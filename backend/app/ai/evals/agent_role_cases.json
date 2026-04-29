@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "dataset": "builtin-agent-role-regression",
+  "privacy": "synthetic_no_customer_documents",
+  "default_memory_mode": "sql",
+  "roles": [
+    {
+      "id": "technologist_process_plan",
+      "profession": "технолог",
+      "user_request": "По чертежу вала из стали 40Х подготовь маршрут мехобработки, инструмент, контроль и черновик норм времени.",
+      "expected_tool_sequence": [
+        "memory.search",
+        "tech.resource_list",
+        "tech.operation_template_list",
+        "tech.process_plan_draft_from_document",
+        "tech.process_plan_validate",
+        "tech.norm_estimate_suggest",
+        "tech.process_plan_approve"
+      ],
+      "expected_approval_gates": [
+        "tech.process_plan_approve"
+      ],
+      "expected_terms": [
+        "Сталь 40Х",
+        "токарная",
+        "фрезерная",
+        "шлифование",
+        "контроль",
+        "норма времени"
+      ]
+    },
+    {
+      "id": "designer_drawing_ntd_review",
+      "profession": "конструктор",
+      "user_request": "Проверь чертеж детали: материал, шероховатость, посадки, недостающие требования и соответствие НТД.",
+      "expected_tool_sequence": [
+        "doc.get",
+        "memory.search",
+        "ntd.requirement_search",
+        "ntd.norm_control_run",
+        "graph.neighborhood",
+        "email.draft"
+      ],
+      "expected_approval_gates": [],
+      "expected_terms": [
+        "шероховатость",
+        "посадка",
+        "допуск",
+        "НТД",
+        "вопросы заказчику"
+      ]
+    },
+    {
+      "id": "norm_setter_learning",
+      "profession": "нормировщик",
+      "user_request": "Рассчитай и проверь нормы времени для операций, учти прошлые корректировки и предложи правило обучения.",
+      "expected_tool_sequence": [
+        "memory.search",
+        "tech.process_plan_get",
+        "tech.norm_estimate_suggest",
+        "tech.norm_estimate_create",
+        "tech.correction_record",
+        "tech.learning_suggest",
+        "tech.learning_rule_create",
+        "tech.learning_rule_activate"
+      ],
+      "expected_approval_gates": [
+        "tech.learning_rule_activate"
+      ],
+      "expected_terms": [
+        "машинное время",
+        "подготовительно-заключительное время",
+        "переход",
+        "корректировка",
+        "правило обучения"
+      ]
+    },
+    {
+      "id": "warehouse_keeper_receipt",
+      "profession": "кладовщик",
+      "user_request": "Проверь складские остатки по спецификации, найди дефицит, подготовь приход и подтверждение только после согласования.",
+      "expected_tool_sequence": [
+        "bom.get",
+        "bom.stock_check",
+        "warehouse.list_inventory",
+        "warehouse.low_stock",
+        "warehouse.create_receipt",
+        "warehouse.confirm_receipt"
+      ],
+      "expected_approval_gates": [
+        "warehouse.confirm_receipt"
+      ],
+      "expected_terms": [
+        "остаток",
+        "дефицит",
+        "приходный ордер",
+        "партия",
+        "ячейка хранения"
+      ]
+    },
+    {
+      "id": "buyer_procurement_rfq",
+      "profession": "закупщик",
+      "user_request": "По дефициту из BOM создай заявку на закупку, найди поставщиков, проверь историю цен и подготовь RFQ.",
+      "expected_tool_sequence": [
+        "bom.create_purchase_request",
+        "procurement.get_request",
+        "supplier.search",
+        "supplier.price_history",
+        "procurement.send_rfq",
+        "payment.schedule_from_invoice"
+      ],
+      "expected_approval_gates": [
+        "bom.create_purchase_request",
+        "procurement.send_rfq"
+      ],
+      "expected_terms": [
+        "заявка на закупку",
+        "поставщик",
+        "история цен",
+        "срок поставки",
+        "RFQ"
+      ]
+    }
+  ]
+}

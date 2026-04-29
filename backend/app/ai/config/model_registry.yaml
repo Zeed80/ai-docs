@@ -1,0 +1,184 @@
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+    timeout_seconds: 180
+    is_local: true
+  vllm:
+    base_url: "http://localhost:8000"
+    timeout_seconds: 180
+    is_local: true
+  openai_compatible:
+    base_url: "http://localhost:8080"
+    timeout_seconds: 180
+    is_local: true
+  cloud_provider:
+    base_url: "https://api.example.invalid"
+    api_key_env: "CLOUD_AI_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+
+models:
+  gemma4_e4b_ollama:
+    provider: "ollama"
+    provider_model: "gemma4:e4b"
+    status: "production"
+    modalities: ["text", "vision", "audio"]
+    max_context_tokens: 128000
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.72
+    speed_score: 0.85
+    notes: "Baseline local fast multimodal model for OCR, classification, and extraction."
+  gemma4_26b_ollama:
+    provider: "ollama"
+    provider_model: "gemma4:26b"
+    status: "production"
+    modalities: ["text", "vision"]
+    max_context_tokens: 256000
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.86
+    speed_score: 0.55
+    notes: "Baseline local reasoning model. Replace through registry when better local models pass evals."
+  local_reasoning_vllm_turboquant:
+    provider: "vllm"
+    provider_model: "replace-with-local-long-context-model"
+    status: "candidate"
+    modalities: ["text"]
+    max_context_tokens: 131072
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.0
+    speed_score: 0.0
+    notes: "Optional vLLM long-context profile. TurboQuant KV-cache must be enabled in serving config after benchmark."
+  local_embedding_ollama:
+    provider: "ollama"
+    provider_model: "nomic-embed-text"
+    status: "production"
+    modalities: ["embedding"]
+    max_context_tokens: 8192
+    embedding_dimension: 768
+    distance_metric: "cosine"
+    normalize_embeddings: true
+    max_input_tokens: 8192
+    batch_size: 16
+    pooling: "native"
+    supports_batching: true
+    model_family: "nomic"
+    capability_source: "manual"
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.62
+    speed_score: 0.75
+    notes: "Current production embedding model used by the existing 768-dim Qdrant collection."
+  local_embedding_vllm:
+    provider: "vllm"
+    provider_model: "intfloat/multilingual-e5-large"
+    status: "candidate"
+    modalities: ["embedding"]
+    max_context_tokens: 8192
+    embedding_dimension: 1024
+    distance_metric: "cosine"
+    normalize_embeddings: true
+    max_input_tokens: 8192
+    batch_size: 32
+    pooling: "mean"
+    supports_batching: true
+    model_family: "e5"
+    capability_source: "manual"
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.65
+    speed_score: 0.70
+  local_reranker_openai_compatible:
+    provider: "openai_compatible"
+    provider_model: "BAAI/bge-reranker-v2-m3"
+    status: "candidate"
+    modalities: ["rerank"]
+    max_context_tokens: 8192
+    max_input_tokens: 8192
+    batch_size: 16
+    supports_batching: true
+    rerank_score_range: "0..1"
+    model_family: "bge-reranker"
+    capability_source: "manual"
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.70
+    speed_score: 0.55
+  future_reasoning_cloud:
+    provider: "cloud_provider"
+    provider_model: "replace-with-approved-model"
+    status: "candidate"
+    modalities: ["text", "tool_calling"]
+    max_context_tokens: 200000
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: false
+    quality_score: 0.0
+    speed_score: 0.0
+    notes: "Disabled candidate until security policy and evals approve it."
+
+routes:
+  invoice_ocr:
+    required_modalities: ["vision"]
+    local_only: true
+    fallback_chain: ["gemma4_e4b_ollama", "gemma4_26b_ollama"]
+    manual_review_fallback: true
+    min_quality_score: 0.0
+  structured_extraction:
+    required_modalities: ["text"]
+    local_only: true
+    fallback_chain: ["gemma4_e4b_ollama", "gemma4_26b_ollama"]
+    manual_review_fallback: true
+  drawing_analysis:
+    required_modalities: ["vision"]
+    local_only: true
+    fallback_chain: ["gemma4_26b_ollama", "gemma4_e4b_ollama"]
+    manual_review_fallback: true
+  engineering_reasoning:
+    required_modalities: ["text"]
+    local_only: true
+    fallback_chain: ["gemma4_26b_ollama", "future_reasoning_cloud"]
+    manual_review_fallback: true
+  email_drafting:
+    required_modalities: ["text"]
+    local_only: true
+    fallback_chain: ["gemma4_26b_ollama", "future_reasoning_cloud"]
+    manual_review_fallback: true
+  embedding:
+    required_modalities: ["embedding"]
+    local_only: true
+    fallback_chain: ["local_embedding_ollama", "local_embedding_vllm"]
+    manual_review_fallback: false
+  reranking:
+    required_modalities: ["rerank"]
+    local_only: true
+    fallback_chain: ["local_reranker_openai_compatible"]
+    manual_review_fallback: true
+  classification:
+    required_modalities: ["text"]
+    local_only: true
+    fallback_chain: ["gemma4_e4b_ollama", "gemma4_26b_ollama"]
+    manual_review_fallback: true
+  long_context_summarization:
+    required_modalities: ["text"]
+    local_only: true
+    fallback_chain: ["gemma4_26b_ollama"]
+    manual_review_fallback: true
+  tool_calling:
+    required_modalities: ["tool_calling"]
+    local_only: true
+    fallback_chain: ["future_reasoning_cloud"]
+    manual_review_fallback: true
+  speech:
+    required_modalities: ["audio"]
+    local_only: true
+    fallback_chain: ["gemma4_e4b_ollama"]
+    manual_review_fallback: true

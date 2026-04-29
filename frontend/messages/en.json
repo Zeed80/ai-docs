@@ -1,0 +1,89 @@
+{
+  "app": {
+    "title": "AI Document Workflow",
+    "subtitle": "Workspace"
+  },
+  "nav": {
+    "feed": "Workspace",
+    "inbox": "Inbox",
+    "documents": "Documents",
+    "invoices": "Invoices",
+    "suppliers": "Suppliers",
+    "email": "Email",
+    "search": "Search",
+    "anomalies": "Anomalies",
+    "calendar": "Calendar",
+    "approvals": "Approvals",
+    "quarantine": "Quarantine",
+    "settings": "Settings",
+    "openclaw": "OpenClaw",
+    "warehouse": "Warehouse",
+    "procurement": "Procurement",
+    "payments": "Payments",
+    "normalization": "Normalization",
+    "ntd": "NTD",
+    "boms": "BOMs"
+  },
+  "inbox": {
+    "title": "Inbox",
+    "empty": "No new documents",
+    "filters": {
+      "all": "All",
+      "mine": "Mine",
+      "team": "Team",
+      "needs_review": "Needs Review",
+      "approved": "Approved",
+      "rejected": "Rejected"
+    }
+  },
+  "document": {
+    "status": {
+      "ingested": "Ingested",
+      "classifying": "Classifying",
+      "extracting": "Extracting",
+      "needs_review": "Needs Review",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "archived": "Archived"
+    },
+    "type": {
+      "invoice": "Invoice",
+      "letter": "Letter",
+      "contract": "Contract",
+      "drawing": "Drawing",
+      "commercial_offer": "Commercial Offer",
+      "act": "Act",
+      "waybill": "Waybill",
+      "other": "Other"
+    }
+  },
+  "actions": {
+    "approve": "Approve",
+    "reject": "Reject",
+    "snooze": "Snooze",
+    "handover": "Handover",
+    "comment": "Comment",
+    "export": "Export",
+    "search": "Search",
+    "upload": "Upload"
+  },
+  "chat": {
+    "placeholder": "Ask Sveta...",
+    "sveta": "Sveta",
+    "unavailable": "Automated features temporarily unavailable"
+  },
+  "keyboard": {
+    "help_title": "Keyboard Shortcuts",
+    "j": "Next",
+    "k": "Previous",
+    "enter": "Open",
+    "e": "Edit",
+    "a": "Approve",
+    "r": "Reject",
+    "s": "Snooze",
+    "c": "Comment",
+    "x": "Select",
+    "?": "Help",
+    "ctrl_k": "Command Palette"
+  }
+}

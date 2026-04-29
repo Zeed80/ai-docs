@@ -1,0 +1,61 @@
+[project]
+name = "ai-workspace-backend"
+version = "0.1.0"
+description = "AI Manufacturing Workspace — FastAPI backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy[asyncio]>=2.0,<3",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7",
+    "celery[redis]>=5.4",
+    "redis>=5.2",
+    "minio>=7.2",
+    "httpx>=0.28",
+    "python-multipart>=0.0.18",
+    "pymupdf>=1.25",
+    "openpyxl>=3.1",
+    "qdrant-client>=1.13",
+    "structlog>=24.4",
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
+    "psycopg2-binary>=2.9",
+    "lxml>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "aiosqlite>=0.20",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]

@@ -1,0 +1,88 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+playwright-report/
+test-results/
+frontend/playwright-report/
+frontend/test-results/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.claude/
+.codex
+.mcp.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Data
+datasets/*.pdf
+datasets/*.json
+!datasets/.gitkeep
+data/
+*.db
+*.sqlite
+*.sqlite3
+backend/celerybeat-schedule*
+example-invoices/*
+!example-invoices/.gitkeep
+example-drawings/*
+!example-drawings/.gitkeep
+
+# OpenClaw local runtime, device identity, logs, and downloaded runtime deps
+openclaw/official/
+
+# MinIO data
+minio_data/
+
+# Postgres data
+postgres_data/
+
+# Redis data
+redis_data/
+
+# Qdrant data
+qdrant_data/
+
+# Ollama models
+ollama_data/
+
+# Coverage
+htmlcov/
+.coverage
+coverage.xml
+
+# Pytest
+.pytest_cache/
+
+# Alembic
+backend/app/db/versions/*.pyc
+backend/data/

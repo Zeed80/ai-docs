@@ -1,0 +1,114 @@
+# Scenario 8: Smart Ingest
+# Trigger: file uploaded via chat, Telegram, or drag-and-drop
+# Chain: doc.ingest → doc.classify → route by type → extract → validate → notify
+
+name: smart-ingest
+description: "Умная загрузка документа с автоклассификацией и маршрутизацией"
+version: "1.0"
+
+trigger:
+  type: event
+  events:
+    - "file.uploaded"
+    - "chat.file_attached"
+    - "telegram.file_received"
+
+timeout: 60
+retry_attempts: 2
+
+parameters:
+  file_path:
+    type: string
+    required: true
+    description: "Путь к файлу в MinIO"
+  file_name:
+    type: string
+    required: true
+  source_channel:
+    type: string
+    required: true
+    description: "email, upload, chat, telegram"
+  user_id:
+    type: string
+    required: false
+
+steps:
+  # Step 1: Ingest document
+  - id: ingest
+    skill: doc.ingest
+    input:
+      file_path: "{{ parameters.file_path }}"
+      file_name: "{{ parameters.file_name }}"
+      source_channel: "{{ parameters.source_channel }}"
+    output: document
+
+  # Step 2: Classify
+  - id: classify
+    skill: doc.classify
+    input:
+      document_id: "{{ steps.ingest.output.id }}"
+    output: classification
+
+  # Step 3: Route by type
+  # 3a: Invoice — extract fields
+  - id: extract_invoice
+    skill: doc.extract
+    condition: "{{ steps.classify.output.doc_type == 'invoice' }}"
+    input:
+      document_id: "{{ steps.ingest.output.id }}"
+    output: extraction
+
+  # 3b: Validate invoice
+  - id: validate
+    skill: invoice.validate
+    condition: "{{ steps.extract_invoice.output.invoice_id }}"
+    input:
+      invoice_id: "{{ steps.extract_invoice.output.invoice_id }}"
+    output: validation
+
+  # 3c: Apply normalization rules
+  - id: normalize
+    skill: norm.apply_rules
+    condition: "{{ steps.extract_invoice.output.invoice_id }}"
+    input:
+      document_id: "{{ steps.ingest.output.id }}"
+    output: normalization
+
+  # Step 4: Summarize (for non-invoices or as supplementary info)
+  - id: summarize
+    skill: doc.summarize
+    condition: "{{ steps.classify.output.doc_type != 'invoice' }}"
+    input:
+      document_id: "{{ steps.ingest.output.id }}"
+    output: summary
+
+  # Step 5: Try to link to supplier
+  - id: link_supplier
+    skill: supplier.search
+    condition: "{{ steps.extract_invoice.output }}"
+    input:
+      query: "{{ steps.extraction.output.supplier_name | default: '' }}"
+      limit: 1
+    output: supplier_match
+    on_error: continue
+
+  # Step 6: Notify user
+  - id: notify
+    type: user_message
+    message: |
+      {% if steps.classify.output.doc_type == 'invoice' %}
+      📄 Счёт загружен: {{ parameters.file_name }}
+      Номер: {{ steps.extraction.output.invoice_number | default: '—' }}
+      Сумма: {{ steps.extraction.output.total_amount | default: '—' }}
+      Поставщик: {{ steps.supplier_match.output.results[0].name | default: 'не определён' }}
+      Уверенность: {{ steps.extraction.output.overall_confidence | default: '—' }}
+      {% if steps.validation.output.errors | size > 0 %}
+      ⚠️ Ошибки: {{ steps.validation.output.errors | size }}
+      {% endif %}
+      {% else %}
+      📎 Документ загружен: {{ parameters.file_name }}
+      Тип: {{ steps.classify.output.doc_type }}
+      {% if steps.summary.output %}
+      Краткое содержание: {{ steps.summary.output.summary }}
+      {% endif %}
+      {% endif %}

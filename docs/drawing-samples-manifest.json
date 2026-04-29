@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "dataset": "drawing-samples",
+  "privacy": "placeholder_no_customer_drawings_committed",
+  "root": "example-drawings",
+  "groups": [],
+  "expected_common": {
+    "document_type": "drawing",
+    "local_only": true,
+    "required_fields": [
+      "drawing_number",
+      "material_hint",
+      "features",
+      "questions"
+    ]
+  }
+}

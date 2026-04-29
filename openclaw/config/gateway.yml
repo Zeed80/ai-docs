@@ -1,0 +1,252 @@
+# OpenClaw Gateway — AI Manufacturing Workspace
+# Agent: Света (Sveta)
+# Single source of truth for agent behaviour.
+# Edit this file to add/remove skills or approval gates — no server restart needed.
+
+agent:
+  name: Света
+  description: AI-сотрудник производственного предприятия
+  language: ru
+
+# ── AI model routing ──────────────────────────────────────────────────────────
+# Reasoning model can be overridden at runtime via /api/ai/config.
+models:
+  reasoning:
+    provider: ollama
+    model: ${AGENT_MODEL:-qwen3.5:9b}
+    base_url: ${OLLAMA_URL:-http://localhost:11434}
+    fallback:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      api_key: ${ANTHROPIC_API_KEY:-}
+  ocr:
+    # Always local — documents are confidential
+    provider: ollama
+    model: ${OCR_MODEL:-gemma4:e4b}
+    base_url: ${OLLAMA_URL:-http://localhost:11434}
+
+# ── Backend connection ────────────────────────────────────────────────────────
+backend:
+  base_url: ${FASTAPI_URL:-http://localhost:8000}
+  timeout: 30
+
+# ── Skills ────────────────────────────────────────────────────────────────────
+skills:
+  # Auto-generated from FastAPI docstrings — do not edit manually
+  registry: ./skills/_registry.yml
+
+  # Whitelist: only these skills are exposed to the agent in chat.
+  # To expose a new skill: add its name here.
+  # To hide a skill from chat (but keep it for scenarios): remove it.
+  exposed:
+    # Documents
+    - doc.list
+    - doc.get
+    - doc.summarize
+    - doc.extract
+    - doc.classify
+    # Invoices
+    - invoice.list
+    - invoice.get
+    - invoice.approve
+    - invoice.reject
+    - invoice.validate
+    - invoice.compare_prices
+    - invoice.update
+    - invoice.delete
+    - invoice.bulk_delete
+    - invoice.receive
+    # Search
+    - search.hybrid
+    - search.nl_to_query
+    - search.nl
+    # Graph memory
+    - graph.node_create
+    - graph.edge_create
+    - graph.neighborhood
+    - graph.path
+    - graph.chunk_create
+    - graph.evidence_create
+    - graph.mention_create
+    - graph.review_list
+    - graph.review_decide
+    - memory.search
+    - memory.explain
+    - memory.reindex
+    - memory.embeddings_rebuild
+    # Manufacturing technology
+    - tech.resource_list
+    - tech.resource_create
+    - tech.operation_template_list
+    - tech.operation_template_create
+    - tech.process_plan_list
+    - tech.process_plan_create
+    - tech.process_plan_draft_from_document
+    - tech.process_plan_get
+    - tech.process_plan_approve
+    - tech.process_plan_validate
+    - tech.operation_add
+    - tech.norm_estimate_create
+    - tech.norm_estimate_suggest
+    - tech.norm_estimate_approve
+    - tech.correction_record
+    - tech.learning_suggest
+    - tech.learning_rule_list
+    - tech.learning_rule_create
+    - tech.learning_rule_activate
+    # Anomalies
+    - anomaly.list
+    - anomaly.check_all
+    - anomaly.create_card
+    - anomaly.resolve
+    - anomaly.explain
+    # Email
+    - email.list_threads
+    - email.search
+    - email.get_thread
+    - email.send
+    - email.list_drafts
+    # Approvals
+    - approval.list_pending
+    - approval.status
+    # Suppliers
+    - supplier.list
+    - supplier.get
+    - supplier.search
+    - supplier.price_history
+    - supplier.trust_score
+    - supplier.alerts
+    # Normalization
+    - norm.list_rules
+    - norm.suggest_rule
+    - norm.activate_rule
+    - norm.list_norm_cards
+    - norm.create_norm_card
+    - norm.update_norm_card
+    - norm.list_canonical_items
+    - norm.get_canonical_item
+    - norm.update_canonical_item
+    - norm.get_item_norm_cards
+    # Tables / export
+    - table.query
+    - table.export_excel
+    # Calendar
+    - calendar.list_events
+    - calendar.upcoming
+    - calendar.create_reminder
+    # Dashboard
+    - dashboard.today
+    # Quarantine
+    - quarantine.list
+    # Warehouse
+    - warehouse.list_inventory
+    - warehouse.get_item
+    - warehouse.create_item
+    - warehouse.low_stock
+    - warehouse.create_receipt
+    - warehouse.confirm_receipt
+    - warehouse.list_receipts
+    - warehouse.get_receipt
+    # Procurement
+    - procurement.list_requests
+    - procurement.create_request
+    - procurement.get_request
+    - procurement.update_request
+    - procurement.send_rfq
+    - procurement.list_contracts
+    - procurement.create_contract
+    - procurement.get_contract
+    # Payments
+    - payment.list_schedule
+    - payment.create_schedule
+    - payment.mark_paid
+    - payment.overdue
+    - payment.upcoming
+    - payment.schedule_from_invoice
+    # BOM
+    - bom.list
+    - bom.get
+    - bom.create
+    - bom.update
+    - bom.approve
+    - bom.stock_check
+    - bom.create_purchase_request
+
+  # Approval gates: agent pauses and waits for explicit human confirmation.
+  # Editing this list takes effect for the NEXT conversation (hot-reload).
+  approval_gates:
+    - invoice.approve
+    - invoice.reject
+    - invoice.bulk_delete
+    - email.send
+    - anomaly.resolve
+    - norm.activate_rule
+    - compare.decide
+    - warehouse.confirm_receipt
+    - payment.mark_paid
+    - procurement.send_rfq
+    - bom.approve
+    - bom.create_purchase_request
+    - tech.process_plan_approve
+    - tech.norm_estimate_approve
+    - tech.learning_rule_activate
+
+# ── Scenarios ─────────────────────────────────────────────────────────────────
+# Pipelines that run automatically or on-demand.
+# Scenario files live in ./scenarios/*.yml
+scenarios:
+  - name: email_triage
+    path: ./scenarios/email-triage.yml
+    trigger:
+      type: schedule
+      cron: "*/5 * * * *"
+  - name: assisted_review
+    path: ./scenarios/assisted-review.yml
+    trigger:
+      type: event
+      event: document.review_opened
+  - name: warehouse_receipt
+    path: ./scenarios/warehouse-receipt.yml
+    trigger:
+      type: event
+      event: invoice.approved
+  - name: low_stock_alert
+    path: ./scenarios/low-stock-alert.yml
+    trigger:
+      type: schedule
+      cron: "0 9 * * *"   # every day at 09:00
+  - name: memory_maintenance
+    path: ./scenarios/memory-maintenance.yml
+    trigger:
+      type: schedule
+      cron: "30 2 * * *"
+
+# ── Prompts ───────────────────────────────────────────────────────────────────
+prompts:
+  base: ./prompts/base.md
+  roles:
+    manager: ./prompts/role-manager.md
+    engineer: ./prompts/role-engineer.md
+    accountant: ./prompts/role-accountant.md
+    buyer: ./prompts/role-buyer.md
+
+# ── Channels ─────────────────────────────────────────────────────────────────
+channels:
+  websocket:
+    enabled: true
+    path: /ws/chat
+    auth: none   # handled by FastAPI middleware
+
+# ── Auth (SSO) ────────────────────────────────────────────────────────────────
+auth:
+  provider: authentik
+  oauth2:
+    issuer: ${AUTHENTIK_URL:-http://authentik:9000}/application/o/ai-workspace/
+    client_id: ${OAUTH_CLIENT_ID:-}
+    client_secret: ${OAUTH_CLIENT_SECRET:-}
+
+# ── Observability ─────────────────────────────────────────────────────────────
+logging:
+  level: info
+  format: json
+  audit: true

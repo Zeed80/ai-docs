@@ -1,0 +1,132 @@
+{
+  "app": {
+    "title": "AI Документооборот",
+    "subtitle": "Рабочее пространство"
+  },
+  "nav": {
+    "feed": "Рабочий стол",
+    "inbox": "Входящие",
+    "documents": "Документы",
+    "invoices": "Счета",
+    "suppliers": "Поставщики",
+    "email": "Почта",
+    "search": "Поиск",
+    "anomalies": "Аномалии",
+    "calendar": "Календарь",
+    "approvals": "Согласования",
+    "quarantine": "Карантин",
+    "settings": "Настройки",
+    "openclaw": "OpenClaw",
+    "warehouse": "Склад",
+    "procurement": "Закупки",
+    "payments": "Платежи",
+    "normalization": "Нормирование",
+    "ntd": "НТД",
+    "boms": "Спецификации"
+  },
+  "inbox": {
+    "title": "Входящие",
+    "empty": "Нет новых документов",
+    "filters": {
+      "all": "Все",
+      "mine": "Мои",
+      "team": "Команда",
+      "needs_review": "На проверку",
+      "approved": "Утверждённые",
+      "rejected": "Отклонённые"
+    }
+  },
+  "document": {
+    "status": {
+      "ingested": "Загружен",
+      "classifying": "Классификация",
+      "extracting": "Извлечение",
+      "needs_review": "На проверку",
+      "approved": "Утверждён",
+      "rejected": "Отклонён",
+      "archived": "В архиве"
+    },
+    "type": {
+      "invoice": "Счёт",
+      "letter": "Письмо",
+      "contract": "Договор",
+      "drawing": "Чертёж",
+      "commercial_offer": "Коммерческое предложение",
+      "act": "Акт",
+      "waybill": "Накладная",
+      "other": "Другое"
+    }
+  },
+  "actions": {
+    "approve": "Утвердить",
+    "reject": "Отклонить",
+    "review": "Проверить",
+    "re_extract": "Переизвлечь",
+    "validate": "Проверить суммы",
+    "snooze": "Отложить",
+    "handover": "Передать",
+    "comment": "Комментарий",
+    "export": "Экспорт",
+    "search": "Поиск",
+    "upload": "Загрузить"
+  },
+  "review": {
+    "title": "Проверка документа",
+    "extracted_fields": "Извлечённые поля",
+    "no_fields": "Нет извлечённых полей",
+    "fields_need_review": "{count} полей требуют проверки",
+    "corrected": "исправлено",
+    "validation_ok": "Все суммы верны",
+    "validation_errors": "Ошибки валидации",
+    "approved": "Документ утверждён",
+    "rejected": "Документ отклонён",
+    "reject_reason": "Причина отклонения...",
+    "confirm_reject": "Подтвердить отклонение",
+    "cancel": "Отмена",
+    "download_original": "Скачать оригинал",
+    "back": "Назад",
+    "re_extract_started": "Переизвлечение запущено"
+  },
+  "normalization": {
+    "title": "Правила нормализации",
+    "new_rule": "Новое правило",
+    "suggest": "Предложить правила",
+    "suggesting": "Анализ...",
+    "field": "Поле",
+    "pattern": "Паттерн",
+    "replacement": "Замена",
+    "description": "Описание",
+    "regex": "Regex",
+    "create": "Создать",
+    "activate": "Активировать",
+    "disable": "Отключить",
+    "enable": "Включить",
+    "proposed": "Предложено",
+    "active": "Активно",
+    "disabled": "Отключено",
+    "corrections": "Исправлений",
+    "applications": "Применений",
+    "author": "Автор",
+    "activated_by": "Активировал",
+    "no_rules": "Нет правил нормализации"
+  },
+  "chat": {
+    "placeholder": "Спросите Свету...",
+    "sveta": "Света",
+    "unavailable": "Автоматические функции временно недоступны"
+  },
+  "keyboard": {
+    "help_title": "Горячие клавиши",
+    "j": "Следующий",
+    "k": "Предыдущий",
+    "enter": "Открыть",
+    "e": "Редактировать",
+    "a": "Утвердить",
+    "r": "Отклонить",
+    "s": "Отложить",
+    "c": "Комментарий",
+    "x": "Выбрать",
+    "?": "Справка",
+    "ctrl_k": "Командная палитра"
+  }
+}

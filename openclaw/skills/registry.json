@@ -1,0 +1,662 @@
+{
+  "version": 1,
+  "source": "fastapi_openapi",
+  "policy": {
+    "default": "deny",
+    "unknown_tools": "deny",
+    "confidential_default": true,
+    "external_actions_require_approval": true
+  },
+  "tools": [
+    {
+      "name": "doc.classify",
+      "approval_required": false,
+      "description": "Classify document type through the AI router.",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/classify",
+      "operation_id": "classify_document_api_documents__document_id__classify_post",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/TaskResponse"
+    },
+    {
+      "name": "doc.extract",
+      "approval_required": false,
+      "description": "Run structured extraction for a document.",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/extract",
+      "operation_id": "extract_document_api_documents__document_id__extract_post",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/TaskResponse"
+    },
+    {
+      "name": "doc.get",
+      "approval_required": false,
+      "description": "Read a document with extraction evidence.",
+      "method": "GET",
+      "path": "/api/documents/{document_id}",
+      "operation_id": "get_document_api_documents__document_id__get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/DocumentOut"
+    },
+    {
+      "name": "doc.ingest",
+      "approval_required": false,
+      "description": "Accept a document, store it, and create a Document record.",
+      "method": "POST",
+      "path": "/api/documents/ingest",
+      "operation_id": "ingest_document_api_documents_ingest_post",
+      "request_schema": "#/components/schemas/Body_ingest_document_api_documents_ingest_post",
+      "response_schema": "#/components/schemas/DocumentIngestResponse"
+    },
+    {
+      "name": "doc.list",
+      "approval_required": false,
+      "description": "List documents with filters.",
+      "method": "GET",
+      "path": "/api/documents",
+      "operation_id": "list_documents_api_documents_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/DocumentListResponse"
+    },
+    {
+      "name": "doc.summarize",
+      "approval_required": false,
+      "description": "Summarize a document without external action.",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/summarize",
+      "operation_id": "summarize_document_api_documents__document_id__summarize_post",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/DocumentSummaryAI"
+    },
+    {
+      "name": "email.draft",
+      "approval_required": false,
+      "description": "Create a draft email with risk-check.",
+      "method": "POST",
+      "path": "/api/email/drafts",
+      "operation_id": "create_draft_api_email_drafts_post",
+      "request_schema": "#/components/schemas/EmailDraftCreate",
+      "response_schema": "#/components/schemas/EmailDraftOut"
+    },
+    {
+      "name": "email.risk_check",
+      "approval_required": false,
+      "description": "Check draft email risks before send.",
+      "method": "POST",
+      "path": "/api/email/drafts/{draft_id}/risk-check",
+      "operation_id": "risk_check_api_email_drafts__draft_id__risk_check_post",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/RiskCheckResponse"
+    },
+    {
+      "name": "email.send",
+      "approval_required": true,
+      "description": "Send a draft email only after approval.",
+      "method": "POST",
+      "path": "/api/email/drafts/{draft_id}/send",
+      "operation_id": "send_email_api_email_drafts__draft_id__send_post",
+      "request_schema": null,
+      "response_schema": null
+    },
+    {
+      "name": "graph.chunk_create",
+      "approval_required": false,
+      "description": "Create a document memory chunk.",
+      "method": "POST",
+      "path": "/api/graph/chunks",
+      "operation_id": "create_chunk_api_graph_chunks_post",
+      "request_schema": "#/components/schemas/DocumentChunkCreate",
+      "response_schema": "#/components/schemas/DocumentChunkOut"
+    },
+    {
+      "name": "graph.edge_create",
+      "approval_required": false,
+      "description": "Create a graph relationship edge.",
+      "method": "POST",
+      "path": "/api/graph/edges",
+      "operation_id": "create_edge_api_graph_edges_post",
+      "request_schema": "#/components/schemas/KnowledgeEdgeCreate",
+      "response_schema": "#/components/schemas/KnowledgeEdgeOut"
+    },
+    {
+      "name": "graph.evidence_create",
+      "approval_required": false,
+      "description": "Create a source evidence span.",
+      "method": "POST",
+      "path": "/api/graph/evidence",
+      "operation_id": "create_evidence_api_graph_evidence_post",
+      "request_schema": "#/components/schemas/EvidenceSpanCreate",
+      "response_schema": "#/components/schemas/EvidenceSpanOut"
+    },
+    {
+      "name": "graph.mention_create",
+      "approval_required": false,
+      "description": "Create an entity mention from a document.",
+      "method": "POST",
+      "path": "/api/graph/mentions",
+      "operation_id": "create_mention_api_graph_mentions_post",
+      "request_schema": "#/components/schemas/EntityMentionCreate",
+      "response_schema": "#/components/schemas/EntityMentionOut"
+    },
+    {
+      "name": "graph.neighborhood",
+      "approval_required": false,
+      "description": "Read connected graph memory around a node.",
+      "method": "GET",
+      "path": "/api/graph/nodes/{node_id}/neighborhood",
+      "operation_id": "get_neighborhood_api_graph_nodes__node_id__neighborhood_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/GraphNeighborhoodResponse"
+    },
+    {
+      "name": "graph.node_create",
+      "approval_required": false,
+      "description": "Create a graph memory node.",
+      "method": "POST",
+      "path": "/api/graph/nodes",
+      "operation_id": "create_node_api_graph_nodes_post",
+      "request_schema": "#/components/schemas/KnowledgeNodeCreate",
+      "response_schema": "#/components/schemas/KnowledgeNodeOut"
+    },
+    {
+      "name": "graph.path",
+      "approval_required": false,
+      "description": "Find a relationship path between two graph nodes.",
+      "method": "GET",
+      "path": "/api/graph/path",
+      "operation_id": "find_path_api_graph_path_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/GraphPathResponse"
+    },
+    {
+      "name": "graph.review_decide",
+      "approval_required": false,
+      "description": "Approve or reject a graph memory suggestion.",
+      "method": "POST",
+      "path": "/api/graph/review/{item_id}/decide",
+      "operation_id": "decide_review_item_api_graph_review__item_id__decide_post",
+      "request_schema": "#/components/schemas/GraphReviewDecision",
+      "response_schema": "#/components/schemas/GraphReviewItemOut"
+    },
+    {
+      "name": "graph.review_list",
+      "approval_required": false,
+      "description": "List graph memory suggestions that need review.",
+      "method": "GET",
+      "path": "/api/graph/review",
+      "operation_id": "list_review_items_api_graph_review_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/GraphReviewListResponse"
+    },
+    {
+      "name": "invoice.approve",
+      "approval_required": true,
+      "description": "Approve an invoice after human confirmation.",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/approve",
+      "operation_id": "approve_invoice_api_invoices__invoice_id__approve_post",
+      "request_schema": "#/components/schemas/InvoiceApproveRequest",
+      "response_schema": "#/components/schemas/InvoiceOut"
+    },
+    {
+      "name": "invoice.compare_prices",
+      "approval_required": false,
+      "description": "Compare invoice lines with supplier price history.",
+      "method": "GET",
+      "path": "/api/invoices/{invoice_id}/price-check",
+      "operation_id": "price_check_api_invoices__invoice_id__price_check_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/PriceCheckResponse"
+    },
+    {
+      "name": "invoice.export.1c.prepare",
+      "approval_required": true,
+      "description": "Prepare 1C export payload; no external send.",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/export-1c",
+      "operation_id": "export_invoice_1c_api_invoices__invoice_id__export_1c_post",
+      "request_schema": null,
+      "response_schema": null
+    },
+    {
+      "name": "invoice.export.excel",
+      "approval_required": false,
+      "description": "Create local Excel artifact for an invoice.",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/export",
+      "operation_id": "export_invoice_excel_api_invoices__invoice_id__export_post",
+      "request_schema": null,
+      "response_schema": null
+    },
+    {
+      "name": "invoice.reject",
+      "approval_required": true,
+      "description": "Reject an invoice after human confirmation.",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/reject",
+      "operation_id": "reject_invoice_api_invoices__invoice_id__reject_post",
+      "request_schema": "#/components/schemas/InvoiceRejectRequest",
+      "response_schema": "#/components/schemas/InvoiceOut"
+    },
+    {
+      "name": "invoice.validate",
+      "approval_required": false,
+      "description": "Run deterministic invoice checks.",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/validate",
+      "operation_id": "validate_invoice_api_invoices__invoice_id__validate_post",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/InvoiceValidationResponse"
+    },
+    {
+      "name": "memory.embeddings_index_active",
+      "approval_required": false,
+      "description": "Index queued/stale memory embedding records into Qdrant.",
+      "method": "POST",
+      "path": "/api/memory/embeddings/index-active",
+      "operation_id": "index_active_memory_embeddings_api_memory_embeddings_index_active_post",
+      "request_schema": "#/components/schemas/MemoryEmbeddingIndexRequest",
+      "response_schema": "#/components/schemas/MemoryEmbeddingIndexResponse"
+    },
+    {
+      "name": "memory.embeddings_rebuild",
+      "approval_required": false,
+      "description": "Prepare chunk and evidence embeddings for Qdrant.",
+      "method": "POST",
+      "path": "/api/memory/embeddings/rebuild",
+      "operation_id": "rebuild_memory_embeddings_api_memory_embeddings_rebuild_post",
+      "request_schema": "#/components/schemas/MemoryEmbeddingRebuildRequest",
+      "response_schema": "#/components/schemas/MemoryEmbeddingRebuildResponse"
+    },
+    {
+      "name": "memory.embeddings_rebuild_active",
+      "approval_required": false,
+      "description": "Rebuild records for the active embedding profile.",
+      "method": "POST",
+      "path": "/api/memory/embeddings/rebuild-active",
+      "operation_id": "rebuild_active_memory_embeddings_api_memory_embeddings_rebuild_active_post",
+      "request_schema": "#/components/schemas/MemoryEmbeddingRebuildRequest",
+      "response_schema": "#/components/schemas/MemoryEmbeddingRebuildResponse"
+    },
+    {
+      "name": "memory.embeddings_stats",
+      "approval_required": false,
+      "description": "Show active embedding profile and record statuses.",
+      "method": "GET",
+      "path": "/api/memory/embeddings/stats",
+      "operation_id": "get_memory_embedding_stats_api_memory_embeddings_stats_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/MemoryEmbeddingStatsResponse"
+    },
+    {
+      "name": "memory.explain",
+      "approval_required": false,
+      "description": "Search memory and return evidence with graph context.",
+      "method": "POST",
+      "path": "/api/memory/explain",
+      "operation_id": "explain_memory_api_memory_explain_post",
+      "request_schema": "#/components/schemas/MemoryExplainRequest",
+      "response_schema": "#/components/schemas/MemoryExplainResponse"
+    },
+    {
+      "name": "memory.reindex",
+      "approval_required": false,
+      "description": "Rebuild graph memory for existing documents.",
+      "method": "POST",
+      "path": "/api/memory/reindex",
+      "operation_id": "reindex_memory_api_memory_reindex_post",
+      "request_schema": "#/components/schemas/MemoryReindexRequest",
+      "response_schema": "#/components/schemas/MemoryReindexResponse"
+    },
+    {
+      "name": "memory.search",
+      "approval_required": false,
+      "description": "Search graph and document memory with source evidence.",
+      "method": "POST",
+      "path": "/api/memory/search",
+      "operation_id": "search_memory_api_memory_search_post",
+      "request_schema": "#/components/schemas/MemorySearchRequest",
+      "response_schema": "#/components/schemas/MemorySearchResponse"
+    },
+    {
+      "name": "ntd.check_availability",
+      "approval_required": false,
+      "description": "Explain whether NTD check can run for a document.",
+      "method": "GET",
+      "path": "/api/documents/{document_id}/ntd-check/availability",
+      "operation_id": "get_document_ntd_check_availability_api_documents__document_id__ntd_check_availability_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/NTDCheckAvailabilityResponse"
+    },
+    {
+      "name": "ntd.check_get",
+      "approval_required": false,
+      "description": "Get NTD check details and findings.",
+      "method": "GET",
+      "path": "/api/ntd/checks/{check_id}",
+      "operation_id": "get_ntd_check_api_ntd_checks__check_id__get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/NTDCheckRunDetail"
+    },
+    {
+      "name": "ntd.check_list",
+      "approval_required": false,
+      "description": "List NTD checks for a document.",
+      "method": "GET",
+      "path": "/api/documents/{document_id}/ntd-checks",
+      "operation_id": "list_document_ntd_checks_api_documents__document_id__ntd_checks_get",
+      "request_schema": null,
+      "response_schema": "Response List Document Ntd Checks Api Documents  Document Id  Ntd Checks Get"
+    },
+    {
+      "name": "ntd.clause_create",
+      "approval_required": false,
+      "description": "Create a normative document clause.",
+      "method": "POST",
+      "path": "/api/ntd/clauses",
+      "operation_id": "create_normative_clause_api_ntd_clauses_post",
+      "request_schema": "#/components/schemas/NormativeClauseCreate",
+      "response_schema": "#/components/schemas/NormativeClauseOut"
+    },
+    {
+      "name": "ntd.control_settings_get",
+      "approval_required": false,
+      "description": "Read NTD norm-control mode.",
+      "method": "GET",
+      "path": "/api/settings/ntd-control",
+      "operation_id": "get_ntd_control_settings_api_settings_ntd_control_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/NTDControlSettingsOut"
+    },
+    {
+      "name": "ntd.control_settings_update",
+      "approval_required": false,
+      "description": "Set manual or automatic NTD norm-control mode.",
+      "method": "PATCH",
+      "path": "/api/settings/ntd-control",
+      "operation_id": "update_ntd_control_settings_api_settings_ntd_control_patch",
+      "request_schema": "#/components/schemas/NTDControlSettingsUpdate",
+      "response_schema": "#/components/schemas/NTDControlSettingsOut"
+    },
+    {
+      "name": "ntd.document_create",
+      "approval_required": false,
+      "description": "Create a normative document record.",
+      "method": "POST",
+      "path": "/api/ntd/documents",
+      "operation_id": "create_normative_document_api_ntd_documents_post",
+      "request_schema": "#/components/schemas/NormativeDocumentCreate",
+      "response_schema": "#/components/schemas/NormativeDocumentOut"
+    },
+    {
+      "name": "ntd.document_create_from_source",
+      "approval_required": false,
+      "description": "Create and optionally index NTD from an uploaded document.",
+      "method": "POST",
+      "path": "/api/ntd/documents/from-source",
+      "operation_id": "create_normative_document_from_source_api_ntd_documents_from_source_post",
+      "request_schema": "#/components/schemas/NTDDocumentCreateFromSourceRequest",
+      "response_schema": "#/components/schemas/NTDDocumentCreateFromSourceResponse"
+    },
+    {
+      "name": "ntd.document_index",
+      "approval_required": false,
+      "description": "Parse source document text into NTD clauses and requirements.",
+      "method": "POST",
+      "path": "/api/ntd/documents/{normative_document_id}/index",
+      "operation_id": "index_normative_document_api_ntd_documents__normative_document_id__index_post",
+      "request_schema": "#/components/schemas/NTDDocumentIndexRequest",
+      "response_schema": "#/components/schemas/NTDDocumentIndexResponse"
+    },
+    {
+      "name": "ntd.document_list",
+      "approval_required": false,
+      "description": "List normative documents.",
+      "method": "GET",
+      "path": "/api/ntd/documents",
+      "operation_id": "list_normative_documents_api_ntd_documents_get",
+      "request_schema": null,
+      "response_schema": "Response List Normative Documents Api Ntd Documents Get"
+    },
+    {
+      "name": "ntd.finding_decide",
+      "approval_required": false,
+      "description": "Record a human decision for an NTD finding.",
+      "method": "POST",
+      "path": "/api/ntd/checks/{check_id}/findings/{finding_id}/decide",
+      "operation_id": "decide_ntd_finding_api_ntd_checks__check_id__findings__finding_id__decide_post",
+      "request_schema": "#/components/schemas/NTDFindingDecisionRequest",
+      "response_schema": "#/components/schemas/NTDFindingOut"
+    },
+    {
+      "name": "ntd.norm_control_run",
+      "approval_required": false,
+      "description": "Check one document against applicable NTD.",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/ntd-check",
+      "operation_id": "run_document_ntd_check_api_documents__document_id__ntd_check_post",
+      "request_schema": "Payload",
+      "response_schema": "#/components/schemas/NTDCheckRunDetail"
+    },
+    {
+      "name": "ntd.norm_control_run_payload",
+      "approval_required": false,
+      "description": "Check a document against applicable NTD.",
+      "method": "POST",
+      "path": "/api/ntd/checks/run",
+      "operation_id": "run_ntd_check_api_ntd_checks_run_post",
+      "request_schema": "#/components/schemas/NTDCheckRunRequest",
+      "response_schema": "#/components/schemas/NTDCheckRunDetail"
+    },
+    {
+      "name": "ntd.requirement_create",
+      "approval_required": false,
+      "description": "Create a normative requirement.",
+      "method": "POST",
+      "path": "/api/ntd/requirements",
+      "operation_id": "create_normative_requirement_api_ntd_requirements_post",
+      "request_schema": "#/components/schemas/NormativeRequirementCreate",
+      "response_schema": "#/components/schemas/NormativeRequirementOut"
+    },
+    {
+      "name": "ntd.requirement_search",
+      "approval_required": false,
+      "description": "Search SQL-first NTD requirements.",
+      "method": "GET",
+      "path": "/api/ntd/requirements/search",
+      "operation_id": "search_requirements_api_ntd_requirements_search_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/NTDRequirementSearchResponse"
+    },
+    {
+      "name": "tech.correction_record",
+      "approval_required": false,
+      "description": "Record a human correction for learning.",
+      "method": "POST",
+      "path": "/api/technology/corrections",
+      "operation_id": "record_correction_api_technology_corrections_post",
+      "request_schema": "#/components/schemas/TechnologyCorrectionCreate",
+      "response_schema": "#/components/schemas/TechnologyCorrectionOut"
+    },
+    {
+      "name": "tech.learning_rule_activate",
+      "approval_required": true,
+      "description": "Activate a proposed learning rule.",
+      "method": "POST",
+      "path": "/api/technology/learning-rules/{rule_id}/activate",
+      "operation_id": "activate_learning_rule_api_technology_learning_rules__rule_id__activate_post",
+      "request_schema": "#/components/schemas/LearningRuleActivateRequest",
+      "response_schema": "#/components/schemas/LearningRuleOut"
+    },
+    {
+      "name": "tech.learning_rule_create",
+      "approval_required": false,
+      "description": "Save a proposed learning rule.",
+      "method": "POST",
+      "path": "/api/technology/learning-rules",
+      "operation_id": "create_learning_rule_api_technology_learning_rules_post",
+      "request_schema": "#/components/schemas/LearningRuleCreate",
+      "response_schema": "#/components/schemas/LearningRuleOut"
+    },
+    {
+      "name": "tech.learning_rule_list",
+      "approval_required": false,
+      "description": "List proposed and active learning rules.",
+      "method": "GET",
+      "path": "/api/technology/learning-rules",
+      "operation_id": "list_learning_rules_api_technology_learning_rules_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/LearningRuleListResponse"
+    },
+    {
+      "name": "tech.learning_suggest",
+      "approval_required": false,
+      "description": "Suggest rules from repeated corrections.",
+      "method": "GET",
+      "path": "/api/technology/learning-suggestions",
+      "operation_id": "list_learning_suggestions_api_technology_learning_suggestions_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/LearningSuggestionResponse"
+    },
+    {
+      "name": "tech.norm_estimate_approve",
+      "approval_required": true,
+      "description": "Approve labor and machine time estimate.",
+      "method": "POST",
+      "path": "/api/technology/norm-estimates/{estimate_id}/approve",
+      "operation_id": "approve_norm_estimate_api_technology_norm_estimates__estimate_id__approve_post",
+      "request_schema": "#/components/schemas/NormEstimateApproveRequest",
+      "response_schema": "#/components/schemas/NormEstimateOut"
+    },
+    {
+      "name": "tech.norm_estimate_create",
+      "approval_required": false,
+      "description": "Create labor and machine time estimate.",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/norm-estimates",
+      "operation_id": "create_norm_estimate_api_technology_process_plans__plan_id__norm_estimates_post",
+      "request_schema": "#/components/schemas/NormEstimateCreate",
+      "response_schema": "#/components/schemas/NormEstimateOut"
+    },
+    {
+      "name": "tech.norm_estimate_suggest",
+      "approval_required": false,
+      "description": "Suggest operation time and cutting parameters.",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/estimate-norms",
+      "operation_id": "estimate_process_plan_norms_api_technology_process_plans__plan_id__estimate_norms_post",
+      "request_schema": "#/components/schemas/ProcessPlanEstimateNormsRequest",
+      "response_schema": "#/components/schemas/ProcessPlanEstimateNormsResponse"
+    },
+    {
+      "name": "tech.operation_add",
+      "approval_required": false,
+      "description": "Add manufacturing operation and graph links.",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/operations",
+      "operation_id": "add_operation_api_technology_process_plans__plan_id__operations_post",
+      "request_schema": "#/components/schemas/OperationCreate",
+      "response_schema": "#/components/schemas/OperationOut"
+    },
+    {
+      "name": "tech.operation_template_create",
+      "approval_required": false,
+      "description": "Create a technology operation template.",
+      "method": "POST",
+      "path": "/api/technology/operation-templates",
+      "operation_id": "create_operation_template_api_technology_operation_templates_post",
+      "request_schema": "#/components/schemas/OperationTemplateCreate",
+      "response_schema": "#/components/schemas/OperationTemplateOut"
+    },
+    {
+      "name": "tech.operation_template_list",
+      "approval_required": false,
+      "description": "List technology operation templates.",
+      "method": "GET",
+      "path": "/api/technology/operation-templates",
+      "operation_id": "list_operation_templates_api_technology_operation_templates_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/OperationTemplateListResponse"
+    },
+    {
+      "name": "tech.process_plan_approve",
+      "approval_required": true,
+      "description": "Approve a manufacturing process plan after review.",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/approve",
+      "operation_id": "approve_process_plan_api_technology_process_plans__plan_id__approve_post",
+      "request_schema": "#/components/schemas/ProcessPlanApproveRequest",
+      "response_schema": "#/components/schemas/ProcessPlanOut"
+    },
+    {
+      "name": "tech.process_plan_create",
+      "approval_required": false,
+      "description": "Create a manufacturing process plan.",
+      "method": "POST",
+      "path": "/api/technology/process-plans",
+      "operation_id": "create_process_plan_api_technology_process_plans_post",
+      "request_schema": "#/components/schemas/ProcessPlanCreate",
+      "response_schema": "#/components/schemas/ProcessPlanOut"
+    },
+    {
+      "name": "tech.process_plan_draft_from_document",
+      "approval_required": false,
+      "description": "Draft process plan from document graph memory.",
+      "method": "POST",
+      "path": "/api/technology/process-plans/draft-from-document",
+      "operation_id": "draft_process_plan_from_document_api_technology_process_plans_draft_from_document_post",
+      "request_schema": "#/components/schemas/ProcessPlanDraftFromDocumentRequest",
+      "response_schema": "#/components/schemas/ProcessPlanDraftFromDocumentResponse"
+    },
+    {
+      "name": "tech.process_plan_get",
+      "approval_required": false,
+      "description": "Get process plan with operations and norms.",
+      "method": "GET",
+      "path": "/api/technology/process-plans/{plan_id}",
+      "operation_id": "get_process_plan_api_technology_process_plans__plan_id__get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/ProcessPlanDetail"
+    },
+    {
+      "name": "tech.process_plan_list",
+      "approval_required": false,
+      "description": "List manufacturing process plans.",
+      "method": "GET",
+      "path": "/api/technology/process-plans",
+      "operation_id": "list_process_plans_api_technology_process_plans_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/ProcessPlanListResponse"
+    },
+    {
+      "name": "tech.process_plan_validate",
+      "approval_required": false,
+      "description": "Validate manufacturability and completeness.",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/validate",
+      "operation_id": "validate_process_plan_api_technology_process_plans__plan_id__validate_post",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/TechnologyCheckResponse"
+    },
+    {
+      "name": "tech.resource_create",
+      "approval_required": false,
+      "description": "Create a manufacturing resource.",
+      "method": "POST",
+      "path": "/api/technology/resources",
+      "operation_id": "create_resource_api_technology_resources_post",
+      "request_schema": "#/components/schemas/ManufacturingResourceCreate",
+      "response_schema": "#/components/schemas/ManufacturingResourceOut"
+    },
+    {
+      "name": "tech.resource_list",
+      "approval_required": false,
+      "description": "List machines, tools, fixtures, and equipment.",
+      "method": "GET",
+      "path": "/api/technology/resources",
+      "operation_id": "list_resources_api_technology_resources_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/ResourceListResponse"
+    }
+  ]
+}

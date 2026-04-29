@@ -1,0 +1,57 @@
+# OpenClaw Scenario 2 — Assisted Review
+# Trigger: user opens document review → Света prepares context
+#
+# Chain: invoice.get → invoice.compare_prices → supplier.get (stub)
+#        → doc.summarize → present context
+
+name: assisted_review
+description: |
+  Когда пользователь открывает документ для проверки, Света автоматически
+  подготавливает контекст: сравнение цен, профиль поставщика, резюме.
+trigger:
+  type: event
+  event: document.review_opened
+  params:
+    document_id: "{{ event.document_id }}"
+
+steps:
+  - id: get_document
+    skill: doc.get
+    params:
+      document_id: "{{ trigger.document_id }}"
+    on_error: abort
+
+  - id: summarize
+    skill: doc.summarize
+    params:
+      document_id: "{{ trigger.document_id }}"
+    on_error: continue
+    description: Сгенерировать резюме документа
+
+  - id: price_check
+    skill: invoice.compare_prices
+    condition: "{{ get_document.doc_type == 'invoice' }}"
+    params:
+      invoice_id: "{{ get_document.invoice.id }}"
+    on_error: continue
+    description: Сравнить цены с предыдущими счетами поставщика
+
+  - id: get_validation
+    skill: invoice.validate
+    condition: "{{ get_document.doc_type == 'invoice' }}"
+    params:
+      invoice_id: "{{ get_document.invoice.id }}"
+    on_error: continue
+    description: Проверить арифметику
+
+completion:
+  context:
+    summary: "{{ summarize.summary }}"
+    key_facts: "{{ summarize.key_facts }}"
+    price_changes: "{{ price_check.comparisons }}"
+    validation: "{{ get_validation }}"
+  notify:
+    channel: review_panel
+    widget: context_card
+
+timeout: 30  # Quick — user is waiting

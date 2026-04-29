@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ../backend:/app
+      - ../openclaw:/openclaw
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      APP_DEBUG: "true"
+      APP_LOG_LEVEL: DEBUG
+
+  celery-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ../backend:/app
+      - ../openclaw:/openclaw:ro
+    command: celery -A app.tasks.celery_app worker -l debug -c 2 -Q celery,extraction,ingest,scheduler
+
+  celery-beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ../backend:/app
+      - ../openclaw:/openclaw:ro
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    environment:
+      NODE_ENV: development
+
+  # Disable GPU requirement for dev (use CPU Ollama)
+  ollama:
+    deploy:
+      resources: {}

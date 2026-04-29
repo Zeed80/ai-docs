@@ -1,0 +1,5394 @@
+{
+  "version": 1,
+  "source": "fastapi_docstrings",
+  "policy": {
+    "default": "deny",
+    "unknown_tools": "deny",
+    "confidential_default": true,
+    "external_actions_require_approval": true
+  },
+  "tools": [
+    {
+      "name": "doc.ingest",
+      "description": "Skill: doc.ingest — Accept file, store, create Document record.",
+      "category": "documents",
+      "method": "POST",
+      "path": "/api/documents/ingest",
+      "approval_required": false
+    },
+    {
+      "name": "doc.get",
+      "description": "Skill: doc.get — Get document with extractions and links.",
+      "category": "documents",
+      "method": "GET",
+      "path": "/api/documents/{document_id}",
+      "approval_required": false
+    },
+    {
+      "name": "doc.list",
+      "description": "Skill: doc.list — List documents with filters.",
+      "category": "documents",
+      "method": "GET",
+      "path": "/api/documents",
+      "approval_required": false
+    },
+    {
+      "name": "doc.update",
+      "description": "Skill: doc.update — Update document fields.",
+      "category": "documents",
+      "method": "PATCH",
+      "path": "/api/documents/{document_id}",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "DocumentStatus": {
+            "enum": [
+              "ingested",
+              "classifying",
+              "extracting",
+              "needs_review",
+              "approved",
+              "rejected",
+              "archived",
+              "suspicious"
+            ],
+            "title": "DocumentStatus",
+            "type": "string"
+          },
+          "DocumentType": {
+            "enum": [
+              "invoice",
+              "letter",
+              "contract",
+              "drawing",
+              "commercial_offer",
+              "act",
+              "waybill",
+              "other"
+            ],
+            "title": "DocumentType",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "doc_type": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DocumentType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DocumentStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "title": "DocumentUpdate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "doc.link",
+      "description": "Skill: doc.link — Link document to an entity.",
+      "category": "documents",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/links",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "linked_entity_type": {
+            "title": "Linked Entity Type",
+            "type": "string"
+          },
+          "linked_entity_id": {
+            "format": "uuid",
+            "title": "Linked Entity Id",
+            "type": "string"
+          },
+          "link_type": {
+            "default": "related",
+            "title": "Link Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "linked_entity_type",
+          "linked_entity_id"
+        ],
+        "title": "DocumentLinkCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "doc.classify",
+      "description": "Skill: doc.classify — Trigger document classification via AI.",
+      "category": "documents",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/classify",
+      "approval_required": false
+    },
+    {
+      "name": "doc.extract",
+      "description": "Skill: doc.extract — Trigger full extraction pipeline (classify → extract → validate).",
+      "category": "documents",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/extract",
+      "approval_required": false
+    },
+    {
+      "name": "doc.correct_field",
+      "description": "Skill: doc.correct_field — Human correction of an extracted field.",
+      "category": "documents",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/correct-field",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "field_name": {
+            "title": "Field Name",
+            "type": "string"
+          },
+          "corrected_value": {
+            "title": "Corrected Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field_name",
+          "corrected_value"
+        ],
+        "title": "FieldCorrectionRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "doc.summarize",
+      "description": "Skill: doc.summarize — Generate AI summary of a document.",
+      "category": "documents",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/summarize",
+      "approval_required": false
+    },
+    {
+      "name": "invoice.list",
+      "description": "Skill: invoice.list — List invoices with filters.",
+      "category": "invoices",
+      "method": "GET",
+      "path": "/api/invoices",
+      "approval_required": false
+    },
+    {
+      "name": "invoice.get",
+      "description": "Skill: invoice.get — Get invoice with lines.",
+      "category": "invoices",
+      "method": "GET",
+      "path": "/api/invoices/{invoice_id}",
+      "approval_required": false
+    },
+    {
+      "name": "invoice.extract",
+      "description": "Skill: invoice.extract — Re-run extraction on invoice's document.",
+      "category": "invoices",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/re-extract",
+      "approval_required": false
+    },
+    {
+      "name": "invoice.validate",
+      "description": "Skill: invoice.validate — Run arithmetic and format validation on invoice.",
+      "category": "invoices",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/validate",
+      "approval_required": false
+    },
+    {
+      "name": "invoice.update",
+      "description": "Skill: invoice.update — Update invoice fields after human review.",
+      "category": "invoices",
+      "method": "PATCH",
+      "path": "/api/invoices/{invoice_id}",
+      "approval_required": false,
+      "parameters": {
+        "description": "Update specific invoice fields after review.",
+        "properties": {
+          "invoice_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Number"
+          },
+          "invoice_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Date"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Due Date"
+          },
+          "validity_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Validity Date"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency"
+          },
+          "subtotal": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtotal"
+          },
+          "tax_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tax Amount"
+          },
+          "total_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total Amount"
+          },
+          "payment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Payment Id"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
+          }
+        },
+        "title": "InvoiceFieldUpdate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "invoice.approve",
+      "description": "Skill: invoice.approve — Approve invoice (approval gate).",
+      "category": "invoices",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/approve",
+      "approval_required": true,
+      "parameters": {
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment"
+          }
+        },
+        "title": "InvoiceApproveRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "invoice.reject",
+      "description": "Skill: invoice.reject — Reject invoice (approval gate).",
+      "category": "invoices",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/reject",
+      "approval_required": true,
+      "parameters": {
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "InvoiceRejectRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "invoice.compare_prices",
+      "description": "Skill: invoice.compare_prices — Compare line prices with previous invoices from same supplier.",
+      "category": "invoices",
+      "method": "GET",
+      "path": "/api/invoices/{invoice_id}/price-check",
+      "approval_required": false
+    },
+    {
+      "name": "invoice.delete",
+      "description": "Skill: invoice.delete — Delete a single invoice and its lines.",
+      "category": "invoices",
+      "method": "DELETE",
+      "path": "/api/invoices/{invoice_id}",
+      "approval_required": false
+    },
+    {
+      "name": "invoice.bulk_delete",
+      "description": "Skill: invoice.bulk_delete — Bulk delete invoices by ids list, filter, or all.",
+      "category": "invoices",
+      "method": "DELETE",
+      "path": "/api/invoices",
+      "approval_required": true,
+      "parameters": {
+        "$defs": {
+          "InvoiceStatus": {
+            "enum": [
+              "draft",
+              "needs_review",
+              "approved",
+              "rejected",
+              "paid"
+            ],
+            "title": "InvoiceStatus",
+            "type": "string"
+          }
+        },
+        "description": "Bulk delete request — pass ids OR filters.",
+        "properties": {
+          "ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ids"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InvoiceStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "supplier_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supplier Id"
+          },
+          "delete_all": {
+            "default": false,
+            "title": "Delete All",
+            "type": "boolean"
+          }
+        },
+        "title": "InvoiceDeleteRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "invoice.receive",
+      "description": "Skill: invoice.receive — Create warehouse receipt from this invoice's lines.",
+      "category": "invoices",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/receive",
+      "approval_required": false
+    },
+    {
+      "name": "email.fetch_new",
+      "description": "Skill: email.fetch_new — Check for new emails via IMAP.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/fetch",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "mailbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mailbox"
+          }
+        },
+        "title": "EmailFetchRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.search",
+      "description": "Skill: email.search — Search emails by query, supplier, or address.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/search",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Query"
+          },
+          "supplier_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supplier Id"
+          },
+          "email_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Email Address"
+          },
+          "mailbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mailbox"
+          },
+          "limit": {
+            "default": 20,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "EmailSearchRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.list_threads",
+      "description": "Skill: email.list_threads — List email threads.",
+      "category": "email",
+      "method": "GET",
+      "path": "/api/email/threads",
+      "approval_required": false
+    },
+    {
+      "name": "email.get_thread",
+      "description": "Skill: email.get_thread — Get thread with all messages.",
+      "category": "email",
+      "method": "GET",
+      "path": "/api/email/threads/{thread_id}",
+      "approval_required": false
+    },
+    {
+      "name": "email.draft",
+      "description": "Skill: email.draft — Create email draft.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/drafts",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "to_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "To Addresses",
+            "type": "array"
+          },
+          "cc_addresses": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Cc Addresses",
+            "type": "array"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "body_html": {
+            "title": "Body Html",
+            "type": "string"
+          },
+          "body_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Body Text"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          },
+          "supplier_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supplier Id"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context"
+          }
+        },
+        "required": [
+          "to_addresses",
+          "subject",
+          "body_html"
+        ],
+        "title": "EmailDraftCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.list_drafts",
+      "description": "Skill: email.list_drafts — List email drafts.",
+      "category": "email",
+      "method": "GET",
+      "path": "/api/email/drafts",
+      "approval_required": false
+    },
+    {
+      "name": "email.style_match",
+      "description": "Skill: email.style_match — Analyze communication style with a counterparty.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/style-analyze",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "supplier_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supplier Id"
+          },
+          "email_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Email Address"
+          },
+          "sample_count": {
+            "default": 5,
+            "title": "Sample Count",
+            "type": "integer"
+          }
+        },
+        "title": "StyleAnalyzeRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.risk_check",
+      "description": "Skill: email.risk_check — Check email draft for risks before sending.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/drafts/{draft_id}/risk-check",
+      "approval_required": false
+    },
+    {
+      "name": "email.send",
+      "description": "Skill: email.send — Send email draft via SMTP (approval gate).",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/drafts/{draft_id}/send",
+      "approval_required": true
+    },
+    {
+      "name": "email.suggest_template",
+      "description": "Skill: email.suggest_template — Suggest email template by context.",
+      "category": "email",
+      "method": "POST",
+      "path": "/api/email/suggest-template",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "context_type": {
+            "title": "Context Type",
+            "type": "string"
+          },
+          "supplier_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supplier Id"
+          },
+          "invoice_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Id"
+          },
+          "language": {
+            "default": "ru",
+            "title": "Language",
+            "type": "string"
+          }
+        },
+        "required": [
+          "context_type"
+        ],
+        "title": "TemplateSuggestRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "email.read",
+      "description": "Skill: email.read — Read email message with attachments.",
+      "category": "email",
+      "method": "GET",
+      "path": "/api/email/{email_id}",
+      "approval_required": false
+    },
+    {
+      "name": "approval.request",
+      "description": "Skill: approval.request — Request human approval. Blocks agent.",
+      "category": "approvals",
+      "method": "POST",
+      "path": "/api/approvals",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "ApprovalActionType": {
+            "enum": [
+              "invoice.approve",
+              "invoice.reject",
+              "invoice.bulk_delete",
+              "email.send",
+              "anomaly.resolve",
+              "table.apply_diff",
+              "norm.activate_rule",
+              "compare.decide",
+              "warehouse.confirm_receipt",
+              "payment.mark_paid",
+              "procurement.send_rfq",
+              "bom.approve",
+              "bom.create_purchase_request",
+              "tech.process_plan_approve",
+              "tech.norm_estimate_approve",
+              "tech.learning_rule_activate",
+              "agent.tool_call"
+            ],
+            "title": "ApprovalActionType",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "action_type": {
+            "$ref": "#/$defs/ApprovalActionType"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "requested_by": {
+            "default": "sveta",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "assigned_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Assigned To"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          }
+        },
+        "required": [
+          "action_type",
+          "entity_type",
+          "entity_id"
+        ],
+        "title": "ApprovalCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "approval.list_pending",
+      "description": "Skill: approval.list_pending — List pending approvals.",
+      "category": "approvals",
+      "method": "GET",
+      "path": "/api/approvals/pending",
+      "approval_required": false
+    },
+    {
+      "name": "approval.status",
+      "description": "Skill: approval.status — Check approval status.",
+      "category": "approvals",
+      "method": "GET",
+      "path": "/api/approvals/{approval_id}",
+      "approval_required": false
+    },
+    {
+      "name": "doc.search",
+      "description": "Skill: doc.search — Hybrid search: Postgres FTS + ILIKE fallback.",
+      "category": "search",
+      "method": "POST",
+      "path": "/api/search/documents",
+      "approval_required": false
+    },
+    {
+      "name": "search.nl_to_query",
+      "description": "Skill: search.nl_to_query — Convert natural language to structured query.",
+      "category": "search",
+      "method": "POST",
+      "path": "/api/search/nl",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "NLQueryRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "search.nl",
+      "description": "Skill: search.nl_to_query — Convert natural language to structured query.",
+      "category": "search",
+      "method": "POST",
+      "path": "/api/search/nl",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "NLQueryRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "search.hybrid",
+      "description": "Skill: search.hybrid — Vector similarity search via Qdrant + SQL filter fallback.",
+      "category": "search",
+      "method": "POST",
+      "path": "/api/search/hybrid",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Doc Type"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          },
+          "limit": {
+            "default": 20,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "HybridSearchRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "norm.list_rules",
+      "description": "Skill: norm.list_rules — List normalization rules.",
+      "category": "normalization",
+      "method": "GET",
+      "path": "/api/normalization/rules",
+      "approval_required": false
+    },
+    {
+      "name": "norm.suggest_rule",
+      "description": "Skill: norm.suggest_rule — Detect repeated human corrections and propose rules.",
+      "category": "normalization",
+      "method": "POST",
+      "path": "/api/normalization/suggest",
+      "approval_required": false,
+      "parameters": {
+        "description": "Trigger suggestion engine for a specific document or field.",
+        "properties": {
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Id"
+          },
+          "field_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Field Name"
+          },
+          "min_corrections": {
+            "default": 3,
+            "description": "Minimum repeated corrections to suggest a rule",
+            "minimum": 1,
+            "title": "Min Corrections",
+            "type": "integer"
+          }
+        },
+        "title": "NormRuleSuggestRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "norm.activate_rule",
+      "description": "Skill: norm.activate_rule — Activate a proposed rule (approval gate).",
+      "category": "normalization",
+      "method": "POST",
+      "path": "/api/normalization/rules/{rule_id}/activate",
+      "approval_required": true,
+      "parameters": {
+        "properties": {
+          "activated_by": {
+            "default": "user",
+            "title": "Activated By",
+            "type": "string"
+          }
+        },
+        "title": "NormRuleActivateRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "norm.apply_rules",
+      "description": "Skill: norm.apply_rules — Apply active normalization rules to a document's extraction.",
+      "category": "normalization",
+      "method": "POST",
+      "path": "/api/normalization/apply",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "NormApplyRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "norm.list_norm_cards",
+      "description": "Skill: norm.list_norm_cards — List norm cards.",
+      "category": "normalization",
+      "method": "GET",
+      "path": "/api/normalization/norm-cards",
+      "approval_required": false
+    },
+    {
+      "name": "norm.create_norm_card",
+      "description": "Skill: norm.create_norm_card — Create a norm card for a canonical item.",
+      "category": "normalization",
+      "method": "POST",
+      "path": "/api/normalization/norm-cards",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "canonical_item_id": {
+            "format": "uuid",
+            "title": "Canonical Item Id",
+            "type": "string"
+          },
+          "norm_qty": {
+            "title": "Norm Qty",
+            "type": "number"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "product_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Product Code"
+          },
+          "loss_factor": {
+            "default": 1.0,
+            "title": "Loss Factor",
+            "type": "number"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Approved By"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
+          }
+        },
+        "required": [
+          "canonical_item_id",
+          "norm_qty",
+          "unit"
+        ],
+        "title": "NormCardCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "norm.update_norm_card",
+      "description": "Skill: norm.update_norm_card — Update norm card values.",
+      "category": "normalization",
+      "method": "PATCH",
+      "path": "/api/normalization/norm-cards/{card_id}",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "norm_qty": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Norm Qty"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unit"
+          },
+          "product_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Product Code"
+          },
+          "loss_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Loss Factor"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Approved By"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
+          }
+        },
+        "title": "NormCardUpdate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "norm.list_canonical_items",
+      "description": "Skill: norm.list_canonical_items — List canonical items.",
+      "category": "normalization",
+      "method": "GET",
+      "path": "/api/normalization/canonical-items",
+      "approval_required": false
+    },
+    {
+      "name": "norm.get_canonical_item",
+      "description": "Skill: norm.get_canonical_item — Get canonical item with classification fields.",
+      "category": "normalization",
+      "method": "GET",
+      "path": "/api/normalization/canonical-items/{item_id}",
+      "approval_required": false
+    },
+    {
+      "name": "norm.update_canonical_item",
+      "description": "Skill: norm.update_canonical_item — Update OKPD2, GOST, hazard class.",
+      "category": "normalization",
+      "method": "PATCH",
+      "path": "/api/normalization/canonical-items/{item_id}",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "okpd2_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Okpd2 Code"
+          },
+          "gost": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gost"
+          },
+          "hazard_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hazard Class"
+          }
+        },
+        "title": "CanonicalItemClassificationUpdate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "norm.get_item_norm_cards",
+      "description": "Skill: norm.get_item_norm_cards — Get all norm cards for a canonical item.",
+      "category": "normalization",
+      "method": "GET",
+      "path": "/api/normalization/canonical-items/{item_id}/norm-cards",
+      "approval_required": false
+    },
+    {
+      "name": "table.query",
+      "description": "Skill: table.query — Query table with filters, sort, pagination.",
+      "category": "tables",
+      "method": "POST",
+      "path": "/api/tables/query",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "TableFilter": {
+            "properties": {
+              "column": {
+                "title": "Column",
+                "type": "string"
+              },
+              "operator": {
+                "default": "eq",
+                "title": "Operator",
+                "type": "string"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Value"
+              }
+            },
+            "required": [
+              "column"
+            ],
+            "title": "TableFilter",
+            "type": "object"
+          },
+          "TableSort": {
+            "properties": {
+              "column": {
+                "title": "Column",
+                "type": "string"
+              },
+              "direction": {
+                "default": "desc",
+                "title": "Direction",
+                "type": "string"
+              }
+            },
+            "required": [
+              "column"
+            ],
+            "title": "TableSort",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "table": {
+            "default": "invoices",
+            "title": "Table",
+            "type": "string"
+          },
+          "columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Columns"
+          },
+          "filters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TableFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "sort": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TableSort"
+            },
+            "title": "Sort",
+            "type": "array"
+          },
+          "search": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Search"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 500,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "TableQueryRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "table.export_excel",
+      "description": "Skill: table.export_excel — Export table to Excel/CSV.",
+      "category": "tables",
+      "method": "POST",
+      "path": "/api/tables/export",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "TableFilter": {
+            "properties": {
+              "column": {
+                "title": "Column",
+                "type": "string"
+              },
+              "operator": {
+                "default": "eq",
+                "title": "Operator",
+                "type": "string"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Value"
+              }
+            },
+            "required": [
+              "column"
+            ],
+            "title": "TableFilter",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "table": {
+            "default": "invoices",
+            "title": "Table",
+            "type": "string"
+          },
+          "filters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TableFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Columns"
+          },
+          "format": {
+            "default": "xlsx",
+            "title": "Format",
+            "type": "string"
+          }
+        },
+        "title": "ExportRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "table.export_1c",
+      "description": "Skill: table.export_1c — Export invoices to 1С CommerceML XML format.",
+      "category": "tables",
+      "method": "POST",
+      "path": "/api/tables/export-1c",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "TableFilter": {
+            "properties": {
+              "column": {
+                "title": "Column",
+                "type": "string"
+              },
+              "operator": {
+                "default": "eq",
+                "title": "Operator",
+                "type": "string"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Value"
+              }
+            },
+            "required": [
+              "column"
+            ],
+            "title": "TableFilter",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "invoice_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Ids"
+          },
+          "filters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TableFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "format": {
+            "default": "commerceml",
+            "title": "Format",
+            "type": "string"
+          }
+        },
+        "title": "Export1CRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "table.list_views",
+      "description": "Skill: table.list_views — List saved table views.",
+      "category": "tables",
+      "method": "GET",
+      "path": "/api/tables/views",
+      "approval_required": false
+    },
+    {
+      "name": "table.create_view",
+      "description": "Skill: table.create_view — Create a saved table view.",
+      "category": "tables",
+      "method": "POST",
+      "path": "/api/tables/views",
+      "approval_required": false,
+      "parameters": {
+        "$defs": {
+          "TableFilter": {
+            "properties": {
+              "column": {
+                "title": "Column",
+                "type": "string"
+              },
+              "operator": {
+                "default": "eq",
+                "title": "Operator",
+                "type": "string"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Value"
+              }
+            },
+            "required": [
+              "column"
+            ],
+            "title": "TableFilter",
+            "type": "object"
+          },
+          "TableSort": {
+            "properties": {
+              "column": {
+                "title": "Column",
+                "type": "string"
+              },
+              "direction": {
+                "default": "desc",
+                "title": "Direction",
+                "type": "string"
+              }
+            },
+            "required": [
+              "column"
+            ],
+            "title": "TableSort",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "table": {
+            "default": "invoices",
+            "title": "Table",
+            "type": "string"
+          },
+          "columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Columns"
+          },
+          "filters": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TableFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          },
+          "sort": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TableSort"
+            },
+            "title": "Sort",
+            "type": "array"
+          },
+          "is_shared": {
+            "default": false,
+            "title": "Is Shared",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SavedViewCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "table.delete_view",
+      "description": "Skill: table.delete_view — Delete a saved view.",
+      "category": "tables",
+      "method": "DELETE",
+      "path": "/api/tables/views/{view_id}",
+      "approval_required": false
+    },
+    {
+      "name": "table.import_excel",
+      "description": "Skill: table.import_excel — Upload Excel, build diff for review.",
+      "category": "tables",
+      "method": "POST",
+      "path": "/api/tables/import",
+      "approval_required": false
+    },
+    {
+      "name": "table.apply_diff",
+      "description": "Skill: table.apply_diff — Apply import diff rows to the database.",
+      "category": "tables",
+      "method": "POST",
+      "path": "/api/tables/apply-diff",
+      "approval_required": true,
+      "parameters": {
+        "$defs": {
+          "ApplyDiffRow": {
+            "properties": {
+              "entity_id": {
+                "anyOf": [
+                  {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Entity Id"
+              },
+              "action": {
+                "title": "Action",
+                "type": "string"
+              },
+              "changes": {
+                "additionalProperties": true,
+                "default": {},
+                "title": "Changes",
+                "type": "object"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "title": "ApplyDiffRow",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/$defs/ApplyDiffRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "title": "ApplyDiffRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "table.inline_edit",
+      "description": "Skill: table.inline_edit — Edit a single cell value.",
+      "category": "tables",
+      "method": "POST",
+      "path": "/api/tables/inline-edit",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "entity_id",
+          "field",
+          "value"
+        ],
+        "title": "InlineEditRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "table.batch_action",
+      "description": "Skill: table.batch_action — Apply action to multiple invoices.",
+      "category": "tables",
+      "method": "POST",
+      "path": "/api/tables/batch",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "entity_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Entity Ids",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "action",
+          "entity_ids"
+        ],
+        "title": "BatchActionRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "supplier.get",
+      "description": "Skill: supplier.get — Get supplier profile with aggregated stats.",
+      "category": "suppliers",
+      "method": "GET",
+      "path": "/api/suppliers/{supplier_id}",
+      "approval_required": false
+    },
+    {
+      "name": "supplier.search",
+      "description": "Skill: supplier.search — Search suppliers by name, INN, or address.",
+      "category": "suppliers",
+      "method": "POST",
+      "path": "/api/suppliers/search",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "limit": {
+            "default": 10,
+            "maximum": 50,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SupplierSearchRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "supplier.price_history",
+      "description": "Skill: supplier.price_history — Get price history for all items from this supplier.",
+      "category": "suppliers",
+      "method": "GET",
+      "path": "/api/suppliers/{supplier_id}/price-history",
+      "approval_required": false
+    },
+    {
+      "name": "supplier.check_requisites",
+      "description": "Skill: supplier.check_requisites — Validate supplier requisites.",
+      "category": "suppliers",
+      "method": "POST",
+      "path": "/api/suppliers/{supplier_id}/check-requisites",
+      "approval_required": false
+    },
+    {
+      "name": "supplier.trust_score",
+      "description": "Skill: supplier.trust_score — Calculate supplier trust score.",
+      "category": "suppliers",
+      "method": "GET",
+      "path": "/api/suppliers/{supplier_id}/trust-score",
+      "approval_required": false
+    },
+    {
+      "name": "supplier.alerts",
+      "description": "Skill: supplier.alerts — Get alerts for a supplier.",
+      "category": "suppliers",
+      "method": "GET",
+      "path": "/api/suppliers/{supplier_id}/alerts",
+      "approval_required": false
+    },
+    {
+      "name": "supplier.update",
+      "description": "Skill: supplier.update — Update supplier details.",
+      "category": "suppliers",
+      "method": "PATCH",
+      "path": "/api/suppliers/{supplier_id}",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "inn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Inn"
+          },
+          "kpp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kpp"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Address"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Email"
+          },
+          "contact_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Phone"
+          },
+          "bank_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bank Name"
+          },
+          "bank_bik": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bank Bik"
+          },
+          "bank_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bank Account"
+          },
+          "corr_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Corr Account"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
+          }
+        },
+        "title": "SupplierUpdate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "supplier.list",
+      "description": "Skill: supplier.list — List all suppliers/parties.",
+      "category": "suppliers",
+      "method": "GET",
+      "path": "/api/suppliers",
+      "approval_required": false
+    },
+    {
+      "name": "collection.create",
+      "description": "Skill: collection.create — Create a new collection.",
+      "category": "collections",
+      "method": "POST",
+      "path": "/api/collections",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CollectionCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "collection.list",
+      "description": "Skill: collection.list — List collections.",
+      "category": "collections",
+      "method": "GET",
+      "path": "/api/collections",
+      "approval_required": false
+    },
+    {
+      "name": "collection.get",
+      "description": "Skill: collection.get — Get collection with items.",
+      "category": "collections",
+      "method": "GET",
+      "path": "/api/collections/{collection_id}",
+      "approval_required": false
+    },
+    {
+      "name": "collection.add",
+      "description": "Skill: collection.add — Add item to collection.",
+      "category": "collections",
+      "method": "POST",
+      "path": "/api/collections/{collection_id}/items",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          }
+        },
+        "required": [
+          "entity_type",
+          "entity_id"
+        ],
+        "title": "CollectionAddItem",
+        "type": "object"
+      }
+    },
+    {
+      "name": "collection.summarize",
+      "description": "Skill: collection.summarize — Summarize collection contents.",
+      "category": "collections",
+      "method": "POST",
+      "path": "/api/collections/{collection_id}/summarize",
+      "approval_required": false
+    },
+    {
+      "name": "collection.timeline",
+      "description": "Skill: collection.timeline — Get timeline of events for items in collection.",
+      "category": "collections",
+      "method": "GET",
+      "path": "/api/collections/{collection_id}/timeline",
+      "approval_required": false
+    },
+    {
+      "name": "anomaly.check_all",
+      "description": "Skill: anomaly.check_all — Run all anomaly detectors on an invoice.",
+      "category": "anomalies",
+      "method": "POST",
+      "path": "/api/anomalies/check",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "invoice_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Id"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Id"
+          }
+        },
+        "title": "AnomalyCheckRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "anomaly.create_card",
+      "description": "Skill: anomaly.create_card — Manually create an anomaly card.",
+      "category": "anomalies",
+      "method": "POST",
+      "path": "/api/anomalies",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "anomaly_type": {
+            "title": "Anomaly Type",
+            "type": "string"
+          },
+          "severity": {
+            "default": "warning",
+            "title": "Severity",
+            "type": "string"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Details"
+          }
+        },
+        "required": [
+          "anomaly_type",
+          "entity_type",
+          "entity_id",
+          "title"
+        ],
+        "title": "AnomalyCreateRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "anomaly.list",
+      "description": "Skill: anomaly.list — List anomaly cards.",
+      "category": "anomalies",
+      "method": "GET",
+      "path": "/api/anomalies",
+      "approval_required": false
+    },
+    {
+      "name": "anomaly.resolve",
+      "description": "Skill: anomaly.resolve — Resolve an anomaly (approval gate).",
+      "category": "anomalies",
+      "method": "POST",
+      "path": "/api/anomalies/{anomaly_id}/resolve",
+      "approval_required": true,
+      "parameters": {
+        "properties": {
+          "resolution": {
+            "title": "Resolution",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment"
+          }
+        },
+        "required": [
+          "resolution"
+        ],
+        "title": "AnomalyResolveRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "anomaly.explain",
+      "description": "Skill: anomaly.explain — Get human-readable explanation of an anomaly.",
+      "category": "anomalies",
+      "method": "GET",
+      "path": "/api/anomalies/{anomaly_id}/explain",
+      "approval_required": false
+    },
+    {
+      "name": "compare.create",
+      "description": "Skill: compare.create — Create a comparison session for commercial offers.",
+      "category": "compare",
+      "method": "POST",
+      "path": "/api/compare",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "invoice_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Invoice Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "invoice_ids"
+        ],
+        "title": "CompareCreateRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "compare.list",
+      "description": "Skill: compare.list — List comparison sessions.",
+      "category": "compare",
+      "method": "GET",
+      "path": "/api/compare",
+      "approval_required": false
+    },
+    {
+      "name": "compare.get",
+      "description": "Skill: compare.get — Get a comparison session.",
+      "category": "compare",
+      "method": "GET",
+      "path": "/api/compare/{session_id}",
+      "approval_required": false
+    },
+    {
+      "name": "compare.align",
+      "description": "Skill: compare.align — Align line items across invoices for comparison.",
+      "category": "compare",
+      "method": "POST",
+      "path": "/api/compare/{session_id}/align",
+      "approval_required": false
+    },
+    {
+      "name": "compare.decide",
+      "description": "Skill: compare.decide — Choose a supplier (approval gate).",
+      "category": "compare",
+      "method": "POST",
+      "path": "/api/compare/{session_id}/decide",
+      "approval_required": true,
+      "parameters": {
+        "properties": {
+          "chosen_supplier_id": {
+            "format": "uuid",
+            "title": "Chosen Supplier Id",
+            "type": "string"
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning"
+          }
+        },
+        "required": [
+          "chosen_supplier_id"
+        ],
+        "title": "CompareDecideRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "compare.summary",
+      "description": "Skill: compare.summary — Get comparison summary with recommendation.",
+      "category": "compare",
+      "method": "GET",
+      "path": "/api/compare/{session_id}/summary",
+      "approval_required": false
+    },
+    {
+      "name": "calendar.create_event",
+      "description": "Skill: calendar.create_event — Create a calendar event.",
+      "category": "calendar",
+      "method": "POST",
+      "path": "/api/calendar/events",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "event_date": {
+            "format": "date-time",
+            "title": "Event Date",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "entity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entity Type"
+          },
+          "entity_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entity Id"
+          },
+          "source": {
+            "default": "manual",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "event_date",
+          "event_type"
+        ],
+        "title": "CalendarEventCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar.list_events",
+      "description": "Skill: calendar.list_events — List calendar events with filters.",
+      "category": "calendar",
+      "method": "GET",
+      "path": "/api/calendar/events",
+      "approval_required": false
+    },
+    {
+      "name": "calendar.extract_dates",
+      "description": "Skill: calendar.extract_dates — Extract dates from invoice and create events.",
+      "category": "calendar",
+      "method": "POST",
+      "path": "/api/calendar/extract-dates",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "invoice_id": {
+            "format": "uuid",
+            "title": "Invoice Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invoice_id"
+        ],
+        "title": "ExtractDatesRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar.upcoming",
+      "description": "Skill: calendar.upcoming — Get upcoming events and pending reminders.",
+      "category": "calendar",
+      "method": "GET",
+      "path": "/api/calendar/upcoming",
+      "approval_required": false
+    },
+    {
+      "name": "calendar.create_reminder",
+      "description": "Skill: calendar.create_reminder — Create a reminder.",
+      "category": "calendar",
+      "method": "POST",
+      "path": "/api/calendar/reminders",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "remind_at": {
+            "format": "date-time",
+            "title": "Remind At",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "calendar_event_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Calendar Event Id"
+          }
+        },
+        "required": [
+          "entity_type",
+          "entity_id",
+          "remind_at",
+          "message"
+        ],
+        "title": "ReminderCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "calendar.list_reminders",
+      "description": "Skill: calendar.list_reminders — List reminders.",
+      "category": "calendar",
+      "method": "GET",
+      "path": "/api/calendar/reminders",
+      "approval_required": false
+    },
+    {
+      "name": "calendar.mark_sent",
+      "description": "Skill: calendar.mark_sent — Mark a reminder as sent.",
+      "category": "calendar",
+      "method": "POST",
+      "path": "/api/calendar/reminders/{reminder_id}/mark-sent",
+      "approval_required": false
+    },
+    {
+      "name": "dashboard.today",
+      "description": "Skill: dashboard.today — Read counters and recent activity for today.",
+      "category": "dashboard",
+      "method": "GET",
+      "path": "/api/dashboard/today",
+      "approval_required": false
+    },
+    {
+      "name": "graph.node_create",
+      "description": "Skill: graph.node_create — Create a graph memory node.",
+      "category": "graph",
+      "method": "POST",
+      "path": "/api/graph/nodes",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "node_type": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Node Type",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "canonical_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Canonical Key"
+          },
+          "entity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entity Type"
+          },
+          "entity_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entity Id"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Summary"
+          },
+          "aliases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Aliases"
+          },
+          "confidence": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "node_type",
+          "title"
+        ],
+        "title": "KnowledgeNodeCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "graph.node_get",
+      "description": "Skill: graph.node_get — Get a graph memory node.",
+      "category": "graph",
+      "method": "GET",
+      "path": "/api/graph/nodes/{node_id}",
+      "approval_required": false
+    },
+    {
+      "name": "graph.edge_create",
+      "description": "Skill: graph.edge_create — Link two graph memory nodes.",
+      "category": "graph",
+      "method": "POST",
+      "path": "/api/graph/edges",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "source_node_id": {
+            "format": "uuid",
+            "title": "Source Node Id",
+            "type": "string"
+          },
+          "target_node_id": {
+            "format": "uuid",
+            "title": "Target Node Id",
+            "type": "string"
+          },
+          "edge_type": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Edge Type",
+            "type": "string"
+          },
+          "confidence": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "source_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Document Id"
+          },
+          "source_document_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Document Version Id"
+          },
+          "evidence_span_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence Span Id"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "source_node_id",
+          "target_node_id",
+          "edge_type"
+        ],
+        "title": "KnowledgeEdgeCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "graph.neighborhood",
+      "description": "Skill: graph.neighborhood — Get connected graph memory around a node.",
+      "category": "graph",
+      "method": "GET",
+      "path": "/api/graph/nodes/{node_id}/neighborhood",
+      "approval_required": false
+    },
+    {
+      "name": "graph.path",
+      "description": "Skill: graph.path — Find a short relationship path between two nodes.",
+      "category": "graph",
+      "method": "GET",
+      "path": "/api/graph/path",
+      "approval_required": false
+    },
+    {
+      "name": "graph.chunk_create",
+      "description": "Skill: graph.chunk_create — Create a memory chunk for a document.",
+      "category": "graph",
+      "method": "POST",
+      "path": "/api/graph/chunks",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Version Id"
+          },
+          "chunk_index": {
+            "minimum": 0,
+            "title": "Chunk Index",
+            "type": "integer"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "token_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Token Count"
+          },
+          "page_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page Number"
+          },
+          "bbox_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bbox Data"
+          },
+          "embedding_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Embedding Id"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "document_id",
+          "chunk_index",
+          "text"
+        ],
+        "title": "DocumentChunkCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "graph.evidence_create",
+      "description": "Skill: graph.evidence_create — Create source evidence span.",
+      "category": "graph",
+      "method": "POST",
+      "path": "/api/graph/evidence",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Version Id"
+          },
+          "chunk_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Chunk Id"
+          },
+          "field_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Field Name"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "page_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page Number"
+          },
+          "bbox_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bbox Data"
+          },
+          "confidence": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "document_id",
+          "text"
+        ],
+        "title": "EvidenceSpanCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "graph.mention_create",
+      "description": "Skill: graph.mention_create — Create a document entity mention.",
+      "category": "graph",
+      "method": "POST",
+      "path": "/api/graph/mentions",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Version Id"
+          },
+          "chunk_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Chunk Id"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Node Id"
+          },
+          "mention_text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Mention Text",
+            "type": "string"
+          },
+          "entity_type": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "start_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Offset"
+          },
+          "end_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Offset"
+          },
+          "confidence": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "extraction_method": {
+            "default": "manual",
+            "title": "Extraction Method",
+            "type": "string"
+          },
+          "evidence_span_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence Span Id"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "document_id",
+          "mention_text",
+          "entity_type"
+        ],
+        "title": "EntityMentionCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "graph.review_list",
+      "description": "Skill: graph.review_list — List graph memory links that need review.",
+      "category": "graph",
+      "method": "GET",
+      "path": "/api/graph/review",
+      "approval_required": false
+    },
+    {
+      "name": "graph.review_decide",
+      "description": "Skill: graph.review_decide — Approve or reject a graph memory suggestion.",
+      "category": "graph",
+      "method": "POST",
+      "path": "/api/graph/review/{item_id}/decide",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "action": {
+            "pattern": "^(approve|reject)$",
+            "title": "Action",
+            "type": "string"
+          },
+          "decided_by": {
+            "default": "system",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Decided By",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "GraphReviewDecision",
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory.search",
+      "description": "Skill: memory.search — Search graph nodes, chunks, and evidence spans.",
+      "category": "memory",
+      "method": "POST",
+      "path": "/api/memory/search",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "query": {
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "node_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Node Types"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Id"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "retrieval_mode": {
+            "default": "sql",
+            "enum": [
+              "sql",
+              "sql_vector",
+              "sql_vector_rerank",
+              "graph",
+              "hybrid"
+            ],
+            "title": "Retrieval Mode",
+            "type": "string"
+          },
+          "include_explain": {
+            "default": true,
+            "title": "Include Explain",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "MemorySearchRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory.explain",
+      "description": "Skill: memory.explain — Search memory and return evidence with graph context.",
+      "category": "memory",
+      "method": "POST",
+      "path": "/api/memory/explain",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "query": {
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Id"
+          },
+          "node_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Node Types"
+          },
+          "limit": {
+            "default": 10,
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "neighborhood_depth": {
+            "default": 1,
+            "maximum": 2,
+            "minimum": 0,
+            "title": "Neighborhood Depth",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "MemoryExplainRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory.embeddings_rebuild",
+      "description": "Skill: memory.embeddings_rebuild — Prepare chunk/evidence embeddings for Qdrant.",
+      "category": "memory",
+      "method": "POST",
+      "path": "/api/memory/embeddings/rebuild",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Id"
+          },
+          "content_types": {
+            "default": [
+              "document_chunk",
+              "evidence_span"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Content Types",
+            "type": "array"
+          },
+          "collection_name": {
+            "default": "memory_chunks",
+            "title": "Collection Name",
+            "type": "string"
+          },
+          "embedding_model": {
+            "default": "nomic-embed-text",
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "vector_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Vector Size"
+          },
+          "limit": {
+            "default": 500,
+            "maximum": 5000,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "mark_stale_existing": {
+            "default": true,
+            "title": "Mark Stale Existing",
+            "type": "boolean"
+          }
+        },
+        "title": "MemoryEmbeddingRebuildRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory.embeddings_stats",
+      "description": "Skill: memory.embeddings_stats — Show active embedding profile and record statuses.",
+      "category": "memory",
+      "method": "GET",
+      "path": "/api/memory/embeddings/stats",
+      "approval_required": false
+    },
+    {
+      "name": "memory.embeddings_rebuild_active",
+      "description": "Skill: memory.embeddings_rebuild_active — Rebuild records for the active embedding profile.",
+      "category": "memory",
+      "method": "POST",
+      "path": "/api/memory/embeddings/rebuild-active",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Id"
+          },
+          "content_types": {
+            "default": [
+              "document_chunk",
+              "evidence_span"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Content Types",
+            "type": "array"
+          },
+          "collection_name": {
+            "default": "memory_chunks",
+            "title": "Collection Name",
+            "type": "string"
+          },
+          "embedding_model": {
+            "default": "nomic-embed-text",
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "vector_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Vector Size"
+          },
+          "limit": {
+            "default": 500,
+            "maximum": 5000,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "mark_stale_existing": {
+            "default": true,
+            "title": "Mark Stale Existing",
+            "type": "boolean"
+          }
+        },
+        "title": "MemoryEmbeddingRebuildRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory.embeddings_index_active",
+      "description": "Skill: memory.embeddings_index_active — Index queued/stale memory records into Qdrant.",
+      "category": "memory",
+      "method": "POST",
+      "path": "/api/memory/embeddings/index-active",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Id"
+          },
+          "statuses": {
+            "default": [
+              "queued",
+              "stale"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Statuses",
+            "type": "array"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 1000,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "MemoryEmbeddingIndexRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory.reindex",
+      "description": "Skill: memory.reindex — Rebuild graph memory for existing documents.",
+      "category": "memory",
+      "method": "POST",
+      "path": "/api/memory/reindex",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Ids"
+          },
+          "rebuild": {
+            "default": true,
+            "title": "Rebuild",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 1000,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "MemoryReindexRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.resource_list",
+      "description": "Skill: tech.resource_list — List machines, tools, fixtures, and equipment.",
+      "category": "technology",
+      "method": "GET",
+      "path": "/api/technology/resources",
+      "approval_required": false
+    },
+    {
+      "name": "tech.resource_create",
+      "description": "Skill: tech.resource_create — Create a manufacturing resource.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/resources",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "resource_type": {
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Resource Type",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "standard": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Standard"
+          },
+          "capabilities": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Capabilities"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "status": {
+            "default": "active",
+            "title": "Status",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "resource_type",
+          "name"
+        ],
+        "title": "ManufacturingResourceCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.operation_template_list",
+      "description": "Skill: tech.operation_template_list — List technology operation templates.",
+      "category": "technology",
+      "method": "GET",
+      "path": "/api/technology/operation-templates",
+      "approval_required": false
+    },
+    {
+      "name": "tech.operation_template_create",
+      "description": "Skill: tech.operation_template_create — Create an operation template.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/operation-templates",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "operation_type": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "standard_system": {
+            "default": "ЕСТД",
+            "title": "Standard System",
+            "type": "string"
+          },
+          "default_operation_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Operation Code"
+          },
+          "required_resource_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Required Resource Types"
+          },
+          "default_transition_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Transition Text"
+          },
+          "default_control_requirements": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Control Requirements"
+          },
+          "default_safety_requirements": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Safety Requirements"
+          },
+          "parameters_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parameters Schema"
+          },
+          "is_active": {
+            "default": true,
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "operation_type",
+          "name"
+        ],
+        "title": "OperationTemplateCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.process_plan_list",
+      "description": "Skill: tech.process_plan_list — List manufacturing process plans.",
+      "category": "technology",
+      "method": "GET",
+      "path": "/api/technology/process-plans",
+      "approval_required": false
+    },
+    {
+      "name": "tech.process_plan_create",
+      "description": "Skill: tech.process_plan_create — Create a manufacturing process plan.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Id"
+          },
+          "bom_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bom Id"
+          },
+          "product_name": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Product Name",
+            "type": "string"
+          },
+          "product_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Product Code"
+          },
+          "version": {
+            "default": "1.0",
+            "title": "Version",
+            "type": "string"
+          },
+          "status": {
+            "default": "draft",
+            "title": "Status",
+            "type": "string"
+          },
+          "standard_system": {
+            "default": "ЕСТД",
+            "title": "Standard System",
+            "type": "string"
+          },
+          "route_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Route Summary"
+          },
+          "material": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Material"
+          },
+          "blank_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Blank Type"
+          },
+          "quality_requirements": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Quality Requirements"
+          },
+          "created_by": {
+            "default": "sveta",
+            "title": "Created By",
+            "type": "string"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "product_name"
+        ],
+        "title": "ProcessPlanCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.process_plan_draft_from_document",
+      "description": "Skill: tech.process_plan_draft_from_document — Draft process plan from memory.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/draft-from-document",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "product_name": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Product Name"
+          },
+          "product_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Product Code"
+          },
+          "created_by": {
+            "default": "sveta",
+            "title": "Created By",
+            "type": "string"
+          },
+          "rebuild_existing": {
+            "default": false,
+            "title": "Rebuild Existing",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "ProcessPlanDraftFromDocumentRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.process_plan_get",
+      "description": "Skill: tech.process_plan_get — Get process plan with operations and norms.",
+      "category": "technology",
+      "method": "GET",
+      "path": "/api/technology/process-plans/{plan_id}",
+      "approval_required": false
+    },
+    {
+      "name": "tech.process_plan_approve",
+      "description": "Skill: tech.process_plan_approve — Approve process plan after review.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/approve",
+      "approval_required": true,
+      "parameters": {
+        "properties": {
+          "approved_by": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Approved By",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment"
+          }
+        },
+        "required": [
+          "approved_by"
+        ],
+        "title": "ProcessPlanApproveRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.process_plan_validate",
+      "description": "Skill: tech.process_plan_validate — Validate manufacturability and completeness.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/validate",
+      "approval_required": false
+    },
+    {
+      "name": "tech.norm_estimate_suggest",
+      "description": "Skill: tech.norm_estimate_suggest — Suggest operation time and cutting parameters.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/estimate-norms",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "batch_size": {
+            "default": 1.0,
+            "exclusiveMinimum": 0,
+            "title": "Batch Size",
+            "type": "number"
+          },
+          "overwrite_existing": {
+            "default": false,
+            "title": "Overwrite Existing",
+            "type": "boolean"
+          },
+          "created_by": {
+            "default": "sveta",
+            "title": "Created By",
+            "type": "string"
+          }
+        },
+        "title": "ProcessPlanEstimateNormsRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.operation_add",
+      "description": "Skill: tech.operation_add — Add a process operation and graph links.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/operations",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "sequence_no": {
+            "minimum": 1,
+            "title": "Sequence No",
+            "type": "integer"
+          },
+          "operation_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Code"
+          },
+          "name": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "operation_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Type"
+          },
+          "machine_resource_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Machine Resource Id"
+          },
+          "tool_resource_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Resource Id"
+          },
+          "fixture_resource_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fixture Resource Id"
+          },
+          "setup_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Setup Description"
+          },
+          "transition_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Transition Text"
+          },
+          "cutting_parameters": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cutting Parameters"
+          },
+          "control_requirements": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Control Requirements"
+          },
+          "safety_requirements": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Safety Requirements"
+          },
+          "setup_minutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Setup Minutes"
+          },
+          "machine_minutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Machine Minutes"
+          },
+          "labor_minutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labor Minutes"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "sequence_no",
+          "name"
+        ],
+        "title": "OperationCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.norm_estimate_create",
+      "description": "Skill: tech.norm_estimate_create — Create labor and machine time estimate.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/norm-estimates",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "operation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Id"
+          },
+          "setup_minutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Setup Minutes"
+          },
+          "machine_minutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Machine Minutes"
+          },
+          "labor_minutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labor Minutes"
+          },
+          "batch_size": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Batch Size"
+          },
+          "confidence": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "method": {
+            "default": "manual",
+            "title": "Method",
+            "type": "string"
+          },
+          "assumptions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Assumptions"
+          },
+          "created_by": {
+            "default": "sveta",
+            "title": "Created By",
+            "type": "string"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "title": "NormEstimateCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.norm_estimate_approve",
+      "description": "Skill: tech.norm_estimate_approve — Approve labor and machine time estimate.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/norm-estimates/{estimate_id}/approve",
+      "approval_required": true,
+      "parameters": {
+        "properties": {
+          "approved_by": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Approved By",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment"
+          }
+        },
+        "required": [
+          "approved_by"
+        ],
+        "title": "NormEstimateApproveRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.correction_record",
+      "description": "Skill: tech.correction_record — Record a human correction for learning.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/corrections",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "entity_type": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "field_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Field Name",
+            "type": "string"
+          },
+          "old_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Old Value"
+          },
+          "new_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "New Value"
+          },
+          "correction_type": {
+            "default": "manual_edit",
+            "title": "Correction Type",
+            "type": "string"
+          },
+          "corrected_by": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Corrected By",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "source_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Document Id"
+          },
+          "process_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Process Plan Id"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Id"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "entity_type",
+          "entity_id",
+          "field_name",
+          "corrected_by"
+        ],
+        "title": "TechnologyCorrectionCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.learning_suggest",
+      "description": "Skill: tech.learning_suggest — Suggest rules from repeated corrections.",
+      "category": "technology",
+      "method": "GET",
+      "path": "/api/technology/learning-suggestions",
+      "approval_required": false
+    },
+    {
+      "name": "tech.learning_rule_list",
+      "description": "Skill: tech.learning_rule_list — List proposed and active learning rules.",
+      "category": "technology",
+      "method": "GET",
+      "path": "/api/technology/learning-rules",
+      "approval_required": false
+    },
+    {
+      "name": "tech.learning_rule_create",
+      "description": "Skill: tech.learning_rule_create — Save a proposed learning rule.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/learning-rules",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "rule_type": {
+            "default": "normalization_rule",
+            "title": "Rule Type",
+            "type": "string"
+          },
+          "entity_type": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "field_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Field Name",
+            "type": "string"
+          },
+          "match_old_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Match Old Value"
+          },
+          "replacement_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Replacement Value"
+          },
+          "confidence": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "occurrences": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Occurrences",
+            "type": "integer"
+          },
+          "status": {
+            "default": "proposed",
+            "title": "Status",
+            "type": "string"
+          },
+          "suggested_by": {
+            "default": "system",
+            "title": "Suggested By",
+            "type": "string"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          }
+        },
+        "required": [
+          "entity_type",
+          "field_name"
+        ],
+        "title": "LearningRuleCreate",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tech.learning_rule_activate",
+      "description": "Skill: tech.learning_rule_activate — Activate a proposed learning rule.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/learning-rules/{rule_id}/activate",
+      "approval_required": true,
+      "parameters": {
+        "properties": {
+          "activated_by": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Activated By",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment"
+          }
+        },
+        "required": [
+          "activated_by"
+        ],
+        "title": "LearningRuleActivateRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "quarantine.list",
+      "description": "Skill: quarantine.list — List files waiting for quarantine review.",
+      "category": "quarantine",
+      "method": "GET",
+      "path": "/api/quarantine",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.list_inventory",
+      "description": "Skill: warehouse.list_inventory — List inventory items.",
+      "category": "warehouse",
+      "method": "GET",
+      "path": "/api/warehouse/inventory",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.create_item",
+      "description": "Skill: warehouse.create_item — Create inventory position.",
+      "category": "warehouse",
+      "method": "POST",
+      "path": "/api/warehouse/inventory",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.low_stock",
+      "description": "Skill: warehouse.low_stock — Items below minimum quantity.",
+      "category": "warehouse",
+      "method": "GET",
+      "path": "/api/warehouse/inventory/low-stock",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.get_item",
+      "description": "Skill: warehouse.get_item — Get item card with recent movements.",
+      "category": "warehouse",
+      "method": "GET",
+      "path": "/api/warehouse/inventory/{item_id}",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.list_receipts",
+      "description": "Skill: warehouse.list_receipts — List warehouse receipts.",
+      "category": "warehouse",
+      "method": "GET",
+      "path": "/api/warehouse/receipts",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.create_receipt",
+      "description": "Skill: warehouse.create_receipt — Create receipt from invoice lines.",
+      "category": "warehouse",
+      "method": "POST",
+      "path": "/api/warehouse/receipts",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.get_receipt",
+      "description": "Skill: warehouse.get_receipt — Get receipt with lines.",
+      "category": "warehouse",
+      "method": "GET",
+      "path": "/api/warehouse/receipts/{receipt_id}",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.confirm_receipt",
+      "description": "Skill: warehouse.confirm_receipt — Confirm receipt, update stock (approval gate).",
+      "category": "warehouse",
+      "method": "POST",
+      "path": "/api/warehouse/receipts/{receipt_id}/confirm",
+      "approval_required": true
+    },
+    {
+      "name": "procurement.list_requests",
+      "description": "Skill: procurement.list_requests — List purchase requests.",
+      "category": "procurement",
+      "method": "GET",
+      "path": "/api/purchase-requests",
+      "approval_required": false
+    },
+    {
+      "name": "procurement.create_request",
+      "description": "Skill: procurement.create_request — Create a purchase request.",
+      "category": "procurement",
+      "method": "POST",
+      "path": "/api/purchase-requests",
+      "approval_required": false
+    },
+    {
+      "name": "procurement.get_request",
+      "description": "Skill: procurement.get_request — Get purchase request details.",
+      "category": "procurement",
+      "method": "GET",
+      "path": "/api/purchase-requests/{req_id}",
+      "approval_required": false
+    },
+    {
+      "name": "procurement.update_request",
+      "description": "Skill: procurement.update_request — Update purchase request.",
+      "category": "procurement",
+      "method": "PATCH",
+      "path": "/api/purchase-requests/{req_id}",
+      "approval_required": false
+    },
+    {
+      "name": "procurement.send_rfq",
+      "description": "Skill: procurement.send_rfq — Generate RFQ draft emails to suppliers (approval gate).",
+      "category": "procurement",
+      "method": "POST",
+      "path": "/api/purchase-requests/{req_id}/send-rfq",
+      "approval_required": true
+    },
+    {
+      "name": "procurement.list_contracts",
+      "description": "Skill: procurement.list_contracts — List supplier contracts.",
+      "category": "procurement",
+      "method": "GET",
+      "path": "/api/supplier-contracts",
+      "approval_required": false
+    },
+    {
+      "name": "procurement.create_contract",
+      "description": "Skill: procurement.create_contract — Create supplier contract.",
+      "category": "procurement",
+      "method": "POST",
+      "path": "/api/supplier-contracts",
+      "approval_required": false
+    },
+    {
+      "name": "procurement.get_contract",
+      "description": "Skill: procurement.get_contract — Get contract details.",
+      "category": "procurement",
+      "method": "GET",
+      "path": "/api/supplier-contracts/{contract_id}",
+      "approval_required": false
+    },
+    {
+      "name": "procurement.update_contract",
+      "description": "Skill: procurement.update_contract — Update contract details.",
+      "category": "procurement",
+      "method": "PATCH",
+      "path": "/api/supplier-contracts/{contract_id}",
+      "approval_required": false
+    },
+    {
+      "name": "payment.list_schedule",
+      "description": "Skill: payment.list_schedule — List payment schedules with filters.",
+      "category": "payments",
+      "method": "GET",
+      "path": "/api/payment-schedules",
+      "approval_required": false
+    },
+    {
+      "name": "payment.create_schedule",
+      "description": "Skill: payment.create_schedule — Create payment schedule entry.",
+      "category": "payments",
+      "method": "POST",
+      "path": "/api/payment-schedules",
+      "approval_required": false
+    },
+    {
+      "name": "payment.overdue",
+      "description": "Skill: payment.overdue — List overdue payments.",
+      "category": "payments",
+      "method": "GET",
+      "path": "/api/payment-schedules/overdue",
+      "approval_required": false
+    },
+    {
+      "name": "payment.upcoming",
+      "description": "Skill: payment.upcoming — List upcoming payments within N days.",
+      "category": "payments",
+      "method": "GET",
+      "path": "/api/payment-schedules/upcoming",
+      "approval_required": false
+    },
+    {
+      "name": "payment.mark_paid",
+      "description": "Skill: payment.mark_paid — Mark payment as paid (approval gate).",
+      "category": "payments",
+      "method": "POST",
+      "path": "/api/payment-schedules/{schedule_id}/mark-paid",
+      "approval_required": true
+    },
+    {
+      "name": "payment.schedule_from_invoice",
+      "description": "Skill: payment.schedule_from_invoice — Create payment schedule from invoice due date and total.",
+      "category": "payments",
+      "method": "POST",
+      "path": "/api/invoices/{invoice_id}/schedule-payment",
+      "approval_required": false
+    },
+    {
+      "name": "bom.list",
+      "description": "Skill: bom.list — List BOMs (bill of materials).",
+      "category": "boms",
+      "method": "GET",
+      "path": "/api/boms",
+      "approval_required": false
+    },
+    {
+      "name": "bom.create",
+      "description": "Skill: bom.create — Create a new BOM.",
+      "category": "boms",
+      "method": "POST",
+      "path": "/api/boms",
+      "approval_required": false
+    },
+    {
+      "name": "bom.get",
+      "description": "Skill: bom.get — Get BOM with all lines.",
+      "category": "boms",
+      "method": "GET",
+      "path": "/api/boms/{bom_id}",
+      "approval_required": false
+    },
+    {
+      "name": "bom.update",
+      "description": "Skill: bom.update — Update BOM metadata.",
+      "category": "boms",
+      "method": "PATCH",
+      "path": "/api/boms/{bom_id}",
+      "approval_required": false
+    },
+    {
+      "name": "bom.approve",
+      "description": "Skill: bom.approve — Approve BOM (approval gate).",
+      "category": "boms",
+      "method": "POST",
+      "path": "/api/boms/{bom_id}/approve",
+      "approval_required": true
+    },
+    {
+      "name": "bom.stock_check",
+      "description": "Skill: bom.stock_check — Check inventory availability for BOM production.",
+      "category": "boms",
+      "method": "GET",
+      "path": "/api/boms/{bom_id}/stock-check",
+      "approval_required": false
+    },
+    {
+      "name": "bom.create_purchase_request",
+      "description": "Skill: bom.create_purchase_request — Create purchase request from BOM shortage (approval gate).",
+      "category": "boms",
+      "method": "POST",
+      "path": "/api/boms/{bom_id}/create-purchase-request",
+      "approval_required": true
+    },
+    {
+      "name": "ntd.control_settings_get",
+      "description": "Skill: ntd.control_settings_get — Read NTD norm-control mode.",
+      "category": "ntd",
+      "method": "GET",
+      "path": "/api/settings/ntd-control",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.control_settings_update",
+      "description": "Skill: ntd.control_settings_update — Set manual or automatic NTD norm-control mode.",
+      "category": "ntd",
+      "method": "PATCH",
+      "path": "/api/settings/ntd-control",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.document_list",
+      "description": "Skill: ntd.document_list — List normative documents.",
+      "category": "ntd",
+      "method": "GET",
+      "path": "/api/ntd/documents",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.document_create",
+      "description": "Skill: ntd.document_create — Create a normative document record.",
+      "category": "ntd",
+      "method": "POST",
+      "path": "/api/ntd/documents",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.document_create_from_source",
+      "description": "Skill: ntd.document_create_from_source — Create and optionally index NTD from an uploaded document.",
+      "category": "ntd",
+      "method": "POST",
+      "path": "/api/ntd/documents/from-source",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.document_index",
+      "description": "Skill: ntd.document_index — Parse source document text into NTD clauses and requirements.",
+      "category": "ntd",
+      "method": "POST",
+      "path": "/api/ntd/documents/{normative_document_id}/index",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.clause_create",
+      "description": "Skill: ntd.clause_create — Create a normative document clause.",
+      "category": "ntd",
+      "method": "POST",
+      "path": "/api/ntd/clauses",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.requirement_create",
+      "description": "Skill: ntd.requirement_create — Create a normative requirement.",
+      "category": "ntd",
+      "method": "POST",
+      "path": "/api/ntd/requirements",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.requirement_search",
+      "description": "Skill: ntd.requirement_search — Search SQL-first NTD requirements.",
+      "category": "ntd",
+      "method": "GET",
+      "path": "/api/ntd/requirements/search",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.norm_control_run",
+      "description": "Skill: ntd.norm_control_run — Check one document against applicable NTD.",
+      "category": "ntd",
+      "method": "POST",
+      "path": "/api/documents/{document_id}/ntd-check",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.check_availability",
+      "description": "Skill: ntd.check_availability — Explain whether NTD check can run for a document.",
+      "category": "ntd",
+      "method": "GET",
+      "path": "/api/documents/{document_id}/ntd-check/availability",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.norm_control_run_payload",
+      "description": "Skill: ntd.norm_control_run_payload — Check a document against applicable NTD.",
+      "category": "ntd",
+      "method": "POST",
+      "path": "/api/ntd/checks/run",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.check_list",
+      "description": "Skill: ntd.check_list — List NTD checks for a document.",
+      "category": "ntd",
+      "method": "GET",
+      "path": "/api/documents/{document_id}/ntd-checks",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.check_get",
+      "description": "Skill: ntd.check_get — Get NTD check details and findings.",
+      "category": "ntd",
+      "method": "GET",
+      "path": "/api/ntd/checks/{check_id}",
+      "approval_required": false
+    },
+    {
+      "name": "ntd.finding_decide",
+      "description": "Skill: ntd.finding_decide — Record a human decision for an NTD finding.",
+      "category": "ntd",
+      "method": "POST",
+      "path": "/api/ntd/checks/{check_id}/findings/{finding_id}/decide",
+      "approval_required": false
+    }
+  ]
+}

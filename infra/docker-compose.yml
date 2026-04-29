@@ -1,0 +1,300 @@
+version: "3.9"
+
+x-backend-env: &backend-env
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER:-aiworkspace}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+  POSTGRES_DB: ${POSTGRES_DB:-aiworkspace}
+  REDIS_URL: redis://redis:6379/0
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-changeme}
+  MINIO_BUCKET: ${MINIO_BUCKET:-documents}
+  QDRANT_URL: http://qdrant:6333
+  OLLAMA_URL: ${OLLAMA_URL:-http://host-gateway:11434}
+  APP_ENV: ${APP_ENV:-development}
+  APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-secret-key}
+  APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+  AUTH_ENABLED: ${AUTH_ENABLED:-false}
+  AUTHENTIK_URL: ${AUTHENTIK_URL:-http://authentik-server:9000}
+  AUTHENTIK_SLUG: ${AUTHENTIK_SLUG:-ai-workspace}
+  OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-}
+  OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
+
+x-authentik-env: &authentik-env
+  AUTHENTIK_REDIS__HOST: redis
+  AUTHENTIK_REDIS__PORT: "6379"
+  AUTHENTIK_REDIS__DB: "1"
+  AUTHENTIK_POSTGRESQL__HOST: authentik-db
+  AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_DB_USER:-authentik}
+  AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_DB_PASSWORD:-authentik}
+  AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_DB_NAME:-authentik}
+  AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:-please-change-me-in-production}
+  AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+  AUTHENTIK_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+
+services:
+  # === Database ===
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aiworkspace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-aiworkspace}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiworkspace}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - app
+
+  # === Cache & Broker ===
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - app
+
+  # === Object Storage ===
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-changeme}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app
+
+  # === MinIO Init (create bucket) ===
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-changeme};
+      mc mb --ignore-existing local/$${MINIO_BUCKET:-documents};
+      echo 'Bucket ready';
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-changeme}
+      MINIO_BUCKET: ${MINIO_BUCKET:-documents}
+    networks:
+      - app
+
+  # === Vector Store ===
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app
+
+  # === AI (Local) ===
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - app
+
+  # === Backend API ===
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    environment:
+      <<: *backend-env
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app
+
+  # === Celery Worker ===
+  celery-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_app worker -l info -c 4 -Q celery,extraction,ingest,scheduler
+    environment:
+      <<: *backend-env
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app
+
+  # === Celery Beat ===
+  celery-beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_app beat -l info
+    environment:
+      <<: *backend-env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - app
+
+  # === Frontend ===
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app
+
+  # === Authentik SSO ===
+  authentik-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${AUTHENTIK_DB_USER:-authentik}
+      POSTGRES_PASSWORD: ${AUTHENTIK_DB_PASSWORD:-authentik}
+      POSTGRES_DB: ${AUTHENTIK_DB_NAME:-authentik}
+    volumes:
+      - authentik_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AUTHENTIK_DB_USER:-authentik}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - app
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2024.12.3
+    command: server
+    environment:
+      <<: *authentik-env
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+    ports:
+      - "9100:9000"
+      - "9443:9443"
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2024.12.3
+    command: worker
+    environment:
+      <<: *authentik-env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - authentik_media:/media
+      - authentik_templates:/templates
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app
+
+  # === Reverse Proxy ===
+  traefik:
+    image: traefik:v3.2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik_acme:/etc/traefik/acme
+    environment:
+      TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN:-localhost}
+      TRAEFIK_ACME_EMAIL: ${TRAEFIK_ACME_EMAIL:-admin@company.com}
+    networks:
+      - app
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  qdrant_data:
+  ollama_data:
+  traefik_acme:
+  authentik_db_data:
+  authentik_media:
+  authentik_templates:
+
+networks:
+  app:
+    driver: bridge

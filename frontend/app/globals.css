@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg: #f8fafc;
+  --color-sidebar: #1e293b;
+  --color-sidebar-hover: #334155;
+  --color-primary: #3b82f6;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Keyboard-first focus styles */
+*:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}

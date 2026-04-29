@@ -1,0 +1,37 @@
+# OpenClaw Scenario — Low Stock Alert
+# Trigger: daily cron at 09:00
+# Checks inventory for positions below minimum quantity and
+# suggests creating purchase requests for critical shortages.
+
+name: low_stock_alert
+description: |
+  Ежедневная проверка складских остатков. Позиции ниже минимума —
+  Света предлагает создать заявку на закупку.
+
+trigger:
+  type: schedule
+  cron: "0 9 * * *"
+
+steps:
+  - id: low_stock_items
+    skill: warehouse.low_stock
+    params: {}
+    on_error: abort
+    description: Получить список позиций ниже минимального запаса
+
+  - id: bom_stock_context
+    skill: bom.list
+    params:
+      status: approved
+    on_error: continue
+    description: Загрузить утверждённые спецификации для контекста
+
+completion:
+  context:
+    low_stock_count: "{{ low_stock_items.total }}"
+    items: "{{ low_stock_items.items }}"
+  notify:
+    channel: dashboard
+    message: "Обнаружено {{ low_stock_items.total }} позиций ниже минимума"
+
+timeout: 60

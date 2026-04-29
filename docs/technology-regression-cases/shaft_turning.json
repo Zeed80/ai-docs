@@ -1,0 +1,13 @@
+{
+  "case_id": "shaft_turning_synthetic",
+  "description": "Синтетический кейс вала: материал, токарный станок, резец, ГОСТ контроля.",
+  "mentions": {
+    "material": ["Сталь 40Х"],
+    "machine": ["токарный станок 16К20"],
+    "tool": ["резец проходной"],
+    "standard": ["ГОСТ 2789-73"]
+  },
+  "expected_operations": ["010", "020", "090"],
+  "expected_operation_type": "turning",
+  "expected_required_checks": []
+}

@@ -1,0 +1,356 @@
+"""AI settings API — model management and config."""
+
+import json
+from pathlib import Path
+
+import httpx
+import structlog
+import yaml
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy import update as sql_update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.ai.agent_config import (
+    BuiltinAgentConfig,
+    BuiltinAgentConfigUpdate,
+    get_builtin_agent_config,
+    reset_builtin_agent_config,
+    update_builtin_agent_config,
+)
+from app.ai.gateway_config import gateway_config
+from app.ai.model_registry import ModelRegistry
+from app.ai.schemas import AITask, Modality
+from app.config import settings
+from app.db.models import MemoryEmbeddingRecord
+from app.db.session import get_db
+
+router = APIRouter()
+logger = structlog.get_logger()
+
+_CONFIG_FILE = Path(__file__).parent.parent.parent / "data" / "ai_config.json"
+_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+_DEFAULT_CONFIG = {
+    "model_agent": "qwen3.5:9b",
+    "model_ocr": settings.ollama_model_ocr,
+    "model_reasoning": settings.ollama_model_reasoning,
+    "embedding_model": "local_embedding_ollama",
+    "reranker_model": None,
+    "turboquant_enabled": False,
+    "turboquant_kv_cache_dtype": "turboquant_k8v4",
+    "turboquant_max_model_len": 131072,
+}
+
+
+def get_ai_config() -> dict:
+    if _CONFIG_FILE.exists():
+        try:
+            return {**_DEFAULT_CONFIG, **json.loads(_CONFIG_FILE.read_text())}
+        except Exception:
+            pass
+    return dict(_DEFAULT_CONFIG)
+
+
+def save_ai_config(cfg: dict) -> None:
+    _CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+
+
+# ── Models list ───────────────────────────────────────────────────────────────
+
+@router.get("/models")
+async def list_models() -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{settings.ollama_url}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+            models = [
+                {
+                    "name": m["name"],
+                    "size": m.get("size", 0),
+                    "modified_at": m.get("modified_at", ""),
+                    "parameter_size": m.get("details", {}).get("parameter_size", ""),
+                    "family": m.get("details", {}).get("family", ""),
+                }
+                for m in data.get("models", [])
+            ]
+            return {"models": sorted(models, key=lambda x: x["name"])}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Ollama unavailable: {e}")
+
+
+# ── Pull model (streaming progress) ──────────────────────────────────────────
+
+class PullRequest(BaseModel):
+    name: str
+
+
+@router.post("/models/pull")
+async def pull_model(payload: PullRequest):
+    """Pull a model from Ollama registry. Streams NDJSON progress."""
+    async def _stream():
+        try:
+            async with httpx.AsyncClient(timeout=600) as client:
+                async with client.stream(
+                    "POST",
+                    f"{settings.ollama_url}/api/pull",
+                    json={"name": payload.name, "stream": True},
+                ) as resp:
+                    if resp.status_code >= 400:
+                        err = await resp.aread()
+                        yield json.dumps({"status": "error", "error": err.decode()}) + "\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if line:
+                            yield line + "\n"
+        except Exception as e:
+            yield json.dumps({"status": "error", "error": str(e)}) + "\n"
+
+    return StreamingResponse(_stream(), media_type="application/x-ndjson")
+
+
+# ── Delete model ──────────────────────────────────────────────────────────────
+
+@router.delete("/models/{model_name:path}")
+async def delete_model(model_name: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.request(
+                "DELETE",
+                f"{settings.ollama_url}/api/delete",
+                json={"name": model_name},
+            )
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail="Model not found")
+            resp.raise_for_status()
+            return {"deleted": model_name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+# ── Config CRUD ───────────────────────────────────────────────────────────────
+
+@router.get("/config")
+async def get_config() -> dict:
+    return get_ai_config()
+
+
+@router.get("/config/status")
+async def get_config_status() -> dict:
+    cfg = get_ai_config()
+    warnings: list[str] = []
+    installed_models: set[str] = set()
+    installed_model_aliases: set[str] = set()
+    ollama_available = False
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{settings.ollama_url}/api/tags")
+            resp.raise_for_status()
+            installed_models = {item.get("name", "") for item in resp.json().get("models", [])}
+            installed_model_aliases = {
+                model.removesuffix(":latest")
+                for model in installed_models
+                if model
+            } | installed_models
+            ollama_available = True
+    except Exception as exc:
+        warnings.append(f"Ollama unavailable: {exc}")
+
+    for key in ("model_agent", "model_ocr", "model_reasoning"):
+        model_name = cfg.get(key)
+        if model_name and installed_models and model_name not in installed_model_aliases:
+            warnings.append(f"{key} points to a missing Ollama model: {model_name}")
+
+    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+    registry_warnings: list[str] = []
+    for key in ("embedding_model", "reranker_model"):
+        model_key = cfg.get(key)
+        if not model_key:
+            continue
+        try:
+            model = registry.get_model(model_key)
+        except KeyError:
+            registry_warnings.append(f"{key} is not in model registry: {model_key}")
+            continue
+        if (
+            model.provider == "ollama"
+            and installed_models
+            and model.provider_model not in installed_model_aliases
+        ):
+            registry_warnings.append(
+                f"{key} provider model is not installed in Ollama: {model.provider_model}"
+            )
+
+    warnings.extend(registry_warnings)
+    return {
+        "ok": not warnings,
+        "ollama_available": ollama_available,
+        "installed_models": sorted(installed_models),
+        "config": cfg,
+        "warnings": warnings,
+    }
+
+
+class ConfigUpdate(BaseModel):
+    model_agent: str | None = None
+    model_ocr: str | None = None
+    model_reasoning: str | None = None
+    embedding_model: str | None = None
+    reranker_model: str | None = None
+    turboquant_enabled: bool | None = None
+    turboquant_kv_cache_dtype: str | None = None
+    turboquant_max_model_len: int | None = None
+
+
+@router.patch("/config")
+async def update_config(
+    payload: ConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    cfg = get_ai_config()
+    previous_embedding_model = cfg.get("embedding_model")
+    update = payload.model_dump(include=payload.model_fields_set)
+    cfg.update(update)
+    save_ai_config(cfg)
+    if "model_agent" in update and update["model_agent"]:
+        update_builtin_agent_config(
+            BuiltinAgentConfigUpdate(model=str(update["model_agent"]))
+        )
+    if (
+        payload.embedding_model
+        and previous_embedding_model
+        and payload.embedding_model != previous_embedding_model
+    ):
+        await db.execute(
+            sql_update(MemoryEmbeddingRecord)
+            .where(MemoryEmbeddingRecord.status.in_(["queued", "indexed"]))
+            .values(status="stale")
+        )
+        await db.commit()
+    logger.info("ai_config_updated", **update)
+    return cfg
+
+
+# ── Built-in agent config ────────────────────────────────────────────────────
+
+@router.get("/agent-config", response_model=BuiltinAgentConfig)
+async def get_agent_config() -> BuiltinAgentConfig:
+    return get_builtin_agent_config()
+
+
+@router.patch("/agent-config", response_model=BuiltinAgentConfig)
+async def patch_agent_config(
+    payload: BuiltinAgentConfigUpdate,
+) -> BuiltinAgentConfig:
+    config = update_builtin_agent_config(payload)
+    logger.info("builtin_agent_config_updated", **payload.model_dump(exclude_unset=True))
+    return config
+
+
+@router.post("/agent-config/reset", response_model=BuiltinAgentConfig)
+async def reset_agent_config() -> BuiltinAgentConfig:
+    config = reset_builtin_agent_config()
+    logger.info("builtin_agent_config_reset")
+    return config
+
+
+@router.get("/agent-skills")
+async def list_agent_skills() -> dict:
+    config = get_builtin_agent_config()
+    registry_path = gateway_config.registry_path
+    if not registry_path.exists():
+        return {"skills": []}
+    data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    exposed = set(config.exposed_skills)
+    approval_gates = set(config.approval_gates)
+    skills = []
+    for skill in data.get("skills") or data.get("tools") or []:
+        name = skill.get("name")
+        if not name:
+            continue
+        skills.append({
+            "name": name,
+            "description": skill.get("description", ""),
+            "method": skill.get("method", ""),
+            "path": skill.get("path", ""),
+            "enabled": name in exposed,
+            "approval_required": name in approval_gates,
+        })
+    return {"skills": skills}
+
+
+@router.get("/embedding-profile")
+async def get_embedding_profile() -> dict:
+    from app.ai.embeddings import get_active_embedding_profile
+
+    return get_active_embedding_profile().__dict__
+
+
+@router.get("/models/capabilities")
+async def list_model_capabilities() -> dict:
+    """List registry models with embedding/reranker capabilities."""
+    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+    return {
+        "models": [
+            model.model_dump(mode="json")
+            for model in registry.models.values()
+        ],
+        "routes": {
+            task.value: route.model_dump(mode="json")
+            for task, route in registry.routes.items()
+            if task in {AITask.EMBEDDING, AITask.RERANKING}
+        },
+    }
+
+
+@router.get("/models/discover")
+async def discover_local_model_capabilities() -> dict:
+    """Discover local Ollama models and infer initial embedding/reranker metadata."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{settings.ollama_url}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Ollama unavailable: {e}")
+
+    discovered = []
+    for item in data.get("models", []):
+        name = item.get("name", "")
+        details = item.get("details", {})
+        family = details.get("family") or ""
+        modalities = ["text"]
+        if any(token in name.lower() for token in ("embed", "bge", "e5", "nomic")):
+            modalities = [Modality.EMBEDDING.value]
+        discovered.append(
+            {
+                "name": name,
+                "provider": "ollama",
+                "provider_model": name,
+                "modalities": modalities,
+                "model_family": family,
+                "parameter_size": details.get("parameter_size", ""),
+                "capability_source": "discovered",
+                "embedding_dimension": _known_embedding_dimension(name),
+                "distance_metric": "cosine",
+                "normalize_embeddings": True,
+                "supports_batching": Modality.EMBEDDING.value in modalities,
+            }
+        )
+    return {"models": discovered}
+
+
+def _known_embedding_dimension(model_name: str) -> int | None:
+    name = model_name.lower()
+    if "nomic-embed-text" in name:
+        return 768
+    if "multilingual-e5-large" in name:
+        return 1024
+    if "bge-m3" in name:
+        return 1024
+    return None

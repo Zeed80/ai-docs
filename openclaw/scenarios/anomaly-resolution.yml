@@ -1,0 +1,86 @@
+# OpenClaw Scenario 6 — Anomaly Resolution
+# Trigger: anomaly detected on invoice → Света explains and guides user
+#
+# Chain: anomaly.check_all → anomaly.explain → supplier.get
+#        → present context → wait for user decision → anomaly.resolve
+
+name: anomaly_resolution
+description: |
+  Когда обнаружена аномалия, Света объясняет суть проблемы,
+  собирает контекст (профиль поставщика, историю) и предлагает
+  варианты действий. Ждёт решения пользователя (approval gate).
+trigger:
+  type: event
+  event: invoice.anomaly_detected
+  params:
+    invoice_id: "{{ event.invoice_id }}"
+    anomaly_ids: "{{ event.anomaly_ids }}"
+
+steps:
+  - id: get_invoice
+    skill: invoice.get
+    params:
+      invoice_id: "{{ trigger.invoice_id }}"
+    on_error: abort
+
+  - id: explain_anomalies
+    skill: anomaly.explain
+    loop: "{{ trigger.anomaly_ids }}"
+    params:
+      anomaly_id: "{{ item }}"
+    on_error: continue
+    description: Получить объяснение каждой аномалии
+
+  - id: get_supplier
+    skill: supplier.get
+    condition: "{{ get_invoice.supplier_id }}"
+    params:
+      supplier_id: "{{ get_invoice.supplier_id }}"
+    on_error: continue
+    description: Загрузить профиль поставщика
+
+  - id: trust_score
+    skill: supplier.trust_score
+    condition: "{{ get_invoice.supplier_id }}"
+    params:
+      supplier_id: "{{ get_invoice.supplier_id }}"
+    on_error: continue
+    description: Рассчитать trust score поставщика
+
+  - id: present_context
+    skill: ui.show_anomaly_panel
+    params:
+      invoice: "{{ get_invoice }}"
+      anomalies: "{{ explain_anomalies }}"
+      supplier: "{{ get_supplier }}"
+      trust_score: "{{ trust_score }}"
+    description: Показать панель аномалий пользователю
+
+  - id: wait_decision
+    skill: approval.wait
+    gate: anomaly.resolve
+    timeout: 86400  # 24 hours
+    params:
+      prompt: "Решите по каждой аномалии: подтвердить / ложное срабатывание"
+      anomaly_ids: "{{ trigger.anomaly_ids }}"
+    description: Ожидание решения пользователя (approval gate)
+
+  - id: apply_resolution
+    skill: anomaly.resolve
+    loop: "{{ wait_decision.decisions }}"
+    params:
+      anomaly_id: "{{ item.anomaly_id }}"
+      resolution: "{{ item.resolution }}"
+      comment: "{{ item.comment }}"
+    on_error: continue
+    description: Применить решение пользователя
+
+completion:
+  summary: |
+    Обработано {{ trigger.anomaly_ids | length }} аномалий для счёта
+    {{ get_invoice.invoice_number }} от {{ get_supplier.name }}.
+  notify:
+    channel: review_panel
+    event: anomalies_resolved
+
+timeout: 90000  # 25 hours (approval gate + processing)

@@ -1,0 +1,85 @@
+# Scenario 7: NL Query + Action
+# Trigger: user types a natural language query in command palette or chat
+# Chain: search.nl_to_query → table.query → action chips
+
+name: nl-query-action
+description: "Поиск по естественному языку с выбором действия"
+version: "1.0"
+
+trigger:
+  type: user_intent
+  intents:
+    - "search"
+    - "find"
+    - "query"
+  patterns:
+    - "покажи"
+    - "найди"
+    - "сколько"
+    - "список"
+    - "какие"
+
+timeout: 30
+retry_attempts: 1
+
+parameters:
+  query:
+    type: string
+    required: true
+    description: "Запрос на естественном языке"
+
+steps:
+  # Step 1: Parse NL to structured query
+  - id: parse_query
+    skill: search.nl_to_query
+    input:
+      query: "{{ parameters.query }}"
+      limit: 20
+    output: search_result
+
+  # Step 2: Present results with action chips
+  - id: present_results
+    type: user_interaction
+    message: |
+      {{ steps.parse_query.output.interpretation }}
+
+      Найдено: {{ steps.parse_query.output.total }} документов
+
+      {% for doc in steps.parse_query.output.results | slice: 5 %}
+      - {{ doc.file_name }} ({{ doc.status }})
+      {% endfor %}
+      {% if steps.parse_query.output.total > 5 %}
+      ... и ещё {{ steps.parse_query.output.total | minus: 5 }}
+      {% endif %}
+    actions:
+      - label: "Открыть первый"
+        value: "open_first"
+        condition: "{{ steps.parse_query.output.total > 0 }}"
+      - label: "Экспорт в Excel"
+        value: "export"
+        condition: "{{ steps.parse_query.output.total > 0 }}"
+      - label: "Отправить поставщику"
+        value: "email"
+        condition: "{{ steps.parse_query.output.total > 0 }}"
+      - label: "В коллекцию"
+        value: "collect"
+        condition: "{{ steps.parse_query.output.total > 0 }}"
+      - label: "Уточнить"
+        value: "refine"
+
+  # Step 3a: Export if chosen
+  - id: export
+    skill: table.export_excel
+    condition: "{{ steps.present_results.output.action == 'export' }}"
+    input:
+      table: "documents"
+      filters: "{{ steps.parse_query.output.structured_filter }}"
+    output: export_result
+
+  # Step 3b: Supplier price history if applicable
+  - id: price_history
+    skill: supplier.price_history
+    condition: "{{ steps.present_results.output.action == 'email' and steps.parse_query.output.structured_filter.supplier_name }}"
+    input:
+      supplier_id: "{{ steps.parse_query.output.results[0].supplier_id }}"
+    output: prices

@@ -1,0 +1,10 @@
+{
+  "name": "drawing_review",
+  "max_steps": 4,
+  "description": "Analyze a drawing and prepare customer clarification questions when needed.",
+  "steps": [
+    "document.drawing_analysis",
+    "email.draft"
+  ],
+  "approval_gates": ["email.send.request_approval"]
+}

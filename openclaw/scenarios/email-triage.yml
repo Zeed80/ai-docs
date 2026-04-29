@@ -1,0 +1,94 @@
+# OpenClaw Scenario 1 — Email Triage
+# Trigger: new email arrives → full pipeline → document lands in Inbox
+#
+# Chain: email.fetch_new → doc.ingest → doc.classify → invoice.extract
+#        → norm.apply_rules → invoice.validate → anomaly.check_all (stub)
+#        → doc.link → route to Inbox
+
+name: email_triage
+description: |
+  Автоматическая обработка входящих писем: получение → загрузка вложений →
+  классификация → извлечение данных → нормализация → валидация → маршрутизация.
+trigger:
+  type: schedule
+  cron: "*/5 * * * *"
+  # Also triggered manually via: POST /api/email/fetch
+
+steps:
+  - id: fetch_emails
+    skill: email.fetch_new
+    params:
+      mailbox: null  # all mailboxes
+    on_error: abort
+    description: Проверить все почтовые ящики на новые письма
+
+  - id: process_attachments
+    skill: doc.ingest
+    for_each: "{{ fetch_emails.attachments }}"
+    params:
+      source_channel: email
+    on_error: continue
+    description: Загрузить и зарегистрировать каждое вложение
+
+  - id: classify
+    skill: doc.classify
+    for_each: "{{ process_attachments.results }}"
+    params:
+      document_id: "{{ item.document_id }}"
+    on_error: continue
+    description: Классифицировать каждый документ с помощью AI
+
+  - id: extract
+    skill: doc.extract
+    for_each: "{{ classify.results }}"
+    condition: "{{ item.doc_type == 'invoice' }}"
+    params:
+      document_id: "{{ item.document_id }}"
+    on_error: continue
+    description: Извлечь данные из счетов
+
+  - id: normalize
+    skill: norm.apply_rules
+    for_each: "{{ extract.results }}"
+    params:
+      document_id: "{{ item.document_id }}"
+    on_error: continue
+    description: Применить правила нормализации
+
+  - id: validate
+    skill: invoice.validate
+    for_each: "{{ extract.results }}"
+    condition: "{{ item.invoice_id != null }}"
+    params:
+      invoice_id: "{{ item.invoice_id }}"
+    on_error: continue
+    description: Проверить арифметику и формат
+
+  - id: link_to_email
+    skill: doc.link
+    for_each: "{{ process_attachments.results }}"
+    params:
+      document_id: "{{ item.document_id }}"
+      linked_entity_type: email_message
+      linked_entity_id: "{{ item.email_message_id }}"
+      link_type: attachment
+    on_error: continue
+    description: Связать документ с письмом
+
+  # Step 8: anomaly.check_all — stub for now
+  # Will be implemented in Epic 4
+
+completion:
+  summary: |
+    Обработано {{ fetch_emails.count }} писем.
+    Загружено {{ process_attachments.count }} вложений.
+    Классифицировано: {{ classify.count }}.
+    Счетов извлечено: {{ extract.count }}.
+  notify:
+    channel: inbox
+    message: "Новые документы из почты готовы к проверке"
+
+timeout: 300  # 5 minutes max
+retry:
+  max_attempts: 2
+  backoff: 30

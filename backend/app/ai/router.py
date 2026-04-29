@@ -1,0 +1,265 @@
+"""AI Router — single entry point for all AI calls.
+
+Business code must import only from this module, not from ollama_client directly.
+This allows swapping models and backends without touching business logic.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import structlog
+
+from app.ai.extraction_prompts import (
+    CLASSIFY_PROMPT,
+    CLASSIFY_SYSTEM,
+    EXTRACT_INVOICE_PROMPT,
+    EXTRACT_INVOICE_SYSTEM,
+    SUMMARIZE_PROMPT,
+    SUMMARIZE_SYSTEM,
+)
+from app.ai.model_registry import ModelRegistry
+from app.ai.ollama_client import generate_json, reasoning_generate
+from app.ai.providers.base import AIProvider
+from app.ai.providers.ollama import OllamaProvider
+from app.ai.providers.openai_compatible import OpenAICompatibleProvider
+from app.ai.providers.vllm import VLLMProvider
+from app.ai.schemas import AIRequest, AIResponse, AITask, Modality, ModelCapability, ProviderKind
+from app.config import settings
+
+logger = structlog.get_logger()
+
+
+class AIConfidentialityPolicyError(RuntimeError):
+    """Raised when an AI request would violate local-only/confidential policy."""
+
+_EMAIL_SYSTEM = """Ты — AI-сотрудник Света. Пишешь деловые письма на русском языке
+для промышленного предприятия. Отвечай строго в JSON."""
+
+_EMAIL_PROMPT = """Составь деловое письмо по следующему контексту:
+
+{context_json}
+
+Ответь в JSON:
+{{
+  "subject": "<тема письма>",
+  "body_text": "<тело письма в plain text>",
+  "body_html": "<тело письма в HTML>",
+  "tone": "formal",
+  "risk_flags": []
+}}"""
+
+_NL_QUERY_SYSTEM = """Ты — SQL-ассистент. Преобразуй запрос на естественном языке
+в структурированный JSON-фильтр. Отвечай строго в JSON."""
+
+_NL_QUERY_PROMPT = """Преобразуй запрос в структурированный фильтр.
+Схема данных: {schema_json}
+
+Запрос: {nl_text}
+
+Ответь в JSON:
+{{
+  "filters": {{"<field>": "<value>"}},
+  "sort_by": "<field or null>",
+  "sort_order": "desc",
+  "limit": 50
+}}"""
+
+
+class AIRouter:
+    """Unified AI router — routes tasks to appropriate models.
+
+    The legacy convenience methods below are kept for existing invoice/document
+    code. New code should call ``run(AIRequest(...))`` so model choice,
+    local-only policy, structured output validation, and tool allowlisting stay
+    in one place.
+    """
+
+    def __init__(
+        self,
+        registry: ModelRegistry | None = None,
+        providers: dict[ProviderKind, AIProvider] | None = None,
+    ) -> None:
+        self.registry = registry or ModelRegistry.from_yaml(
+            "backend/app/ai/config/model_registry.yaml"
+        )
+        self.providers = providers or {
+            kind: self._provider_from_config(kind)
+            for kind in self.registry.providers
+        }
+
+    def _provider_from_config(self, kind: ProviderKind) -> AIProvider:
+        config = self.registry.providers[kind]
+        if kind == ProviderKind.OLLAMA:
+            config = config.model_copy(update={"base_url": settings.ollama_url})
+            return OllamaProvider(config)
+        if kind == ProviderKind.VLLM:
+            return VLLMProvider(config)
+        if kind in (ProviderKind.OPENAI_COMPATIBLE, ProviderKind.CLOUD_PROVIDER):
+            return OpenAICompatibleProvider(config)
+        raise KeyError(f"Unsupported AI provider: {kind.value}")
+
+    async def run(self, request: AIRequest) -> AIResponse:
+        """Run one AI task through the registry and validate the result."""
+        route = self.registry.get_route(request.task)
+        candidates = [request.preferred_model] if request.preferred_model else route.fallback_chain
+        last_error: Exception | None = None
+
+        for model_name in [name for name in candidates if name]:
+            model = self.registry.get_model(model_name)
+            try:
+                self._enforce_policy(request, model)
+                provider = self.providers[model.provider]
+                response = await self._dispatch(provider, request, model)
+                response = self._validate_structured_output(request, response)
+                response.proposed_tool_calls = self._filter_tool_calls(request, response)
+                return response
+            except AIConfidentialityPolicyError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "ai_route_model_failed",
+                    task=request.task.value,
+                    model=model_name,
+                    error=str(exc),
+                )
+
+        if last_error:
+            raise last_error
+        raise KeyError(f"No model configured for task {request.task.value}")
+
+    def _enforce_policy(self, request: AIRequest, model: ModelCapability) -> None:
+        provider = self.registry.providers[model.provider]
+        cloud_requested = not provider.is_local or not model.local_only
+        if request.confidential and cloud_requested:
+            raise AIConfidentialityPolicyError(
+                f"Confidential task {request.task.value} cannot use non-local model {model.name}"
+            )
+        if cloud_requested and not request.allow_cloud:
+            raise AIConfidentialityPolicyError(
+                f"Cloud model {model.name} requires allow_cloud=True"
+            )
+
+    async def _dispatch(
+        self,
+        provider: AIProvider,
+        request: AIRequest,
+        model: ModelCapability,
+    ) -> AIResponse:
+        provider_model = model.provider_model
+        if request.task == AITask.EMBEDDING:
+            return await provider.embedding(request, provider_model)
+        if request.task == AITask.RERANKING:
+            return await provider.rerank(request, provider_model)
+        if request.task == AITask.SPEECH:
+            return await provider.speech(request, provider_model)
+        if request.task == AITask.TOOL_CALLING:
+            return await provider.tool_calling(request, provider_model)
+        if request.images or Modality.VISION in model.modalities:
+            return await provider.vision(request, provider_model)
+        if request.response_schema is not None:
+            return await provider.structured_extract(request, provider_model)
+        return await provider.chat(request, provider_model)
+
+    def _validate_structured_output(self, request: AIRequest, response: AIResponse) -> AIResponse:
+        schema = request.response_schema
+        if schema is None:
+            return response
+        if isinstance(response.data, schema):
+            return response
+        payload: Any = response.data
+        if payload is None:
+            payload = json.loads(response.text or "{}")
+        response.data = schema.model_validate(payload)
+        return response
+
+    def _filter_tool_calls(
+        self,
+        request: AIRequest,
+        response: AIResponse,
+    ):
+        if not request.tools:
+            return []
+        allowed = {tool.name for tool in request.tools}
+        return [call for call in response.proposed_tool_calls if call.name in allowed]
+
+    async def extract_invoice(self, text: str) -> dict:
+        prompt = EXTRACT_INVOICE_PROMPT.format(text=text[:8000])
+        return await generate_json(
+            prompt,
+            model=settings.ollama_model_ocr,
+            system=EXTRACT_INVOICE_SYSTEM,
+            max_tokens=8192,
+            timeout_seconds=180.0,
+        )
+
+    async def classify_document(self, text: str) -> dict:
+        prompt = CLASSIFY_PROMPT.format(text=text[:3000])
+        return await generate_json(
+            prompt,
+            model=settings.ollama_model_ocr,
+            system=CLASSIFY_SYSTEM,
+        )
+
+    async def summarize_document(self, text: str) -> dict:
+        prompt = SUMMARIZE_PROMPT.format(text=text[:4000])
+        return await generate_json(
+            prompt,
+            model=settings.ollama_model_ocr,
+            system=SUMMARIZE_SYSTEM,
+        )
+
+    async def generate_email(self, context: dict) -> dict:
+        import json
+        prompt = _EMAIL_PROMPT.format(context_json=json.dumps(context, ensure_ascii=False))
+        raw = await reasoning_generate(
+            prompt,
+            system=_EMAIL_SYSTEM,
+            format_json=True,
+        )
+        import json as _json
+        try:
+            return _json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return {"subject": "", "body_text": raw, "body_html": None, "risk_flags": []}
+
+    async def analyze_email_style(self, emails_text: str, count: int) -> dict:
+        system = """You are a communication style analyzer for business emails.
+Analyze the writing style of emails and provide recommendations. Respond in JSON only."""
+        prompt = f"""Analyze the writing style of these {count} emails:
+
+{emails_text[:3000]}
+
+Respond with JSON:
+{{
+  "tone": "formal|friendly|neutral",
+  "language": "ru|en|mixed",
+  "greeting_style": "<typical greeting>",
+  "closing_style": "<typical closing>",
+  "avg_length": <average word count>,
+  "recommendations": ["<recommendation 1>", "<recommendation 2>"]
+}}"""
+        return await generate_json(
+            prompt,
+            model=settings.ollama_model_ocr,
+            system=system,
+            timeout_seconds=30.0,
+        )
+
+    async def nl_to_query(self, nl: str, schema: dict | None = None) -> dict:
+        import json
+        prompt = _NL_QUERY_PROMPT.format(
+            nl_text=nl,
+            schema_json=json.dumps(schema or {}, ensure_ascii=False),
+        )
+        raw = await reasoning_generate(prompt, system=_NL_QUERY_SYSTEM, format_json=True)
+        import json as _json
+        try:
+            return _json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return {"filters": {}, "sort_by": None, "sort_order": "desc", "limit": 50}
+
+
+ai_router = AIRouter()

@@ -1,0 +1,7 @@
+{
+  "name": "draft_email",
+  "max_steps": 3,
+  "description": "Create a draft email and block sending until approval.",
+  "steps": ["email.draft"],
+  "approval_gates": ["email.send.request_approval"]
+}

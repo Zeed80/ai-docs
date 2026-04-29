@@ -1,0 +1,11 @@
+{
+  "name": "smart_ingest",
+  "max_steps": 6,
+  "description": "Process an uploaded document and branch into invoice or drawing extraction using only allowlisted tools.",
+  "steps": [
+    "document.process",
+    "document.invoice_extraction",
+    "document.drawing_analysis"
+  ],
+  "approval_gates": []
+}

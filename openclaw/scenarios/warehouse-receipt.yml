@@ -1,0 +1,52 @@
+# OpenClaw Scenario — Warehouse Receipt
+# Trigger: invoice approved → automatically create a draft warehouse receipt
+#
+# When a user approves an invoice, Света creates a draft receipt
+# pre-filled from the invoice lines. The user then reviews quantities
+# and confirms the actual receipt.
+
+name: warehouse_receipt
+description: |
+  Когда счёт утверждён, автоматически создать черновик приходного ордера
+  из строк счёта. Пользователь затем вводит фактически принятые количества.
+
+trigger:
+  type: event
+  event: invoice.approved
+  params:
+    invoice_id: "{{ event.invoice_id }}"
+
+steps:
+  - id: get_invoice
+    skill: invoice.get
+    params:
+      invoice_id: "{{ trigger.invoice_id }}"
+    on_error: abort
+    description: Загрузить данные счёта
+
+  - id: check_existing_receipts
+    skill: warehouse.list_receipts
+    params:
+      invoice_id: "{{ trigger.invoice_id }}"
+    on_error: continue
+    description: Проверить нет ли уже ордера для этого счёта
+
+  - id: create_receipt
+    skill: invoice.receive
+    condition: "{{ check_existing_receipts.total == 0 }}"
+    params:
+      invoice_id: "{{ trigger.invoice_id }}"
+    on_error: continue
+    description: Создать черновой приходный ордер из строк счёта
+
+completion:
+  context:
+    invoice_id: "{{ trigger.invoice_id }}"
+    receipt_id: "{{ create_receipt.receipt_id }}"
+    receipt_number: "{{ create_receipt.receipt_number }}"
+    lines_count: "{{ create_receipt.lines_count }}"
+  notify:
+    channel: inbox
+    message: "Создан приходный ордер {{ create_receipt.receipt_number }} по счёту {{ get_invoice.invoice_number }}"
+
+timeout: 30

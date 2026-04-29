@@ -1,0 +1,50 @@
+# OpenClaw Scenario — Memory Maintenance
+# Trigger: schedule → rebuild graph memory → inspect pending graph review queue.
+
+name: memory_maintenance
+description: |
+  Регулярное обслуживание многоступенчатой памяти: переиндексация архива
+  документов, поиск слабых связей и подготовка очереди графовых гипотез для
+  автономной проверки агентом.
+trigger:
+  type: schedule
+  cron: "30 2 * * *"
+
+steps:
+  - id: reindex_archive
+    skill: memory.reindex
+    params:
+      rebuild: true
+      limit: 500
+    on_error: abort
+    description: Перестроить автоматический слой графовой памяти по архиву
+
+  - id: list_graph_review
+    skill: graph.review_list
+    params:
+      status: pending
+      limit: 100
+    on_error: continue
+    description: Получить слабые связи и возможные противоречия для проверки
+
+  - id: list_process_plans
+    skill: tech.process_plan_list
+    params:
+      status: draft
+      limit: 100
+    on_error: continue
+    description: Сверить черновики техпроцессов, связанные с памятью документов
+
+completion:
+  summary: |
+    Переиндексировано документов: {{ reindex_archive.processed }}.
+    Гипотез в очереди проверки: {{ list_graph_review.total }}.
+    Черновиков техпроцессов: {{ list_process_plans.total }}.
+  notify:
+    channel: memory
+    message: "Обслуживание графовой памяти завершено"
+
+timeout: 600
+retry:
+  max_attempts: 1
+  backoff: 60

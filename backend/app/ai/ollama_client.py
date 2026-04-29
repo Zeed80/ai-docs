@@ -1,0 +1,338 @@
+"""Ollama client with retry, timeout, circuit breaker.
+
+Dual AI strategy:
+- gemma4:e4b (local) — OCR, classification, extraction (confidential documents)
+- gemma4:26b (local) or Claude API (remote) — reasoning, letters, NL-query
+"""
+
+import json
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+
+import httpx
+import structlog
+
+from app.config import settings
+
+logger = structlog.get_logger()
+
+
+class AIBackend(str, Enum):
+    OLLAMA = "ollama"
+    CLAUDE = "claude"
+
+
+class CircuitState(str, Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+
+@dataclass
+class CircuitBreaker:
+    """Simple circuit breaker for AI backends."""
+
+    failure_threshold: int = 3
+    recovery_timeout: float = 60.0
+    _failures: int = 0
+    _state: CircuitState = CircuitState.CLOSED
+    _last_failure_time: float = 0.0
+
+    @property
+    def state(self) -> CircuitState:
+        if self._state == CircuitState.OPEN:
+            if time.time() - self._last_failure_time > self.recovery_timeout:
+                self._state = CircuitState.HALF_OPEN
+        return self._state
+
+    def record_success(self) -> None:
+        self._failures = 0
+        self._state = CircuitState.CLOSED
+
+    def record_failure(self) -> None:
+        self._failures += 1
+        self._last_failure_time = time.time()
+        if self._failures >= self.failure_threshold:
+            self._state = CircuitState.OPEN
+            logger.warning("circuit_breaker_open", failures=self._failures)
+
+    @property
+    def is_available(self) -> bool:
+        return self.state != CircuitState.OPEN
+
+
+@dataclass
+class OllamaResponse:
+    text: str
+    model: str
+    total_duration_ms: int = 0
+    prompt_eval_count: int = 0
+    eval_count: int = 0
+
+
+# Per-model circuit breakers
+_breakers: dict[str, CircuitBreaker] = {}
+
+
+def _get_breaker(model: str) -> CircuitBreaker:
+    if model not in _breakers:
+        _breakers[model] = CircuitBreaker()
+    return _breakers[model]
+
+
+async def generate(
+    prompt: str,
+    *,
+    model: str | None = None,
+    system: str | None = None,
+    temperature: float = 0.1,
+    max_tokens: int = 4096,
+    timeout_seconds: float = 120.0,
+    max_retries: int = 2,
+    format_json: bool = False,
+) -> OllamaResponse:
+    """Generate text from Ollama.
+
+    Args:
+        prompt: User prompt
+        model: Model name (defaults to settings.ollama_model_ocr)
+        system: System prompt
+        temperature: Sampling temperature
+        max_tokens: Max tokens in response
+        timeout_seconds: Request timeout
+        max_retries: Number of retries
+        format_json: Request JSON output format
+    """
+    model = model or settings.ollama_model_ocr
+    breaker = _get_breaker(model)
+
+    if not breaker.is_available:
+        raise RuntimeError(f"Circuit breaker open for model {model}")
+
+    payload: dict = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": temperature,
+            "num_predict": max_tokens,
+        },
+    }
+    if system:
+        payload["system"] = system
+    if format_json:
+        payload["format"] = "json"
+
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                start = time.time()
+                response = await client.post(
+                    f"{settings.ollama_url}/api/generate",
+                    json=payload,
+                )
+                elapsed_ms = int((time.time() - start) * 1000)
+
+            response.raise_for_status()
+            data = response.json()
+
+            breaker.record_success()
+
+            result = OllamaResponse(
+                text=data.get("response", ""),
+                model=model,
+                total_duration_ms=data.get("total_duration", 0) // 1_000_000,
+                prompt_eval_count=data.get("prompt_eval_count", 0),
+                eval_count=data.get("eval_count", 0),
+            )
+
+            logger.info(
+                "ollama_generate",
+                model=model,
+                elapsed_ms=elapsed_ms,
+                tokens=result.eval_count,
+                attempt=attempt + 1,
+            )
+            return result
+
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            last_error = e
+            breaker.record_failure()
+            logger.warning(
+                "ollama_retry",
+                model=model,
+                attempt=attempt + 1,
+                error=str(e),
+            )
+            if attempt < max_retries:
+                await _async_sleep(2 ** attempt)
+
+        except httpx.HTTPStatusError as e:
+            last_error = e
+            breaker.record_failure()
+            logger.error("ollama_http_error", model=model, status=e.response.status_code)
+            break
+
+    raise RuntimeError(f"Ollama generation failed after {max_retries + 1} attempts: {last_error}")
+
+
+async def generate_json(
+    prompt: str,
+    *,
+    model: str | None = None,
+    system: str | None = None,
+    temperature: float = 0.1,
+    max_tokens: int = 4096,
+    timeout_seconds: float = 120.0,
+) -> dict:
+    """Generate structured JSON from Ollama."""
+    response = await generate(
+        prompt,
+        model=model,
+        system=system,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
+        format_json=True,
+    )
+
+    try:
+        return json.loads(response.text)
+    except json.JSONDecodeError as e:
+        logger.error("ollama_json_parse_error", text=response.text[:200], error=str(e))
+        raise ValueError(f"Failed to parse JSON from model output: {e}")
+
+
+async def chat(
+    messages: list[dict[str, str]],
+    *,
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+    timeout_seconds: float = 120.0,
+    format_json: bool = False,
+) -> OllamaResponse:
+    """Chat-style generation using Ollama /api/chat."""
+    model = model or settings.ollama_model_reasoning
+    breaker = _get_breaker(model)
+
+    if not breaker.is_available:
+        raise RuntimeError(f"Circuit breaker open for model {model}")
+
+    payload: dict = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": temperature,
+            "num_predict": max_tokens,
+        },
+    }
+    if format_json:
+        payload["format"] = "json"
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            start = time.time()
+            response = await client.post(
+                f"{settings.ollama_url}/api/chat",
+                json=payload,
+            )
+            elapsed_ms = int((time.time() - start) * 1000)
+
+        response.raise_for_status()
+        data = response.json()
+        breaker.record_success()
+
+        return OllamaResponse(
+            text=data.get("message", {}).get("content", ""),
+            model=model,
+            total_duration_ms=data.get("total_duration", 0) // 1_000_000,
+            eval_count=data.get("eval_count", 0),
+        )
+
+    except Exception as e:
+        breaker.record_failure()
+        raise RuntimeError(f"Ollama chat failed: {e}")
+
+
+async def reasoning_generate(
+    prompt: str,
+    *,
+    system: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+    format_json: bool = False,
+) -> str:
+    """Generate using the reasoning backend (local Ollama or Claude API).
+
+    Automatically routes to the configured backend.
+    """
+    if settings.ai_reasoning_backend == "claude" and settings.anthropic_api_key:
+        return await _claude_generate(prompt, system=system, temperature=temperature, max_tokens=max_tokens)
+
+    # Default: local Ollama with reasoning model
+    response = await generate(
+        prompt,
+        model=settings.ollama_model_reasoning,
+        system=system,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        format_json=format_json,
+    )
+    return response.text
+
+
+async def _claude_generate(
+    prompt: str,
+    *,
+    system: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+) -> str:
+    """Generate using Claude API (for non-confidential reasoning tasks)."""
+    messages = [{"role": "user", "content": prompt}]
+
+    payload: dict = {
+        "model": "claude-sonnet-4-6",
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": messages,
+    }
+    if system:
+        payload["system"] = system
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": settings.anthropic_api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=payload,
+        )
+
+    response.raise_for_status()
+    data = response.json()
+    return data["content"][0]["text"]
+
+
+async def check_health() -> dict:
+    """Check Ollama health and list available models."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{settings.ollama_url}/api/tags")
+        resp.raise_for_status()
+        models = [m["name"] for m in resp.json().get("models", [])]
+        return {"status": "ok", "models": models}
+    except Exception as e:
+        return {"status": "unavailable", "error": str(e)}
+
+
+async def _async_sleep(seconds: float) -> None:
+    import asyncio
+    await asyncio.sleep(seconds)

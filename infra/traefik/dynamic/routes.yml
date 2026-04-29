@@ -1,0 +1,70 @@
+# Traefik dynamic routing configuration
+http:
+  routers:
+    # Frontend (Next.js)
+    frontend:
+      rule: "Host(`${TRAEFIK_DOMAIN:-localhost}`)"
+      service: frontend
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+
+    # Backend API
+    backend-api:
+      rule: "Host(`${TRAEFIK_DOMAIN:-localhost}`) && PathPrefix(`/api`)"
+      service: backend
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+
+    # Health endpoint
+    backend-health:
+      rule: "Host(`${TRAEFIK_DOMAIN:-localhost}`) && Path(`/health`)"
+      service: backend
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+
+    # MinIO console
+    minio-console:
+      rule: "Host(`minio.${TRAEFIK_DOMAIN:-localhost}`)"
+      service: minio-console
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    frontend:
+      loadBalancer:
+        servers:
+          - url: "http://frontend:3000"
+
+    backend:
+      loadBalancer:
+        servers:
+          - url: "http://backend:8000"
+
+    minio-console:
+      loadBalancer:
+        servers:
+          - url: "http://minio:9001"
+
+  # Security headers
+  middlewares:
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        contentTypeNosniff: true
+        frameDeny: true
+        browserXssFilter: true
+        contentSecurityPolicy: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:"
+
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50

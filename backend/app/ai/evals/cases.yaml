@@ -1,0 +1,42 @@
+cases:
+  - id: invoice-basic-fields
+    task: structured_extraction
+    confidential: true
+    prompt: >-
+      Extract supplier name, invoice number, total amount, INN/KPP, and line items from
+      an invoice. Return strict JSON and explain low-confidence fields separately.
+    expected_contains:
+      - supplier
+      - invoice
+      - total
+  - id: drawing-risk-review
+    task: drawing_analysis
+    confidential: true
+    prompt: >-
+      Analyze a manufacturing drawing and list material, tolerance, coating, heat treatment,
+      critical dimensions, missing requirements, and questions for the customer.
+    expected_contains:
+      - material
+      - tolerance
+      - question
+  - id: email-risk-aware-draft
+    task: email_drafting
+    confidential: true
+    prompt: >-
+      Draft a supplier email asking to confirm price increase and delivery date.
+      Do not promise payment or disclose unrelated customer information.
+    expected_contains:
+      - confirm
+      - delivery
+      - price
+  - id: process-plan-outline
+    task: engineering_reasoning
+    confidential: true
+    prompt: >-
+      Create a cautious draft process plan for a CNC-machined steel shaft.
+      Include operations, machine assumptions, tooling, inspection, and warnings.
+    expected_contains:
+      - operation
+      - inspection
+      - warning
+

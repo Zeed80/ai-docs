@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "dataset": "technology-process-regression",
+  "privacy": "synthetic_no_customer_documents",
+  "root": "docs/technology-regression-cases",
+  "groups": [
+    {
+      "name": "synthetic_process_cases",
+      "glob": "*.json"
+    }
+  ],
+  "expected_common": {
+    "document_type": "process_plan",
+    "local_only": true,
+    "required_fields": [
+      "case_id",
+      "mentions",
+      "expected_operations",
+      "expected_operation_type",
+      "expected_required_checks"
+    ]
+  }
+}

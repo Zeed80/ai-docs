@@ -1,0 +1,164 @@
+# Scenario 3: Draft Email
+# Trigger: user says "подготовь письмо поставщику X" or similar
+# Full chain: supplier.get → email.search → email.style_match → email.suggest_template → email.draft → email.risk_check → approval.request → email.send
+
+name: draft-email
+description: "Подготовка и отправка письма поставщику с проверкой рисков"
+version: "1.0"
+
+trigger:
+  type: user_intent
+  intents:
+    - "draft_email"
+    - "write_email"
+    - "send_email"
+  patterns:
+    - "подготовь письмо"
+    - "напиши письмо"
+    - "отправь письмо"
+    - "написать поставщику"
+
+timeout: 120  # seconds
+retry_attempts: 1
+
+parameters:
+  supplier_name:
+    type: string
+    required: true
+    description: "Имя поставщика или получателя"
+  context_type:
+    type: string
+    required: false
+    default: "custom"
+    description: "Тип письма: payment_reminder, price_inquiry, order_confirmation, document_request, custom"
+  invoice_id:
+    type: string
+    required: false
+    description: "ID связанного счёта (если есть)"
+
+steps:
+  # Step 1: Find supplier
+  - id: find_supplier
+    skill: supplier.search
+    input:
+      query: "{{ parameters.supplier_name }}"
+      limit: 1
+    output: supplier
+    on_error: continue
+
+  # Step 2: Search previous correspondence
+  - id: search_emails
+    skill: email.search
+    input:
+      supplier_id: "{{ steps.find_supplier.output.id | default: null }}"
+      query: "{{ parameters.supplier_name }}"
+      limit: 5
+    output: previous_emails
+    on_error: continue
+
+  # Step 3: Analyze communication style
+  - id: analyze_style
+    skill: email.style_match
+    input:
+      supplier_id: "{{ steps.find_supplier.output.id | default: null }}"
+      sample_count: 5
+    output: style
+    on_error: continue
+
+  # Step 4: Suggest template
+  - id: suggest_template
+    skill: email.suggest_template
+    input:
+      context_type: "{{ parameters.context_type }}"
+      supplier_id: "{{ steps.find_supplier.output.id | default: null }}"
+      invoice_id: "{{ parameters.invoice_id | default: null }}"
+    output: templates
+
+  # Step 5: Generate draft (AI — gemma4:26b or Claude API)
+  - id: generate_draft
+    skill: email.draft
+    ai_model: reasoning  # uses gemma4:26b or Claude API per config
+    input:
+      to_addresses:
+        - "{{ steps.find_supplier.output.contact_email | default: '' }}"
+      subject: "{{ steps.suggest_template.output.templates[0].subject }}"
+      body_html: "{{ steps.suggest_template.output.templates[0].body_html }}"
+      supplier_id: "{{ steps.find_supplier.output.id | default: null }}"
+      context:
+        invoice_id: "{{ parameters.invoice_id | default: null }}"
+        style: "{{ steps.analyze_style.output }}"
+        previous_emails_count: "{{ steps.search_emails.output.total }}"
+    output: draft
+    system_prompt: |
+      You are Света, an AI assistant for a manufacturing company.
+      Generate a professional email draft in {{ steps.analyze_style.output.language | default: 'Russian' }}.
+
+      Style guidelines:
+      - Tone: {{ steps.analyze_style.output.tone | default: 'formal' }}
+      - Greeting: {{ steps.analyze_style.output.greeting_style | default: 'Добрый день!' }}
+      - Closing: {{ steps.analyze_style.output.closing_style | default: 'С уважением,' }}
+
+      Context: {{ parameters.context_type }}
+      Previous correspondence: {{ steps.search_emails.output.total }} emails found
+
+  # Step 6: Risk check
+  - id: check_risks
+    skill: email.risk_check
+    input:
+      draft_id: "{{ steps.generate_draft.output.id }}"
+    output: risk_result
+
+  # Step 7: Present to user for review
+  - id: present_draft
+    type: user_interaction
+    message: |
+      Подготовлен черновик письма для {{ parameters.supplier_name }}:
+
+      Тема: {{ steps.generate_draft.output.subject }}
+      Кому: {{ steps.generate_draft.output.to_addresses | join: ', ' }}
+
+      {% if steps.check_risks.output.flags | size > 0 %}
+      ⚠️ Обнаружены риски:
+      {% for flag in steps.check_risks.output.flags %}
+      - {{ flag.message }}
+      {% endfor %}
+      {% endif %}
+
+      Стиль переписки: {{ steps.analyze_style.output.tone | default: 'нейтральный' }}
+      Предыдущих писем: {{ steps.search_emails.output.total }}
+    actions:
+      - label: "Отправить"
+        value: "send"
+        requires_approval: true  # approval gate
+      - label: "Редактировать"
+        value: "edit"
+      - label: "Отменить"
+        value: "cancel"
+
+  # Step 8: Approval gate (if user chose "send")
+  - id: request_approval
+    skill: approval.request
+    condition: "{{ steps.present_draft.output.action == 'send' }}"
+    input:
+      action_type: "email.send"
+      entity_type: "email"
+      entity_id: "{{ steps.generate_draft.output.id }}"
+      context:
+        to: "{{ steps.generate_draft.output.to_addresses }}"
+        subject: "{{ steps.generate_draft.output.subject }}"
+        risk_flags: "{{ steps.check_risks.output.flags }}"
+    output: approval
+
+  # Step 9: Send if approved
+  - id: send_email
+    skill: email.send
+    condition: "{{ steps.request_approval.output.status == 'approved' }}"
+    input:
+      draft_id: "{{ steps.generate_draft.output.id }}"
+    output: send_result
+
+  # Step 10: Confirm to user
+  - id: confirm
+    type: user_message
+    condition: "{{ steps.send_email.output.status == 'sent' }}"
+    message: "Письмо отправлено на {{ steps.generate_draft.output.to_addresses | join: ', ' }}"

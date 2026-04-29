@@ -1,0 +1,7 @@
+{
+  "name": "process_plan_draft",
+  "max_steps": 3,
+  "description": "Placeholder scenario for future process plan drafting from drawing analysis.",
+  "steps": [],
+  "approval_gates": []
+}
