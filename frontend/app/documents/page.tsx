@@ -28,6 +28,7 @@ interface PipelineStatus {
   processing_status: string | null;
   current_step: string | null;
   processing_error: string | null;
+  pipeline_steps: PipelineStep[];
   extraction_count: number;
   artifact_count: number;
   graph_status: string | null;
@@ -41,6 +42,13 @@ interface PipelineStatus {
   embedding_records: number;
   ntd_checks: number;
   ntd_open_findings: number;
+}
+
+interface PipelineStep {
+  key: string;
+  label: string;
+  status: "pending" | "queued" | "running" | "done" | "failed" | "skipped" | string;
+  error?: string;
 }
 
 interface WorkspaceItem {
@@ -135,12 +143,26 @@ const DOC_TYPES = [
   { value: "other", label: "Другое" },
 ];
 
-const PROCESS_STEPS: Array<{ key: keyof PipelineStatus; label: string }> = [
-  { key: "extraction_count", label: "SQL" },
-  { key: "memory_chunks", label: "Память" },
-  { key: "embedding_records", label: "Векторы" },
-  { key: "graph_nodes", label: "Граф" },
-  { key: "ntd_checks", label: "НТД" },
+const PIPELINE_STEP_LABELS: Record<string, string> = {
+  store: "Файл",
+  memory_seed: "Память",
+  classification: "Класс",
+  extraction: "OCR",
+  sql_records: "SQL",
+  memory_graph: "Граф",
+  ntd: "НТД",
+  embedding: "Векторы",
+};
+
+const FALLBACK_PROCESS_STEPS: PipelineStep[] = [
+  { key: "store", label: "Файл", status: "pending" },
+  { key: "memory_seed", label: "Память", status: "pending" },
+  { key: "classification", label: "Класс", status: "pending" },
+  { key: "extraction", label: "OCR", status: "pending" },
+  { key: "sql_records", label: "SQL", status: "pending" },
+  { key: "memory_graph", label: "Граф", status: "pending" },
+  { key: "ntd", label: "НТД", status: "pending" },
+  { key: "embedding", label: "Векторы", status: "pending" },
 ];
 
 function fmtBytes(value: number) {
@@ -157,8 +179,26 @@ function statusLabel(value: string | null | undefined) {
   return STATUS_FILTERS.find((item) => item.value === value)?.label ?? value ?? "Не задан";
 }
 
-function isDone(value: unknown) {
-  return typeof value === "number" ? value > 0 : Boolean(value);
+function pipelineSteps(pipeline: PipelineStatus | null | undefined): PipelineStep[] {
+  const steps = pipeline?.pipeline_steps?.length ? pipeline.pipeline_steps : FALLBACK_PROCESS_STEPS;
+  return steps.map((step) => ({
+    ...step,
+    label: PIPELINE_STEP_LABELS[step.key] ?? step.label ?? step.key,
+  }));
+}
+
+function pipelineProgress(pipeline: PipelineStatus | null | undefined) {
+  const steps = pipelineSteps(pipeline);
+  if (!steps.length) return 0;
+  const completed = steps.filter((step) => ["done", "skipped"].includes(step.status)).length;
+  return Math.round((completed / steps.length) * 100);
+}
+
+function isPipelineActive(item: WorkspaceItem) {
+  return (
+    ["queued", "running"].includes(item.pipeline.processing_status ?? "") ||
+    ["ingested", "classifying", "extracting"].includes(item.document.status)
+  );
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -259,6 +299,16 @@ export default function DocumentsPage() {
   }, [loadWorkspace]);
 
   useEffect(() => {
+    const hasActivePipeline = Boolean(workspace?.items.some(isPipelineActive));
+    if (!hasActivePipeline && !uploading) return;
+    const timer = window.setInterval(() => {
+      loadWorkspace();
+      loadSummary(selectedId);
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [loadSummary, loadWorkspace, selectedId, uploading, workspace]);
+
+  useEffect(() => {
     loadSummary(selectedId);
     loadDependencies(selectedId);
   }, [loadDependencies, loadSummary, selectedId]);
@@ -289,6 +339,7 @@ export default function DocumentsPage() {
     setUploading(true);
     setMessage(null);
     const results: UploadResult[] = [];
+    const uploadedIds: string[] = [];
     for (const file of Array.from(files)) {
       const params = new URLSearchParams({
         source_channel: sourceChannel || "upload",
@@ -320,6 +371,7 @@ export default function DocumentsPage() {
           detail: `дубликат ${String(payload.duplicate_of).slice(0, 8)}`,
         });
       } else if (response.ok) {
+        if (payload.id) uploadedIds.push(payload.id);
         results.push({
           fileName: file.name,
           status: "uploaded",
@@ -337,6 +389,11 @@ export default function DocumentsPage() {
     setUploading(false);
     setMessage(results.some((item) => item.status === "failed") ? "Есть ошибки" : "Готово");
     await loadWorkspace();
+    if (uploadedIds.length) {
+      setSelectedIds(new Set(uploadedIds));
+      setSelectedId(uploadedIds[uploadedIds.length - 1]);
+      setTab(autoProcess ? "queue" : "registry");
+    }
   }
 
   async function runAction(action: string, fn: () => Promise<unknown>) {
@@ -899,17 +956,16 @@ function QueuePanel({
         ))}
       </div>
       <div className="overflow-hidden rounded-md border border-slate-800">
-        <div className="grid grid-cols-[minmax(220px,1.6fr)_repeat(5,minmax(74px,0.5fr))] border-b border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-500">
+        <div className="grid grid-cols-[minmax(220px,1.1fr)_minmax(360px,2fr)_90px] border-b border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-500">
           <span>Документ</span>
-          {PROCESS_STEPS.map((step) => (
-            <span key={step.key}>{step.label}</span>
-          ))}
+          <span>Этапы</span>
+          <span>Прогресс</span>
         </div>
         {items.map((item) => (
           <button
             key={item.document.id}
             onClick={() => onSelect(item.document.id)}
-            className={`grid w-full grid-cols-[minmax(220px,1.6fr)_repeat(5,minmax(74px,0.5fr))] items-center gap-2 border-b border-slate-900 px-3 py-3 text-left text-sm hover:bg-slate-900 ${
+            className={`grid w-full grid-cols-[minmax(220px,1.1fr)_minmax(360px,2fr)_90px] items-center gap-3 border-b border-slate-900 px-3 py-3 text-left text-sm hover:bg-slate-900 ${
               selectedId === item.document.id ? "bg-slate-900" : ""
             }`}
           >
@@ -920,21 +976,14 @@ function QueuePanel({
               <span className="text-xs text-slate-500">
                 {statusLabel(item.document.status)}
               </span>
+              {item.pipeline.processing_error && (
+                <span className="mt-1 block truncate text-xs text-red-300">
+                  {item.pipeline.processing_error}
+                </span>
+              )}
             </span>
-            {PROCESS_STEPS.map((step) => (
-              <span
-                key={step.key}
-                className={
-                  isDone(item.pipeline[step.key])
-                    ? "text-emerald-300"
-                    : item.pipeline.processing_error
-                      ? "text-red-300"
-                      : "text-slate-600"
-                }
-              >
-                {isDone(item.pipeline[step.key]) ? "готово" : "нет"}
-              </span>
-            ))}
+            <PipelineSteps steps={pipelineSteps(item.pipeline)} compact />
+            <ProgressBar value={pipelineProgress(item.pipeline)} failed={Boolean(item.pipeline.processing_error)} />
           </button>
         ))}
         {!items.length && <div className="p-8 text-center text-sm text-slate-500">Нет данных</div>}
@@ -1232,6 +1281,7 @@ function DetailPanel({
             <Metric label="Векторов" value={pipeline?.embedding_records ?? 0} compact />
             <Metric label="НТД" value={pipeline?.ntd_open_findings ?? 0} compact />
           </div>
+          <PipelineProgressCard pipeline={pipeline} />
           <label key={`${selected.id}-file-name`} className="block text-xs text-slate-400">
             Имя файла
             <input
@@ -1334,6 +1384,67 @@ function DetailPanel({
         </div>
       )}
     </aside>
+  );
+}
+
+function ProgressBar({ value, failed = false }: { value: number; failed?: boolean }) {
+  return (
+    <div>
+      <div className="mb-1 text-xs text-slate-500">{value}%</div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+        <div
+          className={`h-full rounded-full ${failed ? "bg-red-500" : "bg-emerald-500"}`}
+          style={{ width: `${Math.max(4, value)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PipelineSteps({ steps, compact = false }: { steps: PipelineStep[]; compact?: boolean }) {
+  const colors: Record<string, string> = {
+    done: "border-emerald-900 bg-emerald-950/50 text-emerald-200",
+    skipped: "border-slate-700 bg-slate-900 text-slate-500",
+    running: "border-blue-800 bg-blue-950/60 text-blue-200",
+    queued: "border-amber-800 bg-amber-950/40 text-amber-200",
+    failed: "border-red-800 bg-red-950/50 text-red-200",
+    pending: "border-slate-800 bg-slate-950 text-slate-600",
+  };
+  return (
+    <div className={`flex flex-wrap ${compact ? "gap-1" : "gap-2"}`}>
+      {steps.map((step) => (
+        <span
+          key={step.key}
+          title={step.error ?? step.status}
+          className={`rounded-md border px-2 py-1 text-[11px] ${
+            colors[step.status] ?? colors.pending
+          }`}
+        >
+          {step.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function PipelineProgressCard({ pipeline }: { pipeline: PipelineStatus | null }) {
+  const progress = pipelineProgress(pipeline);
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs text-slate-500">Пайплайн</p>
+          <p className="mt-1 text-sm text-slate-300">
+            {pipeline?.processing_status ?? "нет задачи"}
+            {pipeline?.current_step ? ` · ${pipeline.current_step}` : ""}
+          </p>
+        </div>
+        <div className="w-24">
+          <ProgressBar value={progress} failed={Boolean(pipeline?.processing_error)} />
+        </div>
+      </div>
+      <PipelineSteps steps={pipelineSteps(pipeline)} />
+    </div>
   );
 }
 

@@ -12,6 +12,7 @@ from app.db.models import (
     DocumentChunk,
     DocumentExtraction,
     DocumentLink,
+    DocumentProcessingJob,
     DocumentStatus,
     ExtractionField,
     Invoice,
@@ -255,6 +256,44 @@ async def test_document_workspace_endpoint(client: AsyncClient):
     assert data["status_counts"]["ingested"] >= 1
     item = next(item for item in data["items"] if item["document"]["id"] == doc_id)
     assert item["pipeline"]["memory_chunks"] >= 0
+    assert isinstance(item["pipeline"]["pipeline_steps"], list)
+
+
+@pytest.mark.asyncio
+async def test_ingest_auto_process_creates_queued_pipeline_job(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """doc.ingest — auto-process upload exposes queued pipeline progress immediately."""
+    from app.tasks import extraction
+
+    class FakeTask:
+        id = "queued-task-1"
+
+    monkeypatch.setattr(extraction.process_document, "delay", lambda *args: FakeTask())
+    resp = await client.post(
+        "/api/documents/ingest",
+        files={"file": ("pipeline_progress.txt", b"invoice text", "text/plain")},
+    )
+    assert resp.status_code == 200
+    doc_id = resp.json()["id"]
+
+    job = (
+        await db_session.execute(
+            select(DocumentProcessingJob)
+            .where(DocumentProcessingJob.document_id == uuid.UUID(doc_id))
+            .order_by(DocumentProcessingJob.created_at.desc())
+        )
+    ).scalars().first()
+    assert job is not None
+    assert job.status == "queued"
+    assert job.current_step == "classification"
+    assert job.celery_task_id == "queued-task-1"
+    assert any(
+        step["key"] == "classification" and step["status"] == "queued"
+        for step in job.pipeline_steps
+    )
 
 
 @pytest.mark.asyncio

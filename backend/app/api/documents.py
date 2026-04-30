@@ -2,6 +2,7 @@
 
 import hashlib
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -67,6 +68,17 @@ from app.domain.documents import (
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+PIPELINE_STEP_DEFINITIONS = [
+    ("store", "Файл сохранен"),
+    ("memory_seed", "Первичная память"),
+    ("classification", "Классификация"),
+    ("extraction", "Распознавание"),
+    ("sql_records", "Записи SQL"),
+    ("memory_graph", "Память и граф"),
+    ("ntd", "Нормоконтроль"),
+    ("embedding", "Векторизация"),
+]
 
 DEFAULT_ALLOWED_EXTENSIONS = {
     ".bmp",
@@ -159,6 +171,7 @@ async def _pipeline_status_for_document(
         processing_status=latest_job.status if latest_job else None,
         current_step=latest_job.current_step if latest_job else None,
         processing_error=latest_job.error if latest_job else None,
+        pipeline_steps=latest_job.pipeline_steps if latest_job else [],
         extraction_count=await _count_for(
             db,
             DocumentExtraction,
@@ -203,6 +216,49 @@ async def _pipeline_status_for_document(
             NTDCheckFinding.status == "open",
         ),
     )
+
+
+def _initial_pipeline_steps(*, memory_seed_done: bool = False) -> list[dict]:
+    steps = []
+    for key, label in PIPELINE_STEP_DEFINITIONS:
+        status = "pending"
+        if key == "store":
+            status = "done"
+        elif key == "memory_seed" and memory_seed_done:
+            status = "done"
+        steps.append({"key": key, "label": label, "status": status})
+    return steps
+
+
+def _mark_pipeline_step(steps: list[dict], key: str, status: str) -> list[dict]:
+    return [
+        {**step, "status": status} if step.get("key") == key else step
+        for step in steps
+    ]
+
+
+async def _create_processing_job(
+    db: AsyncSession,
+    doc: Document,
+    *,
+    status: str,
+    current_step: str | None,
+    memory_seed_done: bool = False,
+) -> DocumentProcessingJob:
+    steps = _initial_pipeline_steps(memory_seed_done=memory_seed_done)
+    if current_step:
+        step_status = status if status == "queued" else "running"
+        steps = _mark_pipeline_step(steps, current_step, step_status)
+    job = DocumentProcessingJob(
+        document_id=doc.id,
+        status=status,
+        pipeline_steps=steps,
+        current_step=current_step,
+        started_at=datetime.now(UTC) if status == "running" else None,
+    )
+    db.add(job)
+    await db.flush()
+    return job
 
 
 # ── doc.download + presigned URL ─────────────────────────────────────────────
@@ -378,10 +434,12 @@ async def ingest_document(
         actor="system",
     )
 
+    memory_seed_done = False
     try:
         from app.domain.memory_builder import build_document_memory_async
 
         memory_result = await build_document_memory_async(db, doc, text=doc.file_name)
+        memory_seed_done = True
         await add_timeline_event(
             db,
             entity_type="document",
@@ -394,19 +452,52 @@ async def ingest_document(
     except Exception as e:
         logger.warning("memory_index_failed", doc_id=str(doc.id), error=str(e))
 
+    pipeline_queued = False
+    processing_job: DocumentProcessingJob | None = None
+    if auto_process:
+        processing_job = await _create_processing_job(
+            db,
+            doc,
+            status="queued",
+            current_step="classification",
+            memory_seed_done=memory_seed_done,
+        )
+    else:
+        processing_job = await _create_processing_job(
+            db,
+            doc,
+            status="done",
+            current_step=None,
+            memory_seed_done=memory_seed_done,
+        )
+        processing_job.finished_at = datetime.now(UTC)
+
     await db.commit()
 
     logger.info("document_ingested", doc_id=str(doc.id), file_name=doc.file_name)
 
-    pipeline_queued = False
     if auto_process:
         # Auto-trigger extraction pipeline
         try:
             from app.tasks.extraction import process_document
-            process_document.delay(str(doc.id))
+            task = process_document.delay(str(doc.id))
+            if processing_job:
+                processing_job.celery_task_id = task.id
+                await db.commit()
             pipeline_queued = True
             logger.info("extraction_queued", doc_id=str(doc.id))
         except Exception as e:
+            if processing_job:
+                processing_job.status = "failed"
+                processing_job.error = str(e)
+                processing_job.pipeline_steps = _mark_pipeline_step(
+                    processing_job.pipeline_steps,
+                    "classification",
+                    "failed",
+                )
+                processing_job.finished_at = datetime.now(UTC)
+                processing_job.current_step = "classification"
+                await db.commit()
             logger.warning("extraction_queue_failed", doc_id=str(doc.id), error=str(e))
 
     # Auto-trigger embedding (after extraction completes; also embed file_name immediately)
@@ -599,7 +690,16 @@ async def batch_process_documents(
                 )
             )
             continue
+        job = await _create_processing_job(
+            db,
+            doc,
+            status="queued",
+            current_step="classification",
+            memory_seed_done=True,
+        )
         task = process_document.delay(str(document_id), payload.force)
+        job.celery_task_id = task.id
+        await db.commit()
         results.append(
             DocumentBatchActionResult(
                 document_id=document_id,
@@ -624,7 +724,16 @@ async def batch_classify_documents(
         if not doc:
             results.append(DocumentBatchActionResult(document_id=document_id, status="missing"))
             continue
+        job = await _create_processing_job(
+            db,
+            doc,
+            status="queued",
+            current_step="classification",
+            memory_seed_done=True,
+        )
         task = classify_task.delay(str(document_id), payload.force)
+        job.celery_task_id = task.id
+        await db.commit()
         results.append(
             DocumentBatchActionResult(
                 document_id=document_id,
@@ -1035,7 +1144,15 @@ async def classify_document(
 
     from app.tasks.extraction import classify_document as classify_task
 
+    job = await _create_processing_job(
+        db,
+        doc,
+        status="queued",
+        current_step="classification",
+        memory_seed_done=True,
+    )
     task = classify_task.delay(str(document_id), force)
+    job.celery_task_id = task.id
 
     await log_action(
         db,
@@ -1078,7 +1195,15 @@ async def extract_document(
 
     from app.tasks.extraction import process_document
 
+    job = await _create_processing_job(
+        db,
+        doc,
+        status="queued",
+        current_step="classification",
+        memory_seed_done=True,
+    )
     task = process_document.delay(str(document_id), force)
+    job.celery_task_id = task.id
 
     await log_action(
         db,

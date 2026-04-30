@@ -17,6 +17,7 @@ from app.config import settings
 from app.db.models import (
     Document,
     DocumentExtraction,
+    DocumentProcessingJob,
     DocumentStatus,
     DocumentType,
     ExtractionField,
@@ -31,6 +32,17 @@ from app.domain.ntd_checker import build_ntd_findings
 from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
+
+PIPELINE_STEP_DEFINITIONS = [
+    ("store", "Файл сохранен"),
+    ("memory_seed", "Первичная память"),
+    ("classification", "Классификация"),
+    ("extraction", "Распознавание"),
+    ("sql_records", "Записи SQL"),
+    ("memory_graph", "Память и граф"),
+    ("ntd", "Нормоконтроль"),
+    ("embedding", "Векторизация"),
+]
 
 
 def _get_sync_session() -> Session:
@@ -51,6 +63,111 @@ def _run_async(coro):
         return asyncio.run(coro)
 
 
+def _default_pipeline_steps() -> list[dict]:
+    return [
+        {"key": key, "label": label, "status": "pending"}
+        for key, label in PIPELINE_STEP_DEFINITIONS
+    ]
+
+
+def _latest_processing_job(db: Session, doc: Document) -> DocumentProcessingJob | None:
+    return db.execute(
+        select(DocumentProcessingJob)
+        .where(DocumentProcessingJob.document_id == doc.id)
+        .order_by(DocumentProcessingJob.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _get_or_create_processing_job(
+    db: Session,
+    doc: Document,
+    *,
+    current_step: str,
+    celery_task_id: str | None = None,
+) -> DocumentProcessingJob:
+    job = _latest_processing_job(db, doc)
+    if not job or job.status in {"done", "failed"}:
+        job = DocumentProcessingJob(
+            document_id=doc.id,
+            status="running",
+            pipeline_steps=_default_pipeline_steps(),
+            current_step=current_step,
+            started_at=datetime.now(UTC),
+            celery_task_id=celery_task_id,
+        )
+        db.add(job)
+        db.flush()
+    else:
+        job.status = "running"
+        job.current_step = current_step
+        job.started_at = job.started_at or datetime.now(UTC)
+        if celery_task_id and not job.celery_task_id:
+            job.celery_task_id = celery_task_id
+    return job
+
+
+def _ensure_step_entries(job: DocumentProcessingJob) -> list[dict]:
+    existing = {
+        step.get("key"): dict(step)
+        for step in (job.pipeline_steps or [])
+        if isinstance(step, dict) and step.get("key")
+    }
+    steps = []
+    for key, label in PIPELINE_STEP_DEFINITIONS:
+        step = existing.get(key, {"key": key, "label": label, "status": "pending"})
+        step.setdefault("label", label)
+        step.setdefault("status", "pending")
+        steps.append(step)
+    return steps
+
+
+def _set_job_step(
+    job: DocumentProcessingJob,
+    key: str,
+    status: str,
+    *,
+    error: str | None = None,
+) -> None:
+    steps = []
+    for step in _ensure_step_entries(job):
+        if step["key"] == key:
+            step = {**step, "status": status}
+            if error:
+                step["error"] = error
+        steps.append(step)
+    job.pipeline_steps = steps
+    job.current_step = key if status in {"queued", "running", "failed"} else job.current_step
+    if error:
+        job.error = error
+
+
+def _step_status(job: DocumentProcessingJob, key: str) -> str | None:
+    for step in _ensure_step_entries(job):
+        if step["key"] == key:
+            return step.get("status")
+    return None
+
+
+def _skip_remaining_steps(job: DocumentProcessingJob, keys: set[str]) -> None:
+    for key in keys:
+        if _step_status(job, key) in {"pending", "queued", None}:
+            _set_job_step(job, key, "skipped")
+
+
+def _finish_job(
+    job: DocumentProcessingJob,
+    status: str,
+    *,
+    error: str | None = None,
+) -> None:
+    job.status = status
+    job.error = error
+    job.finished_at = datetime.now(UTC)
+    if status == "done":
+        job.current_step = "completed"
+
+
 @celery_app.task(name="app.tasks.extraction.classify_document", bind=True, max_retries=2)
 def classify_document(self, document_id: str, force: bool = False) -> dict:
     """Classify document type using gemma4:e4b.
@@ -63,6 +180,16 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
         doc = db.get(Document, uuid.UUID(document_id))
         if not doc:
             return {"error": "Document not found"}
+        job = _get_or_create_processing_job(
+            db,
+            doc,
+            current_step="classification",
+            celery_task_id=getattr(self.request, "id", None),
+        )
+        _set_job_step(job, "store", "done")
+        if doc.source_channel:
+            _set_job_step(job, "memory_seed", "done")
+        _set_job_step(job, "classification", "running")
 
         metadata = doc.metadata_ or {}
         if (
@@ -72,12 +199,20 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
         ):
             doc.doc_type_confidence = doc.doc_type_confidence or 1.0
             doc.status = DocumentStatus.extracting
+            _set_job_step(job, "classification", "done")
             db.commit()
             doc_type = doc.doc_type.value
             if doc_type == "invoice":
+                _set_job_step(job, "extraction", "queued")
                 extract_invoice.delay(document_id)
+                db.commit()
             else:
                 doc.status = DocumentStatus.needs_review
+                _skip_remaining_steps(
+                    job,
+                    {"extraction", "sql_records", "memory_graph", "ntd"},
+                )
+                _finish_job(job, "done")
                 db.commit()
             logger.info(
                 "classify_skipped_manual_override",
@@ -99,8 +234,11 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
         if not text:
             logger.warning("classify_no_text", document_id=document_id)
             doc.status = DocumentStatus.needs_review
+            error = "No text extracted from document"
+            _set_job_step(job, "classification", "failed", error=error)
+            _finish_job(job, "failed", error=error)
             db.commit()
-            return {"error": "No text extracted from document"}
+            return {"error": error}
 
         # Classify via Ollama
         try:
@@ -119,6 +257,7 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
             doc.doc_type = DocumentType(doc_type)
             doc.doc_type_confidence = confidence
             doc.status = DocumentStatus.extracting
+            _set_job_step(job, "classification", "done")
             db.commit()
 
             logger.info(
@@ -130,9 +269,16 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
 
             # Chain: if invoice → extract
             if doc_type == "invoice":
+                _set_job_step(job, "extraction", "queued")
                 extract_invoice.delay(document_id)
+                db.commit()
             else:
                 doc.status = DocumentStatus.needs_review
+                _skip_remaining_steps(
+                    job,
+                    {"extraction", "sql_records", "memory_graph", "ntd"},
+                )
+                _finish_job(job, "done")
                 db.commit()
 
             return {
@@ -144,6 +290,8 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
         except Exception as e:
             logger.error("classify_error", document_id=document_id, error=str(e))
             doc.status = DocumentStatus.needs_review
+            _set_job_step(job, "classification", "failed", error=str(e))
+            _finish_job(job, "failed", error=str(e))
             db.commit()
             self.retry(countdown=30, exc=e)
             return {"error": str(e)}
@@ -162,10 +310,24 @@ def extract_invoice(self, document_id: str) -> dict:
         doc = db.get(Document, uuid.UUID(document_id))
         if not doc:
             return {"error": "Document not found"}
+        job = _get_or_create_processing_job(
+            db,
+            doc,
+            current_step="extraction",
+            celery_task_id=getattr(self.request, "id", None),
+        )
+        _set_job_step(job, "extraction", "running")
+        doc.status = DocumentStatus.extracting
+        db.commit()
 
         text = _get_document_text(doc)
         if not text:
-            return {"error": "No text"}
+            error = "No text extracted from document"
+            doc.status = DocumentStatus.needs_review
+            _set_job_step(job, "extraction", "failed", error=error)
+            _finish_job(job, "failed", error=error)
+            db.commit()
+            return {"error": error}
 
         start_time = time.time()
 
@@ -179,6 +341,8 @@ def extract_invoice(self, document_id: str) -> dict:
         except Exception as e:
             logger.error("extract_error", document_id=document_id, error=str(e))
             doc.status = DocumentStatus.needs_review
+            _set_job_step(job, "extraction", "failed", error=str(e))
+            _finish_job(job, "failed", error=str(e))
             db.commit()
             self.retry(countdown=30, exc=e)
             return {"error": str(e)}
@@ -221,6 +385,8 @@ def extract_invoice(self, document_id: str) -> dict:
         )
         db.add(extraction)
         db.flush()
+        _set_job_step(job, "extraction", "done")
+        _set_job_step(job, "sql_records", "running")
 
         # Save ExtractionFields
         for fc in field_confs:
@@ -297,11 +463,14 @@ def extract_invoice(self, document_id: str) -> dict:
             db.add(line)
 
         doc.status = DocumentStatus.needs_review
+        _set_job_step(job, "sql_records", "done")
 
         try:
             from app.domain.memory_builder import build_document_memory_sync
 
+            _set_job_step(job, "memory_graph", "running")
             memory_result = build_document_memory_sync(db, doc, text=text)
+            _set_job_step(job, "memory_graph", "done")
             logger.info(
                 "document_memory_built",
                 document_id=document_id,
@@ -310,13 +479,20 @@ def extract_invoice(self, document_id: str) -> dict:
                 edges=memory_result.edges_created,
             )
         except Exception as e:
+            _set_job_step(job, "memory_graph", "failed", error=str(e))
             logger.warning("document_memory_build_failed", document_id=document_id, error=str(e))
 
         try:
+            _set_job_step(job, "ntd", "running")
             _run_auto_ntd_check_sync(db, doc, text)
+            _set_job_step(job, "ntd", "done")
         except Exception as e:
+            _set_job_step(job, "ntd", "failed", error=str(e))
             logger.warning("ntd_auto_check_failed", document_id=document_id, error=str(e))
 
+        if _step_status(job, "embedding") != "done":
+            _set_job_step(job, "embedding", "queued")
+        _finish_job(job, "done")
         db.commit()
 
         logger.info(

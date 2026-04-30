@@ -177,6 +177,7 @@ class DocumentPipelineStatus(BaseModel):
     processing_status: str | None = None
     current_step: str | None = None
     processing_error: str | None = None
+    pipeline_steps: list[dict] = []
     extraction_count: int = 0
     artifact_count: int = 0
     graph_status: str | None = None
