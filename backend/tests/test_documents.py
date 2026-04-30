@@ -12,6 +12,7 @@ from app.db.models import (
     DocumentChunk,
     DocumentExtraction,
     DocumentLink,
+    DocumentStatus,
     ExtractionField,
     Invoice,
     InvoiceLine,
@@ -182,6 +183,115 @@ async def test_update_document(client: AsyncClient):
     )
     assert resp.status_code == 200
     assert resp.json()["doc_type"] == "invoice"
+
+
+@pytest.mark.asyncio
+async def test_ingest_with_manual_doc_type_override(
+    client: AsyncClient,
+    db_session: AsyncSession,
+):
+    """doc.ingest — requested doc type can be pinned by a human override."""
+    resp = await client.post(
+        "/api/documents/ingest"
+        "?source_channel=upload"
+        "&requested_doc_type=drawing"
+        "&manual_doc_type_override=true"
+        "&auto_process=false",
+        files={"file": ("manual_type.pdf", b"manual type content", "application/pdf")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["pipeline_queued"] is False
+
+    doc = await db_session.get(Document, uuid.UUID(data["id"]))
+    assert doc is not None
+    assert doc.doc_type.value == "drawing"
+    assert doc.doc_type_confidence == 1.0
+    assert doc.metadata_["manual_doc_type_override"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_document_sets_manual_override(
+    client: AsyncClient,
+    db_session: AsyncSession,
+):
+    """doc.update — manual doc type assignment is preserved for later classification."""
+    ingest = await client.post(
+        "/api/documents/ingest?auto_process=false",
+        files={"file": ("manual_update.pdf", b"manual update content", "application/pdf")},
+    )
+    doc_id = ingest.json()["id"]
+
+    resp = await client.patch(
+        f"/api/documents/{doc_id}",
+        json={
+            "doc_type": "contract",
+            "source_channel": "upload",
+            "manual_doc_type_override": True,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["doc_type"] == "contract"
+
+    doc = await db_session.get(Document, uuid.UUID(doc_id))
+    assert doc is not None
+    assert doc.doc_type_confidence == 1.0
+    assert doc.metadata_["manual_doc_type_override"] is True
+
+
+@pytest.mark.asyncio
+async def test_document_workspace_endpoint(client: AsyncClient):
+    """doc.workspace — returns documents with compact pipeline summaries and counters."""
+    ingest = await client.post(
+        "/api/documents/ingest?auto_process=false",
+        files={"file": ("workspace_test.pdf", b"workspace content", "application/pdf")},
+    )
+    doc_id = ingest.json()["id"]
+
+    resp = await client.get("/api/documents/workspace")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] >= 1
+    assert data["status_counts"]["ingested"] >= 1
+    item = next(item for item in data["items"] if item["document"]["id"] == doc_id)
+    assert item["pipeline"]["memory_chunks"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_batch_process_skips_quarantined_documents(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """doc.batch_process — queues allowed documents and skips quarantine."""
+    from app.tasks import extraction
+
+    class FakeTask:
+        id = "task-1"
+
+    monkeypatch.setattr(extraction.process_document, "delay", lambda *args: FakeTask())
+    ok = await client.post(
+        "/api/documents/ingest?auto_process=false",
+        files={"file": ("batch_ok.pdf", b"batch ok", "application/pdf")},
+    )
+    quarantined = Document(
+        file_name="blocked.exe",
+        file_hash="blocked",
+        file_size=1,
+        mime_type="application/octet-stream",
+        storage_path="documents/blocked",
+        status=DocumentStatus.suspicious,
+    )
+    db_session.add(quarantined)
+    await db_session.commit()
+
+    resp = await client.post(
+        "/api/documents/batch/process",
+        json={"document_ids": [ok.json()["id"], str(quarantined.id)]},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [item["status"] for item in data["results"]] == ["queued", "skipped"]
 
 
 @pytest.mark.asyncio

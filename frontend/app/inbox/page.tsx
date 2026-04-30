@@ -1,8 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { documents as docsApi } from "@/lib/api-client";
+import { useCallback, useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 
 const API = getApiBaseUrl();
@@ -19,14 +18,9 @@ interface DocumentItem {
 export default function InboxPage() {
   const t = useTranslations("inbox");
   const tDoc = useTranslations("document");
-  const tActions = useTranslations("actions");
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [filter, setFilter] = useState("all");
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchDocuments = useCallback(() => {
     const params = new URLSearchParams({ limit: "50" });
@@ -37,31 +31,6 @@ export default function InboxPage() {
       .then((data) => setDocuments(data.items ?? []))
       .catch(() => setDocuments([]));
   }, [filter]);
-
-  async function handleUploadFiles(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    setUploading(true);
-    setUploadError(null);
-    const errors: string[] = [];
-    for (const file of Array.from(files)) {
-      try {
-        await docsApi.ingest(file);
-      } catch (error) {
-        errors.push(`${file.name}${error instanceof Error ? ` (${error.message})` : ""}`);
-      }
-    }
-    setUploading(false);
-    if (errors.length > 0) {
-      setUploadError(`Ошибка загрузки: ${errors.join(", ")}`);
-    }
-    fetchDocuments();
-  }
-
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setIsDragging(false);
-    handleUploadFiles(e.dataTransfer.files);
-  }
 
   // Keyboard navigation
   useEffect(() => {
@@ -120,56 +89,13 @@ export default function InboxPage() {
             </button>
           ))}
           <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
+            onClick={() => {
+              window.location.href = "/documents";
+            }}
             className="px-3 py-1.5 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50 flex items-center gap-1.5"
           >
-            {uploading ? "Загрузка..." : `+ ${tActions("upload")}`}
+            Открыть документы
           </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".pdf,.jpg,.jpeg,.png,.docx,.xlsx"
-            className="hidden"
-            onChange={(e) => handleUploadFiles(e.target.files)}
-          />
-        </div>
-      </div>
-
-      {/* Upload error */}
-      {uploadError && (
-        <div className="mb-4 px-4 py-2 bg-red-950/40 border border-red-700 text-sm text-red-300 rounded-lg">
-          {uploadError}
-          <button
-            onClick={() => setUploadError(null)}
-            className="ml-2 underline"
-          >
-            Закрыть
-          </button>
-        </div>
-      )}
-
-      {/* Drop zone */}
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          setIsDragging(true);
-        }}
-        onDragLeave={() => setIsDragging(false)}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
-        className={`mb-4 cursor-pointer rounded-lg border-2 border-dashed px-4 py-6 text-center text-sm transition-colors ${
-          isDragging
-            ? "border-blue-400 bg-blue-950/20 text-blue-400"
-            : "border-slate-600 bg-slate-900/40 text-slate-400 hover:border-slate-500"
-        }`}
-      >
-        <div className="font-medium text-slate-200">
-          {isDragging ? "Отпустите для загрузки" : "Перетащите документы сюда"}
-        </div>
-        <div className="mt-1 text-xs text-slate-500">
-          PDF, изображения, DOCX, XLSX, TXT, DXF/STEP
         </div>
       </div>
 

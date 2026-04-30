@@ -40,6 +40,9 @@ from app.domain.document_deletion import (
 from app.domain.documents import (
     DevelopmentPurgeRequest,
     DevelopmentPurgeResponse,
+    DocumentBatchActionResponse,
+    DocumentBatchActionResult,
+    DocumentBatchRequest,
     DocumentBulkDeleteRequest,
     DocumentBulkDeleteResponse,
     DocumentDeleteResult,
@@ -55,6 +58,8 @@ from app.domain.documents import (
     DocumentSummary,
     DocumentSummaryAI,
     DocumentUpdate,
+    DocumentWorkspaceItem,
+    DocumentWorkspaceResponse,
     FieldCorrectionRequest,
     FieldCorrectionResponse,
     TaskResponse,
@@ -129,6 +134,77 @@ async def _document_text_for_memory(db: AsyncSession, doc: Document) -> str:
     return doc.file_name
 
 
+async def _pipeline_status_for_document(
+    db: AsyncSession,
+    document_id: uuid.UUID,
+) -> DocumentPipelineStatus:
+    latest_job = (
+        await db.execute(
+            select(DocumentProcessingJob)
+            .where(DocumentProcessingJob.document_id == document_id)
+            .order_by(DocumentProcessingJob.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    latest_graph = (
+        await db.execute(
+            select(GraphBuildStatus)
+            .where(GraphBuildStatus.document_id == document_id)
+            .order_by(GraphBuildStatus.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    return DocumentPipelineStatus(
+        processing_status=latest_job.status if latest_job else None,
+        current_step=latest_job.current_step if latest_job else None,
+        processing_error=latest_job.error if latest_job else None,
+        extraction_count=await _count_for(
+            db,
+            DocumentExtraction,
+            DocumentExtraction.document_id == document_id,
+        ),
+        artifact_count=await _count_for(
+            db,
+            DocumentArtifact,
+            DocumentArtifact.document_id == document_id,
+        ),
+        graph_status=latest_graph.status if latest_graph else None,
+        graph_scope=latest_graph.build_scope if latest_graph else None,
+        graph_error=latest_graph.error if latest_graph else None,
+        memory_chunks=await _count_for(db, DocumentChunk, DocumentChunk.document_id == document_id),
+        evidence_spans=await _count_for(db, EvidenceSpan, EvidenceSpan.document_id == document_id),
+        graph_nodes=await _count_for(
+            db,
+            KnowledgeNode,
+            KnowledgeNode.source_document_id == document_id,
+        ),
+        graph_edges=await _count_for(
+            db,
+            KnowledgeEdge,
+            KnowledgeEdge.source_document_id == document_id,
+        ),
+        graph_review_pending=await _count_for(
+            db,
+            GraphReviewItem,
+            GraphReviewItem.document_id == document_id,
+            GraphReviewItem.status == "pending",
+        ),
+        embedding_records=await _count_for(
+            db,
+            MemoryEmbeddingRecord,
+            MemoryEmbeddingRecord.document_id == document_id,
+        ),
+        ntd_checks=await _count_for(db, NTDCheckRun, NTDCheckRun.document_id == document_id),
+        ntd_open_findings=await _count_for(
+            db,
+            NTDCheckFinding,
+            NTDCheckFinding.document_id == document_id,
+            NTDCheckFinding.status == "open",
+        ),
+    )
+
+
 # ── doc.download + presigned URL ─────────────────────────────────────────────
 
 
@@ -187,6 +263,9 @@ async def get_document_presigned_url(
 async def ingest_document(
     file: UploadFile = File(...),
     source_channel: str = Query("upload"),
+    requested_doc_type: DocumentType | None = Query(None),
+    auto_process: bool = Query(True),
+    manual_doc_type_override: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: doc.ingest — Accept file, store, create Document record."""
@@ -208,6 +287,7 @@ async def ingest_document(
             status=duplicate.status,
             is_duplicate=True,
             duplicate_of=duplicate.id,
+            pipeline_queued=False,
             created_at=duplicate.created_at,
         )
 
@@ -241,6 +321,11 @@ async def ingest_document(
         storage_path=storage_path,
         source_channel=source_channel,
         status=initial_status,
+        doc_type=requested_doc_type,
+        doc_type_confidence=1.0 if requested_doc_type and manual_doc_type_override else None,
+        metadata_={
+            "manual_doc_type_override": manual_doc_type_override,
+        } if requested_doc_type and manual_doc_type_override else None,
     )
     db.add(doc)
     await db.flush()
@@ -313,13 +398,16 @@ async def ingest_document(
 
     logger.info("document_ingested", doc_id=str(doc.id), file_name=doc.file_name)
 
-    # Auto-trigger extraction pipeline
-    try:
-        from app.tasks.extraction import process_document
-        process_document.delay(str(doc.id))
-        logger.info("extraction_queued", doc_id=str(doc.id))
-    except Exception as e:
-        logger.warning("extraction_queue_failed", doc_id=str(doc.id), error=str(e))
+    pipeline_queued = False
+    if auto_process:
+        # Auto-trigger extraction pipeline
+        try:
+            from app.tasks.extraction import process_document
+            process_document.delay(str(doc.id))
+            pipeline_queued = True
+            logger.info("extraction_queued", doc_id=str(doc.id))
+        except Exception as e:
+            logger.warning("extraction_queue_failed", doc_id=str(doc.id), error=str(e))
 
     # Auto-trigger embedding (after extraction completes; also embed file_name immediately)
     try:
@@ -335,34 +423,12 @@ async def ingest_document(
         file_size=doc.file_size,
         mime_type=doc.mime_type,
         status=doc.status,
+        pipeline_queued=pipeline_queued,
         created_at=doc.created_at,
     )
 
 
-# ── doc.get ──────────────────────────────────────────────────────────────────
-
-
-@router.get("/{document_id}", response_model=DocumentOut)
-async def get_document(
-    document_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    """Skill: doc.get — Get document with extractions and links."""
-    result = await db.execute(
-        select(Document)
-        .where(Document.id == document_id)
-        .options(
-            selectinload(Document.extractions).selectinload(DocumentExtraction.fields),
-            selectinload(Document.links),
-        )
-    )
-    doc = result.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    return doc
-
-
-# ── doc.list ─────────────────────────────────────────────────────────────────
+# ── doc.list / doc.workspace ─────────────────────────────────────────────────
 
 
 @router.get("", response_model=DocumentListResponse)
@@ -399,6 +465,98 @@ async def list_documents(
     return DocumentListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
+@router.get("/workspace", response_model=DocumentWorkspaceResponse)
+async def list_document_workspace(
+    status: DocumentStatus | None = None,
+    doc_type: DocumentType | None = None,
+    source_channel: str | None = None,
+    search: str | None = None,
+    offset: int = 0,
+    limit: int = Query(50, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: doc.workspace — List documents with compact pipeline summaries."""
+    query = select(Document)
+
+    if status:
+        query = query.where(Document.status == status)
+    if doc_type:
+        query = query.where(Document.doc_type == doc_type)
+    if source_channel:
+        query = query.where(Document.source_channel == source_channel)
+    if search:
+        query = query.where(
+            or_(
+                Document.file_name.ilike(f"%{search}%"),
+                Document.file_hash.ilike(f"%{search}%"),
+            )
+        )
+
+    total = (
+        await db.execute(select(func.count()).select_from(query.subquery()))
+    ).scalar() or 0
+    result = await db.execute(
+        query.order_by(Document.created_at.desc()).offset(offset).limit(limit)
+    )
+    docs = result.scalars().all()
+
+    status_counts_result = await db.execute(
+        select(Document.status, func.count()).group_by(Document.status)
+    )
+    status_counts = {
+        status.value if hasattr(status, "value") else str(status): int(count)
+        for status, count in status_counts_result.all()
+    }
+    type_counts_result = await db.execute(
+        select(Document.doc_type, func.count())
+        .where(Document.doc_type.is_not(None))
+        .group_by(Document.doc_type)
+    )
+    doc_type_counts = {
+        doc_type.value if hasattr(doc_type, "value") else str(doc_type): int(count)
+        for doc_type, count in type_counts_result.all()
+    }
+
+    items = [
+        DocumentWorkspaceItem(
+            document=doc,
+            pipeline=await _pipeline_status_for_document(db, doc.id),
+        )
+        for doc in docs
+    ]
+    return DocumentWorkspaceResponse(
+        items=items,
+        total=total,
+        offset=offset,
+        limit=limit,
+        status_counts=status_counts,
+        doc_type_counts=doc_type_counts,
+    )
+
+
+# ── doc.get ──────────────────────────────────────────────────────────────────
+
+
+@router.get("/{document_id}", response_model=DocumentOut)
+async def get_document(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: doc.get — Get document with extractions and links."""
+    result = await db.execute(
+        select(Document)
+        .where(Document.id == document_id)
+        .options(
+            selectinload(Document.extractions).selectinload(DocumentExtraction.fields),
+            selectinload(Document.links),
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
+
+
 @router.delete("/bulk-delete", response_model=DocumentBulkDeleteResponse)
 async def bulk_delete_documents(
     payload: DocumentBulkDeleteRequest,
@@ -416,6 +574,165 @@ async def bulk_delete_documents(
         missing=int(result["missing"]),
         results=[_delete_result_payload(item) for item in result["results"]],
     )
+
+
+@router.post("/batch/process", response_model=DocumentBatchActionResponse)
+async def batch_process_documents(
+    payload: DocumentBatchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: doc.batch_process — Trigger full processing for selected documents."""
+    from app.tasks.extraction import process_document
+
+    results: list[DocumentBatchActionResult] = []
+    for document_id in payload.document_ids:
+        doc = await db.get(Document, document_id)
+        if not doc:
+            results.append(DocumentBatchActionResult(document_id=document_id, status="missing"))
+            continue
+        if doc.status == DocumentStatus.suspicious:
+            results.append(
+                DocumentBatchActionResult(
+                    document_id=document_id,
+                    status="skipped",
+                    detail="quarantined",
+                )
+            )
+            continue
+        task = process_document.delay(str(document_id), payload.force)
+        results.append(
+            DocumentBatchActionResult(
+                document_id=document_id,
+                status="queued",
+                task_id=task.id,
+            )
+        )
+    return DocumentBatchActionResponse(action="process", results=results)
+
+
+@router.post("/batch/classify", response_model=DocumentBatchActionResponse)
+async def batch_classify_documents(
+    payload: DocumentBatchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: doc.batch_classify — Trigger classification for selected documents."""
+    from app.tasks.extraction import classify_document as classify_task
+
+    results: list[DocumentBatchActionResult] = []
+    for document_id in payload.document_ids:
+        doc = await db.get(Document, document_id)
+        if not doc:
+            results.append(DocumentBatchActionResult(document_id=document_id, status="missing"))
+            continue
+        task = classify_task.delay(str(document_id), payload.force)
+        results.append(
+            DocumentBatchActionResult(
+                document_id=document_id,
+                status="queued",
+                task_id=task.id,
+            )
+        )
+    return DocumentBatchActionResponse(action="classify", results=results)
+
+
+@router.post("/batch/embeddings-reindex", response_model=DocumentBatchActionResponse)
+async def batch_reindex_document_embeddings(
+    payload: DocumentBatchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: doc.batch_embeddings_reindex — Queue embedding rebuild for selected documents."""
+    from app.tasks.embedding import embed_document
+
+    results: list[DocumentBatchActionResult] = []
+    for document_id in payload.document_ids:
+        doc = await db.get(Document, document_id)
+        if not doc:
+            results.append(DocumentBatchActionResult(document_id=document_id, status="missing"))
+            continue
+        task = embed_document.delay(str(document_id))
+        results.append(
+            DocumentBatchActionResult(
+                document_id=document_id,
+                status="queued",
+                task_id=task.id,
+            )
+        )
+    return DocumentBatchActionResponse(action="embeddings-reindex", results=results)
+
+
+@router.post("/batch/memory-rebuild", response_model=DocumentBatchActionResponse)
+async def batch_rebuild_document_memory(
+    payload: DocumentBatchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: doc.batch_memory_rebuild — Rebuild graph memory for selected documents."""
+    from app.domain.memory_builder import build_document_memory_async
+
+    results: list[DocumentBatchActionResult] = []
+    for document_id in payload.document_ids:
+        doc = await db.get(Document, document_id)
+        if not doc:
+            results.append(DocumentBatchActionResult(document_id=document_id, status="missing"))
+            continue
+        try:
+            text = await _document_text_for_memory(db, doc)
+            await build_document_memory_async(
+                db,
+                doc,
+                text=text,
+                build_scope=payload.build_scope,
+                actor="user",
+                clear_existing=True,
+            )
+            await db.commit()
+            results.append(DocumentBatchActionResult(document_id=document_id, status="completed"))
+        except Exception as exc:
+            await db.rollback()
+            results.append(
+                DocumentBatchActionResult(
+                    document_id=document_id,
+                    status="failed",
+                    detail=str(exc),
+                )
+            )
+    return DocumentBatchActionResponse(action="memory-rebuild", results=results)
+
+
+@router.post("/batch/ntd-check", response_model=DocumentBatchActionResponse)
+async def batch_run_ntd_checks(
+    payload: DocumentBatchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: doc.batch_ntd_check — Run manual NTD checks for selected documents."""
+    from app.api.ntd import _run_ntd_check
+    from app.domain.ntd import NTDCheckRunRequest
+
+    results: list[DocumentBatchActionResult] = []
+    for document_id in payload.document_ids:
+        doc = await db.get(Document, document_id)
+        if not doc:
+            results.append(DocumentBatchActionResult(document_id=document_id, status="missing"))
+            continue
+        try:
+            await _run_ntd_check(
+                db,
+                NTDCheckRunRequest(
+                    document_id=document_id,
+                    triggered_by="manual",
+                    actor="user",
+                ),
+            )
+            results.append(DocumentBatchActionResult(document_id=document_id, status="completed"))
+        except Exception as exc:
+            await db.rollback()
+            results.append(
+                DocumentBatchActionResult(
+                    document_id=document_id,
+                    status="failed",
+                    detail=str(exc),
+                )
+            )
+    return DocumentBatchActionResponse(action="ntd-check", results=results)
 
 
 @router.post("/dev/purge-all", response_model=DevelopmentPurgeResponse)
@@ -458,71 +775,7 @@ async def get_document_management_summary(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    latest_job = (
-        await db.execute(
-            select(DocumentProcessingJob)
-            .where(DocumentProcessingJob.document_id == document_id)
-            .order_by(DocumentProcessingJob.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    latest_graph = (
-        await db.execute(
-            select(GraphBuildStatus)
-            .where(GraphBuildStatus.document_id == document_id)
-            .order_by(GraphBuildStatus.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-    pipeline = DocumentPipelineStatus(
-        processing_status=latest_job.status if latest_job else None,
-        current_step=latest_job.current_step if latest_job else None,
-        processing_error=latest_job.error if latest_job else None,
-        extraction_count=await _count_for(
-            db,
-            DocumentExtraction,
-            DocumentExtraction.document_id == document_id,
-        ),
-        artifact_count=await _count_for(
-            db,
-            DocumentArtifact,
-            DocumentArtifact.document_id == document_id,
-        ),
-        graph_status=latest_graph.status if latest_graph else None,
-        graph_scope=latest_graph.build_scope if latest_graph else None,
-        graph_error=latest_graph.error if latest_graph else None,
-        memory_chunks=await _count_for(db, DocumentChunk, DocumentChunk.document_id == document_id),
-        evidence_spans=await _count_for(db, EvidenceSpan, EvidenceSpan.document_id == document_id),
-        graph_nodes=await _count_for(
-            db,
-            KnowledgeNode,
-            KnowledgeNode.source_document_id == document_id,
-        ),
-        graph_edges=await _count_for(
-            db,
-            KnowledgeEdge,
-            KnowledgeEdge.source_document_id == document_id,
-        ),
-        graph_review_pending=await _count_for(
-            db,
-            GraphReviewItem,
-            GraphReviewItem.document_id == document_id,
-            GraphReviewItem.status == "pending",
-        ),
-        embedding_records=await _count_for(
-            db,
-            MemoryEmbeddingRecord,
-            MemoryEmbeddingRecord.document_id == document_id,
-        ),
-        ntd_checks=await _count_for(db, NTDCheckRun, NTDCheckRun.document_id == document_id),
-        ntd_open_findings=await _count_for(
-            db,
-            NTDCheckFinding,
-            NTDCheckFinding.document_id == document_id,
-            NTDCheckFinding.status == "open",
-        ),
-    )
+    pipeline = await _pipeline_status_for_document(db, document_id)
     return DocumentManagementSummary(document=doc, pipeline=pipeline, links=doc.links)
 
 
@@ -542,11 +795,22 @@ async def update_document(
         raise HTTPException(status_code=404, detail="Document not found")
 
     update_data = payload.model_dump(exclude_unset=True)
+    manual_override = update_data.pop("manual_doc_type_override", None)
     for field, value in update_data.items():
         if field == "metadata_":
             doc.metadata_ = value
         else:
             setattr(doc, field, value)
+
+    if manual_override is not None:
+        metadata = dict(doc.metadata_ or {})
+        metadata["manual_doc_type_override"] = bool(manual_override)
+        doc.metadata_ = metadata
+    if "doc_type" in update_data and doc.doc_type and manual_override is not False:
+        doc.doc_type_confidence = 1.0
+        metadata = dict(doc.metadata_ or {})
+        metadata["manual_doc_type_override"] = True
+        doc.metadata_ = metadata
 
     await log_action(
         db,
@@ -754,6 +1018,7 @@ async def get_document_dependencies(
 @router.post("/{document_id}/classify", response_model=TaskResponse)
 async def classify_document(
     document_id: uuid.UUID,
+    force: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: doc.classify — Trigger document classification via AI."""
@@ -762,7 +1027,7 @@ async def classify_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    if doc.status not in (DocumentStatus.ingested, DocumentStatus.needs_review):
+    if not force and doc.status not in (DocumentStatus.ingested, DocumentStatus.needs_review):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot classify document in status {doc.status.value}",
@@ -770,7 +1035,7 @@ async def classify_document(
 
     from app.tasks.extraction import classify_document as classify_task
 
-    task = classify_task.delay(str(document_id))
+    task = classify_task.delay(str(document_id), force)
 
     await log_action(
         db,
@@ -802,6 +1067,7 @@ async def classify_document(
 @router.post("/{document_id}/extract", response_model=TaskResponse)
 async def extract_document(
     document_id: uuid.UUID,
+    force: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: doc.extract — Trigger full extraction pipeline (classify → extract → validate)."""
@@ -812,7 +1078,7 @@ async def extract_document(
 
     from app.tasks.extraction import process_document
 
-    task = process_document.delay(str(document_id))
+    task = process_document.delay(str(document_id), force)
 
     await log_action(
         db,

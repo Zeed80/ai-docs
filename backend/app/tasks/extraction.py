@@ -52,7 +52,7 @@ def _run_async(coro):
 
 
 @celery_app.task(name="app.tasks.extraction.classify_document", bind=True, max_retries=2)
-def classify_document(self, document_id: str) -> dict:
+def classify_document(self, document_id: str, force: bool = False) -> dict:
     """Classify document type using gemma4:e4b.
 
     Updates Document.doc_type and doc_type_confidence.
@@ -63,6 +63,33 @@ def classify_document(self, document_id: str) -> dict:
         doc = db.get(Document, uuid.UUID(document_id))
         if not doc:
             return {"error": "Document not found"}
+
+        metadata = doc.metadata_ or {}
+        if (
+            not force
+            and metadata.get("manual_doc_type_override")
+            and doc.doc_type is not None
+        ):
+            doc.doc_type_confidence = doc.doc_type_confidence or 1.0
+            doc.status = DocumentStatus.extracting
+            db.commit()
+            doc_type = doc.doc_type.value
+            if doc_type == "invoice":
+                extract_invoice.delay(document_id)
+            else:
+                doc.status = DocumentStatus.needs_review
+                db.commit()
+            logger.info(
+                "classify_skipped_manual_override",
+                document_id=document_id,
+                doc_type=doc_type,
+            )
+            return {
+                "document_id": document_id,
+                "doc_type": doc_type,
+                "confidence": doc.doc_type_confidence,
+                "manual_override": True,
+            }
 
         doc.status = DocumentStatus.classifying
         db.commit()
@@ -104,6 +131,9 @@ def classify_document(self, document_id: str) -> dict:
             # Chain: if invoice → extract
             if doc_type == "invoice":
                 extract_invoice.delay(document_id)
+            else:
+                doc.status = DocumentStatus.needs_review
+                db.commit()
 
             return {
                 "document_id": document_id,
@@ -309,12 +339,12 @@ def extract_invoice(self, document_id: str) -> dict:
 
 
 @celery_app.task(name="app.tasks.extraction.process_document")
-def process_document(document_id: str) -> dict:
+def process_document(document_id: str, force: bool = False) -> dict:
     """Full pipeline: classify → extract → validate.
 
     Entry point for newly ingested documents.
     """
-    return classify_document(document_id)
+    return classify_document(document_id, force)
 
 
 def _get_document_text(doc: Document) -> str:

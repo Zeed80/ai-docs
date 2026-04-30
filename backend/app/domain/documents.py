@@ -30,6 +30,8 @@ class DocumentIngestResponse(BaseModel):
     status: DocumentStatus
     is_duplicate: bool = False
     duplicate_of: uuid.UUID | None = None
+    quarantined: bool = False
+    pipeline_queued: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -196,6 +198,20 @@ class DocumentManagementSummary(BaseModel):
     links: list[DocumentLinkOut] = []
 
 
+class DocumentWorkspaceItem(BaseModel):
+    document: DocumentSummary
+    pipeline: DocumentPipelineStatus
+
+
+class DocumentWorkspaceResponse(BaseModel):
+    items: list[DocumentWorkspaceItem]
+    total: int
+    offset: int
+    limit: int
+    status_counts: dict[str, int] = {}
+    doc_type_counts: dict[str, int] = {}
+
+
 # ── List (doc.list) ─────────────────────────────────────────────────────────
 
 
@@ -219,9 +235,30 @@ class DocumentListResponse(BaseModel):
 
 
 class DocumentUpdate(BaseModel):
+    file_name: str | None = None
     doc_type: DocumentType | None = None
     status: DocumentStatus | None = None
+    source_channel: str | None = None
+    manual_doc_type_override: bool | None = None
     metadata_: dict | None = Field(None, alias="metadata")
+
+
+class DocumentBatchRequest(BaseModel):
+    document_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=500)
+    force: bool = False
+    build_scope: str | None = None
+
+
+class DocumentBatchActionResult(BaseModel):
+    document_id: uuid.UUID
+    status: str
+    task_id: str | None = None
+    detail: str | None = None
+
+
+class DocumentBatchActionResponse(BaseModel):
+    action: str
+    results: list[DocumentBatchActionResult]
 
 
 # ── Link (doc.link) ─────────────────────────────────────────────────────────

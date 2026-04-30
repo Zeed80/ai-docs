@@ -91,13 +91,70 @@ export interface DocumentListResponse {
   limit: number;
 }
 
+export interface DocumentPipelineStatus {
+  processing_status: string | null;
+  current_step: string | null;
+  processing_error: string | null;
+  extraction_count: number;
+  artifact_count: number;
+  graph_status: string | null;
+  graph_scope: string | null;
+  graph_error: string | null;
+  memory_chunks: number;
+  evidence_spans: number;
+  graph_nodes: number;
+  graph_edges: number;
+  graph_review_pending: number;
+  embedding_records: number;
+  ntd_checks: number;
+  ntd_open_findings: number;
+}
+
+export interface DocumentWorkspaceItem {
+  document: Document;
+  pipeline: DocumentPipelineStatus;
+}
+
+export interface DocumentWorkspaceResponse {
+  items: DocumentWorkspaceItem[];
+  total: number;
+  offset: number;
+  limit: number;
+  status_counts: Record<string, number>;
+  doc_type_counts: Record<string, number>;
+}
+
+export interface DocumentManagementSummary {
+  document: Document;
+  pipeline: DocumentPipelineStatus;
+  links: DocumentLink[];
+}
+
+export interface DocumentBatchActionResponse {
+  action: string;
+  results: Array<{
+    document_id: string;
+    status: string;
+    task_id: string | null;
+    detail: string | null;
+  }>;
+}
+
 export const documents = {
   list: (params?: Record<string, string>) =>
     request<DocumentListResponse>(
       `/api/documents?${new URLSearchParams(params)}`,
     ),
 
+  workspace: (params?: Record<string, string>) =>
+    request<DocumentWorkspaceResponse>(
+      `/api/documents/workspace?${new URLSearchParams(params)}`,
+    ),
+
   get: (id: string) => request<Document>(`/api/documents/${id}`),
+
+  management: (id: string) =>
+    request<DocumentManagementSummary>(`/api/documents/${id}/management`),
 
   update: (id: string, data: Partial<Document>) =>
     request<Document>(`/api/documents/${id}`, {
@@ -128,6 +185,41 @@ export const documents = {
     request<DocumentLink>(`/api/documents/${id}/links`, {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+
+  delete: (id: string) =>
+    request(`/api/documents/${id}`, {
+      method: "DELETE",
+    }),
+
+  batchProcess: (documentIds: string[], force = false) =>
+    request<DocumentBatchActionResponse>("/api/documents/batch/process", {
+      method: "POST",
+      body: JSON.stringify({ document_ids: documentIds, force }),
+    }),
+
+  batchClassify: (documentIds: string[], force = false) =>
+    request<DocumentBatchActionResponse>("/api/documents/batch/classify", {
+      method: "POST",
+      body: JSON.stringify({ document_ids: documentIds, force }),
+    }),
+
+  batchMemoryRebuild: (documentIds: string[], buildScope = "extended") =>
+    request<DocumentBatchActionResponse>("/api/documents/batch/memory-rebuild", {
+      method: "POST",
+      body: JSON.stringify({ document_ids: documentIds, build_scope: buildScope }),
+    }),
+
+  batchEmbeddingsReindex: (documentIds: string[]) =>
+    request<DocumentBatchActionResponse>("/api/documents/batch/embeddings-reindex", {
+      method: "POST",
+      body: JSON.stringify({ document_ids: documentIds }),
+    }),
+
+  batchNtdCheck: (documentIds: string[]) =>
+    request<DocumentBatchActionResponse>("/api/documents/batch/ntd-check", {
+      method: "POST",
+      body: JSON.stringify({ document_ids: documentIds }),
     }),
 
   search: (q: string, limit = 20) =>

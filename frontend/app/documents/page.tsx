@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 
 const API = getApiBaseUrl();
+
+type WorkspaceTab = "upload" | "registry" | "queue" | "graph" | "ntd";
 
 interface DocumentItem {
   id: string;
@@ -12,6 +14,8 @@ interface DocumentItem {
   file_hash: string;
   file_size: number;
   mime_type: string;
+  storage_path?: string;
+  page_count?: number | null;
   doc_type: string | null;
   doc_type_confidence: number | null;
   status: string;
@@ -39,15 +43,31 @@ interface PipelineStatus {
   ntd_open_findings: number;
 }
 
+interface WorkspaceItem {
+  document: DocumentItem;
+  pipeline: PipelineStatus;
+}
+
+interface WorkspaceResponse {
+  items: WorkspaceItem[];
+  total: number;
+  offset: number;
+  limit: number;
+  status_counts: Record<string, number>;
+  doc_type_counts: Record<string, number>;
+}
+
 interface ManagementSummary {
   document: DocumentItem;
   pipeline: PipelineStatus;
-  links: Array<{
-    id: string;
-    linked_entity_type: string;
-    linked_entity_id: string;
-    link_type: string;
-  }>;
+  links: DocumentLink[];
+}
+
+interface DocumentLink {
+  id: string;
+  linked_entity_type: string;
+  linked_entity_id: string;
+  link_type: string;
 }
 
 interface DependenciesSummary {
@@ -72,22 +92,39 @@ interface DependenciesSummary {
 
 interface UploadResult {
   fileName: string;
-  status: "uploaded" | "quarantined" | "failed";
+  status: "uploaded" | "duplicate" | "quarantined" | "failed";
   detail: string;
 }
 
+interface SearchDocument {
+  id: string;
+  file_name: string;
+  doc_type: string | null;
+  status: string;
+}
+
+const TABS: Array<{ key: WorkspaceTab; label: string }> = [
+  { key: "upload", label: "Загрузка" },
+  { key: "registry", label: "Реестр" },
+  { key: "queue", label: "Обработка" },
+  { key: "graph", label: "Связи и граф" },
+  { key: "ntd", label: "НТД" },
+];
+
 const STATUS_FILTERS = [
-  { value: "", label: "Все" },
+  { value: "", label: "Все статусы" },
   { value: "ingested", label: "Загружены" },
-  { value: "extracting", label: "Распознаются" },
+  { value: "classifying", label: "Классификация" },
+  { value: "extracting", label: "Распознавание" },
   { value: "needs_review", label: "На проверку" },
   { value: "approved", label: "Утверждены" },
+  { value: "rejected", label: "Отклонены" },
   { value: "suspicious", label: "Карантин" },
   { value: "archived", label: "Архив" },
 ];
 
 const DOC_TYPES = [
-  { value: "", label: "Не задан" },
+  { value: "", label: "Автоопределение" },
   { value: "invoice", label: "Счет" },
   { value: "letter", label: "Письмо" },
   { value: "contract", label: "Договор" },
@@ -98,48 +135,96 @@ const DOC_TYPES = [
   { value: "other", label: "Другое" },
 ];
 
+const PROCESS_STEPS: Array<{ key: keyof PipelineStatus; label: string }> = [
+  { key: "extraction_count", label: "SQL" },
+  { key: "memory_chunks", label: "Память" },
+  { key: "embedding_records", label: "Векторы" },
+  { key: "graph_nodes", label: "Граф" },
+  { key: "ntd_checks", label: "НТД" },
+];
+
 function fmtBytes(value: number) {
   if (value > 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
   if (value > 1024) return `${Math.round(value / 1024)} KB`;
   return `${value} B`;
 }
 
+function docTypeLabel(value: string | null | undefined) {
+  return DOC_TYPES.find((item) => item.value === value)?.label ?? value ?? "Не задан";
+}
+
+function statusLabel(value: string | null | undefined) {
+  return STATUS_FILTERS.find((item) => item.value === value)?.label ?? value ?? "Не задан";
+}
+
+function isDone(value: unknown) {
+  return typeof value === "number" ? value > 0 : Boolean(value);
+}
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init?.headers,
+    },
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(body || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 export default function DocumentsPage() {
-  const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [tab, setTab] = useState<WorkspaceTab>("upload");
+  const [workspace, setWorkspace] = useState<WorkspaceResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [summary, setSummary] = useState<ManagementSummary | null>(null);
+  const [dependencies, setDependencies] = useState<DependenciesSummary | null>(null);
   const [status, setStatus] = useState("");
   const [docType, setDocType] = useState("");
   const [search, setSearch] = useState("");
-  const [sourceChannel, setSourceChannel] = useState("");
+  const [sourceChannel, setSourceChannel] = useState("upload");
+  const [uploadDocType, setUploadDocType] = useState("");
+  const [autoProcess, setAutoProcess] = useState(true);
+  const [manualUploadType, setManualUploadType] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [dragging, setDragging] = useState(false);
+  const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
   const [dependencyQuery, setDependencyQuery] = useState("");
-  const [dependencies, setDependencies] = useState<DependenciesSummary | null>(null);
   const [linkType, setLinkType] = useState("related");
-  const [linkedEntityType, setLinkedEntityType] = useState("document");
-  const [linkedEntityId, setLinkedEntityId] = useState("");
+  const [targetQuery, setTargetQuery] = useState("");
+  const [targetDocumentId, setTargetDocumentId] = useState("");
+  const [targetSearchResults, setTargetSearchResults] = useState<SearchDocument[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const loadDocuments = useCallback(async () => {
+  const selectedItem = useMemo(
+    () => workspace?.items.find((item) => item.document.id === selectedId) ?? null,
+    [selectedId, workspace],
+  );
+  const selected = summary?.document ?? selectedItem?.document ?? null;
+  const pipeline = summary?.pipeline ?? selectedItem?.pipeline ?? null;
+  const selectedIdsArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
+
+  const loadWorkspace = useCallback(async () => {
     const params = new URLSearchParams({ limit: "100" });
     if (status) params.set("status", status);
     if (docType) params.set("doc_type", docType);
-    if (sourceChannel) params.set("source_channel", sourceChannel);
+    if (sourceChannel.trim()) params.set("source_channel", sourceChannel.trim());
     if (search.trim()) params.set("search", search.trim());
-    const response = await fetch(`${API}/api/documents?${params}`).catch(() => null);
-    if (!response?.ok) {
-      setDocuments([]);
+    const data = await requestJson<WorkspaceResponse>(`/api/documents/workspace?${params}`).catch(
+      () => null,
+    );
+    if (!data) {
+      setWorkspace(null);
       return;
     }
-    const data = await response.json();
-    const items = data.items ?? [];
-    setDocuments(items);
-    setSelectedId((current) => current ?? items[0]?.id ?? null);
+    setWorkspace(data);
+    setSelectedId((current) => current ?? data.items[0]?.document.id ?? null);
   }, [docType, search, sourceChannel, status]);
 
   const loadSummary = useCallback(async (id: string | null) => {
@@ -147,14 +232,10 @@ export default function DocumentsPage() {
       setSummary(null);
       return;
     }
-    const response = await fetch(`${API}/api/documents/${id}/management`).catch(
+    const data = await requestJson<ManagementSummary>(`/api/documents/${id}/management`).catch(
       () => null,
     );
-    if (!response?.ok) {
-      setSummary(null);
-      return;
-    }
-    setSummary(await response.json());
+    setSummary(data);
   }, []);
 
   const loadDependencies = useCallback(
@@ -165,29 +246,43 @@ export default function DocumentsPage() {
       }
       const params = new URLSearchParams({ depth: "2", limit: "150" });
       if (dependencyQuery.trim()) params.set("query", dependencyQuery.trim());
-      const response = await fetch(
-        `${API}/api/documents/${id}/dependencies?${params}`,
+      const data = await requestJson<DependenciesSummary>(
+        `/api/documents/${id}/dependencies?${params}`,
       ).catch(() => null);
-      if (!response?.ok) {
-        setDependencies(null);
-        return;
-      }
-      setDependencies(await response.json());
+      setDependencies(data);
     },
     [dependencyQuery],
   );
 
   useEffect(() => {
-    loadDocuments();
-  }, [loadDocuments]);
+    loadWorkspace();
+  }, [loadWorkspace]);
 
   useEffect(() => {
     loadSummary(selectedId);
-  }, [loadSummary, selectedId]);
+    loadDependencies(selectedId);
+  }, [loadDependencies, loadSummary, selectedId]);
 
   useEffect(() => {
-    loadDependencies(selectedId);
-  }, [loadDependencies, selectedId]);
+    if (!targetQuery.trim()) {
+      setTargetSearchResults([]);
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      const params = new URLSearchParams({ limit: "10", search: targetQuery.trim() });
+      const data = await requestJson<{ items: SearchDocument[] }>(
+        `/api/documents?${params}`,
+      ).catch(() => null);
+      setTargetSearchResults(data?.items ?? []);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [targetQuery]);
+
+  async function refreshSelected() {
+    await loadWorkspace();
+    await loadSummary(selectedId);
+    await loadDependencies(selectedId);
+  }
 
   async function uploadFiles(files: FileList | null) {
     if (!files?.length) return;
@@ -195,18 +290,20 @@ export default function DocumentsPage() {
     setMessage(null);
     const results: UploadResult[] = [];
     for (const file of Array.from(files)) {
+      const params = new URLSearchParams({
+        source_channel: sourceChannel || "upload",
+        auto_process: String(autoProcess),
+        manual_doc_type_override: String(Boolean(uploadDocType && manualUploadType)),
+      });
+      if (uploadDocType) params.set("requested_doc_type", uploadDocType);
       const form = new FormData();
       form.append("file", file);
-      const response = await fetch(
-        `${API}/api/documents/ingest?source_channel=${encodeURIComponent(sourceChannel || "upload")}`,
-        { method: "POST", body: form },
-      ).catch(() => null);
+      const response = await fetch(`${API}/api/documents/ingest?${params}`, {
+        method: "POST",
+        body: form,
+      }).catch(() => null);
       if (!response) {
-        results.push({
-          fileName: file.name,
-          status: "failed",
-          detail: "backend недоступен",
-        });
+        results.push({ fileName: file.name, status: "failed", detail: "backend недоступен" });
         continue;
       }
       const payload = await response.json().catch(() => ({}));
@@ -214,13 +311,19 @@ export default function DocumentsPage() {
         results.push({
           fileName: file.name,
           status: "quarantined",
-          detail: payload.reason ?? "файл отправлен в карантин",
+          detail: payload.reason ?? "карантин",
+        });
+      } else if (response.ok && payload.is_duplicate) {
+        results.push({
+          fileName: file.name,
+          status: "duplicate",
+          detail: `дубликат ${String(payload.duplicate_of).slice(0, 8)}`,
         });
       } else if (response.ok) {
         results.push({
           fileName: file.name,
           status: "uploaded",
-          detail: "загружен, обработка поставлена в очередь",
+          detail: payload.pipeline_queued ? "пайплайн запущен" : "сохранен",
         });
       } else {
         results.push({
@@ -230,48 +333,52 @@ export default function DocumentsPage() {
         });
       }
     }
-    setUploading(false);
     setUploadResults(results);
-    setMessage(
-      results.some((item) => item.status === "failed")
-        ? "Часть файлов не загрузилась"
-        : "Загрузка завершена",
-    );
-    await loadDocuments();
+    setUploading(false);
+    setMessage(results.some((item) => item.status === "failed") ? "Есть ошибки" : "Готово");
+    await loadWorkspace();
   }
 
-  async function runAction(action: string, fn: () => Promise<Response | void>) {
-    if (!selectedId) return;
+  async function runAction(action: string, fn: () => Promise<unknown>) {
     setBusyAction(action);
     setMessage(null);
-    const response = await fn().catch(() => null);
-    if (response && "ok" in response && !response.ok) {
-      setMessage(`Ошибка выполнения: ${action}`);
-    } else {
+    try {
+      await fn();
       setMessage("Команда выполнена");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ошибка выполнения");
+    } finally {
+      setBusyAction(null);
+      await refreshSelected();
     }
-    setBusyAction(null);
-    await loadDocuments();
-    await loadSummary(selectedId);
   }
 
   async function updateDocument(patch: Record<string, unknown>) {
-    if (!selectedId) return;
+    if (!selected) return;
     await runAction("save", () =>
-      fetch(`${API}/api/documents/${selectedId}`, {
+      requestJson(`/api/documents/${selected.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       }),
     );
   }
 
+  async function batchAction(action: string, path: string, body: Record<string, unknown> = {}) {
+    if (!selectedIdsArray.length) return;
+    await runAction(action, () =>
+      requestJson(`/api/documents/${path}`, {
+        method: path === "bulk-delete" ? "DELETE" : "POST",
+        body: JSON.stringify({ document_ids: selectedIdsArray, ...body }),
+      }),
+    );
+  }
+
   async function deleteCurrentDocument() {
-    if (!selectedId) return;
+    if (!selected) return;
     if (!confirm("Удалить документ и все связанные записи из баз данных?")) return;
-    const deletingId = selectedId;
+    const deletingId = selected.id;
     await runAction("delete", () =>
-      fetch(`${API}/api/documents/${deletingId}`, { method: "DELETE" }),
+      requestJson(`/api/documents/${deletingId}`, { method: "DELETE" }),
     );
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -281,29 +388,27 @@ export default function DocumentsPage() {
     setSelectedId(null);
   }
 
-  async function deleteSelectedDocuments() {
-    const ids = Array.from(selectedIds);
-    if (!ids.length) return;
-    if (!confirm(`Удалить выбранные документы (${ids.length}) и все связанные записи?`)) {
-      return;
-    }
-    setBusyAction("bulk-delete");
-    setMessage(null);
-    const response = await fetch(`${API}/api/documents/bulk-delete`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ document_ids: ids, delete_files: true }),
-    }).catch(() => null);
-    if (!response?.ok) {
-      setMessage("Ошибка массового удаления");
-    } else {
-      const data = await response.json();
-      setMessage(`Удалено документов: ${data.deleted}; не найдено: ${data.missing}`);
-      setSelectedIds(new Set());
-      setSelectedId(null);
-    }
-    setBusyAction(null);
-    await loadDocuments();
+  async function createLink() {
+    if (!selected || !targetDocumentId) return;
+    await runAction("link", () =>
+      requestJson(`/api/documents/${selected.id}/links`, {
+        method: "POST",
+        body: JSON.stringify({
+          linked_entity_type: "document",
+          linked_entity_id: targetDocumentId,
+          link_type: linkType || "related",
+        }),
+      }),
+    );
+    setTargetDocumentId("");
+    setTargetQuery("");
+  }
+
+  async function deleteLink(linkId: string) {
+    if (!selected) return;
+    await runAction("unlink", () =>
+      fetch(`${API}/api/documents/${selected.id}/links/${linkId}`, { method: "DELETE" }),
+    );
   }
 
   function toggleSelection(id: string, checked: boolean) {
@@ -315,47 +420,24 @@ export default function DocumentsPage() {
     });
   }
 
-  async function createLink() {
-    if (!selectedId || !linkedEntityId.trim()) return;
-    await runAction("link", () =>
-      fetch(`${API}/api/documents/${selectedId}/links`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          linked_entity_type: linkedEntityType,
-          linked_entity_id: linkedEntityId.trim(),
-          link_type: linkType,
-        }),
-      }),
-    );
-    setLinkedEntityId("");
-    await loadDependencies(selectedId);
-  }
-
-  async function deleteLink(linkId: string) {
-    if (!selectedId) return;
-    await runAction("unlink", () =>
-      fetch(`${API}/api/documents/${selectedId}/links/${linkId}`, {
-        method: "DELETE",
-      }),
-    );
-    await loadDependencies(selectedId);
-  }
-
-  const selected = summary?.document ?? documents.find((item) => item.id === selectedId);
-  const pipeline = summary?.pipeline;
-
   return (
-    <div className="flex h-full min-h-screen bg-slate-950 text-slate-100">
-      <aside className="w-[420px] shrink-0 border-r border-slate-800 bg-slate-900">
-        <div className="border-b border-slate-800 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h1 className="text-lg font-semibold">Документы</h1>
-              <p className="mt-1 text-xs text-slate-400">
-                Загрузка, распознавание, базы данных, память и связи.
-              </p>
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-950/95 px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold">Документы</h1>
+            <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
+              <span>Всего: {workspace?.total ?? 0}</span>
+              <span>На проверку: {workspace?.status_counts.needs_review ?? 0}</span>
+              <span>Карантин: {workspace?.status_counts.suspicious ?? 0}</span>
             </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedIds.size > 0 && (
+              <span className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300">
+                Выбрано: {selectedIds.size}
+              </span>
+            )}
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
@@ -364,539 +446,953 @@ export default function DocumentsPage() {
               {uploading ? "Загрузка" : "Загрузить"}
             </button>
           </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(event) => uploadFiles(event.target.files)}
+        </div>
+        <div className="mt-4 flex gap-1 overflow-x-auto">
+          {TABS.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => setTab(item.key)}
+              className={`shrink-0 rounded-md px-3 py-2 text-sm ${
+                tab === item.key
+                  ? "bg-slate-100 text-slate-950"
+                  : "text-slate-400 hover:bg-slate-900 hover:text-slate-100"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <div className="grid min-h-[calc(100vh-130px)] grid-cols-1 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <main className="min-w-0 border-r border-slate-800 p-6">
+          <Toolbar
+            status={status}
+            docType={docType}
+            search={search}
+            sourceChannel={sourceChannel}
+            onStatus={setStatus}
+            onDocType={setDocType}
+            onSearch={setSearch}
+            onSourceChannel={setSourceChannel}
           />
-          <div
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(event) => {
-              event.preventDefault();
-              setDragging(false);
-              uploadFiles(event.dataTransfer.files);
-            }}
-            onClick={() => fileInputRef.current?.click()}
-            className={`mt-4 cursor-pointer rounded-md border border-dashed p-5 text-center transition ${
-              dragging
-                ? "border-blue-400 bg-blue-950/40 text-blue-100"
-                : "border-slate-700 bg-slate-950/40 text-slate-300 hover:border-slate-500"
-            }`}
-          >
-            <div className="text-sm font-medium">
-              Перетащите файлы сюда или нажмите для выбора
-            </div>
-            <div className="mt-1 text-xs text-slate-500">
-              PDF, JPG/PNG/TIFF, DOCX, XLSX, TXT, DXF, STEP/STP, XML/CSV/JSON
-            </div>
-            {uploading && (
-              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-800">
-                <div className="h-full w-2/3 animate-pulse rounded-full bg-blue-500" />
-              </div>
-            )}
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <select
-              value={status}
-              onChange={(event) => setStatus(event.target.value)}
-              className="rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-xs"
-            >
-              {STATUS_FILTERS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={docType}
-              onChange={(event) => setDocType(event.target.value)}
-              className="rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-xs"
-            >
-              <option value="">Все типы</option>
-              {DOC_TYPES.filter((item) => item.value).map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-            <input
-              value={sourceChannel}
-              onChange={(event) => setSourceChannel(event.target.value)}
-              placeholder="Источник"
-              className="rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-xs"
-            />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Поиск"
-              className="rounded-md border border-slate-700 bg-slate-950 px-2 py-2 text-xs"
-            />
-          </div>
+
           {message && (
-            <div className="mt-3 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+            <div className="mt-4 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300">
               {message}
             </div>
           )}
-          {uploadResults.length > 0 && (
-            <div className="mt-3 space-y-1 rounded-md border border-slate-800 bg-slate-950 p-2">
-              {uploadResults.map((item) => (
-                <div
-                  key={`${item.fileName}-${item.status}`}
-                  className="flex items-start justify-between gap-3 rounded px-2 py-1.5 text-xs"
-                >
-                  <span className="min-w-0 truncate text-slate-300">{item.fileName}</span>
-                  <span
-                    className={
-                      item.status === "uploaded"
-                        ? "text-emerald-300"
-                        : item.status === "quarantined"
-                          ? "text-amber-300"
-                          : "text-red-300"
-                    }
-                  >
-                    {item.status === "uploaded"
-                      ? "Загружен"
-                      : item.status === "quarantined"
-                        ? "Карантин"
-                        : "Ошибка"}
-                    {item.detail ? `: ${item.detail}` : ""}
-                  </span>
-                </div>
-              ))}
-            </div>
+
+          {tab === "upload" && (
+            <UploadPanel
+              dragging={dragging}
+              uploading={uploading}
+              uploadDocType={uploadDocType}
+              autoProcess={autoProcess}
+              manualUploadType={manualUploadType}
+              uploadResults={uploadResults}
+              fileInputRef={fileInputRef}
+              onDrag={setDragging}
+              onUploadDocType={setUploadDocType}
+              onAutoProcess={setAutoProcess}
+              onManualUploadType={setManualUploadType}
+              onUpload={uploadFiles}
+            />
           )}
-          {selectedIds.size > 0 && (
-            <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-red-900 bg-red-950/30 px-3 py-2">
-              <span className="text-xs text-red-100">
-                Выбрано: {selectedIds.size}
-              </span>
-              <button
-                onClick={deleteSelectedDocuments}
-                disabled={Boolean(busyAction)}
-                className="rounded-md bg-red-700 px-3 py-1.5 text-xs text-white hover:bg-red-600 disabled:opacity-50"
-              >
-                Удалить выбранные
-              </button>
-            </div>
+
+          {tab === "registry" && (
+            <RegistryPanel
+              items={workspace?.items ?? []}
+              selectedId={selectedId}
+              selectedIds={selectedIds}
+              busyAction={busyAction}
+              onSelect={setSelectedId}
+              onToggle={toggleSelection}
+              onBatch={(path, body) => batchAction(path, path, body)}
+            />
           )}
-        </div>
-        <div className="h-[calc(100vh-260px)] overflow-y-auto">
-          {documents.map((doc) => (
-            <div
-              key={doc.id}
-              className={`flex w-full gap-3 border-b border-slate-800 px-4 py-3 text-left hover:bg-slate-800 ${
-                selectedId === doc.id ? "bg-slate-800" : ""
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={selectedIds.has(doc.id)}
-                onChange={(event) => toggleSelection(doc.id, event.target.checked)}
-                className="mt-1 shrink-0"
-              />
-              <button
-                onClick={() => setSelectedId(doc.id)}
-                className="min-w-0 flex-1 text-left"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-medium">{doc.file_name}</span>
-                  <span className="rounded bg-slate-950 px-2 py-0.5 text-[11px] text-slate-400">
-                    {doc.status}
-                  </span>
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-                  <span>{doc.doc_type ?? "не классифицирован"}</span>
-                  <span>{fmtBytes(doc.file_size)}</span>
-                  <span>{new Date(doc.created_at).toLocaleDateString("ru-RU")}</span>
-                </div>
-              </button>
-            </div>
-          ))}
-          {!documents.length && (
-            <div className="p-8 text-center text-sm text-slate-500">
-              Документы не найдены
-            </div>
+
+          {tab === "queue" && (
+            <QueuePanel
+              items={workspace?.items ?? []}
+              selectedId={selectedId}
+              selectedIds={selectedIds}
+              busyAction={busyAction}
+              onSelect={setSelectedId}
+              onBatchProcess={() => batchAction("process", "batch/process")}
+              onBatchClassify={() => batchAction("classify", "batch/classify", { force: true })}
+              onBatchEmbeddings={() => batchAction("embeddings", "batch/embeddings-reindex")}
+              onBatchMemory={() =>
+                batchAction("memory", "batch/memory-rebuild", { build_scope: "extended" })
+              }
+              onBatchNtd={() => batchAction("ntd", "batch/ntd-check")}
+            />
           )}
-        </div>
-      </aside>
 
-      <main className="flex-1 overflow-y-auto p-6">
-        {!selected ? (
-          <div className="text-slate-500">Выберите документ</div>
-        ) : (
-          <div className="mx-auto max-w-6xl space-y-6">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h2 className="truncate text-xl font-semibold">{selected.file_name}</h2>
-                <p className="mt-1 text-sm text-slate-400">
-                  {selected.mime_type} · {fmtBytes(selected.file_size)} ·{" "}
-                  {selected.source_channel ?? "upload"}
-                </p>
-              </div>
-              <div className="flex flex-wrap justify-end gap-2">
-                <Link
-                  href={`/documents/${selected.id}/review`}
-                  className="rounded-md bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600"
-                >
-                  Review
-                </Link>
-                <a
-                  href={`${API}/api/documents/${selected.id}/download`}
-                  className="rounded-md bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600"
-                >
-                  Скачать
-                </a>
-              </div>
-            </div>
+          {tab === "graph" && (
+            <GraphPanel
+              selected={selected}
+              summary={summary}
+              dependencies={dependencies}
+              dependencyQuery={dependencyQuery}
+              linkType={linkType}
+              targetQuery={targetQuery}
+              targetDocumentId={targetDocumentId}
+              targetSearchResults={targetSearchResults}
+              busyAction={busyAction}
+              onDependencyQuery={setDependencyQuery}
+              onSearchDependencies={() => loadDependencies(selectedId)}
+              onLinkType={setLinkType}
+              onTargetQuery={setTargetQuery}
+              onTargetDocumentId={setTargetDocumentId}
+              onCreateLink={createLink}
+              onDeleteLink={deleteLink}
+              onRebuild={(scope) =>
+                selected &&
+                runAction("memory", () =>
+                  requestJson(
+                    `/api/documents/${selected.id}/memory/rebuild?build_scope=${scope}`,
+                    { method: "POST" },
+                  ),
+                )
+              }
+            />
+          )}
 
-            <section className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-              <Metric label="Извлечений" value={pipeline?.extraction_count ?? 0} />
-              <Metric label="Чанков памяти" value={pipeline?.memory_chunks ?? 0} />
-              <Metric label="Узлов графа" value={pipeline?.graph_nodes ?? 0} />
-              <Metric label="НТД замечаний" value={pipeline?.ntd_open_findings ?? 0} />
-            </section>
+          {tab === "ntd" && (
+            <NtdPanel
+              selected={selected}
+              pipeline={pipeline}
+              busyAction={busyAction}
+              onRun={() =>
+                selected &&
+                runAction("ntd", () =>
+                  requestJson(`/api/documents/${selected.id}/ntd-check`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      document_id: selected.id,
+                      triggered_by: "manual",
+                      actor: "user",
+                    }),
+                  }),
+                )
+              }
+              onCreateSource={() =>
+                selected &&
+                runAction("ntd-source", () =>
+                  requestJson("/api/ntd/documents/from-source", {
+                    method: "POST",
+                    body: JSON.stringify({
+                      source_document_id: selected.id,
+                      index_immediately: true,
+                    }),
+                  }),
+                )
+              }
+            />
+          )}
+        </main>
 
-            <section className="rounded-md border border-slate-800 bg-slate-900 p-4">
-              <h3 className="text-sm font-semibold">Lifecycle и категоризация</h3>
-              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                <label className="text-xs text-slate-400">
-                  Тип документа
-                  <select
-                    value={selected.doc_type ?? ""}
-                    onChange={(event) =>
-                      updateDocument({ doc_type: event.target.value || null })
-                    }
-                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                  >
-                    {DOC_TYPES.map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-400">
-                  Статус
-                  <select
-                    value={selected.status}
-                    onChange={(event) => updateDocument({ status: event.target.value })}
-                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                  >
-                    {STATUS_FILTERS.filter((item) => item.value).map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-slate-400">
-                  Источник
-                  <input
-                    value={selected.source_channel ?? ""}
-                    onChange={(event) =>
-                      updateDocument({ source_channel: event.target.value || null })
-                    }
-                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                  />
-                </label>
-              </div>
-            </section>
-
-            <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <ActionPanel
-                title="Распознавание и извлечение"
-                status={[
-                  pipeline?.processing_status,
-                  pipeline?.current_step,
-                  pipeline?.processing_error,
-                ].filter(Boolean).join(" · ") || "нет активной задачи"}
-                actions={[
-                  {
-                    label: "Классифицировать",
-                    onClick: () =>
-                      runAction("classify", () =>
-                        fetch(`${API}/api/documents/${selected.id}/classify`, {
-                          method: "POST",
-                        }),
-                      ),
-                  },
-                  {
-                    label: "Распознать заново",
-                    onClick: () =>
-                      runAction("extract", () =>
-                        fetch(`${API}/api/documents/${selected.id}/extract`, {
-                          method: "POST",
-                        }),
-                      ),
-                  },
-                ]}
-                busyAction={busyAction}
-              />
-              <ActionPanel
-                title="Память и граф"
-                status={
-                  pipeline?.graph_status
-                    ? `${pipeline.graph_status} · ${pipeline.graph_scope ?? "scope"}`
-                    : "граф еще не построен"
-                }
-                actions={[
-                  {
-                    label: "Compact graph",
-                    onClick: () =>
-                      runAction("memory", () =>
-                        fetch(`${API}/api/documents/${selected.id}/memory/rebuild?build_scope=compact`, {
-                          method: "POST",
-                        }),
-                      ),
-                  },
-                  {
-                    label: "Extended graph",
-                    onClick: () =>
-                      runAction("memory", () =>
-                        fetch(`${API}/api/documents/${selected.id}/memory/rebuild?build_scope=extended`, {
-                          method: "POST",
-                        }),
-                      ),
-                  },
-                ]}
-                busyAction={busyAction}
-              />
-              <ActionPanel
-                title="НТД и базы данных"
-                status={`Проверок: ${pipeline?.ntd_checks ?? 0}, открыто: ${pipeline?.ntd_open_findings ?? 0}`}
-                actions={[
-                  {
-                    label: "Проверить НТД",
-                    onClick: () =>
-                      runAction("ntd", () =>
-                        fetch(`${API}/api/documents/${selected.id}/ntd-check`, {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            document_id: selected.id,
-                            triggered_by: "manual",
-                            actor: "user",
-                          }),
-                        }),
-                      ),
-                  },
-                  {
-                    label: "Создать НТД",
-                    onClick: () =>
-                      runAction("ntd-source", () =>
-                        fetch(`${API}/api/ntd/documents/from-source`, {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            source_document_id: selected.id,
-                            index_immediately: true,
-                          }),
-                        }),
-                      ),
-                  },
-                ]}
-                busyAction={busyAction}
-              />
-              <ActionPanel
-                title="Управление"
-                status={`Связей: ${summary?.links.length ?? 0}, артефактов: ${pipeline?.artifact_count ?? 0}`}
-                actions={[
-                  {
-                    label: "Удалить полностью",
-                    danger: true,
-                    onClick: deleteCurrentDocument,
-                  },
-                ]}
-                busyAction={busyAction}
-              />
-            </section>
-
-            <section className="rounded-md border border-slate-800 bg-slate-900 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold">Связи и зависимости</h3>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Явные связи, узлы памяти и найденные ребра графа.
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    value={dependencyQuery}
-                    onChange={(event) => setDependencyQuery(event.target.value)}
-                    placeholder="Поиск по связям"
-                    className="w-56 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                  />
-                  <button
-                    onClick={() => loadDependencies(selected.id)}
-                    className="rounded-md bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600"
-                  >
-                    Найти
-                  </button>
-                </div>
-              </div>
-              <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_2fr_auto]">
-                <input
-                  value={linkType}
-                  onChange={(event) => setLinkType(event.target.value)}
-                  placeholder="Тип связи"
-                  className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                />
-                <input
-                  value={linkedEntityType}
-                  onChange={(event) => setLinkedEntityType(event.target.value)}
-                  placeholder="Тип сущности"
-                  className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                />
-                <input
-                  value={linkedEntityId}
-                  onChange={(event) => setLinkedEntityId(event.target.value)}
-                  placeholder="UUID связанной сущности"
-                  className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                />
-                <button
-                  onClick={createLink}
-                  disabled={Boolean(busyAction) || !linkedEntityId.trim()}
-                  className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-                >
-                  Добавить
-                </button>
-              </div>
-              <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-                <Metric label="Явных связей" value={summary?.links.length ?? 0} />
-                <Metric label="Узлов найдено" value={dependencies?.total_nodes ?? 0} />
-                <Metric label="Ребер найдено" value={dependencies?.total_edges ?? 0} />
-              </div>
-              <div className="mt-3 divide-y divide-slate-800">
-                {summary?.links.map((link) => (
-                  <div
-                    key={link.id}
-                    className="flex items-center justify-between gap-3 py-2 text-sm text-slate-300"
-                  >
-                    <div className="min-w-0">
-                      {link.link_type}: {link.linked_entity_type}{" "}
-                      <span className="font-mono text-xs text-slate-500">
-                        {link.linked_entity_id}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => deleteLink(link.id)}
-                      disabled={Boolean(busyAction)}
-                      className="rounded-md bg-red-950 px-2 py-1 text-xs text-red-200 hover:bg-red-900 disabled:opacity-50"
-                    >
-                      Удалить
-                    </button>
-                  </div>
-                ))}
-                {!summary?.links.length && (
-                  <p className="py-4 text-sm text-slate-500">
-                    Явных связей пока нет. Их можно добавить вручную или получить
-                    после распознавания и построения графа.
-                  </p>
-                )}
-              </div>
-              <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <DependencyList
-                  title="Узлы памяти"
-                  items={(dependencies?.nodes ?? []).map((node) => ({
-                    id: node.id,
-                    title: `${node.node_type}: ${node.title}`,
-                    detail: node.summary ?? `confidence ${node.confidence.toFixed(2)}`,
-                  }))}
-                />
-                <DependencyList
-                  title="Ребра графа"
-                  items={(dependencies?.edges ?? []).map((edge) => ({
-                    id: edge.id,
-                    title: edge.edge_type,
-                    detail:
-                      edge.reason ??
-                      `${edge.source_node_id.slice(0, 8)} → ${edge.target_node_id.slice(0, 8)}`,
-                  }))}
-                />
-              </div>
-            </section>
-          </div>
-        )}
-      </main>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function ActionPanel({
-  title,
-  status,
-  actions,
-  busyAction,
-}: {
-  title: string;
-  status: string;
-  actions: Array<{ label: string; danger?: boolean; onClick: () => void }>;
-  busyAction: string | null;
-}) {
-  return (
-    <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
-      <h3 className="text-sm font-semibold">{title}</h3>
-      <p className="mt-1 min-h-5 text-xs text-slate-500">{status}</p>
-      <div className="mt-4 flex flex-wrap gap-2">
-        {actions.map((action) => (
-          <button
-            key={action.label}
-            onClick={action.onClick}
-            disabled={Boolean(busyAction)}
-            className={`rounded-md px-3 py-2 text-sm disabled:opacity-50 ${
-              action.danger
-                ? "bg-red-950 text-red-200 hover:bg-red-900"
-                : "bg-slate-700 text-slate-100 hover:bg-slate-600"
-            }`}
-          >
-            {busyAction ? "Выполняется..." : action.label}
-          </button>
-        ))}
+        <DetailPanel
+          selected={selected}
+          pipeline={pipeline}
+          busyAction={busyAction}
+          onUpdate={updateDocument}
+          onDelete={deleteCurrentDocument}
+          onClassify={() =>
+            selected &&
+            runAction("classify", () =>
+              requestJson(`/api/documents/${selected.id}/classify?force=true`, {
+                method: "POST",
+              }),
+            )
+          }
+          onExtract={() =>
+            selected &&
+            runAction("extract", () =>
+              requestJson(`/api/documents/${selected.id}/extract?force=true`, {
+                method: "POST",
+              }),
+            )
+          }
+        />
       </div>
     </div>
   );
 }
 
-function DependencyList({
+function Toolbar({
+  status,
+  docType,
+  search,
+  sourceChannel,
+  onStatus,
+  onDocType,
+  onSearch,
+  onSourceChannel,
+}: {
+  status: string;
+  docType: string;
+  search: string;
+  sourceChannel: string;
+  onStatus: (value: string) => void;
+  onDocType: (value: string) => void;
+  onSearch: (value: string) => void;
+  onSourceChannel: (value: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-[1.1fr_0.8fr_0.8fr_0.8fr]">
+      <input
+        value={search}
+        onChange={(event) => onSearch(event.target.value)}
+        placeholder="Поиск по имени или hash"
+        className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-blue-500"
+      />
+      <select
+        value={status}
+        onChange={(event) => onStatus(event.target.value)}
+        className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
+      >
+        {STATUS_FILTERS.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+      <select
+        value={docType}
+        onChange={(event) => onDocType(event.target.value)}
+        className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
+      >
+        <option value="">Все типы</option>
+        {DOC_TYPES.filter((item) => item.value).map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+      <input
+        value={sourceChannel}
+        onChange={(event) => onSourceChannel(event.target.value)}
+        placeholder="Источник"
+        className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-blue-500"
+      />
+    </div>
+  );
+}
+
+function UploadPanel({
+  dragging,
+  uploading,
+  uploadDocType,
+  autoProcess,
+  manualUploadType,
+  uploadResults,
+  fileInputRef,
+  onDrag,
+  onUploadDocType,
+  onAutoProcess,
+  onManualUploadType,
+  onUpload,
+}: {
+  dragging: boolean;
+  uploading: boolean;
+  uploadDocType: string;
+  autoProcess: boolean;
+  manualUploadType: boolean;
+  uploadResults: UploadResult[];
+  fileInputRef: RefObject<HTMLInputElement | null>;
+  onDrag: (value: boolean) => void;
+  onUploadDocType: (value: string) => void;
+  onAutoProcess: (value: boolean) => void;
+  onManualUploadType: (value: boolean) => void;
+  onUpload: (files: FileList | null) => void;
+}) {
+  return (
+    <section className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => onUpload(event.target.files)}
+      />
+      <div
+        onDragOver={(event) => {
+          event.preventDefault();
+          onDrag(true);
+        }}
+        onDragLeave={() => onDrag(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          onDrag(false);
+          onUpload(event.dataTransfer.files);
+        }}
+        onClick={() => fileInputRef.current?.click()}
+        className={`flex min-h-[340px] cursor-pointer flex-col items-center justify-center rounded-md border border-dashed px-6 text-center transition ${
+          dragging
+            ? "border-blue-400 bg-blue-950/40"
+            : "border-slate-700 bg-slate-900 hover:border-slate-500"
+        }`}
+      >
+        <div className="text-lg font-semibold">
+          {uploading ? "Файлы загружаются" : "Выберите или перетащите документы"}
+        </div>
+        <div className="mt-2 max-w-xl text-sm text-slate-400">
+          PDF, изображения, DOCX, XLSX, TXT, DXF, STEP/STP, XML, CSV, JSON
+        </div>
+        {uploading && (
+          <div className="mt-6 h-2 w-full max-w-md overflow-hidden rounded-full bg-slate-800">
+            <div className="h-full w-2/3 animate-pulse rounded-full bg-blue-500" />
+          </div>
+        )}
+      </div>
+      <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
+        <h2 className="text-sm font-semibold">Параметры партии</h2>
+        <label className="mt-4 block text-xs text-slate-400">
+          Тип документа
+          <select
+            value={uploadDocType}
+            onChange={(event) => onUploadDocType(event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+          >
+            {DOC_TYPES.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mt-4 flex items-center gap-2 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={manualUploadType}
+            disabled={!uploadDocType}
+            onChange={(event) => onManualUploadType(event.target.checked)}
+          />
+          Закрепить выбранный тип
+        </label>
+        <label className="mt-3 flex items-center gap-2 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={autoProcess}
+            onChange={(event) => onAutoProcess(event.target.checked)}
+          />
+          Запускать полный пайплайн
+        </label>
+        <div className="mt-5 divide-y divide-slate-800">
+          {uploadResults.slice(0, 8).map((item) => (
+            <div key={`${item.fileName}-${item.status}`} className="py-2 text-sm">
+              <div className="truncate text-slate-200">{item.fileName}</div>
+              <div
+                className={
+                  item.status === "failed"
+                    ? "text-red-300"
+                    : item.status === "quarantined"
+                      ? "text-amber-300"
+                      : "text-emerald-300"
+                }
+              >
+                {item.detail}
+              </div>
+            </div>
+          ))}
+          {!uploadResults.length && (
+            <div className="py-8 text-sm text-slate-500">Нет загруженных файлов</div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RegistryPanel({
+  items,
+  selectedId,
+  selectedIds,
+  busyAction,
+  onSelect,
+  onToggle,
+  onBatch,
+}: {
+  items: WorkspaceItem[];
+  selectedId: string | null;
+  selectedIds: Set<string>;
+  busyAction: string | null;
+  onSelect: (id: string) => void;
+  onToggle: (id: string, checked: boolean) => void;
+  onBatch: (path: string, body?: Record<string, unknown>) => void;
+}) {
+  return (
+    <section className="mt-5 overflow-hidden rounded-md border border-slate-800">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2">
+        <span className="text-sm text-slate-300">Документы: {items.length}</span>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => onBatch("batch/process")}
+            disabled={!selectedIds.size || Boolean(busyAction)}
+            className="rounded-md bg-slate-700 px-3 py-1.5 text-xs hover:bg-slate-600 disabled:opacity-50"
+          >
+            Обработать
+          </button>
+          <button
+            onClick={() => onBatch("bulk-delete", { delete_files: true })}
+            disabled={!selectedIds.size || Boolean(busyAction)}
+            className="rounded-md bg-red-950 px-3 py-1.5 text-xs text-red-200 hover:bg-red-900 disabled:opacity-50"
+          >
+            Удалить
+          </button>
+        </div>
+      </div>
+      <DocumentTable
+        items={items}
+        selectedId={selectedId}
+        selectedIds={selectedIds}
+        onSelect={onSelect}
+        onToggle={onToggle}
+      />
+    </section>
+  );
+}
+
+function QueuePanel({
+  items,
+  selectedId,
+  selectedIds,
+  busyAction,
+  onSelect,
+  onBatchProcess,
+  onBatchClassify,
+  onBatchEmbeddings,
+  onBatchMemory,
+  onBatchNtd,
+}: {
+  items: WorkspaceItem[];
+  selectedId: string | null;
+  selectedIds: Set<string>;
+  busyAction: string | null;
+  onSelect: (id: string) => void;
+  onBatchProcess: () => void;
+  onBatchClassify: () => void;
+  onBatchEmbeddings: () => void;
+  onBatchMemory: () => void;
+  onBatchNtd: () => void;
+}) {
+  return (
+    <section className="mt-5 space-y-4">
+      <div className="flex flex-wrap gap-2">
+        {[
+          { label: "Полный пайплайн", handler: onBatchProcess },
+          { label: "Классификация", handler: onBatchClassify },
+          { label: "Память и граф", handler: onBatchMemory },
+          { label: "Векторизация", handler: onBatchEmbeddings },
+          { label: "НТД", handler: onBatchNtd },
+        ].map((item) => (
+          <button
+            key={item.label}
+            onClick={item.handler}
+            disabled={!selectedIds.size || Boolean(busyAction)}
+            className="rounded-md bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-50"
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div className="overflow-hidden rounded-md border border-slate-800">
+        <div className="grid grid-cols-[minmax(220px,1.6fr)_repeat(5,minmax(74px,0.5fr))] border-b border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-500">
+          <span>Документ</span>
+          {PROCESS_STEPS.map((step) => (
+            <span key={step.key}>{step.label}</span>
+          ))}
+        </div>
+        {items.map((item) => (
+          <button
+            key={item.document.id}
+            onClick={() => onSelect(item.document.id)}
+            className={`grid w-full grid-cols-[minmax(220px,1.6fr)_repeat(5,minmax(74px,0.5fr))] items-center gap-2 border-b border-slate-900 px-3 py-3 text-left text-sm hover:bg-slate-900 ${
+              selectedId === item.document.id ? "bg-slate-900" : ""
+            }`}
+          >
+            <span className="min-w-0">
+              <span className="block truncate font-medium text-slate-100">
+                {item.document.file_name}
+              </span>
+              <span className="text-xs text-slate-500">
+                {statusLabel(item.document.status)}
+              </span>
+            </span>
+            {PROCESS_STEPS.map((step) => (
+              <span
+                key={step.key}
+                className={
+                  isDone(item.pipeline[step.key])
+                    ? "text-emerald-300"
+                    : item.pipeline.processing_error
+                      ? "text-red-300"
+                      : "text-slate-600"
+                }
+              >
+                {isDone(item.pipeline[step.key]) ? "готово" : "нет"}
+              </span>
+            ))}
+          </button>
+        ))}
+        {!items.length && <div className="p-8 text-center text-sm text-slate-500">Нет данных</div>}
+      </div>
+    </section>
+  );
+}
+
+function DocumentTable({
+  items,
+  selectedId,
+  selectedIds,
+  onSelect,
+  onToggle,
+}: {
+  items: WorkspaceItem[];
+  selectedId: string | null;
+  selectedIds: Set<string>;
+  onSelect: (id: string) => void;
+  onToggle: (id: string, checked: boolean) => void;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[880px] border-collapse text-sm">
+        <thead className="bg-slate-900 text-xs text-slate-500">
+          <tr>
+            <th className="w-10 px-3 py-2 text-left"></th>
+            <th className="px-3 py-2 text-left">Файл</th>
+            <th className="px-3 py-2 text-left">Тип</th>
+            <th className="px-3 py-2 text-left">Статус</th>
+            <th className="px-3 py-2 text-left">Память</th>
+            <th className="px-3 py-2 text-left">Граф</th>
+            <th className="px-3 py-2 text-left">Дата</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr
+              key={item.document.id}
+              onClick={() => onSelect(item.document.id)}
+              className={`cursor-pointer border-t border-slate-900 hover:bg-slate-900 ${
+                selectedId === item.document.id ? "bg-slate-900" : ""
+              }`}
+            >
+              <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(item.document.id)}
+                  onChange={(event) => onToggle(item.document.id, event.target.checked)}
+                />
+              </td>
+              <td className="max-w-[360px] px-3 py-3">
+                <div className="truncate font-medium">{item.document.file_name}</div>
+                <div className="text-xs text-slate-500">
+                  {fmtBytes(item.document.file_size)} · {item.document.source_channel ?? "upload"}
+                </div>
+              </td>
+              <td className="px-3 py-3">{docTypeLabel(item.document.doc_type)}</td>
+              <td className="px-3 py-3">{statusLabel(item.document.status)}</td>
+              <td className="px-3 py-3">{item.pipeline.memory_chunks}</td>
+              <td className="px-3 py-3">
+                {item.pipeline.graph_nodes}/{item.pipeline.graph_edges}
+              </td>
+              <td className="px-3 py-3 text-slate-400">
+                {new Date(item.document.created_at).toLocaleDateString("ru-RU")}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!items.length && <div className="p-8 text-center text-sm text-slate-500">Нет документов</div>}
+    </div>
+  );
+}
+
+function GraphPanel({
+  selected,
+  summary,
+  dependencies,
+  dependencyQuery,
+  linkType,
+  targetQuery,
+  targetDocumentId,
+  targetSearchResults,
+  busyAction,
+  onDependencyQuery,
+  onSearchDependencies,
+  onLinkType,
+  onTargetQuery,
+  onTargetDocumentId,
+  onCreateLink,
+  onDeleteLink,
+  onRebuild,
+}: {
+  selected: DocumentItem | null;
+  summary: ManagementSummary | null;
+  dependencies: DependenciesSummary | null;
+  dependencyQuery: string;
+  linkType: string;
+  targetQuery: string;
+  targetDocumentId: string;
+  targetSearchResults: SearchDocument[];
+  busyAction: string | null;
+  onDependencyQuery: (value: string) => void;
+  onSearchDependencies: () => void;
+  onLinkType: (value: string) => void;
+  onTargetQuery: (value: string) => void;
+  onTargetDocumentId: (value: string) => void;
+  onCreateLink: () => void;
+  onDeleteLink: (id: string) => void;
+  onRebuild: (scope: string) => void;
+}) {
+  if (!selected) return <EmptySelection />;
+  return (
+    <section className="mt-5 space-y-5">
+      <div className="grid gap-4 md:grid-cols-3">
+        <Metric label="Явные связи" value={summary?.links.length ?? 0} />
+        <Metric label="Узлы графа" value={dependencies?.total_nodes ?? 0} />
+        <Metric label="Ребра графа" value={dependencies?.total_edges ?? 0} />
+      </div>
+      <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
+        <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
+          <input
+            value={dependencyQuery}
+            onChange={(event) => onDependencyQuery(event.target.value)}
+            placeholder="Поиск по зависимостям"
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+          />
+          <button onClick={onSearchDependencies} className="rounded-md bg-slate-700 px-3 py-2 text-sm">
+            Найти
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => onRebuild("compact")}
+              disabled={Boolean(busyAction)}
+              className="rounded-md bg-slate-700 px-3 py-2 text-sm disabled:opacity-50"
+            >
+              Compact
+            </button>
+            <button
+              onClick={() => onRebuild("extended")}
+              disabled={Boolean(busyAction)}
+              className="rounded-md bg-slate-700 px-3 py-2 text-sm disabled:opacity-50"
+            >
+              Extended
+            </button>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-2 md:grid-cols-[0.7fr_1fr_1fr_auto]">
+          <input
+            value={linkType}
+            onChange={(event) => onLinkType(event.target.value)}
+            placeholder="Тип связи"
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+          />
+          <input
+            value={targetQuery}
+            onChange={(event) => onTargetQuery(event.target.value)}
+            placeholder="Найти документ для связи"
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+          />
+          <select
+            value={targetDocumentId}
+            onChange={(event) => onTargetDocumentId(event.target.value)}
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+          >
+            <option value="">Не выбран</option>
+            {targetSearchResults
+              .filter((item) => item.id !== selected.id)
+              .map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.file_name}
+                </option>
+              ))}
+          </select>
+          <button
+            onClick={onCreateLink}
+            disabled={!targetDocumentId || Boolean(busyAction)}
+            className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50"
+          >
+            Добавить
+          </button>
+        </div>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-3">
+        <ListPanel
+          title="Явные связи"
+          items={(summary?.links ?? []).map((link) => ({
+            id: link.id,
+            title: `${link.link_type}: ${link.linked_entity_type}`,
+            detail: link.linked_entity_id,
+            action: () => onDeleteLink(link.id),
+          }))}
+        />
+        <ListPanel
+          title="Узлы памяти"
+          items={(dependencies?.nodes ?? []).map((node) => ({
+            id: node.id,
+            title: `${node.node_type}: ${node.title}`,
+            detail: node.summary ?? `confidence ${node.confidence.toFixed(2)}`,
+          }))}
+        />
+        <ListPanel
+          title="Ребра графа"
+          items={(dependencies?.edges ?? []).map((edge) => ({
+            id: edge.id,
+            title: edge.edge_type,
+            detail: edge.reason ?? `${edge.source_node_id.slice(0, 8)} -> ${edge.target_node_id.slice(0, 8)}`,
+          }))}
+        />
+      </div>
+    </section>
+  );
+}
+
+function NtdPanel({
+  selected,
+  pipeline,
+  busyAction,
+  onRun,
+  onCreateSource,
+}: {
+  selected: DocumentItem | null;
+  pipeline: PipelineStatus | null;
+  busyAction: string | null;
+  onRun: () => void;
+  onCreateSource: () => void;
+}) {
+  if (!selected) return <EmptySelection />;
+  return (
+    <section className="mt-5 space-y-5">
+      <div className="grid gap-4 md:grid-cols-3">
+        <Metric label="Проверок" value={pipeline?.ntd_checks ?? 0} />
+        <Metric label="Открытых замечаний" value={pipeline?.ntd_open_findings ?? 0} />
+        <Metric label="Evidence spans" value={pipeline?.evidence_spans ?? 0} />
+      </div>
+      <div className="flex flex-wrap gap-2 rounded-md border border-slate-800 bg-slate-900 p-4">
+        <button
+          onClick={onRun}
+          disabled={Boolean(busyAction)}
+          className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50"
+        >
+          Проверить на соответствие НТД
+        </button>
+        <button
+          onClick={onCreateSource}
+          disabled={Boolean(busyAction)}
+          className="rounded-md bg-slate-700 px-3 py-2 text-sm disabled:opacity-50"
+        >
+          Занести как НТД
+        </button>
+        <Link
+          href="/settings/ntd"
+          className="rounded-md bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600"
+        >
+          База НТД
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function DetailPanel({
+  selected,
+  pipeline,
+  busyAction,
+  onUpdate,
+  onDelete,
+  onClassify,
+  onExtract,
+}: {
+  selected: DocumentItem | null;
+  pipeline: PipelineStatus | null;
+  busyAction: string | null;
+  onUpdate: (patch: Record<string, unknown>) => void;
+  onDelete: () => void;
+  onClassify: () => void;
+  onExtract: () => void;
+}) {
+  return (
+    <aside className="min-w-0 bg-slate-950 p-5">
+      {!selected ? (
+        <EmptySelection />
+      ) : (
+        <div className="space-y-5">
+          <div>
+            <h2 className="line-clamp-2 text-lg font-semibold">{selected.file_name}</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              {selected.mime_type} · {fmtBytes(selected.file_size)}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Metric label="Извлечений" value={pipeline?.extraction_count ?? 0} compact />
+            <Metric label="Граф" value={pipeline?.graph_nodes ?? 0} compact />
+            <Metric label="Векторов" value={pipeline?.embedding_records ?? 0} compact />
+            <Metric label="НТД" value={pipeline?.ntd_open_findings ?? 0} compact />
+          </div>
+          <label key={`${selected.id}-file-name`} className="block text-xs text-slate-400">
+            Имя файла
+            <input
+              defaultValue={selected.file_name}
+              onBlur={(event) => {
+                const nextValue = event.target.value.trim();
+                if (nextValue && nextValue !== selected.file_name) {
+                  onUpdate({ file_name: nextValue });
+                }
+              }}
+              className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            />
+          </label>
+          <label className="block text-xs text-slate-400">
+            Тип документа
+            <select
+              value={selected.doc_type ?? ""}
+              onChange={(event) =>
+                onUpdate({
+                  doc_type: event.target.value || null,
+                  manual_doc_type_override: Boolean(event.target.value),
+                })
+              }
+              className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            >
+              {DOC_TYPES.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs text-slate-400">
+            Статус
+            <select
+              value={selected.status}
+              onChange={(event) => onUpdate({ status: event.target.value })}
+              className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            >
+              {STATUS_FILTERS.filter((item) => item.value).map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label key={`${selected.id}-source`} className="block text-xs text-slate-400">
+            Источник
+            <input
+              defaultValue={selected.source_channel ?? ""}
+              onBlur={(event) => {
+                const nextValue = event.target.value.trim() || null;
+                if (nextValue !== selected.source_channel) {
+                  onUpdate({ source_channel: nextValue });
+                }
+              }}
+              className="mt-1 w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={onClassify}
+              disabled={Boolean(busyAction)}
+              className="rounded-md bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-50"
+            >
+              Классифицировать
+            </button>
+            <button
+              onClick={onExtract}
+              disabled={Boolean(busyAction)}
+              className="rounded-md bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-50"
+            >
+              Распознать
+            </button>
+            <Link
+              href={`/documents/${selected.id}/review`}
+              className="rounded-md bg-slate-700 px-3 py-2 text-center text-sm hover:bg-slate-600"
+            >
+              Review
+            </Link>
+            <a
+              href={`${API}/api/documents/${selected.id}/download`}
+              className="rounded-md bg-slate-700 px-3 py-2 text-center text-sm hover:bg-slate-600"
+            >
+              Скачать
+            </a>
+          </div>
+          <button
+            onClick={onDelete}
+            disabled={Boolean(busyAction)}
+            className="w-full rounded-md bg-red-950 px-3 py-2 text-sm text-red-200 hover:bg-red-900 disabled:opacity-50"
+          >
+            Удалить полностью
+          </button>
+          {pipeline?.processing_error && (
+            <div className="rounded-md border border-red-900 bg-red-950/30 p-3 text-sm text-red-200">
+              {pipeline.processing_error}
+            </div>
+          )}
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  compact = false,
+}: {
+  label: string;
+  value: number;
+  compact?: boolean;
+}) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className={compact ? "mt-1 text-lg font-semibold" : "mt-1 text-2xl font-semibold"}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function ListPanel({
   title,
   items,
 }: {
   title: string;
-  items: Array<{ id: string; title: string; detail: string }>;
+  items: Array<{ id: string; title: string; detail: string; action?: () => void }>;
 }) {
   return (
-    <div className="rounded-md border border-slate-800 bg-slate-950 p-3">
-      <h4 className="text-xs font-semibold uppercase text-slate-500">
-        {title}
-      </h4>
-      <div className="mt-2 max-h-80 overflow-y-auto divide-y divide-slate-800">
+    <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
+      <h3 className="text-xs font-semibold uppercase text-slate-500">{title}</h3>
+      <div className="mt-2 max-h-96 overflow-y-auto divide-y divide-slate-800">
         {items.map((item) => (
-          <div key={item.id} className="py-2">
-            <div className="truncate text-sm text-slate-200">{item.title}</div>
-            <div className="mt-1 line-clamp-2 text-xs text-slate-500">
-              {item.detail}
+          <div key={item.id} className="flex gap-2 py-2">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm text-slate-100">{item.title}</div>
+              <div className="mt-1 line-clamp-2 text-xs text-slate-500">{item.detail}</div>
             </div>
+            {item.action && (
+              <button
+                onClick={item.action}
+                className="self-start rounded-md bg-red-950 px-2 py-1 text-xs text-red-200"
+              >
+                Удалить
+              </button>
+            )}
           </div>
         ))}
-        {!items.length && (
-          <div className="py-4 text-sm text-slate-600">Нет данных</div>
-        )}
+        {!items.length && <div className="py-6 text-sm text-slate-600">Нет данных</div>}
       </div>
+    </div>
+  );
+}
+
+function EmptySelection() {
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-900 p-8 text-center text-sm text-slate-500">
+      Выберите документ
     </div>
   );
 }
