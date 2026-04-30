@@ -49,8 +49,8 @@ class OllamaProvider(AIProvider):
         started = time.perf_counter()
         payload = {
             "model": model,
-            "prompt": request.prompt or request.input_text or "",
-            "images": request.images,
+            "prompt": _request_prompt(request),
+            "images": [_ollama_image_payload(image) for image in request.images],
             "stream": False,
             "options": {"temperature": 0.1},
         }
@@ -101,3 +101,19 @@ def _sum_optional(left: int | None, right: int | None) -> int | None:
     if left is None and right is None:
         return None
     return (left or 0) + (right or 0)
+
+
+def _request_prompt(request: AIRequest) -> str:
+    if request.prompt or request.input_text:
+        return request.prompt or request.input_text or ""
+    return "\n\n".join(
+        message.content
+        for message in request.messages
+        if message.role in {"system", "user"} and message.content
+    )
+
+
+def _ollama_image_payload(image: str) -> str:
+    if image.startswith("data:") and ";base64," in image:
+        return image.split(";base64,", 1)[1]
+    return image

@@ -4,6 +4,7 @@ import hashlib
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -76,7 +77,6 @@ PIPELINE_STEP_DEFINITIONS = [
     ("extraction", "Распознавание"),
     ("sql_records", "Записи SQL"),
     ("memory_graph", "Память и граф"),
-    ("ntd", "Нормоконтроль"),
     ("embedding", "Векторизация"),
 ]
 
@@ -284,7 +284,8 @@ async def download_document(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Storage unavailable: {e}")
 
-    disposition = "inline" if inline else f'attachment; filename="{doc.file_name}"'
+    safe_name = quote(doc.file_name)
+    disposition = "inline" if inline else f"attachment; filename*=UTF-8''{safe_name}"
     return Response(
         content=content,
         media_type=doc.mime_type,

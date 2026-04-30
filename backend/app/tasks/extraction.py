@@ -6,6 +6,8 @@ Runs on 'extraction' queue.
 
 import asyncio
 import base64
+import subprocess
+import tempfile
 import uuid
 from datetime import UTC, datetime
 
@@ -24,11 +26,7 @@ from app.db.models import (
     Invoice,
     InvoiceLine,
     InvoiceStatus,
-    NormativeRequirement,
-    NTDCheckRun,
-    NTDControlSettings,
 )
-from app.domain.ntd_checker import build_ntd_findings
 from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
@@ -40,7 +38,6 @@ PIPELINE_STEP_DEFINITIONS = [
     ("extraction", "Распознавание"),
     ("sql_records", "Записи SQL"),
     ("memory_graph", "Память и граф"),
-    ("ntd", "Нормоконтроль"),
     ("embedding", "Векторизация"),
 ]
 
@@ -210,7 +207,7 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
                 doc.status = DocumentStatus.needs_review
                 _skip_remaining_steps(
                     job,
-                    {"extraction", "sql_records", "memory_graph", "ntd"},
+                    {"extraction", "sql_records", "memory_graph"},
                 )
                 _finish_job(job, "done")
                 db.commit()
@@ -276,7 +273,7 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
                 doc.status = DocumentStatus.needs_review
                 _skip_remaining_steps(
                     job,
-                    {"extraction", "sql_records", "memory_graph", "ntd"},
+                    {"extraction", "sql_records", "memory_graph"},
                 )
                 _finish_job(job, "done")
                 db.commit()
@@ -482,14 +479,6 @@ def extract_invoice(self, document_id: str) -> dict:
             _set_job_step(job, "memory_graph", "failed", error=str(e))
             logger.warning("document_memory_build_failed", document_id=document_id, error=str(e))
 
-        try:
-            _set_job_step(job, "ntd", "running")
-            _run_auto_ntd_check_sync(db, doc, text)
-            _set_job_step(job, "ntd", "done")
-        except Exception as e:
-            _set_job_step(job, "ntd", "failed", error=str(e))
-            logger.warning("ntd_auto_check_failed", document_id=document_id, error=str(e))
-
         if _step_status(job, "embedding") != "done":
             _set_job_step(job, "embedding", "queued")
         _finish_job(job, "done")
@@ -552,6 +541,10 @@ def _get_document_text(doc: Document) -> str:
 
 def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
     """OCR an image through the local vision model."""
+    tesseract_text = _ocr_image_with_tesseract(content, mime_type, doc)
+    if _looks_like_document_text(tesseract_text):
+        return tesseract_text
+
     try:
         from app.ai.router import ai_router
         from app.ai.schemas import AIRequest, AITask, ChatMessage
@@ -580,10 +573,14 @@ def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
         )
         text = response.text or ""
         logger.info("image_ocr_done", document_id=str(doc.id), text_len=len(text))
+        if _looks_like_document_text(text):
+            return text
+        if tesseract_text.strip():
+            return tesseract_text
         return text
     except Exception as e:
         logger.warning("image_ocr_failed", document_id=str(doc.id), error=str(e))
-        return ""
+        return tesseract_text
 
 
 def _ocr_pdf_content(content: bytes, doc: Document) -> str:
@@ -592,11 +589,19 @@ def _ocr_pdf_content(content: bytes, doc: Document) -> str:
         import fitz
 
         images: list[str] = []
+        tesseract_pages: list[str] = []
         with fitz.open(stream=content, filetype="pdf") as pdf:
             for page in list(pdf)[:3]:
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-                encoded = base64.b64encode(pixmap.tobytes("png")).decode("ascii")
+                png_content = pixmap.tobytes("png")
+                page_text = _ocr_image_with_tesseract(png_content, "image/png", doc)
+                if page_text.strip():
+                    tesseract_pages.append(page_text)
+                encoded = base64.b64encode(png_content).decode("ascii")
                 images.append(f"data:image/png;base64,{encoded}")
+        tesseract_text = "\n\n".join(tesseract_pages).strip()
+        if _looks_like_document_text(tesseract_text):
+            return tesseract_text
         if not images:
             return ""
 
@@ -625,10 +630,76 @@ def _ocr_pdf_content(content: bytes, doc: Document) -> str:
         )
         text = response.text or ""
         logger.info("pdf_ocr_done", document_id=str(doc.id), text_len=len(text))
-        return text
+        if _looks_like_document_text(text):
+            return text
+        return tesseract_text or text
     except Exception as e:
         logger.warning("pdf_ocr_failed", document_id=str(doc.id), error=str(e))
         return ""
+
+
+def _ocr_image_with_tesseract(content: bytes, mime_type: str, doc: Document) -> str:
+    suffix = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/tiff": ".tiff",
+        "image/bmp": ".bmp",
+    }.get(mime_type, ".img")
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as temp:
+            temp.write(content)
+            temp.flush()
+            result = subprocess.run(
+                [
+                    "tesseract",
+                    temp.name,
+                    "stdout",
+                    "-l",
+                    "rus+eng",
+                    "--psm",
+                    "6",
+                    "--dpi",
+                    "300",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+        text = _normalize_ocr_text(result.stdout)
+        if result.returncode == 0 and text:
+            logger.info("tesseract_ocr_done", document_id=str(doc.id), text_len=len(text))
+            return text
+        if result.stderr:
+            logger.warning(
+                "tesseract_ocr_failed",
+                document_id=str(doc.id),
+                error=result.stderr[-500:],
+            )
+    except FileNotFoundError:
+        logger.warning("tesseract_not_installed", document_id=str(doc.id))
+    except subprocess.TimeoutExpired:
+        logger.warning("tesseract_ocr_timeout", document_id=str(doc.id))
+    except Exception as e:
+        logger.warning("tesseract_ocr_error", document_id=str(doc.id), error=str(e))
+    return ""
+
+
+def _normalize_ocr_text(text: str) -> str:
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip()).strip()
+
+
+def _looks_like_document_text(text: str) -> bool:
+    normalized = _normalize_ocr_text(text)
+    if len(normalized) < 30:
+        return False
+    alpha_num = sum(ch.isalnum() for ch in normalized)
+    if alpha_num / max(len(normalized), 1) < 0.35:
+        return False
+    words = [word.lower() for word in normalized.split()]
+    if len(words) >= 5 and len(set(words)) <= 2:
+        return False
+    return True
 
 
 def _download_document(doc: Document) -> bytes | None:
@@ -693,49 +764,6 @@ def _apply_normalization_rules(db: Session, field_confs: list) -> list:
 
     db.commit()
     return field_confs
-
-
-def _run_auto_ntd_check_sync(db: Session, doc: Document, text: str) -> None:
-    settings_row = (
-        db.query(NTDControlSettings)
-        .filter(NTDControlSettings.singleton_key == "default")
-        .one_or_none()
-    )
-    if not settings_row or settings_row.mode != "auto":
-        return
-    if doc.status == DocumentStatus.suspicious or not text.strip():
-        return
-
-    requirements = (
-        db.query(NormativeRequirement)
-        .filter(NormativeRequirement.is_active.is_(True))
-        .order_by(NormativeRequirement.requirement_code)
-        .all()
-    )
-    check = NTDCheckRun(
-        document_id=doc.id,
-        status="completed",
-        mode="auto",
-        triggered_by="auto",
-        summary="Автоматическая проверка НТД выполнена без замечаний.",
-        metadata_={"requirements_checked": len(requirements)},
-    )
-    db.add(check)
-    db.flush()
-
-    findings = build_ntd_findings(check, doc, text, requirements)
-    for finding in findings:
-        db.add(finding)
-    check.findings_total = len(findings)
-    check.findings_open = len(findings)
-    if findings:
-        check.summary = f"Автоматический нормоконтроль: найдено замечаний НТД: {len(findings)}."
-    logger.info(
-        "ntd_auto_check_completed",
-        document_id=str(doc.id),
-        findings_total=len(findings),
-        requirements_checked=len(requirements),
-    )
 
 
 def _upsert_party(db: Session, data: dict, role: str) -> uuid.UUID | None:

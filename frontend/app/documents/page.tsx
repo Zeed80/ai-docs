@@ -150,7 +150,6 @@ const PIPELINE_STEP_LABELS: Record<string, string> = {
   extraction: "OCR",
   sql_records: "SQL",
   memory_graph: "Граф",
-  ntd: "НТД",
   embedding: "Векторы",
 };
 
@@ -161,7 +160,6 @@ const FALLBACK_PROCESS_STEPS: PipelineStep[] = [
   { key: "extraction", label: "OCR", status: "pending" },
   { key: "sql_records", label: "SQL", status: "pending" },
   { key: "memory_graph", label: "Граф", status: "pending" },
-  { key: "ntd", label: "НТД", status: "pending" },
   { key: "embedding", label: "Векторы", status: "pending" },
 ];
 
@@ -181,10 +179,12 @@ function statusLabel(value: string | null | undefined) {
 
 function pipelineSteps(pipeline: PipelineStatus | null | undefined): PipelineStep[] {
   const steps = pipeline?.pipeline_steps?.length ? pipeline.pipeline_steps : FALLBACK_PROCESS_STEPS;
-  return steps.map((step) => ({
-    ...step,
-    label: PIPELINE_STEP_LABELS[step.key] ?? step.label ?? step.key,
-  }));
+  return steps
+    .filter((step) => step.key !== "ntd")
+    .map((step) => ({
+      ...step,
+      label: PIPELINE_STEP_LABELS[step.key] ?? step.label ?? step.key,
+    }));
 }
 
 function pipelineProgress(pipeline: PipelineStatus | null | undefined) {
@@ -582,7 +582,6 @@ export default function DocumentsPage() {
               onBatchMemory={() =>
                 batchAction("memory", "batch/memory-rebuild", { build_scope: "extended" })
               }
-              onBatchNtd={() => batchAction("ntd", "batch/ntd-check")}
             />
           )}
 
@@ -922,7 +921,6 @@ function QueuePanel({
   onBatchClassify,
   onBatchEmbeddings,
   onBatchMemory,
-  onBatchNtd,
 }: {
   items: WorkspaceItem[];
   selectedId: string | null;
@@ -933,7 +931,6 @@ function QueuePanel({
   onBatchClassify: () => void;
   onBatchEmbeddings: () => void;
   onBatchMemory: () => void;
-  onBatchNtd: () => void;
 }) {
   return (
     <section className="mt-5 space-y-4">
@@ -943,7 +940,6 @@ function QueuePanel({
           { label: "Классификация", handler: onBatchClassify },
           { label: "Память и граф", handler: onBatchMemory },
           { label: "Векторизация", handler: onBatchEmbeddings },
-          { label: "НТД", handler: onBatchNtd },
         ].map((item) => (
           <button
             key={item.label}

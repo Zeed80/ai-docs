@@ -6,29 +6,32 @@ import uuid
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from app.ai.schemas import AIResponse, AITask, ProviderKind
 from app.db.base import Base
 from app.db.models import (
     Document,
     DocumentChunk,
     DocumentStatus,
     DocumentType,
-    NTDCheckFinding,
-    NTDCheckRun,
-    NTDControlSettings,
     NormativeDocument,
     NormativeDocumentVersion,
     NormativeRequirement,
+    NTDCheckFinding,
+    NTDCheckRun,
+    NTDControlSettings,
 )
-from app.ai.schemas import AIResponse, AITask, ProviderKind
-from app.domain.ntd import NTDCheckRunRequest, NTDControlSettingsUpdate, NormativeRequirementCreate
-from app.domain.ntd import NTDCheckAvailabilityResponse
+from app.domain.ntd import (
+    NormativeRequirementCreate,
+    NTDCheckAvailabilityResponse,
+    NTDCheckRunRequest,
+    NTDControlSettingsUpdate,
+)
 from app.domain.ntd_checker import (
     SemanticNTDResponse,
     build_ntd_findings,
     build_semantic_ntd_findings,
 )
 from app.domain.ntd_parser import detect_normative_metadata, parse_normative_text
-from app.tasks.extraction import _run_auto_ntd_check_sync
 
 
 def test_ntd_tables_are_registered() -> None:
@@ -261,54 +264,6 @@ def test_semantic_ntd_findings_convert_ai_response_to_findings(monkeypatch) -> N
     assert findings[0].metadata_["source"] == "semantic_ai"
 
 
-def test_auto_ntd_check_runs_only_when_mode_is_auto() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-
-    with Session(engine) as session:
-        settings = NTDControlSettings(mode="auto", updated_by="admin")
-        document = Document(
-            file_name="process-auto.txt",
-            file_hash="ntd-auto-hash",
-            file_size=200,
-            mime_type="text/plain",
-            storage_path="documents/process-auto.txt",
-            doc_type=DocumentType.other,
-            status=DocumentStatus.approved,
-        )
-        normative_doc = NormativeDocument(
-            code="ГОСТ 3.1105-2011",
-            title="ЕСТД. Формы и правила оформления документов",
-            document_type="ГОСТ",
-            status="active",
-        )
-        session.add_all([settings, document, normative_doc])
-        session.flush()
-        requirement = NormativeRequirement(
-            normative_document_id=normative_doc.id,
-            requirement_code="REQ-CONTROL",
-            requirement_type="process_plan",
-            applies_to=["other"],
-            text="В документе должен быть указан контроль.",
-            required_keywords=["контроль"],
-            severity="error",
-        )
-        session.add(requirement)
-        session.flush()
-
-        _run_auto_ntd_check_sync(
-            session,
-            document,
-            "Техпроцесс. Материал Сталь 40Х. Операция токарная.",
-        )
-        session.commit()
-
-        check = session.query(NTDCheckRun).one()
-        assert check.mode == "auto"
-        assert check.triggered_by == "auto"
-        assert check.findings_total == 2
-
-
 def test_ntd_parser_extracts_clauses_and_requirements() -> None:
     parsed = parse_normative_text(
         """
@@ -332,7 +287,10 @@ def test_ntd_parser_extracts_clauses_and_requirements() -> None:
 
 def test_ntd_parser_detects_metadata() -> None:
     meta = detect_normative_metadata(
-        "ГОСТ 3.1105-2011 Единая система технологической документации. Формы и правила оформления документов",
+        (
+            "ГОСТ 3.1105-2011 Единая система технологической документации. "
+            "Формы и правила оформления документов"
+        ),
         fallback_title="fallback.pdf",
     )
 
