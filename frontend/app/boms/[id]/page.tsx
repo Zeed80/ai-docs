@@ -1,10 +1,12 @@
 "use client";
 
+import { getApiBaseUrl } from "@/lib/api-base";
+
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = getApiBaseUrl();
 
 interface BOMLine {
   id: string;

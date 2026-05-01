@@ -6,8 +6,6 @@ Runs on 'extraction' queue.
 
 import asyncio
 import base64
-import subprocess
-import tempfile
 import uuid
 from datetime import UTC, datetime
 
@@ -383,7 +381,6 @@ def extract_invoice(self, document_id: str) -> dict:
         db.add(extraction)
         db.flush()
         _set_job_step(job, "extraction", "done")
-        _set_job_step(job, "sql_records", "running")
 
         # Save ExtractionFields
         for fc in field_confs:
@@ -402,103 +399,30 @@ def extract_invoice(self, document_id: str) -> dict:
             )
             db.add(ef)
 
-        # Upsert supplier Party from extracted data
-        supplier_data = extracted.get("supplier", {}) or {}
-        buyer_data = extracted.get("buyer", {}) or {}
-        supplier_party_id = _upsert_party(db, supplier_data, role="supplier")
-        buyer_party_id = _upsert_party(db, buyer_data, role="buyer")
-
-        # Delete existing invoice for this document (re-extraction)
-        existing = db.execute(
-            select(Invoice).where(Invoice.document_id == doc.id)
-        ).scalar_one_or_none()
-        if existing:
-            db.execute(
-                __import__("sqlalchemy", fromlist=["delete"]).delete(InvoiceLine).where(
-                    InvoiceLine.invoice_id == existing.id
-                )
-            )
-            db.delete(existing)
-            db.flush()
-
-        # Create Invoice
-        invoice = Invoice(
-            document_id=doc.id,
-            invoice_number=extracted.get("invoice_number"),
-            invoice_date=_parse_date(extracted.get("invoice_date")),
-            due_date=_parse_date(extracted.get("due_date")),
-            validity_date=_parse_date(extracted.get("validity_date")),
-            currency=extracted.get("currency", "RUB"),
-            subtotal=extracted.get("subtotal"),
-            tax_amount=extracted.get("tax_amount"),
-            total_amount=extracted.get("total_amount"),
-            payment_id=extracted.get("payment_id"),
-            notes=extracted.get("notes"),
-            supplier_id=supplier_party_id,
-            buyer_id=buyer_party_id,
-            status=InvoiceStatus.needs_review,
-            overall_confidence=overall_confidence,
-        )
-
-        db.add(invoice)
-        db.flush()
-
-        for line_data in extracted.get("lines", []):
-            line = InvoiceLine(
-                invoice_id=invoice.id,
-                line_number=line_data.get("line_number", 0),
-                sku=line_data.get("sku"),
-                description=line_data.get("description"),
-                quantity=line_data.get("quantity"),
-                unit=line_data.get("unit"),
-                unit_price=line_data.get("unit_price"),
-                amount=line_data.get("amount"),
-                tax_rate=line_data.get("tax_rate"),
-                tax_amount=line_data.get("tax_amount"),
-                weight=line_data.get("weight"),
-            )
-            db.add(line)
-
         doc.status = DocumentStatus.needs_review
-        _set_job_step(job, "sql_records", "done")
-
-        try:
-            from app.domain.memory_builder import build_document_memory_sync
-
-            _set_job_step(job, "memory_graph", "running")
-            memory_result = build_document_memory_sync(db, doc, text=text)
-            _set_job_step(job, "memory_graph", "done")
-            logger.info(
-                "document_memory_built",
-                document_id=document_id,
-                chunks=memory_result.chunks_created,
-                mentions=memory_result.mentions_created,
-                edges=memory_result.edges_created,
-            )
-        except Exception as e:
-            _set_job_step(job, "memory_graph", "failed", error=str(e))
-            logger.warning("document_memory_build_failed", document_id=document_id, error=str(e))
-
-        if _step_status(job, "embedding") != "done":
-            _set_job_step(job, "embedding", "queued")
         _finish_job(job, "done")
+
+        # Check if auto_verify is requested
+        doc_meta = doc.metadata_ or {}
+        if doc_meta.get("auto_verify"):
+            auto_verify_document.delay(document_id)
+            logger.info("auto_verify_queued", document_id=document_id)
+
         db.commit()
 
         logger.info(
             "extract_done",
             document_id=document_id,
-            invoice_id=str(invoice.id),
             confidence=overall_confidence,
-            lines=len(extracted.get("lines", [])),
+            field_count=len(field_confs),
             processing_ms=processing_time_ms,
             validation_errors=len(validation_errors),
         )
 
         return {
             "document_id": document_id,
-            "invoice_id": str(invoice.id),
             "overall_confidence": overall_confidence,
-            "line_count": len(extracted.get("lines", [])),
+            "field_count": len(field_confs),
             "validation_errors": validation_errors,
         }
 
@@ -539,150 +463,113 @@ def _get_document_text(doc: Document) -> str:
         return ""
 
 
-def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
-    """OCR an image through the local vision model."""
-    tesseract_text = _ocr_image_with_tesseract(content, mime_type, doc)
-    if _looks_like_document_text(tesseract_text):
-        return tesseract_text
-
+def _get_configured_ocr_model() -> str:
+    """Read OCR model name from ai_config.json, fall back to config default."""
     try:
-        from app.ai.router import ai_router
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
+        from app.api.ai_settings import get_ai_config
+        return get_ai_config().get("model_ocr") or settings.ollama_model_ocr
+    except Exception:
+        return settings.ollama_model_ocr
 
-        encoded = base64.b64encode(content).decode("ascii")
-        data_uri = f"data:{mime_type};base64,{encoded}"
-        response = _run_async(
-            ai_router.run(
-                AIRequest(
-                    task=AITask.INVOICE_OCR,
-                    messages=[
-                        ChatMessage(
-                            role="user",
-                            content=(
-                                "Распознай весь видимый текст документа. "
-                                "Сохрани номера, даты, ИНН/КПП, суммы, наименования, "
-                                "табличные строки и единицы измерения. Верни только текст."
-                            ),
-                        )
-                    ],
-                    images=[data_uri],
-                    confidential=True,
-                    metadata={"document_id": str(doc.id), "local_only": True},
-                )
-            )
+
+_VISION_FALLBACK_MODELS = ["gemma4:e4b", "gemma4:e2b", "gemma4:31b"]
+
+
+def _ollama_vision_ocr(images_b64: list[str], model_name: str, prompt: str) -> str:
+    """Call Ollama vision API synchronously. images_b64 must be raw base64 (no data: prefix).
+
+    If the configured model returns empty (no vision support), automatically retries
+    with known vision-capable fallback models.
+    """
+    import httpx
+
+    def _call(model: str) -> str:
+        resp = httpx.post(
+            f"{str(settings.ollama_url).rstrip('/')}/api/chat",
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt, "images": images_b64}],
+                "stream": False,
+                "options": {"temperature": 0.0},
+            },
+            timeout=300.0,
         )
-        text = response.text or ""
-        logger.info("image_ocr_done", document_id=str(doc.id), text_len=len(text))
-        if _looks_like_document_text(text):
+        resp.raise_for_status()
+        return resp.json().get("message", {}).get("content", "")
+
+    # Try the configured model first
+    try:
+        text = _call(model_name)
+        if text.strip():
             return text
-        if tesseract_text.strip():
-            return tesseract_text
-        return text
+        logger.warning("ollama_vision_ocr_empty", model=model_name)
     except Exception as e:
-        logger.warning("image_ocr_failed", document_id=str(doc.id), error=str(e))
-        return tesseract_text
+        logger.warning("ollama_vision_ocr_failed", model=model_name, error=str(e))
+
+    # Fallback to known vision-capable models
+    for fallback in _VISION_FALLBACK_MODELS:
+        if fallback == model_name:
+            continue
+        try:
+            text = _call(fallback)
+            if text.strip():
+                logger.info("ollama_vision_ocr_fallback_used", primary=model_name, fallback=fallback)
+                return text
+        except Exception as e:
+            logger.warning("ollama_vision_ocr_fallback_failed", model=fallback, error=str(e))
+
+    return ""
+
+
+def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
+    """OCR an image using the configured OCR model."""
+    model = _get_configured_ocr_model()
+    logger.info("image_ocr_start", document_id=str(doc.id), model=model)
+    encoded = base64.b64encode(content).decode("ascii")
+    text = _ollama_vision_ocr(
+        [encoded],
+        model,
+        (
+            "Распознай весь видимый текст документа. "
+            "Сохрани номера, даты, ИНН/КПП, суммы, наименования, "
+            "табличные строки и единицы измерения. Верни только текст."
+        ),
+    )
+    logger.info("image_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
+    return text
 
 
 def _ocr_pdf_content(content: bytes, doc: Document) -> str:
-    """Render the first pages of a scanned PDF and OCR them through vision."""
+    """Render the first pages of a scanned PDF and OCR them using the configured model."""
     try:
         import fitz
 
-        images: list[str] = []
-        tesseract_pages: list[str] = []
+        images_b64: list[str] = []
         with fitz.open(stream=content, filetype="pdf") as pdf:
             for page in list(pdf)[:3]:
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-                png_content = pixmap.tobytes("png")
-                page_text = _ocr_image_with_tesseract(png_content, "image/png", doc)
-                if page_text.strip():
-                    tesseract_pages.append(page_text)
-                encoded = base64.b64encode(png_content).decode("ascii")
-                images.append(f"data:image/png;base64,{encoded}")
-        tesseract_text = "\n\n".join(tesseract_pages).strip()
-        if _looks_like_document_text(tesseract_text):
-            return tesseract_text
-        if not images:
+                png_bytes = pixmap.tobytes("png")
+                images_b64.append(base64.b64encode(png_bytes).decode("ascii"))
+        if not images_b64:
             return ""
 
-        from app.ai.router import ai_router
-        from app.ai.schemas import AIRequest, AITask, ChatMessage
-
-        response = _run_async(
-            ai_router.run(
-                AIRequest(
-                    task=AITask.INVOICE_OCR,
-                    messages=[
-                        ChatMessage(
-                            role="user",
-                            content=(
-                                "Распознай текст этих страниц PDF. "
-                                "Сохрани номера, даты, реквизиты, суммы и таблицы. "
-                                "Верни только текст."
-                            ),
-                        )
-                    ],
-                    images=images,
-                    confidential=True,
-                    metadata={"document_id": str(doc.id), "local_only": True},
-                )
-            )
+        model = _get_configured_ocr_model()
+        logger.info("pdf_ocr_start", document_id=str(doc.id), model=model, pages=len(images_b64))
+        text = _ollama_vision_ocr(
+            images_b64,
+            model,
+            (
+                "Распознай текст этих страниц PDF. "
+                "Сохрани номера, даты, реквизиты, суммы и таблицы. "
+                "Верни только текст."
+            ),
         )
-        text = response.text or ""
-        logger.info("pdf_ocr_done", document_id=str(doc.id), text_len=len(text))
-        if _looks_like_document_text(text):
-            return text
-        return tesseract_text or text
+        logger.info("pdf_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
+        return text
     except Exception as e:
         logger.warning("pdf_ocr_failed", document_id=str(doc.id), error=str(e))
         return ""
 
-
-def _ocr_image_with_tesseract(content: bytes, mime_type: str, doc: Document) -> str:
-    suffix = {
-        "image/jpeg": ".jpg",
-        "image/png": ".png",
-        "image/tiff": ".tiff",
-        "image/bmp": ".bmp",
-    }.get(mime_type, ".img")
-    try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as temp:
-            temp.write(content)
-            temp.flush()
-            result = subprocess.run(
-                [
-                    "tesseract",
-                    temp.name,
-                    "stdout",
-                    "-l",
-                    "rus+eng",
-                    "--psm",
-                    "6",
-                    "--dpi",
-                    "300",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=90,
-            )
-        text = _normalize_ocr_text(result.stdout)
-        if result.returncode == 0 and text:
-            logger.info("tesseract_ocr_done", document_id=str(doc.id), text_len=len(text))
-            return text
-        if result.stderr:
-            logger.warning(
-                "tesseract_ocr_failed",
-                document_id=str(doc.id),
-                error=result.stderr[-500:],
-            )
-    except FileNotFoundError:
-        logger.warning("tesseract_not_installed", document_id=str(doc.id))
-    except subprocess.TimeoutExpired:
-        logger.warning("tesseract_ocr_timeout", document_id=str(doc.id))
-    except Exception as e:
-        logger.warning("tesseract_ocr_error", document_id=str(doc.id), error=str(e))
-    return ""
 
 
 def _normalize_ocr_text(text: str) -> str:
@@ -766,6 +653,101 @@ def _apply_normalization_rules(db: Session, field_confs: list) -> list:
     return field_confs
 
 
+def _compare_extractions(main: dict, others: list[dict]) -> tuple[bool, float]:
+    """Compare key invoice fields across all model extractions.
+
+    Rules:
+    - invoice_number and invoice_date are mandatory: if either is missing in
+      main extraction → reject immediately (score=0).
+    - For each key field present in main, check that ALL other extractions agree.
+    - Score = fraction of agreeing fields. threshold = 0.95.
+    """
+    MANDATORY = {"invoice_number", "invoice_date"}
+    KEY_FIELDS = [
+        "invoice_number", "invoice_date", "total_amount", "currency",
+        "subtotal", "tax_amount",
+    ]
+
+    # Mandatory fields must be present
+    for mf in MANDATORY:
+        if not main.get(mf):
+            logger.info(
+                "auto_verify_reject_mandatory_missing",
+                field=mf,
+                value=main.get(mf),
+            )
+            return False, 0.0
+
+    if not others:
+        return False, 0.0
+
+    agreements = 0
+    total = 0
+    for field in KEY_FIELDS:
+        main_val = main.get(field)
+        if main_val is None:
+            continue
+        total += 1
+        main_str = str(main_val).strip()
+        # Every verify extraction must have this field and agree
+        all_match = True
+        for o in others:
+            other_val = o.get(field)
+            if other_val is None or str(other_val).strip() != main_str:
+                all_match = False
+                break
+        if all_match:
+            agreements += 1
+
+    if total == 0:
+        return False, 0.0
+    score = agreements / total
+    return score >= 0.95, score
+
+
+def _extract_invoice_with_model(text: str, model_name: str) -> dict:
+    """Re-extract invoice using a specific Ollama model for verification."""
+    import json as _json
+    import re
+
+    import httpx
+
+    from app.config import settings
+
+    if not model_name or not model_name.strip():
+        return {}
+
+    prompt = (
+        "Extract invoice fields as JSON object with these keys only: "
+        "invoice_number, invoice_date, due_date, currency, subtotal, tax_amount, total_amount, "
+        "supplier (object with name, inn), buyer (object with name, inn). "
+        "Use null for missing fields. Return ONLY the JSON object, no explanation.\n\n"
+        f"Document text:\n{text[:8000]}"
+    )
+
+    try:
+        response = httpx.post(
+            f"{str(settings.ollama_url).rstrip('/')}/api/chat",
+            json={
+                "model": model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {"temperature": 0.1},
+            },
+            timeout=180.0,
+        )
+        response.raise_for_status()
+        body = response.json()
+        content = body.get("message", {}).get("content", "")
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        if match:
+            return _json.loads(match.group())
+        return {}
+    except Exception as e:
+        logger.warning("verify_extract_failed", model=model_name, error=str(e))
+        return {}
+
+
 def _upsert_party(db: Session, data: dict, role: str) -> uuid.UUID | None:
     """Create or update a Party from extracted supplier/buyer data. Returns party.id or None."""
     if not data:
@@ -812,6 +794,485 @@ def _upsert_party(db: Session, data: dict, role: str) -> uuid.UUID | None:
     _set_if_better("contact_email", data.get("email"))
     db.flush()
     return party.id
+
+
+@celery_app.task(name="app.tasks.extraction.auto_verify_document", bind=True, max_retries=1)
+def auto_verify_document(self, document_id: str) -> dict:
+    """Auto-verification: re-extract with verify models and compare.
+
+    If all key fields agree across models → auto-approve.
+    Otherwise leave as needs_review.
+    """
+    logger.info("auto_verify_start", document_id=document_id)
+
+    from app.api.ai_settings import get_ai_config
+
+    cfg = get_ai_config()
+    verify_model_1 = cfg.get("verify_model_1", "")
+    verify_model_2 = cfg.get("verify_model_2", "")
+
+    with _get_sync_session() as db:
+        doc = db.get(Document, uuid.UUID(document_id))
+        if not doc:
+            return {"error": "not_found"}
+
+        # Get main extraction
+        main_extraction = db.execute(
+            select(DocumentExtraction)
+            .where(DocumentExtraction.document_id == doc.id)
+            .order_by(DocumentExtraction.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        if not main_extraction:
+            return {"error": "no_extraction"}
+
+        main_data = main_extraction.structured_data or {}
+        text = _get_document_text(doc)
+
+        if not text:
+            return {"error": "no_text"}
+
+        # Check mandatory field confidence from ExtractionField records
+        from app.db.models import ExtractionField as EF
+        MANDATORY_CONF_THRESHOLD = 0.95
+        MANDATORY_FIELDS_CHECK = ["invoice_number", "invoice_date"]
+
+        low_conf_mandatory: list[str] = []
+        for field_name in MANDATORY_FIELDS_CHECK:
+            ef = db.execute(
+                select(EF)
+                .where(
+                    EF.extraction_id == main_extraction.id,
+                    EF.field_name == field_name,
+                )
+            ).scalar_one_or_none()
+            if ef is None or ef.field_value is None:
+                low_conf_mandatory.append(f"{field_name}:missing")
+            elif ef.confidence is not None and ef.confidence < MANDATORY_CONF_THRESHOLD:
+                low_conf_mandatory.append(
+                    f"{field_name}:{ef.confidence:.2f}"
+                )
+
+        if low_conf_mandatory:
+            logger.info(
+                "auto_verify_reject_low_confidence",
+                document_id=document_id,
+                mandatory_issues=low_conf_mandatory,
+            )
+            return {
+                "document_id": document_id,
+                "consensus": 0.0,
+                "auto_approved": False,
+                "reject_reason": "mandatory_fields_low_confidence",
+                "mandatory_issues": low_conf_mandatory,
+            }
+
+        # Run verify extractions sequentially with all configured models
+        verify_extractions: list[dict] = []
+        models_used: list[str] = []
+
+        for model_key, model_name in [
+            ("verify_model_1", verify_model_1),
+            ("verify_model_2", verify_model_2),
+        ]:
+            if not model_name or not model_name.strip():
+                continue
+            logger.info("auto_verify_extracting", model=model_name, document_id=document_id)
+            extracted = _extract_invoice_with_model(text, model_name)
+            if extracted:
+                verify_extractions.append(extracted)
+                models_used.append(model_name)
+            else:
+                logger.warning("auto_verify_model_failed", model=model_name)
+
+        if not verify_extractions:
+            logger.warning("auto_verify_no_verify_models", document_id=document_id)
+            return {"error": "no_verify_models_configured"}
+
+        should_approve, consensus = _compare_extractions(main_data, verify_extractions)
+
+        logger.info(
+            "auto_verify_result",
+            document_id=document_id,
+            consensus=consensus,
+            should_approve=should_approve,
+            models_used=models_used,
+            verify_count=len(verify_extractions),
+        )
+
+        if should_approve:
+            doc.status = DocumentStatus.approved
+            job = _latest_processing_job(db, doc)
+            if job:
+                job.current_step = "auto_verified"
+            db.commit()
+            # Trigger post-approval pipeline (Invoice/Party/memory/embeddings)
+            process_approved_document.delay(document_id)
+            logger.info("auto_verify_approved", document_id=document_id, consensus=consensus)
+
+        return {
+            "document_id": document_id,
+            "consensus": consensus,
+            "auto_approved": should_approve,
+            "models_used": models_used,
+            "verify_count": len(verify_extractions),
+        }
+
+
+@celery_app.task(name="app.tasks.extraction.process_approved_document", bind=True, max_retries=1)
+def process_approved_document(self, document_id: str) -> dict:
+    """Post-approval pipeline: create Invoice/Lines/Party, build memory graph, queue embeddings.
+
+    Called after document status is set to 'approved' — either by manual approval or auto-verify.
+    Only verified data gets written to Invoice/Party tables and the knowledge graph.
+    """
+    logger.info("post_approve_start", document_id=document_id)
+    from sqlalchemy import delete as _sa_delete
+
+    with _get_sync_session() as db:
+        doc = db.get(Document, uuid.UUID(document_id))
+        if not doc:
+            return {"error": "not_found"}
+
+        extraction = db.execute(
+            select(DocumentExtraction)
+            .where(DocumentExtraction.document_id == doc.id)
+            .order_by(DocumentExtraction.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        if not extraction:
+            logger.warning("post_approve_no_extraction", document_id=document_id)
+            return {"error": "no_extraction"}
+
+        extracted = extraction.structured_data or {}
+
+        # Reopen the existing processing job so steps stay on the same job
+        job = _latest_processing_job(db, doc)
+        if job:
+            job.status = "running"
+            job.current_step = "sql_records"
+        else:
+            job = DocumentProcessingJob(
+                document_id=doc.id,
+                status="running",
+                pipeline_steps=_default_pipeline_steps(),
+                current_step="sql_records",
+                started_at=datetime.now(UTC),
+            )
+            db.add(job)
+            db.flush()
+
+        # ── Step: sql_records ────────────────────────────────────────────────
+        _set_job_step(job, "sql_records", "running")
+
+        supplier_data = extracted.get("supplier", {}) or {}
+        buyer_data = extracted.get("buyer", {}) or {}
+        supplier_party_id = _upsert_party(db, supplier_data, role="supplier")
+        buyer_party_id = _upsert_party(db, buyer_data, role="buyer")
+
+        # Remove existing invoice if re-approved (e.g. re-uploaded)
+        existing = db.execute(
+            select(Invoice).where(Invoice.document_id == doc.id)
+        ).scalar_one_or_none()
+        if existing:
+            db.execute(_sa_delete(InvoiceLine).where(InvoiceLine.invoice_id == existing.id))
+            db.delete(existing)
+            db.flush()
+
+        invoice = Invoice(
+            document_id=doc.id,
+            invoice_number=extracted.get("invoice_number"),
+            invoice_date=_parse_date(extracted.get("invoice_date")),
+            due_date=_parse_date(extracted.get("due_date")),
+            validity_date=_parse_date(extracted.get("validity_date")),
+            currency=extracted.get("currency", "RUB"),
+            subtotal=extracted.get("subtotal"),
+            tax_amount=extracted.get("tax_amount"),
+            total_amount=extracted.get("total_amount"),
+            payment_id=extracted.get("payment_id"),
+            notes=extracted.get("notes"),
+            supplier_id=supplier_party_id,
+            buyer_id=buyer_party_id,
+            status=InvoiceStatus.approved,
+            overall_confidence=extraction.overall_confidence,
+        )
+        db.add(invoice)
+        db.flush()
+
+        for line_data in extracted.get("lines", []):
+            db.add(InvoiceLine(
+                invoice_id=invoice.id,
+                line_number=line_data.get("line_number", 0),
+                sku=line_data.get("sku"),
+                description=line_data.get("description"),
+                quantity=line_data.get("quantity"),
+                unit=line_data.get("unit"),
+                unit_price=line_data.get("unit_price"),
+                amount=line_data.get("amount"),
+                tax_rate=line_data.get("tax_rate"),
+                tax_amount=line_data.get("tax_amount"),
+                weight=line_data.get("weight"),
+            ))
+
+        _set_job_step(job, "sql_records", "done")
+
+        # ── SupplierProfile update ───────────────────────────────────────────
+        if supplier_party_id:
+            from app.db.models import SupplierProfile
+            profile = db.execute(
+                select(SupplierProfile).where(SupplierProfile.party_id == supplier_party_id)
+            ).scalar_one_or_none()
+            if not profile:
+                profile = SupplierProfile(party_id=supplier_party_id, total_invoices=0, total_amount=0.0)
+                db.add(profile)
+            db.flush()
+            profile.total_invoices = (profile.total_invoices or 0) + 1
+            if invoice.total_amount:
+                profile.total_amount = (profile.total_amount or 0.0) + float(invoice.total_amount)
+            if invoice.invoice_date:
+                if not profile.last_invoice_date or invoice.invoice_date > profile.last_invoice_date:
+                    profile.last_invoice_date = invoice.invoice_date
+
+        # ── Step: memory_graph ───────────────────────────────────────────────
+        text = _get_document_text(doc)
+        try:
+            from app.domain.memory_builder import build_document_memory_sync
+            _set_job_step(job, "memory_graph", "running")
+            memory_result = build_document_memory_sync(db, doc, text=text)
+            _set_job_step(job, "memory_graph", "done")
+            logger.info(
+                "post_approve_memory_built",
+                document_id=document_id,
+                chunks=memory_result.chunks_created,
+                mentions=memory_result.mentions_created,
+                edges=memory_result.edges_created,
+            )
+        except Exception as e:
+            _set_job_step(job, "memory_graph", "failed", error=str(e))
+            logger.warning("post_approve_memory_failed", document_id=document_id, error=str(e))
+
+        # ── Step: embedding ──────────────────────────────────────────────────
+        if _step_status(job, "embedding") != "done":
+            _set_job_step(job, "embedding", "queued")
+
+        _finish_job(job, "done")
+        db.commit()
+
+        # Dispatch embedding task after commit so the doc state is final
+        from app.tasks.embedding import embed_document
+        embed_document.delay(document_id)
+
+        logger.info(
+            "post_approve_done",
+            document_id=document_id,
+            invoice_id=str(invoice.id),
+            supplier_party_id=str(supplier_party_id) if supplier_party_id else None,
+            lines=len(extracted.get("lines", [])),
+        )
+
+        return {
+            "document_id": document_id,
+            "invoice_id": str(invoice.id),
+            "supplier_party_id": str(supplier_party_id) if supplier_party_id else None,
+            "lines": len(extracted.get("lines", [])),
+        }
+
+
+def _normalize_company_name(name: str) -> str:
+    """Strip common Russian legal form prefixes for fuzzy comparison."""
+    import re as _re
+    s = name.lower().strip()
+    for pat in [
+        r'общество с ограниченной ответственностью',
+        r'акционерное общество',
+        r'закрытое акционерное общество',
+        r'публичное акционерное общество',
+        r'индивидуальный предприниматель',
+        r'\bооо\b', r'\bао\b', r'\bзао\b', r'\bпао\b', r'\bип\b', r'\bгуп\b', r'\bмуп\b',
+    ]:
+        s = _re.sub(pat, '', s)
+    s = _re.sub(r'["\'\«\»\(\)]', '', s)
+    return _re.sub(r'\s+', ' ', s).strip()
+
+
+def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUID | None":
+    """LLM-based supplier name deduplication. INN match should be tried first."""
+    import json as _json
+    import re as _re
+    import httpx
+    from app.config import settings
+
+    if not new_name or not existing_parties:
+        return None
+
+    # Fast path: normalized string match
+    norm_new = _normalize_company_name(new_name)
+    for p in existing_parties:
+        if _normalize_company_name(p.name) == norm_new:
+            logger.info("supplier_norm_matched", new=new_name, existing=p.name)
+            return p.id
+
+    # LLM path
+    names_list = "\n".join(f"{i + 1}. {p.name}" for i, p in enumerate(existing_parties[:30]))
+    prompt = (
+        f'Task: decide if the new company is the same legal entity as any in the list.\n'
+        f'New company: "{new_name}"\n'
+        f'Existing companies:\n{names_list}\n\n'
+        f'Rules: ООО = Общество с ограниченной ответственностью, '
+        f'АО = Акционерное общество, ЗАО = Закрытое АО, ИП = Индивидуальный предприниматель.\n'
+        f'Answer JSON only: {{"match": true/false, "index": <1-based int or null>}}'
+    )
+    try:
+        resp = httpx.post(
+            f"{str(settings.ollama_url).rstrip('/')}/api/chat",
+            json={
+                "model": settings.ollama_model_ocr,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {"temperature": 0.0},
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        content = resp.json().get("message", {}).get("content", "")
+        m = _re.search(r'\{.*?\}', content, _re.DOTALL)
+        if m:
+            result = _json.loads(m.group())
+            if result.get("match") and result.get("index"):
+                idx = int(result["index"]) - 1
+                if 0 <= idx < len(existing_parties):
+                    matched = existing_parties[idx]
+                    logger.info("llm_supplier_matched", new=new_name, matched=matched.name)
+                    return matched.id
+    except Exception as e:
+        logger.warning("llm_supplier_match_failed", error=str(e))
+    return None
+
+
+@celery_app.task(name="app.tasks.extraction.auto_supplier_task", bind=True, max_retries=1)
+def auto_supplier_task(self, document_id: str) -> dict:
+    """After document approval: match or create supplier Party, update SupplierProfile."""
+    logger.info("auto_supplier_start", document_id=document_id)
+
+    from app.db.models import Invoice, DocumentLink, SupplierProfile, Party, PartyRole
+
+    with _get_sync_session() as db:
+        doc = db.get(Document, uuid.UUID(document_id))
+        if not doc:
+            return {"error": "not_found"}
+
+        # Find linked invoice
+        invoice = db.execute(
+            select(Invoice).where(Invoice.document_id == doc.id)
+        ).scalar_one_or_none()
+
+        if not invoice:
+            link = db.execute(
+                select(DocumentLink).where(
+                    DocumentLink.document_id == doc.id,
+                    DocumentLink.linked_entity_type == "invoice",
+                )
+            ).scalar_one_or_none()
+            if link:
+                invoice = db.get(Invoice, link.linked_entity_id)
+
+        if not invoice:
+            return {"error": "no_invoice"}
+
+        # Get extraction structured_data for full supplier info
+        extraction = db.execute(
+            select(DocumentExtraction)
+            .where(DocumentExtraction.document_id == doc.id)
+            .order_by(DocumentExtraction.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        supplier_data: dict = {}
+        if extraction and extraction.structured_data:
+            supplier_data = extraction.structured_data.get("supplier") or {}
+
+        supplier_name = supplier_data.get("name")
+        supplier_inn = supplier_data.get("inn")
+
+        party_id = invoice.supplier_id
+
+        if not party_id:
+            # 1. INN exact match
+            if supplier_inn:
+                existing = db.execute(
+                    select(Party).where(Party.inn == supplier_inn)
+                ).scalar_one_or_none()
+                if existing:
+                    party_id = existing.id
+
+            # 2. LLM name match
+            if not party_id and supplier_name:
+                candidates = db.execute(
+                    select(Party).where(Party.role.in_(["supplier", "both"])).limit(50)
+                ).scalars().all()
+                party_id = _llm_match_supplier_name(supplier_name, list(candidates))
+
+            # 3. Create new Party
+            if not party_id and (supplier_name or supplier_inn):
+                new_party = Party(
+                    name=supplier_name or supplier_inn,
+                    inn=supplier_inn,
+                    role=PartyRole.supplier,
+                    kpp=supplier_data.get("kpp"),
+                    address=supplier_data.get("address"),
+                    bank_name=supplier_data.get("bank_name"),
+                    bank_bik=supplier_data.get("bank_bik"),
+                    bank_account=supplier_data.get("bank_account"),
+                    corr_account=supplier_data.get("corr_account"),
+                    contact_phone=supplier_data.get("phone"),
+                    contact_email=supplier_data.get("email"),
+                )
+                db.add(new_party)
+                db.flush()
+                party_id = new_party.id
+                logger.info("auto_supplier_created", party_id=str(party_id), name=supplier_name)
+
+            if party_id:
+                invoice.supplier_id = party_id
+                # Update any party fields that were missing
+                party = db.get(Party, party_id)
+                if party and supplier_data:
+                    def _fill(attr, val):
+                        if val and not getattr(party, attr, None):
+                            setattr(party, attr, val)
+                    _fill("kpp", supplier_data.get("kpp"))
+                    _fill("address", supplier_data.get("address"))
+                    _fill("bank_name", supplier_data.get("bank_name"))
+                    _fill("bank_bik", supplier_data.get("bank_bik"))
+                    _fill("bank_account", supplier_data.get("bank_account"))
+                    _fill("corr_account", supplier_data.get("corr_account"))
+                    _fill("contact_phone", supplier_data.get("phone"))
+                    _fill("contact_email", supplier_data.get("email"))
+
+        # Update SupplierProfile stats
+        if party_id:
+            profile = db.execute(
+                select(SupplierProfile).where(SupplierProfile.party_id == party_id)
+            ).scalar_one_or_none()
+            if not profile:
+                profile = SupplierProfile(party_id=party_id, total_invoices=0, total_amount=0.0)
+                db.add(profile)
+
+            profile.total_invoices = (profile.total_invoices or 0) + 1
+            if invoice.total_amount:
+                profile.total_amount = (profile.total_amount or 0.0) + float(invoice.total_amount)
+            if invoice.invoice_date:
+                if not profile.last_invoice_date or invoice.invoice_date > profile.last_invoice_date:
+                    profile.last_invoice_date = invoice.invoice_date
+
+            db.commit()
+            logger.info("auto_supplier_done", document_id=document_id, party_id=str(party_id))
+            return {"party_id": str(party_id)}
+
+        logger.warning("auto_supplier_no_data", document_id=document_id)
+        return {"error": "no_supplier_data"}
 
 
 def _parse_date(value: str | None) -> datetime | None:

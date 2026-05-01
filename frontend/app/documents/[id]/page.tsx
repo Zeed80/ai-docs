@@ -1,8 +1,13 @@
 "use client";
 
+import { getApiBaseUrl } from "@/lib/api-base";
+import { documents as docsApi } from "@/lib/api-client";
+import { PdfViewer } from "@/components/review/pdf-viewer";
 import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+
+const API = getApiBaseUrl();
 
 interface DocumentDetail {
   id: string;
@@ -45,12 +50,13 @@ export default function DocumentPage() {
   const tActions = useTranslations("actions");
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [showRejectDialog, setShowRejectDialog] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
 
   useEffect(() => {
     if (!params.id) return;
-    fetch(
-      `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/documents/${params.id}`,
-    )
+    fetch(`${API}/api/documents/${params.id}`)
       .then((r) => {
         if (!r.ok) throw new Error("Not found");
         return r.json();
@@ -91,6 +97,32 @@ export default function DocumentPage() {
   }
 
   const latestExtraction = doc.extractions[0] ?? null;
+  const isDecided = doc.status === "approved" || doc.status === "rejected";
+
+  async function handleApprove() {
+    if (!doc || saving || isDecided) return;
+    setSaving(true);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await docsApi.update(doc.id, { status: "approved" } as any);
+      router.push("/inbox");
+    } catch {
+      setSaving(false);
+    }
+  }
+
+  async function handleReject() {
+    if (!doc || saving || isDecided) return;
+    setSaving(true);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await docsApi.update(doc.id, { status: "rejected" } as any);
+      setShowRejectDialog(false);
+      router.push("/inbox");
+    } catch {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -139,30 +171,33 @@ export default function DocumentPage() {
               {tActions("review") ?? "Проверить"}
             </button>
           )}
-          <button className="px-3 py-1.5 text-sm bg-green-500 text-white rounded-md hover:bg-green-600">
+          <button
+            onClick={handleApprove}
+            disabled={saving || isDecided}
+            className="px-3 py-1.5 text-sm bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-50"
+          >
             {tActions("approve")}
           </button>
-          <button className="px-3 py-1.5 text-sm bg-red-500 text-white rounded-md hover:bg-red-600">
+          <button
+            onClick={() => setShowRejectDialog(true)}
+            disabled={saving || isDecided}
+            className="px-3 py-1.5 text-sm bg-red-500 text-white rounded-md hover:bg-red-600 disabled:opacity-50"
+          >
             {tActions("reject")}
-          </button>
-          <button className="px-3 py-1.5 text-sm bg-white border border-slate-200 text-slate-600 rounded-md hover:bg-slate-50">
-            {tActions("comment")}
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        {/* PDF Viewer placeholder */}
-        <div className="col-span-2 bg-white border border-slate-200 rounded-lg p-4 min-h-[600px]">
-          <div className="flex items-center justify-center h-full text-slate-300">
-            <div className="text-center">
-              <p className="text-lg">PDF Preview</p>
-              <p className="text-sm mt-1">
-                {doc.mime_type} &middot;{" "}
-                {doc.page_count ? `${doc.page_count} pages` : ""}
-              </p>
-            </div>
-          </div>
+      <div className="grid grid-cols-3 gap-6" style={{ minHeight: 600 }}>
+        {/* PDF Viewer */}
+        <div className="col-span-2" style={{ height: 640 }}>
+          <PdfViewer
+            documentId={doc.id}
+            mimeType={doc.mime_type}
+            highlightedBbox={null}
+            bboxes={{}}
+            activeField={null}
+          />
         </div>
 
         {/* Sidebar — metadata + extraction */}
@@ -255,6 +290,40 @@ export default function DocumentPage() {
           )}
         </div>
       </div>
+
+      {/* Reject dialog */}
+      {showRejectDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-96 max-w-full mx-4 rounded-lg bg-white p-6 shadow-xl">
+            <h3 className="mb-3 text-sm font-semibold text-slate-800">
+              Причина отклонения
+            </h3>
+            <textarea
+              autoFocus
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Укажите причину..."
+              rows={3}
+              className="w-full resize-none rounded border border-slate-200 p-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                onClick={() => setShowRejectDialog(false)}
+                className="rounded border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleReject}
+                disabled={saving}
+                className="rounded bg-red-500 px-3 py-1.5 text-sm text-white hover:bg-red-600 disabled:opacity-50"
+              >
+                Отклонить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

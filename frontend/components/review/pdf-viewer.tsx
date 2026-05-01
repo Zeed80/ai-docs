@@ -1,5 +1,7 @@
 "use client";
 
+import { getApiBaseUrl } from "@/lib/api-base";
+
 import { useEffect, useRef, useState } from "react";
 
 export interface BBox {
@@ -12,20 +14,23 @@ export interface BBox {
 
 interface PdfViewerProps {
   documentId: string;
+  mimeType?: string | null;
   highlightedBbox: BBox | null;
   onBboxClick?: (bbox: BBox) => void;
   bboxes?: Record<string, BBox>;
   activeField?: string | null;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE = getApiBaseUrl();
 
 export function PdfViewer({
   documentId,
+  mimeType,
   highlightedBbox,
   bboxes = {},
   activeField,
 }: PdfViewerProps) {
+  const isImage = mimeType?.startsWith("image/") ?? false;
   // Use backend proxy — avoids MinIO localhost URL issues across network
   const viewUrl = `${API_BASE}/api/documents/${documentId}/download?inline=true`;
   const [error, setError] = useState<string | null>(null);
@@ -84,13 +89,22 @@ export function PdfViewer({
           </div>
         ) : (
           <div className="relative mx-auto" style={{ maxWidth: 800 }}>
-            <iframe
-              src={viewUrl}
-              className="w-full border-0"
-              style={{ height: "calc(100vh - 200px)" }}
-              title="PDF Preview"
-              onError={() => setError("PDF unavailable")}
-            />
+            {isImage ? (
+              <img
+                src={viewUrl}
+                alt="Document preview"
+                className="w-full object-contain rounded"
+                onError={() => setError("Изображение недоступно")}
+              />
+            ) : (
+              <iframe
+                src={viewUrl}
+                className="w-full border-0"
+                style={{ height: "calc(100vh - 200px)" }}
+                title="PDF Preview"
+                onError={() => setError("PDF недоступен")}
+              />
+            )}
             {/* Bbox overlays */}
             {allBboxesOnPage.map(([fieldName, bbox]) => (
               <div

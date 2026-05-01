@@ -322,6 +322,7 @@ async def ingest_document(
     source_channel: str = Query("upload"),
     requested_doc_type: DocumentType | None = Query(None),
     auto_process: bool = Query(True),
+    auto_verify: bool = Query(False),
     manual_doc_type_override: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
@@ -370,6 +371,14 @@ async def ingest_document(
         logger.warning("minio_upload_failed", error=str(e), path=storage_path)
 
     initial_status = DocumentStatus.ingested if is_allowed else DocumentStatus.suspicious
+    initial_metadata: dict | None = None
+    if (requested_doc_type and manual_doc_type_override) or auto_verify:
+        initial_metadata = {}
+        if requested_doc_type and manual_doc_type_override:
+            initial_metadata["manual_doc_type_override"] = manual_doc_type_override
+        if auto_verify:
+            initial_metadata["auto_verify"] = True
+
     doc = Document(
         file_name=file.filename or "unknown",
         file_hash=file_hash,
@@ -380,9 +389,7 @@ async def ingest_document(
         status=initial_status,
         doc_type=requested_doc_type,
         doc_type_confidence=1.0 if requested_doc_type and manual_doc_type_override else None,
-        metadata_={
-            "manual_doc_type_override": manual_doc_type_override,
-        } if requested_doc_type and manual_doc_type_override else None,
+        metadata_=initial_metadata,
     )
     db.add(doc)
     await db.flush()
@@ -624,6 +631,115 @@ async def list_document_workspace(
         status_counts=status_counts,
         doc_type_counts=doc_type_counts,
     )
+
+
+# ── doc.invoice ──────────────────────────────────────────────────────────────
+
+
+@router.get("/{document_id}/invoice")
+async def get_document_invoice(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return invoice with line items for a document."""
+    from app.db.models import Invoice, InvoiceLine  # noqa: F401
+    from sqlalchemy.orm import selectinload as _sil
+
+    # Try direct FK first (invoice.document_id), then via DocumentLink
+    inv_result = await db.execute(
+        select(Invoice)
+        .where(Invoice.document_id == document_id)
+        .options(_sil(Invoice.lines))
+    )
+    invoice = inv_result.scalar_one_or_none()
+
+    if not invoice:
+        link_result = await db.execute(
+            select(DocumentLink).where(
+                DocumentLink.document_id == document_id,
+                DocumentLink.linked_entity_type == "invoice",
+            )
+        )
+        link = link_result.scalar_one_or_none()
+        if link:
+            inv_result2 = await db.execute(
+                select(Invoice)
+                .where(Invoice.id == link.linked_entity_id)
+                .options(_sil(Invoice.lines))
+            )
+            invoice = inv_result2.scalar_one_or_none()
+
+    if invoice:
+        return {
+            "id": str(invoice.id),
+            "preview": False,
+            "invoice_number": invoice.invoice_number,
+            "invoice_date": invoice.invoice_date.date().isoformat() if invoice.invoice_date else None,
+            "due_date": invoice.due_date.date().isoformat() if invoice.due_date else None,
+            "currency": invoice.currency,
+            "subtotal": float(invoice.subtotal) if invoice.subtotal is not None else None,
+            "tax_amount": float(invoice.tax_amount) if invoice.tax_amount is not None else None,
+            "total_amount": float(invoice.total_amount) if invoice.total_amount is not None else None,
+            "status": invoice.status.value if invoice.status else None,
+            "lines": [
+                {
+                    "id": str(l.id),
+                    "line_number": l.line_number,
+                    "sku": l.sku,
+                    "description": l.description,
+                    "quantity": float(l.quantity) if l.quantity is not None else None,
+                    "unit": l.unit,
+                    "unit_price": float(l.unit_price) if l.unit_price is not None else None,
+                    "amount": float(l.amount) if l.amount is not None else None,
+                    "tax_rate": float(l.tax_rate) if l.tax_rate is not None else None,
+                    "tax_amount": float(l.tax_amount) if l.tax_amount is not None else None,
+                    "confidence": float(l.confidence) if l.confidence is not None else None,
+                }
+                for l in sorted(invoice.lines, key=lambda x: x.line_number)
+            ],
+        }
+
+    # No confirmed Invoice yet — return preview from extraction structured_data
+    ext_result = await db.execute(
+        select(DocumentExtraction)
+        .where(DocumentExtraction.document_id == document_id)
+        .order_by(DocumentExtraction.created_at.desc())
+        .limit(1)
+    )
+    extraction = ext_result.scalar_one_or_none()
+    if not extraction or not extraction.structured_data:
+        raise HTTPException(status_code=404, detail="No invoice found for this document")
+
+    data = extraction.structured_data
+    lines_raw = data.get("lines") or []
+    return {
+        "id": None,
+        "preview": True,
+        "invoice_number": data.get("invoice_number"),
+        "invoice_date": data.get("invoice_date"),
+        "due_date": data.get("due_date"),
+        "currency": data.get("currency"),
+        "subtotal": data.get("subtotal"),
+        "tax_amount": data.get("tax_amount"),
+        "total_amount": data.get("total_amount"),
+        "status": "preview",
+        "lines": [
+            {
+                "id": None,
+                "line_number": l.get("line_number", i + 1),
+                "sku": l.get("sku"),
+                "description": l.get("description"),
+                "quantity": l.get("quantity"),
+                "unit": l.get("unit"),
+                "unit_price": l.get("unit_price"),
+                "amount": l.get("amount"),
+                "tax_rate": l.get("tax_rate"),
+                "tax_amount": l.get("tax_amount"),
+                "confidence": None,
+            }
+            for i, l in enumerate(lines_raw)
+        ],
+    }
 
 
 # ── doc.get ──────────────────────────────────────────────────────────────────
@@ -931,6 +1047,16 @@ async def update_document(
     )
     await db.commit()
     await db.refresh(doc)
+
+    # On approval: create Invoice/Party records, build memory graph, queue embeddings
+    if update_data.get("status") == "approved":
+        try:
+            from app.tasks.extraction import process_approved_document
+            process_approved_document.delay(str(doc.id))
+            logger.info("post_approve_queued", document_id=str(doc.id))
+        except Exception as e:
+            logger.warning("post_approve_queue_failed", document_id=str(doc.id), error=str(e))
+
     return doc
 
 

@@ -1,3 +1,4 @@
+import { getApiBaseUrl } from "@/lib/api-base";
 /**
  * Review streak — manages queue of documents for keyboard-first review.
  *
@@ -7,7 +8,7 @@
 
 import { documents as docsApi, type Document } from "./api-client";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE = getApiBaseUrl();
 
 export interface ReviewQueue {
   /** IDs of documents in the review queue */

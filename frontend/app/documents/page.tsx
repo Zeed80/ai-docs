@@ -1,7 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 
 const API = getApiBaseUrl();
@@ -47,7 +54,14 @@ interface PipelineStatus {
 interface PipelineStep {
   key: string;
   label: string;
-  status: "pending" | "queued" | "running" | "done" | "failed" | "skipped" | string;
+  status:
+    | "pending"
+    | "queued"
+    | "running"
+    | "done"
+    | "failed"
+    | "skipped"
+    | string;
   error?: string;
 }
 
@@ -170,15 +184,25 @@ function fmtBytes(value: number) {
 }
 
 function docTypeLabel(value: string | null | undefined) {
-  return DOC_TYPES.find((item) => item.value === value)?.label ?? value ?? "Не задан";
+  return (
+    DOC_TYPES.find((item) => item.value === value)?.label ?? value ?? "Не задан"
+  );
 }
 
 function statusLabel(value: string | null | undefined) {
-  return STATUS_FILTERS.find((item) => item.value === value)?.label ?? value ?? "Не задан";
+  return (
+    STATUS_FILTERS.find((item) => item.value === value)?.label ??
+    value ??
+    "Не задан"
+  );
 }
 
-function pipelineSteps(pipeline: PipelineStatus | null | undefined): PipelineStep[] {
-  const steps = pipeline?.pipeline_steps?.length ? pipeline.pipeline_steps : FALLBACK_PROCESS_STEPS;
+function pipelineSteps(
+  pipeline: PipelineStatus | null | undefined,
+): PipelineStep[] {
+  const steps = pipeline?.pipeline_steps?.length
+    ? pipeline.pipeline_steps
+    : FALLBACK_PROCESS_STEPS;
   return steps
     .filter((step) => step.key !== "ntd")
     .map((step) => ({
@@ -190,7 +214,9 @@ function pipelineSteps(pipeline: PipelineStatus | null | undefined): PipelineSte
 function pipelineProgress(pipeline: PipelineStatus | null | undefined) {
   const steps = pipelineSteps(pipeline);
   if (!steps.length) return 0;
-  const completed = steps.filter((step) => ["done", "skipped"].includes(step.status)).length;
+  const completed = steps.filter((step) =>
+    ["done", "skipped"].includes(step.status),
+  ).length;
   return Math.round((completed / steps.length) * 100);
 }
 
@@ -199,6 +225,28 @@ function isPipelineActive(item: WorkspaceItem) {
     ["queued", "running"].includes(item.pipeline.processing_status ?? "") ||
     ["ingested", "classifying", "extracting"].includes(item.document.status)
   );
+}
+
+function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(() => {
+    if (typeof window === "undefined") return initial;
+    try {
+      const stored = localStorage.getItem(key);
+      return stored !== null ? (JSON.parse(stored) as T) : initial;
+    } catch {
+      return initial;
+    }
+  });
+  const set = useCallback(
+    (v: T) => {
+      setValue(v);
+      try {
+        localStorage.setItem(key, JSON.stringify(v));
+      } catch {}
+    },
+    [key],
+  );
+  return [value, set];
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -222,14 +270,29 @@ export default function DocumentsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [summary, setSummary] = useState<ManagementSummary | null>(null);
-  const [dependencies, setDependencies] = useState<DependenciesSummary | null>(null);
+  const [dependencies, setDependencies] = useState<DependenciesSummary | null>(
+    null,
+  );
   const [status, setStatus] = useState("");
   const [docType, setDocType] = useState("");
   const [search, setSearch] = useState("");
   const [sourceChannel, setSourceChannel] = useState("upload");
-  const [uploadDocType, setUploadDocType] = useState("");
-  const [autoProcess, setAutoProcess] = useState(true);
-  const [manualUploadType, setManualUploadType] = useState(false);
+  const [uploadDocType, setUploadDocType] = useLocalStorage(
+    "upload.docType",
+    "",
+  );
+  const [autoProcess, setAutoProcess] = useLocalStorage(
+    "upload.autoProcess",
+    true,
+  );
+  const [autoVerify, setAutoVerify] = useLocalStorage(
+    "upload.autoVerify",
+    false,
+  );
+  const [manualUploadType, setManualUploadType] = useLocalStorage(
+    "upload.manualType",
+    false,
+  );
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -239,26 +302,33 @@ export default function DocumentsPage() {
   const [linkType, setLinkType] = useState("related");
   const [targetQuery, setTargetQuery] = useState("");
   const [targetDocumentId, setTargetDocumentId] = useState("");
-  const [targetSearchResults, setTargetSearchResults] = useState<SearchDocument[]>([]);
+  const [targetSearchResults, setTargetSearchResults] = useState<
+    SearchDocument[]
+  >([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const selectedItem = useMemo(
-    () => workspace?.items.find((item) => item.document.id === selectedId) ?? null,
+    () =>
+      workspace?.items.find((item) => item.document.id === selectedId) ?? null,
     [selectedId, workspace],
   );
   const selected = summary?.document ?? selectedItem?.document ?? null;
   const pipeline = summary?.pipeline ?? selectedItem?.pipeline ?? null;
-  const selectedIdsArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
+  const selectedIdsArray = useMemo(
+    () => Array.from(selectedIds),
+    [selectedIds],
+  );
 
   const loadWorkspace = useCallback(async () => {
     const params = new URLSearchParams({ limit: "100" });
     if (status) params.set("status", status);
     if (docType) params.set("doc_type", docType);
-    if (sourceChannel.trim()) params.set("source_channel", sourceChannel.trim());
+    if (sourceChannel.trim())
+      params.set("source_channel", sourceChannel.trim());
     if (search.trim()) params.set("search", search.trim());
-    const data = await requestJson<WorkspaceResponse>(`/api/documents/workspace?${params}`).catch(
-      () => null,
-    );
+    const data = await requestJson<WorkspaceResponse>(
+      `/api/documents/workspace?${params}`,
+    ).catch(() => null);
     if (!data) {
       setWorkspace(null);
       return;
@@ -272,9 +342,9 @@ export default function DocumentsPage() {
       setSummary(null);
       return;
     }
-    const data = await requestJson<ManagementSummary>(`/api/documents/${id}/management`).catch(
-      () => null,
-    );
+    const data = await requestJson<ManagementSummary>(
+      `/api/documents/${id}/management`,
+    ).catch(() => null);
     setSummary(data);
   }, []);
 
@@ -319,7 +389,10 @@ export default function DocumentsPage() {
       return;
     }
     const timer = window.setTimeout(async () => {
-      const params = new URLSearchParams({ limit: "10", search: targetQuery.trim() });
+      const params = new URLSearchParams({
+        limit: "10",
+        search: targetQuery.trim(),
+      });
       const data = await requestJson<{ items: SearchDocument[] }>(
         `/api/documents?${params}`,
       ).catch(() => null);
@@ -344,7 +417,10 @@ export default function DocumentsPage() {
       const params = new URLSearchParams({
         source_channel: sourceChannel || "upload",
         auto_process: String(autoProcess),
-        manual_doc_type_override: String(Boolean(uploadDocType && manualUploadType)),
+        auto_verify: String(autoVerify && autoProcess),
+        manual_doc_type_override: String(
+          Boolean(uploadDocType && manualUploadType),
+        ),
       });
       if (uploadDocType) params.set("requested_doc_type", uploadDocType);
       const form = new FormData();
@@ -354,7 +430,11 @@ export default function DocumentsPage() {
         body: form,
       }).catch(() => null);
       if (!response) {
-        results.push({ fileName: file.name, status: "failed", detail: "backend недоступен" });
+        results.push({
+          fileName: file.name,
+          status: "failed",
+          detail: "backend недоступен",
+        });
         continue;
       }
       const payload = await response.json().catch(() => ({}));
@@ -387,7 +467,11 @@ export default function DocumentsPage() {
     }
     setUploadResults(results);
     setUploading(false);
-    setMessage(results.some((item) => item.status === "failed") ? "Есть ошибки" : "Готово");
+    setMessage(
+      results.some((item) => item.status === "failed")
+        ? "Есть ошибки"
+        : "Готово",
+    );
     await loadWorkspace();
     if (uploadedIds.length) {
       setSelectedIds(new Set(uploadedIds));
@@ -420,7 +504,11 @@ export default function DocumentsPage() {
     );
   }
 
-  async function batchAction(action: string, path: string, body: Record<string, unknown> = {}) {
+  async function batchAction(
+    action: string,
+    path: string,
+    body: Record<string, unknown> = {},
+  ) {
     if (!selectedIdsArray.length) return;
     await runAction(action, () =>
       requestJson(`/api/documents/${path}`, {
@@ -432,7 +520,8 @@ export default function DocumentsPage() {
 
   async function deleteCurrentDocument() {
     if (!selected) return;
-    if (!confirm("Удалить документ и все связанные записи из баз данных?")) return;
+    if (!confirm("Удалить документ и все связанные записи из баз данных?"))
+      return;
     const deletingId = selected.id;
     await runAction("delete", () =>
       requestJson(`/api/documents/${deletingId}`, { method: "DELETE" }),
@@ -464,7 +553,9 @@ export default function DocumentsPage() {
   async function deleteLink(linkId: string) {
     if (!selected) return;
     await runAction("unlink", () =>
-      fetch(`${API}/api/documents/${selected.id}/links/${linkId}`, { method: "DELETE" }),
+      fetch(`${API}/api/documents/${selected.id}/links/${linkId}`, {
+        method: "DELETE",
+      }),
     );
   }
 
@@ -485,7 +576,9 @@ export default function DocumentsPage() {
             <h1 className="text-xl font-semibold">Документы</h1>
             <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
               <span>Всего: {workspace?.total ?? 0}</span>
-              <span>На проверку: {workspace?.status_counts.needs_review ?? 0}</span>
+              <span>
+                На проверку: {workspace?.status_counts.needs_review ?? 0}
+              </span>
               <span>Карантин: {workspace?.status_counts.suspicious ?? 0}</span>
             </div>
           </div>
@@ -546,12 +639,14 @@ export default function DocumentsPage() {
               uploading={uploading}
               uploadDocType={uploadDocType}
               autoProcess={autoProcess}
+              autoVerify={autoVerify}
               manualUploadType={manualUploadType}
               uploadResults={uploadResults}
               fileInputRef={fileInputRef}
               onDrag={setDragging}
               onUploadDocType={setUploadDocType}
               onAutoProcess={setAutoProcess}
+              onAutoVerify={setAutoVerify}
               onManualUploadType={setManualUploadType}
               onUpload={uploadFiles}
             />
@@ -577,10 +672,16 @@ export default function DocumentsPage() {
               busyAction={busyAction}
               onSelect={setSelectedId}
               onBatchProcess={() => batchAction("process", "batch/process")}
-              onBatchClassify={() => batchAction("classify", "batch/classify", { force: true })}
-              onBatchEmbeddings={() => batchAction("embeddings", "batch/embeddings-reindex")}
+              onBatchClassify={() =>
+                batchAction("classify", "batch/classify", { force: true })
+              }
+              onBatchEmbeddings={() =>
+                batchAction("embeddings", "batch/embeddings-reindex")
+              }
               onBatchMemory={() =>
-                batchAction("memory", "batch/memory-rebuild", { build_scope: "extended" })
+                batchAction("memory", "batch/memory-rebuild", {
+                  build_scope: "extended",
+                })
               }
             />
           )}
@@ -742,12 +843,14 @@ function UploadPanel({
   uploading,
   uploadDocType,
   autoProcess,
+  autoVerify,
   manualUploadType,
   uploadResults,
   fileInputRef,
   onDrag,
   onUploadDocType,
   onAutoProcess,
+  onAutoVerify,
   onManualUploadType,
   onUpload,
 }: {
@@ -755,12 +858,14 @@ function UploadPanel({
   uploading: boolean;
   uploadDocType: string;
   autoProcess: boolean;
+  autoVerify: boolean;
   manualUploadType: boolean;
   uploadResults: UploadResult[];
   fileInputRef: RefObject<HTMLInputElement | null>;
   onDrag: (value: boolean) => void;
   onUploadDocType: (value: string) => void;
   onAutoProcess: (value: boolean) => void;
+  onAutoVerify: (value: boolean) => void;
   onManualUploadType: (value: boolean) => void;
   onUpload: (files: FileList | null) => void;
 }) {
@@ -792,7 +897,9 @@ function UploadPanel({
         }`}
       >
         <div className="text-lg font-semibold">
-          {uploading ? "Файлы загружаются" : "Выберите или перетащите документы"}
+          {uploading
+            ? "Файлы загружаются"
+            : "Выберите или перетащите документы"}
         </div>
         <div className="mt-2 max-w-xl text-sm text-slate-400">
           PDF, изображения, DOCX, XLSX, TXT, DXF, STEP/STP, XML, CSV, JSON
@@ -836,9 +943,30 @@ function UploadPanel({
           />
           Запускать полный пайплайн
         </label>
+        <label
+          className={`mt-3 flex items-start gap-2 text-sm ${autoProcess ? "text-slate-300" : "text-slate-600 cursor-not-allowed"}`}
+        >
+          <input
+            type="checkbox"
+            checked={autoVerify}
+            disabled={!autoProcess}
+            onChange={(event) => onAutoVerify(event.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Автоматически проверять и утверждать
+            <span className="block text-xs text-slate-500 mt-0.5">
+              Повторное извлечение проверочными моделями, утверждение при 95%+
+              консенсусе
+            </span>
+          </span>
+        </label>
         <div className="mt-5 divide-y divide-slate-800">
           {uploadResults.slice(0, 8).map((item) => (
-            <div key={`${item.fileName}-${item.status}`} className="py-2 text-sm">
+            <div
+              key={`${item.fileName}-${item.status}`}
+              className="py-2 text-sm"
+            >
               <div className="truncate text-slate-200">{item.fileName}</div>
               <div
                 className={
@@ -854,7 +982,9 @@ function UploadPanel({
             </div>
           ))}
           {!uploadResults.length && (
-            <div className="py-8 text-sm text-slate-500">Нет загруженных файлов</div>
+            <div className="py-8 text-sm text-slate-500">
+              Нет загруженных файлов
+            </div>
           )}
         </div>
       </div>
@@ -882,7 +1012,9 @@ function RegistryPanel({
   return (
     <section className="mt-5 overflow-hidden rounded-md border border-slate-800">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2">
-        <span className="text-sm text-slate-300">Документы: {items.length}</span>
+        <span className="text-sm text-slate-300">
+          Документы: {items.length}
+        </span>
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => onBatch("batch/process")}
@@ -979,10 +1111,17 @@ function QueuePanel({
               )}
             </span>
             <PipelineSteps steps={pipelineSteps(item.pipeline)} compact />
-            <ProgressBar value={pipelineProgress(item.pipeline)} failed={Boolean(item.pipeline.processing_error)} />
+            <ProgressBar
+              value={pipelineProgress(item.pipeline)}
+              failed={Boolean(item.pipeline.processing_error)}
+            />
           </button>
         ))}
-        {!items.length && <div className="p-8 text-center text-sm text-slate-500">Нет данных</div>}
+        {!items.length && (
+          <div className="p-8 text-center text-sm text-slate-500">
+            Нет данных
+          </div>
+        )}
       </div>
     </section>
   );
@@ -1024,20 +1163,30 @@ function DocumentTable({
                 selectedId === item.document.id ? "bg-slate-900" : ""
               }`}
             >
-              <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}>
+              <td
+                className="px-3 py-3"
+                onClick={(event) => event.stopPropagation()}
+              >
                 <input
                   type="checkbox"
                   checked={selectedIds.has(item.document.id)}
-                  onChange={(event) => onToggle(item.document.id, event.target.checked)}
+                  onChange={(event) =>
+                    onToggle(item.document.id, event.target.checked)
+                  }
                 />
               </td>
               <td className="max-w-[360px] px-3 py-3">
-                <div className="truncate font-medium">{item.document.file_name}</div>
+                <div className="truncate font-medium">
+                  {item.document.file_name}
+                </div>
                 <div className="text-xs text-slate-500">
-                  {fmtBytes(item.document.file_size)} · {item.document.source_channel ?? "upload"}
+                  {fmtBytes(item.document.file_size)} ·{" "}
+                  {item.document.source_channel ?? "upload"}
                 </div>
               </td>
-              <td className="px-3 py-3">{docTypeLabel(item.document.doc_type)}</td>
+              <td className="px-3 py-3">
+                {docTypeLabel(item.document.doc_type)}
+              </td>
               <td className="px-3 py-3">{statusLabel(item.document.status)}</td>
               <td className="px-3 py-3">{item.pipeline.memory_chunks}</td>
               <td className="px-3 py-3">
@@ -1050,7 +1199,11 @@ function DocumentTable({
           ))}
         </tbody>
       </table>
-      {!items.length && <div className="p-8 text-center text-sm text-slate-500">Нет документов</div>}
+      {!items.length && (
+        <div className="p-8 text-center text-sm text-slate-500">
+          Нет документов
+        </div>
+      )}
     </div>
   );
 }
@@ -1108,7 +1261,10 @@ function GraphPanel({
             placeholder="Поиск по зависимостям"
             className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
           />
-          <button onClick={onSearchDependencies} className="rounded-md bg-slate-700 px-3 py-2 text-sm">
+          <button
+            onClick={onSearchDependencies}
+            className="rounded-md bg-slate-700 px-3 py-2 text-sm"
+          >
             Найти
           </button>
           <div className="flex gap-2">
@@ -1187,7 +1343,9 @@ function GraphPanel({
           items={(dependencies?.edges ?? []).map((edge) => ({
             id: edge.id,
             title: edge.edge_type,
-            detail: edge.reason ?? `${edge.source_node_id.slice(0, 8)} -> ${edge.target_node_id.slice(0, 8)}`,
+            detail:
+              edge.reason ??
+              `${edge.source_node_id.slice(0, 8)} -> ${edge.target_node_id.slice(0, 8)}`,
           }))}
         />
       </div>
@@ -1213,7 +1371,10 @@ function NtdPanel({
     <section className="mt-5 space-y-5">
       <div className="grid gap-4 md:grid-cols-3">
         <Metric label="Проверок" value={pipeline?.ntd_checks ?? 0} />
-        <Metric label="Открытых замечаний" value={pipeline?.ntd_open_findings ?? 0} />
+        <Metric
+          label="Открытых замечаний"
+          value={pipeline?.ntd_open_findings ?? 0}
+        />
         <Metric label="Evidence spans" value={pipeline?.evidence_spans ?? 0} />
       </div>
       <div className="flex flex-wrap gap-2 rounded-md border border-slate-800 bg-slate-900 p-4">
@@ -1266,19 +1427,36 @@ function DetailPanel({
       ) : (
         <div className="space-y-5">
           <div>
-            <h2 className="line-clamp-2 text-lg font-semibold">{selected.file_name}</h2>
+            <h2 className="line-clamp-2 text-lg font-semibold">
+              {selected.file_name}
+            </h2>
             <p className="mt-1 text-xs text-slate-500">
               {selected.mime_type} · {fmtBytes(selected.file_size)}
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Metric label="Извлечений" value={pipeline?.extraction_count ?? 0} compact />
+            <Metric
+              label="Извлечений"
+              value={pipeline?.extraction_count ?? 0}
+              compact
+            />
             <Metric label="Граф" value={pipeline?.graph_nodes ?? 0} compact />
-            <Metric label="Векторов" value={pipeline?.embedding_records ?? 0} compact />
-            <Metric label="НТД" value={pipeline?.ntd_open_findings ?? 0} compact />
+            <Metric
+              label="Векторов"
+              value={pipeline?.embedding_records ?? 0}
+              compact
+            />
+            <Metric
+              label="НТД"
+              value={pipeline?.ntd_open_findings ?? 0}
+              compact
+            />
           </div>
           <PipelineProgressCard pipeline={pipeline} />
-          <label key={`${selected.id}-file-name`} className="block text-xs text-slate-400">
+          <label
+            key={`${selected.id}-file-name`}
+            className="block text-xs text-slate-400"
+          >
             Имя файла
             <input
               defaultValue={selected.file_name}
@@ -1324,7 +1502,10 @@ function DetailPanel({
               ))}
             </select>
           </label>
-          <label key={`${selected.id}-source`} className="block text-xs text-slate-400">
+          <label
+            key={`${selected.id}-source`}
+            className="block text-xs text-slate-400"
+          >
             Источник
             <input
               defaultValue={selected.source_channel ?? ""}
@@ -1383,7 +1564,13 @@ function DetailPanel({
   );
 }
 
-function ProgressBar({ value, failed = false }: { value: number; failed?: boolean }) {
+function ProgressBar({
+  value,
+  failed = false,
+}: {
+  value: number;
+  failed?: boolean;
+}) {
   return (
     <div>
       <div className="mb-1 text-xs text-slate-500">{value}%</div>
@@ -1397,7 +1584,13 @@ function ProgressBar({ value, failed = false }: { value: number; failed?: boolea
   );
 }
 
-function PipelineSteps({ steps, compact = false }: { steps: PipelineStep[]; compact?: boolean }) {
+function PipelineSteps({
+  steps,
+  compact = false,
+}: {
+  steps: PipelineStep[];
+  compact?: boolean;
+}) {
   const colors: Record<string, string> = {
     done: "border-emerald-900 bg-emerald-950/50 text-emerald-200",
     skipped: "border-slate-700 bg-slate-900 text-slate-500",
@@ -1423,7 +1616,11 @@ function PipelineSteps({ steps, compact = false }: { steps: PipelineStep[]; comp
   );
 }
 
-function PipelineProgressCard({ pipeline }: { pipeline: PipelineStatus | null }) {
+function PipelineProgressCard({
+  pipeline,
+}: {
+  pipeline: PipelineStatus | null;
+}) {
   const progress = pipelineProgress(pipeline);
   return (
     <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
@@ -1436,7 +1633,10 @@ function PipelineProgressCard({ pipeline }: { pipeline: PipelineStatus | null })
           </p>
         </div>
         <div className="w-24">
-          <ProgressBar value={progress} failed={Boolean(pipeline?.processing_error)} />
+          <ProgressBar
+            value={progress}
+            failed={Boolean(pipeline?.processing_error)}
+          />
         </div>
       </div>
       <PipelineSteps steps={pipelineSteps(pipeline)} />
@@ -1456,7 +1656,11 @@ function Metric({
   return (
     <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
       <p className="text-xs text-slate-500">{label}</p>
-      <p className={compact ? "mt-1 text-lg font-semibold" : "mt-1 text-2xl font-semibold"}>
+      <p
+        className={
+          compact ? "mt-1 text-lg font-semibold" : "mt-1 text-2xl font-semibold"
+        }
+      >
         {value}
       </p>
     </div>
@@ -1468,17 +1672,28 @@ function ListPanel({
   items,
 }: {
   title: string;
-  items: Array<{ id: string; title: string; detail: string; action?: () => void }>;
+  items: Array<{
+    id: string;
+    title: string;
+    detail: string;
+    action?: () => void;
+  }>;
 }) {
   return (
     <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
-      <h3 className="text-xs font-semibold uppercase text-slate-500">{title}</h3>
+      <h3 className="text-xs font-semibold uppercase text-slate-500">
+        {title}
+      </h3>
       <div className="mt-2 max-h-96 overflow-y-auto divide-y divide-slate-800">
         {items.map((item) => (
           <div key={item.id} className="flex gap-2 py-2">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm text-slate-100">{item.title}</div>
-              <div className="mt-1 line-clamp-2 text-xs text-slate-500">{item.detail}</div>
+              <div className="truncate text-sm text-slate-100">
+                {item.title}
+              </div>
+              <div className="mt-1 line-clamp-2 text-xs text-slate-500">
+                {item.detail}
+              </div>
             </div>
             {item.action && (
               <button
@@ -1490,7 +1705,9 @@ function ListPanel({
             )}
           </div>
         ))}
-        {!items.length && <div className="py-6 text-sm text-slate-600">Нет данных</div>}
+        {!items.length && (
+          <div className="py-6 text-sm text-slate-600">Нет данных</div>
+        )}
       </div>
     </div>
   );

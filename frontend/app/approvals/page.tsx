@@ -1,8 +1,10 @@
 "use client";
 
+import { getApiBaseUrl } from "@/lib/api-base";
+
 import { useCallback, useEffect, useState } from "react";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = getApiBaseUrl();
 
 interface ApprovalItem {
   id: string;

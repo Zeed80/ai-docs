@@ -32,28 +32,65 @@ logger = structlog.get_logger()
 _CONFIG_FILE = Path(__file__).parent.parent.parent / "data" / "ai_config.json"
 _CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
+_REDIS_KEY = "ai_config"
+
 _DEFAULT_CONFIG = {
     "model_agent": "qwen3.5:9b",
     "model_ocr": settings.ollama_model_ocr,
     "model_reasoning": settings.ollama_model_reasoning,
-    "embedding_model": "local_embedding_ollama",
-    "reranker_model": None,
+    "embedding_model": "qwen3_embedding_8b_ollama",
+    "reranker_model": "local_reranker_ollama",
+    "verify_model_1": settings.ollama_model_ocr,
+    "verify_model_2": "",
     "turboquant_enabled": False,
     "turboquant_kv_cache_dtype": "turboquant_k8v4",
     "turboquant_max_model_len": 131072,
 }
 
 
+def _redis_get_config() -> dict | None:
+    """Read config from Redis (shared between backend and workers)."""
+    try:
+        import redis as _redis
+        r = _redis.from_url(settings.redis_url, decode_responses=True)
+        raw = r.get(_REDIS_KEY)
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+    return None
+
+
+def _redis_set_config(cfg: dict) -> None:
+    """Write config to Redis so all workers pick it up immediately."""
+    try:
+        import redis as _redis
+        r = _redis.from_url(settings.redis_url, decode_responses=True)
+        r.set(_REDIS_KEY, json.dumps(cfg, ensure_ascii=False))
+    except Exception as e:
+        logger.warning("ai_config_redis_write_failed", error=str(e))
+
+
 def get_ai_config() -> dict:
+    # 1. Redis — shared across all containers
+    redis_cfg = _redis_get_config()
+    if redis_cfg:
+        return {**_DEFAULT_CONFIG, **redis_cfg}
+    # 2. Local file fallback (backend container only)
     if _CONFIG_FILE.exists():
         try:
-            return {**_DEFAULT_CONFIG, **json.loads(_CONFIG_FILE.read_text())}
+            file_cfg = json.loads(_CONFIG_FILE.read_text())
+            # Migrate to Redis so workers can read it
+            _redis_set_config(file_cfg)
+            return {**_DEFAULT_CONFIG, **file_cfg}
         except Exception:
             pass
     return dict(_DEFAULT_CONFIG)
 
 
 def save_ai_config(cfg: dict) -> None:
+    # Write to both Redis (shared) and local file (backup)
+    _redis_set_config(cfg)
     _CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
 
 
@@ -202,6 +239,8 @@ class ConfigUpdate(BaseModel):
     model_reasoning: str | None = None
     embedding_model: str | None = None
     reranker_model: str | None = None
+    verify_model_1: str | None = None
+    verify_model_2: str | None = None
     turboquant_enabled: bool | None = None
     turboquant_kv_cache_dtype: str | None = None
     turboquant_max_model_len: int | None = None

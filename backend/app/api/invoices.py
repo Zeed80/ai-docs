@@ -532,7 +532,7 @@ async def receive_invoice(
         supplier_id=invoice.supplier_id,
         receipt_number=receipt_number,
         received_by=received_by or "user",
-        status="draft",
+        status="expected",
     )
     db.add(receipt)
     await db.flush()

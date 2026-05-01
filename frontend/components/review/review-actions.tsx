@@ -34,8 +34,8 @@ export function ReviewActions({
     status === "needs_review" || status === "draft" || status === "ingested";
 
   return (
-    <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-3">
-      <h3 className="text-sm font-semibold">Действия</h3>
+    <div className="bg-slate-900 border border-slate-700 rounded-lg p-4 space-y-3">
+      <h3 className="text-sm font-semibold text-slate-100">Действия</h3>
 
       {canDecide ? (
         <>
@@ -63,7 +63,7 @@ export function ReviewActions({
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 placeholder="Причина отклонения..."
-                className="w-full text-sm border rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-red-400 resize-none"
+                className="w-full text-sm bg-slate-800 border border-slate-600 text-slate-100 placeholder-slate-500 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-red-400 resize-none"
                 rows={2}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
@@ -91,7 +91,7 @@ export function ReviewActions({
                     setShowReject(false);
                     setRejectReason("");
                   }}
-                  className="px-3 py-1.5 text-sm border rounded-md hover:bg-slate-50"
+                  className="px-3 py-1.5 text-sm border border-slate-600 text-slate-300 rounded-md hover:bg-slate-700"
                 >
                   Отмена
                 </button>
@@ -117,18 +117,18 @@ export function ReviewActions({
         </div>
       )}
 
-      <div className="border-t border-slate-100 pt-3 flex gap-2">
+      <div className="border-t border-slate-700 pt-3 flex gap-2">
         <button
           onClick={onValidate}
           disabled={loading}
-          className="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-50"
+          className="flex-1 px-3 py-1.5 text-xs border border-slate-600 text-slate-300 rounded-md hover:bg-slate-700 disabled:opacity-50"
         >
           Проверить суммы
         </button>
         <button
           onClick={onReExtract}
           disabled={loading}
-          className="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-50"
+          className="flex-1 px-3 py-1.5 text-xs border border-slate-600 text-slate-300 rounded-md hover:bg-slate-700 disabled:opacity-50"
         >
           Переизвлечь
         </button>
@@ -136,8 +136,8 @@ export function ReviewActions({
 
       {status === "approved" &&
         (onReceive || onSchedulePayment || onExportExcel || onExport1C) && (
-          <div className="border-t border-slate-100 pt-3 space-y-2">
-            <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+          <div className="border-t border-slate-700 pt-3 space-y-2">
+            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
               Действия после утверждения
             </p>
             {onReceive && (
@@ -164,7 +164,7 @@ export function ReviewActions({
                   <button
                     onClick={onExportExcel}
                     disabled={loading}
-                    className="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-50"
+                    className="flex-1 px-3 py-1.5 text-xs border border-slate-600 text-slate-300 rounded-md hover:bg-slate-700 disabled:opacity-50"
                   >
                     Excel
                   </button>
@@ -173,7 +173,7 @@ export function ReviewActions({
                   <button
                     onClick={onExport1C}
                     disabled={loading}
-                    className="flex-1 px-3 py-1.5 text-xs border border-amber-300 text-amber-700 rounded-md hover:bg-amber-50 disabled:opacity-50"
+                    className="flex-1 px-3 py-1.5 text-xs border border-amber-700 text-amber-400 rounded-md hover:bg-amber-900/30 disabled:opacity-50"
                     title="Требует подтверждения"
                   >
                     1С ⚠

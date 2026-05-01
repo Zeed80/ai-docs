@@ -1,10 +1,11 @@
 """Memory API — hybrid graph/structured memory search."""
 
 import json
+import os
 import uuid
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -37,6 +38,11 @@ from app.domain.memory_builder import build_document_memory_async
 from app.api.ai_settings import get_ai_config
 
 router = APIRouter()
+
+_TEXT_WEIGHT = float(os.getenv("MEMORY_TEXT_WEIGHT", "0.45"))
+_VECTOR_WEIGHT = float(os.getenv("MEMORY_VECTOR_WEIGHT", "0.40"))
+_GRAPH_WEIGHT = float(os.getenv("MEMORY_GRAPH_WEIGHT", "0.15"))
+_VECTOR_SCORE_THRESHOLD = float(os.getenv("MEMORY_VECTOR_SCORE_THRESHOLD", "0.3"))
 
 
 @router.post("/search", response_model=MemorySearchResponse)
@@ -74,6 +80,15 @@ async def search_memory(
     )
 
 
+def _fts_condition(column, query: str):
+    """Return a PostgreSQL tsvector FTS condition with Russian dictionary, fallback to ILIKE."""
+    try:
+        tsq = func.plainto_tsquery("russian", query)
+        return func.to_tsvector("russian", column).op("@@")(tsq)
+    except Exception:
+        return column.ilike(f"%{query}%")
+
+
 async def _search_graph_nodes(
     db: AsyncSession,
     payload: MemorySearchRequest,
@@ -82,8 +97,8 @@ async def _search_graph_nodes(
     hits: list[MemorySearchHit] = []
     node_query = select(KnowledgeNode).where(
         or_(
-            KnowledgeNode.title.ilike(pattern),
-            KnowledgeNode.summary.ilike(pattern),
+            _fts_condition(KnowledgeNode.title, payload.query),
+            _fts_condition(KnowledgeNode.summary, payload.query),
             KnowledgeNode.canonical_key.ilike(pattern),
         )
     )
@@ -124,12 +139,12 @@ async def _search_vector_memory(
         profile = get_active_embedding_profile()
         if collection_count_for(profile.collection_name) <= 0:
             return []
-        query_vector = await embed_text(payload.query, profile)
+        query_vector = await embed_text(payload.query, profile, task_type="query")
         vector_hits = search_similar(
             query_vector,
             limit=limit,
             collection_name=profile.collection_name,
-            score_threshold=0.0,
+            score_threshold=_VECTOR_SCORE_THRESHOLD,
         )
     except Exception:
         return []
@@ -253,9 +268,9 @@ def _rank_memory_hits(hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
 
 def _rank_memory_hit(hit: MemorySearchHit) -> MemorySearchHit:
     scores = [
-        (hit.text_score, 0.45),
-        (hit.vector_score, 0.40),
-        (hit.graph_score, 0.15),
+        (hit.text_score, _TEXT_WEIGHT),
+        (hit.vector_score, _VECTOR_WEIGHT),
+        (hit.graph_score, _GRAPH_WEIGHT),
     ]
     available = [(score, weight) for score, weight in scores if score is not None]
     if not available:
@@ -276,7 +291,9 @@ async def _search_sql_memory(
         return []
     hits: list[MemorySearchHit] = []
 
-    chunk_query = select(DocumentChunk).where(DocumentChunk.text.ilike(pattern))
+    chunk_query = select(DocumentChunk).where(
+        _fts_condition(DocumentChunk.text, payload.query)
+    )
     if payload.document_id:
         chunk_query = chunk_query.where(DocumentChunk.document_id == payload.document_id)
     chunk_result = await db.execute(
@@ -299,7 +316,9 @@ async def _search_sql_memory(
 
     remaining = payload.limit - len(hits)
     if remaining > 0:
-        evidence_query = select(EvidenceSpan).where(EvidenceSpan.text.ilike(pattern))
+        evidence_query = select(EvidenceSpan).where(
+            _fts_condition(EvidenceSpan.text, payload.query)
+        )
         if payload.document_id:
             evidence_query = evidence_query.where(EvidenceSpan.document_id == payload.document_id)
         evidence_result = await db.execute(

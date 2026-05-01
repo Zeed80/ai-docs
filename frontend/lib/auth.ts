@@ -1,3 +1,4 @@
+import { getApiBaseUrl } from "@/lib/api-base";
 /**
  * Auth helpers — token storage and user info.
  * When AUTH_ENABLED=false (default dev), all API calls work without a token.
@@ -32,7 +33,7 @@ export interface UserInfo {
   groups: string[];
 }
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = getApiBaseUrl();
 
 export async function fetchMe(): Promise<UserInfo | null> {
   try {

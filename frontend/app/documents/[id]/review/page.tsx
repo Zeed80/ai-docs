@@ -1,5 +1,7 @@
 "use client";
 
+import { getApiBaseUrl } from "@/lib/api-base";
+
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PdfViewer, type BBox } from "@/components/review/pdf-viewer";
@@ -11,11 +13,13 @@ import {
   invoices as invoicesApi,
   ntd as ntdApi,
   type Document,
+  type InvoiceDetail,
   type NTDCheckAvailability,
   type NTDCheck,
   type NTDFinding,
   type ValidationResponse,
 } from "@/lib/api-client";
+import { LineItemsTable } from "@/components/review/line-items-table";
 import {
   advanceStreak,
   getQueue,
@@ -33,6 +37,9 @@ export default function ReviewPage() {
   const documentId = params.id as string;
 
   const [doc, setDoc] = useState<ReviewDoc | null>(null);
+  const [invoiceDetail, setInvoiceDetail] = useState<InvoiceDetail | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [activeField, setActiveField] = useState<string | null>(null);
@@ -76,14 +83,26 @@ export default function ReviewPage() {
     }
   }, [documentId]);
 
+  // Fetch invoice lines (best-effort)
+  const fetchInvoice = useCallback(async () => {
+    try {
+      const data = await docsApi.getInvoice(documentId);
+      setInvoiceDetail(data);
+    } catch {
+      setInvoiceDetail(null);
+    }
+  }, [documentId]);
+
   useEffect(() => {
     setLoading(true);
     setValidation(null);
     setNtdChecks([]);
     setNtdFindings([]);
     setActiveField(null);
+    setInvoiceDetail(null);
     fetchDoc();
-  }, [fetchDoc]);
+    fetchInvoice();
+  }, [fetchDoc, fetchInvoice]);
 
   useEffect(() => {
     ntdApi
@@ -245,21 +264,19 @@ export default function ReviewPage() {
   async function handleValidate() {
     setActionLoading(true);
     try {
-      const invLink = doc?.links.find(
-        (l) => l.linked_entity_type === "invoice",
-      );
-      if (invLink) {
-        const result = await invoicesApi.validate(invLink.linked_entity_id);
-        setValidation(result);
-        showToast(
-          result.is_valid
-            ? "Все суммы верны"
-            : `Найдено ошибок: ${result.errors.length}`,
-          3000,
-        );
-      } else {
-        showToast("Счёт не найден для валидации");
+      const invoiceId = getInvoiceId();
+      if (!invoiceId) {
+        showToast("Счёт доступен только после утверждения документа");
+        return;
       }
+      const result = await invoicesApi.validate(invoiceId);
+      setValidation(result);
+      showToast(
+        result.is_valid
+          ? "Все суммы верны"
+          : `Найдено ошибок: ${result.errors.length}`,
+        3000,
+      );
     } catch {
       showToast("Ошибка валидации");
     } finally {
@@ -304,26 +321,29 @@ export default function ReviewPage() {
     }
   }
 
+  function getInvoiceId(): string | null {
+    return invoiceDetail?.id ?? null;
+  }
+
   async function handleReceive() {
-    const invLink = doc?.links.find((l) => l.linked_entity_type === "invoice");
-    if (!invLink) {
-      showToast("Счёт не найден — нечего оприходовать");
+    const invoiceId = getInvoiceId();
+    if (!invoiceId) {
+      showToast("Счёт не найден — обработайте документ сначала");
       return;
     }
     setActionLoading(true);
     try {
-      const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-      const res = await fetch(
-        `${API}/api/invoices/${invLink.linked_entity_id}/receive`,
-        { method: "POST" },
-      );
+      const API = getApiBaseUrl();
+      const res = await fetch(`${API}/api/invoices/${invoiceId}/receive`, {
+        method: "POST",
+      });
       if (!res.ok) {
         const d = await res.json();
         showToast(d.detail ?? "Ошибка создания ордера");
         return;
       }
       const data = await res.json();
-      showToast(`Создан ордер ${data.receipt_number}`, 3000);
+      showToast(`Создан ордер ${data.receipt_number} (Ожидается)`, 3000);
       router.push(`/warehouse/receipts/${data.receipt_id}`);
     } catch {
       showToast("Ошибка сети");
@@ -333,16 +353,16 @@ export default function ReviewPage() {
   }
 
   async function handleSchedulePayment() {
-    const invLink = doc?.links.find((l) => l.linked_entity_type === "invoice");
-    if (!invLink) {
+    const invoiceId = getInvoiceId();
+    if (!invoiceId) {
       showToast("Счёт не найден");
       return;
     }
     setActionLoading(true);
     try {
-      const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+      const API = getApiBaseUrl();
       const res = await fetch(
-        `${API}/api/invoices/${invLink.linked_entity_id}/schedule-payment`,
+        `${API}/api/invoices/${invoiceId}/schedule-payment`,
         { method: "POST" },
       );
       if (!res.ok) {
@@ -359,18 +379,17 @@ export default function ReviewPage() {
   }
 
   async function handleExportExcel() {
-    const invLink = doc?.links.find((l) => l.linked_entity_type === "invoice");
-    if (!invLink) {
+    const invoiceId = getInvoiceId();
+    if (!invoiceId) {
       showToast("Счёт не найден");
       return;
     }
     setActionLoading(true);
     try {
-      const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-      const res = await fetch(
-        `${API}/api/invoices/${invLink.linked_entity_id}/export`,
-        { method: "POST" },
-      );
+      const API = getApiBaseUrl();
+      const res = await fetch(`${API}/api/invoices/${invoiceId}/export`, {
+        method: "POST",
+      });
       if (!res.ok) {
         const d = await res.json();
         showToast(d.detail ?? "Ошибка экспорта");
@@ -389,18 +408,17 @@ export default function ReviewPage() {
   }
 
   async function handleExport1C() {
-    const invLink = doc?.links.find((l) => l.linked_entity_type === "invoice");
-    if (!invLink) {
+    const invoiceId = getInvoiceId();
+    if (!invoiceId) {
       showToast("Счёт не найден");
       return;
     }
     setActionLoading(true);
     try {
-      const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-      const res = await fetch(
-        `${API}/api/invoices/${invLink.linked_entity_id}/export-1c`,
-        { method: "POST" },
-      );
+      const API = getApiBaseUrl();
+      const res = await fetch(`${API}/api/invoices/${invoiceId}/export-1c`, {
+        method: "POST",
+      });
       if (!res.ok) {
         const d = await res.json();
         showToast(d.detail ?? "Ошибка экспорта 1С");
@@ -441,7 +459,9 @@ export default function ReviewPage() {
     ntd_requirements_not_configured: "Нет активных требований НТД",
   };
   const ntdDisabledReason = ntdAvailability
-    ? ntdAvailability.reasons.map((reason) => reasonText[reason] ?? reason).join("; ") || null
+    ? ntdAvailability.reasons
+        .map((reason) => reasonText[reason] ?? reason)
+        .join("; ") || null
     : doc.status === "suspicious"
       ? "Документ в карантине"
       : !ext && doc.status === "ingested"
@@ -449,28 +469,28 @@ export default function ReviewPage() {
         : null;
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-screen bg-slate-950 text-slate-100">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 bg-white">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800 bg-slate-900">
         <div className="flex items-center gap-3">
           <button
             onClick={() => router.push(`/documents/${documentId}`)}
-            className="text-sm text-slate-400 hover:text-slate-600"
+            className="text-sm text-slate-400 hover:text-slate-200"
           >
             &larr; Назад
           </button>
-          <h1 className="text-sm font-semibold truncate max-w-md">
+          <h1 className="text-sm font-semibold truncate max-w-md text-slate-100">
             {doc.file_name}
           </h1>
           <span
             className={`px-2 py-0.5 text-xs font-medium rounded-full ${
               doc.status === "needs_review"
-                ? "bg-amber-100 text-amber-700"
+                ? "bg-amber-900/50 text-amber-300"
                 : doc.status === "approved"
-                  ? "bg-green-100 text-green-700"
+                  ? "bg-green-900/50 text-green-300"
                   : doc.status === "rejected"
-                    ? "bg-red-100 text-red-700"
-                    : "bg-slate-100 text-slate-600"
+                    ? "bg-red-900/50 text-red-300"
+                    : "bg-slate-800 text-slate-400"
             }`}
           >
             {doc.status}
@@ -480,24 +500,36 @@ export default function ReviewPage() {
         <div className="flex items-center gap-4">
           {/* Streak counter */}
           {streak.streakCount > 0 && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-900/50 text-emerald-300 rounded-full text-xs font-medium">
               <span className="text-base">&#9889;</span>
               Серия: {streak.streakCount}
             </div>
           )}
           {queueRemaining > 0 && (
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-slate-500">
               Осталось: {queueRemaining}
             </span>
           )}
-          <div className="text-xs text-slate-400">
-            <kbd className="px-1 border rounded text-[10px]">j</kbd>/
-            <kbd className="px-1 border rounded text-[10px]">k</kbd> поля
-            <kbd className="px-1 border rounded text-[10px] ml-2">a</kbd>{" "}
+          <div className="text-xs text-slate-500">
+            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800">
+              j
+            </kbd>
+            /
+            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800">
+              k
+            </kbd>{" "}
+            поля
+            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800 ml-2">
+              a
+            </kbd>{" "}
             утвердить
-            <kbd className="px-1 border rounded text-[10px] ml-2">n</kbd>{" "}
+            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800 ml-2">
+              n
+            </kbd>{" "}
             пропустить
-            <kbd className="px-1 border rounded text-[10px] ml-2">Esc</kbd>{" "}
+            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800 ml-2">
+              Esc
+            </kbd>{" "}
             выход
           </div>
         </div>
@@ -505,7 +537,7 @@ export default function ReviewPage() {
 
       {/* Validation errors banner */}
       {validation && !validation.is_valid && (
-        <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-sm text-red-700">
+        <div className="px-4 py-2 bg-red-950/50 border-b border-red-800 text-sm text-red-300">
           <strong>Ошибки валидации:</strong>{" "}
           {validation.errors.map((e, i) => (
             <span key={i}>
@@ -522,6 +554,7 @@ export default function ReviewPage() {
         <div className="flex-1 p-3">
           <PdfViewer
             documentId={documentId}
+            mimeType={doc.mime_type}
             highlightedBbox={highlightedBbox}
             bboxes={bboxes}
             activeField={activeField}
@@ -529,7 +562,7 @@ export default function ReviewPage() {
         </div>
 
         {/* Right: Fields + Actions */}
-        <div className="w-96 border-l border-slate-200 flex flex-col p-3 gap-3 overflow-auto bg-slate-50">
+        <div className="w-96 border-l border-slate-800 flex flex-col p-3 gap-3 overflow-auto bg-slate-950">
           <ReviewActions
             status={doc.status}
             onApprove={handleApprove}
@@ -543,13 +576,13 @@ export default function ReviewPage() {
             loading={actionLoading}
           />
 
-          <div className="rounded border border-slate-200 bg-white p-3">
+          <div className="rounded border border-slate-700 bg-slate-900 p-3">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <h2 className="text-sm font-semibold text-slate-800">
+                <h2 className="text-sm font-semibold text-slate-100">
                   Нормоконтроль
                 </h2>
-                <p className="mt-0.5 text-xs text-slate-500">
+                <p className="mt-0.5 text-xs text-slate-400">
                   {ntdChecks[0]
                     ? `${ntdChecks[0].summary ?? "Последняя проверка НТД выполнена"}`
                     : ntdAvailability?.mode === "auto"
@@ -561,30 +594,30 @@ export default function ReviewPage() {
                 onClick={handleNtdCheck}
                 disabled={actionLoading || Boolean(ntdDisabledReason)}
                 title={ntdDisabledReason ?? "Проверить документ по базе НТД"}
-                className="shrink-0 rounded border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="shrink-0 rounded border border-slate-600 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Проверить на соответствие НТД
               </button>
             </div>
             {ntdDisabledReason && (
-              <p className="mt-2 text-xs text-amber-700">{ntdDisabledReason}</p>
+              <p className="mt-2 text-xs text-amber-400">{ntdDisabledReason}</p>
             )}
             {ntdFindings.length > 0 && (
               <div className="mt-3 space-y-2">
                 {ntdFindings.slice(0, 5).map((finding) => (
                   <div
                     key={finding.id}
-                    className="rounded border border-amber-200 bg-amber-50 p-2"
+                    className="rounded border border-amber-800 bg-amber-950/40 p-2"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-amber-800">
+                      <span className="text-xs font-semibold text-amber-300">
                         {finding.severity}
                       </span>
-                      <span className="text-[11px] text-amber-700">
+                      <span className="text-[11px] text-amber-400">
                         {Math.round(finding.confidence * 100)}%
                       </span>
                     </div>
-                    <p className="mt-1 text-xs text-slate-700">
+                    <p className="mt-1 text-xs text-slate-300">
                       {finding.message}
                     </p>
                     {finding.recommendation && (
@@ -608,6 +641,40 @@ export default function ReviewPage() {
               disabled={doc.status === "approved" || doc.status === "rejected"}
             />
           </div>
+
+          {/* Invoice line items */}
+          {invoiceDetail && (
+            <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex-shrink-0">
+              <div className="px-3 py-2 border-b border-slate-700 bg-slate-800 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-100">
+                  Товары и услуги
+                  {invoiceDetail.preview && (
+                    <span className="ml-2 text-[10px] text-amber-400 font-normal">
+                      предпросмотр
+                    </span>
+                  )}
+                </h3>
+                <span className="text-xs text-slate-400">
+                  {invoiceDetail.lines.length} поз.
+                  {invoiceDetail.total_amount != null && (
+                    <span className="ml-2 text-slate-300 font-medium">
+                      {invoiceDetail.total_amount.toLocaleString("ru-RU", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}{" "}
+                      {invoiceDetail.currency ?? "₽"}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                <LineItemsTable
+                  lines={invoiceDetail.lines}
+                  currency={invoiceDetail.currency}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

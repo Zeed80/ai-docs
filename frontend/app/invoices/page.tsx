@@ -1,5 +1,7 @@
 "use client";
 
+import { getApiBaseUrl } from "@/lib/api-base";
+
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -20,7 +22,7 @@ import {
   type SavedView,
 } from "@/lib/api-client";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = getApiBaseUrl();
 
 const statusBadge: Record<string, string> = {
   draft: "bg-slate-700 text-slate-400",

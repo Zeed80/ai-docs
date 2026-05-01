@@ -10,8 +10,8 @@ from app.ai.schemas import AIRequest, AITask
 
 logger = structlog.get_logger()
 
-EMBED_MODEL = "nomic-embed-text"
-EMBED_DIM = 768
+EMBED_MODEL = "qwen3-embedding:8b"
+EMBED_DIM = 4096
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ def get_active_embedding_profile() -> EmbeddingProfile:
         dimension=dimension,
         distance_metric=model.distance_metric,
     )
-    if model.name == "local_embedding_ollama" and dimension == EMBED_DIM:
+    if model.name == "local_embedding_ollama" and model.embedding_dimension == 768:
         collection_name = "documents"
     return EmbeddingProfile(
         model_key=model.name,
@@ -61,18 +61,27 @@ def embedding_collection_name(
     return f"{scope}__{safe_model}__{dimension}_{distance_metric}"
 
 
-async def embed_text(text: str, profile: EmbeddingProfile | None = None) -> list[float]:
+async def embed_text(
+    text: str,
+    profile: EmbeddingProfile | None = None,
+    task_type: str = "passage",
+) -> list[float]:
     """Generate an embedding vector using the active registry model."""
     active_profile = profile or get_active_embedding_profile()
     if not text or not text.strip():
         return [0.0] * active_profile.dimension
+
+    prefixed_text = text
+    if "qwen3" in active_profile.model_key.lower():
+        prefix = "query: " if task_type == "query" else "passage: "
+        prefixed_text = f"{prefix}{text}"
 
     registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     router = AIRouter(registry)
     response = await router.run(
         AIRequest(
             task=AITask.EMBEDDING,
-            input_text=text[:8000],
+            input_text=prefixed_text[:32000],
             preferred_model=active_profile.model_key,
             confidential=True,
         )

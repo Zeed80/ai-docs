@@ -84,6 +84,34 @@ export interface DocumentLink {
   link_type: string;
 }
 
+export interface InvoiceLine {
+  id: string | null;
+  line_number: number;
+  sku: string | null;
+  description: string | null;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  amount: number | null;
+  tax_rate: number | null;
+  tax_amount: number | null;
+  confidence: number | null;
+}
+
+export interface InvoiceDetail {
+  id: string | null;
+  preview?: boolean;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  due_date: string | null;
+  currency: string | null;
+  subtotal: number | null;
+  tax_amount: number | null;
+  total_amount: number | null;
+  status: string | null;
+  lines: InvoiceLine[];
+}
+
 export interface DocumentListResponse {
   items: Document[];
   total: number;
@@ -153,6 +181,9 @@ export const documents = {
 
   get: (id: string) => request<Document>(`/api/documents/${id}`),
 
+  getInvoice: (id: string) =>
+    request<InvoiceDetail>(`/api/documents/${id}/invoice`),
+
   management: (id: string) =>
     request<DocumentManagementSummary>(`/api/documents/${id}/management`),
 
@@ -169,7 +200,8 @@ export const documents = {
       `${API_BASE}/api/documents/ingest?source_channel=${sourceChannel}`,
       { method: "POST", body: formData },
     ).then((r) => {
-      if (!r.ok && r.status !== 202) throw new ApiError(r.status, "Upload failed");
+      if (!r.ok && r.status !== 202)
+        throw new ApiError(r.status, "Upload failed");
       return r.json();
     });
   },
@@ -205,16 +237,25 @@ export const documents = {
     }),
 
   batchMemoryRebuild: (documentIds: string[], buildScope = "extended") =>
-    request<DocumentBatchActionResponse>("/api/documents/batch/memory-rebuild", {
-      method: "POST",
-      body: JSON.stringify({ document_ids: documentIds, build_scope: buildScope }),
-    }),
+    request<DocumentBatchActionResponse>(
+      "/api/documents/batch/memory-rebuild",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          document_ids: documentIds,
+          build_scope: buildScope,
+        }),
+      },
+    ),
 
   batchEmbeddingsReindex: (documentIds: string[]) =>
-    request<DocumentBatchActionResponse>("/api/documents/batch/embeddings-reindex", {
-      method: "POST",
-      body: JSON.stringify({ document_ids: documentIds }),
-    }),
+    request<DocumentBatchActionResponse>(
+      "/api/documents/batch/embeddings-reindex",
+      {
+        method: "POST",
+        body: JSON.stringify({ document_ids: documentIds }),
+      },
+    ),
 
   batchNtdCheck: (documentIds: string[]) =>
     request<DocumentBatchActionResponse>("/api/documents/batch/ntd-check", {

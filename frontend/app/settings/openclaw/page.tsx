@@ -1,9 +1,11 @@
 "use client";
 
+import { getApiBaseUrl } from "@/lib/api-base";
+
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = getApiBaseUrl();
 
 type AgentWsMode = "legacy" | "openclaw";
 type GatewayBind = "loopback" | "lan" | "tailnet" | "auto" | "custom";

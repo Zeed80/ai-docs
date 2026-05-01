@@ -124,6 +124,31 @@ class ReceiptCreateRequest(BaseModel):
     notes: str | None = None
 
 
+class ReceiptStatusUpdate(BaseModel):
+    status: Literal["expected", "partial", "received", "issued", "cancelled"]
+    notes: str | None = None
+
+
+# Allowed status transitions
+_RECEIPT_TRANSITIONS: dict[str, set[str]] = {
+    "draft":    {"expected", "received", "cancelled"},
+    "expected": {"partial", "received", "cancelled"},
+    "partial":  {"received", "cancelled"},
+    "received": {"issued"},
+    "issued":   set(),
+    "cancelled": set(),
+}
+
+RECEIPT_STATUS_LABELS = {
+    "draft":    "Черновик",
+    "expected": "Ожидается",
+    "partial":  "Частично получен",
+    "received": "Получен",
+    "issued":   "Выдан",
+    "cancelled": "Отменён",
+}
+
+
 # ── Inventory ────────────────────────────────────────────────────────────────
 
 
@@ -354,8 +379,8 @@ async def confirm_receipt(
     receipt = result.scalar_one_or_none()
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found")
-    if receipt.status != "draft":
-        raise HTTPException(status_code=400, detail=f"Receipt is already {receipt.status}")
+    if receipt.status not in {"draft", "expected", "partial"}:
+        raise HTTPException(status_code=400, detail=f"Cannot confirm receipt with status '{receipt.status}'")
 
     # Atomic: update stock for each line that has an inventory_item
     for line in receipt.lines:
@@ -395,7 +420,7 @@ async def confirm_receipt(
         )
         db.add(movement)
 
-    receipt.status = "confirmed"
+    receipt.status = "received"
 
     await log_action(db, action="warehouse.confirm_receipt", entity_type="warehouse_receipt",
                      entity_id=receipt.id, details={"lines": len(receipt.lines)})
@@ -411,17 +436,55 @@ async def confirm_receipt(
     return result.scalar_one()
 
 
+@router.patch("/receipts/{receipt_id}/status")
+async def update_receipt_status(
+    receipt_id: uuid.UUID,
+    payload: ReceiptStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: warehouse.update_status — Transition receipt status."""
+    receipt = await db.get(WarehouseReceipt, receipt_id)
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+
+    allowed = _RECEIPT_TRANSITIONS.get(receipt.status, set())
+    if payload.status not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Cannot transition from '{receipt.status}' to '{payload.status}'. "
+                f"Allowed: {sorted(allowed) or 'none (terminal state)'}"
+            ),
+        )
+
+    old_status = receipt.status
+    receipt.status = payload.status
+    if payload.notes:
+        receipt.notes = (receipt.notes or "") + f"\n[{payload.status}] {payload.notes}"
+
+    await log_action(db, action="warehouse.status_change", entity_type="warehouse_receipt",
+                     entity_id=receipt.id, details={"from": old_status, "to": payload.status})
+    await db.commit()
+    await db.refresh(receipt)
+    return {
+        "id": str(receipt.id),
+        "receipt_number": receipt.receipt_number,
+        "status": receipt.status,
+        "status_label": RECEIPT_STATUS_LABELS.get(receipt.status, receipt.status),
+    }
+
+
 @router.delete("/receipts/{receipt_id}", status_code=200)
 async def cancel_receipt(
     receipt_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    """Cancel a draft receipt."""
+    """Cancel receipt (any non-terminal status)."""
     receipt = await db.get(WarehouseReceipt, receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found")
-    if receipt.status != "draft":
-        raise HTTPException(status_code=400, detail="Only draft receipts can be cancelled")
+    if receipt.status in {"received", "issued", "cancelled"}:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel receipt with status '{receipt.status}'")
     receipt.status = "cancelled"
     await db.commit()
     return {"status": "cancelled", "receipt_id": str(receipt_id)}

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class KnowledgeNodeCreate(BaseModel):
@@ -16,7 +16,11 @@ class KnowledgeNodeCreate(BaseModel):
     summary: str | None = None
     aliases: list[str] | None = None
     confidence: float = Field(1.0, ge=0.0, le=1.0)
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
 
 
 class KnowledgeNodeOut(BaseModel):
@@ -30,7 +34,11 @@ class KnowledgeNodeOut(BaseModel):
     aliases: list | None = None
     confidence: float
     created_by: str
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     source_document_id: uuid.UUID | None = None
     source_document_version_id: uuid.UUID | None = None
     created_at: datetime
@@ -47,7 +55,11 @@ class KnowledgeEdgeCreate(BaseModel):
     source_document_id: uuid.UUID | None = None
     source_document_version_id: uuid.UUID | None = None
     evidence_span_id: uuid.UUID | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
 
 
 class KnowledgeEdgeOut(BaseModel):
@@ -61,7 +73,11 @@ class KnowledgeEdgeOut(BaseModel):
     source_document_version_id: uuid.UUID | None = None
     evidence_span_id: uuid.UUID | None = None
     created_by: str
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -76,7 +92,11 @@ class DocumentChunkCreate(BaseModel):
     page_number: int | None = None
     bbox_data: dict | None = None
     embedding_id: str | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
 
 
 class DocumentChunkOut(BaseModel):
@@ -89,7 +109,11 @@ class DocumentChunkOut(BaseModel):
     page_number: int | None = None
     bbox_data: dict | None = None
     embedding_id: str | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -104,7 +128,11 @@ class EvidenceSpanCreate(BaseModel):
     page_number: int | None = None
     bbox_data: dict | None = None
     confidence: float = Field(1.0, ge=0.0, le=1.0)
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
 
 
 class EvidenceSpanOut(BaseModel):
@@ -117,7 +145,11 @@ class EvidenceSpanOut(BaseModel):
     page_number: int | None = None
     bbox_data: dict | None = None
     confidence: float
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -135,7 +167,11 @@ class EntityMentionCreate(BaseModel):
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     extraction_method: str = "manual"
     evidence_span_id: uuid.UUID | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
 
 
 class EntityMentionOut(BaseModel):
@@ -151,7 +187,11 @@ class EntityMentionOut(BaseModel):
     confidence: float
     extraction_method: str
     evidence_span_id: uuid.UUID | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -185,7 +225,11 @@ class GraphReviewItemOut(BaseModel):
     decided_by: str | None = None
     decided_at: datetime | None = None
     decision_comment: str | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -272,7 +316,11 @@ class MemoryEmbeddingRecordOut(BaseModel):
     vector_size: int | None = None
     status: str
     error: str | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}

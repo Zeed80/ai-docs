@@ -75,6 +75,27 @@ models:
     quality_score: 0.62
     speed_score: 0.75
     notes: "Current production embedding model used by the existing 768-dim Qdrant collection."
+  qwen3_embedding_8b_ollama:
+    provider: "ollama"
+    provider_model: "qwen3-embedding:8b"
+    status: "production"
+    modalities: ["embedding"]
+    max_context_tokens: 32768
+    embedding_dimension: 4096
+    distance_metric: "cosine"
+    normalize_embeddings: true
+    max_input_tokens: 32768
+    batch_size: 8
+    pooling: "native"
+    supports_batching: true
+    model_family: "qwen3"
+    capability_source: "manual"
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.87
+    speed_score: 0.55
+    notes: "MTEB SOTA 2025 multilingual embedding, strong Russian. Uses task prefix query:/passage: for best results."
   local_embedding_vllm:
     provider: "vllm"
     provider_model: "intfloat/multilingual-e5-large"
@@ -95,6 +116,24 @@ models:
     local_only: true
     quality_score: 0.65
     speed_score: 0.70
+  local_reranker_ollama:
+    provider: "ollama"
+    provider_model: "qllama/bge-reranker-v2-m3:f16"
+    status: "production"
+    modalities: ["rerank"]
+    max_context_tokens: 8192
+    max_input_tokens: 8192
+    batch_size: 8
+    supports_batching: true
+    rerank_score_range: "0..1"
+    model_family: "bge-reranker"
+    capability_source: "manual"
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.75
+    speed_score: 0.70
+    notes: "Cross-encoder reranker via Ollama generate. Compact (1.2 GB), reliable."
   local_reranker_openai_compatible:
     provider: "openai_compatible"
     provider_model: "BAAI/bge-reranker-v2-m3"
@@ -155,12 +194,12 @@ routes:
   embedding:
     required_modalities: ["embedding"]
     local_only: true
-    fallback_chain: ["local_embedding_ollama", "local_embedding_vllm"]
+    fallback_chain: ["qwen3_embedding_8b_ollama", "local_embedding_ollama", "local_embedding_vllm"]
     manual_review_fallback: false
   reranking:
     required_modalities: ["rerank"]
     local_only: true
-    fallback_chain: ["local_reranker_openai_compatible"]
+    fallback_chain: ["local_reranker_ollama", "local_reranker_openai_compatible"]
     manual_review_fallback: true
   classification:
     required_modalities: ["text"]

@@ -96,6 +96,66 @@ class OllamaProvider(AIProvider):
             raw=body,
         )
 
+    async def rerank(self, request: AIRequest, model: str) -> AIResponse:
+        """Rerank via cosine similarity using Ollama's embed API.
+
+        Ollama 0.21.x has no native /api/rerank endpoint. BGE-reranker and
+        similar cross-encoder models loaded in Ollama function as embedding
+        models. We embed the query and each passage separately and compute
+        normalised cosine similarity as the relevance score.
+        """
+        started = time.perf_counter()
+        query = request.input_text or ""
+        documents: list[str] = (request.metadata or {}).get("documents", [])
+        base_url = str(self.config.base_url).rstrip("/")
+
+        if not documents:
+            return AIResponse(
+                task=request.task,
+                provider=self.kind,
+                model=model,
+                scores=[],
+                usage=AIUsage(latency_ms=0),
+            )
+
+        async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
+            resp = await client.post(
+                f"{base_url}/api/embed",
+                json={"model": model, "input": f"query: {query}"},
+            )
+            resp.raise_for_status()
+            q_vec: list[float] = resp.json().get("embeddings", [[]])[0]
+
+            scores: list[float] = []
+            for doc in documents:
+                resp = await client.post(
+                    f"{base_url}/api/embed",
+                    json={"model": model, "input": f"passage: {doc[:2000]}"},
+                )
+                resp.raise_for_status()
+                d_vec: list[float] = resp.json().get("embeddings", [[]])[0]
+                scores.append(_cosine_to_score(q_vec, d_vec))
+
+        return AIResponse(
+            task=request.task,
+            provider=self.kind,
+            model=model,
+            scores=scores,
+            usage=AIUsage(latency_ms=int((time.perf_counter() - started) * 1000)),
+        )
+
+
+def _cosine_to_score(a: list[float], b: list[float]) -> float:
+    """Cosine similarity mapped to [0, 1]. Returns 0.5 on empty vectors."""
+    if not a or not b:
+        return 0.5
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.5
+    return max(0.0, min(1.0, (dot / (norm_a * norm_b) + 1.0) / 2.0))
+
 
 def _sum_optional(left: int | None, right: int | None) -> int | None:
     if left is None and right is None:

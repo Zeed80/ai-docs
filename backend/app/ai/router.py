@@ -185,29 +185,42 @@ class AIRouter:
         allowed = {tool.name for tool in request.tools}
         return [call for call in response.proposed_tool_calls if call.name in allowed]
 
+    def _ocr_model_name(self) -> str:
+        """Return the currently configured OCR model from ai_config.json, with fallback."""
+        try:
+            from app.api.ai_settings import get_ai_config
+            return get_ai_config().get("model_ocr") or settings.ollama_model_ocr
+        except Exception:
+            return settings.ollama_model_ocr
+
     async def extract_invoice(self, text: str) -> dict:
+        model = self._ocr_model_name()
+        logger.info("extract_invoice_model", model=model)
         prompt = EXTRACT_INVOICE_PROMPT.format(text=text[:8000])
         return await generate_json(
             prompt,
-            model=settings.ollama_model_ocr,
+            model=model,
             system=EXTRACT_INVOICE_SYSTEM,
             max_tokens=8192,
             timeout_seconds=180.0,
         )
 
     async def classify_document(self, text: str) -> dict:
+        model = self._ocr_model_name()
+        logger.info("classify_document_model", model=model)
         prompt = CLASSIFY_PROMPT.format(text=text[:3000])
         return await generate_json(
             prompt,
-            model=settings.ollama_model_ocr,
+            model=model,
             system=CLASSIFY_SYSTEM,
         )
 
     async def summarize_document(self, text: str) -> dict:
+        model = self._ocr_model_name()
         prompt = SUMMARIZE_PROMPT.format(text=text[:4000])
         return await generate_json(
             prompt,
-            model=settings.ollama_model_ocr,
+            model=model,
             system=SUMMARIZE_SYSTEM,
         )
 

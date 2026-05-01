@@ -20,6 +20,8 @@ interface AiConfig {
   model_reasoning: string;
   embedding_model: string;
   reranker_model: string | null;
+  verify_model_1: string;
+  verify_model_2: string;
   turboquant_enabled: boolean;
   turboquant_kv_cache_dtype: string;
   turboquant_max_model_len: number;
@@ -146,8 +148,11 @@ export default function SettingsPage() {
   const [models, setModels] = useState<OllamaModel[]>([]);
   const [config, setConfig] = useState<AiConfig | null>(null);
   const [registryModels, setRegistryModels] = useState<RegistryModel[]>([]);
-  const [embeddingProfile, setEmbeddingProfile] = useState<EmbeddingProfile | null>(null);
-  const [embeddingStats, setEmbeddingStats] = useState<EmbeddingStats | null>(null);
+  const [embeddingProfile, setEmbeddingProfile] =
+    useState<EmbeddingProfile | null>(null);
+  const [embeddingStats, setEmbeddingStats] = useState<EmbeddingStats | null>(
+    null,
+  );
   const [rebuildingEmbeddings, setRebuildingEmbeddings] = useState(false);
   const [indexingEmbeddings, setIndexingEmbeddings] = useState(false);
   const [rebuildMessage, setRebuildMessage] = useState<string | null>(null);
@@ -370,7 +375,9 @@ export default function SettingsPage() {
         }),
       });
       const data = await r.json();
-      setRebuildMessage(`Создано записей: ${data.created}; stale: ${data.stale_marked}`);
+      setRebuildMessage(
+        `Создано записей: ${data.created}; stale: ${data.stale_marked}`,
+      );
       await loadEmbeddingStats();
     } catch {
       setRebuildMessage("Не удалось подготовить переиндексацию");
@@ -389,7 +396,9 @@ export default function SettingsPage() {
         body: JSON.stringify({ statuses: ["queued", "stale"], limit: 100 }),
       });
       const data = await r.json();
-      setRebuildMessage(`Qdrant: indexed ${data.indexed}; failed ${data.failed}`);
+      setRebuildMessage(
+        `Qdrant: indexed ${data.indexed}; failed ${data.failed}`,
+      );
       await loadEmbeddingStats();
     } catch {
       setRebuildMessage("Не удалось индексировать embeddings в Qdrant");
@@ -477,7 +486,8 @@ export default function SettingsPage() {
 
   async function handleDevelopmentPurge() {
     if (purgeConfirm !== "DELETE ALL DOCUMENT DATA") return;
-    if (!confirm("Полностью удалить все документы и связанные записи БД?")) return;
+    if (!confirm("Полностью удалить все документы и связанные записи БД?"))
+      return;
     setPurgeBusy(true);
     setPurgeMessage(null);
     try {
@@ -540,7 +550,8 @@ export default function SettingsPage() {
           <div>
             <h2 className="text-lg font-semibold">Выбор моделей</h2>
             <p className="mt-1 text-sm text-slate-400">
-              Встроенный агент использует эти настройки напрямую, без official OpenClaw.
+              Встроенный агент использует эти настройки напрямую, без official
+              OpenClaw.
             </p>
           </div>
           <button
@@ -562,7 +573,8 @@ export default function SettingsPage() {
             }`}
           >
             <div>
-              Ollama: {configStatus.ollama_available ? "доступна" : "недоступна"} ·
+              Ollama:{" "}
+              {configStatus.ollama_available ? "доступна" : "недоступна"} ·
               моделей: {configStatus.installed_models.length}
             </div>
             {configStatus.warnings.length > 0 && (
@@ -598,6 +610,31 @@ export default function SettingsPage() {
               onChange={(v) => setConfig({ ...config, model_reasoning: v })}
             />
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <ModelSelector
+                label="Проверочная модель 1"
+                description="Повторная экстракция для автоверификации. Если пусто — используется та же что OCR."
+                value={config.verify_model_1}
+                models={models}
+                onChange={(v) => setConfig({ ...config, verify_model_1: v })}
+              />
+              <ModelSelector
+                label="Проверочная модель 2 (опц.)"
+                description="Третий проход для 3-стороннего сравнения. Оставьте пустым если не нужна."
+                value={config.verify_model_2}
+                models={[
+                  {
+                    name: "",
+                    size: 0,
+                    parameter_size: "—",
+                    family: "",
+                    modified_at: "",
+                  },
+                  ...models,
+                ]}
+                onChange={(v) => setConfig({ ...config, verify_model_2: v })}
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1">
                   Embedding модель
@@ -614,16 +651,21 @@ export default function SettingsPage() {
                     .map((m) => (
                       <option key={m.name} value={m.name}>
                         {m.name}
-                        {m.embedding_dimension ? ` · ${m.embedding_dimension}` : ""}
+                        {m.embedding_dimension
+                          ? ` · ${m.embedding_dimension}`
+                          : ""}
                       </option>
                     ))}
                 </select>
                 <p className="text-xs text-slate-400 mt-1">
-                  Используется для векторной памяти; параметры берутся из registry/discovery.
+                  Используется для векторной памяти; параметры берутся из
+                  registry/discovery.
                 </p>
                 {embeddingProfile && (
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Коллекция: {embeddingProfile.collection_name} · {embeddingProfile.dimension} · {embeddingProfile.distance_metric}
+                    Коллекция: {embeddingProfile.collection_name} ·{" "}
+                    {embeddingProfile.dimension} ·{" "}
+                    {embeddingProfile.distance_metric}
                   </p>
                 )}
               </div>
@@ -712,11 +754,15 @@ export default function SettingsPage() {
                   className="w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
                   value={agentConfig.agent_name}
                   onChange={(e) =>
-                    setAgentConfig({ ...agentConfig, agent_name: e.target.value })
+                    setAgentConfig({
+                      ...agentConfig,
+                      agent_name: e.target.value,
+                    })
                   }
                 />
                 <p className="mt-1 text-xs text-slate-400">
-                  Используется в системном промпте, если промпт не переопределен.
+                  Используется в системном промпте, если промпт не
+                  переопределен.
                 </p>
               </div>
             </div>
@@ -733,7 +779,10 @@ export default function SettingsPage() {
                 className="rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
                 value={agentConfig.backend_url}
                 onChange={(e) =>
-                  setAgentConfig({ ...agentConfig, backend_url: e.target.value })
+                  setAgentConfig({
+                    ...agentConfig,
+                    backend_url: e.target.value,
+                  })
                 }
                 placeholder="Backend URL"
               />
@@ -849,7 +898,8 @@ export default function SettingsPage() {
               <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-xs text-slate-400">
                   Инструменты: включено {agentConfig.exposed_skills.length} из{" "}
-                  {agentSkills.length}; подтверждений {agentConfig.approval_gates.length}
+                  {agentSkills.length}; подтверждений{" "}
+                  {agentConfig.approval_gates.length}
                 </div>
                 <input
                   className="w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-xs text-slate-200 sm:w-64"
@@ -872,8 +922,12 @@ export default function SettingsPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-800">
                     {filteredAgentSkills.map((skill) => {
-                      const isExposed = agentConfig.exposed_skills.includes(skill.name);
-                      const needsApproval = agentConfig.approval_gates.includes(skill.name);
+                      const isExposed = agentConfig.exposed_skills.includes(
+                        skill.name,
+                      );
+                      const needsApproval = agentConfig.approval_gates.includes(
+                        skill.name,
+                      );
                       return (
                         <tr key={skill.name} className="bg-slate-900/40">
                           <td className="px-3 py-2">
@@ -890,12 +944,17 @@ export default function SettingsPage() {
                               type="checkbox"
                               checked={needsApproval}
                               onChange={(e) =>
-                                updateAgentApprovalGate(skill.name, e.target.checked)
+                                updateAgentApprovalGate(
+                                  skill.name,
+                                  e.target.checked,
+                                )
                               }
                             />
                           </td>
                           <td className="px-3 py-2">
-                            <div className="font-mono text-slate-200">{skill.name}</div>
+                            <div className="font-mono text-slate-200">
+                              {skill.name}
+                            </div>
                             <div className="mt-0.5 text-slate-500">
                               {skill.description || "Без описания"}
                             </div>
@@ -948,7 +1007,8 @@ export default function SettingsPage() {
       <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
         <h2 className="text-lg font-semibold">TurboQuant</h2>
         <p className="text-sm text-slate-400 mt-1">
-          Optional vLLM KV-cache профиль для long-context reasoning. Не используется для embeddings и rerankers.
+          Optional vLLM KV-cache профиль для long-context reasoning. Не
+          используется для embeddings и rerankers.
         </p>
         {config && (
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -966,7 +1026,10 @@ export default function SettingsPage() {
               className="rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
               value={config.turboquant_kv_cache_dtype}
               onChange={(e) =>
-                setConfig({ ...config, turboquant_kv_cache_dtype: e.target.value })
+                setConfig({
+                  ...config,
+                  turboquant_kv_cache_dtype: e.target.value,
+                })
               }
             />
             <input
@@ -983,7 +1046,8 @@ export default function SettingsPage() {
           </div>
         )}
         <p className="mt-3 text-xs text-slate-500">
-          Включайте только после benchmark baseline vs TurboQuant по качеству, VRAM и latency.
+          Включайте только после benchmark baseline vs TurboQuant по качеству,
+          VRAM и latency.
         </p>
       </section>
 
@@ -993,9 +1057,9 @@ export default function SettingsPage() {
           Полная очистка документов
         </h2>
         <p className="mt-1 text-sm text-red-200/80">
-          Dev-команда удаляет все документы, файлы и связанные записи: извлечения,
-          память, граф, НТД-проверки, счета, техпроцессы, BOM и складские приемки,
-          созданные от документов.
+          Dev-команда удаляет все документы, файлы и связанные записи:
+          извлечения, память, граф, НТД-проверки, счета, техпроцессы, BOM и
+          складские приемки, созданные от документов.
         </p>
         <div className="mt-4 flex flex-col gap-3 sm:flex-row">
           <input
@@ -1023,7 +1087,8 @@ export default function SettingsPage() {
           <div>
             <h2 className="text-lg font-semibold">Векторная память</h2>
             <p className="text-sm text-slate-400 mt-1">
-              Активный embedding profile определяет Qdrant-коллекцию, размерность и модель.
+              Активный embedding profile определяет Qdrant-коллекцию,
+              размерность и модель.
             </p>
           </div>
           <div className="flex gap-2">
@@ -1047,13 +1112,17 @@ export default function SettingsPage() {
           <div className="rounded-md bg-slate-900/50 p-3">
             <p className="text-xs text-slate-500">Модель</p>
             <p className="mt-1 text-sm font-mono text-slate-200">
-              {embeddingStats?.active_model ?? embeddingProfile?.model_key ?? "—"}
+              {embeddingStats?.active_model ??
+                embeddingProfile?.model_key ??
+                "—"}
             </p>
           </div>
           <div className="rounded-md bg-slate-900/50 p-3">
             <p className="text-xs text-slate-500">Коллекция</p>
             <p className="mt-1 text-sm font-mono text-slate-200 break-all">
-              {embeddingStats?.active_collection ?? embeddingProfile?.collection_name ?? "—"}
+              {embeddingStats?.active_collection ??
+                embeddingProfile?.collection_name ??
+                "—"}
             </p>
           </div>
           <div className="rounded-md bg-slate-900/50 p-3">
@@ -1082,8 +1151,8 @@ export default function SettingsPage() {
           <div>
             <h2 className="text-lg font-semibold">Нормоконтроль НТД</h2>
             <p className="text-sm text-slate-400 mt-1">
-              Проверка документов по базе НТД может запускаться вручную из карточки
-              документа или автоматически после обработки.
+              Проверка документов по базе НТД может запускаться вручную из
+              карточки документа или автоматически после обработки.
             </p>
           </div>
           {ntdSaved && (
@@ -1120,12 +1189,14 @@ export default function SettingsPage() {
               Проверять автоматически
             </span>
             <span className="mt-1 block text-xs text-slate-400">
-              Нормоконтроль запускается после extraction, без применения исправлений.
+              Нормоконтроль запускается после extraction, без применения
+              исправлений.
             </span>
           </button>
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          Текущий режим: {ntdConfig?.mode === "auto" ? "автоматический" : "ручной"}
+          Текущий режим:{" "}
+          {ntdConfig?.mode === "auto" ? "автоматический" : "ручной"}
           {ntdConfig?.updated_at
             ? ` · обновлено ${new Date(ntdConfig.updated_at).toLocaleString("ru-RU")}`
             : ""}

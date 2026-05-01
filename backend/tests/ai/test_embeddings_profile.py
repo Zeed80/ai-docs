@@ -1,4 +1,4 @@
-from backend.app.ai.embeddings import (
+from app.ai.embeddings import (
     EmbeddingProfile,
     embedding_collection_name,
     get_active_embedding_profile,
@@ -17,12 +17,12 @@ def test_embedding_collection_name_is_stable() -> None:
     )
 
 
-def test_default_embedding_profile_keeps_legacy_collection() -> None:
+def test_default_embedding_profile_uses_qwen3() -> None:
     profile = get_active_embedding_profile()
 
-    assert profile.model_key == "local_embedding_ollama"
-    assert profile.dimension == 768
-    assert profile.collection_name == "documents"
+    assert profile.model_key == "qwen3_embedding_8b_ollama"
+    assert profile.dimension == 4096
+    assert profile.collection_name == "documents__qwen3_embedding_8b_ollama__4096_cosine"
 
 
 def test_embedding_profile_serializes_for_api() -> None:

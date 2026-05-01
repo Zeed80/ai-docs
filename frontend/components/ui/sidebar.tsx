@@ -1,5 +1,7 @@
 "use client";
 
+import { getApiBaseUrl } from "@/lib/api-base";
+
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -7,7 +9,7 @@ import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { fetchMe, logout, type UserInfo } from "@/lib/auth";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = getApiBaseUrl();
 
 function useFeedCount() {
   const [count, setCount] = useState(0);

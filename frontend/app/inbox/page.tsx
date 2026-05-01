@@ -48,13 +48,24 @@ export default function InboxPage() {
         case "k":
           setSelectedIndex((i) => Math.max(i - 1, 0));
           break;
-        case "Enter":
-          if (documents[selectedIndex]) {
-            window.location.href = `/documents/${documents[selectedIndex].id}`;
+        case "Enter": {
+          const selected = documents[selectedIndex];
+          if (selected) {
+            window.location.href =
+              selected.status === "needs_review"
+                ? `/documents/${selected.id}/review`
+                : `/documents/${selected.id}`;
           }
           break;
+        }
+        case "r": {
+          const sel = documents[selectedIndex];
+          if (sel?.status === "needs_review") {
+            window.location.href = `/documents/${sel.id}/review`;
+          }
+          break;
+        }
         case "?":
-          // TODO: show keyboard help modal
           break;
       }
     }
@@ -126,7 +137,10 @@ export default function InboxPage() {
               }`}
               onClick={() => {
                 setSelectedIndex(index);
-                window.location.href = `/documents/${doc.id}`;
+                window.location.href =
+                  doc.status === "needs_review"
+                    ? `/documents/${doc.id}/review`
+                    : `/documents/${doc.id}`;
               }}
             >
               {/* Status badge */}
@@ -157,6 +171,13 @@ export default function InboxPage() {
               {doc.source_channel && (
                 <span className="text-xs text-slate-400">
                   {doc.source_channel}
+                </span>
+              )}
+
+              {/* Quick action */}
+              {doc.status === "needs_review" && (
+                <span className="text-xs font-medium text-amber-400 shrink-0">
+                  → Проверить
                 </span>
               )}
             </div>

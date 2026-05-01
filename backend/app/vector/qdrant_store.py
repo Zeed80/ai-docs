@@ -7,9 +7,14 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    HnswConfigDiff,
     MatchValue,
+    PayloadSchemaType,
     PointStruct,
     Query,
+    ScalarQuantization,
+    ScalarQuantizationConfig,
+    ScalarType,
     VectorParams,
 )
 
@@ -18,7 +23,7 @@ from app.config import settings
 logger = structlog.get_logger()
 
 COLLECTION = "documents"
-VECTOR_SIZE = 768
+VECTOR_SIZE = 4096
 
 
 def get_client() -> QdrantClient:
@@ -36,8 +41,27 @@ def ensure_collection(
     if collection_name not in existing:
         client.create_collection(
             collection_name=collection_name,
-            vectors_config=VectorParams(size=vector_size, distance=_distance(distance_metric)),
+            vectors_config=VectorParams(
+                size=vector_size,
+                distance=_distance(distance_metric),
+                hnsw_config=HnswConfigDiff(m=16, ef_construct=100),
+            ),
+            quantization_config=ScalarQuantization(
+                scalar=ScalarQuantizationConfig(
+                    type=ScalarType.INT8,
+                    always_ram=True,
+                )
+            ),
         )
+        for field, schema_type in [
+            ("doc_type", PayloadSchemaType.KEYWORD),
+            ("status", PayloadSchemaType.KEYWORD),
+        ]:
+            client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field,
+                field_schema=schema_type,
+            )
         logger.info("qdrant_collection_created", collection=collection_name)
     else:
         logger.debug("qdrant_collection_exists", collection=collection_name)
