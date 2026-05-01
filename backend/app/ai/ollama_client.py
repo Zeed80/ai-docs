@@ -110,17 +110,21 @@ async def generate(
     if not breaker.is_available:
         raise RuntimeError(f"Circuit breaker open for model {model}")
 
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
     payload: dict = {
         "model": model,
-        "prompt": prompt,
+        "messages": messages,
         "stream": False,
+        "think": False,
         "options": {
             "temperature": temperature,
             "num_predict": max_tokens,
         },
     }
-    if system:
-        payload["system"] = system
     if format_json:
         payload["format"] = "json"
 
@@ -131,7 +135,7 @@ async def generate(
             async with httpx.AsyncClient(timeout=timeout_seconds) as client:
                 start = time.time()
                 response = await client.post(
-                    f"{settings.ollama_url}/api/generate",
+                    f"{settings.ollama_url}/api/chat",
                     json=payload,
                 )
                 elapsed_ms = int((time.time() - start) * 1000)
@@ -142,7 +146,7 @@ async def generate(
             breaker.record_success()
 
             result = OllamaResponse(
-                text=data.get("response", ""),
+                text=data.get("message", {}).get("content", ""),
                 model=model,
                 total_duration_ms=data.get("total_duration", 0) // 1_000_000,
                 prompt_eval_count=data.get("prompt_eval_count", 0),
@@ -179,6 +183,47 @@ async def generate(
     raise RuntimeError(f"Ollama generation failed after {max_retries + 1} attempts: {last_error}")
 
 
+def _extract_json_from_text(text: str) -> str:
+    """Strip <think>…</think> blocks and markdown fences, then return the JSON portion."""
+    import re
+
+    # Remove Qwen3 / DeepSeek thinking blocks
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
+    fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+    if fence:
+        text = fence.group(1)
+
+    # Find the outermost JSON object or array
+    for start_char, end_char in [('{', '}'), ('[', ']')]:
+        start = text.find(start_char)
+        if start != -1:
+            depth = 0
+            in_str = False
+            escape = False
+            for i, ch in enumerate(text[start:], start):
+                if escape:
+                    escape = False
+                    continue
+                if ch == '\\' and in_str:
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == start_char:
+                    depth += 1
+                elif ch == end_char:
+                    depth -= 1
+                    if depth == 0:
+                        return text[start:i + 1]
+
+    return text.strip()
+
+
 async def generate_json(
     prompt: str,
     *,
@@ -188,22 +233,83 @@ async def generate_json(
     max_tokens: int = 4096,
     timeout_seconds: float = 120.0,
 ) -> dict:
-    """Generate structured JSON from Ollama."""
-    response = await generate(
-        prompt,
-        model=model,
-        system=system,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        timeout_seconds=timeout_seconds,
-        format_json=True,
-    )
+    """Generate structured JSON via /api/chat (works for thinking models like Qwen3).
 
-    try:
-        return json.loads(response.text)
-    except json.JSONDecodeError as e:
-        logger.error("ollama_json_parse_error", text=response.text[:200], error=str(e))
-        raise ValueError(f"Failed to parse JSON from model output: {e}")
+    Uses chat endpoint with think:false to suppress reasoning preamble.
+    Falls back to regex JSON extraction if the model wraps output in markdown.
+    """
+    model = model or settings.ollama_model_ocr
+    breaker = _get_breaker(model)
+    if not breaker.is_available:
+        raise RuntimeError(f"Circuit breaker open for model {model}")
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    payload: dict = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "think": False,
+        "format": "json",
+        "options": {
+            "temperature": temperature,
+            "num_predict": max_tokens,
+        },
+    }
+
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                start = time.time()
+                response = await client.post(
+                    f"{settings.ollama_url}/api/chat",
+                    json=payload,
+                )
+                elapsed_ms = int((time.time() - start) * 1000)
+
+            response.raise_for_status()
+            data = response.json()
+            raw = data.get("message", {}).get("content", "")
+
+            breaker.record_success()
+            logger.info(
+                "ollama_generate_json",
+                model=model,
+                elapsed_ms=elapsed_ms,
+                text_len=len(raw),
+                attempt=attempt + 1,
+            )
+
+            cleaned = _extract_json_from_text(raw)
+            if not cleaned:
+                raise ValueError(f"Model returned empty response (attempt {attempt + 1})")
+
+            return json.loads(cleaned)
+
+        except json.JSONDecodeError as e:
+            logger.error("ollama_json_parse_error", model=model, text=raw[:300], error=str(e))
+            last_error = ValueError(f"Failed to parse JSON from model output: {e}")
+            break  # Don't retry parse errors — bad prompt, not a transient issue
+
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            last_error = e
+            breaker.record_failure()
+            logger.warning("ollama_json_retry", model=model, attempt=attempt + 1, error=str(e))
+            if attempt < 2:
+                import asyncio
+                await asyncio.sleep(2 ** attempt)
+
+        except Exception as e:
+            last_error = e
+            breaker.record_failure()
+            logger.error("ollama_json_error", model=model, error=str(e))
+            break
+
+    raise last_error or RuntimeError("generate_json failed")
 
 
 async def chat(
