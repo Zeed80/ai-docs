@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field
 from app.ai.gateway_config import gateway_config
 
 _CONFIG_FILE = Path(__file__).parent.parent.parent / "data" / "agent_config.json"
+_REDIS_KEY = "agent_config"
 
 
 class BuiltinAgentConfig(BaseModel):
@@ -67,24 +69,78 @@ def _default_config() -> BuiltinAgentConfig:
     )
 
 
-def get_builtin_agent_config() -> BuiltinAgentConfig:
-    """Load config from disk and merge it with gateway-compatible defaults."""
-    defaults = _default_config().model_dump()
-    if not _CONFIG_FILE.exists():
-        return BuiltinAgentConfig(**defaults)
+def _redis_get_agent_config() -> dict | None:
     try:
-        data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+        import redis as _redis
+        from app.config import settings
+        r = _redis.from_url(settings.redis_url, decode_responses=True)
+        raw = r.get(_REDIS_KEY)
+        if raw:
+            return json.loads(raw)
     except Exception:
-        return BuiltinAgentConfig(**defaults)
-    return BuiltinAgentConfig(**{**defaults, **data})
+        pass
+    return None
+
+
+def _redis_set_agent_config(data: dict) -> None:
+    try:
+        import redis as _redis
+        from app.config import settings
+        r = _redis.from_url(settings.redis_url, decode_responses=True)
+        r.set(_REDIS_KEY, json.dumps(data, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def _env_overrides() -> dict:
+    """Values that MUST come from environment, never from saved file."""
+    overrides: dict = {}
+    ollama_url = os.environ.get("OLLAMA_URL")
+    if ollama_url:
+        overrides["ollama_url"] = ollama_url.rstrip("/")
+    fastapi_url = os.environ.get("FASTAPI_URL")
+    if fastapi_url:
+        overrides["backend_url"] = fastapi_url.rstrip("/")
+    # Load exposed_skills and approval_gates from gateway.yml if not set
+    return overrides
+
+
+def get_builtin_agent_config() -> BuiltinAgentConfig:
+    """Load config from Redis → local file → defaults. Env vars always win for URLs."""
+    defaults = _default_config().model_dump()
+
+    # Load saved overrides (Redis first, then file)
+    saved: dict = {}
+    redis_data = _redis_get_agent_config()
+    if redis_data:
+        saved = redis_data
+    elif _CONFIG_FILE.exists():
+        try:
+            saved = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+            # Migrate to Redis
+            _redis_set_agent_config(saved)
+        except Exception:
+            pass
+
+    merged = {**defaults, **saved}
+
+    # If exposed_skills is empty, reload from gateway.yml
+    if not merged.get("exposed_skills"):
+        merged["exposed_skills"] = sorted(gateway_config.exposed_skills)
+    if not merged.get("approval_gates"):
+        merged["approval_gates"] = sorted(gateway_config.approval_gates)
+
+    # Environment always wins for connection URLs
+    merged.update(_env_overrides())
+
+    return BuiltinAgentConfig(**merged)
 
 
 def save_builtin_agent_config(config: BuiltinAgentConfig) -> BuiltinAgentConfig:
+    data = config.model_dump()
+    _redis_set_agent_config(data)
     _CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _CONFIG_FILE.write_text(
-        json.dumps(config.model_dump(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return config
 
 

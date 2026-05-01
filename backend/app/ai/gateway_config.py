@@ -12,7 +12,9 @@ from pathlib import Path
 
 import yaml
 
-_OPENCLAW_ROOT = Path(__file__).parent.parent.parent.parent / "openclaw"
+_OPENCLAW_ROOT = Path(
+    os.environ.get("OPENCLAW_ROOT", str(Path(__file__).parent.parent.parent / "openclaw"))
+)
 _GATEWAY_PATH = _OPENCLAW_ROOT / "config" / "gateway.yml"
 _REGISTRY_PATH = _OPENCLAW_ROOT / "skills" / "_registry.yml"
 _PROMPTS_DIR = _OPENCLAW_ROOT / "prompts"
