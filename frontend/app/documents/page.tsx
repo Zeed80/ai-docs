@@ -932,6 +932,7 @@ function UploadPanel({
             checked={manualUploadType}
             disabled={!uploadDocType}
             onChange={(event) => onManualUploadType(event.target.checked)}
+            suppressHydrationWarning
           />
           Закрепить выбранный тип
         </label>
@@ -940,6 +941,7 @@ function UploadPanel({
             type="checkbox"
             checked={autoProcess}
             onChange={(event) => onAutoProcess(event.target.checked)}
+            suppressHydrationWarning
           />
           Запускать полный пайплайн
         </label>
@@ -952,6 +954,7 @@ function UploadPanel({
             disabled={!autoProcess}
             onChange={(event) => onAutoVerify(event.target.checked)}
             className="mt-0.5"
+            suppressHydrationWarning
           />
           <span>
             Автоматически проверять и утверждать

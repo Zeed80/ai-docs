@@ -23,12 +23,16 @@ function usePersistentWidth(key: string, defaultValue: number) {
     } catch {}
   }, [key]);
 
+  // Supports functional updater (prev => next) or plain number
   const update = useCallback(
-    (next: number) => {
-      setWidth(next);
-      try {
-        localStorage.setItem(key, String(next));
-      } catch {}
+    (nextOrFn: number | ((prev: number) => number)) => {
+      setWidth((prev) => {
+        const next = typeof nextOrFn === "function" ? nextOrFn(prev) : nextOrFn;
+        try {
+          localStorage.setItem(key, String(next));
+        } catch {}
+        return next;
+      });
     },
     [key],
   );
@@ -37,11 +41,9 @@ function usePersistentWidth(key: string, defaultValue: number) {
 }
 
 function DragHandle({
-  onDrag,
-  cursor,
+  onDragRef,
 }: {
-  onDrag: (delta: number) => void;
-  cursor: "col-resize";
+  onDragRef: React.RefObject<(delta: number) => void>;
 }) {
   const dragging = useRef(false);
   const lastX = useRef(0);
@@ -56,7 +58,7 @@ function DragHandle({
         if (!dragging.current) return;
         const delta = ev.clientX - lastX.current;
         lastX.current = ev.clientX;
-        onDrag(delta);
+        onDragRef.current?.(delta);
       };
       const onUp = () => {
         dragging.current = false;
@@ -68,17 +70,17 @@ function DragHandle({
 
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
-      document.body.style.cursor = cursor;
+      document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     },
-    [onDrag, cursor],
+    [onDragRef],
   );
 
   return (
     <div
       onMouseDown={onMouseDown}
-      className="w-1 shrink-0 bg-slate-700 hover:bg-blue-500 active:bg-blue-400 transition-colors cursor-col-resize"
-      style={{ cursor }}
+      className="w-1 shrink-0 bg-slate-700 hover:bg-blue-500 active:bg-blue-400 transition-colors"
+      style={{ cursor: "col-resize" }}
     />
   );
 }
@@ -101,26 +103,23 @@ export function ResizableLayout({
     CHAT_DEFAULT,
   );
 
-  const handleSidebarDrag = useCallback(
-    (delta: number) => {
-      setSidebarWidth(clamp(sidebarWidth + delta, SIDEBAR_MIN, SIDEBAR_MAX));
-    },
-    [sidebarWidth, setSidebarWidth],
-  );
+  // Stable refs so DragHandle closures always call the latest handler
+  const sidebarDragRef = useRef<(delta: number) => void>(() => {});
+  const chatDragRef = useRef<(delta: number) => void>(() => {});
 
-  const handleChatDrag = useCallback(
-    (delta: number) => {
-      setChatWidth(clamp(chatWidth - delta, CHAT_MIN, CHAT_MAX));
-    },
-    [chatWidth, setChatWidth],
-  );
+  sidebarDragRef.current = (delta: number) => {
+    setSidebarWidth((prev) => clamp(prev + delta, SIDEBAR_MIN, SIDEBAR_MAX));
+  };
+  chatDragRef.current = (delta: number) => {
+    setChatWidth((prev) => clamp(prev - delta, CHAT_MIN, CHAT_MAX));
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
       <div style={{ width: sidebarWidth, flexShrink: 0 }}>{sidebar}</div>
-      <DragHandle onDrag={handleSidebarDrag} cursor="col-resize" />
+      <DragHandle onDragRef={sidebarDragRef} />
       <main className="flex-1 overflow-auto min-w-0">{children}</main>
-      <DragHandle onDrag={handleChatDrag} cursor="col-resize" />
+      <DragHandle onDragRef={chatDragRef} />
       <div style={{ width: chatWidth, flexShrink: 0 }}>{chat}</div>
     </div>
   );
