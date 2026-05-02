@@ -1,6 +1,7 @@
 """Supplier API — skills: supplier.get, supplier.search, supplier.price_history,
 supplier.check_requisites, supplier.trust_score, supplier.alerts"""
 
+import re
 import uuid
 from collections import defaultdict
 
@@ -13,6 +14,8 @@ from sqlalchemy.orm import selectinload
 from app.db.session import get_db
 from app.db.models import Invoice, InvoiceLine, InvoiceStatus, Party, PartyRole, SupplierProfile
 from app.domain.suppliers import (
+    DuplicateCheckResult,
+    DuplicateMatch,
     PartyOut,
     PriceHistoryItem,
     PriceHistoryPoint,
@@ -20,6 +23,7 @@ from app.domain.suppliers import (
     RequisiteCheckResponse,
     SupplierAlert,
     SupplierAlertsResponse,
+    SupplierCreate,
     SupplierFullOut,
     SupplierPriceHistoryResponse,
     SupplierProfileOut,
@@ -33,6 +37,182 @@ from app.audit.service import log_action
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+
+def _normalize_phone(phone: str) -> str:
+    """Strip all non-digit chars, normalize 8→7 prefix for RU numbers."""
+    digits = re.sub(r"\D", "", phone)
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    return digits
+
+
+async def _find_duplicates(
+    db: AsyncSession,
+    name: str,
+    inn: str | None,
+    email: str | None,
+    phone: str | None,
+    exclude_id: uuid.UUID | None = None,
+) -> list[DuplicateMatch]:
+    """Return potential duplicate parties.
+
+    A match is flagged when:
+    - INN matches exactly (always a duplicate regardless of name), OR
+    - Email matches exactly + name is similar, OR
+    - Normalized phone matches + name is similar.
+    """
+    matches: list[DuplicateMatch] = []
+    seen: set[uuid.UUID] = set()
+
+    async def _collect(query, reason: str) -> None:
+        result = await db.execute(query)
+        for p in result.scalars().all():
+            if p.id in seen:
+                continue
+            if exclude_id and p.id == exclude_id:
+                continue
+            seen.add(p.id)
+            matches.append(DuplicateMatch(
+                id=p.id,
+                name=p.name,
+                inn=p.inn,
+                contact_email=p.contact_email,
+                contact_phone=p.contact_phone,
+                match_reason=reason,
+            ))
+
+    # INN exact match
+    if inn:
+        await _collect(
+            select(Party).where(Party.inn == inn, Party.role.in_([PartyRole.supplier, PartyRole.both])),
+            "Совпадение ИНН",
+        )
+
+    name_lower = name.lower().strip()
+
+    # Email + similar name
+    if email and not matches:
+        q = select(Party).where(
+            Party.contact_email.ilike(email),
+            Party.role.in_([PartyRole.supplier, PartyRole.both]),
+        )
+        result = await db.execute(q)
+        for p in result.scalars().all():
+            if exclude_id and p.id == exclude_id:
+                continue
+            if p.id in seen:
+                continue
+            if name_lower in p.name.lower() or p.name.lower() in name_lower:
+                seen.add(p.id)
+                matches.append(DuplicateMatch(
+                    id=p.id, name=p.name, inn=p.inn,
+                    contact_email=p.contact_email, contact_phone=p.contact_phone,
+                    match_reason="Совпадение email + похожее название",
+                ))
+
+    # Phone + similar name
+    if phone and not matches:
+        norm = _normalize_phone(phone)
+        q = select(Party).where(Party.role.in_([PartyRole.supplier, PartyRole.both]))
+        result = await db.execute(q)
+        for p in result.scalars().all():
+            if exclude_id and p.id == exclude_id:
+                continue
+            if p.id in seen or not p.contact_phone:
+                continue
+            if _normalize_phone(p.contact_phone) == norm:
+                if name_lower in p.name.lower() or p.name.lower() in name_lower:
+                    seen.add(p.id)
+                    matches.append(DuplicateMatch(
+                        id=p.id, name=p.name, inn=p.inn,
+                        contact_email=p.contact_email, contact_phone=p.contact_phone,
+                        match_reason="Совпадение телефона + похожее название",
+                    ))
+
+    # Pure name similarity (ilike) as a weak signal — only if nothing else found
+    if not matches:
+        q = select(Party).where(
+            Party.name.ilike(f"%{name.strip()}%"),
+            Party.role.in_([PartyRole.supplier, PartyRole.both]),
+        )
+        result = await db.execute(q)
+        for p in result.scalars().all():
+            if exclude_id and p.id == exclude_id:
+                continue
+            if p.id in seen:
+                continue
+            seen.add(p.id)
+            matches.append(DuplicateMatch(
+                id=p.id, name=p.name, inn=p.inn,
+                contact_email=p.contact_email, contact_phone=p.contact_phone,
+                match_reason="Похожее название",
+            ))
+
+    return matches
+
+
+# ── supplier.check_duplicate ──────────────────────────────────────────────
+
+
+@router.post("/check-duplicate", response_model=DuplicateCheckResult)
+async def check_duplicate(
+    payload: SupplierCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if a supplier with the same INN / email / phone already exists."""
+    matches = await _find_duplicates(db, payload.name, payload.inn, payload.contact_email, payload.contact_phone)
+    return DuplicateCheckResult(has_duplicates=bool(matches), matches=matches)
+
+
+# ── supplier.create ────────────────────────────────────────────────────────
+
+
+@router.post("", response_model=PartyOut, status_code=201)
+async def create_supplier(
+    payload: SupplierCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new supplier manually. Returns 409 with duplicate info if a match is found
+    and force=False."""
+    if not payload.force:
+        matches = await _find_duplicates(db, payload.name, payload.inn, payload.contact_email, payload.contact_phone)
+        if matches:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Возможные дубликаты найдены",
+                    "matches": [m.model_dump() for m in matches],
+                },
+            )
+
+    party = Party(
+        name=payload.name,
+        inn=payload.inn,
+        kpp=payload.kpp,
+        ogrn=payload.ogrn,
+        address=payload.address,
+        contact_email=payload.contact_email,
+        contact_phone=payload.contact_phone,
+        bank_name=payload.bank_name,
+        bank_bik=payload.bank_bik,
+        bank_account=payload.bank_account,
+        corr_account=payload.corr_account,
+        user_notes=payload.user_notes,
+        user_rating=payload.user_rating,
+        role=PartyRole.supplier,
+    )
+    db.add(party)
+    await db.flush()
+
+    profile = SupplierProfile(party_id=party.id)
+    db.add(profile)
+
+    await log_action(db, action="supplier.create", entity_type="supplier",
+                     entity_id=party.id, details={"name": party.name, "inn": party.inn})
+    await db.commit()
+    await db.refresh(party)
+    return party
 
 
 # ── supplier.get ───────────────────────────────────────────────────────────
@@ -425,12 +605,20 @@ async def update_supplier(
 
     # Notes go to profile
     notes = update_data.pop("notes", None)
+    # user_notes / user_rating stay on Party directly
+    for field in ("user_notes", "user_rating"):
+        if field in update_data:
+            setattr(party, field, update_data.pop(field))
 
     for field, value in update_data.items():
         setattr(party, field, value)
 
-    if notes is not None and party.profile:
-        party.profile.notes = notes
+    if notes is not None:
+        if party.profile:
+            party.profile.notes = notes
+        else:
+            profile = SupplierProfile(party_id=party.id, notes=notes)
+            db.add(profile)
 
     await log_action(
         db, action="supplier.update", entity_type="supplier",

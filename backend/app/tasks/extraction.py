@@ -1207,14 +1207,45 @@ def auto_supplier_task(self, document_id: str) -> dict:
                 if existing:
                     party_id = existing.id
 
-            # 2. LLM name match
+            # 2. Email match + similar name
+            supplier_email = supplier_data.get("email")
+            if not party_id and supplier_email and supplier_name:
+                existing = db.execute(
+                    select(Party).where(Party.contact_email.ilike(supplier_email))
+                ).scalar_one_or_none()
+                if existing and (
+                    supplier_name.lower() in existing.name.lower()
+                    or existing.name.lower() in supplier_name.lower()
+                ):
+                    party_id = existing.id
+
+            # 3. Phone match + similar name
+            supplier_phone = supplier_data.get("phone")
+            if not party_id and supplier_phone and supplier_name:
+                import re as _re
+                def _norm(p: str) -> str:
+                    d = _re.sub(r"\D", "", p)
+                    return ("7" + d[1:]) if len(d) == 11 and d.startswith("8") else d
+
+                norm_phone = _norm(supplier_phone)
+                candidates_phone = db.execute(
+                    select(Party).where(Party.contact_phone.isnot(None))
+                ).scalars().all()
+                for cp in candidates_phone:
+                    if cp.contact_phone and _norm(cp.contact_phone) == norm_phone:
+                        if (supplier_name.lower() in cp.name.lower()
+                                or cp.name.lower() in supplier_name.lower()):
+                            party_id = cp.id
+                            break
+
+            # 4. LLM name match
             if not party_id and supplier_name:
                 candidates = db.execute(
                     select(Party).where(Party.role.in_(["supplier", "both"])).limit(50)
                 ).scalars().all()
                 party_id = _llm_match_supplier_name(supplier_name, list(candidates))
 
-            # 3. Create new Party
+            # 5. Create new Party
             if not party_id and (supplier_name or supplier_inn):
                 new_party = Party(
                     name=supplier_name or supplier_inn,

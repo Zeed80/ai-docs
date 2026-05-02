@@ -12,6 +12,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    SmallInteger,
     String,
     Text,
     func,
@@ -487,6 +488,9 @@ class Party(UUIDPrimaryKey, TimestampMixin, Base):
 
     contact_email: Mapped[str | None] = mapped_column(String(200))
     contact_phone: Mapped[str | None] = mapped_column(String(50))
+
+    user_notes: Mapped[str | None] = mapped_column(Text)
+    user_rating: Mapped[int | None] = mapped_column(SmallInteger)
 
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 

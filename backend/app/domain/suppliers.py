@@ -23,6 +23,8 @@ class PartyOut(BaseModel):
     corr_account: str | None = None
     contact_email: str | None = None
     contact_phone: str | None = None
+    user_notes: str | None = None
+    user_rating: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -145,6 +147,7 @@ class SupplierUpdate(BaseModel):
     name: str | None = None
     inn: str | None = None
     kpp: str | None = None
+    ogrn: str | None = None
     address: str | None = None
     contact_email: str | None = None
     contact_phone: str | None = None
@@ -153,3 +156,36 @@ class SupplierUpdate(BaseModel):
     bank_account: str | None = None
     corr_account: str | None = None
     notes: str | None = None
+    user_notes: str | None = None
+    user_rating: int | None = Field(default=None, ge=1, le=5)
+
+
+class SupplierCreate(BaseModel):
+    name: str
+    inn: str | None = None
+    kpp: str | None = None
+    ogrn: str | None = None
+    address: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    bank_name: str | None = None
+    bank_bik: str | None = None
+    bank_account: str | None = None
+    corr_account: str | None = None
+    user_notes: str | None = None
+    user_rating: int | None = Field(default=None, ge=1, le=5)
+    force: bool = False
+
+
+class DuplicateMatch(BaseModel):
+    id: uuid.UUID
+    name: str
+    inn: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    match_reason: str
+
+
+class DuplicateCheckResult(BaseModel):
+    has_duplicates: bool
+    matches: list[DuplicateMatch]
