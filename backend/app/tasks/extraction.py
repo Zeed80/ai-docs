@@ -855,7 +855,6 @@ def auto_verify_document(self, document_id: str) -> dict:
 
     cfg = get_ai_config()
     verify_model_1 = cfg.get("verify_model_1", "")
-    verify_model_2 = cfg.get("verify_model_2", "")
 
     with _get_sync_session() as db:
         doc = db.get(Document, uuid.UUID(document_id))
@@ -914,23 +913,18 @@ def auto_verify_document(self, document_id: str) -> dict:
                 "mandatory_issues": low_conf_mandatory,
             }
 
-        # Run verify extractions sequentially with all configured models
+        # Run verify extraction with the configured verify model
         verify_extractions: list[dict] = []
         models_used: list[str] = []
 
-        for model_key, model_name in [
-            ("verify_model_1", verify_model_1),
-            ("verify_model_2", verify_model_2),
-        ]:
-            if not model_name or not model_name.strip():
-                continue
-            logger.info("auto_verify_extracting", model=model_name, document_id=document_id)
-            extracted = _extract_invoice_with_model(text, model_name)
+        if verify_model_1 and verify_model_1.strip():
+            logger.info("auto_verify_extracting", model=verify_model_1, document_id=document_id)
+            extracted = _extract_invoice_with_model(text, verify_model_1)
             if extracted:
                 verify_extractions.append(extracted)
-                models_used.append(model_name)
+                models_used.append(verify_model_1)
             else:
-                logger.warning("auto_verify_model_failed", model=model_name)
+                logger.warning("auto_verify_model_failed", model=verify_model_1)
 
         if not verify_extractions:
             logger.warning("auto_verify_no_verify_models", document_id=document_id)

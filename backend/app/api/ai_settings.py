@@ -74,14 +74,18 @@ def get_ai_config() -> dict:
     # 1. Redis — shared across all containers
     redis_cfg = _redis_get_config()
     if redis_cfg:
-        return {**_DEFAULT_CONFIG, **redis_cfg}
+        cfg = {**_DEFAULT_CONFIG, **redis_cfg}
+        cfg.pop("verify_model_2", None)
+        return cfg
     # 2. Local file fallback (backend container only)
     if _CONFIG_FILE.exists():
         try:
             file_cfg = json.loads(_CONFIG_FILE.read_text())
             # Migrate to Redis so workers can read it
             _redis_set_config(file_cfg)
-            return {**_DEFAULT_CONFIG, **file_cfg}
+            cfg = {**_DEFAULT_CONFIG, **file_cfg}
+            cfg.pop("verify_model_2", None)
+            return cfg
         except Exception:
             pass
     return dict(_DEFAULT_CONFIG)
@@ -239,7 +243,6 @@ class ConfigUpdate(BaseModel):
     embedding_model: str | None = None
     reranker_model: str | None = None
     verify_model_1: str | None = None
-    verify_model_2: str | None = None
     turboquant_enabled: bool | None = None
     turboquant_kv_cache_dtype: str | None = None
     turboquant_max_model_len: int | None = None
@@ -254,6 +257,7 @@ async def update_config(
     previous_embedding_model = cfg.get("embedding_model")
     update = payload.model_dump(include=payload.model_fields_set)
     cfg.update(update)
+    cfg.pop("verify_model_2", None)
     save_ai_config(cfg)
     if "model_agent" in update and update["model_agent"]:
         update_builtin_agent_config(

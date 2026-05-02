@@ -568,6 +568,16 @@ export default function DocumentsPage() {
     });
   }
 
+  function toggleAll(checked: boolean) {
+    if (checked) {
+      setSelectedIds(
+        new Set((workspace?.items ?? []).map((i) => i.document.id)),
+      );
+    } else {
+      setSelectedIds(new Set());
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-950/95 px-6 py-4">
@@ -660,6 +670,7 @@ export default function DocumentsPage() {
               busyAction={busyAction}
               onSelect={setSelectedId}
               onToggle={toggleSelection}
+              onToggleAll={toggleAll}
               onBatch={(path, body) => batchAction(path, path, body)}
             />
           )}
@@ -1002,6 +1013,7 @@ function RegistryPanel({
   busyAction,
   onSelect,
   onToggle,
+  onToggleAll,
   onBatch,
 }: {
   items: WorkspaceItem[];
@@ -1010,6 +1022,7 @@ function RegistryPanel({
   busyAction: string | null;
   onSelect: (id: string) => void;
   onToggle: (id: string, checked: boolean) => void;
+  onToggleAll: (checked: boolean) => void;
   onBatch: (path: string, body?: Record<string, unknown>) => void;
 }) {
   return (
@@ -1041,6 +1054,7 @@ function RegistryPanel({
         selectedIds={selectedIds}
         onSelect={onSelect}
         onToggle={onToggle}
+        onToggleAll={onToggleAll}
       />
     </section>
   );
@@ -1136,19 +1150,35 @@ function DocumentTable({
   selectedIds,
   onSelect,
   onToggle,
+  onToggleAll,
 }: {
   items: WorkspaceItem[];
   selectedId: string | null;
   selectedIds: Set<string>;
   onSelect: (id: string) => void;
   onToggle: (id: string, checked: boolean) => void;
+  onToggleAll: (checked: boolean) => void;
 }) {
+  const allChecked = items.length > 0 && selectedIds.size === items.length;
+  const indeterminate = selectedIds.size > 0 && selectedIds.size < items.length;
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[880px] border-collapse text-sm">
         <thead className="bg-slate-900 text-xs text-slate-500">
           <tr>
-            <th className="w-10 px-3 py-2 text-left"></th>
+            <th className="w-10 px-3 py-2 text-left">
+              <input
+                type="checkbox"
+                checked={allChecked}
+                ref={(el) => {
+                  if (el) el.indeterminate = indeterminate;
+                }}
+                onChange={(e) => onToggleAll(e.target.checked)}
+                disabled={items.length === 0}
+                title="Выбрать все"
+              />
+            </th>
             <th className="px-3 py-2 text-left">Файл</th>
             <th className="px-3 py-2 text-left">Тип</th>
             <th className="px-3 py-2 text-left">Статус</th>
