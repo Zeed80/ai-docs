@@ -41,7 +41,6 @@ _DEFAULT_CONFIG = {
     "embedding_model": "qwen3_embedding_8b_ollama",
     "reranker_model": "local_reranker_ollama",
     "verify_model_1": settings.ollama_model_ocr,
-    "verify_model_2": "",
     "turboquant_enabled": False,
     "turboquant_kv_cache_dtype": "turboquant_k8v4",
     "turboquant_max_model_len": 131072,

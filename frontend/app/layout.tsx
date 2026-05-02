@@ -2,10 +2,8 @@ import type { Metadata } from "next";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import "./globals.css";
-import { Sidebar } from "@/components/ui/sidebar";
 import { KeyboardProvider } from "@/lib/keyboard-context";
-import { SvetaPanel } from "@/components/chat/sveta-panel";
-import { ResizableLayout } from "@/components/ui/resizable-layout";
+import { ClientLayout } from "@/components/ui/client-layout";
 
 export const metadata: Metadata = {
   title: "AI Документооборот",
@@ -25,9 +23,7 @@ export default async function RootLayout({
       <body className="bg-slate-900 text-slate-100 antialiased">
         <NextIntlClientProvider messages={messages}>
           <KeyboardProvider>
-            <ResizableLayout sidebar={<Sidebar />} chat={<SvetaPanel />}>
-              {children}
-            </ResizableLayout>
+            <ClientLayout>{children}</ClientLayout>
           </KeyboardProvider>
         </NextIntlClientProvider>
       </body>

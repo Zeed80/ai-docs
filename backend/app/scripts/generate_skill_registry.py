@@ -41,6 +41,9 @@ ROUTERS = {
     "payments": ("app.api.payments", "/api"),
     "boms": ("app.api.boms", "/api"),
     "ntd": ("app.api.ntd", "/api"),
+    "canvas": ("app.api.canvas", "/api/canvas"),
+    "mailbox": ("app.api.mailbox", "/api/mailbox"),
+    "email_templates": ("app.api.email_templates", "/api/email-templates"),
 }
 
 APPROVAL_GATES = {

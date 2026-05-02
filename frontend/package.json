@@ -15,7 +15,8 @@
     "next": "^15.3",
     "next-intl": "^4.1",
     "react": "^19.1",
-    "react-dom": "^19.1"
+    "react-dom": "^19.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.50",

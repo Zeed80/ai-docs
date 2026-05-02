@@ -4,10 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const SIDEBAR_DEFAULT = 192; // w-48
 const CHAT_DEFAULT = 320; // w-80
+const CANVAS_DEFAULT = 400;
 const SIDEBAR_MIN = 140;
 const SIDEBAR_MAX = 480;
 const CHAT_MIN = 220;
 const CHAT_MAX = 640;
+const CANVAS_MIN = 280;
+const CANVAS_MAX = 800;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -88,10 +91,14 @@ function DragHandle({
 export function ResizableLayout({
   sidebar,
   chat,
+  canvas,
+  canvasOpen,
   children,
 }: {
   sidebar: React.ReactNode;
   chat: React.ReactNode;
+  canvas?: React.ReactNode;
+  canvasOpen?: boolean;
   children: React.ReactNode;
 }) {
   const [sidebarWidth, setSidebarWidth] = usePersistentWidth(
@@ -102,10 +109,14 @@ export function ResizableLayout({
     "layout:chatWidth",
     CHAT_DEFAULT,
   );
+  const [canvasWidth, setCanvasWidth] = usePersistentWidth(
+    "layout:canvasWidth",
+    CANVAS_DEFAULT,
+  );
 
-  // Stable refs so DragHandle closures always call the latest handler
   const sidebarDragRef = useRef<(delta: number) => void>(() => {});
   const chatDragRef = useRef<(delta: number) => void>(() => {});
+  const canvasDragRef = useRef<(delta: number) => void>(() => {});
 
   sidebarDragRef.current = (delta: number) => {
     setSidebarWidth((prev) => clamp(prev + delta, SIDEBAR_MIN, SIDEBAR_MAX));
@@ -113,12 +124,21 @@ export function ResizableLayout({
   chatDragRef.current = (delta: number) => {
     setChatWidth((prev) => clamp(prev - delta, CHAT_MIN, CHAT_MAX));
   };
+  canvasDragRef.current = (delta: number) => {
+    setCanvasWidth((prev) => clamp(prev - delta, CANVAS_MIN, CANVAS_MAX));
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
       <div style={{ width: sidebarWidth, flexShrink: 0 }}>{sidebar}</div>
       <DragHandle onDragRef={sidebarDragRef} />
       <main className="flex-1 overflow-auto min-w-0">{children}</main>
+      {canvasOpen && canvas && (
+        <>
+          <DragHandle onDragRef={canvasDragRef} />
+          <div style={{ width: canvasWidth, flexShrink: 0 }}>{canvas}</div>
+        </>
+      )}
       <DragHandle onDragRef={chatDragRef} />
       <div style={{ width: chatWidth, flexShrink: 0 }}>{chat}</div>
     </div>

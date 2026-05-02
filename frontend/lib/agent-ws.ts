@@ -151,6 +151,7 @@ export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
       "approval_request",
       "error",
       "tg_user",
+      "canvas",
     ].includes(type)
   ) {
     return [data as unknown as AgentWsMessage];

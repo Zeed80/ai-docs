@@ -12,17 +12,207 @@ tools:
   method: POST
   path: /api/documents/ingest
   approval_required: false
+- name: doc.list
+  description: 'Skill: doc.list — List documents with filters.'
+  category: documents
+  method: GET
+  path: /api/documents
+  approval_required: false
+- name: doc.workspace
+  description: 'Skill: doc.workspace — List documents with compact pipeline summaries.'
+  category: documents
+  method: GET
+  path: /api/documents/workspace
+  approval_required: false
 - name: doc.get
   description: 'Skill: doc.get — Get document with extractions and links.'
   category: documents
   method: GET
   path: /api/documents/{document_id}
   approval_required: false
-- name: doc.list
-  description: 'Skill: doc.list — List documents with filters.'
+- name: doc.bulk_delete
+  description: 'Skill: doc.bulk_delete — Hard-delete selected documents and derived
+    records.'
+  category: documents
+  method: DELETE
+  path: /api/documents/bulk-delete
+  approval_required: false
+  parameters:
+    properties:
+      document_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 500
+        minItems: 1
+        title: Document Ids
+        type: array
+      delete_files:
+        default: true
+        title: Delete Files
+        type: boolean
+    required:
+    - document_ids
+    title: DocumentBulkDeleteRequest
+    type: object
+- name: doc.batch_process
+  description: 'Skill: doc.batch_process — Trigger full processing for selected documents.'
+  category: documents
+  method: POST
+  path: /api/documents/batch/process
+  approval_required: false
+  parameters:
+    properties:
+      document_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 500
+        minItems: 1
+        title: Document Ids
+        type: array
+      force:
+        default: false
+        title: Force
+        type: boolean
+      build_scope:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Build Scope
+    required:
+    - document_ids
+    title: DocumentBatchRequest
+    type: object
+- name: doc.batch_classify
+  description: 'Skill: doc.batch_classify — Trigger classification for selected documents.'
+  category: documents
+  method: POST
+  path: /api/documents/batch/classify
+  approval_required: false
+  parameters:
+    properties:
+      document_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 500
+        minItems: 1
+        title: Document Ids
+        type: array
+      force:
+        default: false
+        title: Force
+        type: boolean
+      build_scope:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Build Scope
+    required:
+    - document_ids
+    title: DocumentBatchRequest
+    type: object
+- name: doc.batch_embeddings_reindex
+  description: 'Skill: doc.batch_embeddings_reindex — Queue embedding rebuild for
+    selected documents.'
+  category: documents
+  method: POST
+  path: /api/documents/batch/embeddings-reindex
+  approval_required: false
+  parameters:
+    properties:
+      document_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 500
+        minItems: 1
+        title: Document Ids
+        type: array
+      force:
+        default: false
+        title: Force
+        type: boolean
+      build_scope:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Build Scope
+    required:
+    - document_ids
+    title: DocumentBatchRequest
+    type: object
+- name: doc.batch_memory_rebuild
+  description: 'Skill: doc.batch_memory_rebuild — Rebuild graph memory for selected
+    documents.'
+  category: documents
+  method: POST
+  path: /api/documents/batch/memory-rebuild
+  approval_required: false
+  parameters:
+    properties:
+      document_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 500
+        minItems: 1
+        title: Document Ids
+        type: array
+      force:
+        default: false
+        title: Force
+        type: boolean
+      build_scope:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Build Scope
+    required:
+    - document_ids
+    title: DocumentBatchRequest
+    type: object
+- name: doc.batch_ntd_check
+  description: 'Skill: doc.batch_ntd_check — Run manual NTD checks for selected documents.'
+  category: documents
+  method: POST
+  path: /api/documents/batch/ntd-check
+  approval_required: false
+  parameters:
+    properties:
+      document_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 500
+        minItems: 1
+        title: Document Ids
+        type: array
+      force:
+        default: false
+        title: Force
+        type: boolean
+      build_scope:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Build Scope
+    required:
+    - document_ids
+    title: DocumentBatchRequest
+    type: object
+- name: doc.management
+  description: 'Skill: doc.management — Read document pipeline, memory, graph and
+    NTD status.'
   category: documents
   method: GET
-  path: /api/documents
+  path: /api/documents/{document_id}/management
   approval_required: false
 - name: doc.update
   description: 'Skill: doc.update — Update document fields.'
@@ -57,6 +247,12 @@ tools:
         title: DocumentType
         type: string
     properties:
+      file_name:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: File Name
       doc_type:
         anyOf:
         - $ref: '#/$defs/DocumentType'
@@ -67,6 +263,18 @@ tools:
         - $ref: '#/$defs/DocumentStatus'
         - type: 'null'
         default: null
+      source_channel:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Source Channel
+      manual_doc_type_override:
+        anyOf:
+        - type: boolean
+        - type: 'null'
+        default: null
+        title: Manual Doc Type Override
       metadata:
         anyOf:
         - additionalProperties: true
@@ -100,6 +308,48 @@ tools:
     - linked_entity_id
     title: DocumentLinkCreate
     type: object
+- name: doc.link_update
+  description: 'Skill: doc.link_update — Edit an explicit document dependency link.'
+  category: documents
+  method: PATCH
+  path: /api/documents/{document_id}/links/{link_id}
+  approval_required: false
+  parameters:
+    properties:
+      linked_entity_type:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Linked Entity Type
+      linked_entity_id:
+        anyOf:
+        - format: uuid
+          type: string
+        - type: 'null'
+        default: null
+        title: Linked Entity Id
+      link_type:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Link Type
+    title: DocumentLinkUpdate
+    type: object
+- name: doc.link_delete
+  description: 'Skill: doc.link_delete — Remove an explicit document dependency link.'
+  category: documents
+  method: DELETE
+  path: /api/documents/{document_id}/links/{link_id}
+  approval_required: false
+- name: doc.dependencies
+  description: 'Skill: doc.dependencies — Search explicit links and graph dependencies
+    for a document.'
+  category: documents
+  method: GET
+  path: /api/documents/{document_id}/dependencies
+  approval_required: false
 - name: doc.classify
   description: 'Skill: doc.classify — Trigger document classification via AI.'
   category: documents
@@ -112,6 +362,18 @@ tools:
   category: documents
   method: POST
   path: /api/documents/{document_id}/extract
+  approval_required: false
+- name: doc.memory_rebuild
+  description: 'Skill: doc.memory_rebuild — Rebuild graph memory for one document.'
+  category: documents
+  method: POST
+  path: /api/documents/{document_id}/memory/rebuild
+  approval_required: false
+- name: doc.delete
+  description: 'Skill: doc.delete — Hard-delete a document and all derived records.'
+  category: documents
+  method: DELETE
+  path: /api/documents/{document_id}
   approval_required: false
 - name: doc.correct_field
   description: 'Skill: doc.correct_field — Human correction of an extracted field.'
@@ -1398,6 +1660,12 @@ tools:
         - type: 'null'
         default: null
         title: Kpp
+      ogrn:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Ogrn
       address:
         anyOf:
         - type: string
@@ -1446,6 +1714,20 @@ tools:
         - type: 'null'
         default: null
         title: Notes
+      user_notes:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: User Notes
+      user_rating:
+        anyOf:
+        - maximum: 5
+          minimum: 1
+          type: integer
+        - type: 'null'
+        default: null
+        title: User Rating
     title: SupplierUpdate
     type: object
 - name: supplier.list
@@ -1877,7 +2159,7 @@ tools:
         minimum: 0.0
         title: Confidence
         type: number
-      metadata:
+      metadata_:
         anyOf:
         - additionalProperties: true
           type: object
@@ -1949,7 +2231,7 @@ tools:
         - type: 'null'
         default: null
         title: Evidence Span Id
-      metadata:
+      metadata_:
         anyOf:
         - additionalProperties: true
           type: object
@@ -2026,7 +2308,7 @@ tools:
         - type: 'null'
         default: null
         title: Embedding Id
-      metadata:
+      metadata_:
         anyOf:
         - additionalProperties: true
           type: object
@@ -2094,7 +2376,7 @@ tools:
         minimum: 0.0
         title: Confidence
         type: number
-      metadata:
+      metadata_:
         anyOf:
         - additionalProperties: true
           type: object
@@ -2178,7 +2460,7 @@ tools:
         - type: 'null'
         default: null
         title: Evidence Span Id
-      metadata:
+      metadata_:
         anyOf:
         - additionalProperties: true
           type: object
@@ -3290,6 +3572,12 @@ tools:
   method: POST
   path: /api/warehouse/receipts/{receipt_id}/confirm
   approval_required: true
+- name: warehouse.update_status
+  description: 'Skill: warehouse.update_status — Transition receipt status.'
+  category: warehouse
+  method: PATCH
+  path: /api/warehouse/receipts/{receipt_id}/status
+  approval_required: false
 - name: procurement.list_requests
   description: 'Skill: procurement.list_requests — List purchase requests.'
   category: procurement
@@ -3520,4 +3808,90 @@ tools:
   category: ntd
   method: POST
   path: /api/ntd/checks/{check_id}/findings/{finding_id}/decide
+  approval_required: false
+- name: canvas.publish
+  description: 'Skill: canvas.publish — Send a rich content block to the agent canvas
+    panel.'
+  category: canvas
+  method: POST
+  path: /api/canvas/publish
+  approval_required: false
+- name: mailbox.create
+  description: 'Skill: mailbox.create — Add a new IMAP/SMTP mailbox configuration.'
+  category: mailbox
+  method: POST
+  path: /api/mailbox/configs
+  approval_required: false
+- name: mailbox.list
+  description: 'Skill: mailbox.list — List all configured mailboxes.'
+  category: mailbox
+  method: GET
+  path: /api/mailbox/configs
+  approval_required: false
+- name: mailbox.get
+  description: 'Skill: mailbox.get — Get a mailbox configuration by ID.'
+  category: mailbox
+  method: GET
+  path: /api/mailbox/configs/{mailbox_id}
+  approval_required: false
+- name: mailbox.update
+  description: 'Skill: mailbox.update — Update mailbox settings.'
+  category: mailbox
+  method: PATCH
+  path: /api/mailbox/configs/{mailbox_id}
+  approval_required: false
+- name: mailbox.delete
+  description: 'Skill: mailbox.delete — Remove a mailbox configuration.'
+  category: mailbox
+  method: DELETE
+  path: /api/mailbox/configs/{mailbox_id}
+  approval_required: false
+- name: mailbox.test
+  description: 'Skill: mailbox.test — Test IMAP and SMTP connectivity.'
+  category: mailbox
+  method: POST
+  path: /api/mailbox/configs/{mailbox_id}/test
+  approval_required: false
+- name: email.templates.list
+  description: 'Skill: email.templates.list — List email templates with optional filters.'
+  category: email_templates
+  method: GET
+  path: /api/email-templates/
+  approval_required: false
+- name: email.templates.create
+  description: 'Skill: email.templates.create — Create a new email template.'
+  category: email_templates
+  method: POST
+  path: /api/email-templates/
+  approval_required: false
+- name: email.templates.get
+  description: 'Skill: email.templates.get — Get a template by ID.'
+  category: email_templates
+  method: GET
+  path: /api/email-templates/{template_id}
+  approval_required: false
+- name: email.templates.update
+  description: 'Skill: email.templates.update — Update a custom template.'
+  category: email_templates
+  method: PATCH
+  path: /api/email-templates/{template_id}
+  approval_required: false
+- name: email.templates.delete
+  description: 'Skill: email.templates.delete — Delete a custom template.'
+  category: email_templates
+  method: DELETE
+  path: /api/email-templates/{template_id}
+  approval_required: false
+- name: email.templates.from_message
+  description: 'Skill: email.templates.from_message — Create a template from an existing
+    email.'
+  category: email_templates
+  method: POST
+  path: /api/email-templates/from-message
+  approval_required: false
+- name: email.templates.render
+  description: 'Skill: email.templates.render — Render a template with variable substitution.'
+  category: email_templates
+  method: POST
+  path: /api/email-templates/{template_id}/render
   approval_required: false

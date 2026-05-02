@@ -59,16 +59,39 @@ class ParsedEmail:
 
 
 def get_mailbox_configs() -> list[MailboxConfig]:
-    """Build mailbox configs from environment settings."""
-    configs = []
+    """Load active mailbox configs from the database."""
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
 
-    # Procurement mailbox
-    if settings.smtp_host:  # Use smtp_host as indicator that email is configured
-        # In production, these would come from DB or env
-        pass
+    from app.config import settings as _settings
+    from app.db.models import MailboxConfig as MailboxConfigDB
+    from app.utils.crypto import decrypt_password
 
-    # For now return empty — mailboxes configured via admin UI (Epic 1 TODO)
-    return configs
+    try:
+        engine = create_engine(_settings.database_url_sync, pool_pre_ping=True)
+        with Session(engine) as db:
+            rows = db.execute(
+                select(MailboxConfigDB).where(MailboxConfigDB.is_active == True)  # noqa: E712
+            ).scalars().all()
+            configs = [
+                MailboxConfig(
+                    name=row.name,
+                    host=row.imap_host,
+                    port=row.imap_port,
+                    user=row.imap_user,
+                    password=decrypt_password(row.imap_password_encrypted),
+                    ssl=row.imap_ssl,
+                    folder=row.imap_folder,
+                    default_doc_type=row.default_doc_type,
+                    assigned_role=row.assigned_role,
+                )
+                for row in rows
+            ]
+        engine.dispose()
+        return configs
+    except Exception as e:
+        logger.warning("mailbox_configs_load_failed", error=str(e))
+        return []
 
 
 def decode_mime_header(value: str | None) -> str:

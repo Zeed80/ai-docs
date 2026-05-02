@@ -10,6 +10,7 @@ import {
 } from "@/lib/agent-ws";
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { genId } from "@/lib/ws-url";
+import { useCanvasDispatch, type CanvasBlock } from "@/lib/canvas-context";
 
 type MessageRole = "user" | "assistant" | "tool" | "approval" | "error";
 
@@ -129,6 +130,7 @@ function FileChip({
 
 export function SvetaPanel() {
   const { isDegraded } = useDegradedMode();
+  const canvasDispatch = useCanvasDispatch();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -316,6 +318,23 @@ export function SvetaPanel() {
           status: "pending",
         },
       ]);
+      return;
+    }
+
+    // ── Canvas ────────────────────────────────────────────────────────────────
+    if (type === "canvas") {
+      const rawBlock = data.block as Omit<CanvasBlock, "id">;
+      const canvasId = data.canvas_id as string | undefined;
+      if (data.append === false && canvasId) {
+        canvasDispatch({
+          type: "REPLACE_BLOCK",
+          id: canvasId,
+          block: rawBlock,
+        });
+      } else {
+        canvasDispatch({ type: "APPEND_BLOCK", block: rawBlock });
+      }
+      canvasDispatch({ type: "OPEN" });
       return;
     }
 

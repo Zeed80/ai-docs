@@ -141,16 +141,24 @@ def compute_field_confidences(
 
 
 def compute_overall_confidence(field_confidences: list[FieldConfidence]) -> float:
-    """Compute overall document confidence from field confidences."""
+    """Compute overall document confidence from field confidences.
+
+    Only filled fields (value is not None) are counted — absent fields are
+    simply not in the denominator, so a document with fewer fields doesn't
+    get penalised for having blank optional columns.
+    """
     if not field_confidences:
         return 0.0
 
-    # Weighted: critical fields (amounts, dates) weigh more
+    filled = [fc for fc in field_confidences if fc.value is not None]
+    if not filled:
+        return 0.0
+
     critical = {"total_amount", "invoice_number", "invoice_date", "supplier.inn"}
     weighted_sum = 0.0
     weight_total = 0.0
 
-    for fc in field_confidences:
+    for fc in filled:
         weight = 2.0 if fc.field_name in critical else 1.0
         weighted_sum += fc.confidence * weight
         weight_total += weight

@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -437,7 +437,12 @@ def process_document(document_id: str, force: bool = False) -> dict:
 
 
 def _get_document_text(doc: Document) -> str:
-    """Get text from a document — try PDF extraction, fallback to stored text."""
+    """Get text from a document — try PDF extraction, fallback to OCR.
+
+    If OCR returns empty on first attempt (model cold start), waits 10 s and retries once.
+    """
+    import time
+
     content = _download_document(doc)
     if not content:
         return ""
@@ -448,13 +453,23 @@ def _get_document_text(doc: Document) -> str:
             pdf_data = extract_pdf(content, render_pages=False)
             if pdf_data.full_text.strip():
                 return pdf_data.full_text
-            return _ocr_pdf_content(content, doc)
         except Exception as e:
             logger.warning("pdf_text_extraction_failed", error=str(e))
-            return _ocr_pdf_content(content, doc)
+
+        text = _ocr_pdf_content(content, doc)
+        if not text.strip():
+            logger.warning("pdf_ocr_empty_retry", document_id=str(doc.id))
+            time.sleep(10)
+            text = _ocr_pdf_content(content, doc)
+        return text
 
     if doc.mime_type.startswith("image/"):
-        return _ocr_image_content(content, doc.mime_type, doc)
+        text = _ocr_image_content(content, doc.mime_type, doc)
+        if not text.strip():
+            logger.warning("image_ocr_empty_retry", document_id=str(doc.id))
+            time.sleep(10)
+            text = _ocr_image_content(content, doc.mime_type, doc)
+        return text
 
     # Plain text
     try:
@@ -478,9 +493,11 @@ _VISION_FALLBACK_MODELS = ["gemma4:e4b", "gemma4:e2b", "gemma4:31b"]
 def _ollama_vision_ocr(images_b64: list[str], model_name: str, prompt: str) -> str:
     """Call Ollama vision API synchronously. images_b64 must be raw base64 (no data: prefix).
 
-    If the configured model returns empty (no vision support), automatically retries
-    with known vision-capable fallback models.
+    Retries once after a short delay if the primary model returns empty (cold start).
+    Falls back to known vision-capable models if still empty.
     """
+    import time
+
     import httpx
 
     def _call(model: str) -> str:
@@ -497,9 +514,13 @@ def _ollama_vision_ocr(images_b64: list[str], model_name: str, prompt: str) -> s
         resp.raise_for_status()
         return resp.json().get("message", {}).get("content", "")
 
-    # Try the configured model first
+    # Try the configured model; retry once on empty to survive cold-start
     try:
         text = _call(model_name)
+        if not text.strip():
+            logger.warning("ollama_vision_ocr_empty_retry", model=model_name)
+            time.sleep(5)
+            text = _call(model_name)
         if text.strip():
             return text
         logger.warning("ollama_vision_ocr_empty", model=model_name)
@@ -521,20 +542,39 @@ def _ollama_vision_ocr(images_b64: list[str], model_name: str, prompt: str) -> s
     return ""
 
 
+_OCR_PROMPT = (
+    "Распознай ВЕСЬ текст на изображении документа. "
+    "Точно сохрани: номера счётов/договоров, даты, ИНН, КПП, ОГРН, БИК, "
+    "расчётные и корреспондентские счета, наименования организаций и товаров, "
+    "единицы измерения, количества, цены, суммы, НДС, итоговые суммы. "
+    "Таблицы сохрани построчно. Если текст нечёткий — распознай максимально точно. "
+    "Верни ТОЛЬКО текст без пояснений."
+)
+
+
+def _preprocess_image(content: bytes) -> bytes:
+    """Enhance image contrast/brightness for better OCR on dark or washed-out scans."""
+    try:
+        from PIL import Image, ImageEnhance
+        import io
+
+        img = Image.open(io.BytesIO(content)).convert("RGB")
+        img = ImageEnhance.Contrast(img).enhance(1.5)
+        img = ImageEnhance.Sharpness(img).enhance(1.3)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=False)
+        return buf.getvalue()
+    except Exception:
+        return content
+
+
 def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
     """OCR an image using the configured OCR model."""
     model = _get_configured_ocr_model()
     logger.info("image_ocr_start", document_id=str(doc.id), model=model)
-    encoded = base64.b64encode(content).decode("ascii")
-    text = _ollama_vision_ocr(
-        [encoded],
-        model,
-        (
-            "Распознай весь видимый текст документа. "
-            "Сохрани номера, даты, ИНН/КПП, суммы, наименования, "
-            "табличные строки и единицы измерения. Верни только текст."
-        ),
-    )
+    enhanced = _preprocess_image(content)
+    encoded = base64.b64encode(enhanced).decode("ascii")
+    text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
     logger.info("image_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
     return text
 
@@ -547,7 +587,8 @@ def _ocr_pdf_content(content: bytes, doc: Document) -> str:
         images_b64: list[str] = []
         with fitz.open(stream=content, filetype="pdf") as pdf:
             for page in list(pdf)[:3]:
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                # 2.5x gives ~180 DPI equivalent — good balance for invoice OCR
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
                 png_bytes = pixmap.tobytes("png")
                 images_b64.append(base64.b64encode(png_bytes).decode("ascii"))
         if not images_b64:
@@ -555,15 +596,7 @@ def _ocr_pdf_content(content: bytes, doc: Document) -> str:
 
         model = _get_configured_ocr_model()
         logger.info("pdf_ocr_start", document_id=str(doc.id), model=model, pages=len(images_b64))
-        text = _ollama_vision_ocr(
-            images_b64,
-            model,
-            (
-                "Распознай текст этих страниц PDF. "
-                "Сохрани номера, даты, реквизиты, суммы и таблицы. "
-                "Верни только текст."
-            ),
-        )
+        text = _ollama_vision_ocr(images_b64, model, _OCR_PROMPT)
         logger.info("pdf_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
         return text
     except Exception as e:
@@ -759,17 +792,30 @@ def _upsert_party(db: Session, data: dict, role: str) -> uuid.UUID | None:
 
     from app.db.models import Party, PartyRole
 
+    try:
+        party_role = PartyRole(role)
+    except ValueError:
+        party_role = PartyRole.supplier
+
     party = None
     if inn:
         party = db.execute(
             select(Party).where(Party.inn == inn)
         ).scalar_one_or_none()
 
+    # Fall back to name match (covers suppliers without INN or OCR errors in INN)
+    if party is None and name:
+        normalized = name.strip().upper()
+        party = db.execute(
+            select(Party).where(
+                func.upper(func.trim(Party.name)) == normalized,
+                Party.role.in_([PartyRole.supplier, PartyRole.both, party_role]),
+            )
+        ).first()
+        if party is not None:
+            party = party[0]
+
     if party is None:
-        try:
-            party_role = PartyRole(role)
-        except ValueError:
-            party_role = PartyRole.supplier
         party = Party(
             name=name or inn,
             inn=inn,

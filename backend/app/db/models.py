@@ -1602,3 +1602,69 @@ class NTDCheckFinding(UUIDPrimaryKey, TimestampMixin, Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
     check: Mapped["NTDCheckRun"] = relationship(back_populates="findings")
+
+
+# ── Mailbox / Email Templates ─────────────────────────────────────────────────
+
+
+class MailboxConfig(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "mailbox_configs"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(200))
+
+    # IMAP
+    imap_host: Mapped[str] = mapped_column(String(500), nullable=False)
+    imap_port: Mapped[int] = mapped_column(Integer, default=993, nullable=False)
+    imap_user: Mapped[str] = mapped_column(String(500), nullable=False)
+    imap_password_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    imap_ssl: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    imap_folder: Mapped[str] = mapped_column(String(100), default="INBOX", nullable=False)
+
+    # SMTP (optional)
+    smtp_host: Mapped[str | None] = mapped_column(String(500))
+    smtp_port: Mapped[int | None] = mapped_column(Integer, default=587)
+    smtp_user: Mapped[str | None] = mapped_column(String(500))
+    smtp_password_encrypted: Mapped[str | None] = mapped_column(Text)
+    smtp_use_tls: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    smtp_from_address: Mapped[str | None] = mapped_column(String(500))
+    smtp_from_name: Mapped[str | None] = mapped_column(String(200))
+
+    # Routing
+    default_doc_type: Mapped[str | None] = mapped_column(String(50))
+    assigned_role: Mapped[str | None] = mapped_column(String(50))
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_error: Mapped[str | None] = mapped_column(Text)
+
+
+class EmailTemplateCategory(str, enum.Enum):
+    payment = "payment"
+    inquiry = "inquiry"
+    confirmation = "confirmation"
+    reminder = "reminder"
+    request = "request"
+    custom = "custom"
+
+
+class EmailTemplateDB(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "email_templates"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    category: Mapped[EmailTemplateCategory] = mapped_column(
+        Enum(EmailTemplateCategory), default=EmailTemplateCategory.custom, nullable=False
+    )
+    language: Mapped[str] = mapped_column(String(10), default="ru", nullable=False)
+    subject: Mapped[str] = mapped_column(String(500), nullable=False)
+    body_html: Mapped[str] = mapped_column(Text, nullable=False)
+    body_text: Mapped[str | None] = mapped_column(Text)
+    variables: Mapped[list | None] = mapped_column(JSON)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    source_email_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("email_messages.id"), nullable=True
+    )
+    use_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str | None] = mapped_column(String(100))

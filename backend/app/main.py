@@ -16,6 +16,7 @@ from app.api import (
     agent_actions, export, draft_email, quarantine, dashboard, warehouse,
     procurement, payments, boms, scenarios,
     graph, memory, technology, openclaw_gateway, ntd, telegram,
+    canvas, mailbox, email_templates,
 )
 
 
@@ -54,6 +55,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning("telegram bot failed to start at startup", error=err)
     except Exception as exc:
         logger.warning("telegram bot init error", error=str(exc))
+
+    try:
+        from app.db.session import _get_session_factory
+        from app.db.seeds.email_templates import seed_builtin_templates
+        async with _get_session_factory()() as db:
+            await seed_builtin_templates(db)
+    except Exception as exc:
+        logger.warning("email_templates_seed_failed", error=str(exc))
 
     yield
 
@@ -116,6 +125,9 @@ def create_app() -> FastAPI:
     app.include_router(openclaw_gateway.router, prefix="/api/openclaw", tags=["openclaw"])
     app.include_router(ntd.router, prefix="/api", tags=["ntd"])
     app.include_router(telegram.router, prefix="/api/telegram", tags=["telegram"])
+    app.include_router(canvas.router, prefix="/api/canvas", tags=["canvas"])
+    app.include_router(mailbox.router, prefix="/api/mailbox", tags=["mailbox"])
+    app.include_router(email_templates.router, prefix="/api/email-templates", tags=["email-templates"])
 
     return app
 

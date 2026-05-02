@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { MailboxSection } from "@/components/email/mailbox-settings";
+import { EmailTemplatesSection } from "@/components/email/email-templates";
 
 const API = getApiBaseUrl();
 
@@ -23,7 +25,6 @@ interface AiConfig {
   embedding_model: string;
   reranker_model: string | null;
   verify_model_1: string;
-  verify_model_2: string;
   turboquant_enabled: boolean;
   turboquant_kv_cache_dtype: string;
   turboquant_max_model_len: number;
@@ -136,7 +137,7 @@ const PROVIDER_MODEL_PLACEHOLDER: Record<string, string> = {
   deepseek: "deepseek-chat  или  deepseek-reasoner",
 };
 
-type TabId = "agent" | "models" | "memory" | "data" | "system";
+type TabId = "agent" | "models" | "memory" | "data" | "system" | "email";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "agent", label: "Агент" },
@@ -144,6 +145,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "memory", label: "Память" },
   { id: "data", label: "Данные" },
   { id: "system", label: "Система" },
+  { id: "email", label: "Почта" },
 ];
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
@@ -1551,35 +1553,13 @@ export default function SettingsPage() {
                   models={models}
                   onChange={(v) => setConfig({ ...config, model_reasoning: v })}
                 />
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <ModelSelector
-                    label="Проверочная модель 1"
-                    description="Повторная экстракция для автоверификации."
-                    value={config.verify_model_1}
-                    models={models}
-                    onChange={(v) =>
-                      setConfig({ ...config, verify_model_1: v })
-                    }
-                  />
-                  <ModelSelector
-                    label="Проверочная модель 2 (опц.)"
-                    description="Третий проход для 3-стороннего сравнения."
-                    value={config.verify_model_2}
-                    models={[
-                      {
-                        name: "",
-                        size: 0,
-                        parameter_size: "—",
-                        family: "",
-                        modified_at: "",
-                      },
-                      ...models,
-                    ]}
-                    onChange={(v) =>
-                      setConfig({ ...config, verify_model_2: v })
-                    }
-                  />
-                </div>
+                <ModelSelector
+                  label="Проверочная модель"
+                  description="Повторная экстракция для автоверификации."
+                  value={config.verify_model_1}
+                  models={models}
+                  onChange={(v) => setConfig({ ...config, verify_model_1: v })}
+                />
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field
                     label="Embedding модель"
@@ -2264,6 +2244,14 @@ export default function SettingsPage() {
               </p>
             </div>
           </SectionCard>
+        </div>
+      )}
+
+      {/* ── TAB: Почта ──────────────────────────────────────────────────────── */}
+      {activeTab === "email" && (
+        <div className="space-y-6">
+          <MailboxSection />
+          <EmailTemplatesSection />
         </div>
       )}
     </div>
