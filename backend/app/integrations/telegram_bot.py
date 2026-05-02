@@ -238,6 +238,13 @@ class SvetaTelegramBot:
             except asyncio.QueueEmpty:
                 break
 
+        # Mirror user message to all connected web chat clients
+        try:
+            from app.core.chat_bus import chat_bus
+            await chat_bus.publish({"type": "tg_user", "content": text, "source": "telegram"})
+        except Exception:
+            pass
+
         # Send placeholder; we'll edit it as tokens stream in
         placeholder = await update.message.reply_text("…")
         accumulated = ""
@@ -263,17 +270,21 @@ class SvetaTelegramBot:
         agent_task = asyncio.create_task(session.on_user_message(text))
 
         try:
+            from app.core.chat_bus import chat_bus
             while not agent_task.done() or not queue.empty():
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=0.2)
                 except asyncio.TimeoutError:
                     continue
 
+                # Mirror every agent event to web chat in real time
+                asyncio.create_task(chat_bus.publish({**event, "source": "telegram"}))
+
                 ev_type = event.get("type", "")
                 if ev_type == "token":
                     accumulated += event.get("content", "")
                 elif ev_type == "text":
-                    accumulated = event.get("content", accumulated)
+                    accumulated += event.get("content", "")
                 elif ev_type == "approval_request":
                     skill = event.get("skill", "")
                     desc = event.get("description", "Разрешить выполнение?")

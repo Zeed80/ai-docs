@@ -23,6 +23,7 @@ interface ChatMessage {
   status?: "calling" | "done" | "pending" | "approved" | "rejected";
   preview?: string;
   attachments?: { name: string; docId: string }[];
+  source?: "telegram";
 }
 
 type AttachedFileStatus = "uploading" | "uploaded" | "error";
@@ -137,6 +138,7 @@ export function SvetaPanel() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamingIdRef = useRef<string | null>(null);
+  const tgStreamingIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const agentWsModeRef = useRef<AgentWsMode>("legacy");
@@ -199,8 +201,44 @@ export function SvetaPanel() {
 
   function handleServerMessage(data: Record<string, unknown>) {
     const type = data.type as string;
+    const isTelegram = data.source === "telegram";
+
+    // ── Telegram user message (mirror) ──────────────────────────────────────
+    if (type === "tg_user") {
+      tgStreamingIdRef.current = null;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: genId(),
+          role: "user",
+          content: data.content as string,
+          source: "telegram",
+        },
+      ]);
+      return;
+    }
+
+    // ── Text / streaming ─────────────────────────────────────────────────────
     if (type === "text") {
       const content = (data.content as string) ?? "";
+      if (isTelegram) {
+        const sid = tgStreamingIdRef.current;
+        if (sid) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === sid ? { ...m, content: (m.content ?? "") + content } : m,
+            ),
+          );
+        } else {
+          const id = genId();
+          tgStreamingIdRef.current = id;
+          setMessages((prev) => [
+            ...prev,
+            { id, role: "assistant", content, source: "telegram" },
+          ]);
+        }
+        return;
+      }
       const sid = streamingIdRef.current;
       if (sid) {
         setMessages((prev) =>
@@ -214,10 +252,23 @@ export function SvetaPanel() {
         setIsStreaming(true);
         setMessages((prev) => [...prev, { id, role: "assistant", content }]);
       }
-    } else if (type === "done") {
+      return;
+    }
+
+    // ── Done ─────────────────────────────────────────────────────────────────
+    if (type === "done") {
+      if (isTelegram) {
+        tgStreamingIdRef.current = null;
+        return;
+      }
       streamingIdRef.current = null;
       setIsStreaming(false);
-    } else if (type === "tool_call") {
+      return;
+    }
+
+    // ── Tool call / result (skip Telegram mirror — too noisy) ─────────────────
+    if (type === "tool_call") {
+      if (isTelegram) return;
       setMessages((prev) => [
         ...prev,
         {
@@ -228,7 +279,10 @@ export function SvetaPanel() {
           status: "calling",
         },
       ]);
-    } else if (type === "tool_result") {
+      return;
+    }
+    if (type === "tool_result") {
+      if (isTelegram) return;
       const toolName = data.tool as string;
       setMessages((prev) => {
         const idx = [...prev]
@@ -245,7 +299,12 @@ export function SvetaPanel() {
           i === realIdx ? { ...m, status: "done", result: data.result } : m,
         );
       });
-    } else if (type === "approval_request") {
+      return;
+    }
+
+    // ── Approval (skip Telegram — handled by inline buttons) ─────────────────
+    if (type === "approval_request") {
+      if (isTelegram) return;
       setMessages((prev) => [
         ...prev,
         {
@@ -257,7 +316,15 @@ export function SvetaPanel() {
           status: "pending",
         },
       ]);
-    } else if (type === "error") {
+      return;
+    }
+
+    // ── Error ─────────────────────────────────────────────────────────────────
+    if (type === "error") {
+      if (isTelegram) {
+        tgStreamingIdRef.current = null;
+        return;
+      }
       streamingIdRef.current = null;
       setIsStreaming(false);
       setMessages((prev) => [
@@ -474,11 +541,25 @@ export function SvetaPanel() {
 
         {messages.map((msg) => {
           if (msg.role === "user") {
+            const isTg = msg.source === "telegram";
             return (
               <div key={msg.id} className="flex justify-end">
                 <div className="max-w-[85%] space-y-1">
+                  {isTg && (
+                    <div className="flex items-center justify-end gap-1 mb-0.5">
+                      <svg
+                        viewBox="0 0 24 24"
+                        className="w-3 h-3 text-sky-400 fill-current shrink-0"
+                      >
+                        <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.19 13.65l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.958.909z" />
+                      </svg>
+                      <span className="text-[9px] text-sky-500">Telegram</span>
+                    </div>
+                  )}
                   {msg.content && (
-                    <div className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white">
+                    <div
+                      className={`px-3 py-2 rounded-lg text-sm text-white ${isTg ? "bg-sky-700" : "bg-blue-600"}`}
+                    >
                       {msg.content}
                     </div>
                   )}
@@ -515,10 +596,26 @@ export function SvetaPanel() {
             );
           }
           if (msg.role === "assistant") {
+            const isTg = msg.source === "telegram";
             return (
               <div key={msg.id} className="flex justify-start">
-                <div className="max-w-[90%] px-3 py-2 rounded-lg text-sm bg-slate-700 text-slate-100 whitespace-pre-wrap">
-                  {msg.content}
+                <div
+                  className={`max-w-[90%] rounded-lg text-sm text-slate-100 whitespace-pre-wrap overflow-hidden ${isTg ? "bg-slate-600" : "bg-slate-700"}`}
+                >
+                  {isTg && (
+                    <div className="flex items-center gap-1 px-3 pt-2 pb-1 border-b border-slate-500/40">
+                      <svg
+                        viewBox="0 0 24 24"
+                        className="w-3 h-3 text-sky-400 fill-current shrink-0"
+                      >
+                        <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.19 13.65l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.958.909z" />
+                      </svg>
+                      <span className="text-[9px] text-sky-400">
+                        Ответ через Telegram
+                      </span>
+                    </div>
+                  )}
+                  <div className="px-3 py-2">{msg.content}</div>
                 </div>
               </div>
             );

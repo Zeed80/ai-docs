@@ -7,6 +7,7 @@ import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.ai.agent_loop import AgentSession
+from app.core.chat_bus import chat_bus
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -23,6 +24,9 @@ async def chat_ws(ws: WebSocket) -> None:
         except Exception:
             pass
 
+    # Mirror Telegram conversations to this WebSocket client
+    sub_id = chat_bus.subscribe(send)
+
     session = AgentSession(send)
     current_turn: asyncio.Task | None = None
 
@@ -31,6 +35,7 @@ async def chat_ws(ws: WebSocket) -> None:
         await send({"type": "text", "content": "Привет! Я Света. Чем могу помочь?"})
         await send({"type": "done"})
     except Exception:
+        chat_bus.unsubscribe(sub_id)
         return
 
     try:
@@ -72,3 +77,5 @@ async def chat_ws(ws: WebSocket) -> None:
             pass
         if current_turn and not current_turn.done():
             current_turn.cancel()
+    finally:
+        chat_bus.unsubscribe(sub_id)
