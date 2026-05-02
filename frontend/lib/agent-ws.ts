@@ -150,6 +150,7 @@ export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
       "tool_result",
       "approval_request",
       "error",
+      "tg_user",
     ].includes(type)
   ) {
     return [data as unknown as AgentWsMessage];
@@ -192,7 +193,9 @@ export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
     return [
       {
         type: "tool_call",
-        tool: String(payload.tool ?? data.tool ?? payload.name ?? data.name ?? ""),
+        tool: String(
+          payload.tool ?? data.tool ?? payload.name ?? data.name ?? "",
+        ),
         args: (payload.args ?? data.args ?? {}) as Record<string, unknown>,
       },
     ];
@@ -202,7 +205,9 @@ export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
     return [
       {
         type: "tool_result",
-        tool: String(payload.tool ?? data.tool ?? payload.name ?? data.name ?? ""),
+        tool: String(
+          payload.tool ?? data.tool ?? payload.name ?? data.name ?? "",
+        ),
         result: payload.result ?? data.result,
       },
     ];
@@ -212,7 +217,9 @@ export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
     return [
       {
         type: "approval_request",
-        tool: String(payload.tool ?? data.tool ?? payload.name ?? data.name ?? ""),
+        tool: String(
+          payload.tool ?? data.tool ?? payload.name ?? data.name ?? "",
+        ),
         args: (payload.args ?? data.args ?? {}) as Record<string, unknown>,
         preview: String(payload.preview ?? data.preview ?? ""),
       },
