@@ -47,31 +47,21 @@ def _reject_silent_production_schema_create() -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("starting", env=settings.app_env)
 
-    _tg_bot = None
-    _tg_task = None
     try:
-        from app.api.telegram import get_bot_token, get_allowed_users
-        tg_token = get_bot_token()
-        if tg_token:
-            from app.integrations.telegram_bot import SvetaTelegramBot
-            _tg_bot = SvetaTelegramBot(
-                token=tg_token,
-                allowed_user_ids=get_allowed_users(),
-            )
-            _tg_task = asyncio.create_task(_tg_bot.start_polling())
-            logger.info("telegram bot started")
+        from app.api.telegram import bot_manager
+        err = await bot_manager.start()
+        if err:
+            logger.warning("telegram bot failed to start at startup", error=err)
     except Exception as exc:
-        logger.warning("telegram bot failed to start", error=str(exc))
+        logger.warning("telegram bot init error", error=str(exc))
 
     yield
 
-    if _tg_bot is not None:
-        try:
-            await _tg_bot.stop()
-        except Exception:
-            pass
-    if _tg_task is not None:
-        _tg_task.cancel()
+    try:
+        from app.api.telegram import bot_manager
+        await bot_manager.stop()
+    except Exception:
+        pass
     await engine.dispose()
     logger.info("shutdown")
 

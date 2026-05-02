@@ -3,11 +3,15 @@
 Sensitive values (bot token, chat IDs, allowed users) are stored encrypted
 in Redis. The plaintext is never returned to the frontend — only masked
 previews are exposed.
+
+The bot lifecycle is managed via _BotManager so it can be started/stopped/
+restarted at runtime without restarting the whole server.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
+import logging
 
 import redis as _redis
 from fastapi import APIRouter, HTTPException
@@ -16,6 +20,7 @@ from pydantic import BaseModel
 from app.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Redis keys
 _KEY_TOKEN = "telegram:config:bot_token"
@@ -78,23 +83,89 @@ def get_notifications_enabled() -> bool:
     return val.lower() in ("1", "true", "yes")
 
 
+# ── Runtime bot manager ───────────────────────────────────────────────────────
+
+class _BotManager:
+    """Holds a single SvetaTelegramBot instance; supports hot start/stop."""
+
+    def __init__(self) -> None:
+        self._bot: object | None = None
+        self._task: asyncio.Task | None = None  # type: ignore[type-arg]
+        self._running = False
+        self._last_error: str = ""
+
+    @property
+    def running(self) -> bool:
+        return self._running and self._task is not None and not self._task.done()
+
+    async def start(self) -> str:
+        """Start (or restart) the bot. Returns "" on success, error message on failure."""
+        await self.stop()
+
+        token = get_bot_token()
+        if not token:
+            return "Токен бота не настроен"
+
+        try:
+            from app.integrations.telegram_bot import SvetaTelegramBot
+            bot = SvetaTelegramBot(token=token, allowed_user_ids=get_allowed_users())
+            await bot.start_polling()
+            self._bot = bot
+            self._running = True
+            self._last_error = ""
+            logger.info("Telegram bot started via API")
+            return ""
+        except Exception as exc:
+            self._running = False
+            self._last_error = str(exc)
+            logger.warning("Telegram bot failed to start: %s", exc)
+            return str(exc)
+
+    async def stop(self) -> None:
+        if self._bot is not None:
+            try:
+                from app.integrations.telegram_bot import SvetaTelegramBot
+                if isinstance(self._bot, SvetaTelegramBot):
+                    await self._bot.stop()
+            except Exception:
+                pass
+            self._bot = None
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+        self._running = False
+
+    @property
+    def last_error(self) -> str:
+        return self._last_error
+
+
+bot_manager = _BotManager()
+
+
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 class TelegramConfigUpdate(BaseModel):
-    bot_token: str | None = None          # "" to clear
+    bot_token: str | None = None
     notifications_chat_id: str | None = None
-    allowed_users: str | None = None      # comma-separated int IDs
+    allowed_users: str | None = None
     notifications_enabled: bool | None = None
 
 
 class TelegramConfigView(BaseModel):
     configured: bool
+    bot_running: bool
     notifications_enabled: bool
     has_default_chat: bool
     allowed_users_count: int
-    token_masked: str        # e.g. "**************3F9A"
-    chat_id_masked: str      # e.g. "**********4521"
+    token_masked: str
+    chat_id_masked: str
     allowed_users_masked: str
+    last_error: str
 
 
 class NotifyRequest(BaseModel):
@@ -111,7 +182,6 @@ class NotifyResponse(BaseModel):
 
 @router.get("/status", response_model=TelegramConfigView)
 async def telegram_status() -> TelegramConfigView:
-    """Return current Telegram config status (no plaintext secrets)."""
     from app.utils.secret_store import decrypt, mask
 
     token = get_bot_token()
@@ -121,18 +191,20 @@ async def telegram_status() -> TelegramConfigView:
 
     return TelegramConfigView(
         configured=bool(token),
+        bot_running=bot_manager.running,
         notifications_enabled=get_notifications_enabled(),
         has_default_chat=bool(chat_id),
         allowed_users_count=allowed_count,
         token_masked=mask(token, 4) if token else "",
         chat_id_masked=mask(chat_id, 4) if chat_id else "",
         allowed_users_masked=allowed_raw if len(allowed_raw) <= 40 else allowed_raw[:37] + "…",
+        last_error=bot_manager.last_error,
     )
 
 
 @router.patch("/config")
 async def update_telegram_config(body: TelegramConfigUpdate) -> TelegramConfigView:
-    """Save Telegram settings encrypted in Redis."""
+    """Save Telegram settings encrypted in Redis, then restart the bot."""
     from app.utils.secret_store import encrypt
 
     if body.bot_token is not None:
@@ -147,12 +219,32 @@ async def update_telegram_config(body: TelegramConfigUpdate) -> TelegramConfigVi
     if body.notifications_enabled is not None:
         _r_set(_KEY_ENABLED, "true" if body.notifications_enabled else "false")
 
+    # Auto-restart bot with new config
+    if get_bot_token():
+        asyncio.create_task(bot_manager.start())
+
+    return await telegram_status()
+
+
+@router.post("/restart")
+async def telegram_restart() -> TelegramConfigView:
+    """(Re)start the polling bot with current config."""
+    err = await bot_manager.start()
+    status = await telegram_status()
+    if err:
+        status.last_error = err
+    return status
+
+
+@router.post("/stop")
+async def telegram_stop() -> TelegramConfigView:
+    """Stop the polling bot."""
+    await bot_manager.stop()
     return await telegram_status()
 
 
 @router.post("/notify")
 async def telegram_notify(req: NotifyRequest) -> NotifyResponse:
-    """Send a plain text notification to the configured chat."""
     token = get_bot_token()
     if not token:
         raise HTTPException(status_code=503, detail="Telegram bot token not configured")
@@ -172,7 +264,6 @@ async def telegram_notify(req: NotifyRequest) -> NotifyResponse:
 
 @router.post("/test")
 async def telegram_test() -> NotifyResponse:
-    """Send a test message to the default chat."""
     token = get_bot_token()
     if not token:
         raise HTTPException(status_code=503, detail="Telegram bot token not configured")

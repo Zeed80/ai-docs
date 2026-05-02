@@ -389,13 +389,16 @@ export default function SettingsPage() {
   // Telegram
   const [tgStatus, setTgStatus] = useState<{
     configured: boolean;
+    bot_running: boolean;
     notifications_enabled: boolean;
     has_default_chat: boolean;
     allowed_users_count: number;
     token_masked: string;
     chat_id_masked: string;
     allowed_users_masked: string;
+    last_error: string;
   } | null>(null);
+  const [tgRestarting, setTgRestarting] = useState(false);
   const [tgTesting, setTgTesting] = useState(false);
   const [tgTestResult, setTgTestResult] = useState<string | null>(null);
   const [tgEditing, setTgEditing] = useState(false);
@@ -745,6 +748,25 @@ export default function SettingsPage() {
       setPurgeMessage("Не удалось выполнить полную очистку");
     } finally {
       setPurgeBusy(false);
+    }
+  }
+
+  async function handleTelegramRestart() {
+    setTgRestarting(true);
+    setTgTestResult(null);
+    try {
+      const r = await fetch(`${API}/api/telegram/restart`, { method: "POST" });
+      const d = await r.json();
+      setTgTestResult(
+        d.bot_running
+          ? "✅ Бот запущен"
+          : `❌ ${d.last_error || "Не удалось запустить"}`,
+      );
+      await loadTgStatus();
+    } catch (e) {
+      setTgTestResult(`❌ Ошибка: ${e}`);
+    } finally {
+      setTgRestarting(false);
     }
   }
 
@@ -2011,6 +2033,7 @@ export default function SettingsPage() {
             <div className="space-y-4">
               {/* Status badges */}
               <div className="flex flex-wrap items-center gap-2">
+                {/* Configured */}
                 <span
                   className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
                     tgStatus?.configured
@@ -2023,6 +2046,22 @@ export default function SettingsPage() {
                   />
                   {tgStatus?.configured ? "Настроен" : "Не настроен"}
                 </span>
+                {/* Polling status */}
+                {tgStatus?.configured && (
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
+                      tgStatus.bot_running
+                        ? "bg-emerald-900/50 text-emerald-300 border-emerald-700"
+                        : "bg-yellow-900/50 text-yellow-300 border-yellow-700"
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${tgStatus.bot_running ? "bg-emerald-400 animate-pulse" : "bg-yellow-400"}`}
+                    />
+                    {tgStatus.bot_running ? "Polling запущен" : "Не запущен"}
+                  </span>
+                )}
+                {/* Notifications */}
                 {tgStatus?.configured && (
                   <span
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
@@ -2040,6 +2079,12 @@ export default function SettingsPage() {
                   <span className="text-xs text-green-400">✓ Сохранено</span>
                 )}
               </div>
+              {/* Error banner */}
+              {tgStatus?.last_error && !tgStatus.bot_running && (
+                <div className="rounded-md bg-red-900/30 border border-red-700 px-3 py-2 text-sm text-red-300">
+                  {tgStatus.last_error}
+                </div>
+              )}
 
               {/* Current values (masked) */}
               {tgStatus?.configured && !tgEditing && (
@@ -2093,7 +2138,7 @@ export default function SettingsPage() {
                   </Field>
                   <Field
                     label="Chat ID для уведомлений"
-                    hint="ID чата или пользователя, куда отправлять push-уведомления (узнать у @userinfobot)."
+                    hint="Ваш личный Telegram user ID (узнать у @userinfobot — именно свой ID, не ID бота). Для группы/канала — ID чата."
                   >
                     <input
                       className={inputCls}
@@ -2157,12 +2202,43 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {/* Test button */}
-              <div className="flex items-center gap-3">
+              {/* Bot control + test */}
+              <div className="flex flex-wrap items-center gap-3">
+                {tgStatus?.configured && !tgStatus.bot_running && (
+                  <button
+                    onClick={handleTelegramRestart}
+                    disabled={tgRestarting}
+                    className={btnPrimary}
+                  >
+                    {tgRestarting ? "Запуск…" : "▶ Запустить бота"}
+                  </button>
+                )}
+                {tgStatus?.bot_running && (
+                  <button
+                    onClick={async () => {
+                      await fetch(`${API}/api/telegram/stop`, {
+                        method: "POST",
+                      });
+                      await loadTgStatus();
+                    }}
+                    className={btnSecondary}
+                  >
+                    ■ Остановить
+                  </button>
+                )}
                 <button
                   onClick={handleTelegramTest}
-                  disabled={tgTesting || !tgStatus?.configured}
+                  disabled={
+                    tgTesting ||
+                    !tgStatus?.configured ||
+                    !tgStatus?.has_default_chat
+                  }
                   className={btnSecondary}
+                  title={
+                    !tgStatus?.has_default_chat
+                      ? "Сначала укажите Chat ID для уведомлений"
+                      : ""
+                  }
                 >
                   {tgTesting ? "Отправка…" : "Отправить тест"}
                 </button>
