@@ -399,7 +399,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-48 bg-slate-800 border-r border-slate-700 flex flex-col shrink-0">
+    <aside className="w-full h-full bg-slate-800 border-r border-slate-700 flex flex-col overflow-hidden">
       {/* Logo */}
       <div className="px-4 py-3 border-b border-slate-700">
         <h1 className="text-sm font-bold text-slate-100 tracking-tight">

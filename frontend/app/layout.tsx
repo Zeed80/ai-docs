@@ -5,6 +5,7 @@ import "./globals.css";
 import { Sidebar } from "@/components/ui/sidebar";
 import { KeyboardProvider } from "@/lib/keyboard-context";
 import { SvetaPanel } from "@/components/chat/sveta-panel";
+import { ResizableLayout } from "@/components/ui/resizable-layout";
 
 export const metadata: Metadata = {
   title: "AI Документооборот",
@@ -24,11 +25,9 @@ export default async function RootLayout({
       <body className="bg-slate-900 text-slate-100 antialiased">
         <NextIntlClientProvider messages={messages}>
           <KeyboardProvider>
-            <div className="flex h-screen overflow-hidden">
-              <Sidebar />
-              <main className="flex-1 overflow-auto">{children}</main>
-              <SvetaPanel />
-            </div>
+            <ResizableLayout sidebar={<Sidebar />} chat={<SvetaPanel />}>
+              {children}
+            </ResizableLayout>
           </KeyboardProvider>
         </NextIntlClientProvider>
       </body>

@@ -21,6 +21,7 @@ from app.db.models import (
     DocumentLink,
     DocumentProcessingJob,
     DocumentVersion,
+    EmailThread,
     EntityMention,
     EvidenceSpan,
     ExtractionField,
@@ -41,10 +42,12 @@ from app.db.models import (
     NormativeRequirement,
     NTDCheckFinding,
     NTDCheckRun,
+    Party,
     PaymentSchedule,
     PriceHistoryEntry,
     QuarantineEntry,
     SupplierContract,
+    SupplierProfile,
     TechnologyCorrection,
     WarehouseReceipt,
     WarehouseReceiptLine,
@@ -404,7 +407,26 @@ async def purge_all_development_data(
     document_ids = list((await db.execute(select(Document.id))).scalars().all())
     result = await hard_delete_documents(db, document_ids, delete_files=delete_files)
     result["documents_seen"] = len(document_ids)
+
+    # Also purge supplier-related data (not derived from documents)
+    await _purge_supplier_data(db)
+
     return result
+
+
+async def _purge_supplier_data(db: AsyncSession) -> None:
+    """Delete all supplier/party records not tied to specific documents."""
+    # Nullify nullable FKs that reference parties (avoids FK constraint errors)
+    await db.execute(
+        EmailThread.__table__.update().values(party_id=None)  # type: ignore[attr-defined]
+    )
+    await db.execute(
+        WarehouseReceipt.__table__.update().values(supplier_id=None)  # type: ignore[attr-defined]
+    )
+    # Delete in FK-safe order
+    for model in (SupplierContract, PriceHistoryEntry, SupplierProfile, Party):
+        await db.execute(delete(model))
+    logger.info("supplier_data_purged")
 
 
 async def _delete_cross_entity_records(

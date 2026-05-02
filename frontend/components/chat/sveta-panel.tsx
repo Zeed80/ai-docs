@@ -42,22 +42,22 @@ export function SvetaPanel() {
         const config = await resolveAgentWsConfig();
         agentWsModeRef.current = config.mode;
         const ws = new WebSocket(config.endpoint);
-      ws.onopen = () => setIsConnected(true);
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data) as Record<string, unknown>;
-          for (const message of normalizeAgentMessages(data)) {
-            handleServerMessage(message);
+        ws.onopen = () => setIsConnected(true);
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data) as Record<string, unknown>;
+            for (const message of normalizeAgentMessages(data)) {
+              handleServerMessage(message);
+            }
+          } catch {
+            appendAssistant(String(event.data));
           }
-        } catch {
-          appendAssistant(String(event.data));
-        }
-      };
-      ws.onclose = () => {
-        setIsConnected(false);
-        setTimeout(connect, 5000);
-      };
-      ws.onerror = () => setIsConnected(false);
+        };
+        ws.onclose = () => {
+          setIsConnected(false);
+          setTimeout(connect, 5000);
+        };
+        ws.onerror = () => setIsConnected(false);
         wsRef.current = ws;
       } catch {
         setIsConnected(false);
@@ -175,10 +175,7 @@ export function SvetaPanel() {
     )
       return;
     const content = input.trim();
-    setMessages((prev) => [
-      ...prev,
-      { id: genId(), role: "user", content },
-    ]);
+    setMessages((prev) => [...prev, { id: genId(), role: "user", content }]);
     wsRef.current.send(
       JSON.stringify(buildAgentUserMessage(content, agentWsModeRef.current)),
     );
@@ -189,7 +186,9 @@ export function SvetaPanel() {
   function handleApproval(msgId: string, approved: boolean) {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(
-      JSON.stringify(buildAgentApprovalMessage(approved, agentWsModeRef.current)),
+      JSON.stringify(
+        buildAgentApprovalMessage(approved, agentWsModeRef.current),
+      ),
     );
     setMessages((prev) =>
       prev.map((m) =>
@@ -201,7 +200,7 @@ export function SvetaPanel() {
   }
 
   return (
-    <aside className="w-80 shrink-0 bg-slate-800 border-l border-slate-700 flex flex-col">
+    <aside className="w-full h-full bg-slate-800 border-l border-slate-700 flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-slate-700 flex items-center gap-2">
         <span
