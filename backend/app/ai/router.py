@@ -25,6 +25,8 @@ from app.ai.providers.base import AIProvider
 from app.ai.providers.ollama import OllamaProvider
 from app.ai.providers.openai_compatible import OpenAICompatibleProvider
 from app.ai.providers.vllm import VLLMProvider
+from app.ai.providers.anthropic_provider import AnthropicProvider
+from app.ai.providers.openrouter import OpenRouterProvider
 from app.ai.schemas import AIRequest, AIResponse, AITask, Modality, ModelCapability, ProviderKind
 from app.config import settings
 
@@ -97,6 +99,13 @@ class AIRouter:
         if kind == ProviderKind.VLLM:
             return VLLMProvider(config)
         if kind in (ProviderKind.OPENAI_COMPATIBLE, ProviderKind.CLOUD_PROVIDER):
+            return OpenAICompatibleProvider(config)
+        if kind == ProviderKind.ANTHROPIC:
+            return AnthropicProvider.from_env()
+        if kind == ProviderKind.OPENROUTER:
+            return OpenRouterProvider.from_env()
+        if kind in (ProviderKind.DEEPSEEK, ProviderKind.GEMINI):
+            # OpenAI-compatible endpoints — use base_url from registry, key from env
             return OpenAICompatibleProvider(config)
         raise KeyError(f"Unsupported AI provider: {kind.value}")
 
