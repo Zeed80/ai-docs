@@ -74,6 +74,13 @@ export function SvetaPanel() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Restore focus to input after streaming ends
+  useEffect(() => {
+    if (!isStreaming && !isDegraded) {
+      inputRef.current?.focus();
+    }
+  }, [isStreaming, isDegraded]);
+
   // Focus input on Ctrl+K
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
