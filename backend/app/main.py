@@ -15,7 +15,7 @@ from app.api import (
     suppliers, collections, anomalies, compare, calendar, agent, auth, ai_settings,
     agent_actions, export, draft_email, quarantine, dashboard, warehouse,
     procurement, payments, boms, scenarios,
-    graph, memory, technology, openclaw_gateway, ntd,
+    graph, memory, technology, openclaw_gateway, ntd, telegram,
 )
 
 
@@ -46,7 +46,36 @@ def _reject_silent_production_schema_create() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("starting", env=settings.app_env)
+
+    _tg_bot = None
+    _tg_task = None
+    if settings.telegram_bot_token:
+        try:
+            from app.integrations.telegram_bot import SvetaTelegramBot
+            allowed: set[int] = set()
+            if settings.telegram_allowed_users:
+                for uid in settings.telegram_allowed_users.split(","):
+                    uid = uid.strip()
+                    if uid.isdigit():
+                        allowed.add(int(uid))
+            _tg_bot = SvetaTelegramBot(
+                token=settings.telegram_bot_token,
+                allowed_user_ids=allowed,
+            )
+            _tg_task = asyncio.create_task(_tg_bot.start_polling())
+            logger.info("telegram bot started")
+        except Exception as exc:
+            logger.warning("telegram bot failed to start", error=str(exc))
+
     yield
+
+    if _tg_bot is not None:
+        try:
+            await _tg_bot.stop()
+        except Exception:
+            pass
+    if _tg_task is not None:
+        _tg_task.cancel()
     await engine.dispose()
     logger.info("shutdown")
 
@@ -100,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(technology.router, prefix="/api/technology", tags=["technology"])
     app.include_router(openclaw_gateway.router, prefix="/api/openclaw", tags=["openclaw"])
     app.include_router(ntd.router, prefix="/api", tags=["ntd"])
+    app.include_router(telegram.router, prefix="/api/telegram", tags=["telegram"])
 
     return app
 

@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = "noreply@company.com"
 
+    # Telegram
+    telegram_bot_token: str = ""
+    telegram_allowed_users: str = ""  # comma-separated int user IDs; empty = no whitelist
+    telegram_notifications_chat_id: str = ""  # default chat for push notifications
+    telegram_notifications_enabled: bool = False
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

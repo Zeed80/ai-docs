@@ -376,6 +376,16 @@ export default function SettingsPage() {
   const [purgeBusy, setPurgeBusy] = useState(false);
   const [purgeMessage, setPurgeMessage] = useState<string | null>(null);
 
+  // Telegram
+  const [tgStatus, setTgStatus] = useState<{
+    configured: boolean;
+    notifications_enabled: boolean;
+    has_default_chat: boolean;
+    allowed_users_count: number;
+  } | null>(null);
+  const [tgTesting, setTgTesting] = useState(false);
+  const [tgTestResult, setTgTestResult] = useState<string | null>(null);
+
   // ── Data loaders ─────────────────────────────────────────────────────────
 
   async function loadModels() {
@@ -464,6 +474,15 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadTgStatus() {
+    try {
+      const r = await fetch(`${API}/api/telegram/status`);
+      setTgStatus(await r.json());
+    } catch {
+      setTgStatus(null);
+    }
+  }
+
   useEffect(() => {
     loadModels();
     loadConfig();
@@ -473,6 +492,7 @@ export default function SettingsPage() {
     loadNtdConfig();
     loadAgentConfig();
     loadAgentSkills();
+    loadTgStatus();
   }, []);
 
   useEffect(() => {
@@ -703,6 +723,23 @@ export default function SettingsPage() {
       setPurgeMessage("Не удалось выполнить полную очистку");
     } finally {
       setPurgeBusy(false);
+    }
+  }
+
+  async function handleTelegramTest() {
+    setTgTesting(true);
+    setTgTestResult(null);
+    try {
+      const r = await fetch(`${API}/api/telegram/test`, { method: "POST" });
+      const d = await r.json();
+      setTgTestResult(
+        d.ok ? "✅ Тестовое сообщение отправлено" : `❌ ${d.detail}`,
+      );
+    } catch (e) {
+      setTgTestResult(`❌ Ошибка: ${e}`);
+    } finally {
+      setTgTesting(false);
+      await loadTgStatus();
     }
   }
 
@@ -1730,6 +1767,86 @@ export default function SettingsPage() {
               </Link>
             }
           />
+
+          {/* Telegram */}
+          <SectionCard
+            title="Telegram"
+            subtitle="Бот для уведомлений и управления агентом из Telegram. Токен задаётся через переменную окружения TELEGRAM_BOT_TOKEN."
+          >
+            <div className="space-y-4">
+              {/* Status badge */}
+              <div className="flex items-center gap-3">
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                    tgStatus?.configured
+                      ? "bg-green-900/50 text-green-300 border border-green-700"
+                      : "bg-slate-700 text-slate-400 border border-slate-600"
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${tgStatus?.configured ? "bg-green-400" : "bg-slate-500"}`}
+                  />
+                  {tgStatus?.configured ? "Настроен" : "Не настроен"}
+                </span>
+                {tgStatus?.configured && (
+                  <>
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                        tgStatus.notifications_enabled
+                          ? "bg-blue-900/50 text-blue-300 border border-blue-700"
+                          : "bg-slate-700 text-slate-400 border border-slate-600"
+                      }`}
+                    >
+                      {tgStatus.notifications_enabled
+                        ? "Уведомления вкл."
+                        : "Уведомления выкл."}
+                    </span>
+                    {tgStatus.allowed_users_count > 0 && (
+                      <span className="text-xs text-slate-400">
+                        Разрешённых пользователей:{" "}
+                        {tgStatus.allowed_users_count}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="text-sm text-slate-400 space-y-1">
+                <p>
+                  <span className="text-slate-300 font-mono text-xs">
+                    TELEGRAM_BOT_TOKEN
+                  </span>{" "}
+                  — токен бота (получить у{" "}
+                  <span className="text-blue-400">@BotFather</span>)
+                </p>
+                <p>
+                  <span className="text-slate-300 font-mono text-xs">
+                    TELEGRAM_ALLOWED_USERS
+                  </span>{" "}
+                  — список ID через запятую (пусто = без ограничений)
+                </p>
+                <p>
+                  <span className="text-slate-300 font-mono text-xs">
+                    TELEGRAM_NOTIFICATIONS_CHAT_ID
+                  </span>{" "}
+                  — chat_id для push-уведомлений
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleTelegramTest}
+                  disabled={tgTesting || !tgStatus?.configured}
+                  className={btnSecondary}
+                >
+                  {tgTesting ? "Отправка…" : "Отправить тест"}
+                </button>
+                {tgTestResult && (
+                  <span className="text-sm text-slate-300">{tgTestResult}</span>
+                )}
+              </div>
+            </div>
+          </SectionCard>
 
           <SectionCard title="О системе">
             <div className="space-y-1 text-sm">
