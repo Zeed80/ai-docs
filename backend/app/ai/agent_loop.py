@@ -544,9 +544,10 @@ async def _call_anthropic_streaming(
 async def _call_provider_streaming(
     messages: list[dict],
     tools: list[dict],
-    system_prompt: str,
+    system_prompt: str | None,
     config: BuiltinAgentConfig,
     on_token: Callable[[str], Awaitable[None]],
+    model_override: str | None = None,
 ) -> dict:
     """Dispatch to the configured LLM provider with optional fallback chain."""
     providers_to_try = [config.provider or "ollama"] + list(config.fallback_providers or [])
@@ -598,6 +599,30 @@ class AgentSession:
         self._system = _load_system_prompt(self._config)
         self._approval_gates = set(self._config.approval_gates)
 
+        from app.ai.context_compressor import ContextCompressor
+        self._compressor = ContextCompressor(
+            model=_get_agent_model(self._config),
+            threshold_percent=self._config.context_compression_threshold,
+            compression_model=self._config.compression_model,
+        ) if self._config.context_compression_enabled else None
+
+    async def _call_for_compression(
+        self,
+        messages: list[dict],
+        model: str,
+        tools: list[dict],
+    ) -> Any:
+        """Async generator adapter used by ContextCompressor for summarisation calls."""
+        config = self._config
+        accumulated: list[str] = []
+
+        async def _collect(token: str) -> None:
+            accumulated.append(token)
+
+        await _call_provider_streaming(messages, [], None, config, _collect)
+        for chunk in accumulated:
+            yield chunk
+
     async def _log_action(self, **kwargs: Any) -> None:
         """Persist agent step to DB (fire-and-forget)."""
         try:
@@ -633,6 +658,18 @@ class AgentSession:
 
             for iteration in range(self._config.max_steps):
                 self._iteration = iteration
+
+                # Context compression before each LLM call
+                if self._compressor and self._compressor.should_compress(self.messages):
+                    logger.info("compressing context", session=self._session_id, iteration=iteration)
+                    await self._send({
+                        "type": "status",
+                        "content": "Сжимаю контекст сессии…",
+                    })
+                    self.messages = await self._compressor.compress(
+                        self.messages,
+                        self._call_for_compression,
+                    )
 
                 t_start = time.time()
                 accumulated_text: list[str] = []

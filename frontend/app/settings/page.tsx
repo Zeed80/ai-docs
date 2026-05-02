@@ -94,6 +94,9 @@ interface AgentConfig {
   exposed_skills: string[];
   approval_gates: string[];
   system_prompt: string | null;
+  context_compression_enabled: boolean;
+  context_compression_threshold: number;
+  compression_model: string | null;
 }
 
 interface AgentSkill {
@@ -1131,6 +1134,72 @@ export default function SettingsPage() {
                       }
                     />
                   </Field>
+                </div>
+              </SectionCard>
+
+              {/* Context Compression */}
+              <SectionCard
+                title="Сжатие контекста"
+                subtitle="Когда история разговора приближается к лимиту модели, вспомогательная LLM автоматически сжимает средние сообщения."
+              >
+                <div className="space-y-4">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-600 bg-slate-900"
+                      checked={agentConfig.context_compression_enabled}
+                      onChange={(e) =>
+                        setAgentConfig({
+                          ...agentConfig,
+                          context_compression_enabled: e.target.checked,
+                        })
+                      }
+                    />
+                    <span className="text-sm text-slate-300">
+                      Включить автоматическое сжатие
+                    </span>
+                  </label>
+                  {agentConfig.context_compression_enabled && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <Field
+                        label="Порог сжатия"
+                        hint="Доля контекстного окна (0.50–0.98), при достижении которой запускается сжатие"
+                      >
+                        <input
+                          className={`${inputCls} max-w-xs`}
+                          type="number"
+                          min={0.5}
+                          max={0.98}
+                          step={0.05}
+                          value={agentConfig.context_compression_threshold}
+                          onChange={(e) =>
+                            setAgentConfig({
+                              ...agentConfig,
+                              context_compression_threshold: Number(
+                                e.target.value,
+                              ),
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field
+                        label="Модель для сжатия"
+                        hint="Пусто = использовать основную модель агента"
+                      >
+                        <input
+                          className={inputCls}
+                          placeholder="gemma4:e4b  или  claude-haiku-4-5"
+                          value={agentConfig.compression_model ?? ""}
+                          onChange={(e) =>
+                            setAgentConfig({
+                              ...agentConfig,
+                              compression_model: e.target.value.trim() || null,
+                            })
+                          }
+                        />
+                      </Field>
+                    </div>
+                  )}
                 </div>
               </SectionCard>
 

@@ -40,6 +40,9 @@ class BuiltinAgentConfig(BaseModel):
     exposed_skills: list[str] = Field(default_factory=list)
     approval_gates: list[str] = Field(default_factory=list)
     system_prompt: str | None = None
+    context_compression_enabled: bool = True
+    context_compression_threshold: float = Field(0.85, ge=0.5, le=0.98)
+    compression_model: str | None = None  # None = use primary model
 
 
 class BuiltinAgentConfigUpdate(BaseModel):
@@ -64,6 +67,9 @@ class BuiltinAgentConfigUpdate(BaseModel):
     exposed_skills: list[str] | None = None
     approval_gates: list[str] | None = None
     system_prompt: str | None = None
+    context_compression_enabled: bool | None = None
+    context_compression_threshold: float | None = Field(default=None, ge=0.5, le=0.98)
+    compression_model: str | None = None
 
 
 def _default_config() -> BuiltinAgentConfig:
