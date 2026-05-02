@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -239,6 +240,336 @@ async def _call_ollama_streaming(
     return final_message
 
 
+# ── OpenAI-compatible streaming (OpenRouter / DeepSeek) ──────────────────────
+
+def _openrouter_base_url() -> str:
+    return "https://openrouter.ai/api/v1"
+
+
+def _deepseek_base_url() -> str:
+    return "https://api.deepseek.com/v1"
+
+
+async def _call_openai_streaming(
+    messages: list[dict],
+    tools: list[dict],
+    system_prompt: str,
+    config: BuiltinAgentConfig,
+    on_token: Callable[[str], Awaitable[None]],
+    provider: str,
+) -> dict:
+    """Stream an OpenAI-compatible SSE endpoint (OpenRouter, DeepSeek).
+
+    Returns a normalised message dict identical to the Ollama format so that
+    the rest of AgentSession._run() needs no changes.
+    """
+    model = _get_agent_model(config)
+
+    if provider == "openrouter":
+        base_url = _openrouter_base_url()
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        extra: dict[str, str] = {
+            "HTTP-Referer": "https://ai-workspace.local",
+            "X-Title": "AI Manufacturing Workspace",
+        }
+    elif provider == "deepseek":
+        base_url = _deepseek_base_url()
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        extra = {}
+    else:
+        raise ValueError(f"Unsupported openai-compatible provider: {provider}")
+
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}", **extra}
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "system", "content": system_prompt}] + messages,
+        "stream": True,
+        "temperature": config.temperature,
+    }
+    if tools:
+        payload["tools"] = tools
+
+    full_content = ""
+    scrubber = StreamingContextScrubber()
+    # Accumulate streamed tool calls: index → {id, name, arguments}
+    tool_acc: dict[int, dict[str, str]] = {}
+
+    async with httpx.AsyncClient(timeout=float(config.llm_timeout_seconds)) as client:
+        async with client.stream(
+            "POST", f"{base_url}/chat/completions", headers=headers, json=payload
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                choice = (chunk.get("choices") or [{}])[0]
+                delta = choice.get("delta", {})
+
+                token: str = delta.get("content") or ""
+                visible = scrubber.feed(token)
+                if visible:
+                    full_content += visible
+                    await on_token(visible)
+
+                for tc_delta in delta.get("tool_calls") or []:
+                    idx: int = tc_delta.get("index", 0)
+                    if idx not in tool_acc:
+                        tool_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                    if tc_delta.get("id"):
+                        tool_acc[idx]["id"] = tc_delta["id"]
+                    fn = tc_delta.get("function", {})
+                    if fn.get("name"):
+                        tool_acc[idx]["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        tool_acc[idx]["arguments"] += fn["arguments"]
+
+    trailing = scrubber.flush()
+    if trailing:
+        full_content += trailing
+        await on_token(trailing)
+
+    normalized_tool_calls = []
+    for idx in sorted(tool_acc.keys()):
+        tc = tool_acc[idx]
+        try:
+            args: Any = json.loads(tc["arguments"]) if tc["arguments"] else {}
+        except json.JSONDecodeError:
+            args = {}
+        normalized_tool_calls.append({
+            "id": tc["id"],
+            "function": {"name": tc["name"], "arguments": args},
+        })
+
+    return {
+        "role": "assistant",
+        "content": full_content,
+        "tool_calls": normalized_tool_calls or None,
+    }
+
+
+# ── Anthropic streaming ───────────────────────────────────────────────────────
+
+def _convert_messages_to_anthropic(
+    messages: list[dict],
+    system_prompt: str,
+) -> tuple[str, list[dict]]:
+    """Convert OpenAI/Ollama-format messages to Anthropic Messages API format.
+
+    Returns ``(system_text, anthropic_messages_list)``.
+    """
+    system_parts = [system_prompt] if system_prompt else []
+    result: list[dict] = []
+    pending_ids: list[str] = []
+    pending_results: list[dict] = []
+
+    def _flush() -> None:
+        if pending_results:
+            result.append({"role": "user", "content": list(pending_results)})
+            pending_results.clear()
+            pending_ids.clear()
+
+    for msg in messages:
+        role = msg.get("role", "")
+        content: str = msg.get("content", "") or ""
+        tool_calls = msg.get("tool_calls") or []
+
+        if role == "system":
+            system_parts.append(content)
+            continue
+
+        if role in ("user", "assistant") and pending_results:
+            _flush()
+
+        if role == "user":
+            result.append({"role": "user", "content": content})
+
+        elif role == "assistant":
+            if tool_calls:
+                blocks: list[dict] = []
+                if content:
+                    blocks.append({"type": "text", "text": content})
+                for i, tc in enumerate(tool_calls):
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "unknown")
+                    raw_args = fn.get("arguments", {})
+                    args_dict = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
+                    tc_id = tc.get("id") or f"toolu_{name}_{i}"
+                    pending_ids.append(tc_id)
+                    blocks.append({"type": "tool_use", "id": tc_id, "name": name, "input": args_dict})
+                result.append({"role": "assistant", "content": blocks})
+            elif content:
+                result.append({"role": "assistant", "content": content})
+
+        elif role == "tool":
+            tc_id = pending_ids.pop(0) if pending_ids else f"toolu_unknown_{len(pending_results)}"
+            pending_results.append({"type": "tool_result", "tool_use_id": tc_id, "content": content})
+
+    _flush()
+    return "\n\n".join(p for p in system_parts if p), result
+
+
+def _convert_tools_to_anthropic(tools: list[dict]) -> list[dict]:
+    result = []
+    for t in tools:
+        fn = t.get("function", {})
+        result.append({
+            "name": fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+        })
+    return result
+
+
+async def _call_anthropic_streaming(
+    messages: list[dict],
+    tools: list[dict],
+    system_prompt: str,
+    config: BuiltinAgentConfig,
+    on_token: Callable[[str], Awaitable[None]],
+) -> dict:
+    """Stream Anthropic Messages API response; normalises output to Ollama format."""
+    from app.config import settings
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY") or settings.anthropic_api_key
+    model = _get_agent_model(config)
+
+    system_text, anthropic_msgs = _convert_messages_to_anthropic(messages, system_prompt)
+    anthropic_tools = _convert_tools_to_anthropic(tools) if tools else []
+
+    system_payload: Any = system_text
+    if config.prompt_cache_enabled and system_text:
+        system_payload = [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}]
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": anthropic_msgs,
+        "max_tokens": 4096,
+        "stream": True,
+    }
+    if system_text:
+        payload["system"] = system_payload
+    if anthropic_tools:
+        payload["tools"] = anthropic_tools
+
+    headers: dict[str, str] = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "accept": "text/event-stream",
+    }
+    if config.prompt_cache_enabled:
+        headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+
+    full_content = ""
+    scrubber = StreamingContextScrubber()
+    # Accumulate tool_use blocks: index → {id, name, input_json}
+    tool_acc: dict[int, dict[str, str]] = {}
+    current_idx: int = 0
+
+    async with httpx.AsyncClient(timeout=float(config.llm_timeout_seconds)) as client:
+        async with client.stream(
+            "POST", "https://api.anthropic.com/v1/messages", headers=headers, json=payload
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                try:
+                    event = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                etype = event.get("type", "")
+
+                if etype == "content_block_start":
+                    current_idx = event.get("index", 0)
+                    block = event.get("content_block", {})
+                    if block.get("type") == "tool_use":
+                        tool_acc[current_idx] = {
+                            "id": block.get("id", f"toolu_{current_idx}"),
+                            "name": block.get("name", ""),
+                            "input_json": "",
+                        }
+
+                elif etype == "content_block_delta":
+                    idx = event.get("index", current_idx)
+                    delta = event.get("delta", {})
+                    dtype = delta.get("type", "")
+
+                    if dtype == "text_delta":
+                        token = delta.get("text", "")
+                        visible = scrubber.feed(token)
+                        if visible:
+                            full_content += visible
+                            await on_token(visible)
+                    elif dtype == "input_json_delta" and idx in tool_acc:
+                        tool_acc[idx]["input_json"] += delta.get("partial_json", "")
+
+    trailing = scrubber.flush()
+    if trailing:
+        full_content += trailing
+        await on_token(trailing)
+
+    normalized_tool_calls = []
+    for idx in sorted(tool_acc.keys()):
+        tc = tool_acc[idx]
+        try:
+            args_dict: Any = json.loads(tc["input_json"]) if tc["input_json"] else {}
+        except json.JSONDecodeError:
+            args_dict = {}
+        normalized_tool_calls.append({
+            "id": tc["id"],
+            "function": {"name": tc["name"], "arguments": args_dict},
+        })
+
+    return {
+        "role": "assistant",
+        "content": full_content,
+        "tool_calls": normalized_tool_calls or None,
+    }
+
+
+# ── Provider dispatcher ───────────────────────────────────────────────────────
+
+async def _call_provider_streaming(
+    messages: list[dict],
+    tools: list[dict],
+    system_prompt: str,
+    config: BuiltinAgentConfig,
+    on_token: Callable[[str], Awaitable[None]],
+) -> dict:
+    """Dispatch to the configured LLM provider with optional fallback chain."""
+    providers_to_try = [config.provider or "ollama"] + list(config.fallback_providers or [])
+
+    last_exc: Exception | None = None
+    for p in providers_to_try:
+        try:
+            if p == "ollama":
+                return await _call_ollama_streaming(messages, tools, system_prompt, config, on_token)
+            elif p in ("openrouter", "deepseek"):
+                return await _call_openai_streaming(messages, tools, system_prompt, config, on_token, provider=p)
+            elif p == "anthropic":
+                return await _call_anthropic_streaming(messages, tools, system_prompt, config, on_token)
+            else:
+                logger.warning("unknown_provider_falling_back", provider=p)
+                return await _call_ollama_streaming(messages, tools, system_prompt, config, on_token)
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("provider_call_failed_trying_fallback", provider=p, error=str(exc))
+
+    raise last_exc or RuntimeError("All configured providers failed")
+
+
 # ── Agent session ─────────────────────────────────────────────────────────────
 
 SendFn = Callable[[dict], Awaitable[None]]
@@ -310,7 +641,7 @@ class AgentSession:
                     accumulated_text.append(token)
                     await self._send({"type": "text", "content": token})
 
-                message = await _call_ollama_streaming(
+                message = await _call_provider_streaming(
                     self.messages, self._tools, self._system, self._config, on_token
                 )
                 duration_ms = int((time.time() - t_start) * 1000)

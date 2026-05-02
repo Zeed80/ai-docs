@@ -16,6 +16,21 @@ providers:
     api_key_env: "CLOUD_AI_API_KEY"
     timeout_seconds: 180
     is_local: false
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  anthropic:
+    base_url: "https://api.anthropic.com"
+    api_key_env: "ANTHROPIC_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  deepseek:
+    base_url: "https://api.deepseek.com/v1"
+    api_key_env: "DEEPSEEK_API_KEY"
+    timeout_seconds: 180
+    is_local: false
 
 models:
   gemma4_e4b_ollama:
@@ -151,10 +166,58 @@ models:
     local_only: true
     quality_score: 0.70
     speed_score: 0.55
+  claude_sonnet_anthropic:
+    provider: "anthropic"
+    provider_model: "claude-sonnet-4-6"
+    status: "candidate"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 200000
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: false
+    quality_score: 0.93
+    speed_score: 0.70
+    notes: "Claude Sonnet via Anthropic API. Enable only with allow_cloud=True. Prompt caching supported."
+  claude_haiku_anthropic:
+    provider: "anthropic"
+    provider_model: "claude-haiku-4-5"
+    status: "candidate"
+    modalities: ["text", "tool_calling"]
+    max_context_tokens: 200000
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: false
+    quality_score: 0.82
+    speed_score: 0.92
+    notes: "Claude Haiku — fast and cheap. Good for summarisation and context compression."
+  deepseek_r1_openrouter:
+    provider: "openrouter"
+    provider_model: "deepseek/deepseek-r1"
+    status: "candidate"
+    modalities: ["text", "tool_calling"]
+    max_context_tokens: 128000
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: false
+    quality_score: 0.91
+    speed_score: 0.55
+    notes: "DeepSeek-R1 via OpenRouter. Strong reasoning, open-weight. Requires OPENROUTER_API_KEY."
+  qwen3_235b_openrouter:
+    provider: "openrouter"
+    provider_model: "qwen/qwen3-235b-a22b"
+    status: "candidate"
+    modalities: ["text", "tool_calling"]
+    max_context_tokens: 40000
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: false
+    quality_score: 0.89
+    speed_score: 0.60
+    notes: "Qwen3-235B MoE via OpenRouter. Excellent multilingual + Russian support."
   future_reasoning_cloud:
     provider: "cloud_provider"
     provider_model: "replace-with-approved-model"
-    status: "candidate"
+    status: "disabled"
     modalities: ["text", "tool_calling"]
     max_context_tokens: 200000
     supports_structured_output: true
@@ -162,7 +225,7 @@ models:
     local_only: false
     quality_score: 0.0
     speed_score: 0.0
-    notes: "Disabled candidate until security policy and evals approve it."
+    notes: "Legacy placeholder. Use claude_sonnet_anthropic or deepseek_r1_openrouter instead."
 
 routes:
   invoice_ocr:
@@ -214,7 +277,7 @@ routes:
   tool_calling:
     required_modalities: ["tool_calling"]
     local_only: true
-    fallback_chain: ["future_reasoning_cloud"]
+    fallback_chain: ["future_reasoning_cloud", "deepseek_r1_openrouter", "claude_sonnet_anthropic"]
     manual_review_fallback: true
   speech:
     required_modalities: ["audio"]

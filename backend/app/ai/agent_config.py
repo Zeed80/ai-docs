@@ -19,6 +19,12 @@ class BuiltinAgentConfig(BaseModel):
     enabled: bool = True
     agent_name: str = "Света"
     model: str = "qwen3.5:9b"
+    # LLM provider: "ollama" | "openrouter" | "anthropic" | "deepseek" | "openai_compatible"
+    provider: str = "ollama"
+    # Ordered fallback chain tried when primary provider fails
+    fallback_providers: list[str] = Field(default_factory=list)
+    # Inject Anthropic prompt-cache headers (only effective with provider="anthropic")
+    prompt_cache_enabled: bool = False
     ollama_url: str = "http://localhost:11434"
     backend_url: str = "http://localhost:8000"
     temperature: float = Field(0.1, ge=0.0, le=2.0)
@@ -40,6 +46,9 @@ class BuiltinAgentConfigUpdate(BaseModel):
     enabled: bool | None = None
     agent_name: str | None = None
     model: str | None = None
+    provider: str | None = None
+    fallback_providers: list[str] | None = None
+    prompt_cache_enabled: bool | None = None
     ollama_url: str | None = None
     backend_url: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)

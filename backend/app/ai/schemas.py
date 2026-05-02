@@ -11,6 +11,10 @@ class ProviderKind(str, Enum):
     VLLM = "vllm"
     OPENAI_COMPATIBLE = "openai_compatible"
     CLOUD_PROVIDER = "cloud_provider"
+    OPENROUTER = "openrouter"
+    ANTHROPIC = "anthropic"
+    DEEPSEEK = "deepseek"
+    GEMINI = "gemini"
 
 
 class ModelStatus(str, Enum):

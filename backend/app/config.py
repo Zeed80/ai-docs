@@ -48,8 +48,10 @@ class Settings(BaseSettings):
     ollama_model_reasoning: str = "gemma4:26b"
 
     # AI reasoning backend
-    ai_reasoning_backend: str = "ollama"  # ollama | claude
+    ai_reasoning_backend: str = "ollama"  # ollama | anthropic | openrouter
     anthropic_api_key: str = ""
+    openrouter_api_key: str = ""
+    deepseek_api_key: str = ""
 
     # CORS — wildcard for development; override via CORS_ORIGINS env var in production
     cors_origins: str = "*"
