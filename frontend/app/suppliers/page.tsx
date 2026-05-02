@@ -35,7 +35,7 @@ export default function SuppliersPage() {
           const data = await resp.json();
           setSuppliers(data.results);
         } else {
-          const resp = await fetch(`${API}/api/suppliers`);
+          const resp = await fetch(`${API}/api/suppliers?role=supplier`);
           setSuppliers(await resp.json());
         }
       } catch {

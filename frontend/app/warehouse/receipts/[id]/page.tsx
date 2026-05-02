@@ -35,13 +35,21 @@ interface Receipt {
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Черновик",
+  expected: "Ожидается",
+  partial: "Частично получен",
+  received: "Получен",
   confirmed: "Подтверждён",
+  issued: "Выдан",
   cancelled: "Отменён",
 };
 
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-yellow-500/20 text-yellow-300",
+  expected: "bg-blue-500/20 text-blue-300",
+  partial: "bg-orange-500/20 text-orange-300",
+  received: "bg-green-500/20 text-green-300",
   confirmed: "bg-green-500/20 text-green-300",
+  issued: "bg-purple-500/20 text-purple-300",
   cancelled: "bg-slate-600/40 text-slate-400",
 };
 
@@ -58,8 +66,15 @@ export default function ReceiptDetailPage() {
   function load() {
     setLoading(true);
     fetch(`${API}/api/warehouse/receipts/${id}`)
-      .then((r) => r.json())
-      .then(setReceipt)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data) => {
+        if (data && data.id) setReceipt(data);
+        else setReceipt(null);
+      })
+      .catch(() => setReceipt(null))
       .finally(() => setLoading(false));
   }
 
@@ -125,16 +140,14 @@ export default function ReceiptDetailPage() {
     );
   }
 
-  const isDraft = receipt.status === "draft";
-  const totalExpected = receipt.lines.reduce(
-    (s, l) => s + l.quantity_expected,
-    0,
+  const isEditable = ["draft", "expected", "partial"].includes(receipt.status);
+  const isFinal = ["received", "confirmed", "issued", "cancelled"].includes(
+    receipt.status,
   );
-  const totalReceived = receipt.lines.reduce(
-    (s, l) => s + l.quantity_received,
-    0,
-  );
-  const hasDiscrepancy = receipt.lines.some(
+  const lines = receipt.lines ?? [];
+  const totalExpected = lines.reduce((s, l) => s + l.quantity_expected, 0);
+  const totalReceived = lines.reduce((s, l) => s + l.quantity_received, 0);
+  const hasDiscrepancy = lines.some(
     (l) => l.quantity_received !== l.quantity_expected,
   );
 
@@ -177,7 +190,7 @@ export default function ReceiptDetailPage() {
           </div>
         </div>
 
-        {isDraft && (
+        {isEditable && (
           <div className="flex gap-2">
             <button
               onClick={cancelReceipt}
@@ -193,6 +206,11 @@ export default function ReceiptDetailPage() {
               Подтвердить приход
             </button>
           </div>
+        )}
+        {isFinal && (
+          <span className="text-xs px-3 py-1.5 border border-slate-700 text-slate-500 rounded">
+            {STATUS_LABELS[receipt.status] ?? receipt.status}
+          </span>
         )}
       </div>
 
@@ -217,7 +235,7 @@ export default function ReceiptDetailPage() {
         <div>
           <span className="text-slate-500 text-xs">Строк</span>
           <p className="text-slate-200 font-mono font-semibold">
-            {receipt.lines.length}
+            {lines.length}
           </p>
         </div>
         {hasDiscrepancy && (
@@ -231,7 +249,7 @@ export default function ReceiptDetailPage() {
 
       {/* Lines */}
       <div className="flex-1 overflow-auto">
-        {receipt.lines.length === 0 ? (
+        {lines.length === 0 ? (
           <div className="text-center py-16 text-slate-500 text-sm">
             Строки не найдены
           </div>
@@ -249,11 +267,11 @@ export default function ReceiptDetailPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {receipt.lines.map((line) => (
+              {lines.map((line) => (
                 <LineRow
                   key={line.id}
                   line={line}
-                  isDraft={isDraft}
+                  isEditable={isEditable}
                   onSave={updateLine}
                 />
               ))}
@@ -283,8 +301,7 @@ export default function ReceiptDetailPage() {
             </h2>
             <p className="text-sm text-slate-400 mb-4">
               Остатки будут обновлены для{" "}
-              {receipt.lines.filter((l) => l.quantity_received > 0).length}{" "}
-              позиций.
+              {lines.filter((l) => l.quantity_received > 0).length} позиций.
               {hasDiscrepancy && (
                 <span className="block mt-1 text-orange-400">
                   Внимание: есть расхождения с ожидаемым количеством.
@@ -316,11 +333,11 @@ export default function ReceiptDetailPage() {
 
 function LineRow({
   line,
-  isDraft,
+  isEditable,
   onSave,
 }: {
   line: ReceiptLine;
-  isDraft: boolean;
+  isEditable: boolean;
   onSave: (lineId: string, qty: number, note: string | null) => void;
 }) {
   const [qty, setQty] = useState(String(line.quantity_received));
@@ -347,7 +364,7 @@ function LineRow({
         {line.quantity_expected.toLocaleString("ru-RU")}
       </td>
       <td className="px-3 py-3 text-right">
-        {isDraft ? (
+        {isEditable ? (
           <input
             type="number"
             min="0"
@@ -373,7 +390,7 @@ function LineRow({
       </td>
       <td className="px-3 py-3 text-slate-500 text-xs">{line.unit}</td>
       <td className="px-6 py-3">
-        {isDraft ? (
+        {isEditable ? (
           <div className="flex items-center gap-2">
             <input
               value={note}
