@@ -6,6 +6,8 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 const API = getApiBaseUrl();
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
 interface OllamaModel {
   name: string;
   size: number;
@@ -74,6 +76,9 @@ interface AgentConfig {
   enabled: boolean;
   agent_name: string;
   model: string;
+  provider: string;
+  fallback_providers: string[];
+  prompt_cache_enabled: boolean;
   ollama_url: string;
   backend_url: string;
   temperature: number;
@@ -100,10 +105,126 @@ interface AgentSkill {
   approval_required: boolean;
 }
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const PROVIDERS = [
+  { value: "ollama", label: "Ollama (локально)" },
+  { value: "openrouter", label: "OpenRouter (200+ моделей)" },
+  { value: "anthropic", label: "Anthropic (Claude)" },
+  { value: "deepseek", label: "DeepSeek" },
+] as const;
+
+const PROVIDER_ENV: Record<string, string> = {
+  openrouter: "OPENROUTER_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+};
+
+const PROVIDER_MODEL_PLACEHOLDER: Record<string, string> = {
+  openrouter: "deepseek/deepseek-r1  или  qwen/qwen3-235b-a22b",
+  anthropic: "claude-sonnet-4-6  или  claude-haiku-4-5",
+  deepseek: "deepseek-chat  или  deepseek-reasoner",
+};
+
+type TabId = "agent" | "models" | "memory" | "data" | "system";
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: "agent", label: "Агент" },
+  { id: "models", label: "Модели" },
+  { id: "memory", label: "Память" },
+  { id: "data", label: "Данные" },
+  { id: "system", label: "Система" },
+];
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+
+const inputCls =
+  "w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50";
+const selectCls =
+  "w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500";
+const btnPrimary =
+  "px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors";
+const btnSecondary =
+  "px-4 py-2 bg-slate-700 text-slate-100 text-sm rounded-lg hover:bg-slate-600 disabled:opacity-50 transition-colors";
+
 function fmtBytes(b: number) {
   if (b >= 1e9) return (b / 1e9).toFixed(1) + " GB";
   if (b >= 1e6) return (b / 1e6).toFixed(0) + " MB";
   return b + " B";
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-slate-300 mb-1">
+        {label}
+      </label>
+      {children}
+      {hint && <p className="mt-1 text-xs text-slate-400">{hint}</p>}
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  subtitle,
+  action,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  action?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  return (
+    <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h2 className="text-lg font-semibold">{title}</h2>
+          {subtitle && (
+            <p className="mt-1 text-sm text-slate-400">{subtitle}</p>
+          )}
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function SaveRow({
+  saving,
+  saved,
+  onSave,
+  onReset,
+  saveLabel = "Сохранить",
+}: {
+  saving: boolean;
+  saved: boolean;
+  onSave: () => void;
+  onReset?: () => void;
+  saveLabel?: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 pt-2">
+      <button onClick={onSave} disabled={saving} className={btnPrimary}>
+        {saving ? "Сохранение..." : saved ? "Сохранено ✓" : saveLabel}
+      </button>
+      {onReset && (
+        <button onClick={onReset} disabled={saving} className={btnSecondary}>
+          Сбросить
+        </button>
+      )}
+    </div>
+  );
 }
 
 function ModelSelector({
@@ -120,14 +241,11 @@ function ModelSelector({
   onChange: (v: string) => void;
 }) {
   return (
-    <div>
-      <label className="block text-sm font-medium text-slate-300 mb-1">
-        {label}
-      </label>
+    <Field label={label} hint={description}>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-slate-800 border border-slate-600 text-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className={selectCls}
       >
         {!models.find((m) => m.name === value) && (
           <option value={value}>{value} (не установлена)</option>
@@ -139,15 +257,99 @@ function ModelSelector({
           </option>
         ))}
       </select>
-      <p className="text-xs text-slate-400 mt-1">{description}</p>
+    </Field>
+  );
+}
+
+function FallbackProvidersInput({
+  value,
+  onChange,
+  currentProvider,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+  currentProvider: string;
+}) {
+  const [draft, setDraft] = useState("");
+  const available = PROVIDERS.map((p) => p.value).filter(
+    (p) => p !== currentProvider && !value.includes(p),
+  );
+
+  function add() {
+    if (draft && !value.includes(draft)) {
+      onChange([...value, draft]);
+      setDraft("");
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1 mb-2 min-h-6">
+        {value.map((p, i) => (
+          <span
+            key={p}
+            className="flex items-center gap-1 px-2 py-0.5 bg-slate-700 border border-slate-600 rounded text-xs text-slate-200"
+          >
+            {PROVIDERS.find((x) => x.value === p)?.label ?? p}
+            <button
+              onClick={() => onChange(value.filter((_, j) => j !== i))}
+              className="text-slate-400 hover:text-red-400 ml-0.5 leading-none"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        {value.length === 0 && (
+          <span className="text-xs text-slate-600 italic">нет резервных</span>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <select
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          className="flex-1 rounded-md border border-slate-600 bg-slate-900 px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">Добавить резервный провайдер…</option>
+          {available.map((p) => (
+            <option key={p} value={p}>
+              {PROVIDERS.find((x) => x.value === p)?.label ?? p}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={add}
+          disabled={!draft}
+          className="px-3 py-1.5 bg-slate-700 text-sm text-slate-200 rounded-md hover:bg-slate-600 disabled:opacity-40"
+        >
+          +
+        </button>
+      </div>
     </div>
   );
 }
 
+// ── Main page ─────────────────────────────────────────────────────────────────
+
 export default function SettingsPage() {
+  const [activeTab, setActiveTab] = useState<TabId>("agent");
+
+  // AI Config (models tab)
   const [models, setModels] = useState<OllamaModel[]>([]);
   const [config, setConfig] = useState<AiConfig | null>(null);
   const [registryModels, setRegistryModels] = useState<RegistryModel[]>([]);
+  const [configStatus, setConfigStatus] = useState<AiConfigStatus | null>(null);
+  const [loadingModels, setLoadingModels] = useState(true);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configSaved, setConfigSaved] = useState(false);
+
+  // Model pull
+  const [pullName, setPullName] = useState("");
+  const [pulling, setPulling] = useState(false);
+  const [pullLog, setPullLog] = useState<string[]>([]);
+  const [deletingModel, setDeletingModel] = useState<string | null>(null);
+  const pullLogRef = useRef<HTMLDivElement>(null);
+
+  // Memory / embeddings
   const [embeddingProfile, setEmbeddingProfile] =
     useState<EmbeddingProfile | null>(null);
   const [embeddingStats, setEmbeddingStats] = useState<EmbeddingStats | null>(
@@ -156,26 +358,25 @@ export default function SettingsPage() {
   const [rebuildingEmbeddings, setRebuildingEmbeddings] = useState(false);
   const [indexingEmbeddings, setIndexingEmbeddings] = useState(false);
   const [rebuildMessage, setRebuildMessage] = useState<string | null>(null);
-  const [loadingModels, setLoadingModels] = useState(true);
-  const [pullName, setPullName] = useState("");
-  const [pulling, setPulling] = useState(false);
-  const [pullLog, setPullLog] = useState<string[]>([]);
-  const [deletingModel, setDeletingModel] = useState<string | null>(null);
-  const [configSaving, setConfigSaving] = useState(false);
-  const [configSaved, setConfigSaved] = useState(false);
-  const [configStatus, setConfigStatus] = useState<AiConfigStatus | null>(null);
+
+  // NTD
   const [ntdConfig, setNtdConfig] = useState<NtdControlConfig | null>(null);
   const [ntdSaving, setNtdSaving] = useState(false);
   const [ntdSaved, setNtdSaved] = useState(false);
+
+  // Agent
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [agentSkills, setAgentSkills] = useState<AgentSkill[]>([]);
   const [agentSkillFilter, setAgentSkillFilter] = useState("");
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentSaved, setAgentSaved] = useState(false);
+
+  // Dev purge
   const [purgeConfirm, setPurgeConfirm] = useState("");
   const [purgeBusy, setPurgeBusy] = useState(false);
   const [purgeMessage, setPurgeMessage] = useState<string | null>(null);
-  const pullLogRef = useRef<HTMLDivElement>(null);
+
+  // ── Data loaders ─────────────────────────────────────────────────────────
 
   async function loadModels() {
     setLoadingModels(true);
@@ -278,11 +479,12 @@ export default function SettingsPage() {
     pullLogRef.current?.scrollTo(0, pullLogRef.current.scrollHeight);
   }, [pullLog]);
 
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
   async function handlePull() {
     if (!pullName.trim()) return;
     setPulling(true);
     setPullLog([`Загрузка ${pullName}...`]);
-
     try {
       const resp = await fetch(`${API}/api/ai/models/pull`, {
         method: "POST",
@@ -311,9 +513,8 @@ export default function SettingsPage() {
             setPullLog((prev) => {
               const last = prev[prev.length - 1] ?? "";
               const msg = status + detail;
-              if (last.startsWith(status.split(" ")[0])) {
+              if (last.startsWith(status.split(" ")[0]))
                 return [...prev.slice(0, -1), msg];
-              }
               return [...prev, msg];
             });
             if (obj.status === "error") break;
@@ -456,11 +657,8 @@ export default function SettingsPage() {
   function updateAgentSkill(name: string, enabled: boolean) {
     if (!agentConfig) return;
     const exposed = new Set(agentConfig.exposed_skills);
-    if (enabled) {
-      exposed.add(name);
-    } else {
-      exposed.delete(name);
-    }
+    if (enabled) exposed.add(name);
+    else exposed.delete(name);
     setAgentConfig({
       ...agentConfig,
       exposed_skills: Array.from(exposed).sort(),
@@ -470,17 +668,15 @@ export default function SettingsPage() {
   function updateAgentApprovalGate(name: string, enabled: boolean) {
     if (!agentConfig) return;
     const exposed = new Set(agentConfig.exposed_skills);
-    const approvalGates = new Set(agentConfig.approval_gates);
+    const gates = new Set(agentConfig.approval_gates);
     if (enabled) {
       exposed.add(name);
-      approvalGates.add(name);
-    } else {
-      approvalGates.delete(name);
-    }
+      gates.add(name);
+    } else gates.delete(name);
     setAgentConfig({
       ...agentConfig,
       exposed_skills: Array.from(exposed).sort(),
-      approval_gates: Array.from(approvalGates).sort(),
+      approval_gates: Array.from(gates).sort(),
     });
   }
 
@@ -494,10 +690,7 @@ export default function SettingsPage() {
       const r = await fetch(`${API}/api/documents/dev/purge-all`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          confirm: purgeConfirm,
-          delete_files: true,
-        }),
+        body: JSON.stringify({ confirm: purgeConfirm, delete_files: true }),
       });
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
@@ -514,800 +707,1047 @@ export default function SettingsPage() {
   }
 
   const filteredAgentSkills = agentSkills.filter((skill) => {
-    const query = agentSkillFilter.trim().toLowerCase();
-    if (!query) return true;
+    const q = agentSkillFilter.trim().toLowerCase();
+    if (!q) return true;
     return (
-      skill.name.toLowerCase().includes(query) ||
-      skill.description.toLowerCase().includes(query) ||
-      skill.path.toLowerCase().includes(query)
+      skill.name.toLowerCase().includes(q) ||
+      skill.description.toLowerCase().includes(q) ||
+      skill.path.toLowerCase().includes(q)
     );
   });
 
+  // ── Render ───────────────────────────────────────────────────────────────
+
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold">Настройки</h1>
+    <div className="p-6 max-w-3xl mx-auto">
+      <h1 className="text-2xl font-bold mb-5">Настройки</h1>
 
-      <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold">OpenClaw</h2>
-            <p className="text-sm text-slate-400 mt-1">
-              Gateway, режим чата, allowlist, fallback и статус.
-            </p>
-          </div>
-          <Link
-            href="/settings/openclaw"
-            className="px-4 py-2 bg-slate-700 text-slate-100 text-sm rounded-lg hover:bg-slate-600"
-          >
-            Открыть
-          </Link>
-        </div>
-      </section>
-
-      {/* Model Config */}
-      <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold">Выбор моделей</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              Встроенный агент использует эти настройки напрямую, без official
-              OpenClaw.
-            </p>
-          </div>
+      {/* Tab bar */}
+      <div className="flex gap-1 border-b border-slate-700 mb-6">
+        {TABS.map((tab) => (
           <button
-            onClick={() => {
-              loadModels();
-              loadConfigStatus();
-            }}
-            className="rounded-md bg-slate-700 px-3 py-2 text-xs text-slate-100 hover:bg-slate-600"
-          >
-            Проверить
-          </button>
-        </div>
-        {configStatus && (
-          <div
-            className={`mb-4 rounded-md border p-3 text-sm ${
-              configStatus.ok
-                ? "border-emerald-800 bg-emerald-950/30 text-emerald-200"
-                : "border-amber-800 bg-amber-950/30 text-amber-200"
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2 text-sm rounded-t-md transition-colors ${
+              activeTab === tab.id
+                ? "bg-slate-700 text-slate-100 border border-b-0 border-slate-600"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
             }`}
           >
-            <div>
-              Ollama:{" "}
-              {configStatus.ollama_available ? "доступна" : "недоступна"} ·
-              моделей: {configStatus.installed_models.length}
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── TAB: Агент ───────────────────────────────────────────────────── */}
+      {activeTab === "agent" && (
+        <div className="space-y-6">
+          {agentConfig ? (
+            <>
+              {/* General */}
+              <SectionCard
+                title="Агент «Света»"
+                subtitle="Основной AI-сотрудник — обрабатывает документы, отвечает на вопросы, вызывает инструменты."
+              >
+                <div className="space-y-4">
+                  <label className="flex items-center gap-2 text-sm text-slate-200">
+                    <input
+                      type="checkbox"
+                      checked={agentConfig.enabled}
+                      onChange={(e) =>
+                        setAgentConfig({
+                          ...agentConfig,
+                          enabled: e.target.checked,
+                        })
+                      }
+                    />
+                    Включить встроенного агента
+                  </label>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Field
+                      label="Имя сотрудника"
+                      hint="Используется в системном промпте"
+                    >
+                      <input
+                        className={inputCls}
+                        value={agentConfig.agent_name}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            agent_name: e.target.value,
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field
+                      label="Backend URL"
+                      hint="URL FastAPI-бэкенда для вызова инструментов"
+                    >
+                      <input
+                        className={inputCls}
+                        value={agentConfig.backend_url}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            backend_url: e.target.value,
+                          })
+                        }
+                      />
+                    </Field>
+                  </div>
+                </div>
+              </SectionCard>
+
+              {/* LLM Provider */}
+              <SectionCard
+                title="Провайдер LLM"
+                subtitle="Выбор модели и провайдера. При недоступности основного используются резервные."
+              >
+                <div className="space-y-5">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Field
+                      label="Провайдер"
+                      hint="Откуда берётся LLM для агента"
+                    >
+                      <select
+                        value={agentConfig.provider}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            provider: e.target.value,
+                          })
+                        }
+                        className={selectCls}
+                      >
+                        {PROVIDERS.map((p) => (
+                          <option key={p.value} value={p.value}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+
+                    {agentConfig.provider === "ollama" ? (
+                      <ModelSelector
+                        label="Модель агента"
+                        description="Для диалога, планирования и вызова инструментов"
+                        value={agentConfig.model}
+                        models={models}
+                        onChange={(v) =>
+                          setAgentConfig({ ...agentConfig, model: v })
+                        }
+                      />
+                    ) : (
+                      <Field
+                        label="Модель агента"
+                        hint={`Пример: ${PROVIDER_MODEL_PLACEHOLDER[agentConfig.provider] ?? "model-name"}`}
+                      >
+                        <input
+                          className={inputCls}
+                          value={agentConfig.model}
+                          onChange={(e) =>
+                            setAgentConfig({
+                              ...agentConfig,
+                              model: e.target.value,
+                            })
+                          }
+                          placeholder={
+                            PROVIDER_MODEL_PLACEHOLDER[agentConfig.provider] ??
+                            "model-name"
+                          }
+                        />
+                      </Field>
+                    )}
+                  </div>
+
+                  {/* API key hint */}
+                  {agentConfig.provider !== "ollama" && (
+                    <div className="flex items-start gap-2 rounded-md bg-amber-950/30 border border-amber-800/40 px-3 py-2 text-xs text-amber-300">
+                      <span>🔑</span>
+                      <span>
+                        Установите переменную окружения{" "}
+                        <code className="font-mono bg-amber-900/40 px-1 rounded">
+                          {PROVIDER_ENV[agentConfig.provider] ?? "API_KEY"}
+                        </code>{" "}
+                        в{" "}
+                        <code className="font-mono bg-amber-900/40 px-1 rounded">
+                          .env
+                        </code>{" "}
+                        или Docker Compose.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Ollama URL (only for ollama) */}
+                  {agentConfig.provider === "ollama" && (
+                    <Field
+                      label="Ollama URL"
+                      hint="Адрес локального Ollama-сервера"
+                    >
+                      <input
+                        className={inputCls}
+                        value={agentConfig.ollama_url}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            ollama_url: e.target.value,
+                          })
+                        }
+                      />
+                    </Field>
+                  )}
+
+                  {/* Fallback providers */}
+                  <Field
+                    label="Резервные провайдеры"
+                    hint="При ошибке основного провайдера агент попробует следующий из списка"
+                  >
+                    <FallbackProvidersInput
+                      value={agentConfig.fallback_providers}
+                      onChange={(v) =>
+                        setAgentConfig({
+                          ...agentConfig,
+                          fallback_providers: v,
+                        })
+                      }
+                      currentProvider={agentConfig.provider}
+                    />
+                  </Field>
+
+                  {/* Prompt caching (Anthropic only) */}
+                  {agentConfig.provider === "anthropic" && (
+                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3 cursor-pointer hover:bg-slate-900/80 transition-colors">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={agentConfig.prompt_cache_enabled}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            prompt_cache_enabled: e.target.checked,
+                          })
+                        }
+                      />
+                      <div>
+                        <span className="text-sm text-slate-200">
+                          Prompt Caching (beta)
+                        </span>
+                        <p className="mt-0.5 text-xs text-slate-400">
+                          Ускоряет повторные запросы с общим системным промптом.
+                          Снижает стоимость и latency при длинных сессиях.
+                          Требует поддержки провайдером.
+                        </p>
+                      </div>
+                    </label>
+                  )}
+                </div>
+              </SectionCard>
+
+              {/* Generation params */}
+              <SectionCard title="Параметры генерации">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {(
+                    [
+                      {
+                        key: "temperature",
+                        label: "Temperature",
+                        min: 0,
+                        max: 2,
+                        step: 0.05,
+                      },
+                      {
+                        key: "max_steps",
+                        label: "Max steps",
+                        min: 1,
+                        max: 30,
+                        step: 1,
+                      },
+                      {
+                        key: "llm_timeout_seconds",
+                        label: "LLM timeout (с)",
+                        min: 10,
+                        max: 1800,
+                        step: 1,
+                      },
+                      {
+                        key: "approval_timeout_seconds",
+                        label: "Approval timeout (с)",
+                        min: 10,
+                        max: 1800,
+                        step: 1,
+                      },
+                    ] as const
+                  ).map(({ key, label, min, max, step }) => (
+                    <label key={key} className="text-xs text-slate-400">
+                      {label}
+                      <input
+                        className={`mt-1 ${inputCls}`}
+                        type="number"
+                        min={min}
+                        max={max}
+                        step={step}
+                        value={
+                          (agentConfig as Record<string, unknown>)[
+                            key
+                          ] as number
+                        }
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            [key]: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </SectionCard>
+
+              {/* Memory */}
+              <SectionCard
+                title="Память"
+                subtitle="Долговременный контекст и поиск по истории"
+              >
+                <div className="space-y-4">
+                  <label className="flex items-center gap-2 text-sm text-slate-200">
+                    <input
+                      type="checkbox"
+                      checked={agentConfig.memory_enabled}
+                      onChange={(e) =>
+                        setAgentConfig({
+                          ...agentConfig,
+                          memory_enabled: e.target.checked,
+                        })
+                      }
+                    />
+                    Подключать память к каждому запросу
+                  </label>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <Field label="Режим поиска">
+                      <select
+                        value={agentConfig.memory_mode}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            memory_mode: e.target
+                              .value as AgentConfig["memory_mode"],
+                          })
+                        }
+                        className={selectCls}
+                      >
+                        <option value="sql">SQL (FTS)</option>
+                        <option value="sql_vector">SQL + vector</option>
+                        <option value="sql_vector_rerank">
+                          SQL + vector + rerank
+                        </option>
+                        <option value="hybrid">Hybrid</option>
+                        <option value="graph">Graph</option>
+                      </select>
+                    </Field>
+                    <Field label="Top-K результатов">
+                      <input
+                        className={inputCls}
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={agentConfig.memory_top_k}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            memory_top_k: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="Макс. символов контекста">
+                      <input
+                        className={inputCls}
+                        type="number"
+                        min={1000}
+                        max={30000}
+                        step={500}
+                        value={agentConfig.memory_max_chars}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            memory_max_chars: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </Field>
+                  </div>
+                  <Field
+                    label="Макс. сообщений в истории"
+                    hint="Старые сообщения обрезаются сверху"
+                  >
+                    <input
+                      className={`${inputCls} max-w-xs`}
+                      type="number"
+                      min={4}
+                      max={200}
+                      value={agentConfig.max_history_messages}
+                      onChange={(e) =>
+                        setAgentConfig({
+                          ...agentConfig,
+                          max_history_messages: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+              </SectionCard>
+
+              {/* Skills table */}
+              <SectionCard title="Инструменты (Skills)">
+                <div className="space-y-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs text-slate-400">
+                      Включено {agentConfig.exposed_skills.length} из{" "}
+                      {agentSkills.length} · подтверждений{" "}
+                      {agentConfig.approval_gates.length}
+                    </p>
+                    <input
+                      className="w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 sm:w-64 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={agentSkillFilter}
+                      onChange={(e) => setAgentSkillFilter(e.target.value)}
+                      placeholder="Поиск tools…"
+                    />
+                  </div>
+                  <div className="max-h-72 overflow-auto rounded-md border border-slate-700">
+                    <table className="w-full text-left text-xs">
+                      <thead className="sticky top-0 bg-slate-900 text-slate-400">
+                        <tr>
+                          <th className="w-20 px-3 py-2 font-medium">Агент</th>
+                          <th className="w-24 px-3 py-2 font-medium">Подтв.</th>
+                          <th className="px-3 py-2 font-medium">Tool</th>
+                          <th className="hidden px-3 py-2 font-medium md:table-cell">
+                            Endpoint
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800">
+                        {filteredAgentSkills.map((skill) => {
+                          const isExposed = agentConfig.exposed_skills.includes(
+                            skill.name,
+                          );
+                          const needsApproval =
+                            agentConfig.approval_gates.includes(skill.name);
+                          return (
+                            <tr
+                              key={skill.name}
+                              className="bg-slate-900/40 hover:bg-slate-900/70"
+                            >
+                              <td className="px-3 py-2">
+                                <input
+                                  type="checkbox"
+                                  checked={isExposed}
+                                  onChange={(e) =>
+                                    updateAgentSkill(
+                                      skill.name,
+                                      e.target.checked,
+                                    )
+                                  }
+                                />
+                              </td>
+                              <td className="px-3 py-2">
+                                <input
+                                  type="checkbox"
+                                  checked={needsApproval}
+                                  onChange={(e) =>
+                                    updateAgentApprovalGate(
+                                      skill.name,
+                                      e.target.checked,
+                                    )
+                                  }
+                                />
+                              </td>
+                              <td className="px-3 py-2">
+                                <div className="font-mono text-slate-200">
+                                  {skill.name}
+                                </div>
+                                <div className="mt-0.5 text-slate-500">
+                                  {skill.description || "—"}
+                                </div>
+                              </td>
+                              <td className="hidden px-3 py-2 font-mono text-slate-500 md:table-cell">
+                                {skill.method} {skill.path}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </SectionCard>
+
+              {/* System prompt */}
+              <SectionCard
+                title="Системный промпт"
+                subtitle="Переопределяет базовый промпт из openclaw/prompts/base.md"
+              >
+                <Field
+                  label=""
+                  hint="Оставьте пустым чтобы использовать базовый промпт"
+                >
+                  <textarea
+                    className={`${inputCls} h-28 font-mono text-xs`}
+                    value={agentConfig.system_prompt ?? ""}
+                    onChange={(e) =>
+                      setAgentConfig({
+                        ...agentConfig,
+                        system_prompt: e.target.value || null,
+                      })
+                    }
+                    placeholder="Пусто: используется базовый промпт openclaw/prompts/base.md"
+                  />
+                </Field>
+              </SectionCard>
+
+              <SaveRow
+                saving={agentSaving}
+                saved={agentSaved}
+                onSave={handleSaveAgentConfig}
+                onReset={handleResetAgentConfig}
+                saveLabel="Сохранить настройки агента"
+              />
+            </>
+          ) : (
+            <div className="text-sm text-slate-400 py-12 text-center">
+              Загрузка конфигурации агента…
             </div>
-            {configStatus.warnings.length > 0 && (
-              <div className="mt-2 space-y-1 text-xs">
-                {configStatus.warnings.map((warning) => (
-                  <div key={warning}>{warning}</div>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB: Модели ──────────────────────────────────────────────────── */}
+      {activeTab === "models" && (
+        <div className="space-y-6">
+          {/* Status + model config */}
+          <SectionCard
+            title="Выбор моделей"
+            subtitle="Модели для OCR, reasoning и верификации. Используются Celery-задачами и маршрутизатором AI."
+            action={
+              <button
+                onClick={() => {
+                  loadModels();
+                  loadConfigStatus();
+                }}
+                className="rounded-md bg-slate-700 px-3 py-2 text-xs text-slate-100 hover:bg-slate-600"
+              >
+                Проверить
+              </button>
+            }
+          >
+            {configStatus && (
+              <div
+                className={`mb-4 rounded-md border p-3 text-sm ${
+                  configStatus.ok
+                    ? "border-emerald-800 bg-emerald-950/30 text-emerald-200"
+                    : "border-amber-800 bg-amber-950/30 text-amber-200"
+                }`}
+              >
+                <div>
+                  Ollama:{" "}
+                  {configStatus.ollama_available ? "доступна" : "недоступна"} ·
+                  моделей: {configStatus.installed_models.length}
+                </div>
+                {configStatus.warnings.length > 0 && (
+                  <div className="mt-2 space-y-1 text-xs">
+                    {configStatus.warnings.map((w) => (
+                      <div key={w}>{w}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {config && (
+              <div className="space-y-4">
+                <ModelSelector
+                  label="Модель OCR / извлечения"
+                  description="Распознавание и извлечение данных из документов. Работает только локально."
+                  value={config.model_ocr}
+                  models={models}
+                  onChange={(v) => setConfig({ ...config, model_ocr: v })}
+                />
+                <ModelSelector
+                  label="Модель reasoning"
+                  description="Сложные рассуждения, генерация писем, отчётов."
+                  value={config.model_reasoning}
+                  models={models}
+                  onChange={(v) => setConfig({ ...config, model_reasoning: v })}
+                />
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <ModelSelector
+                    label="Проверочная модель 1"
+                    description="Повторная экстракция для автоверификации."
+                    value={config.verify_model_1}
+                    models={models}
+                    onChange={(v) =>
+                      setConfig({ ...config, verify_model_1: v })
+                    }
+                  />
+                  <ModelSelector
+                    label="Проверочная модель 2 (опц.)"
+                    description="Третий проход для 3-стороннего сравнения."
+                    value={config.verify_model_2}
+                    models={[
+                      {
+                        name: "",
+                        size: 0,
+                        parameter_size: "—",
+                        family: "",
+                        modified_at: "",
+                      },
+                      ...models,
+                    ]}
+                    onChange={(v) =>
+                      setConfig({ ...config, verify_model_2: v })
+                    }
+                  />
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Field
+                    label="Embedding модель"
+                    hint="Для векторной памяти; параметры из registry"
+                  >
+                    <select
+                      value={config.embedding_model}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          embedding_model: e.target.value,
+                        })
+                      }
+                      className={selectCls}
+                    >
+                      {registryModels
+                        .filter((m) => m.modalities.includes("embedding"))
+                        .map((m) => (
+                          <option key={m.name} value={m.name}>
+                            {m.name}
+                            {m.embedding_dimension
+                              ? ` · ${m.embedding_dimension}`
+                              : ""}
+                          </option>
+                        ))}
+                    </select>
+                    {embeddingProfile && (
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Коллекция: {embeddingProfile.collection_name} ·{" "}
+                        {embeddingProfile.dimension} ·{" "}
+                        {embeddingProfile.distance_metric}
+                      </p>
+                    )}
+                  </Field>
+                  <Field
+                    label="Reranker модель"
+                    hint="Применяется к top-K кандидатам поиска"
+                  >
+                    <select
+                      value={config.reranker_model ?? ""}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          reranker_model: e.target.value || null,
+                        })
+                      }
+                      className={selectCls}
+                    >
+                      <option value="">Не использовать</option>
+                      {registryModels
+                        .filter((m) => m.modalities.includes("rerank"))
+                        .map((m) => (
+                          <option key={m.name} value={m.name}>
+                            {m.name}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
+                </div>
+                <SaveRow
+                  saving={configSaving}
+                  saved={configSaved}
+                  onSave={handleSaveConfig}
+                  saveLabel="Сохранить выбор моделей"
+                />
+              </div>
+            )}
+          </SectionCard>
+
+          {/* TurboQuant */}
+          <SectionCard
+            title="TurboQuant"
+            subtitle="Optional vLLM KV-cache профиль для long-context reasoning. Включайте только после benchmark."
+          >
+            {config && (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <label className="flex items-center gap-2 rounded-md bg-slate-900/50 p-3 text-sm text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={config.turboquant_enabled}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        turboquant_enabled: e.target.checked,
+                      })
+                    }
+                  />
+                  Включить профиль
+                </label>
+                <Field label="KV-cache dtype">
+                  <input
+                    className={inputCls}
+                    value={config.turboquant_kv_cache_dtype}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        turboquant_kv_cache_dtype: e.target.value,
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="Max model len (токенов)">
+                  <input
+                    className={inputCls}
+                    type="number"
+                    value={config.turboquant_max_model_len}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        turboquant_max_model_len: Number(e.target.value),
+                      })
+                    }
+                  />
+                </Field>
+              </div>
+            )}
+          </SectionCard>
+
+          {/* Installed models */}
+          <SectionCard
+            title="Установленные модели"
+            action={
+              <button
+                onClick={loadModels}
+                disabled={loadingModels}
+                className="text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded hover:bg-slate-700"
+              >
+                {loadingModels ? "Загрузка..." : "Обновить"}
+              </button>
+            }
+          >
+            {loadingModels ? (
+              <div className="text-sm text-slate-400 py-4 text-center">
+                Загрузка списка моделей…
+              </div>
+            ) : models.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                Нет установленных моделей
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-700">
+                {models.map((m) => (
+                  <div
+                    key={m.name}
+                    className="flex items-center justify-between py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-mono font-medium text-slate-200 truncate">
+                        {m.name}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {[m.parameter_size, m.family, fmtBytes(m.size)]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleDelete(m.name)}
+                      disabled={deletingModel === m.name}
+                      className="ml-4 px-2 py-1 text-xs text-red-400 hover:text-red-300 hover:bg-red-950/30 rounded disabled:opacity-40 shrink-0"
+                    >
+                      {deletingModel === m.name ? "…" : "Удалить"}
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
-          </div>
-        )}
-        {config && (
-          <div className="space-y-4">
-            <ModelSelector
-              label="Модель агента (чат)"
-              description="Используется для диалога и вызова инструментов. Рекомендуется модель с поддержкой tool calling."
-              value={config.model_agent}
-              models={models}
-              onChange={(v) => setConfig({ ...config, model_agent: v })}
-            />
-            <ModelSelector
-              label="Модель OCR / извлечения"
-              description="Используется для распознавания и извлечения данных из документов. Работает только локально."
-              value={config.model_ocr}
-              models={models}
-              onChange={(v) => setConfig({ ...config, model_ocr: v })}
-            />
-            <ModelSelector
-              label="Модель reasoning"
-              description="Используется для сложных рассуждений и генерации текста (письма, отчёты)."
-              value={config.model_reasoning}
-              models={models}
-              onChange={(v) => setConfig({ ...config, model_reasoning: v })}
-            />
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <ModelSelector
-                label="Проверочная модель 1"
-                description="Повторная экстракция для автоверификации. Если пусто — используется та же что OCR."
-                value={config.verify_model_1}
-                models={models}
-                onChange={(v) => setConfig({ ...config, verify_model_1: v })}
-              />
-              <ModelSelector
-                label="Проверочная модель 2 (опц.)"
-                description="Третий проход для 3-стороннего сравнения. Оставьте пустым если не нужна."
-                value={config.verify_model_2}
-                models={[
-                  {
-                    name: "",
-                    size: 0,
-                    parameter_size: "—",
-                    family: "",
-                    modified_at: "",
-                  },
-                  ...models,
-                ]}
-                onChange={(v) => setConfig({ ...config, verify_model_2: v })}
-              />
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">
-                  Embedding модель
-                </label>
-                <select
-                  value={config.embedding_model}
-                  onChange={(e) =>
-                    setConfig({ ...config, embedding_model: e.target.value })
-                  }
-                  className="w-full bg-slate-800 border border-slate-600 text-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {registryModels
-                    .filter((m) => m.modalities.includes("embedding"))
-                    .map((m) => (
-                      <option key={m.name} value={m.name}>
-                        {m.name}
-                        {m.embedding_dimension
-                          ? ` · ${m.embedding_dimension}`
-                          : ""}
-                      </option>
-                    ))}
-                </select>
-                <p className="text-xs text-slate-400 mt-1">
-                  Используется для векторной памяти; параметры берутся из
-                  registry/discovery.
-                </p>
-                {embeddingProfile && (
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Коллекция: {embeddingProfile.collection_name} ·{" "}
-                    {embeddingProfile.dimension} ·{" "}
-                    {embeddingProfile.distance_metric}
-                  </p>
-                )}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">
-                  Reranker модель
-                </label>
-                <select
-                  value={config.reranker_model ?? ""}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      reranker_model: e.target.value || null,
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-600 text-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">Не использовать</option>
-                  {registryModels
-                    .filter((m) => m.modalities.includes("rerank"))
-                    .map((m) => (
-                      <option key={m.name} value={m.name}>
-                        {m.name}
-                      </option>
-                    ))}
-                </select>
-                <p className="text-xs text-slate-400 mt-1">
-                  Применяется только к top-K кандидатам SQL/vector поиска.
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={handleSaveConfig}
-              disabled={configSaving}
-              className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50"
-            >
-              {configSaved
-                ? "Сохранено ✓"
-                : configSaving
-                  ? "Сохранение..."
-                  : "Сохранить"}
-            </button>
-          </div>
-        )}
-      </section>
+          </SectionCard>
 
-      {/* Built-in agent */}
-      <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold">Встроенный агент</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              Основной сотрудник без official OpenClaw: модель, память, лимиты и
-              инструменты.
-            </p>
-          </div>
-          {agentSaved && (
-            <span className="text-xs text-emerald-400 pt-1">Сохранено</span>
-          )}
-        </div>
-        {agentConfig && (
-          <div className="space-y-4">
-            <label className="flex items-center gap-2 text-sm text-slate-200">
+          {/* Pull new model */}
+          <SectionCard title="Загрузить новую модель">
+            <div className="flex gap-2 mb-3">
               <input
-                type="checkbox"
-                checked={agentConfig.enabled}
-                onChange={(e) =>
-                  setAgentConfig({ ...agentConfig, enabled: e.target.checked })
-                }
+                type="text"
+                value={pullName}
+                onChange={(e) => setPullName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !pulling && handlePull()}
+                placeholder="например: llama3.2:3b, qwen3:8b"
+                disabled={pulling}
+                className={`flex-1 ${inputCls}`}
               />
-              Включить встроенного агента
-            </label>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <ModelSelector
-                label="Модель агента"
-                description="Используется для диалога, планирования и tool calling."
-                value={agentConfig.model}
-                models={models}
-                onChange={(v) => setAgentConfig({ ...agentConfig, model: v })}
-              />
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">
-                  Имя сотрудника
-                </label>
-                <input
-                  className="w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-                  value={agentConfig.agent_name}
-                  onChange={(e) =>
-                    setAgentConfig({
-                      ...agentConfig,
-                      agent_name: e.target.value,
-                    })
-                  }
-                />
-                <p className="mt-1 text-xs text-slate-400">
-                  Используется в системном промпте, если промпт не
-                  переопределен.
-                </p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <input
-                className="rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-                value={agentConfig.ollama_url}
-                onChange={(e) =>
-                  setAgentConfig({ ...agentConfig, ollama_url: e.target.value })
-                }
-                placeholder="Ollama URL"
-              />
-              <input
-                className="rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-                value={agentConfig.backend_url}
-                onChange={(e) =>
-                  setAgentConfig({
-                    ...agentConfig,
-                    backend_url: e.target.value,
-                  })
-                }
-                placeholder="Backend URL"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <label className="text-xs text-slate-400">
-                Temperature
-                <input
-                  className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-                  type="number"
-                  min="0"
-                  max="2"
-                  step="0.05"
-                  value={agentConfig.temperature}
-                  onChange={(e) =>
-                    setAgentConfig({
-                      ...agentConfig,
-                      temperature: Number(e.target.value),
-                    })
-                  }
-                />
-              </label>
-              <label className="text-xs text-slate-400">
-                Max steps
-                <input
-                  className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-                  type="number"
-                  min="1"
-                  max="30"
-                  value={agentConfig.max_steps}
-                  onChange={(e) =>
-                    setAgentConfig({
-                      ...agentConfig,
-                      max_steps: Number(e.target.value),
-                    })
-                  }
-                />
-              </label>
-              <label className="text-xs text-slate-400">
-                LLM timeout
-                <input
-                  className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-                  type="number"
-                  value={agentConfig.llm_timeout_seconds}
-                  onChange={(e) =>
-                    setAgentConfig({
-                      ...agentConfig,
-                      llm_timeout_seconds: Number(e.target.value),
-                    })
-                  }
-                />
-              </label>
-              <label className="text-xs text-slate-400">
-                Approval timeout
-                <input
-                  className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-                  type="number"
-                  value={agentConfig.approval_timeout_seconds}
-                  onChange={(e) =>
-                    setAgentConfig({
-                      ...agentConfig,
-                      approval_timeout_seconds: Number(e.target.value),
-                    })
-                  }
-                />
-              </label>
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <label className="flex items-center gap-2 rounded-md bg-slate-900/50 p-3 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={agentConfig.memory_enabled}
-                  onChange={(e) =>
-                    setAgentConfig({
-                      ...agentConfig,
-                      memory_enabled: e.target.checked,
-                    })
-                  }
-                />
-                Подключать память
-              </label>
-              <select
-                value={agentConfig.memory_mode}
-                onChange={(e) =>
-                  setAgentConfig({
-                    ...agentConfig,
-                    memory_mode: e.target.value as AgentConfig["memory_mode"],
-                  })
-                }
-                className="rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-              >
-                <option value="sql">SQL</option>
-                <option value="sql_vector">SQL + vector</option>
-                <option value="sql_vector_rerank">SQL + vector + rerank</option>
-                <option value="hybrid">Hybrid</option>
-                <option value="graph">Graph</option>
-              </select>
-              <input
-                className="rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-                type="number"
-                min="1"
-                max="30"
-                value={agentConfig.memory_top_k}
-                onChange={(e) =>
-                  setAgentConfig({
-                    ...agentConfig,
-                    memory_top_k: Number(e.target.value),
-                  })
-                }
-              />
-            </div>
-            <div>
-              <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-xs text-slate-400">
-                  Инструменты: включено {agentConfig.exposed_skills.length} из{" "}
-                  {agentSkills.length}; подтверждений{" "}
-                  {agentConfig.approval_gates.length}
-                </div>
-                <input
-                  className="w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-xs text-slate-200 sm:w-64"
-                  value={agentSkillFilter}
-                  onChange={(e) => setAgentSkillFilter(e.target.value)}
-                  placeholder="Поиск tools"
-                />
-              </div>
-              <div className="max-h-80 overflow-auto rounded-md border border-slate-700">
-                <table className="w-full text-left text-xs">
-                  <thead className="sticky top-0 bg-slate-900 text-slate-400">
-                    <tr>
-                      <th className="w-24 px-3 py-2 font-medium">Агент</th>
-                      <th className="w-28 px-3 py-2 font-medium">Подтв.</th>
-                      <th className="px-3 py-2 font-medium">Tool</th>
-                      <th className="hidden px-3 py-2 font-medium md:table-cell">
-                        Endpoint
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800">
-                    {filteredAgentSkills.map((skill) => {
-                      const isExposed = agentConfig.exposed_skills.includes(
-                        skill.name,
-                      );
-                      const needsApproval = agentConfig.approval_gates.includes(
-                        skill.name,
-                      );
-                      return (
-                        <tr key={skill.name} className="bg-slate-900/40">
-                          <td className="px-3 py-2">
-                            <input
-                              type="checkbox"
-                              checked={isExposed}
-                              onChange={(e) =>
-                                updateAgentSkill(skill.name, e.target.checked)
-                              }
-                            />
-                          </td>
-                          <td className="px-3 py-2">
-                            <input
-                              type="checkbox"
-                              checked={needsApproval}
-                              onChange={(e) =>
-                                updateAgentApprovalGate(
-                                  skill.name,
-                                  e.target.checked,
-                                )
-                              }
-                            />
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="font-mono text-slate-200">
-                              {skill.name}
-                            </div>
-                            <div className="mt-0.5 text-slate-500">
-                              {skill.description || "Без описания"}
-                            </div>
-                          </td>
-                          <td className="hidden px-3 py-2 font-mono text-slate-500 md:table-cell">
-                            {skill.method} {skill.path}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <label className="text-xs text-slate-400">
-              Системный промпт
-              <textarea
-                className="mt-1 h-28 w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-xs text-slate-200"
-                value={agentConfig.system_prompt ?? ""}
-                onChange={(e) =>
-                  setAgentConfig({
-                    ...agentConfig,
-                    system_prompt: e.target.value || null,
-                  })
-                }
-                placeholder="Пусто: используется базовый промпт openclaw/prompts/base.md"
-              />
-            </label>
-            <div className="flex gap-2">
               <button
-                onClick={handleSaveAgentConfig}
-                disabled={agentSaving}
-                className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                onClick={handlePull}
+                disabled={pulling || !pullName.trim()}
+                className={btnPrimary}
               >
-                {agentSaving ? "Сохранение..." : "Сохранить агента"}
-              </button>
-              <button
-                onClick={handleResetAgentConfig}
-                disabled={agentSaving}
-                className="px-4 py-2 bg-slate-700 text-slate-100 text-sm rounded-lg hover:bg-slate-600 disabled:opacity-50"
-              >
-                Сбросить
+                {pulling ? "Загрузка..." : "Pull"}
               </button>
             </div>
-          </div>
-        )}
-      </section>
-
-      {/* TurboQuant */}
-      <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-        <h2 className="text-lg font-semibold">TurboQuant</h2>
-        <p className="text-sm text-slate-400 mt-1">
-          Optional vLLM KV-cache профиль для long-context reasoning. Не
-          используется для embeddings и rerankers.
-        </p>
-        {config && (
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <label className="flex items-center gap-2 rounded-md bg-slate-900/50 p-3 text-sm text-slate-200">
-              <input
-                type="checkbox"
-                checked={config.turboquant_enabled}
-                onChange={(e) =>
-                  setConfig({ ...config, turboquant_enabled: e.target.checked })
-                }
-              />
-              Включить профиль
-            </label>
-            <input
-              className="rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-              value={config.turboquant_kv_cache_dtype}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  turboquant_kv_cache_dtype: e.target.value,
-                })
-              }
-            />
-            <input
-              className="rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-              type="number"
-              value={config.turboquant_max_model_len}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  turboquant_max_model_len: Number(e.target.value),
-                })
-              }
-            />
-          </div>
-        )}
-        <p className="mt-3 text-xs text-slate-500">
-          Включайте только после benchmark baseline vs TurboQuant по качеству,
-          VRAM и latency.
-        </p>
-      </section>
-
-      {/* Development cleanup */}
-      <section className="rounded-lg border border-red-900 bg-red-950/20 p-6">
-        <h2 className="text-lg font-semibold text-red-100">
-          Полная очистка документов
-        </h2>
-        <p className="mt-1 text-sm text-red-200/80">
-          Dev-команда удаляет все документы, файлы и связанные записи:
-          извлечения, память, граф, НТД-проверки, счета, техпроцессы, BOM и
-          складские приемки, созданные от документов.
-        </p>
-        <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-          <input
-            value={purgeConfirm}
-            onChange={(event) => setPurgeConfirm(event.target.value)}
-            placeholder='Введите "DELETE ALL DOCUMENT DATA"'
-            className="flex-1 rounded-md border border-red-900 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-          />
-          <button
-            onClick={handleDevelopmentPurge}
-            disabled={purgeBusy || purgeConfirm !== "DELETE ALL DOCUMENT DATA"}
-            className="rounded-md bg-red-700 px-4 py-2 text-sm text-white hover:bg-red-600 disabled:opacity-50"
-          >
-            {purgeBusy ? "Очищаю..." : "Очистить все документы"}
-          </button>
-        </div>
-        {purgeMessage && (
-          <p className="mt-3 text-xs text-red-100">{purgeMessage}</p>
-        )}
-      </section>
-
-      {/* Retrieval / embeddings */}
-      <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold">Векторная память</h2>
-            <p className="text-sm text-slate-400 mt-1">
-              Активный embedding profile определяет Qdrant-коллекцию,
-              размерность и модель.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleRebuildEmbeddings}
-              disabled={rebuildingEmbeddings}
-              className="px-3 py-2 bg-slate-700 text-slate-100 text-sm rounded-md hover:bg-slate-600 disabled:opacity-50"
-            >
-              {rebuildingEmbeddings ? "Готовлю..." : "Подготовить records"}
-            </button>
-            <button
-              onClick={handleIndexEmbeddings}
-              disabled={indexingEmbeddings}
-              className="px-3 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 disabled:opacity-50"
-            >
-              {indexingEmbeddings ? "Индексирую..." : "Индексировать в Qdrant"}
-            </button>
-          </div>
-        </div>
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-md bg-slate-900/50 p-3">
-            <p className="text-xs text-slate-500">Модель</p>
-            <p className="mt-1 text-sm font-mono text-slate-200">
-              {embeddingStats?.active_model ??
-                embeddingProfile?.model_key ??
-                "—"}
-            </p>
-          </div>
-          <div className="rounded-md bg-slate-900/50 p-3">
-            <p className="text-xs text-slate-500">Коллекция</p>
-            <p className="mt-1 text-sm font-mono text-slate-200 break-all">
-              {embeddingStats?.active_collection ??
-                embeddingProfile?.collection_name ??
-                "—"}
-            </p>
-          </div>
-          <div className="rounded-md bg-slate-900/50 p-3">
-            <p className="text-xs text-slate-500">Записи</p>
-            <p className="mt-1 text-sm text-slate-200">
-              {embeddingStats ? `${embeddingStats.total}` : "—"}
-            </p>
-          </div>
-        </div>
-        {embeddingStats && (
-          <p className="mt-3 text-xs text-slate-400">
-            Статусы:{" "}
-            {Object.entries(embeddingStats.counts_by_status)
-              .map(([status, count]) => `${status}: ${count}`)
-              .join(" · ") || "нет записей"}
-          </p>
-        )}
-        {rebuildMessage && (
-          <p className="mt-3 text-xs text-slate-300">{rebuildMessage}</p>
-        )}
-      </section>
-
-      {/* NTD norm-control */}
-      <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <h2 className="text-lg font-semibold">Нормоконтроль НТД</h2>
-            <p className="text-sm text-slate-400 mt-1">
-              Проверка документов по базе НТД может запускаться вручную из
-              карточки документа или автоматически после обработки.
-            </p>
-          </div>
-          {ntdSaved && (
-            <span className="text-xs text-emerald-400 pt-1">Сохранено</span>
-          )}
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <button
-            onClick={() => handleSaveNtdConfig("manual")}
-            disabled={ntdSaving}
-            className={`text-left rounded-md border p-4 transition ${
-              ntdConfig?.mode === "manual"
-                ? "border-blue-500 bg-blue-950/30"
-                : "border-slate-700 bg-slate-900/40 hover:border-slate-500"
-            } disabled:opacity-50`}
-          >
-            <span className="block text-sm font-semibold text-slate-100">
-              Проверять вручную
-            </span>
-            <span className="mt-1 block text-xs text-slate-400">
-              Кнопка “Проверить на соответствие НТД” активна в review-документе.
-            </span>
-          </button>
-          <button
-            onClick={() => handleSaveNtdConfig("auto")}
-            disabled={ntdSaving}
-            className={`text-left rounded-md border p-4 transition ${
-              ntdConfig?.mode === "auto"
-                ? "border-blue-500 bg-blue-950/30"
-                : "border-slate-700 bg-slate-900/40 hover:border-slate-500"
-            } disabled:opacity-50`}
-          >
-            <span className="block text-sm font-semibold text-slate-100">
-              Проверять автоматически
-            </span>
-            <span className="mt-1 block text-xs text-slate-400">
-              Нормоконтроль запускается после extraction, без применения
-              исправлений.
-            </span>
-          </button>
-        </div>
-        <p className="mt-3 text-xs text-slate-500">
-          Текущий режим:{" "}
-          {ntdConfig?.mode === "auto" ? "автоматический" : "ручной"}
-          {ntdConfig?.updated_at
-            ? ` · обновлено ${new Date(ntdConfig.updated_at).toLocaleString("ru-RU")}`
-            : ""}
-        </p>
-      </section>
-
-      {/* Installed Models */}
-      <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Установленные модели</h2>
-          <button
-            onClick={loadModels}
-            disabled={loadingModels}
-            className="text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded hover:bg-slate-700"
-          >
-            {loadingModels ? "Загрузка..." : "Обновить"}
-          </button>
-        </div>
-
-        {loadingModels ? (
-          <div className="text-sm text-slate-400 py-4 text-center">
-            Загрузка списка моделей...
-          </div>
-        ) : models.length === 0 ? (
-          <p className="text-sm text-slate-500">Нет установленных моделей</p>
-        ) : (
-          <div className="divide-y divide-slate-700">
-            {models.map((m) => (
+            {pullLog.length > 0 && (
               <div
-                key={m.name}
-                className="flex items-center justify-between py-2.5"
+                ref={pullLogRef}
+                className="bg-slate-900 text-slate-300 text-xs font-mono rounded-md p-3 h-32 overflow-y-auto"
               >
-                <div className="min-w-0">
-                  <p className="text-sm font-mono font-medium text-slate-200 truncate">
-                    {m.name}
-                  </p>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    {[m.parameter_size, m.family, fmtBytes(m.size)]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                </div>
+                {pullLog.map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-slate-400 mt-2">
+              Библиотека:&nbsp;
+              <a
+                href="https://ollama.com/library"
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-slate-300"
+              >
+                ollama.com/library
+              </a>
+            </p>
+          </SectionCard>
+        </div>
+      )}
+
+      {/* ── TAB: Память ──────────────────────────────────────────────────── */}
+      {activeTab === "memory" && (
+        <div className="space-y-6">
+          <SectionCard
+            title="Векторная память"
+            subtitle="Активный embedding profile определяет Qdrant-коллекцию, размерность и модель."
+            action={
+              <div className="flex gap-2">
                 <button
-                  onClick={() => handleDelete(m.name)}
-                  disabled={deletingModel === m.name}
-                  className="ml-4 px-2 py-1 text-xs text-red-400 hover:text-red-300 hover:bg-red-950/30 rounded disabled:opacity-40 shrink-0"
+                  onClick={handleRebuildEmbeddings}
+                  disabled={rebuildingEmbeddings}
+                  className={btnSecondary}
                 >
-                  {deletingModel === m.name ? "..." : "Удалить"}
+                  {rebuildingEmbeddings ? "Готовлю…" : "Подготовить records"}
+                </button>
+                <button
+                  onClick={handleIndexEmbeddings}
+                  disabled={indexingEmbeddings}
+                  className={btnPrimary}
+                >
+                  {indexingEmbeddings
+                    ? "Индексирую…"
+                    : "Индексировать в Qdrant"}
                 </button>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Pull new model */}
-      <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-        <h2 className="text-lg font-semibold mb-4">Загрузить новую модель</h2>
-        <div className="flex gap-2 mb-3">
-          <input
-            type="text"
-            value={pullName}
-            onChange={(e) => setPullName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !pulling && handlePull()}
-            placeholder="например: llama3.2:3b, qwen3:8b"
-            disabled={pulling}
-            className="flex-1 bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-500 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-          />
-          <button
-            onClick={handlePull}
-            disabled={pulling || !pullName.trim()}
-            className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+            }
           >
-            {pulling ? "Загрузка..." : "Pull"}
-          </button>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {[
+                {
+                  label: "Модель",
+                  value:
+                    embeddingStats?.active_model ??
+                    embeddingProfile?.model_key ??
+                    "—",
+                },
+                {
+                  label: "Коллекция",
+                  value:
+                    embeddingStats?.active_collection ??
+                    embeddingProfile?.collection_name ??
+                    "—",
+                },
+                {
+                  label: "Записей",
+                  value: embeddingStats ? String(embeddingStats.total) : "—",
+                },
+              ].map(({ label, value }) => (
+                <div key={label} className="rounded-md bg-slate-900/50 p-3">
+                  <p className="text-xs text-slate-500">{label}</p>
+                  <p className="mt-1 text-sm font-mono text-slate-200 break-all">
+                    {value}
+                  </p>
+                </div>
+              ))}
+            </div>
+            {embeddingStats && (
+              <p className="mt-3 text-xs text-slate-400">
+                Статусы:{" "}
+                {Object.entries(embeddingStats.counts_by_status)
+                  .map(([s, c]) => `${s}: ${c}`)
+                  .join(" · ") || "нет записей"}
+              </p>
+            )}
+            {rebuildMessage && (
+              <p className="mt-3 text-xs text-slate-300">{rebuildMessage}</p>
+            )}
+          </SectionCard>
         </div>
+      )}
 
-        {pullLog.length > 0 && (
-          <div
-            ref={pullLogRef}
-            className="bg-slate-900 text-slate-300 text-xs font-mono rounded-md p-3 h-32 overflow-y-auto"
+      {/* ── TAB: Данные ──────────────────────────────────────────────────── */}
+      {activeTab === "data" && (
+        <div className="space-y-6">
+          {/* NTD control */}
+          <SectionCard
+            title="Нормоконтроль НТД"
+            subtitle="Проверка документов по базе НТД — вручную или автоматически после обработки."
+            action={
+              ntdSaved ? (
+                <span className="text-xs text-emerald-400 pt-1">Сохранено</span>
+              ) : undefined
+            }
           >
-            {pullLog.map((line, i) => (
-              <div key={i}>{line}</div>
-            ))}
-          </div>
-        )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {[
+                {
+                  mode: "manual" as const,
+                  title: "Вручную",
+                  desc: 'Кнопка "Проверить на соответствие НТД" в review-документе.',
+                },
+                {
+                  mode: "auto" as const,
+                  title: "Автоматически",
+                  desc: "Нормоконтроль запускается после extraction, без применения исправлений.",
+                },
+              ].map(({ mode, title, desc }) => (
+                <button
+                  key={mode}
+                  onClick={() => handleSaveNtdConfig(mode)}
+                  disabled={ntdSaving}
+                  className={`text-left rounded-md border p-4 transition ${
+                    ntdConfig?.mode === mode
+                      ? "border-blue-500 bg-blue-950/30"
+                      : "border-slate-700 bg-slate-900/40 hover:border-slate-500"
+                  } disabled:opacity-50`}
+                >
+                  <span className="block text-sm font-semibold text-slate-100">
+                    {title}
+                  </span>
+                  <span className="mt-1 block text-xs text-slate-400">
+                    {desc}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <p className="mt-3 text-xs text-slate-500">
+              Текущий режим:{" "}
+              {ntdConfig?.mode === "auto" ? "автоматический" : "ручной"}
+              {ntdConfig?.updated_at
+                ? ` · обновлено ${new Date(ntdConfig.updated_at).toLocaleString("ru-RU")}`
+                : ""}
+            </p>
+          </SectionCard>
 
-        <p className="text-xs text-slate-400 mt-2">
-          Имена моделей:&nbsp;
-          <a
-            href="https://ollama.com/library"
-            target="_blank"
-            rel="noreferrer"
-            className="underline hover:text-slate-300"
+          {/* Links to sub-pages */}
+          <SectionCard
+            title="Разделы данных"
+            subtitle="Упр��вление нормативной базой и правилами нормализации"
           >
-            ollama.com/library
-          </a>
-        </p>
-      </section>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {[
+                {
+                  href: "/settings/ntd",
+                  title: "НТД",
+                  desc: "Нормативные документы и требования",
+                },
+                {
+                  href: "/settings/norm-cards",
+                  title: "Нормкарточки",
+                  desc: "Нормы расхода и каталог ОКПД2",
+                },
+                {
+                  href: "/settings/normalization",
+                  title: "Нормализация",
+                  desc: "Правила автоматической нормализации",
+                },
+              ].map(({ href, title, desc }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  className="block rounded-md border border-slate-700 bg-slate-900/40 p-4 hover:bg-slate-700/50 hover:border-slate-500 transition-colors"
+                >
+                  <span className="block text-sm font-semibold text-slate-100">
+                    {title}
+                  </span>
+                  <span className="mt-1 block text-xs text-slate-400">
+                    {desc}
+                  </span>
+                </Link>
+              ))}
+            </div>
+          </SectionCard>
 
-      {/* About */}
-      <section className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-        <h2 className="text-lg font-semibold mb-2">О системе</h2>
-        <p className="text-sm text-slate-400">
-          AI Manufacturing Workspace v0.1.0
-        </p>
-        <p className="text-sm text-slate-500 mt-1">
-          AI-ассистент: Света · Backend: FastAPI · AI: Ollama
-        </p>
-      </section>
+          {/* Dev purge */}
+          <section className="rounded-lg border border-red-900 bg-red-950/20 p-6">
+            <h2 className="text-lg font-semibold text-red-100">
+              Полная очистка документов
+            </h2>
+            <p className="mt-1 text-sm text-red-200/80">
+              Dev-команда удаляет все документы, файлы и связанные записи:
+              извлечения, память, граф, НТД-проверки, счета, техпроцессы, BOM и
+              складские приёмки.
+            </p>
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <input
+                value={purgeConfirm}
+                onChange={(e) => setPurgeConfirm(e.target.value)}
+                placeholder='Введите "DELETE ALL DOCUMENT DATA"'
+                className="flex-1 rounded-md border border-red-900 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+              />
+              <button
+                onClick={handleDevelopmentPurge}
+                disabled={
+                  purgeBusy || purgeConfirm !== "DELETE ALL DOCUMENT DATA"
+                }
+                className="rounded-md bg-red-700 px-4 py-2 text-sm text-white hover:bg-red-600 disabled:opacity-50"
+              >
+                {purgeBusy ? "Очищаю..." : "Очистить всё"}
+              </button>
+            </div>
+            {purgeMessage && (
+              <p className="mt-3 text-xs text-red-100">{purgeMessage}</p>
+            )}
+          </section>
+        </div>
+      )}
+
+      {/* ── TAB: Система ─────────────────────────────────────────────────── */}
+      {activeTab === "system" && (
+        <div className="space-y-6">
+          <SectionCard
+            title="OpenClaw Gateway"
+            subtitle="Gateway, режим чата, allowlist, Telegram и статус."
+            action={
+              <Link href="/settings/openclaw" className={btnSecondary}>
+                Открыть
+              </Link>
+            }
+          />
+
+          <SectionCard title="О системе">
+            <div className="space-y-1 text-sm">
+              <p className="text-slate-300 font-medium">
+                AI Manufacturing Workspace v0.1.0
+              </p>
+              <p className="text-slate-400">
+                AI-ассистент: Света · Backend: FastAPI · AI: Ollama / OpenRouter
+                / Anthropic
+              </p>
+              <p className="text-slate-500 text-xs mt-2">
+                Настройки сохраняются в Redis (shared) и локальном файле
+                (fallback).
+              </p>
+            </div>
+          </SectionCard>
+        </div>
+      )}
     </div>
   );
 }
