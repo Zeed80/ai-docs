@@ -613,6 +613,8 @@ class AgentSession:
             max_chars=self._config.memory_max_chars,
         )
 
+        self._mcp_initialised = False
+
     async def _call_for_compression(
         self,
         messages: list[dict],
@@ -641,7 +643,26 @@ class AgentSession:
         except Exception:
             pass
 
+    async def _init_mcp(self) -> None:
+        """Lazy-init MCP tools on first message (async-safe)."""
+        if self._mcp_initialised:
+            return
+        self._mcp_initialised = True
+        servers = self._config.mcp_servers or []
+        if not servers:
+            return
+        try:
+            from app.ai.mcp_client import load_mcp_tools
+            mcp_tools, mcp_handlers = await load_mcp_tools(servers)
+            self._tools.extend(mcp_tools)
+            self._skill_map.update(mcp_handlers)
+            if mcp_tools:
+                logger.info("mcp_tools_loaded", count=len(mcp_tools))
+        except Exception as exc:
+            logger.warning("mcp_init_failed", error=str(exc))
+
     async def on_user_message(self, content: str) -> None:
+        await self._init_mcp()
         self.messages.append({"role": "user", "content": content})
         self._trim_history()
         await self._run()

@@ -43,6 +43,7 @@ class BuiltinAgentConfig(BaseModel):
     context_compression_enabled: bool = True
     context_compression_threshold: float = Field(0.85, ge=0.5, le=0.98)
     compression_model: str | None = None  # None = use primary model
+    mcp_servers: list[dict] = Field(default_factory=list)  # [{name, transport, ...}]
 
 
 class BuiltinAgentConfigUpdate(BaseModel):
@@ -70,6 +71,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     context_compression_enabled: bool | None = None
     context_compression_threshold: float | None = Field(default=None, ge=0.5, le=0.98)
     compression_model: str | None = None
+    mcp_servers: list[dict] | None = None
 
 
 def _default_config() -> BuiltinAgentConfig:

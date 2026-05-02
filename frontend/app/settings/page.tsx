@@ -97,6 +97,13 @@ interface AgentConfig {
   context_compression_enabled: boolean;
   context_compression_threshold: number;
   compression_model: string | null;
+  mcp_servers: Array<{
+    name: string;
+    transport: "stdio" | "http";
+    command?: string;
+    args?: string[];
+    url?: string;
+  }>;
 }
 
 interface AgentSkill {
@@ -1200,6 +1207,97 @@ export default function SettingsPage() {
                       </Field>
                     </div>
                   )}
+                </div>
+              </SectionCard>
+
+              {/* MCP Servers */}
+              <SectionCard
+                title="MCP Серверы"
+                subtitle="Model Context Protocol — подключение внешних инструментов (filesystem, postgres и др.)."
+              >
+                <div className="space-y-3">
+                  {(agentConfig.mcp_servers ?? []).length === 0 && (
+                    <p className="text-sm text-slate-400">
+                      Серверов не добавлено. MCP-инструменты автоматически
+                      появятся в списке Skills после добавления сервера.
+                    </p>
+                  )}
+                  {(agentConfig.mcp_servers ?? []).map((srv, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-start gap-3 rounded-md border border-slate-700 bg-slate-900/50 p-3"
+                    >
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-slate-200">
+                            {srv.name}
+                          </span>
+                          <span className="rounded px-1.5 py-0.5 text-xs bg-slate-700 text-slate-400">
+                            {srv.transport}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 font-mono truncate">
+                          {srv.transport === "stdio"
+                            ? [srv.command, ...(srv.args ?? [])].join(" ")
+                            : srv.url}
+                        </p>
+                      </div>
+                      <button
+                        className="text-xs text-red-400 hover:text-red-300 shrink-0"
+                        onClick={() =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            mcp_servers: agentConfig.mcp_servers.filter(
+                              (_, i) => i !== idx,
+                            ),
+                          })
+                        }
+                      >
+                        Удалить
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className={btnSecondary}
+                    onClick={() => {
+                      const name = prompt("Имя сервера (например: filesystem)");
+                      if (!name) return;
+                      const transport = prompt(
+                        "Транспорт: stdio или http",
+                        "stdio",
+                      ) as "stdio" | "http";
+                      if (!transport) return;
+                      let entry: (typeof agentConfig.mcp_servers)[0];
+                      if (transport === "stdio") {
+                        const cmd = prompt("Команда (например: npx)", "npx");
+                        const argsStr = prompt(
+                          "Аргументы через пробел",
+                          "-y @modelcontextprotocol/server-filesystem /data",
+                        );
+                        entry = {
+                          name,
+                          transport: "stdio",
+                          command: cmd ?? "npx",
+                          args: argsStr ? argsStr.split(" ") : [],
+                        };
+                      } else {
+                        const url = prompt(
+                          "URL сервера",
+                          "http://localhost:5173",
+                        );
+                        entry = { name, transport: "http", url: url ?? "" };
+                      }
+                      setAgentConfig({
+                        ...agentConfig,
+                        mcp_servers: [
+                          ...(agentConfig.mcp_servers ?? []),
+                          entry,
+                        ],
+                      });
+                    }}
+                  >
+                    + Добавить сервер
+                  </button>
                 </div>
               </SectionCard>
 
