@@ -12,6 +12,7 @@ services:
     environment:
       APP_DEBUG: "true"
       APP_LOG_LEVEL: DEBUG
+      OPENCLAW_ROOT: /openclaw
 
   celery-worker:
     build:
@@ -21,6 +22,8 @@ services:
       - ../backend:/app
       - ../openclaw:/openclaw:ro
     command: celery -A app.tasks.celery_app worker -l debug -c 2 -Q celery,extraction,ingest,scheduler
+    environment:
+      OPENCLAW_ROOT: /openclaw
 
   celery-beat:
     build:
@@ -29,6 +32,8 @@ services:
     volumes:
       - ../backend:/app
       - ../openclaw:/openclaw:ro
+    environment:
+      OPENCLAW_ROOT: /openclaw
 
   frontend:
     build:

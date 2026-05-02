@@ -49,23 +49,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     _tg_bot = None
     _tg_task = None
-    if settings.telegram_bot_token:
-        try:
+    try:
+        from app.api.telegram import get_bot_token, get_allowed_users
+        tg_token = get_bot_token()
+        if tg_token:
             from app.integrations.telegram_bot import SvetaTelegramBot
-            allowed: set[int] = set()
-            if settings.telegram_allowed_users:
-                for uid in settings.telegram_allowed_users.split(","):
-                    uid = uid.strip()
-                    if uid.isdigit():
-                        allowed.add(int(uid))
             _tg_bot = SvetaTelegramBot(
-                token=settings.telegram_bot_token,
-                allowed_user_ids=allowed,
+                token=tg_token,
+                allowed_user_ids=get_allowed_users(),
             )
             _tg_task = asyncio.create_task(_tg_bot.start_polling())
             logger.info("telegram bot started")
-        except Exception as exc:
-            logger.warning("telegram bot failed to start", error=str(exc))
+    except Exception as exc:
+        logger.warning("telegram bot failed to start", error=str(exc))
 
     yield
 

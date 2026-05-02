@@ -392,9 +392,21 @@ export default function SettingsPage() {
     notifications_enabled: boolean;
     has_default_chat: boolean;
     allowed_users_count: number;
+    token_masked: string;
+    chat_id_masked: string;
+    allowed_users_masked: string;
   } | null>(null);
   const [tgTesting, setTgTesting] = useState(false);
   const [tgTestResult, setTgTestResult] = useState<string | null>(null);
+  const [tgEditing, setTgEditing] = useState(false);
+  const [tgDraft, setTgDraft] = useState({
+    bot_token: "",
+    notifications_chat_id: "",
+    allowed_users: "",
+    notifications_enabled: false,
+  });
+  const [tgSaving, setTgSaving] = useState(false);
+  const [tgSaved, setTgSaved] = useState(false);
 
   // ── Data loaders ─────────────────────────────────────────────────────────
 
@@ -750,6 +762,42 @@ export default function SettingsPage() {
     } finally {
       setTgTesting(false);
       await loadTgStatus();
+    }
+  }
+
+  async function handleTelegramSave() {
+    setTgSaving(true);
+    setTgTestResult(null);
+    try {
+      const payload: Record<string, string | boolean> = {
+        notifications_enabled: tgDraft.notifications_enabled,
+      };
+      // Only send non-empty fields (empty string = clear)
+      if (tgDraft.bot_token !== "") payload.bot_token = tgDraft.bot_token;
+      if (tgDraft.notifications_chat_id !== "")
+        payload.notifications_chat_id = tgDraft.notifications_chat_id;
+      if (tgDraft.allowed_users !== "")
+        payload.allowed_users = tgDraft.allowed_users;
+      const r = await fetch(`${API}/api/telegram/config`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      await loadTgStatus();
+      setTgDraft({
+        bot_token: "",
+        notifications_chat_id: "",
+        allowed_users: "",
+        notifications_enabled: false,
+      });
+      setTgEditing(false);
+      setTgSaved(true);
+      setTimeout(() => setTgSaved(false), 3000);
+    } catch (e) {
+      setTgTestResult(`❌ Ошибка сохранения: ${e}`);
+    } finally {
+      setTgSaving(false);
     }
   }
 
@@ -1938,16 +1986,36 @@ export default function SettingsPage() {
           {/* Telegram */}
           <SectionCard
             title="Telegram"
-            subtitle="Бот для уведомлений и управления агентом из Telegram. Токен задаётся через переменную окружения TELEGRAM_BOT_TOKEN."
+            subtitle="Бот для уведомлений и управления агентом из Telegram. Токен и ID хранятся зашифрованными в Redis."
+            action={
+              <button
+                className={btnSecondary}
+                onClick={() => {
+                  setTgEditing((v) => !v);
+                  setTgTestResult(null);
+                  if (!tgEditing) {
+                    setTgDraft({
+                      bot_token: "",
+                      notifications_chat_id: "",
+                      allowed_users: tgStatus?.allowed_users_masked ?? "",
+                      notifications_enabled:
+                        tgStatus?.notifications_enabled ?? false,
+                    });
+                  }
+                }}
+              >
+                {tgEditing ? "Отмена" : "Изменить"}
+              </button>
+            }
           >
             <div className="space-y-4">
-              {/* Status badge */}
-              <div className="flex items-center gap-3">
+              {/* Status badges */}
+              <div className="flex flex-wrap items-center gap-2">
                 <span
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
                     tgStatus?.configured
-                      ? "bg-green-900/50 text-green-300 border border-green-700"
-                      : "bg-slate-700 text-slate-400 border border-slate-600"
+                      ? "bg-green-900/50 text-green-300 border-green-700"
+                      : "bg-slate-700 text-slate-400 border-slate-600"
                   }`}
                 >
                   <span
@@ -1956,50 +2024,140 @@ export default function SettingsPage() {
                   {tgStatus?.configured ? "Настроен" : "Не настроен"}
                 </span>
                 {tgStatus?.configured && (
-                  <>
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                        tgStatus.notifications_enabled
-                          ? "bg-blue-900/50 text-blue-300 border border-blue-700"
-                          : "bg-slate-700 text-slate-400 border border-slate-600"
-                      }`}
-                    >
-                      {tgStatus.notifications_enabled
-                        ? "Уведомления вкл."
-                        : "Уведомления выкл."}
-                    </span>
-                    {tgStatus.allowed_users_count > 0 && (
-                      <span className="text-xs text-slate-400">
-                        Разрешённых пользователей:{" "}
-                        {tgStatus.allowed_users_count}
-                      </span>
-                    )}
-                  </>
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
+                      tgStatus.notifications_enabled
+                        ? "bg-blue-900/50 text-blue-300 border-blue-700"
+                        : "bg-slate-700 text-slate-400 border-slate-600"
+                    }`}
+                  >
+                    {tgStatus.notifications_enabled
+                      ? "Уведомления вкл."
+                      : "Уведомления выкл."}
+                  </span>
+                )}
+                {tgSaved && (
+                  <span className="text-xs text-green-400">✓ Сохранено</span>
                 )}
               </div>
 
-              <div className="text-sm text-slate-400 space-y-1">
-                <p>
-                  <span className="text-slate-300 font-mono text-xs">
-                    TELEGRAM_BOT_TOKEN
-                  </span>{" "}
-                  — токен бота (получить у{" "}
-                  <span className="text-blue-400">@BotFather</span>)
-                </p>
-                <p>
-                  <span className="text-slate-300 font-mono text-xs">
-                    TELEGRAM_ALLOWED_USERS
-                  </span>{" "}
-                  — список ID через запятую (пусто = без ограничений)
-                </p>
-                <p>
-                  <span className="text-slate-300 font-mono text-xs">
-                    TELEGRAM_NOTIFICATIONS_CHAT_ID
-                  </span>{" "}
-                  — chat_id для push-уведомлений
-                </p>
-              </div>
+              {/* Current values (masked) */}
+              {tgStatus?.configured && !tgEditing && (
+                <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 space-y-1.5 text-sm">
+                  <div className="flex gap-3">
+                    <span className="text-slate-500 w-36 shrink-0">
+                      Токен бота
+                    </span>
+                    <span className="font-mono text-slate-300">
+                      {tgStatus.token_masked || "—"}
+                    </span>
+                  </div>
+                  <div className="flex gap-3">
+                    <span className="text-slate-500 w-36 shrink-0">
+                      Chat ID
+                    </span>
+                    <span className="font-mono text-slate-300">
+                      {tgStatus.chat_id_masked || "—"}
+                    </span>
+                  </div>
+                  {tgStatus.allowed_users_count > 0 && (
+                    <div className="flex gap-3">
+                      <span className="text-slate-500 w-36 shrink-0">
+                        Разрешённые ID
+                      </span>
+                      <span className="font-mono text-slate-300 truncate">
+                        {tgStatus.allowed_users_masked}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
 
+              {/* Edit form */}
+              {tgEditing && (
+                <div className="space-y-3 rounded-md border border-slate-600 bg-slate-900/30 p-4">
+                  <Field
+                    label="Токен бота"
+                    hint="Получить у @BotFather в Telegram. Оставьте пустым, чтобы не менять."
+                  >
+                    <input
+                      className={inputCls}
+                      type="password"
+                      autoComplete="off"
+                      placeholder="1234567890:ABCdef..."
+                      value={tgDraft.bot_token}
+                      onChange={(e) =>
+                        setTgDraft({ ...tgDraft, bot_token: e.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label="Chat ID для уведомлений"
+                    hint="ID чата или пользователя, куда отправлять push-уведомления (узнать у @userinfobot)."
+                  >
+                    <input
+                      className={inputCls}
+                      placeholder="-1001234567890"
+                      value={tgDraft.notifications_chat_id}
+                      onChange={(e) =>
+                        setTgDraft({
+                          ...tgDraft,
+                          notifications_chat_id: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label="Разрешённые пользователи"
+                    hint="Telegram user ID через запятую. Пусто — принимать сообщения от всех."
+                  >
+                    <input
+                      className={inputCls}
+                      placeholder="123456789, 987654321"
+                      value={tgDraft.allowed_users}
+                      onChange={(e) =>
+                        setTgDraft({
+                          ...tgDraft,
+                          allowed_users: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-600 bg-slate-900"
+                      checked={tgDraft.notifications_enabled}
+                      onChange={(e) =>
+                        setTgDraft({
+                          ...tgDraft,
+                          notifications_enabled: e.target.checked,
+                        })
+                      }
+                    />
+                    <span className="text-sm text-slate-300">
+                      Включить push-уведомления
+                    </span>
+                  </label>
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      className={btnPrimary}
+                      disabled={tgSaving}
+                      onClick={handleTelegramSave}
+                    >
+                      {tgSaving ? "Сохранение…" : "Сохранить"}
+                    </button>
+                    <button
+                      className={btnSecondary}
+                      onClick={() => setTgEditing(false)}
+                    >
+                      Отмена
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Test button */}
               <div className="flex items-center gap-3">
                 <button
                   onClick={handleTelegramTest}
