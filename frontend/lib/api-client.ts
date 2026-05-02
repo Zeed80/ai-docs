@@ -412,16 +412,6 @@ export interface Invoice {
   created_at: string;
 }
 
-export interface InvoiceLine {
-  id: string;
-  line_number: number;
-  description: string | null;
-  quantity: number | null;
-  unit: string | null;
-  unit_price: number | null;
-  amount: number | null;
-}
-
 export interface InvoiceListResponse {
   items: Invoice[];
   total: number;

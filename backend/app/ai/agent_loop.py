@@ -16,6 +16,7 @@ import yaml
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.gateway_config import gateway_config
+from app.ai.streaming_scrubber import StreamingContextScrubber
 
 logger = structlog.get_logger()
 
@@ -198,7 +199,7 @@ async def _call_ollama_streaming(
     full_content = ""
     final_message: dict = {}
     accumulated_tool_calls: list | None = None
-    in_think_block = False
+    scrubber = StreamingContextScrubber()
 
     async with httpx.AsyncClient(timeout=float(config.llm_timeout_seconds)) as client:
         async with client.stream(
@@ -219,20 +220,16 @@ async def _call_ollama_streaming(
                 if msg.get("tool_calls"):
                     accumulated_tool_calls = msg["tool_calls"]
 
-                if "<think>" in token:
-                    in_think_block = True
-                if in_think_block:
-                    if "</think>" in token:
-                        in_think_block = False
-                        token = token.split("</think>", 1)[-1]
-                    else:
-                        token = ""
-
-                if token:
-                    full_content += token
-                    await on_token(token)
+                visible = scrubber.feed(token)
+                if visible:
+                    full_content += visible
+                    await on_token(visible)
 
                 if chunk.get("done"):
+                    trailing = scrubber.flush()
+                    if trailing:
+                        full_content += trailing
+                        await on_token(trailing)
                     final_message = msg
                     final_message["content"] = full_content
                     if accumulated_tool_calls and not final_message.get("tool_calls"):

@@ -57,6 +57,9 @@ example-invoices/*
 example-drawings/*
 !example-drawings/.gitkeep
 
+# External reference projects (not committed)
+hermes-agent/
+
 # OpenClaw local runtime, device identity, logs, and downloaded runtime deps
 openclaw/official/
 
