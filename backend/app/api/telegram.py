@@ -96,7 +96,7 @@ class _BotManager:
 
     @property
     def running(self) -> bool:
-        return self._running and self._task is not None and not self._task.done()
+        return self._running and self._bot is not None
 
     async def start(self) -> str:
         """Start (or restart) the bot. Returns "" on success, error message on failure."""
