@@ -606,6 +606,13 @@ class AgentSession:
             compression_model=self._config.compression_model,
         ) if self._config.context_compression_enabled else None
 
+        from app.ai.memory_manager import MemoryManager
+        self._memory_mgr = MemoryManager(
+            base_url=self._config.backend_url,
+            top_k=self._config.memory_top_k,
+            max_chars=self._config.memory_max_chars,
+        )
+
     async def _call_for_compression(
         self,
         messages: list[dict],
@@ -694,73 +701,22 @@ class AgentSession:
                 ))
 
                 if not tool_calls:
+                    # Fire-and-forget: index this turn into memory
+                    if self._config.memory_enabled and full_text:
+                        latest_user = next(
+                            (m.get("content", "") for m in reversed(self.messages) if m.get("role") == "user"),
+                            "",
+                        )
+                        asyncio.create_task(self._memory_mgr.sync_turn(latest_user, full_text))
                     break
 
                 self.messages.append(message)
 
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    fn_name = fn.get("name", "")
-                    raw_args = fn.get("arguments", {})
-                    args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
-
-                    asyncio.create_task(self._log_action(
-                        iteration=iteration,
-                        action_type="tool_call",
-                        tool_name=fn_name,
-                        tool_args=args,
-                    ))
-
-                    await self._send({"type": "tool_call", "tool": fn_name, "args": args})
-
-                    skill = self._skill_map.get(fn_name)
-                    original_name = skill["name"] if skill else fn_name.replace("__", ".")
-
-                    if original_name in self._approval_gates:
-                        asyncio.create_task(self._log_action(
-                            iteration=iteration,
-                            action_type="approval_request",
-                            tool_name=original_name,
-                            tool_args=args,
-                        ))
-                        approved = await self._request_approval(original_name, args)
-                        asyncio.create_task(self._log_action(
-                            iteration=iteration,
-                            action_type="approval_decision",
-                            tool_name=original_name,
-                            tool_result={"approved": approved},
-                        ))
-                        if not approved:
-                            result = {"status": "rejected", "message": "Отклонено пользователем"}
-                            self.messages.append({
-                                "role": "tool",
-                                "content": json.dumps(result, ensure_ascii=False),
-                            })
-                            await self._send({
-                                "type": "tool_result",
-                                "tool": fn_name,
-                                "result": result,
-                            })
-                            continue
-
-                    if skill:
-                        result = await _execute_skill(skill, args, self._config)
-                    else:
-                        result = {"error": f"Unknown skill: {fn_name}"}
-
-                    asyncio.create_task(self._log_action(
-                        iteration=iteration,
-                        action_type="tool_result",
-                        tool_name=fn_name,
-                        tool_result=result if len(str(result)) < 2000 else {"truncated": True},
-                    ))
-
-                    await self._send({"type": "tool_result", "tool": fn_name, "result": result})
-                    self.messages.append({
-                        "role": "tool",
-                        "content": json.dumps(result, ensure_ascii=False),
-                    })
-                    self._trim_history()
+                from app.ai.tool_parallelism import should_parallelize
+                if should_parallelize(tool_calls):
+                    await self._execute_tools_parallel(tool_calls, iteration)
+                else:
+                    await self._execute_tools_sequential(tool_calls, iteration)
 
         except Exception as e:
             logger.error("agent_loop_error", error=str(e))
@@ -773,6 +729,84 @@ class AgentSession:
                 await self._send({"type": "done"})
             except Exception:
                 pass
+
+    async def _execute_single_tool(
+        self, tc: dict, iteration: int
+    ) -> tuple[str, dict]:
+        """Execute one tool call and return (fn_name, result). Does NOT append to messages."""
+        fn = tc.get("function", {})
+        fn_name = fn.get("name", "")
+        raw_args = fn.get("arguments", {})
+        args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
+
+        asyncio.create_task(self._log_action(
+            iteration=iteration,
+            action_type="tool_call",
+            tool_name=fn_name,
+            tool_args=args,
+        ))
+        await self._send({"type": "tool_call", "tool": fn_name, "args": args})
+
+        skill = self._skill_map.get(fn_name)
+        original_name = skill["name"] if skill else fn_name.replace("__", ".")
+
+        if original_name in self._approval_gates:
+            asyncio.create_task(self._log_action(
+                iteration=iteration,
+                action_type="approval_request",
+                tool_name=original_name,
+                tool_args=args,
+            ))
+            approved = await self._request_approval(original_name, args)
+            asyncio.create_task(self._log_action(
+                iteration=iteration,
+                action_type="approval_decision",
+                tool_name=original_name,
+                tool_result={"approved": approved},
+            ))
+            if not approved:
+                result: dict = {"status": "rejected", "message": "Отклонено пользователем"}
+                await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+                return fn_name, result
+
+        if skill:
+            result = await _execute_skill(skill, args, self._config)
+        else:
+            result = {"error": f"Unknown skill: {fn_name}"}
+
+        asyncio.create_task(self._log_action(
+            iteration=iteration,
+            action_type="tool_result",
+            tool_name=fn_name,
+            tool_result=result if len(str(result)) < 2000 else {"truncated": True},
+        ))
+        await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+        return fn_name, result
+
+    async def _execute_tools_sequential(
+        self, tool_calls: list[dict], iteration: int
+    ) -> None:
+        for tc in tool_calls:
+            fn_name, result = await self._execute_single_tool(tc, iteration)
+            self.messages.append({
+                "role": "tool",
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+            self._trim_history()
+
+    async def _execute_tools_parallel(
+        self, tool_calls: list[dict], iteration: int
+    ) -> None:
+        results = await asyncio.gather(
+            *[self._execute_single_tool(tc, iteration) for tc in tool_calls],
+            return_exceptions=False,
+        )
+        for _fn_name, result in results:
+            self.messages.append({
+                "role": "tool",
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+        self._trim_history()
 
     async def _request_approval(self, skill_name: str, args: dict) -> bool:
         preview = json.dumps(args, ensure_ascii=False, indent=2)
@@ -827,7 +861,10 @@ class AgentSession:
         )
         if not latest_user:
             return
-        context = await _load_memory_context(latest_user, self._config)
+        context = await self._memory_mgr.prefetch(latest_user)
+        if not context:
+            # Fall back to existing HTTP search if MemoryManager returned nothing
+            context = await _load_memory_context(latest_user, self._config)
         if not context:
             return
         self.messages.append({
