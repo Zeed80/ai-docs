@@ -1,4 +1,4 @@
-.PHONY: dev dev-build down test e2e regression agent-regression agent-test agent-ws-smoke aiagent-contract aiagent-strict aiagent-official-up aiagent-official-down aiagent-official-logs aiagent-official-dashboard turboquant-benchmark turboquant-quality lint migrate seed skills logs ps
+.PHONY: dev dev-build down test e2e regression agent-regression agent-test agent-ws-smoke turboquant-benchmark turboquant-quality lint migrate seed skills logs ps
 
 # === Development ===
 dev:
@@ -42,26 +42,6 @@ agent-test:
 
 agent-ws-smoke:
 	node scripts/check_agent_ws_adapter.js
-
-aiagent-contract:
-	python3 scripts/check_aiagent_contract.py
-
-aiagent-strict:
-	python3 scripts/generate_aiagent_strict_gateway.py
-	python3 scripts/generate_aiagent_official_sample.py
-	python3 scripts/check_aiagent_contract.py --gateway aiagent/config/gateway.strict.yml --strict
-
-aiagent-official-up: aiagent-strict
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.aiagent.yml up -d aiagent-gateway
-
-aiagent-official-down:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.aiagent.yml stop aiagent-gateway aiagent-cli
-
-aiagent-official-logs:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.aiagent.yml logs -f aiagent-gateway
-
-aiagent-official-dashboard:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.aiagent.yml run --rm aiagent-cli dashboard --no-open
 
 turboquant-benchmark:
 	python3 scripts/turboquant_benchmark.py --baseline-model "$${BASELINE_MODEL}" --turboquant-model "$${TURBOQUANT_MODEL}" --baseline-url "$${BASELINE_URL:-http://localhost:8000}" --turboquant-url "$${TURBOQUANT_URL:-http://localhost:8001}"

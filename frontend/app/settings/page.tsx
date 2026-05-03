@@ -1975,16 +1975,6 @@ export default function SettingsPage() {
       {/* ── TAB: Система ─────────────────────────────────────────────────── */}
       {activeTab === "system" && (
         <div className="space-y-6">
-          <SectionCard
-            title="AiAgent Gateway"
-            subtitle="Gateway, режим чата, allowlist, Telegram и статус."
-            action={
-              <Link href="/settings/aiagent" className={btnSecondary}>
-                Открыть
-              </Link>
-            }
-          />
-
           {/* Telegram */}
           <SectionCard
             title="Telegram"

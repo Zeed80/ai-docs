@@ -1,22 +1,8 @@
 "use client";
 
 import { getWsUrl } from "@/lib/ws-url";
-import { getApiBaseUrl, getAiAgentWebSocketUrl } from "@/lib/api-base";
 
-export type AgentWsMode = "legacy" | "aiagent";
-
-export interface AgentWsSettings {
-  agent_ws_mode: AgentWsMode;
-  aiagent_ws_url: string;
-  legacy_ws_url: string;
-  fallback_to_legacy: boolean;
-}
-
-export interface AgentWsResolvedConfig {
-  mode: AgentWsMode;
-  endpoint: string;
-  healthCheckEndpoints: string[];
-}
+export type AgentWsMode = "legacy";
 
 export interface AgentWsMessage extends Record<string, unknown> {
   type: string;
@@ -27,109 +13,52 @@ export interface AgentWsMessage extends Record<string, unknown> {
   preview?: string;
 }
 
-const FALLBACK_STORAGE_KEY = "agent_ws_fallback_mode";
-let settingsCache: AgentWsSettings | null = null;
+export interface AgentWsResolvedConfig {
+  mode: AgentWsMode;
+  endpoint: string;
+  healthCheckEndpoints: string[];
+}
 
 function getLegacyWsEndpoint(): string {
   return `${getWsUrl()}/ws/chat`;
 }
 
-function getAiAgentWsUrl(): string {
-  return getAiAgentWebSocketUrl();
-}
-
-function getStoredFallbackMode(): AgentWsMode | null {
-  if (typeof window === "undefined" || !window.sessionStorage) return null;
-  return window.sessionStorage.getItem(FALLBACK_STORAGE_KEY) === "legacy"
-    ? "legacy"
-    : null;
-}
-
 export function setLegacyAgentWsFallback(): void {
-  if (typeof window !== "undefined" && window.sessionStorage) {
-    window.sessionStorage.setItem(FALLBACK_STORAGE_KEY, "legacy");
-  }
+  // no-op: single-mode setup, kept for API compatibility
 }
 
 export function clearAgentWsFallback(): void {
-  if (typeof window !== "undefined" && window.sessionStorage) {
-    window.sessionStorage.removeItem(FALLBACK_STORAGE_KEY);
-  }
-}
-
-export function getAgentWsMode(): AgentWsMode {
-  if (settingsCache?.agent_ws_mode) return settingsCache.agent_ws_mode;
-  return process.env.NEXT_PUBLIC_AGENT_WS_MODE === "aiagent"
-    ? "aiagent"
-    : "legacy";
+  // no-op: single-mode setup, kept for API compatibility
 }
 
 export function getAgentWsEndpoint(): string {
-  const legacy = settingsCache?.legacy_ws_url || getLegacyWsEndpoint();
-  const aiagent = settingsCache?.aiagent_ws_url || getAiAgentWsUrl();
-  return getAgentWsMode() === "aiagent" && getStoredFallbackMode() !== "legacy"
-    ? aiagent
-    : legacy;
+  return getLegacyWsEndpoint();
 }
 
 export function getAgentWsHealthCheckEndpoints(): string[] {
-  const legacy = settingsCache?.legacy_ws_url || getLegacyWsEndpoint();
-  const aiagent = settingsCache?.aiagent_ws_url || getAiAgentWsUrl();
-  if (getAgentWsMode() !== "aiagent") return [legacy];
-  if (settingsCache?.fallback_to_legacy === false) return [aiagent];
-  return [aiagent, legacy];
-}
-
-export async function loadAgentWsSettings(): Promise<AgentWsSettings> {
-  const response = await fetch(`${getApiBaseUrl()}/api/aiagent/settings`);
-  if (!response.ok) throw new Error("AiAgent settings unavailable");
-  const data = (await response.json()) as AgentWsSettings;
-  settingsCache = data;
-  return data;
+  return [getLegacyWsEndpoint()];
 }
 
 export async function resolveAgentWsConfig(): Promise<AgentWsResolvedConfig> {
-  try {
-    await loadAgentWsSettings();
-  } catch {
-    settingsCache = null;
-  }
+  const endpoint = getLegacyWsEndpoint();
   return {
-    mode: getAgentWsMode(),
-    endpoint: getAgentWsEndpoint(),
-    healthCheckEndpoints: getAgentWsHealthCheckEndpoints(),
+    mode: "legacy",
+    endpoint,
+    healthCheckEndpoints: [endpoint],
   };
 }
 
 export function buildAgentUserMessage(
   content: string,
-  mode: AgentWsMode = getAgentWsMode(),
+  _mode?: AgentWsMode,
 ): Record<string, unknown> {
-  if (mode === "aiagent") {
-    return {
-      type: "chat",
-      payload: {
-        text: content,
-      },
-    };
-  }
-
   return { type: "message", content };
 }
 
 export function buildAgentApprovalMessage(
   approved: boolean,
-  mode: AgentWsMode = getAgentWsMode(),
+  _mode?: AgentWsMode,
 ): Record<string, unknown> {
-  if (mode === "aiagent") {
-    return {
-      type: "approval",
-      payload: {
-        approved,
-      },
-    };
-  }
-
   return { type: approved ? "approve" : "reject" };
 }
 
