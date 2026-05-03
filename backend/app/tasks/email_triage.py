@@ -1,4 +1,4 @@
-"""Email Triage pipeline — Scenario 1 degraded mode (no OpenClaw).
+"""Email Triage pipeline — Scenario 1 degraded mode (no AiAgent).
 
 Full chain: poll IMAP → ingest attachments → classify → extract → normalize → validate.
 Runs on 'ingest' queue via Celery Beat or manual trigger.
@@ -14,7 +14,7 @@ logger = structlog.get_logger()
 
 @celery_app.task(name="app.tasks.email_triage.run_triage", bind=True, max_retries=1)
 def run_triage(self, mailbox: str | None = None) -> dict:
-    """Full email triage pipeline — degraded mode (without OpenClaw).
+    """Full email triage pipeline — degraded mode (without AiAgent).
 
     1. Poll IMAP for unseen emails
     2. Store attachments as Documents

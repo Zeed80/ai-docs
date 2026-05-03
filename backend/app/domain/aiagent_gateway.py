@@ -1,4 +1,4 @@
-"""Schemas for official OpenClaw Gateway control callbacks."""
+"""Schemas for official AiAgent Gateway control callbacks."""
 
 import uuid
 from datetime import datetime
@@ -6,7 +6,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class OpenClawApprovalRequest(BaseModel):
+class AiAgentApprovalRequest(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=100)
     iteration: int = Field(0, ge=0)
     tool_name: str = Field(..., min_length=1, max_length=100)
@@ -17,7 +17,7 @@ class OpenClawApprovalRequest(BaseModel):
     reason: str | None = None
 
 
-class OpenClawApprovalTicket(BaseModel):
+class AiAgentApprovalTicket(BaseModel):
     approval_id: uuid.UUID
     agent_action_id: uuid.UUID
     status: str
@@ -25,7 +25,7 @@ class OpenClawApprovalTicket(BaseModel):
     created_at: datetime
 
 
-class OpenClawResumeStatus(BaseModel):
+class AiAgentResumeStatus(BaseModel):
     approval_id: uuid.UUID
     status: str
     approved: bool

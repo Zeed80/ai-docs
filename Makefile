@@ -1,4 +1,4 @@
-.PHONY: dev dev-build down test e2e regression agent-regression agent-test agent-ws-smoke openclaw-contract openclaw-strict openclaw-official-up openclaw-official-down openclaw-official-logs openclaw-official-dashboard turboquant-benchmark turboquant-quality lint migrate seed skills logs ps
+.PHONY: dev dev-build down test e2e regression agent-regression agent-test agent-ws-smoke aiagent-contract aiagent-strict aiagent-official-up aiagent-official-down aiagent-official-logs aiagent-official-dashboard turboquant-benchmark turboquant-quality lint migrate seed skills logs ps
 
 # === Development ===
 dev:
@@ -43,25 +43,25 @@ agent-test:
 agent-ws-smoke:
 	node scripts/check_agent_ws_adapter.js
 
-openclaw-contract:
-	python3 scripts/check_openclaw_contract.py
+aiagent-contract:
+	python3 scripts/check_aiagent_contract.py
 
-openclaw-strict:
-	python3 scripts/generate_openclaw_strict_gateway.py
-	python3 scripts/generate_openclaw_official_sample.py
-	python3 scripts/check_openclaw_contract.py --gateway openclaw/config/gateway.strict.yml --strict
+aiagent-strict:
+	python3 scripts/generate_aiagent_strict_gateway.py
+	python3 scripts/generate_aiagent_official_sample.py
+	python3 scripts/check_aiagent_contract.py --gateway aiagent/config/gateway.strict.yml --strict
 
-openclaw-official-up: openclaw-strict
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.openclaw.yml up -d openclaw-gateway
+aiagent-official-up: aiagent-strict
+	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.aiagent.yml up -d aiagent-gateway
 
-openclaw-official-down:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.openclaw.yml stop openclaw-gateway openclaw-cli
+aiagent-official-down:
+	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.aiagent.yml stop aiagent-gateway aiagent-cli
 
-openclaw-official-logs:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.openclaw.yml logs -f openclaw-gateway
+aiagent-official-logs:
+	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.aiagent.yml logs -f aiagent-gateway
 
-openclaw-official-dashboard:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.openclaw.yml run --rm openclaw-cli dashboard --no-open
+aiagent-official-dashboard:
+	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml -f infra/docker-compose.aiagent.yml run --rm aiagent-cli dashboard --no-open
 
 turboquant-benchmark:
 	python3 scripts/turboquant_benchmark.py --baseline-model "$${BASELINE_MODEL}" --turboquant-model "$${TURBOQUANT_MODEL}" --baseline-url "$${BASELINE_URL:-http://localhost:8000}" --turboquant-url "$${TURBOQUANT_URL:-http://localhost:8001}"

@@ -9,7 +9,7 @@ import yaml
 
 
 def check_contract(
-    gateway_path: Path = Path("openclaw/config/gateway.yml"),
+    gateway_path: Path = Path("aiagent/config/gateway.yml"),
     *,
     strict: bool = False,
 ) -> dict[str, Any]:
@@ -76,8 +76,8 @@ def _resolve_registry_path(gateway_path: Path, registry_value: str) -> Path:
     raw = Path(registry_value)
     if raw.is_absolute():
         return raw
-    openclaw_root = gateway_path.parent.parent
-    return (openclaw_root / raw).resolve()
+    aiagent_root = gateway_path.parent.parent
+    return (aiagent_root / raw).resolve()
 
 
 def _load_registry(path: Path) -> dict[str, Any]:
@@ -94,13 +94,13 @@ def _check_duplicates(label: str, values: list[str], errors: list[str]) -> None:
         errors.append(f"{label} has duplicates: {', '.join(duplicates)}")
 
 
-def _collect_scenario_skills(openclaw_root: Path, scenarios: list[dict[str, Any]]) -> set[str]:
+def _collect_scenario_skills(aiagent_root: Path, scenarios: list[dict[str, Any]]) -> set[str]:
     skills: set[str] = set()
     for scenario in scenarios:
         path_value = scenario.get("path")
         if not path_value:
             continue
-        path = (openclaw_root / path_value).resolve()
+        path = (aiagent_root / path_value).resolve()
         if path.suffix.lower() not in {".yml", ".yaml"} or not path.exists():
             continue
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -112,8 +112,8 @@ def _collect_scenario_skills(openclaw_root: Path, scenarios: list[dict[str, Any]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check OpenClaw gateway/registry contract.")
-    parser.add_argument("--gateway", type=Path, default=Path("openclaw/config/gateway.yml"))
+    parser = argparse.ArgumentParser(description="Check AiAgent gateway/registry contract.")
+    parser.add_argument("--gateway", type=Path, default=Path("aiagent/config/gateway.yml"))
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
@@ -128,7 +128,7 @@ def main() -> int:
         for error in result["errors"]:
             print(f"FAIL {error}")
         if result["ok"]:
-            print("OK OpenClaw contract")
+            print("OK AiAgent contract")
     return 0 if result["ok"] else 1
 
 

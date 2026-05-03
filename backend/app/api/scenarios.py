@@ -1,4 +1,4 @@
-"""Scenarios API — list and trigger OpenClaw workflow scenarios."""
+"""Scenarios API — list and trigger AiAgent workflow scenarios."""
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -20,7 +20,7 @@ class ScenarioRunResponse(BaseModel):
 
 @router.get("")
 async def list_scenarios() -> list[dict]:
-    """Skill: scenarios.list — List available OpenClaw scenarios."""
+    """Skill: scenarios.list — List available AiAgent scenarios."""
     return scenario_runner.list_scenarios()
 
 

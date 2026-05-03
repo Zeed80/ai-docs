@@ -15,7 +15,7 @@ from app.api import (
     suppliers, collections, anomalies, compare, calendar, agent, auth, ai_settings,
     agent_actions, export, draft_email, quarantine, dashboard, warehouse,
     procurement, payments, boms, scenarios,
-    graph, memory, technology, openclaw_gateway, ntd, telegram,
+    graph, memory, technology, aiagent_gateway, ntd, telegram,
     canvas, mailbox, email_templates,
 )
 
@@ -122,7 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
     app.include_router(memory.router, prefix="/api/memory", tags=["memory"])
     app.include_router(technology.router, prefix="/api/technology", tags=["technology"])
-    app.include_router(openclaw_gateway.router, prefix="/api/openclaw", tags=["openclaw"])
+    app.include_router(aiagent_gateway.router, prefix="/api/aiagent", tags=["aiagent"])
     app.include_router(ntd.router, prefix="/api", tags=["ntd"])
     app.include_router(telegram.router, prefix="/api/telegram", tags=["telegram"])
     app.include_router(canvas.router, prefix="/api/canvas", tags=["canvas"])

@@ -7,7 +7,7 @@ The target implementation structure is:
 - `backend/app/` for FastAPI code (`api/`, `domain/`, `tasks/`, `ai/`, `db/`)
 - `frontend/app/` for Next.js routes and pages
 - `frontend/components/` for shared React UI
-- `openclaw/` for prompts, skills, and scenarios
+- `aiagent/` for prompts, skills, and scenarios
 - `infra/` for `docker-compose`, Traefik, and deployment scripts
 
 ## Build, Test, and Development Commands
@@ -16,12 +16,12 @@ Planned local workflow:
 - `make test` runs unit, API, and integration tests
 - `make e2e` runs Playwright end-to-end coverage
 - `make regression` checks extraction quality
-- `make agent-test` validates OpenClaw scenarios against mock skills
+- `make agent-test` validates AiAgent scenarios against mock skills
 
 If you add real code, keep command examples in this file and the planning docs synchronized.
 
 ## Coding Style & Naming Conventions
-Write documentation and contributor discussion in Russian. Keep code, identifiers, and code comments in English. Use clear module boundaries: OpenClaw for planning/orchestration, FastAPI for data and async work, Next.js for UI.
+Write documentation and contributor discussion in Russian. Keep code, identifiers, and code comments in English. Use clear module boundaries: AiAgent for planning/orchestration, FastAPI for data and async work, Next.js for UI.
 
 Prefer:
 - `snake_case` for Python modules and functions
@@ -36,7 +36,7 @@ The planned stack is `pytest` for backend logic and API tests, plus Playwright f
 Name tests after the behavior under test, for example `test_invoice_duplicate_detection.py` or `inbox-review-streak.spec.ts`.
 
 ## Commit & Pull Request Guidelines
-No local `.git` history is present in this workspace, so commit conventions cannot be inferred from prior commits. Until history exists, use short imperative subjects such as `Add invoice anomaly schema` or `Document OpenClaw skill registry flow`.
+No local `.git` history is present in this workspace, so commit conventions cannot be inferred from prior commits. Until history exists, use short imperative subjects such as `Add invoice anomaly schema` or `Document AiAgent skill registry flow`.
 
 Pull requests should include:
 - a concise problem/solution summary

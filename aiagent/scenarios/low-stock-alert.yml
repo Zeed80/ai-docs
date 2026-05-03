@@ -1,4 +1,4 @@
-# OpenClaw Scenario — Low Stock Alert
+# AiAgent Scenario — Low Stock Alert
 # Trigger: daily cron at 09:00
 # Checks inventory for positions below minimum quantity and
 # suggests creating purchase requests for critical shortages.

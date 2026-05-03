@@ -1,4 +1,4 @@
-# OpenClaw Scenario 2 — Assisted Review
+# AiAgent Scenario 2 — Assisted Review
 # Trigger: user opens document review → Света prepares context
 #
 # Chain: invoice.get → invoice.compare_prices → supplier.get (stub)

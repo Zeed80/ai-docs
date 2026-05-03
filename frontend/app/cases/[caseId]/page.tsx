@@ -158,7 +158,7 @@ function TaskPanel({ tasks }: { tasks: TaskJob[] }) {
 function AgentPanel({ caseId }: { caseId: string }) {
   return (
     <div className="content-card">
-      <p className="eyebrow">OpenClaw</p>
+      <p className="eyebrow">AiAgent</p>
       <h2 className="section-title">Сценарии</h2>
       <p className="small-muted">
         Запуск сценария создает allowlisted agent actions, задачи или approval gates. Внешние действия остаются

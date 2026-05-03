@@ -12,7 +12,7 @@ from app.ai.agent_config import BuiltinAgentConfig
 from app.main import app
 
 MANIFEST_PATH = Path("app/ai/evals/agent_role_cases.json")
-REGISTRY_PATH = Path("/openclaw/skills/_registry.yml")
+REGISTRY_PATH = Path("/aiagent/skills/_registry.yml")
 
 
 def _load_roles() -> list[dict]:

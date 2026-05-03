@@ -401,10 +401,10 @@ def _schema_ref(container: dict[str, Any] | None) -> str | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate OpenClaw tool registry from FastAPI OpenAPI.")
+    parser = argparse.ArgumentParser(description="Generate AiAgent tool registry from FastAPI OpenAPI.")
     parser.add_argument(
         "--output",
-        default="openclaw/skills/registry.json",
+        default="aiagent/skills/registry.json",
         help="Path to write the generated registry JSON.",
     )
     args = parser.parse_args()

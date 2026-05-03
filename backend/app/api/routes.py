@@ -103,7 +103,7 @@ from backend.app.security import create_signed_file_token, verify_signed_file_to
 from backend.app.domain.storage import LocalFileStorage
 from backend.app.tasks.document_processing import process_document
 from backend.app.tasks.execution import run_task_job
-from backend.app.tasks.openclaw import load_tool_registry, run_openclaw_scenario
+from backend.app.tasks.aiagent import load_tool_registry, run_aiagent_scenario
 
 
 router = APIRouter()
@@ -679,7 +679,7 @@ async def run_agent_scenario(
     if payload.case_id and get_case(db, payload.case_id) is None:
         raise HTTPException(status_code=404, detail="Case not found")
     try:
-        actions, gates, warnings, max_steps = run_openclaw_scenario(
+        actions, gates, warnings, max_steps = run_aiagent_scenario(
             db,
             scenario_name=scenario_name,
             payload=payload,

@@ -11,7 +11,7 @@ from app.ai.evals.agent_roles import (
 def test_agent_role_regression_manifest_is_valid() -> None:
     errors = validate_agent_role_manifest(
         Path("app/ai/evals/agent_role_cases.json"),
-        Path("/openclaw/skills/_registry.yml"),
+        Path("/aiagent/skills/_registry.yml"),
     )
 
     assert errors == []

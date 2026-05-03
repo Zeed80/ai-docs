@@ -1,13 +1,13 @@
 "use client";
 
 import { getWsUrl } from "@/lib/ws-url";
-import { getApiBaseUrl, getOpenClawWebSocketUrl } from "@/lib/api-base";
+import { getApiBaseUrl, getAiAgentWebSocketUrl } from "@/lib/api-base";
 
-export type AgentWsMode = "legacy" | "openclaw";
+export type AgentWsMode = "legacy" | "aiagent";
 
 export interface AgentWsSettings {
   agent_ws_mode: AgentWsMode;
-  openclaw_ws_url: string;
+  aiagent_ws_url: string;
   legacy_ws_url: string;
   fallback_to_legacy: boolean;
 }
@@ -34,8 +34,8 @@ function getLegacyWsEndpoint(): string {
   return `${getWsUrl()}/ws/chat`;
 }
 
-function getOpenClawWsUrl(): string {
-  return getOpenClawWebSocketUrl();
+function getAiAgentWsUrl(): string {
+  return getAiAgentWebSocketUrl();
 }
 
 function getStoredFallbackMode(): AgentWsMode | null {
@@ -59,30 +59,30 @@ export function clearAgentWsFallback(): void {
 
 export function getAgentWsMode(): AgentWsMode {
   if (settingsCache?.agent_ws_mode) return settingsCache.agent_ws_mode;
-  return process.env.NEXT_PUBLIC_AGENT_WS_MODE === "openclaw"
-    ? "openclaw"
+  return process.env.NEXT_PUBLIC_AGENT_WS_MODE === "aiagent"
+    ? "aiagent"
     : "legacy";
 }
 
 export function getAgentWsEndpoint(): string {
   const legacy = settingsCache?.legacy_ws_url || getLegacyWsEndpoint();
-  const openclaw = settingsCache?.openclaw_ws_url || getOpenClawWsUrl();
-  return getAgentWsMode() === "openclaw" && getStoredFallbackMode() !== "legacy"
-    ? openclaw
+  const aiagent = settingsCache?.aiagent_ws_url || getAiAgentWsUrl();
+  return getAgentWsMode() === "aiagent" && getStoredFallbackMode() !== "legacy"
+    ? aiagent
     : legacy;
 }
 
 export function getAgentWsHealthCheckEndpoints(): string[] {
   const legacy = settingsCache?.legacy_ws_url || getLegacyWsEndpoint();
-  const openclaw = settingsCache?.openclaw_ws_url || getOpenClawWsUrl();
-  if (getAgentWsMode() !== "openclaw") return [legacy];
-  if (settingsCache?.fallback_to_legacy === false) return [openclaw];
-  return [openclaw, legacy];
+  const aiagent = settingsCache?.aiagent_ws_url || getAiAgentWsUrl();
+  if (getAgentWsMode() !== "aiagent") return [legacy];
+  if (settingsCache?.fallback_to_legacy === false) return [aiagent];
+  return [aiagent, legacy];
 }
 
 export async function loadAgentWsSettings(): Promise<AgentWsSettings> {
-  const response = await fetch(`${getApiBaseUrl()}/api/openclaw/settings`);
-  if (!response.ok) throw new Error("OpenClaw settings unavailable");
+  const response = await fetch(`${getApiBaseUrl()}/api/aiagent/settings`);
+  if (!response.ok) throw new Error("AiAgent settings unavailable");
   const data = (await response.json()) as AgentWsSettings;
   settingsCache = data;
   return data;
@@ -105,7 +105,7 @@ export function buildAgentUserMessage(
   content: string,
   mode: AgentWsMode = getAgentWsMode(),
 ): Record<string, unknown> {
-  if (mode === "openclaw") {
+  if (mode === "aiagent") {
     return {
       type: "chat",
       payload: {
@@ -121,7 +121,7 @@ export function buildAgentApprovalMessage(
   approved: boolean,
   mode: AgentWsMode = getAgentWsMode(),
 ): Record<string, unknown> {
-  if (mode === "openclaw") {
+  if (mode === "aiagent") {
     return {
       type: "approval",
       payload: {

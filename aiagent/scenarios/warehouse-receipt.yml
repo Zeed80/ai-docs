@@ -1,4 +1,4 @@
-# OpenClaw Scenario — Warehouse Receipt
+# AiAgent Scenario — Warehouse Receipt
 # Trigger: invoice approved → automatically create a draft warehouse receipt
 #
 # When a user approves an invoice, Света creates a draft receipt

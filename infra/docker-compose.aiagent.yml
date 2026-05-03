@@ -1,0 +1,77 @@
+version: "3.9"
+
+services:
+  frontend:
+    environment:
+      NEXT_PUBLIC_AGENT_WS_MODE: ${NEXT_PUBLIC_AGENT_WS_MODE:-legacy}
+      NEXT_PUBLIC_AIAGENT_WS_URL: ${NEXT_PUBLIC_AIAGENT_WS_URL:-ws://localhost:18789}
+
+  aiagent-gateway:
+    image: ${AIAGENT_IMAGE:-ghcr.io/aiagent/aiagent:latest}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      AIAGENT_GATEWAY_TOKEN: ${AIAGENT_GATEWAY_TOKEN:-dev-aiagent-token}
+      AIAGENT_ALLOW_INSECURE_PRIVATE_WS: ${AIAGENT_ALLOW_INSECURE_PRIVATE_WS:-1}
+      TZ: ${AIAGENT_TZ:-Europe/Moscow}
+    volumes:
+      - ../aiagent/official:/home/node/.aiagent
+      - ../aiagent/official/workspace:/home/node/.aiagent/workspace
+      - ..:/home/node/.aiagent/workspace/project:ro
+    ports:
+      - "${AIAGENT_GATEWAY_PORT:-18789}:18789"
+      - "${AIAGENT_BRIDGE_PORT:-18790}:18790"
+    init: true
+    restart: unless-stopped
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${AIAGENT_GATEWAY_BIND:-lan}",
+        "--port",
+        "18789",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - app
+
+  aiagent-cli:
+    image: ${AIAGENT_IMAGE:-ghcr.io/aiagent/aiagent:latest}
+    network_mode: "service:aiagent-gateway"
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      AIAGENT_GATEWAY_TOKEN: ${AIAGENT_GATEWAY_TOKEN:-dev-aiagent-token}
+      AIAGENT_ALLOW_INSECURE_PRIVATE_WS: ${AIAGENT_ALLOW_INSECURE_PRIVATE_WS:-1}
+      BROWSER: echo
+      TZ: ${AIAGENT_TZ:-Europe/Moscow}
+    volumes:
+      - ../aiagent/official:/home/node/.aiagent
+      - ../aiagent/official/workspace:/home/node/.aiagent/workspace
+      - ..:/home/node/.aiagent/workspace/project:ro
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["node", "dist/index.js"]
+    depends_on:
+      - aiagent-gateway
+    healthcheck:
+      disable: true

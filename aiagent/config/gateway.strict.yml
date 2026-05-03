@@ -129,5 +129,5 @@ logging:
   audit: true
 metadata:
   generated: true
-  source: openclaw/config/gateway.yml
+  source: aiagent/config/gateway.yml
   policy: strict_generated_tools_only

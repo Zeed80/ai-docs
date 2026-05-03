@@ -1,4 +1,4 @@
-# OpenClaw Scenario 6 — Anomaly Resolution
+# AiAgent Scenario 6 — Anomaly Resolution
 # Trigger: anomaly detected on invoice → Света explains and guides user
 #
 # Chain: anomaly.check_all → anomaly.explain → supplier.get

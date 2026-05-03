@@ -9,8 +9,8 @@
 - [x] Единый AI-router с registry, local-only политикой для конфиденциальных задач и фильтрацией proposed tool calls.
 - [x] Запрет прямых AI-вызовов из бизнес/API-слоя, кроме инфраструктурного health-check.
 - [x] Production guard: запрет `AUTO_CREATE_SCHEMA=true` в production.
-- [x] Генерация OpenClaw registry из FastAPI OpenAPI.
-- [x] Документирован план перехода на официальный open-source OpenClaw.
+- [x] Генерация AiAgent registry из FastAPI OpenAPI.
+- [x] Документирован план перехода на официальный open-source AiAgent.
 
 ### P0. Многоступенчатая память документов
 
@@ -22,7 +22,7 @@
 - [x] Идемпотентный rebuild автоматического слоя памяти без удаления ручных сущностей.
 - [x] Очередь проверки графовых гипотез: `graph.review_list`, `graph.review_decide`.
 - [x] Автофиксация потенциальных конфликтов `conflicts_with` по материалам/номерам документов.
-- [x] OpenClaw сценарий обслуживания памяти `memory_maintenance`.
+- [x] AiAgent сценарий обслуживания памяти `memory_maintenance`.
 
 ### P1. База универсального инженера-технолога
 
@@ -85,18 +85,18 @@
 - [x] Разделить learning loop на предложения и правила, требующие approval для активации.
 - [x] Добавить regression-набор документов/чертежей/техпроцессов для контроля качества.
 
-### P2. Переход на официальный OpenClaw
+### P2. Переход на официальный AiAgent
 
-- [x] Поднять официальный OpenClaw Gateway параллельно текущему agent loop.
+- [x] Поднять официальный AiAgent Gateway параллельно текущему agent loop.
 - [x] Подключить generated registry и проверить deny unknown tools на уровне локального контракта.
-- [x] Добавить `make openclaw-contract` для сверки `gateway.yml`, registry, scenarios и approval gates.
-- [x] Добавить generated `openclaw/config/gateway.strict.yml` для запуска официального Gateway только с реализованными tools.
-- [x] Добавить `openclaw/config/openclaw.official.sample.json` с allowlist в формате официального OpenClaw config.
-- [x] Реализовать FastAPI pause/resume callbacks для approval-gated tool calls официального OpenClaw.
-- [x] Добавить параллельный Docker Compose overlay и Make targets для официального OpenClaw Gateway на портах `18789/18790`.
+- [x] Добавить `make aiagent-contract` для сверки `gateway.yml`, registry, scenarios и approval gates.
+- [x] Добавить generated `aiagent/config/gateway.strict.yml` для запуска официального Gateway только с реализованными tools.
+- [x] Добавить `aiagent/config/aiagent.official.sample.json` с allowlist в формате официального AiAgent config.
+- [x] Реализовать FastAPI pause/resume callbacks для approval-gated tool calls официального AiAgent.
+- [x] Добавить параллельный Docker Compose overlay и Make targets для официального AiAgent Gateway на портах `18789/18790`.
 - [x] Проверить официальный Gateway в Docker: контейнер `healthy`, `/healthz` возвращает `{"ok":true,"status":"live"}`, dashboard доступен на `http://127.0.0.1:18789/`.
-- [ ] Проверить pause/resume на реально запущенном официальном OpenClaw Gateway. Блокер на 2026-04-28: `openclaw agent --json` через живой Gateway не завершился за 45 секунд в текущем окружении после установки runtime-зависимостей провайдеров, поэтому approval-flow нельзя валидировать без рабочего model/provider runtime.
-- [x] Перенести WebSocket chat на переключаемый адаптер: legacy FastAPI `/ws/chat` по умолчанию, официальный OpenClaw Gateway через `NEXT_PUBLIC_AGENT_WS_MODE=openclaw`.
+- [ ] Проверить pause/resume на реально запущенном официальном AiAgent Gateway. Блокер на 2026-04-28: `aiagent agent --json` через живой Gateway не завершился за 45 секунд в текущем окружении после установки runtime-зависимостей провайдеров, поэтому approval-flow нельзя валидировать без рабочего model/provider runtime.
+- [x] Перенести WebSocket chat на переключаемый адаптер: legacy FastAPI `/ws/chat` по умолчанию, официальный AiAgent Gateway через `NEXT_PUBLIC_AGENT_WS_MODE=aiagent`.
 - [x] Добавить smoke-тест WebSocket-адаптера official/legacy и fallback-переключения.
 - [x] Оставить FastAPI полностью самодостаточным для degraded mode.
 

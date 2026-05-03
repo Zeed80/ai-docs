@@ -17,9 +17,9 @@ from backend.app.domain.services import (
 from backend.app.domain.schemas import AgentScenarioRunRequest
 
 
-OPENCLAW_ROOT = Path("openclaw")
-REGISTRY_PATH = OPENCLAW_ROOT / "skills" / "registry.json"
-SCENARIOS_DIR = OPENCLAW_ROOT / "scenarios"
+AIAGENT_ROOT = Path("aiagent")
+REGISTRY_PATH = AIAGENT_ROOT / "skills" / "registry.json"
+SCENARIOS_DIR = AIAGENT_ROOT / "scenarios"
 
 
 def load_tool_registry() -> dict[str, dict[str, Any]]:
@@ -34,7 +34,7 @@ def load_scenario(name: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def run_openclaw_scenario(
+def run_aiagent_scenario(
     db: Session,
     *,
     scenario_name: str,

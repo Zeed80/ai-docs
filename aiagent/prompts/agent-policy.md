@@ -1,6 +1,6 @@
 # Agent policy
 
-- Use only allowlisted tools from `openclaw/skills/registry.json`.
+- Use only allowlisted tools from `aiagent/skills/registry.json`.
 - Confidential document content stays local by default.
 - Unknown tools are denied.
 - External actions require approval.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Generate OpenClaw skill YAML from FastAPI Pydantic schemas.
+"""Generate AiAgent skill YAML from FastAPI Pydantic schemas.
 
 Pydantic schemas are the single source of truth.
-This script reads FastAPI routes and generates openclaw/skills/*.yml.
+This script reads FastAPI routes and generates aiagent/skills/*.yml.
 """
 
 import json
@@ -86,7 +86,7 @@ def main():
     print(f"Found {len(skills)} skills from FastAPI routes")
 
     # Write registry
-    output_dir = Path(__file__).parent.parent.parent / "openclaw" / "skills"
+    output_dir = Path(__file__).parent.parent.parent / "aiagent" / "skills"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     registry_path = output_dir / "_registry.yml"

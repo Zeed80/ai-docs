@@ -3,25 +3,25 @@ from __future__ import annotations
 import json
 
 import yaml
-from scripts.check_openclaw_contract import check_contract
-from scripts.generate_openclaw_official_sample import build_official_sample
-from scripts.generate_openclaw_registry import build_registry
-from scripts.generate_openclaw_strict_gateway import build_strict_gateway
+from scripts.check_aiagent_contract import check_contract
+from scripts.generate_aiagent_official_sample import build_official_sample
+from scripts.generate_aiagent_registry import build_registry
+from scripts.generate_aiagent_strict_gateway import build_strict_gateway
 
-from app.api.openclaw_gateway import (
-    OpenClawProjectSettings,
+from app.api.aiagent_gateway import (
+    AiAgentProjectSettings,
     _build_official_config,
     _registry_tool,
 )
 from app.db.models import ApprovalActionType
-from app.domain.openclaw_gateway import (
-    OpenClawApprovalRequest,
-    OpenClawApprovalTicket,
-    OpenClawResumeStatus,
+from app.domain.aiagent_gateway import (
+    AiAgentApprovalRequest,
+    AiAgentApprovalTicket,
+    AiAgentResumeStatus,
 )
 
 
-def test_openclaw_registry_is_generated_from_openapi() -> None:
+def test_aiagent_registry_is_generated_from_openapi() -> None:
     registry = build_registry()
     tools = {tool["name"]: tool for tool in registry["tools"]}
 
@@ -37,7 +37,7 @@ def test_openclaw_registry_is_generated_from_openapi() -> None:
     assert tools["tech.process_plan_approve"]["approval_required"] is True
 
 
-def test_openclaw_registry_can_be_serialized_as_json_and_yaml() -> None:
+def test_aiagent_registry_can_be_serialized_as_json_and_yaml() -> None:
     registry = build_registry()
     as_json = json.loads(json.dumps(registry, ensure_ascii=False))
     as_yaml = yaml.safe_load(yaml.safe_dump(registry, allow_unicode=True, sort_keys=False))
@@ -46,8 +46,8 @@ def test_openclaw_registry_can_be_serialized_as_json_and_yaml() -> None:
     assert any(tool["name"] == "tech.learning_rule_activate" for tool in as_yaml["tools"])
 
 
-def test_openclaw_gateway_registry_file_is_current_yaml() -> None:
-    raw = yaml.safe_load(open("openclaw/skills/_registry.yml", encoding="utf-8"))
+def test_aiagent_gateway_registry_file_is_current_yaml() -> None:
+    raw = yaml.safe_load(open("aiagent/skills/_registry.yml", encoding="utf-8"))
     tools = {tool["name"]: tool for tool in raw["tools"]}
 
     assert raw["source"] == "fastapi_openapi"
@@ -55,7 +55,7 @@ def test_openclaw_gateway_registry_file_is_current_yaml() -> None:
     assert tools["memory.reindex"]["approval_required"] is False
 
 
-def test_openclaw_contract_has_no_generated_policy_errors() -> None:
+def test_aiagent_contract_has_no_generated_policy_errors() -> None:
     result = check_contract()
 
     assert result["ok"] is True
@@ -65,7 +65,7 @@ def test_openclaw_contract_has_no_generated_policy_errors() -> None:
     }
 
 
-def test_openclaw_strict_gateway_only_exposes_generated_tools() -> None:
+def test_aiagent_strict_gateway_only_exposes_generated_tools() -> None:
     strict_gateway = build_strict_gateway()
     registry_tools = {tool["name"]: tool for tool in build_registry()["tools"]}
 
@@ -79,7 +79,7 @@ def test_openclaw_strict_gateway_only_exposes_generated_tools() -> None:
     }
 
 
-def test_openclaw_gateway_control_api_uses_generated_approval_policy() -> None:
+def test_aiagent_gateway_control_api_uses_generated_approval_policy() -> None:
     tool = _registry_tool("tech.process_plan_approve")
 
     assert tool is not None
@@ -87,17 +87,17 @@ def test_openclaw_gateway_control_api_uses_generated_approval_policy() -> None:
     assert ApprovalActionType.agent_tool_call.value == "agent.tool_call"
 
 
-def test_openclaw_official_sample_uses_strict_skill_allowlist() -> None:
+def test_aiagent_official_sample_uses_strict_skill_allowlist() -> None:
     sample = build_official_sample()
     strict_gateway = build_strict_gateway()
 
     assert sample["agents"]["defaults"]["skills"] == strict_gateway["skills"]["exposed"]
     assert sample["session"]["dmScope"] == "per-channel-peer"
-    assert sample["gateway"]["auth"]["token"] == "${OPENCLAW_GATEWAY_TOKEN}"
+    assert sample["gateway"]["auth"]["token"] == "${AIAGENT_GATEWAY_TOKEN}"
 
 
-def test_openclaw_project_settings_build_first_run_official_config() -> None:
-    settings = OpenClawProjectSettings(
+def test_aiagent_project_settings_build_first_run_official_config() -> None:
+    settings = AiAgentProjectSettings(
         first_run_completed=False,
         gateway_auth="token",
         gateway_token_configured=True,
@@ -115,7 +115,7 @@ def test_openclaw_project_settings_build_first_run_official_config() -> None:
     assert warnings == []
     assert config["gateway"]["auth"] == {
         "mode": "token",
-        "token": "${OPENCLAW_GATEWAY_TOKEN}",
+        "token": "${AIAGENT_GATEWAY_TOKEN}",
     }
     assert config["agents"]["defaults"]["model"]["primary"] == "openai/gpt-5.5"
     assert config["agents"]["defaults"]["model"]["fallbacks"] == ["local/qwen3.6:35b"]
@@ -123,22 +123,22 @@ def test_openclaw_project_settings_build_first_run_official_config() -> None:
     assert config["channels"]["telegram"]["allowFrom"] == ["123456"]
 
 
-def test_openclaw_gateway_pause_resume_callback_schemas_match_gateway_contract() -> None:
-    request = OpenClawApprovalRequest(
+def test_aiagent_gateway_pause_resume_callback_schemas_match_gateway_contract() -> None:
+    request = AiAgentApprovalRequest(
         session_id="official-gateway-smoke",
         iteration=1,
         tool_name="tech.process_plan_approve",
         tool_args={"process_plan_id": "plan-1"},
         reason="Official Gateway approval gate smoke test",
     )
-    ticket = OpenClawApprovalTicket(
+    ticket = AiAgentApprovalTicket(
         approval_id="00000000-0000-0000-0000-000000000001",
         agent_action_id="00000000-0000-0000-0000-000000000002",
         status="pending",
         tool_name=request.tool_name,
         created_at="2026-04-28T20:00:00Z",
     )
-    resume = OpenClawResumeStatus(
+    resume = AiAgentResumeStatus(
         approval_id=ticket.approval_id,
         status="approved",
         approved=True,

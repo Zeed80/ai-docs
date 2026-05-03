@@ -22,7 +22,7 @@ def main() -> int:
     parser.add_argument(
         "--registry",
         type=Path,
-        default=Path("openclaw/skills/_registry.yml"),
+        default=Path("aiagent/skills/_registry.yml"),
     )
     args = parser.parse_args()
 

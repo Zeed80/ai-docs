@@ -1,4 +1,4 @@
-# OpenClaw Scenario — Memory Maintenance
+# AiAgent Scenario — Memory Maintenance
 # Trigger: schedule → rebuild graph memory → inspect pending graph review queue.
 
 name: memory_maintenance

@@ -103,7 +103,7 @@
 - [x] Панель “Света” справа.
 - [x] Command palette `Ctrl+K`.
 
-## Этап 7. Agent/OpenClaw
+## Этап 7. Agent/AiAgent
 
 - [x] Сгенерировать skills из FastAPI OpenAPI/Pydantic schemas:
   - [x] `case.create`;
@@ -116,7 +116,7 @@
   - [x] `invoice.export.xlsx`;
   - [x] `invoice.export.1c.prepare`.
 - [x] Добавить allowlist tools:
-  - [x] хранить registry в `openclaw/skills/registry.json`;
+  - [x] хранить registry в `aiagent/skills/registry.json`;
   - [x] backend enforcement по имени tool;
   - [x] запрет всех неизвестных tool calls.
 - [x] Добавить scenario `smart_ingest`:
@@ -205,12 +205,12 @@
   - [x] отображение suspicious/quarantine статусов;
   - [x] signed download action;
   - [x] invoice anomaly card UI;
-  - [x] OpenClaw scenario launch UI.
+  - [x] AiAgent scenario launch UI.
 
 ## Текущий следующий шаг
 
 Следующий технический шаг: усилить встроенного агента как основной рабочий
-контур до возврата к official OpenClaw: сценарии многошагового выполнения,
+контур до возврата к official AiAgent: сценарии многошагового выполнения,
 расширенные approval gates, проверка качества памяти и регрессионные E2E.
 
 ## Этап 10. SQL-first память, НТД и нормоконтроль
@@ -265,15 +265,15 @@
 - [x] Добавить создание НТД из загруженного документа с автоопределением кода/версии.
 - [x] Добавить прямой upload НТД PDF/DOCX/TXT без ручного ввода document id.
 - [x] Добавить optional semantic AI-assisted нормоконтроль с evidence spans.
-- [x] Добавить параллельный compose/Make-контур для официального OpenClaw Gateway без отключения FastAPI degraded mode.
-- [x] Поднять официальный OpenClaw Gateway в Docker и проверить `healthy`/`healthz`.
-- [x] Добавить переключаемый WebSocket-адаптер для legacy FastAPI и официального OpenClaw Gateway.
+- [x] Добавить параллельный compose/Make-контур для официального AiAgent Gateway без отключения FastAPI degraded mode.
+- [x] Поднять официальный AiAgent Gateway в Docker и проверить `healthy`/`healthz`.
+- [x] Добавить переключаемый WebSocket-адаптер для legacy FastAPI и официального AiAgent Gateway.
 - [x] Оставить legacy FastAPI WebSocket дефолтным самодостаточным degraded mode.
 - [x] Добавить optional TurboQuant profile для vLLM long-context reasoning.
 - [x] Добавить TurboQuant benchmark command/report.
 - [x] Добавить TurboQuant quality benchmark на инженерных regression cases с term recall/missing terms.
 
-## Этап 11. Завершение перехода на официальный OpenClaw
+## Этап 11. Завершение перехода на официальный AiAgent
 
 - [ ] Проверить официальный pause/resume flow на живом Gateway:
   - [ ] запустить сценарий с approval-gated tool call;
@@ -281,15 +281,15 @@
   - [ ] подтвердить через FastAPI callback;
   - [ ] убедиться, что выполнение корректно продолжается;
   - [ ] проверить audit событий pause, approve/reject, resume.
-- [x] Переключить безопасный UI-контур чата на `NEXT_PUBLIC_AGENT_WS_MODE=openclaw` через WebSocket-адаптер без удаления legacy режима.
+- [x] Переключить безопасный UI-контур чата на `NEXT_PUBLIC_AGENT_WS_MODE=aiagent` через WebSocket-адаптер без удаления legacy режима.
 - [x] Добавить smoke-тест WebSocket-адаптера official/legacy.
 - [x] Зафиксировать fallback-процедуру в коде: при недоступности Gateway браузерная сессия возвращается к legacy FastAPI agent loop.
 
-Блокер live-проверки: 2026-04-28 `openclaw agent --session-id codex-smoke --message "Reply with OK only" --json --timeout 30` через живой Gateway не вернул JSON за 45 секунд. Gateway health при этом OK, значит следующий шаг требует рабочего provider/model runtime для официального agent turn.
+Блокер live-проверки: 2026-04-28 `aiagent agent --session-id codex-smoke --message "Reply with OK only" --json --timeout 30` через живой Gateway не вернул JSON за 45 секунд. Gateway health при этом OK, значит следующий шаг требует рабочего provider/model runtime для официального agent turn.
 
 ## Этап 12. Встроенный AI-сотрудник как основной контур
 
-- [x] Отложить official OpenClaw как optional integration, не блокирующую работу UI.
+- [x] Отложить official AiAgent как optional integration, не блокирующую работу UI.
 - [x] Добавить отдельный runtime config встроенного агента:
   - [x] включение/отключение агента;
   - [x] имя сотрудника;

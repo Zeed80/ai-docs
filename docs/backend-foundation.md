@@ -13,7 +13,7 @@
 - `Material`, `Machine`, `Tool`, `Operation`, `ProcessPlan`, `NormEstimate` — базовая модель инженерного кейса технолога.
 - `Supplier`, `Quote`, `Invoice`, `InvoiceLine`, `PriceHistoryEntry` — базовая модель закупочных документов и истории цен.
 - `EmailThread`, `EmailMessage`, `EmailAttachment`, `DraftEmail` — базовая модель email workspace.
-- `AgentAction`, `ApprovalGate` — журналируемые шаги OpenClaw-сценариев и блокировки внешних/опасных действий до approval.
+- `AgentAction`, `ApprovalGate` — журналируемые шаги AiAgent-сценариев и блокировки внешних/опасных действий до approval.
 - `AuditEvent` — человекочитаемая история действий.
 - `AIRouter` подключен к endpoints классификации и извлечения.
 
@@ -283,20 +283,20 @@ Risk-check сейчас отмечает отсутствующих получа
 
 Визуальная система сделана как производственный cockpit: теплый инженерный фон, сетка, glass-панели, выразительная serif-типографика для иерархии и компактная mono-навигация для статусов.
 
-## Agent/OpenClaw
+## Agent/AiAgent
 
-Этап OpenClaw добавляет безопасный слой agent tools поверх уже существующего API. Агент не вызывает backend произвольно: доступные tools описаны в `openclaw/skills/registry.json`, а backend заново проверяет имя tool при запуске сценария.
+Этап AiAgent добавляет безопасный слой agent tools поверх уже существующего API. Агент не вызывает backend произвольно: доступные tools описаны в `aiagent/skills/registry.json`, а backend заново проверяет имя tool при запуске сценария.
 
 Registry генерируется из FastAPI OpenAPI/Pydantic schemas:
 
 ```bash
-python3 scripts/generate_openclaw_registry.py
+python3 scripts/generate_aiagent_registry.py
 ```
 
 Или:
 
 ```bash
-make openclaw-registry
+make aiagent-registry
 ```
 
 Поддержанные tools:
@@ -311,7 +311,7 @@ make openclaw-registry
 - `invoice.export.xlsx`;
 - `invoice.export.1c.prepare`.
 
-Сценарии хранятся в `openclaw/scenarios/`:
+Сценарии хранятся в `aiagent/scenarios/`:
 
 - `smart_ingest` — план обработки документа с ветками invoice/drawing и step limit.
 - `drawing_review` — анализ чертежа и подготовка вопросов заказчику.
@@ -358,7 +358,7 @@ Approval flow:
 - `approval_gate_rejected`;
 - `approval_gate_executed`.
 
-GUI cockpit показывает approvals, task queue, quarantine status, signed download action, risk/anomaly panel и запуск OpenClaw scenarios из карточки кейса.
+GUI cockpit показывает approvals, task queue, quarantine status, signed download action, risk/anomaly panel и запуск AiAgent scenarios из карточки кейса.
 
 ## Ограничения текущего среза
 
@@ -370,7 +370,7 @@ GUI cockpit показывает approvals, task queue, quarantine status, signe
 - Excel export зависит от optional `openpyxl`.
 - 1С export пока только готовит payload и имеет post-approval execution placeholder; реальный обмен должен идти через отдельный adapter.
 - IMAP/SMTP adapters пока placeholders без внешнего подключения.
-- Agent/OpenClaw scenarios уже создают tasks/gates; реальные внешние adapters должны добавляться по одному с отдельными тестами.
+- Agent/AiAgent scenarios уже создают tasks/gates; реальные внешние adapters должны добавляться по одному с отдельными тестами.
 - Auth/OIDC и RBAC foundation добавлены; RBAC enforcement пока включен точечно, полный rollout по бизнес-endpoints будет следующим security hardening шагом.
 - Signed file URLs работают для локального storage; при переходе на MinIO нужно заменить выдачу на presigned object URLs с тем же API-контрактом.
 - Quarantine сейчас основан на extension allowlist; сигнатурный/mime scan и антивирусный adapter нужно добавить отдельным hardening шагом.

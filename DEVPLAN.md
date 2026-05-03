@@ -7,19 +7,19 @@
 **Проект**: greenfield, кода нет. Разработка: **vibe coding** (solo + AI-ассистенты).
 
 **Принятые решения** (из обсуждения):
-1. **OpenClaw** (`v2026.4.5` stable, 349K stars, MIT, TS) — не чат-шлюз, а **AI-сотрудник «Света»** (agent orchestrator). Получает задачи из любого канала, планирует multi-step workflows, вызывает FastAPI как tools, останавливается на approval gates.
+1. **AiAgent** (`v2026.4.5` stable, 349K stars, MIT, TS) — не чат-шлюз, а **AI-сотрудник «Света»** (agent orchestrator). Получает задачи из любого канала, планирует multi-step workflows, вызывает FastAPI как tools, останавливается на approval gates.
 2. **Deployment**: on-prem сервер; **не критичные для безопасности AI-задачи могут быть на внешнем API** (Claude API / Groq) — например, reasoning (gemma4:26b замена), style matching, NL-query. OCR/extraction (gemma4:e4b) — только локально (документы конфиденциальны).
 3. **Почта**: поддержка **нескольких IMAP-ящиков** (per department / per function).
 4. **1С**: экспорт в формат 1С **обязателен** (помимо Excel).
 5. **i18n**: **сразу** i18n-ready (русский по умолчанию, архитектура под EN и другие).
-6. **Auth**: **Authentik** (self-hosted SSO, OAuth2/OIDC, SCIM, lightweight) — OpenClaw поддерживает OAuth.
+6. **Auth**: **Authentik** (self-hosted SSO, OAuth2/OIDC, SCIM, lightweight) — AiAgent поддерживает OAuth.
 7. **AI-сотрудник**: имя **Света** (Sveta).
 
 **Что это означает для архитектуры**:
-- OpenClaw — ядро продукта, а не вспомогательный слой. Имя агента: Света.
+- AiAgent — ядро продукта, а не вспомогательный слой. Имя агента: Света.
 - FastAPI — «руки» Светы: самодостаточный REST API для всех операций с данными.
-- Next.js — UI, который работает **двумя путями**: REST (CRUD, таблицы, review) и WebSocket к OpenClaw (чат, агентные сценарии).
-- **Degraded mode**: если OpenClaw недоступен, UI работает через REST — без Светы, но с полным ручным функционалом.
+- Next.js — UI, который работает **двумя путями**: REST (CRUD, таблицы, review) и WebSocket к AiAgent (чат, агентные сценарии).
+- **Degraded mode**: если AiAgent недоступен, UI работает через REST — без Светы, но с полным ручным функционалом.
 - **Dual AI strategy**: gemma4:e4b локально (конфиденциальные документы), reasoning-модель — **локально или через API** (настраиваемо per task). В проде можно гибко переключать.
 - Несколько IMAP-ящиков → routing по ящику (закупки / бухгалтерия / общий).
 - 1С-экспорт → дополнительный формат в таблицах и отдельный endpoint.
@@ -31,7 +31,7 @@
 
 | Слой | Технология | Роль |
 |---|---|---|
-| **Agent (мозг)** | OpenClaw Gateway v2026.4.x (Node.js/TS) | AI-сотрудник «Света»: оркестрация, tool calling, memory, sessions, approval gates, multi-channel |
+| **Agent (мозг)** | AiAgent Gateway v2026.4.x (Node.js/TS) | AI-сотрудник «Света»: оркестрация, tool calling, memory, sessions, approval gates, multi-channel |
 | **Backend (руки)** | Python / FastAPI | REST API, доменная логика, валидации, все CRUD, audit |
 | **Async tasks** | Celery + Redis | Ingest, OCR pipeline, anomaly detection, bulk import, Excel/1C gen |
 | **Auth** | Authentik | Self-hosted SSO, OAuth2/OIDC, RBAC |
@@ -48,7 +48,7 @@
 
 ---
 
-## Архитектура: OpenClaw как AI-сотрудник
+## Архитектура: AiAgent как AI-сотрудник
 
 ### Потоки данных
 
@@ -60,7 +60,7 @@
          │                │                   │
          ▼                ▼                   ▼
 ┌─────────────────────────────────────────────────────────┐
-│              OPENCLAW GATEWAY (Agent Brain)              │
+│              AIAGENT GATEWAY (Agent Brain)              │
 │                                                         │
 │  Session Manager ─── Memory Store ─── Approval Gates    │
 │        │                                    │           │
@@ -93,9 +93,9 @@
 │              NEXT.JS PWA (Eyes — UI)                     │
 │                                                         │
 │  REST ──────→ FastAPI  (CRUD, tables, review, export)   │
-│  WebSocket ──→ OpenClaw (chat, agent scenarios)         │
+│  WebSocket ──→ AiAgent (chat, agent scenarios)         │
 │                                                         │
-│  Degraded mode: REST-only when OpenClaw is down         │
+│  Degraded mode: REST-only when AiAgent is down         │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -103,15 +103,15 @@
 
 | Вопрос | Кто отвечает |
 |---|---|
-| «Что делать дальше?» (планирование, reasoning) | OpenClaw (gemma4:26b) |
+| «Что делать дальше?» (планирование, reasoning) | AiAgent (gemma4:26b) |
 | «Как это сделать?» (CRUD, валидация, расчёт) | FastAPI |
 | «Тяжёлая работа» (OCR, PDF parse, Excel gen) | Celery |
 | «Показать пользователю» | Next.js |
-| «Можно ли это сделать?» (approval gate) | OpenClaw спрашивает → человек отвечает через любой канал |
+| «Можно ли это сделать?» (approval gate) | AiAgent спрашивает → человек отвечает через любой канал |
 
 ### Degraded mode (FastAPI самодостаточен)
 
-Когда OpenClaw недоступен:
+Когда AiAgent недоступен:
 
 | Функция | Работает? | Через что |
 |---|---|---|
@@ -121,20 +121,20 @@
 | Экспорт/импорт Excel | Да | REST → FastAPI |
 | Approve/reject | Да | REST → FastAPI |
 | Ручная загрузка файлов | Да | REST → FastAPI |
-| Email ingest | Да | Celery (не зависит от OpenClaw) |
+| Email ingest | Да | Celery (не зависит от AiAgent) |
 | Чат | Нет | — |
 | Агентные workflows | Нет | — |
 | Auto-draft писем | Нет | — |
 | Telegram | Нет | — |
 | Proactive alerts | Нет | — |
 
-**Правило**: всё, что пользователь может сделать руками в UI, работает через REST без OpenClaw. OpenClaw добавляет **автоматизацию и интеллект**, но не является единственным путём.
+**Правило**: всё, что пользователь может сделать руками в UI, работает через REST без AiAgent. AiAgent добавляет **автоматизацию и интеллект**, но не является единственным путём.
 
 ---
 
-## OpenClaw Skills Manifest
+## AiAgent Skills Manifest
 
-Skills — это FastAPI endpoints, зарегистрированные в OpenClaw как tools. Агент вызывает их в рамках multi-step workflows. Каждый skill описан Pydantic-схемой (input/output), что позволяет заменить OpenClaw на другой agent framework без переписывания бизнес-логики.
+Skills — это FastAPI endpoints, зарегистрированные в AiAgent как tools. Агент вызывает их в рамках multi-step workflows. Каждый skill описан Pydantic-схемой (input/output), что позволяет заменить AiAgent на другой agent framework без переписывания бизнес-логики.
 
 ### Категория: Documents
 
@@ -318,7 +318,7 @@ Skills — это FastAPI endpoints, зарегистрированные в Ope
    └── Обновить price history
 ```
 
-**OpenClaw роль**: подготовка контекста. Само review — в UI через REST.
+**AiAgent роль**: подготовка контекста. Само review — в UI через REST.
 
 ### Scenario 3: Draft Email (trigger: пользователь говорит «подготовь письмо поставщику X»)
 
@@ -457,7 +457,7 @@ Skills — это FastAPI endpoints, зарегистрированные в Ope
 
 Что доступно через каждый канал. Определяет scope работы агента.
 
-| Функция | Web UI (REST) | Web Chat (OpenClaw) | Telegram (OpenClaw) | Email (auto) |
+| Функция | Web UI (REST) | Web Chat (AiAgent) | Telegram (AiAgent) | Email (auto) |
 |---|---|---|---|---|
 | Просмотр документов | ✅ full | ✅ widget + link | 📎 summary + link | — |
 | Side-by-side review | ✅ full | — (redirect to UI) | — (redirect to UI) | — |
@@ -481,11 +481,11 @@ Skills — это FastAPI endpoints, зарегистрированные в Ope
 
 **Легенда**: ✅ = полная поддержка, 📎 = упрощённый вид + ссылка на web, — = недоступно.
 
-**Telegram-бот** — это тот же OpenClaw agent, но с Telegram-адаптером канала. Он имеет тот же tool set, те же approval gates, ту же memory. Разница только в UI capabilities (нет таблиц, нет split-view).
+**Telegram-бот** — это тот же AiAgent agent, но с Telegram-адаптером канала. Он имеет тот же tool set, те же approval gates, ту же memory. Разница только в UI capabilities (нет таблиц, нет split-view).
 
 ---
 
-## System Prompts для OpenClaw Agent
+## System Prompts для AiAgent Agent
 
 ### Base system prompt (все каналы, все роли)
 
@@ -572,9 +572,9 @@ APPROVAL GATES:
 
 | Эпик | Название | Результат |
 |---|---|---|
-| 0 | Validation & spikes | Валидация gemma4, прототип review, прототип OpenClaw skill call |
-| 1 | Foundation & Ingest | Инфраструктура, модель данных, Inbox keyboard-first, ingest, OpenClaw с базовыми skills |
-| 2 | AI Extraction & Review | Extraction pipeline, side-by-side review, review streak, NormalizationRule, OpenClaw Scenario 1+2 |
+| 0 | Validation & spikes | Валидация gemma4, прототип review, прототип AiAgent skill call |
+| 1 | Foundation & Ingest | Инфраструктура, модель данных, Inbox keyboard-first, ingest, AiAgent с базовыми skills |
+| 2 | AI Extraction & Review | Extraction pipeline, side-by-side review, review streak, NormalizationRule, AiAgent Scenario 1+2 |
 | 3 | Actions | Draft emails (Scenario 3), tables, round-trip Excel, command palette, risk-check |
 | 4 | Search, Suppliers, Price History | Hybrid RAG, supplier profile, canonical items, collections, chat context (Scenario 7+8) |
 | 5 | Anomalies, Compare, Calendar | AnomalyCard (Scenario 6), Compare КП (Scenario 4), calendar (Scenario 5), trust score |
@@ -592,17 +592,17 @@ MVP = эпики 0–3 + часть 4 (supplier profile + price history).
 - Dataset ≥100 реальных счетов с разметкой полей (ground truth).
 - Оценка gemma4:e4b: precision/recall по полям, стабильность bbox.
 - Сайзинг: e4b + 26b в 24GB VRAM, параллельная нагрузка.
-- **Spike OpenClaw**: развернуть gateway, зарегистрировать 3 mock-skills (doc.get, doc.search, email.draft), выполнить agent loop через chat.
+- **Spike AiAgent**: развернуть gateway, зарегистрировать 3 mock-skills (doc.get, doc.search, email.draft), выполнить agent loop через chat.
 - **Spike approval gate**: agent вызывает skill → останавливается → получает approve через WebSocket → продолжает.
 - UX-прототип keyboard review (статический Next.js, 5-10 документов).
 - Прототип command palette с mock-данными.
-- Решение по каналу OpenClaw (stable/beta), зафиксировать в ADR.
+- Решение по каналу AiAgent (stable/beta), зафиксировать в ADR.
 - Документ «подтверждённые и опровергнутые гипотезы».
 
 **Выходные критерии**:
 - ≥85% полей извлекаются корректно, bbox стабильны в ≥90% случаев.
 - Латентность extraction ≤10с на целевом железе.
-- OpenClaw agent loop работает: chat → tool call → observe → approval gate → continue.
+- AiAgent agent loop работает: chat → tool call → observe → approval gate → continue.
 - Review управляется только с клавиатуры.
 
 **To Do**:
@@ -612,22 +612,22 @@ MVP = эпики 0–3 + часть 4 (supplier profile + price history).
 - [ ] Spike: extraction скрипт → structured output → оценка precision/recall.
 - [ ] Spike: bbox привязка → визуальная проверка стабильности.
 - [ ] Spike: latency под параллельной нагрузкой (2 запроса одновременно).
-- [ ] **Spike: OpenClaw v2026.4.x onboard → зарегистрировать 3 mock skills → agent loop через chat.**
-- [ ] **Spike: approval gate в OpenClaw → agent stops → user approves → agent continues.**
-- [ ] **Spike: OpenClaw Telegram extension → отправить файл → agent получает.**
+- [ ] **Spike: AiAgent v2026.4.x onboard → зарегистрировать 3 mock skills → agent loop через chat.**
+- [ ] **Spike: approval gate в AiAgent → agent stops → user approves → agent continues.**
+- [ ] **Spike: AiAgent Telegram extension → отправить файл → agent получает.**
 - [ ] Прототип keyboard-review (Next.js, статика, 5-10 docs).
 - [ ] Прототип command palette (mock).
-- [ ] ADR: канал OpenClaw, способ регистрации skills.
+- [ ] ADR: канал AiAgent, способ регистрации skills.
 - [ ] Документ гипотез и результатов.
 
 ---
 
 ## Эпик 1 — Foundation & Ingest
 
-**Цель**: инфраструктура, данные, Inbox, ingest, OpenClaw с базовым agent loop.
+**Цель**: инфраструктура, данные, Inbox, ingest, AiAgent с базовым agent loop.
 
 ### 1.1 Инфраструктура
-- `docker-compose.yml`: Postgres, Redis, Qdrant, MinIO, Ollama, Traefik, FastAPI, Celery, **OpenClaw Gateway**, Next.js.
+- `docker-compose.yml`: Postgres, Redis, Qdrant, MinIO, Ollama, Traefik, FastAPI, Celery, **AiAgent Gateway**, Next.js.
 - Traefik + HTTPS.
 - `.env.example`, healthchecks, Alembic миграции.
 - Базовый CI.
@@ -646,7 +646,7 @@ MVP-набор:
 Зарезервировать в миграциях: `CanonicalItem`, `PriceHistoryEntry`, `AnomalyCard`, `NormalizationRule`, `Reminder`, `TrustScore`, `CalendarEvent`, `AutoApprovalRule`, `CapabilityEntry`.
 
 ### 1.3 FastAPI — базовые endpoints (первые skills)
-Реализовать endpoints, которые станут первыми OpenClaw skills:
+Реализовать endpoints, которые станут первыми AiAgent skills:
 - `doc.ingest` — POST /api/documents/ingest
 - `doc.get` — GET /api/documents/{id}
 - `doc.list` — GET /api/documents
@@ -669,18 +669,18 @@ MVP-набор:
 
 ### 1.4a Auth (Authentik)
 - Authentik контейнер в docker-compose.
-- OAuth2/OIDC flow: Authentik → OpenClaw + FastAPI + Next.js.
+- OAuth2/OIDC flow: Authentik → AiAgent + FastAPI + Next.js.
 - Маппинг ролей Authentik → системные роли (закупщик, бухгалтер, руководитель, технолог, администратор).
 - JWT validation в FastAPI middleware.
 - RBAC middleware на endpoints.
 
-### 1.5 OpenClaw Gateway — agent foundation
-- Deploy OpenClaw в docker-compose.
-- **Зарегистрировать базовые skills** из §1.3 как OpenClaw tools (JSON schema из Pydantic).
+### 1.5 AiAgent Gateway — agent foundation
+- Deploy AiAgent в docker-compose.
+- **Зарегистрировать базовые skills** из §1.3 как AiAgent tools (JSON schema из Pydantic).
 - **Base system prompt** (см. секцию System Prompts).
 - WebSocket endpoint для Next.js chat widget.
 - Session management + memory store (Redis-backed).
-- **Approval gate mechanism**: agent вызывает `approval.request` → OpenClaw приостанавливает execution → ждёт callback от FastAPI (user approved/rejected) → продолжает.
+- **Approval gate mechanism**: agent вызывает `approval.request` → AiAgent приостанавливает execution → ждёт callback от FastAPI (user approved/rejected) → продолжает.
 - Каталог skills UI (список зарегистрированных tools, их статусы).
 - **Stub Scenario 8** (Smart Ingest): файл в чат → doc.ingest → doc.classify (stub) → уведомление.
 
@@ -689,8 +689,8 @@ MVP-набор:
 - «Моя» / «Команды», фильтры, smart batching.
 - Keyboard: j/k/Enter/e/r/c/a/s/x/?
 - Snooze, empty state, SLA.
-- **Chat widget** (sidebar или panel): WebSocket → OpenClaw.
-- **Degraded mode indicator**: если OpenClaw недоступен → badge «Автоматические функции временно недоступны», chat widget disabled.
+- **Chat widget** (sidebar или panel): WebSocket → AiAgent.
+- **Degraded mode indicator**: если AiAgent недоступен → badge «Автоматические функции временно недоступны», chat widget disabled.
 
 ### 1.7 Карточка документа
 - PDF viewer (pdf.js), метаданные, timeline, комментарии, связи, quick actions.
@@ -703,17 +703,17 @@ MVP-набор:
 - **Через чат можно сказать «покажи документ #123» → агент вызывает doc.get → показывает виджет.**
 - **Через чат можно загрузить файл → agent выполняет Scenario 8 (stub).**
 - **Approval gate работает: agent останавливается, ждёт, продолжает.**
-- При отключении OpenClaw — UI работает через REST (degraded mode).
+- При отключении AiAgent — UI работает через REST (degraded mode).
 
 **To Do**:
 
 Инфраструктура:
-- [ ] docker-compose.yml (все сервисы: Postgres, Redis, Qdrant, MinIO, Ollama, OpenClaw, FastAPI, Celery, Next.js, Traefik, **Authentik**).
+- [ ] docker-compose.yml (все сервисы: Postgres, Redis, Qdrant, MinIO, Ollama, AiAgent, FastAPI, Celery, Next.js, Traefik, **Authentik**).
 - [ ] Traefik + HTTPS.
 - [ ] .env.example.
 - [ ] **Authentik: контейнер, начальная конфигурация, OAuth2 flow.**
 - [ ] **Authentik → FastAPI JWT middleware.**
-- [ ] **Authentik → OpenClaw OAuth integration.**
+- [ ] **Authentik → AiAgent OAuth integration.**
 - [ ] **Authentik → Next.js auth (next-auth или аналог).**
 - [ ] **Маппинг ролей Authentik → системные роли.**
 - [ ] FastAPI скелет (health, settings, structured logging).
@@ -760,8 +760,8 @@ Ingest:
 - [ ] Auto-linking эвристики.
 - [ ] Идемпотентность + retry.
 
-OpenClaw:
-- [ ] **Deploy OpenClaw Gateway в compose.**
+AiAgent:
+- [ ] **Deploy AiAgent Gateway в compose.**
 - [ ] **Зарегистрировать 10 базовых skills (из §1.3) как tools.**
 - [ ] **Base system prompt.**
 - [ ] **WebSocket endpoint + фронт chat widget.**
@@ -776,7 +776,7 @@ Frontend:
 - [ ] Фильтры, «Моя»/«Команды», smart batching.
 - [ ] Keyboard shortcuts.
 - [ ] Snooze, empty state, SLA.
-- [ ] Chat widget (WebSocket → OpenClaw).
+- [ ] Chat widget (WebSocket → AiAgent).
 - [ ] Degraded mode indicator.
 - [ ] Карточка документа (PDF, metadata, timeline, comments, links).
 
@@ -787,7 +787,7 @@ Frontend:
 - [ ] E2E: keyboard Inbox навигация.
 - [ ] **E2E: чат «покажи документ» → widget.**
 - [ ] **E2E: approval gate end-to-end.**
-- [ ] **E2E: degraded mode (OpenClaw down → UI через REST).**
+- [ ] **E2E: degraded mode (AiAgent down → UI через REST).**
 
 ---
 
@@ -808,7 +808,7 @@ Frontend:
 - NormalizationRule применение → norm.apply_rules skill.
 - Bbox binding.
 
-**Новые skills для регистрации в OpenClaw**:
+**Новые skills для регистрации в AiAgent**:
 - `doc.classify`
 - `doc.extract`
 - `doc.summarize`
@@ -836,9 +836,9 @@ Frontend:
 - Применение в pipeline до AI.
 - Rollback.
 
-### 2.7 OpenClaw: Scenario 1 + 2
+### 2.7 AiAgent: Scenario 1 + 2
 - **Scenario 1 (Email Triage)** полностью: email.fetch_new → doc.ingest → doc.classify → invoice.extract → norm.apply_rules → invoice.validate → anomaly.check_all (stub) → doc.link → route to Inbox.
-- **Scenario 2 (Assisted Review)** контекст: при открытии review OpenClaw подготавливает контекст (price comparison, supplier diff).
+- **Scenario 2 (Assisted Review)** контекст: при открытии review AiAgent подготавливает контекст (price comparison, supplier diff).
 
 **Критерии приёмки**:
 - ≥80% полей корректно, bbox стабильны.
@@ -876,7 +876,7 @@ Ollama & extraction:
 - [ ] POST /api/normalization/suggest (norm.suggest_rule).
 - [ ] GET /api/normalization/rules (norm.list_rules).
 - [ ] POST /api/normalization/rules/{id}/activate (norm.activate_rule).
-- [ ] **Зарегистрировать все новые skills в OpenClaw.**
+- [ ] **Зарегистрировать все новые skills в AiAgent.**
 
 Review UI:
 - [ ] Split-view layout.
@@ -900,7 +900,7 @@ NormalizationRule:
 - [ ] Метрика обучения виджет.
 - [ ] Rollback + история.
 
-OpenClaw scenarios:
+AiAgent scenarios:
 - [ ] **Scenario 1 (Email Triage): полная цепочка skills.**
 - [ ] **Scenario 2 (Assisted Review): контекстная подготовка.**
 - [ ] **Тесты: E2E scenario 1 end-to-end.**
@@ -936,7 +936,7 @@ OpenClaw scenarios:
 
 ### 3.5 Email Workspace & Draft Flow
 
-**Новые skills для OpenClaw**:
+**Новые skills для AiAgent**:
 - `email.draft`
 - `email.style_match`
 - `email.risk_check`
@@ -984,7 +984,7 @@ NL query:
 - [ ] Pydantic schema фильтров.
 - [ ] Frontend чипы.
 - [ ] Fallback.
-- [ ] **Зарегистрировать skills в OpenClaw.**
+- [ ] **Зарегистрировать skills в AiAgent.**
 
 Таблицы:
 - [ ] TanStack Table.
@@ -1006,7 +1006,7 @@ Excel & 1С:
 - [ ] Diff builder.
 - [ ] Diff Wizard UI.
 - [ ] Audit записи.
-- [ ] **Зарегистрировать skills в OpenClaw (включая 1С export).**
+- [ ] **Зарегистрировать skills в AiAgent (включая 1С export).**
 
 Email workspace:
 - [ ] Thread viewer.
@@ -1022,7 +1022,7 @@ Email workspace:
 - [ ] Risk-check детекторы (все 5).
 - [ ] Risk-check UI с override + audit.
 - [ ] Сверка расхождений счёт↔письмо.
-- [ ] **Зарегистрировать все email skills в OpenClaw.**
+- [ ] **Зарегистрировать все email skills в AiAgent.**
 - [ ] **Scenario 3 (Draft Email): полная цепочка.**
 - [ ] **Email drafting system prompt.**
 
@@ -1067,7 +1067,7 @@ Scenario 7 (NL Query):
 ### 4.5 Chat context improvements
 - Pin context, action chips, strict/reasoning toggle, shareable link.
 
-### 4.6 OpenClaw Scenarios
+### 4.6 AiAgent Scenarios
 - **Scenario 7 (NL Query + Action)**: полная версия с supplier search, price history.
 - **Scenario 8 (Smart Ingest)**: полная версия с классификацией и auto-routing.
 
@@ -1101,7 +1101,7 @@ Supplier:
 - [ ] GET /api/suppliers/{id}/alerts (supplier.alerts).
 - [ ] UI профиля (все блоки).
 - [ ] Aggregation endpoints (cached).
-- [ ] **Зарегистрировать supplier skills в OpenClaw.**
+- [ ] **Зарегистрировать supplier skills в AiAgent.**
 
 Canonical & Price History:
 - [ ] Миграции CanonicalItem, PriceHistoryEntry.
@@ -1112,7 +1112,7 @@ Canonical & Price History:
 - [ ] POST /api/canonical (canonical.create).
 - [ ] PriceHistoryEntry на approve.
 - [ ] Sparkline renderer.
-- [ ] **Зарегистрировать canonical skills в OpenClaw.**
+- [ ] **Зарегистрировать canonical skills в AiAgent.**
 
 Collections:
 - [ ] POST /api/collections (collection.create).
@@ -1130,7 +1130,7 @@ Chat:
 - [ ] Strict/reasoning toggle + system prompt switch.
 - [ ] Shareable link.
 
-OpenClaw scenarios:
+AiAgent scenarios:
 - [ ] **Scenario 7 полностью (NL → search → supplier → price history → actions).**
 - [ ] **Scenario 8 полностью (Smart Ingest с classify + routing).**
 
@@ -1193,7 +1193,7 @@ Anomaly:
 - [ ] Celery task после extraction.
 - [ ] UI AnomalyCard в Inbox.
 - [ ] False positive → update пороги.
-- [ ] **Зарегистрировать anomaly skills в OpenClaw.**
+- [ ] **Зарегистрировать anomaly skills в AiAgent.**
 - [ ] **Scenario 6 полностью.**
 - [ ] **Обновить Scenario 1: реальные anomaly детекторы.**
 
@@ -1248,7 +1248,7 @@ Approval improvements:
 **Не MVP**. Детализация по готовности.
 
 ### 6.1 Telegram channel
-- Telegram Bot API adapter для OpenClaw.
+- Telegram Bot API adapter для AiAgent.
 - Тот же agent, те же skills, другой rendering (текст + inline keyboard).
 - File upload через Telegram → Scenario 8.
 - Approve через inline keyboard.
@@ -1256,7 +1256,7 @@ Approval improvements:
 
 ### 6.2 Proactive agent
 - Celery beat job: периодически проверяет anomalies, approaching deadlines, stale approvals.
-- Генерирует proactive messages через OpenClaw → push в Telegram / web notification.
+- Генерирует proactive messages через AiAgent → push в Telegram / web notification.
 
 ### 6.3 Остальное
 - CAD preview (STEP/DWG).
@@ -1268,11 +1268,11 @@ Approval improvements:
 - Skills marketplace.
 
 **To Do**:
-- [ ] Telegram Bot adapter для OpenClaw.
+- [ ] Telegram Bot adapter для AiAgent.
 - [ ] Telegram rendering (text + inline keyboard).
 - [ ] File upload через Telegram.
 - [ ] Approve через inline keyboard.
-- [ ] Proactive agent (Celery beat + OpenClaw).
+- [ ] Proactive agent (Celery beat + AiAgent).
 - [ ] CAD preview.
 - [ ] TechCard / RouteCard расширение.
 - [ ] Similar cases.
@@ -1287,7 +1287,7 @@ Approval improvements:
 
 ### Безопасность
 - **Authentik** SSO: OAuth2/OIDC → JWT → FastAPI validates, RBAC по ролям.
-- OpenClaw auth через тот же Authentik OAuth flow.
+- AiAgent auth через тот же Authentik OAuth flow.
 - Field-level permissions.
 - **Dual AI security**: конфиденциальные документы (OCR/extraction) — только локальный Ollama. Reasoning/NL-задачи без конфиденциальных данных — можно на API. Конфигурация per task type.
 - Secrets: env / vault only.
@@ -1297,16 +1297,16 @@ Approval improvements:
 
 ### Observability
 - Structured logs (JSON).
-- Prometheus: extraction latency, queue depth, VRAM, **OpenClaw agent step count**, approval wait time.
+- Prometheus: extraction latency, queue depth, VRAM, **AiAgent agent step count**, approval wait time.
 - Grafana dashboards.
 - Sentry (frontend + backend).
-- **OpenClaw agent trace**: каждый scenario execution логируется с tool calls, durations, results.
+- **AiAgent agent trace**: каждый scenario execution логируется с tool calls, durations, results.
 
 ### Testing
 - Unit (pytest, Jest): domain logic, rules, diff parser.
 - API (httpx + pytest): все endpoints.
 - Integration: Celery + Postgres/Redis.
-- **Agent integration**: OpenClaw scenario execution на mock skills → verify tool call sequence.
+- **Agent integration**: AiAgent scenario execution на mock skills → verify tool call sequence.
 - E2E (Playwright): keyboard-first scenarios.
 - Extraction regression: dataset из эпика 0.
 - Accessibility: axe-core.
@@ -1314,7 +1314,7 @@ Approval improvements:
 ### Documentation
 - README.
 - ADRs.
-- **OpenClaw Skills API Reference** (auto-generated from Pydantic schemas).
+- **AiAgent Skills API Reference** (auto-generated from Pydantic schemas).
 - **Agent Scenarios runbook** (how each scenario works, what can fail, how to debug).
 - FastAPI OpenAPI docs.
 - UX shortcut guide.
@@ -1393,7 +1393,7 @@ document-invoices-ai/
 │   │   ├── review/
 │   │   ├── command-palette/
 │   │   ├── tables/
-│   │   ├── chat/                         # OpenClaw WebSocket client
+│   │   ├── chat/                         # AiAgent WebSocket client
 │   │   ├── timeline/
 │   │   ├── compare/
 │   │   ├── supplier/
@@ -1401,12 +1401,12 @@ document-invoices-ai/
 │   ├── lib/
 │   │   ├── keyboard-context.tsx
 │   │   ├── api-client.ts                 # REST → FastAPI
-│   │   ├── openclaw-ws.ts                # WebSocket → OpenClaw
-│   │   └── degraded-mode.ts              # fallback when OpenClaw down
+│   │   ├── aiagent-ws.ts                # WebSocket → AiAgent
+│   │   └── degraded-mode.ts              # fallback when AiAgent down
 │   └── tests/
-├── openclaw/
+├── aiagent/
 │   ├── config/
-│   │   ├── gateway.yml                   # OpenClaw gateway config
+│   │   ├── gateway.yml                   # AiAgent gateway config
 │   │   └── channels/
 │   │       ├── web.yml
 │   │       └── telegram.yml
@@ -1443,7 +1443,7 @@ document-invoices-ai/
 │   │   ├── anomaly-resolution.md
 │   │   ├── nl-query.md
 │   │   └── smart-ingest.md
-│   └── hooks/                            # OpenClaw event hooks
+│   └── hooks/                            # AiAgent event hooks
 │       ├── on-approval-resolved.js
 │       └── on-new-document.js
 ├── infra/
@@ -1453,7 +1453,7 @@ document-invoices-ai/
 │   ├── ollama/
 │   └── scripts/
 │       ├── seed-data.py
-│       ├── generate-skill-registry.py    # Pydantic → OpenClaw skill YAML
+│       ├── generate-skill-registry.py    # Pydantic → AiAgent skill YAML
 │       └── run-agent-tests.py
 ├── datasets/
 ├── docs/
@@ -1467,7 +1467,7 @@ document-invoices-ai/
 └── README.md
 ```
 
-**Ключевой скрипт**: `scripts/generate-skill-registry.py` — читает Pydantic schemas из FastAPI endpoints и генерирует `openclaw/skills/*.yml`. Это **единый источник правды**: контракт описан один раз в Python, OpenClaw и документация генерируются автоматически.
+**Ключевой скрипт**: `scripts/generate-skill-registry.py` — читает Pydantic schemas из FastAPI endpoints и генерирует `aiagent/skills/*.yml`. Это **единый источник правды**: контракт описан один раз в Python, AiAgent и документация генерируются автоматически.
 
 ---
 
@@ -1477,7 +1477,7 @@ document-invoices-ai/
 
 | Эпик | Ключевой тест |
 |---|---|
-| 0 | gemma4 extraction ≥85%, OpenClaw agent loop works, approval gate works |
+| 0 | gemma4 extraction ≥85%, AiAgent agent loop works, approval gate works |
 | 1 | Email → Inbox ≤30с, keyboard навигация, **чат «покажи документ» → widget**, degraded mode |
 | 2 | Extraction ≥80%, review streak 10+ без мыши, NormRule, **Scenario 1 end-to-end** |
 | 3 | Ctrl+K → NL → result, round-trip Excel, **Scenario 3 (draft email) end-to-end** |
@@ -1489,7 +1489,7 @@ document-invoices-ai/
 - `make test` — unit + API + integration.
 - `make e2e` — Playwright.
 - `make regression` — extraction quality.
-- `make agent-test` — OpenClaw scenarios на mock skills.
+- `make agent-test` — AiAgent scenarios на mock skills.
 - CI блокирует merge при падении.
 
 ---
@@ -1500,11 +1500,11 @@ document-invoices-ai/
 |---|---|
 | gemma4:e4b bbox нестабилен | Эпик 0 валидирует; fallback: PyMuPDF bbox + Tesseract для сканов |
 | 24GB VRAM tight | Эпик 0 замеряет; model swapping; fallback: API-модель для 26b |
-| OpenClaw нестабилен | Pin stable version; staging; compatibility matrix; **degraded mode** (UI через REST) |
-| OpenClaw skill registration сложна | generate-skill-registry.py из Pydantic; один источник правды |
+| AiAgent нестабилен | Pin stable version; staging; compatibility matrix; **degraded mode** (UI через REST) |
+| AiAgent skill registration сложна | generate-skill-registry.py из Pydantic; один источник правды |
 | Approval gate latency (agent ждёт долго) | Timeout + escalation; agent может параллельно обрабатывать другие задачи |
 | Round-trip Excel конфликты | Optimistic locking; diff wizard показывает конфликты |
-| Скоуп MVP раздут | Эпик 0 финализирует; OpenClaw skills добавляются инкрементально |
+| Скоуп MVP раздут | Эпик 0 финализирует; AiAgent skills добавляются инкрементально |
 | Telegram + Web разный UX | Channel matrix фиксирует scope; Telegram = упрощённый, не full |
 
 ---
@@ -1519,7 +1519,7 @@ document-invoices-ai/
 | 4 | 1С | Обязателен экспорт в формат 1С |
 | 5 | Язык | i18n-ready сразу (next-intl, RU по умолчанию) |
 | 6 | Auth | Authentik (self-hosted SSO, OAuth2/OIDC) |
-| 7 | OpenClaw | v2026.4.5 stable. Подтверждено: custom skills, approval gates, Telegram, memory, WebSocket, 15+ каналов |
+| 7 | AiAgent | v2026.4.5 stable. Подтверждено: custom skills, approval gates, Telegram, memory, WebSocket, 15+ каналов |
 | 8 | Имя AI | **Света** (Sveta) |
 
 ## Оставшиеся технические вопросы (уточнять по ходу)

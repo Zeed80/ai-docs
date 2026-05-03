@@ -88,7 +88,7 @@ const NAV_FINANCE = [
 
 const NAV_SYSTEM = [
   { href: "/quarantine", icon: "shield", key: "quarantine" },
-  { href: "/settings/openclaw", icon: "settings", key: "openclaw" },
+  { href: "/settings/aiagent", icon: "settings", key: "aiagent" },
   { href: "/settings", icon: "settings", key: "settings" },
 ] as const;
 

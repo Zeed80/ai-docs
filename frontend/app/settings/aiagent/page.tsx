@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 
 const API = getApiBaseUrl();
 
-type AgentWsMode = "legacy" | "openclaw";
+type AgentWsMode = "legacy" | "aiagent";
 type GatewayBind = "loopback" | "lan" | "tailnet" | "auto" | "custom";
 type GatewayAuth = "none" | "token" | "password" | "trusted-proxy";
 type TelegramDmPolicy = "pairing" | "allowlist" | "open" | "disabled";
@@ -17,11 +17,11 @@ type SessionDmScope =
   | "per-channel-peer"
   | "per-account-channel-peer";
 
-interface OpenClawSettings {
+interface AiAgentSettings {
   first_run_completed: boolean;
   agent_ws_mode: AgentWsMode;
-  openclaw_ws_url: string;
-  openclaw_http_url: string;
+  aiagent_ws_url: string;
+  aiagent_http_url: string;
   legacy_ws_url: string;
   fallback_to_legacy: boolean;
   gateway_bind: GatewayBind;
@@ -44,8 +44,8 @@ interface OpenClawSettings {
   notes: string;
 }
 
-interface OpenClawStatus {
-  settings: OpenClawSettings;
+interface AiAgentStatus {
+  settings: AiAgentSettings;
   gateway_available: boolean;
   gateway_status: string;
   gateway_detail: Record<string, unknown> | null;
@@ -66,17 +66,17 @@ interface OfficialConfigResult {
   warnings: string[];
 }
 
-const emptySettings: OpenClawSettings = {
+const emptySettings: AiAgentSettings = {
   first_run_completed: false,
   agent_ws_mode: "legacy",
-  openclaw_ws_url: "ws://localhost:18789",
-  openclaw_http_url: "http://localhost:18789",
+  aiagent_ws_url: "ws://localhost:18789",
+  aiagent_http_url: "http://localhost:18789",
   legacy_ws_url: "ws://localhost:8000/ws/chat",
   fallback_to_legacy: true,
   gateway_bind: "lan",
   gateway_auth: "token",
   gateway_token_configured: false,
-  gateway_token_env: "OPENCLAW_GATEWAY_TOKEN",
+  gateway_token_env: "AIAGENT_GATEWAY_TOKEN",
   dashboard_url: "http://localhost:18789/",
   strict_allowlist: true,
   model_primary: "",
@@ -104,9 +104,9 @@ function fromLines(value: string): string[] {
     .filter(Boolean);
 }
 
-export default function OpenClawSettingsPage() {
-  const [settings, setSettings] = useState<OpenClawSettings>(emptySettings);
-  const [status, setStatus] = useState<OpenClawStatus | null>(null);
+export default function AiAgentSettingsPage() {
+  const [settings, setSettings] = useState<AiAgentSettings>(emptySettings);
+  const [status, setStatus] = useState<AiAgentStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -136,8 +136,8 @@ export default function OpenClawSettingsPage() {
     setError(null);
     try {
       const [settingsResponse, statusResponse] = await Promise.all([
-        fetch(`${API}/api/openclaw/settings`),
-        fetch(`${API}/api/openclaw/status`),
+        fetch(`${API}/api/aiagent/settings`),
+        fetch(`${API}/api/aiagent/status`),
       ]);
       if (!settingsResponse.ok) throw new Error(await settingsResponse.text());
       setSettings(await settingsResponse.json());
@@ -153,7 +153,7 @@ export default function OpenClawSettingsPage() {
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch(`${API}/api/openclaw/settings`, {
+      const response = await fetch(`${API}/api/aiagent/settings`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(nextSettings),
@@ -174,7 +174,7 @@ export default function OpenClawSettingsPage() {
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch(`${API}/api/openclaw/settings/reset`, {
+      const response = await fetch(`${API}/api/aiagent/settings/reset`, {
         method: "POST",
       });
       if (!response.ok) throw new Error(await response.text());
@@ -189,7 +189,7 @@ export default function OpenClawSettingsPage() {
   }
 
   async function refreshStatus() {
-    const response = await fetch(`${API}/api/openclaw/status`);
+    const response = await fetch(`${API}/api/aiagent/status`);
     if (response.ok) setStatus(await response.json());
   }
 
@@ -199,7 +199,7 @@ export default function OpenClawSettingsPage() {
     setApplyResult(null);
     try {
       await save(settings);
-      const response = await fetch(`${API}/api/openclaw/official-config/apply`, {
+      const response = await fetch(`${API}/api/aiagent/official-config/apply`, {
         method: "POST",
       });
       if (!response.ok) throw new Error(await response.text());
@@ -225,7 +225,7 @@ export default function OpenClawSettingsPage() {
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">OpenClaw</h1>
+          <h1 className="text-2xl font-bold text-slate-100">AiAgent</h1>
           <p className="mt-1 text-sm text-slate-400">
             Первый запуск, Gateway, модели, Telegram и strict-интеграция.
           </p>
@@ -297,7 +297,7 @@ export default function OpenClawSettingsPage() {
             value={settings.agent_ws_mode}
             values={[
               ["legacy", "FastAPI legacy"],
-              ["openclaw", "Official OpenClaw Gateway"],
+              ["aiagent", "Official AiAgent Gateway"],
             ]}
             onChange={(agent_ws_mode) =>
               setSettings({ ...settings, agent_ws_mode: agent_ws_mode as AgentWsMode })
@@ -338,17 +338,17 @@ export default function OpenClawSettingsPage() {
             }
           />
           <TextField
-            label="OpenClaw WebSocket URL"
-            value={settings.openclaw_ws_url}
-            onChange={(openclaw_ws_url) =>
-              setSettings({ ...settings, openclaw_ws_url })
+            label="AiAgent WebSocket URL"
+            value={settings.aiagent_ws_url}
+            onChange={(aiagent_ws_url) =>
+              setSettings({ ...settings, aiagent_ws_url })
             }
           />
           <TextField
-            label="OpenClaw HTTP URL"
-            value={settings.openclaw_http_url}
-            onChange={(openclaw_http_url) =>
-              setSettings({ ...settings, openclaw_http_url })
+            label="AiAgent HTTP URL"
+            value={settings.aiagent_http_url}
+            onChange={(aiagent_http_url) =>
+              setSettings({ ...settings, aiagent_http_url })
             }
           />
           <TextField
@@ -527,10 +527,10 @@ export default function OpenClawSettingsPage() {
           </button>
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <Command value="make openclaw-official-up" />
-          <Command value="make openclaw-official-down" />
-          <Command value="make openclaw-official-logs" />
-          <Command value="make openclaw-official-dashboard" />
+          <Command value="make aiagent-official-up" />
+          <Command value="make aiagent-official-down" />
+          <Command value="make aiagent-official-logs" />
+          <Command value="make aiagent-official-dashboard" />
         </div>
         <div className="mt-3 text-xs text-slate-500">
           Config path: {status?.official_config_path || "-"}

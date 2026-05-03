@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Generate OpenClaw skill registry YAML from FastAPI Pydantic schemas.
+"""Generate AiAgent skill registry YAML from FastAPI Pydantic schemas.
 
 Reads all APIRouter endpoints and generates skill definitions
-compatible with OpenClaw Gateway tool format.
+compatible with AiAgent Gateway tool format.
 
 Usage:
     python -m app.scripts.generate_skill_registry
@@ -167,7 +167,7 @@ def main():
 
     output_path = (
         Path(__file__).parent.parent.parent.parent
-        / "openclaw"
+        / "aiagent"
         / "skills"
         / "_registry.yml"
     )

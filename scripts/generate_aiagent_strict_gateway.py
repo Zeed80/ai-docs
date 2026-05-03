@@ -12,11 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.check_openclaw_contract import _collect_scenario_skills
+from scripts.check_aiagent_contract import _collect_scenario_skills
 
 
 def build_strict_gateway(
-    source_path: Path = Path("openclaw/config/gateway.yml"),
+    source_path: Path = Path("aiagent/config/gateway.yml"),
 ) -> dict[str, Any]:
     gateway = yaml.safe_load(source_path.read_text(encoding="utf-8"))
     registry_path = _resolve_registry_path(source_path, gateway["skills"]["registry"])
@@ -50,21 +50,21 @@ def _resolve_registry_path(gateway_path: Path, registry_value: str) -> Path:
 
 
 def _scenario_is_supported(
-    openclaw_root: Path,
+    aiagent_root: Path,
     scenario: dict[str, Any],
     registry_tools: dict[str, Any],
 ) -> bool:
-    skills = _collect_scenario_skills(openclaw_root, [scenario])
+    skills = _collect_scenario_skills(aiagent_root, [scenario])
     return bool(skills) and all(skill in registry_tools for skill in skills)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate strict OpenClaw Gateway config.")
-    parser.add_argument("--source", type=Path, default=Path("openclaw/config/gateway.yml"))
+    parser = argparse.ArgumentParser(description="Generate strict AiAgent Gateway config.")
+    parser.add_argument("--source", type=Path, default=Path("aiagent/config/gateway.yml"))
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("openclaw/config/gateway.strict.yml"),
+        default=Path("aiagent/config/gateway.strict.yml"),
     )
     args = parser.parse_args()
 

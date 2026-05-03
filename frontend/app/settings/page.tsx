@@ -1460,7 +1460,7 @@ export default function SettingsPage() {
               {/* System prompt */}
               <SectionCard
                 title="Системный промпт"
-                subtitle="Переопределяет базовый промпт из openclaw/prompts/base.md"
+                subtitle="Переопределяет базовый промпт из aiagent/prompts/base.md"
               >
                 <Field
                   label=""
@@ -1475,7 +1475,7 @@ export default function SettingsPage() {
                         system_prompt: e.target.value || null,
                       })
                     }
-                    placeholder="Пусто: используется базовый промпт openclaw/prompts/base.md"
+                    placeholder="Пусто: используется базовый промпт aiagent/prompts/base.md"
                   />
                 </Field>
               </SectionCard>
@@ -1976,10 +1976,10 @@ export default function SettingsPage() {
       {activeTab === "system" && (
         <div className="space-y-6">
           <SectionCard
-            title="OpenClaw Gateway"
+            title="AiAgent Gateway"
             subtitle="Gateway, режим чата, allowlist, Telegram и статус."
             action={
-              <Link href="/settings/openclaw" className={btnSecondary}>
+              <Link href="/settings/aiagent" className={btnSecondary}>
                 Открыть
               </Link>
             }

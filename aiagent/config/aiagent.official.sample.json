@@ -85,7 +85,7 @@
     "bind": "lan",
     "auth": {
       "mode": "token",
-      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+      "token": "${AIAGENT_GATEWAY_TOKEN}"
     },
     "reload": {
       "mode": "hybrid",

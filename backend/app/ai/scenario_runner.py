@@ -1,6 +1,6 @@
-"""OpenClaw scenario runner — executes YAML workflow pipelines.
+"""AiAgent scenario runner — executes YAML workflow pipelines.
 
-Scenarios are declared in openclaw/scenarios/*.yml and registered in gateway.yml.
+Scenarios are declared in aiagent/scenarios/*.yml and registered in gateway.yml.
 Each scenario is a sequence of skill calls with optional for_each, conditions,
 and error handling. The runner is intentionally minimal and dependency-free.
 
@@ -147,7 +147,7 @@ async def _run_step(step: dict, ctx: _Context) -> Any:
 # ── Scenario runner ───────────────────────────────────────────────────────────
 
 class ScenarioRunner:
-    """Execute OpenClaw YAML scenarios."""
+    """Execute AiAgent YAML scenarios."""
 
     async def run(
         self,

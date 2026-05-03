@@ -33,8 +33,8 @@ export function getWebSocketBaseUrl(): string {
   return `${proto}//${apiUrl.hostname}:${apiUrl.port || "8000"}`;
 }
 
-export function getOpenClawWebSocketUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_OPENCLAW_WS_URL;
+export function getAiAgentWebSocketUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_AIAGENT_WS_URL;
   if (typeof window !== "undefined") {
     if (configured) {
       try {

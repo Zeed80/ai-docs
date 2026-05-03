@@ -1,4 +1,4 @@
-# OpenClaw Scenario 1 — Email Triage
+# AiAgent Scenario 1 — Email Triage
 # Trigger: new email arrives → full pipeline → document lands in Inbox
 #
 # Chain: email.fetch_new → doc.ingest → doc.classify → invoice.extract

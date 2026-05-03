@@ -1,4 +1,4 @@
-"""Official OpenClaw Gateway control API.
+"""Official AiAgent Gateway control API.
 
 These endpoints are not normal agent skills. They are control-plane callbacks
 used by the Gateway to pause on approval-gated tool calls and resume safely
@@ -20,46 +20,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.service import log_action
 from app.db.models import AgentAction, Approval, ApprovalActionType, ApprovalStatus
 from app.db.session import get_db
-from app.domain.openclaw_gateway import (
-    OpenClawApprovalRequest,
-    OpenClawApprovalTicket,
-    OpenClawResumeStatus,
+from app.domain.aiagent_gateway import (
+    AiAgentApprovalRequest,
+    AiAgentApprovalTicket,
+    AiAgentResumeStatus,
 )
 
 router = APIRouter()
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BACKEND_ROOT.parent
-CONFIG_PATH = BACKEND_ROOT / "data" / "openclaw_config.json"
+CONFIG_PATH = BACKEND_ROOT / "data" / "aiagent_config.json"
 CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 REGISTRY_PATHS = [
-    Path("/openclaw/skills/_registry.yml"),
-    PROJECT_ROOT / "openclaw" / "skills" / "_registry.yml",
-    BACKEND_ROOT / "openclaw" / "skills" / "_registry.yml",
+    Path("/aiagent/skills/_registry.yml"),
+    PROJECT_ROOT / "aiagent" / "skills" / "_registry.yml",
+    BACKEND_ROOT / "aiagent" / "skills" / "_registry.yml",
 ]
 STRICT_GATEWAY_PATHS = [
-    Path("/openclaw/config/gateway.strict.yml"),
-    PROJECT_ROOT / "openclaw" / "config" / "gateway.strict.yml",
-    BACKEND_ROOT / "openclaw" / "config" / "gateway.strict.yml",
+    Path("/aiagent/config/gateway.strict.yml"),
+    PROJECT_ROOT / "aiagent" / "config" / "gateway.strict.yml",
+    BACKEND_ROOT / "aiagent" / "config" / "gateway.strict.yml",
 ]
 OFFICIAL_CONFIG_PATHS = [
-    Path("/openclaw/official/openclaw.json"),
-    PROJECT_ROOT / "openclaw" / "official" / "openclaw.json",
-    BACKEND_ROOT / "openclaw" / "official" / "openclaw.json",
+    Path("/aiagent/official/aiagent.json"),
+    PROJECT_ROOT / "aiagent" / "official" / "aiagent.json",
+    BACKEND_ROOT / "aiagent" / "official" / "aiagent.json",
 ]
 
 
-class OpenClawProjectSettings(BaseModel):
+class AiAgentProjectSettings(BaseModel):
     first_run_completed: bool = False
-    agent_ws_mode: str = Field(default="legacy", pattern="^(legacy|openclaw)$")
-    openclaw_ws_url: str = "ws://localhost:18789"
-    openclaw_http_url: str = "http://localhost:18789"
+    agent_ws_mode: str = Field(default="legacy", pattern="^(legacy|aiagent)$")
+    aiagent_ws_url: str = "ws://localhost:18789"
+    aiagent_http_url: str = "http://localhost:18789"
     legacy_ws_url: str = "ws://localhost:8000/ws/chat"
     fallback_to_legacy: bool = True
     gateway_bind: str = Field(default="lan", pattern="^(loopback|lan|tailnet|auto|custom)$")
     gateway_auth: str = Field(default="token", pattern="^(none|token|password|trusted-proxy)$")
     gateway_token_configured: bool = False
-    gateway_token_env: str = "OPENCLAW_GATEWAY_TOKEN"
+    gateway_token_env: str = "AIAGENT_GATEWAY_TOKEN"
     dashboard_url: str = "http://localhost:18789/"
     strict_allowlist: bool = True
     model_primary: str = ""
@@ -82,11 +82,11 @@ class OpenClawProjectSettings(BaseModel):
     notes: str = ""
 
 
-class OpenClawProjectSettingsUpdate(BaseModel):
+class AiAgentProjectSettingsUpdate(BaseModel):
     first_run_completed: bool | None = None
-    agent_ws_mode: str | None = Field(default=None, pattern="^(legacy|openclaw)$")
-    openclaw_ws_url: str | None = None
-    openclaw_http_url: str | None = None
+    agent_ws_mode: str | None = Field(default=None, pattern="^(legacy|aiagent)$")
+    aiagent_ws_url: str | None = None
+    aiagent_http_url: str | None = None
     legacy_ws_url: str | None = None
     fallback_to_legacy: bool | None = None
     gateway_bind: str | None = Field(default=None, pattern="^(loopback|lan|tailnet|auto|custom)$")
@@ -115,8 +115,8 @@ class OpenClawProjectSettingsUpdate(BaseModel):
     notes: str | None = None
 
 
-class OpenClawStatus(BaseModel):
-    settings: OpenClawProjectSettings
+class AiAgentStatus(BaseModel):
+    settings: AiAgentProjectSettings
     gateway_available: bool
     gateway_status: str
     gateway_detail: dict[str, Any] | None = None
@@ -130,44 +130,44 @@ class OpenClawStatus(BaseModel):
     control_note: str
 
 
-class OpenClawOfficialConfigApplyResult(BaseModel):
+class AiAgentOfficialConfigApplyResult(BaseModel):
     written: bool
     path: str | None
     config: dict[str, Any]
     warnings: list[str]
 
 
-@router.get("/settings", response_model=OpenClawProjectSettings)
-async def get_openclaw_settings() -> OpenClawProjectSettings:
-    return _load_openclaw_settings()
+@router.get("/settings", response_model=AiAgentProjectSettings)
+async def get_aiagent_settings() -> AiAgentProjectSettings:
+    return _load_aiagent_settings()
 
 
-@router.patch("/settings", response_model=OpenClawProjectSettings)
-async def update_openclaw_settings(
-    payload: OpenClawProjectSettingsUpdate,
-) -> OpenClawProjectSettings:
-    settings = _load_openclaw_settings()
+@router.patch("/settings", response_model=AiAgentProjectSettings)
+async def update_aiagent_settings(
+    payload: AiAgentProjectSettingsUpdate,
+) -> AiAgentProjectSettings:
+    settings = _load_aiagent_settings()
     next_settings = settings.model_copy(update=payload.model_dump(exclude_none=True))
-    _save_openclaw_settings(next_settings)
+    _save_aiagent_settings(next_settings)
     return next_settings
 
 
-@router.post("/settings/reset", response_model=OpenClawProjectSettings)
-async def reset_openclaw_settings() -> OpenClawProjectSettings:
-    settings = OpenClawProjectSettings()
-    _save_openclaw_settings(settings)
+@router.post("/settings/reset", response_model=AiAgentProjectSettings)
+async def reset_aiagent_settings() -> AiAgentProjectSettings:
+    settings = AiAgentProjectSettings()
+    _save_aiagent_settings(settings)
     return settings
 
 
-@router.get("/status", response_model=OpenClawStatus)
-async def get_openclaw_status() -> OpenClawStatus:
-    project_settings = _load_openclaw_settings()
+@router.get("/status", response_model=AiAgentStatus)
+async def get_aiagent_status() -> AiAgentStatus:
+    project_settings = _load_aiagent_settings()
     gateway_available = False
     gateway_status = "unavailable"
     gateway_detail: dict[str, Any] | None = None
     gateway_urls = [
-        project_settings.openclaw_http_url.rstrip("/"),
-        "http://openclaw-gateway:18789",
+        project_settings.aiagent_http_url.rstrip("/"),
+        "http://aiagent-gateway:18789",
         "http://host-gateway:18789",
     ]
     seen_gateway_urls: set[str] = set()
@@ -194,7 +194,7 @@ async def get_openclaw_status() -> OpenClawStatus:
     tools = registry.get("tools", [])
     official_config_path = _first_existing_parent(OFFICIAL_CONFIG_PATHS)
     warnings = _config_warnings(project_settings)
-    return OpenClawStatus(
+    return AiAgentStatus(
         settings=project_settings,
         gateway_available=gateway_available,
         gateway_status=gateway_status,
@@ -208,26 +208,26 @@ async def get_openclaw_status() -> OpenClawStatus:
         control_available=False,
         control_note=(
             "Backend не управляет Docker socket. Запуск/остановка Gateway остаются "
-            "операторскими командами: make openclaw-official-up/down."
+            "операторскими командами: make aiagent-official-up/down."
         ),
     )
 
 
 @router.get("/official-config")
 async def get_official_config_preview() -> dict[str, Any]:
-    settings = _load_openclaw_settings()
+    settings = _load_aiagent_settings()
     config, warnings = _build_official_config(settings)
     return {"config": config, "warnings": warnings}
 
 
-@router.post("/official-config/apply", response_model=OpenClawOfficialConfigApplyResult)
-async def apply_official_config() -> OpenClawOfficialConfigApplyResult:
-    settings = _load_openclaw_settings().model_copy(update={"first_run_completed": True})
+@router.post("/official-config/apply", response_model=AiAgentOfficialConfigApplyResult)
+async def apply_official_config() -> AiAgentOfficialConfigApplyResult:
+    settings = _load_aiagent_settings().model_copy(update={"first_run_completed": True})
     config, warnings = _build_official_config(settings)
     target = _first_existing_parent(OFFICIAL_CONFIG_PATHS)
     if target is None:
-        warnings.append("OpenClaw official config path is not mounted into this backend runtime")
-        return OpenClawOfficialConfigApplyResult(
+        warnings.append("AiAgent official config path is not mounted into this backend runtime")
+        return AiAgentOfficialConfigApplyResult(
             written=False,
             path=None,
             config=config,
@@ -237,15 +237,15 @@ async def apply_official_config() -> OpenClawOfficialConfigApplyResult:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except OSError as exc:
-        warnings.append(f"Cannot write OpenClaw official config: {exc}")
-        return OpenClawOfficialConfigApplyResult(
+        warnings.append(f"Cannot write AiAgent official config: {exc}")
+        return AiAgentOfficialConfigApplyResult(
             written=False,
             path=str(target),
             config=config,
             warnings=warnings,
         )
-    _save_openclaw_settings(settings)
-    return OpenClawOfficialConfigApplyResult(
+    _save_aiagent_settings(settings)
+    return AiAgentOfficialConfigApplyResult(
         written=True,
         path=str(target),
         config=config,
@@ -253,9 +253,9 @@ async def apply_official_config() -> OpenClawOfficialConfigApplyResult:
     )
 
 
-@router.post("/approvals/request", response_model=OpenClawApprovalTicket, status_code=201)
+@router.post("/approvals/request", response_model=AiAgentApprovalTicket, status_code=201)
 async def request_gateway_approval(
-    payload: OpenClawApprovalRequest,
+    payload: AiAgentApprovalRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """Gateway callback: create approval and pause an approval-gated tool call."""
@@ -281,7 +281,7 @@ async def request_gateway_approval(
         action_type=ApprovalActionType.agent_tool_call,
         entity_type=payload.entity_type or "agent_action",
         entity_id=payload.entity_id or action.id,
-        requested_by="openclaw",
+        requested_by="aiagent",
         assigned_to=payload.assigned_to,
         context={
             "session_id": payload.session_id,
@@ -298,7 +298,7 @@ async def request_gateway_approval(
 
     await log_action(
         db,
-        action="openclaw.approval_request",
+        action="aiagent.approval_request",
         entity_type="approval",
         entity_id=approval.id,
         details={"tool_name": payload.tool_name, "agent_action_id": str(action.id)},
@@ -306,7 +306,7 @@ async def request_gateway_approval(
     await db.commit()
     await db.refresh(approval)
     await db.refresh(action)
-    return OpenClawApprovalTicket(
+    return AiAgentApprovalTicket(
         approval_id=approval.id,
         agent_action_id=action.id,
         status=approval.status.value,
@@ -315,7 +315,7 @@ async def request_gateway_approval(
     )
 
 
-@router.get("/approvals/{approval_id}/resume", response_model=OpenClawResumeStatus)
+@router.get("/approvals/{approval_id}/resume", response_model=AiAgentResumeStatus)
 async def get_gateway_resume_status(
     approval_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -327,7 +327,7 @@ async def get_gateway_resume_status(
         raise HTTPException(404, "Approval not found")
     context = approval.context or {}
     if approval.action_type != ApprovalActionType.agent_tool_call:
-        raise HTTPException(400, "Approval is not an OpenClaw tool-call approval")
+        raise HTTPException(400, "Approval is not an AiAgent tool-call approval")
 
     if approval.status != ApprovalStatus.pending:
         action_id = context.get("agent_action_id")
@@ -342,7 +342,7 @@ async def get_gateway_resume_status(
                 }
                 await db.commit()
 
-    return OpenClawResumeStatus(
+    return AiAgentResumeStatus(
         approval_id=approval.id,
         status=approval.status.value,
         approved=approval.status == ApprovalStatus.approved,
@@ -380,18 +380,18 @@ def _supported_scenarios() -> list[str]:
     return [scenario["name"] for scenario in raw.get("scenarios", []) if scenario.get("name")]
 
 
-def _load_openclaw_settings() -> OpenClawProjectSettings:
+def _load_aiagent_settings() -> AiAgentProjectSettings:
     if CONFIG_PATH.exists():
         try:
-            return OpenClawProjectSettings(
+            return AiAgentProjectSettings(
                 **json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             )
         except Exception:
             pass
-    return OpenClawProjectSettings()
+    return AiAgentProjectSettings()
 
 
-def _save_openclaw_settings(settings: OpenClawProjectSettings) -> None:
+def _save_aiagent_settings(settings: AiAgentProjectSettings) -> None:
     CONFIG_PATH.write_text(
         json.dumps(settings.model_dump(mode="json"), indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -412,21 +412,21 @@ def _first_existing_parent(paths: list[Path]) -> Path | None:
     return None
 
 
-def _config_warnings(settings: OpenClawProjectSettings) -> list[str]:
+def _config_warnings(settings: AiAgentProjectSettings) -> list[str]:
     warnings: list[str] = []
-    if settings.agent_ws_mode == "openclaw" and not settings.gateway_token_configured:
+    if settings.agent_ws_mode == "aiagent" and not settings.gateway_token_configured:
         warnings.append("Gateway token is not marked as configured")
     if settings.telegram_enabled and not settings.telegram_bot_token_configured:
         warnings.append("Telegram is enabled but bot token is not marked as configured")
     if not settings.model_primary:
-        warnings.append("Primary OpenClaw model is not selected")
+        warnings.append("Primary AiAgent model is not selected")
     if settings.telegram_dm_policy == "open" and "*" not in settings.telegram_allow_from:
         warnings.append("Telegram open DM policy should explicitly include '*' in allowFrom")
     return warnings
 
 
 def _build_official_config(
-    settings: OpenClawProjectSettings,
+    settings: AiAgentProjectSettings,
 ) -> tuple[dict[str, Any], list[str]]:
     registry = _load_registry()
     exposed_skills = [tool["name"] for tool in registry.get("tools", []) if tool.get("name")]
@@ -456,7 +456,7 @@ def _build_official_config(
             "reload": {"mode": "hybrid", "debounceMs": 300},
             "controlUi": {
                 "allowedOrigins": [
-                    settings.openclaw_http_url.rstrip("/"),
+                    settings.aiagent_http_url.rstrip("/"),
                     settings.dashboard_url.rstrip("/"),
                     "http://localhost:18789",
                     "http://127.0.0.1:18789",

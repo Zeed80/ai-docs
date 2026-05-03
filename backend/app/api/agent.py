@@ -1,4 +1,4 @@
-"""WebSocket endpoint for the OpenClaw agent (Света)."""
+"""WebSocket endpoint for the AiAgent agent (Света)."""
 
 import asyncio
 import json

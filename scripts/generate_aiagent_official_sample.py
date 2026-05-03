@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.generate_openclaw_strict_gateway import build_strict_gateway  # noqa: E402
+from scripts.generate_aiagent_strict_gateway import build_strict_gateway  # noqa: E402
 
 
 def build_official_sample() -> dict:
@@ -35,7 +35,7 @@ def build_official_sample() -> dict:
             "bind": "lan",
             "auth": {
                 "mode": "token",
-                "token": "${OPENCLAW_GATEWAY_TOKEN}",
+                "token": "${AIAGENT_GATEWAY_TOKEN}",
             },
             "reload": {
                 "mode": "hybrid",
@@ -55,11 +55,11 @@ def build_official_sample() -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate official OpenClaw JSON sample.")
+    parser = argparse.ArgumentParser(description="Generate official AiAgent JSON sample.")
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("openclaw/config/openclaw.official.sample.json"),
+        default=Path("aiagent/config/aiagent.official.sample.json"),
     )
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 ---
 name: AI-Assistant-Manufacturing
-overview: Подробное ТЗ и план разработки единого рабочего пространства для документов (Счета, Чертежи, Письма). Основан на OpenClaw + Python. Упор на Keyboard-first UX, Side-by-Side review, Round-trip Excel, Anomaly Detection и Human-in-the-Loop.
+overview: Подробное ТЗ и план разработки единого рабочего пространства для документов (Счета, Чертежи, Письма). Основан на AiAgent + Python. Упор на Keyboard-first UX, Side-by-Side review, Round-trip Excel, Anomaly Detection и Human-in-the-Loop.
 todos:
   - id: backend_core_db
     content: "Data Layer: PostgreSQL (Document, Invoice, CanonicalItem, AnomalyCard, NormalizationRule), Qdrant, MinIO. Настройка FastAPI."
@@ -11,11 +11,11 @@ todos:
   - id: smart_document_pipeline
     content: "Пайплайн входящих (Celery): Email/Upload Ingest -> пред-обработка -> VLM gemma4:e4b -> Детекция аномалий (дубликаты, цены) -> Статус 'Needs Review'."
     status: pending
-  - id: openclaw_onboard
-    content: "Агентный слой: развертывание OpenClaw Gateway. Настройка каналов связи и системных промптов."
+  - id: aiagent_onboard
+    content: "Агентный слой: развертывание AiAgent Gateway. Настройка каналов связи и системных промптов."
     status: pending
   - id: frontend_pwa_core
-    content: "Frontend (Next.js): базовый Layout (Dashboard, Inbox с keyboard-first triage). Подключение по WebSocket к OpenClaw Gateway. Command palette (Ctrl+K)."
+    content: "Frontend (Next.js): базовый Layout (Dashboard, Inbox с keyboard-first triage). Подключение по WebSocket к AiAgent Gateway. Command palette (Ctrl+K)."
     status: pending
   - id: frontend_side_by_side
     content: "Frontend (UX Проверки): Side-by-Side View (оригинал PDF / поля). Двусторонняя подсветка (поле <-> bbox). Review streak поток с клавиатуры."
@@ -34,7 +34,7 @@ isProject: false
 
 # Единое рабочее пространство ИИ-документооборота для производства
 
-Данный документ представляет собой финальную архитектуру и техническое задание (ТЗ) на разработку системы. Она построена на слиянии агентского фреймворка **OpenClaw**, кастомного Python-бэкенда и глубокого UX-подхода. 
+Данный документ представляет собой финальную архитектуру и техническое задание (ТЗ) на разработку системы. Она построена на слиянии агентского фреймворка **AiAgent**, кастомного Python-бэкенда и глубокого UX-подхода. 
 
 Это не просто "чат с ИИ". Это профессиональный инструмент, где ИИ работает как надежный ассистент под контролем человека (Draft-First & Human Review), с упором на скорость работы с клавиатуры (Keyboard-first) и прозрачность решений.
 
@@ -50,7 +50,7 @@ isProject: false
 
 ---
 
-## 2. Архитектурный Стек (Multi-Model & OpenClaw)
+## 2. Архитектурный Стек (Multi-Model & AiAgent)
 
 ### 2.1. ИИ-движок (Ollama)
 Балансировка скорости и точности (MoA) в рамках 24GB VRAM:
@@ -58,7 +58,7 @@ isProject: false
 - **Gemma 4 26B MoE (`gemma4:26b`):** Основная "умная" модель (Core Agent) для генерации текстов писем (Style matching), логических рассуждений и работы со сложным контекстом.
 
 ### 2.2. Бэкенд и Инфраструктура
-- **OpenClaw Gateway:** WebSocket-шлюз, управление сессиями, контекстом чата, интеграция навыков (Skills/Plugins) через прозрачный Approval workflow.
+- **AiAgent Gateway:** WebSocket-шлюз, управление сессиями, контекстом чата, интеграция навыков (Skills/Plugins) через прозрачный Approval workflow.
 - **Python / FastAPI + Celery:** "Тяжелый" Data Layer. Парсинг почты, извлечение текста (PyMuPDF), конвертация CAD-файлов, генерация/парсинг Excel, детекция аномалий.
 - **Базы данных:** `PostgreSQL` (все документы, AuditLog, сущности), `Qdrant` (векторный гибридный поиск), `MinIO` (хранилище файлов).
 
@@ -101,14 +101,14 @@ isProject: false
 
 ## 5. Детальный план реализации (Поэтапный)
 
-*Разделяйте логику: управление сессиями и чат — в OpenClaw (Node.js/TS), тяжелая обработка файлов, БД и генерация Excel — в FastAPI (Python).*
+*Разделяйте логику: управление сессиями и чат — в AiAgent (Node.js/TS), тяжелая обработка файлов, БД и генерация Excel — в FastAPI (Python).*
 
 ### Этап 1: Инфраструктура и Единый контур входящих
 1. **Data Layer:** Docker-Compose (PostgreSQL, Redis, Qdrant, MinIO). Traefik (HTTPS).
 2. **FastAPI & DB:** Модели `Document`, `Invoice`, `CanonicalItem`, `AnomalyCard`, `AuditTimelineEvent`.
 3. **AI Layer:** Развернуть Ollama с `gemma4:e4b` и `gemma4:26b`.
 4. **Ingest (Celery):** Прием почты (IMAP) и файлов (Drag&Drop, URL, Paste). Создание объекта в статусе `Needs Review`.
-5. **OpenClaw Gateway:** Развернуть `openclaw onboard`.
+5. **AiAgent Gateway:** Развернуть `aiagent onboard`.
 
 ### Этап 2: UX Проверки и AI-Извлечение
 1. **PWA (Next.js):** Создать Layout, Inbox и Command Palette (`Ctrl+K`).
@@ -119,7 +119,7 @@ isProject: false
 ### Этап 3: Рабочие действия (Excel и Письма)
 1. **Таблицы:** Реализовать табличные виды. Написать генератор Excel (export). 
 2. **Round-trip Import:** Написать Diff-wizard для загрузки измененного Excel обратно в БД с маршрутизацией через Approval.
-3. **Email Workflow:** Виджет редактора писем. Style matching (ИИ подстраивает тон под прошлую переписку). Risk-check перед отправкой. Плагин отправки для OpenClaw.
+3. **Email Workflow:** Виджет редактора писем. Style matching (ИИ подстраивает тон под прошлую переписку). Risk-check перед отправкой. Плагин отправки для AiAgent.
 
 ### Этап 4: Бизнес-ценность (Compare КП и Справочники)
 1. **Профиль поставщика:** UI с реквизитами, метриками (Trust score) и историей.

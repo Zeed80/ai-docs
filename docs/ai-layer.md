@@ -38,7 +38,7 @@ python scripts/ai_eval.py --model new_model_name --task engineering_reasoning
 - Конфиденциальные задачи по умолчанию `confidential=true`.
 - Если route имеет `local_only=true`, cloud-модель запрещена даже для неконфиденциального запроса.
 - Cloud provider требует `allow_cloud=true`.
-- Tool calling не исполняет действия. Модель возвращает только proposed tool calls, затем backend/OpenClaw policy решает, можно ли выполнять действие.
+- Tool calling не исполняет действия. Модель возвращает только proposed tool calls, затем backend/AiAgent policy решает, можно ли выполнять действие.
 - Structured output всегда валидируется Pydantic-схемой через `response_schema`.
 - OCR fallback для document processing использует только `AIRouter` и route `AITask.INVOICE_OCR`; прямые вызовы Ollama/vLLM из domain/tasks кода запрещены.
 

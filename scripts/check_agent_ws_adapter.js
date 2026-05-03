@@ -39,8 +39,8 @@ function loadAdapter(env = {}, windowValue = undefined) {
       if (request === "@/lib/api-base") {
         return {
           getApiBaseUrl: () => "http://api.local",
-          getOpenClawWebSocketUrl: () => {
-            const configured = env.NEXT_PUBLIC_OPENCLAW_WS_URL;
+          getAiAgentWebSocketUrl: () => {
+            const configured = env.NEXT_PUBLIC_AIAGENT_WS_URL;
             if (configured) return configured;
             const proto = windowValue?.location?.protocol === "https:" ? "wss:" : "ws:";
             const host = windowValue?.location?.hostname ?? "localhost";
@@ -76,10 +76,10 @@ function plain(value) {
 
 {
   const adapter = loadAdapter(
-    { NEXT_PUBLIC_AGENT_WS_MODE: "openclaw" },
+    { NEXT_PUBLIC_AGENT_WS_MODE: "aiagent" },
     { location: { protocol: "http:", hostname: "workstation.local" } },
   );
-  assert.equal(adapter.getAgentWsMode(), "openclaw");
+  assert.equal(adapter.getAgentWsMode(), "aiagent");
   assert.equal(adapter.getAgentWsEndpoint(), "ws://workstation.local:18789");
   assert.deepEqual(plain(adapter.getAgentWsHealthCheckEndpoints()), [
     "ws://workstation.local:18789",
@@ -98,7 +98,7 @@ function plain(value) {
 {
   const storage = new Map([["agent_ws_fallback_mode", "legacy"]]);
   const adapter = loadAdapter(
-    { NEXT_PUBLIC_AGENT_WS_MODE: "openclaw" },
+    { NEXT_PUBLIC_AGENT_WS_MODE: "aiagent" },
     {
       location: { protocol: "http:", hostname: "workstation.local" },
       sessionStorage: {
@@ -117,8 +117,8 @@ function plain(value) {
 
 {
   const adapter = loadAdapter({
-    NEXT_PUBLIC_AGENT_WS_MODE: "openclaw",
-    NEXT_PUBLIC_OPENCLAW_WS_URL: "wss://gateway.example/ws",
+    NEXT_PUBLIC_AGENT_WS_MODE: "aiagent",
+    NEXT_PUBLIC_AIAGENT_WS_URL: "wss://gateway.example/ws",
   });
   assert.equal(adapter.getAgentWsEndpoint(), "wss://gateway.example/ws");
 }

@@ -1,6 +1,6 @@
-"""OpenClaw gateway configuration loader.
+"""AiAgent gateway configuration loader.
 
-Single source of truth: openclaw/config/gateway.yml
+Single source of truth: aiagent/config/gateway.yml
 Call gateway_config.reload() to hot-reload without server restart.
 """
 
@@ -12,13 +12,13 @@ from pathlib import Path
 
 import yaml
 
-_OPENCLAW_ROOT = Path(
-    os.environ.get("OPENCLAW_ROOT", str(Path(__file__).parent.parent.parent / "openclaw"))
+_AIAGENT_ROOT = Path(
+    os.environ.get("AIAGENT_ROOT", str(Path(__file__).parent.parent.parent / "aiagent"))
 )
-_GATEWAY_PATH = _OPENCLAW_ROOT / "config" / "gateway.yml"
-_REGISTRY_PATH = _OPENCLAW_ROOT / "skills" / "_registry.yml"
-_PROMPTS_DIR = _OPENCLAW_ROOT / "prompts"
-_SCENARIOS_DIR = _OPENCLAW_ROOT / "scenarios"
+_GATEWAY_PATH = _AIAGENT_ROOT / "config" / "gateway.yml"
+_REGISTRY_PATH = _AIAGENT_ROOT / "skills" / "_registry.yml"
+_PROMPTS_DIR = _AIAGENT_ROOT / "prompts"
+_SCENARIOS_DIR = _AIAGENT_ROOT / "scenarios"
 
 
 def _resolve_env(value: str) -> str:
@@ -30,7 +30,7 @@ def _resolve_env(value: str) -> str:
 
 
 class GatewayConfig:
-    """Reads openclaw/config/gateway.yml.
+    """Reads aiagent/config/gateway.yml.
 
     All attributes are @property so changes to gateway.yml take effect on the
     next access without a server restart. Call .reload() explicitly if you need
@@ -97,7 +97,7 @@ class GatewayConfig:
     @property
     def base_prompt_path(self) -> Path:
         rel = self._raw.get("prompts", {}).get("base", "./prompts/base.md")
-        return _OPENCLAW_ROOT / rel.lstrip("./")
+        return _AIAGENT_ROOT / rel.lstrip("./")
 
     def role_prompt(self, role: str) -> str | None:
         """Return text of a role-specific prompt, or None if not found."""
@@ -105,7 +105,7 @@ class GatewayConfig:
         rel = roles.get(role)
         if not rel:
             return None
-        path = _OPENCLAW_ROOT / rel.lstrip("./")
+        path = _AIAGENT_ROOT / rel.lstrip("./")
         return path.read_text() if path.exists() else None
 
     # ── Scenarios ─────────────────────────────────────────────────────────────
@@ -120,7 +120,7 @@ class GatewayConfig:
         for sdef in self.scenario_definitions:
             if sdef.get("name") == name or Path(sdef.get("path", "")).stem == name:
                 rel = sdef["path"]
-                path = _OPENCLAW_ROOT / rel.lstrip("./")
+                path = _AIAGENT_ROOT / rel.lstrip("./")
                 if path.exists():
                     return yaml.safe_load(path.read_text()) or {}
         # Fallback: try direct file lookup
