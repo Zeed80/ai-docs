@@ -104,7 +104,9 @@ class _BotManager:
 
         token = get_bot_token()
         if not token:
-            return "Токен бота не настроен"
+            msg = "Токен бота не настроен"
+            self._last_error = msg
+            return msg
 
         try:
             from app.integrations.telegram_bot import SvetaTelegramBot

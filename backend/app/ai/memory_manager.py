@@ -41,15 +41,19 @@ class MemoryManager:
         base_url: str,
         top_k: int = 8,
         max_chars: int = _MAX_MEMORY_CHARS,
-        timeout: float = 5.0,
+        timeout: float = 25.0,
+        retrieval_mode: str = "hybrid",
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._top_k = top_k
         self._max_chars = max_chars
         self._timeout = timeout
+        self._retrieval_mode = retrieval_mode
 
     async def prefetch(self, query: str, session_id: str = "") -> str:
         """Search memory for context relevant to *query*.
+
+        Calls ``POST /api/memory/search`` (same contract as :func:`agent_loop._load_memory_context`).
 
         Returns a formatted ``<memory-context>`` block, or an empty string
         if nothing relevant was found or the call failed.
@@ -57,13 +61,18 @@ class MemoryManager:
         if not query.strip():
             return ""
         try:
-            params: dict[str, Any] = {"q": query[:500], "top_k": self._top_k}
+            body: dict[str, Any] = {
+                "query": query[:500],
+                "limit": self._top_k,
+                "retrieval_mode": self._retrieval_mode,
+                "include_explain": False,
+            }
             if session_id:
-                params["session_id"] = session_id
+                body["session_id"] = session_id
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.get(
+                resp = await client.post(
                     f"{self._base_url}/api/memory/search",
-                    params=params,
+                    json=body,
                 )
                 if resp.status_code != 200:
                     return ""
@@ -72,21 +81,25 @@ class MemoryManager:
             logger.debug("memory prefetch failed (non-fatal): %s", exc)
             return ""
 
-        items: list[dict] = data.get("results") or data.get("items") or []
-        if not items:
+        hits: list[dict] = data.get("hits") or []
+        if not hits:
             return ""
 
         lines: list[str] = []
         total_chars = 0
-        for item in items:
-            text = item.get("content") or item.get("text") or ""
-            if not text:
+        for hit in hits:
+            if not isinstance(hit, dict):
                 continue
-            chunk = text[:800]
-            if total_chars + len(chunk) > self._max_chars:
+            title = str(hit.get("title") or hit.get("kind") or "memory")
+            summary = str(hit.get("summary") or "")[:800]
+            source = str(hit.get("source") or "memory")
+            line = f"- [{source}] {title}: {summary}".strip()
+            if not summary and not title:
+                continue
+            if total_chars + len(line) > self._max_chars:
                 break
-            lines.append(f"- {chunk}")
-            total_chars += len(chunk)
+            lines.append(line)
+            total_chars += len(line)
 
         if not lines:
             return ""
@@ -94,21 +107,15 @@ class MemoryManager:
         return self.build_context_block("\n".join(lines))
 
     async def sync_turn(self, user_text: str, assistant_text: str) -> None:
-        """Index the completed turn into memory (fire-and-forget)."""
+        """Persist chat turn into long-term memory.
+
+        Episodic chat indexing (dedicated HTTP route) is not implemented yet;
+        document/graph memory is updated through ingest and approval pipelines.
+        """
         if not user_text.strip() and not assistant_text.strip():
             return
-        try:
-            payload = {
-                "user_message": user_text[:2000],
-                "assistant_message": assistant_text[:2000],
-            }
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                await client.post(
-                    f"{self._base_url}/api/memory/index",
-                    json=payload,
-                )
-        except Exception as exc:
-            logger.debug("memory sync_turn failed (non-fatal): %s", exc)
+        # Reserved for future POST /api/memory/chat-turn or embedding queue.
+        return
 
     @staticmethod
     def build_context_block(raw: str) -> str:

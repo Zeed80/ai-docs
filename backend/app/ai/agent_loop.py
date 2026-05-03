@@ -23,17 +23,21 @@ logger = structlog.get_logger()
 
 
 def _get_agent_model(config: BuiltinAgentConfig | None = None) -> str:
-    """Current agent model: built-in config → ai_settings override → gateway default."""
-    if config and config.model:
-        return config.model
+    """Current agent model: ai_settings (UI) → built-in config → gateway default.
+
+    ``/api/ai/config`` ``model_agent`` must win over ``agent_config.json`` / Redis
+    ``model`` so the Settings page and the chat/Telegram agent stay aligned.
+    """
     try:
         from app.api.ai_settings import get_ai_config
 
         override = get_ai_config().get("model_agent")
-        if override:
-            return override
+        if override and str(override).strip():
+            return str(override).strip()
     except Exception:
         pass
+    if config and config.model:
+        return config.model
     return gateway_config.reasoning_model
 
 
@@ -611,6 +615,7 @@ class AgentSession:
             base_url=self._config.backend_url,
             top_k=self._config.memory_top_k,
             max_chars=self._config.memory_max_chars,
+            retrieval_mode=self._config.memory_mode,
         )
 
         self._mcp_initialised = False
