@@ -316,6 +316,18 @@ async def delete_inventory_item(
         raise HTTPException(status_code=404, detail="Item not found")
     item_name = item.name
     item_qty = item.current_qty
+
+    # Delete related stock movements first (FK NOT NULL constraint)
+    await db.execute(sa_delete(StockMovement).where(StockMovement.inventory_item_id == item_id))
+    # Nullify receipt line references to this item
+    from sqlalchemy import update as sa_update
+    await db.execute(
+        sa_update(WarehouseReceiptLine)
+        .where(WarehouseReceiptLine.inventory_item_id == item_id)
+        .values(inventory_item_id=None)
+    )
+    await db.flush()
+
     await db.delete(item)
     await log_action(db, action="warehouse.delete_item", entity_type="inventory_item",
                      entity_id=item_id, details={"name": item_name, "qty_at_delete": item_qty})
