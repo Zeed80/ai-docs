@@ -28,6 +28,7 @@ x-backend-env: &backend-env
   TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
   TELEGRAM_NOTIFICATIONS_CHAT_ID: ${TELEGRAM_NOTIFICATIONS_CHAT_ID:-}
   TELEGRAM_NOTIFICATIONS_ENABLED: ${TELEGRAM_NOTIFICATIONS_ENABLED:-false}
+  AIAGENT_ROOT: /aiagent
 
 x-authentik-env: &authentik-env
   AUTHENTIK_REDIS__HOST: redis
@@ -155,6 +156,8 @@ services:
       dockerfile: Dockerfile
     environment:
       <<: *backend-env
+    volumes:
+      - ../aiagent:/aiagent:ro
     extra_hosts:
       - "host-gateway:host-gateway"
     ports:
@@ -180,6 +183,8 @@ services:
     command: celery -A app.tasks.celery_app worker -l info -c 4 -Q celery,extraction,ingest,scheduler
     environment:
       <<: *backend-env
+    volumes:
+      - ../aiagent:/aiagent:ro
     extra_hosts:
       - "host-gateway:host-gateway"
     depends_on:
@@ -198,6 +203,8 @@ services:
     command: celery -A app.tasks.celery_app beat -l info
     environment:
       <<: *backend-env
+    volumes:
+      - ../aiagent:/aiagent:ro
     depends_on:
       redis:
         condition: service_healthy

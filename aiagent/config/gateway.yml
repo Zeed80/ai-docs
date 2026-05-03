@@ -40,14 +40,31 @@ skills:
   # To hide a skill from chat (but keep it for scenarios): remove it.
   exposed:
     # Documents
+    - doc.ingest
     - doc.list
     - doc.get
+    - doc.search
+    - doc.workspace
     - doc.summarize
     - doc.extract
     - doc.classify
+    - doc.batch_classify
+    - doc.update
+    - doc.delete
+    - doc.bulk_delete
+    - doc.correct_field
+    - doc.link
+    - doc.link_update
+    - doc.link_delete
+    - doc.dependencies
+    - doc.memory_rebuild
+    - doc.batch_memory_rebuild
+    - doc.batch_process
+    - doc.management
     # Invoices
     - invoice.list
     - invoice.get
+    - invoice.extract
     - invoice.approve
     - invoice.reject
     - invoice.validate
@@ -62,6 +79,7 @@ skills:
     - search.nl
     # Graph memory
     - graph.node_create
+    - graph.node_get
     - graph.edge_create
     - graph.neighborhood
     - graph.path
@@ -74,6 +92,9 @@ skills:
     - memory.explain
     - memory.reindex
     - memory.embeddings_rebuild
+    - memory.embeddings_rebuild_active
+    - memory.embeddings_index_active
+    - memory.embeddings_stats
     # Manufacturing technology
     - tech.resource_list
     - tech.resource_create
@@ -106,9 +127,27 @@ skills:
     - email.get_thread
     - email.send
     - email.list_drafts
+    - email.draft
+    - email.read
+    - email.fetch_new
+    - email.risk_check
+    - email.style_match
+    - email.suggest_template
+    - email.templates.list
+    - email.templates.get
+    - email.templates.render
+    - email.templates.create
+    - email.templates.update
+    - email.templates.from_message
+    # Mailboxes
+    - mailbox.list
+    - mailbox.get
+    - mailbox.create
+    - mailbox.update
     # Approvals
     - approval.list_pending
     - approval.status
+    - approval.request
     # Suppliers
     - supplier.list
     - supplier.get
@@ -116,10 +155,13 @@ skills:
     - supplier.price_history
     - supplier.trust_score
     - supplier.alerts
+    - supplier.update
+    - supplier.check_requisites
     # Normalization
     - norm.list_rules
     - norm.suggest_rule
     - norm.activate_rule
+    - norm.apply_rules
     - norm.list_norm_cards
     - norm.create_norm_card
     - norm.update_norm_card
@@ -130,23 +172,55 @@ skills:
     # Tables / export
     - table.query
     - table.export_excel
+    - table.export_1c
+    - table.import_excel
+    - table.apply_diff
+    - table.inline_edit
+    - table.batch_action
+    - table.list_views
+    - table.create_view
+    - table.delete_view
     # Calendar
     - calendar.list_events
     - calendar.upcoming
     - calendar.create_reminder
+    - calendar.create_event
+    - calendar.list_reminders
+    - calendar.extract_dates
     # Dashboard
     - dashboard.today
     # Quarantine
     - quarantine.list
+    # Collections
+    - collection.list
+    - collection.create
+    - collection.add
+    - collection.get
+    - collection.summarize
+    - collection.timeline
+    # Compare (КП)
+    - compare.list
+    - compare.create
+    - compare.get
+    - compare.decide
+    - compare.summary
+    - compare.align
     # Warehouse
     - warehouse.list_inventory
     - warehouse.get_item
     - warehouse.create_item
+    - warehouse.update_item
+    - warehouse.delete_item
     - warehouse.low_stock
+    - warehouse.issue_stock
+    - warehouse.adjust_stock
     - warehouse.create_receipt
     - warehouse.confirm_receipt
+    - warehouse.bulk_confirm
     - warehouse.list_receipts
     - warehouse.get_receipt
+    - warehouse.update_status
+    - warehouse.list_movements
     # Procurement
     - procurement.list_requests
     - procurement.create_request
@@ -156,6 +230,7 @@ skills:
     - procurement.list_contracts
     - procurement.create_contract
     - procurement.get_contract
+    - procurement.update_contract
     # Payments
     - payment.list_schedule
     - payment.create_schedule
@@ -171,6 +246,18 @@ skills:
     - bom.approve
     - bom.stock_check
     - bom.create_purchase_request
+    # NTD (нормативно-техническая документация)
+    - ntd.document_list
+    - ntd.document_create
+    - ntd.check_list
+    - ntd.check_get
+    - ntd.check_availability
+    - ntd.norm_control_run
+    - ntd.finding_decide
+    - ntd.requirement_create
+    - ntd.requirement_search
+    - ntd.clause_create
+    - ntd.control_settings_get
 
   # Approval gates: agent pauses and waits for explicit human confirmation.
   # Editing this list takes effect for the NEXT conversation (hot-reload).
@@ -178,11 +265,14 @@ skills:
     - invoice.approve
     - invoice.reject
     - invoice.bulk_delete
+    - invoice.delete
     - email.send
     - anomaly.resolve
     - norm.activate_rule
+    - norm.apply_rules
     - compare.decide
     - warehouse.confirm_receipt
+    - warehouse.issue_stock
     - payment.mark_paid
     - procurement.send_rfq
     - bom.approve
@@ -190,6 +280,13 @@ skills:
     - tech.process_plan_approve
     - tech.norm_estimate_approve
     - tech.learning_rule_activate
+    - table.apply_diff
+    - table.import_excel
+    - doc.bulk_delete
+    - ntd.norm_control_run
+    - ntd.finding_decide
+    - mailbox.create
+    - mailbox.delete
 
 # ── Scenarios ─────────────────────────────────────────────────────────────────
 # Pipelines that run automatically or on-demand.

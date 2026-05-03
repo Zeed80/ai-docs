@@ -170,6 +170,7 @@ def update_builtin_agent_config(
 
 
 def reset_builtin_agent_config() -> BuiltinAgentConfig:
+    gateway_config.reload()
     config = _default_config()
     save_builtin_agent_config(config)
     return config
