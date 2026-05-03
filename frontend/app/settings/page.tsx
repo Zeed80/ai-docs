@@ -1106,7 +1106,7 @@ export default function SettingsPage() {
                         max={max}
                         step={step}
                         value={
-                          (agentConfig as Record<string, unknown>)[
+                          (agentConfig as unknown as Record<string, unknown>)[
                             key
                           ] as number
                         }
