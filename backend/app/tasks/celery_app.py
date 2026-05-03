@@ -27,6 +27,8 @@ celery_app.conf.update(
         "app.tasks.ingest.*": {"queue": "ingest"},
         "app.tasks.extraction.*": {"queue": "extraction"},
         "app.tasks.scheduler.*": {"queue": "scheduler"},
+        # name= on @celery_app.task in drawing_analysis.py
+        "drawing_analysis.*": {"queue": "extraction"},
     },
 )
 
@@ -54,3 +56,6 @@ celery_app.autodiscover_tasks([
     "app.tasks.email_triage",
     "app.tasks.embedding",
 ])
+
+# Flat module — not discovered by autodiscover_tasks(related_name="tasks").
+from app.tasks import drawing_analysis as _drawing_analysis  # noqa: F401
