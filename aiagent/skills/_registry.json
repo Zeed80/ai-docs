@@ -5528,6 +5528,54 @@
       "approval_required": false
     },
     {
+      "name": "warehouse.update_item",
+      "description": "Skill: warehouse.update_item — Update inventory item fields (name, unit, sku, location, min_qty).",
+      "category": "warehouse",
+      "method": "PATCH",
+      "path": "/api/warehouse/inventory/{item_id}",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.delete_item",
+      "description": "Skill: warehouse.delete_item — Delete inventory item (only allowed when quantity is 0).",
+      "category": "warehouse",
+      "method": "DELETE",
+      "path": "/api/warehouse/inventory/{item_id}",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.issue_stock",
+      "description": "Skill: warehouse.issue_stock — Issue stock from warehouse, reduces inventory quantity (approval gate).",
+      "category": "warehouse",
+      "method": "POST",
+      "path": "/api/warehouse/inventory/{item_id}/issue",
+      "approval_required": true
+    },
+    {
+      "name": "warehouse.adjust_stock",
+      "description": "Skill: warehouse.adjust_stock — Adjust inventory quantity by positive or negative delta with reason.",
+      "category": "warehouse",
+      "method": "POST",
+      "path": "/api/warehouse/inventory/{item_id}/adjust",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.bulk_confirm",
+      "description": "Skill: warehouse.bulk_confirm — Bulk accept multiple pending warehouse receipts at once.",
+      "category": "warehouse",
+      "method": "POST",
+      "path": "/api/warehouse/receipts/bulk-confirm",
+      "approval_required": false
+    },
+    {
+      "name": "warehouse.list_movements",
+      "description": "Skill: warehouse.list_movements — List all stock movements with optional filter by type or item.",
+      "category": "warehouse",
+      "method": "GET",
+      "path": "/api/warehouse/movements",
+      "approval_required": false
+    },
+    {
       "name": "procurement.list_requests",
       "description": "Skill: procurement.list_requests — List purchase requests.",
       "category": "procurement",

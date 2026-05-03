@@ -24,6 +24,8 @@ from app.db.models import (
     Invoice,
     InvoiceLine,
     InvoiceStatus,
+    WarehouseReceipt,
+    WarehouseReceiptLine,
 )
 from app.tasks.celery_app import celery_app
 
@@ -1057,6 +1059,45 @@ def process_approved_document(self, document_id: str) -> dict:
             ))
 
         _set_job_step(job, "sql_records", "done")
+
+        # ── Auto-create pending warehouse receipt ────────────────────────────
+        try:
+            invoice_lines = db.execute(
+                select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id)
+            ).scalars().all()
+            if invoice_lines:
+                from sqlalchemy import func as _func
+                receipt_count = db.execute(
+                    select(_func.count()).select_from(WarehouseReceipt)
+                ).scalar() or 0
+                receipt_number = f"ПО-{receipt_count + 1:04d}"
+                pending_receipt = WarehouseReceipt(
+                    invoice_id=invoice.id,
+                    document_id=doc.id,
+                    supplier_id=invoice.supplier_id,
+                    status="pending",
+                    receipt_number=receipt_number,
+                    received_by="auto",
+                )
+                db.add(pending_receipt)
+                db.flush()
+                for il in invoice_lines:
+                    db.add(WarehouseReceiptLine(
+                        receipt_id=pending_receipt.id,
+                        description=il.description or "",
+                        quantity_expected=il.quantity or 0,
+                        quantity_received=il.quantity or 0,
+                        unit=il.unit or "шт",
+                        invoice_line_id=il.id,
+                    ))
+                logger.info(
+                    "auto_pending_receipt_created",
+                    document_id=document_id,
+                    receipt_number=receipt_number,
+                    lines=len(invoice_lines),
+                )
+        except Exception as e:
+            logger.warning("auto_pending_receipt_failed", document_id=document_id, error=str(e))
 
         # ── SupplierProfile update ───────────────────────────────────────────
         if supplier_party_id:

@@ -34,6 +34,7 @@ interface Receipt {
 }
 
 const STATUS_LABELS: Record<string, string> = {
+  pending: "Ожидание",
   draft: "Черновик",
   expected: "Ожидается",
   partial: "Частично получен",
@@ -44,8 +45,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
+  pending: "bg-blue-500/20 text-blue-300",
   draft: "bg-yellow-500/20 text-yellow-300",
-  expected: "bg-blue-500/20 text-blue-300",
+  expected: "bg-cyan-500/20 text-cyan-300",
   partial: "bg-orange-500/20 text-orange-300",
   received: "bg-green-500/20 text-green-300",
   confirmed: "bg-green-500/20 text-green-300",
@@ -140,7 +142,9 @@ export default function ReceiptDetailPage() {
     );
   }
 
-  const isEditable = ["draft", "expected", "partial"].includes(receipt.status);
+  const isEditable = ["pending", "draft", "expected", "partial"].includes(
+    receipt.status,
+  );
   const isFinal = ["received", "confirmed", "issued", "cancelled"].includes(
     receipt.status,
   );
