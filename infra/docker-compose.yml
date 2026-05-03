@@ -137,8 +137,9 @@ services:
     image: ollama/ollama:latest
     volumes:
       - ollama_data:/root/.ollama
+    # Host 11434 is often already taken by a system Ollama — publish on 11435 instead
     ports:
-      - "11434:11434"
+      - "11435:11434"
     deploy:
       resources:
         reservations:
@@ -183,6 +184,7 @@ services:
     command: celery -A app.tasks.celery_app worker -l info -c 4 -Q celery,extraction,ingest,scheduler
     environment:
       <<: *backend-env
+      SKIP_DB_MIGRATE: "1"
     volumes:
       - ../aiagent:/aiagent:ro
     extra_hosts:
@@ -191,6 +193,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
     networks:
       - app
@@ -203,10 +207,13 @@ services:
     command: celery -A app.tasks.celery_app beat -l info
     environment:
       <<: *backend-env
+      SKIP_DB_MIGRATE: "1"
     volumes:
       - ../aiagent:/aiagent:ro
     depends_on:
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
     networks:
       - app

@@ -22,13 +22,13 @@ def upgrade() -> None:
         "CREATE INDEX IF NOT EXISTS ix_evidence_spans_text_fts_ru "
         "ON evidence_spans USING gin (to_tsvector('russian', coalesce(text, '')))"
     )
-    # knowledge_nodes — title + summary
+    # knowledge_nodes — title + summary (double parens required for expression GIN index)
     op.execute(
         "CREATE INDEX IF NOT EXISTS ix_knowledge_nodes_fts_ru "
-        "ON knowledge_nodes USING gin ("
-        "  to_tsvector('russian', coalesce(title, ''))"
-        "  || to_tsvector('russian', coalesce(summary, ''))"
-        ")"
+        "ON knowledge_nodes USING gin (("
+        "to_tsvector('russian', coalesce(title::text, '')) "
+        "|| to_tsvector('russian', coalesce(summary::text, ''))"
+        "))"
     )
 
 
