@@ -33,6 +33,9 @@ class DocumentIngestResponse(BaseModel):
     quarantined: bool = False
     pipeline_queued: bool = False
     created_at: datetime
+    # Fast type hint returned immediately — before AI classification
+    detected_type: str | None = None
+    detected_type_source: str | None = None  # "extension" | "mime" | "ai" | "manual"
 
     model_config = {"from_attributes": True}
 

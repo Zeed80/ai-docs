@@ -70,6 +70,51 @@ from app.domain.documents import (
 router = APIRouter()
 logger = structlog.get_logger()
 
+# ── Fast type detection (no AI, instant) ─────────────────────────────────────
+
+_EXT_TO_DOC_TYPE: dict[str, str] = {
+    # Technical drawings (unambiguous)
+    ".dwg": "drawing",
+    ".dxf": "drawing",
+    ".svg": "drawing",
+    ".step": "drawing",
+    ".stp": "drawing",
+    ".iges": "drawing",
+    ".igs": "drawing",
+    # Spreadsheet-based financials
+    ".xlsx": "invoice",
+    ".xls": "invoice",
+    # Office documents
+    ".docx": "letter",
+    ".doc": "letter",
+    ".odt": "letter",
+}
+
+_MIME_TO_DOC_TYPE: dict[str, str] = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "invoice",
+    "application/vnd.ms-excel": "invoice",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "letter",
+    "application/msword": "letter",
+}
+
+
+def _quick_detect_doc_type(
+    filename: str, mime_type: str
+) -> tuple[str | None, str | None]:
+    """
+    Return (doc_type, source) based on file extension and MIME type alone.
+    No AI call — instantaneous.
+
+    Returns (None, None) when detection is ambiguous (e.g. PDF, images, CSV).
+    """
+    ext = Path(filename).suffix.lower()
+    if ext in _EXT_TO_DOC_TYPE:
+        return _EXT_TO_DOC_TYPE[ext], "extension"
+    if mime_type in _MIME_TO_DOC_TYPE:
+        return _MIME_TO_DOC_TYPE[mime_type], "mime"
+    return None, None
+
+
 PIPELINE_STEP_DEFINITIONS = [
     ("store", "Файл сохранен"),
     ("memory_seed", "Первичная память"),
@@ -374,6 +419,32 @@ async def ingest_document(
     except Exception as e:
         logger.warning("minio_upload_failed", error=str(e), path=storage_path)
 
+    # Fast type detection: extension → MIME → manual override (in that priority order)
+    mime_type_str = file.content_type or "application/octet-stream"
+    fast_type, fast_source = _quick_detect_doc_type(file.filename or "", mime_type_str)
+
+    # Determine the effective doc_type to persist immediately:
+    # 1. Manual override (user explicitly chose) → highest priority
+    # 2. Requested type without override (user pre-filled from extension) → use it
+    # 3. Fast detection from extension → set without override flag
+    # 4. None → AI will classify later
+    effective_doc_type: str | None = None
+    effective_confidence: float | None = None
+    effective_source: str | None = None
+
+    if requested_doc_type and manual_doc_type_override:
+        effective_doc_type = requested_doc_type
+        effective_confidence = 1.0
+        effective_source = "manual"
+    elif requested_doc_type:
+        effective_doc_type = requested_doc_type
+        effective_confidence = 0.85
+        effective_source = "suggested"
+    elif fast_type:
+        effective_doc_type = fast_type
+        effective_confidence = 0.9
+        effective_source = fast_source
+
     initial_status = DocumentStatus.ingested if is_allowed else DocumentStatus.suspicious
     initial_metadata: dict | None = None
     if (requested_doc_type and manual_doc_type_override) or auto_verify:
@@ -382,17 +453,21 @@ async def ingest_document(
             initial_metadata["manual_doc_type_override"] = manual_doc_type_override
         if auto_verify:
             initial_metadata["auto_verify"] = True
+    if effective_source and not initial_metadata:
+        initial_metadata = {}
+    if effective_source and initial_metadata is not None:
+        initial_metadata["doc_type_source"] = effective_source
 
     doc = Document(
         file_name=file.filename or "unknown",
         file_hash=file_hash,
         file_size=file_size,
-        mime_type=file.content_type or "application/octet-stream",
+        mime_type=mime_type_str,
         storage_path=storage_path,
         source_channel=source_channel,
         status=initial_status,
-        doc_type=requested_doc_type,
-        doc_type_confidence=1.0 if requested_doc_type and manual_doc_type_override else None,
+        doc_type=effective_doc_type,
+        doc_type_confidence=effective_confidence,
         metadata_=initial_metadata,
     )
     db.add(doc)
@@ -555,6 +630,8 @@ async def ingest_document(
         status=doc.status,
         pipeline_queued=pipeline_queued,
         created_at=doc.created_at,
+        detected_type=effective_doc_type,
+        detected_type_source=effective_source,
     )
 
 

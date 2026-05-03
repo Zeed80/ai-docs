@@ -118,6 +118,29 @@ interface UploadResult {
   detail: string;
 }
 
+type PendingFileStatus =
+  | "pending"
+  | "uploading"
+  | "done"
+  | "duplicate"
+  | "quarantined"
+  | "error";
+
+interface PendingFile {
+  id: string;
+  file: File;
+  /** Type guessed from file extension — shown immediately */
+  guessedType: string;
+  /** Type the user confirmed (starts as guessedType, editable) */
+  confirmedType: string;
+  status: PendingFileStatus;
+  /** Actual type returned by backend after upload */
+  detectedType?: string;
+  detectedTypeSource?: string;
+  detail?: string;
+  documentId?: string;
+}
+
 interface SearchDocument {
   id: string;
   file_name: string;
@@ -156,6 +179,35 @@ const DOC_TYPES = [
   { value: "waybill", label: "Накладная" },
   { value: "other", label: "Другое" },
 ];
+
+/** Extension → doc_type mapping (client-side, no AI) */
+const EXT_TYPE_MAP: Record<string, string> = {
+  dwg: "drawing",
+  dxf: "drawing",
+  svg: "drawing",
+  step: "drawing",
+  stp: "drawing",
+  iges: "drawing",
+  igs: "drawing",
+  xlsx: "invoice",
+  xls: "invoice",
+  docx: "letter",
+  doc: "letter",
+  odt: "letter",
+};
+
+function guessDocType(filename: string): string {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  return EXT_TYPE_MAP[ext] ?? "";
+}
+
+const TYPE_SOURCE_LABEL: Record<string, string> = {
+  extension: "расширение",
+  mime: "MIME",
+  suggested: "подсказка",
+  manual: "вручную",
+  ai: "ИИ",
+};
 
 const PIPELINE_STEP_LABELS: Record<string, string> = {
   store: "Файл",
@@ -297,7 +349,7 @@ export default function DocumentsPage() {
   const [uploading, setUploading] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [dependencyQuery, setDependencyQuery] = useState("");
   const [linkType, setLinkType] = useState("related");
   const [targetQuery, setTargetQuery] = useState("");
@@ -407,71 +459,148 @@ export default function DocumentsPage() {
     await loadDependencies(selectedId);
   }
 
-  async function uploadFiles(files: FileList | null) {
+  /** Add files to the upload queue with extension-based type pre-detection. */
+  function addFilesToQueue(files: FileList | File[] | null) {
     if (!files?.length) return;
+    const entries: PendingFile[] = Array.from(files).map((file) => {
+      const guessed = guessDocType(file.name);
+      // If batch type is manually locked, use it; otherwise use per-file guess
+      const confirmed =
+        manualUploadType && uploadDocType ? uploadDocType : guessed;
+      return {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file,
+        guessedType: guessed,
+        confirmedType: confirmed,
+        status: "pending" as PendingFileStatus,
+      };
+    });
+    setPendingFiles((prev) => [...prev, ...entries]);
+    // Switch to upload tab so user sees the queue
+    setTab("upload");
+  }
+
+  function removeFromQueue(id: string) {
+    setPendingFiles((prev) => prev.filter((f) => f.id !== id));
+  }
+
+  function setQueueFileType(id: string, type: string) {
+    setPendingFiles((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, confirmedType: type } : f)),
+    );
+  }
+
+  function clearDoneFromQueue() {
+    setPendingFiles((prev) => prev.filter((f) => f.status === "pending"));
+  }
+
+  async function uploadPendingFiles() {
+    const toUpload = pendingFiles.filter((f) => f.status === "pending");
+    if (!toUpload.length) return;
     setUploading(true);
     setMessage(null);
-    const results: UploadResult[] = [];
     const uploadedIds: string[] = [];
-    for (const file of Array.from(files)) {
+
+    for (const entry of toUpload) {
+      // Mark as uploading
+      setPendingFiles((prev) =>
+        prev.map((f) =>
+          f.id === entry.id ? { ...f, status: "uploading" } : f,
+        ),
+      );
+
+      // Effective type: batch manual override > per-file confirmed type
+      const docType =
+        manualUploadType && uploadDocType ? uploadDocType : entry.confirmedType;
+
       const params = new URLSearchParams({
         source_channel: sourceChannel || "upload",
         auto_process: String(autoProcess),
         auto_verify: String(autoVerify && autoProcess),
-        manual_doc_type_override: String(
-          Boolean(uploadDocType && manualUploadType),
-        ),
+        manual_doc_type_override: String(Boolean(docType && manualUploadType)),
       });
-      if (uploadDocType) params.set("requested_doc_type", uploadDocType);
+      if (docType) params.set("requested_doc_type", docType);
+
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", entry.file);
       const response = await fetch(`${API}/api/documents/ingest?${params}`, {
         method: "POST",
         body: form,
       }).catch(() => null);
+
       if (!response) {
-        results.push({
-          fileName: file.name,
-          status: "failed",
-          detail: "backend недоступен",
-        });
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === entry.id
+              ? { ...f, status: "error", detail: "backend недоступен" }
+              : f,
+          ),
+        );
         continue;
       }
+
       const payload = await response.json().catch(() => ({}));
+
       if (response.status === 202 || payload.quarantined) {
-        results.push({
-          fileName: file.name,
-          status: "quarantined",
-          detail: payload.reason ?? "карантин",
-        });
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === entry.id
+              ? {
+                  ...f,
+                  status: "quarantined",
+                  detail: payload.reason ?? "карантин",
+                }
+              : f,
+          ),
+        );
       } else if (response.ok && payload.is_duplicate) {
-        results.push({
-          fileName: file.name,
-          status: "duplicate",
-          detail: `дубликат ${String(payload.duplicate_of).slice(0, 8)}`,
-        });
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === entry.id
+              ? {
+                  ...f,
+                  status: "duplicate",
+                  detail: `дубликат ${String(payload.duplicate_of).slice(0, 8)}`,
+                }
+              : f,
+          ),
+        );
       } else if (response.ok) {
         if (payload.id) uploadedIds.push(payload.id);
-        results.push({
-          fileName: file.name,
-          status: "uploaded",
-          detail: payload.pipeline_queued ? "пайплайн запущен" : "сохранен",
-        });
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === entry.id
+              ? {
+                  ...f,
+                  status: "done",
+                  detail: payload.pipeline_queued
+                    ? "пайплайн запущен"
+                    : "сохранён",
+                  detectedType: payload.detected_type ?? undefined,
+                  detectedTypeSource: payload.detected_type_source ?? undefined,
+                  documentId: payload.id,
+                }
+              : f,
+          ),
+        );
       } else {
-        results.push({
-          fileName: file.name,
-          status: "failed",
-          detail: payload.detail ?? `HTTP ${response.status}`,
-        });
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === entry.id
+              ? {
+                  ...f,
+                  status: "error",
+                  detail: payload.detail ?? `HTTP ${response.status}`,
+                }
+              : f,
+          ),
+        );
       }
     }
-    setUploadResults(results);
+
     setUploading(false);
-    setMessage(
-      results.some((item) => item.status === "failed")
-        ? "Есть ошибки"
-        : "Готово",
-    );
+    const hasErrors = pendingFiles.some((f) => f.status === "error");
+    setMessage(hasErrors ? "Есть ошибки" : "Готово");
     await loadWorkspace();
     if (uploadedIds.length) {
       setSelectedIds(new Set(uploadedIds));
@@ -599,11 +728,14 @@ export default function DocumentsPage() {
               </span>
             )}
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => {
+                setTab("upload");
+                fileInputRef.current?.click();
+              }}
               disabled={uploading}
               className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
             >
-              {uploading ? "Загрузка" : "Загрузить"}
+              {uploading ? "Загрузка…" : "Добавить файлы"}
             </button>
           </div>
         </div>
@@ -651,14 +783,18 @@ export default function DocumentsPage() {
               autoProcess={autoProcess}
               autoVerify={autoVerify}
               manualUploadType={manualUploadType}
-              uploadResults={uploadResults}
+              pendingFiles={pendingFiles}
               fileInputRef={fileInputRef}
               onDrag={setDragging}
               onUploadDocType={setUploadDocType}
               onAutoProcess={setAutoProcess}
               onAutoVerify={setAutoVerify}
               onManualUploadType={setManualUploadType}
-              onUpload={uploadFiles}
+              onAddFiles={addFilesToQueue}
+              onRemoveFile={removeFromQueue}
+              onSetFileType={setQueueFileType}
+              onUpload={uploadPendingFiles}
+              onClearDone={clearDoneFromQueue}
             />
           )}
 
@@ -849,6 +985,51 @@ function Toolbar({
   );
 }
 
+function typeSourceBadge(source: string | undefined, guessedType: string) {
+  if (!source && !guessedType)
+    return (
+      <span className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-400">
+        авто
+      </span>
+    );
+  if (source === "manual")
+    return (
+      <span className="rounded bg-green-900 px-1.5 py-0.5 text-xs text-green-300">
+        вручную
+      </span>
+    );
+  if (source === "extension" || (!source && guessedType))
+    return (
+      <span className="rounded bg-blue-900 px-1.5 py-0.5 text-xs text-blue-300">
+        ↑ расширение
+      </span>
+    );
+  if (source === "ai")
+    return (
+      <span className="rounded bg-violet-900 px-1.5 py-0.5 text-xs text-violet-300">
+        ИИ
+      </span>
+    );
+  return (
+    <span className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-400">
+      {TYPE_SOURCE_LABEL[source ?? ""] ?? source}
+    </span>
+  );
+}
+
+function pendingFileStatusIcon(status: PendingFileStatus) {
+  if (status === "uploading")
+    return (
+      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />
+    );
+  if (status === "done") return <span className="text-emerald-400">✓</span>;
+  if (status === "error") return <span className="text-red-400">✗</span>;
+  if (status === "quarantined")
+    return <span className="text-amber-400">⚠</span>;
+  if (status === "duplicate") return <span className="text-slate-400">≡</span>;
+  return null;
+}
+
 function UploadPanel({
   dragging,
   uploading,
@@ -856,14 +1037,18 @@ function UploadPanel({
   autoProcess,
   autoVerify,
   manualUploadType,
-  uploadResults,
+  pendingFiles,
   fileInputRef,
   onDrag,
   onUploadDocType,
   onAutoProcess,
   onAutoVerify,
   onManualUploadType,
+  onAddFiles,
+  onRemoveFile,
+  onSetFileType,
   onUpload,
+  onClearDone,
 }: {
   dragging: boolean;
   uploading: boolean;
@@ -871,15 +1056,29 @@ function UploadPanel({
   autoProcess: boolean;
   autoVerify: boolean;
   manualUploadType: boolean;
-  uploadResults: UploadResult[];
+  pendingFiles: PendingFile[];
   fileInputRef: RefObject<HTMLInputElement | null>;
   onDrag: (value: boolean) => void;
   onUploadDocType: (value: string) => void;
   onAutoProcess: (value: boolean) => void;
   onAutoVerify: (value: boolean) => void;
   onManualUploadType: (value: boolean) => void;
-  onUpload: (files: FileList | null) => void;
+  onAddFiles: (files: FileList | File[]) => void;
+  onRemoveFile: (id: string) => void;
+  onSetFileType: (id: string, type: string) => void;
+  onUpload: () => void;
+  onClearDone: () => void;
 }) {
+  const pendingCount = pendingFiles.filter(
+    (f) => f.status === "pending",
+  ).length;
+  const doneCount = pendingFiles.filter(
+    (f) =>
+      f.status === "done" ||
+      f.status === "duplicate" ||
+      f.status === "quarantined",
+  ).length;
+
   return (
     <section className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
       <input
@@ -888,49 +1087,213 @@ function UploadPanel({
         multiple
         accept=".pdf,.dwg,.dxf,.svg,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp,.gif,.docx,.xlsx,.xls,.csv,.json,.xml,.txt,.step,.stp,.iges,.igs"
         className="hidden"
-        onChange={(event) => onUpload(event.target.files)}
+        onChange={(event) => {
+          if (event.target.files) onAddFiles(event.target.files);
+          // Reset so same file can be re-selected
+          event.target.value = "";
+        }}
       />
-      <div
-        onDragOver={(event) => {
-          event.preventDefault();
-          onDrag(true);
-        }}
-        onDragLeave={() => onDrag(false)}
-        onDrop={(event) => {
-          event.preventDefault();
-          onDrag(false);
-          onUpload(event.dataTransfer.files);
-        }}
-        onClick={() => fileInputRef.current?.click()}
-        className={`flex min-h-[340px] cursor-pointer flex-col items-center justify-center rounded-md border border-dashed px-6 text-center transition ${
-          dragging
-            ? "border-blue-400 bg-blue-950/40"
-            : "border-slate-700 bg-slate-900 hover:border-slate-500"
-        }`}
-      >
-        <div className="text-lg font-semibold">
-          {uploading
-            ? "Файлы загружаются"
-            : "Выберите или перетащите документы"}
+
+      <div className="flex flex-col gap-3">
+        {/* Drop zone — compact when files are queued */}
+        <div
+          onDragOver={(event) => {
+            event.preventDefault();
+            onDrag(true);
+          }}
+          onDragLeave={() => onDrag(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            onDrag(false);
+            onAddFiles(event.dataTransfer.files);
+          }}
+          onClick={() => fileInputRef.current?.click()}
+          className={`flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed px-6 text-center transition ${
+            pendingFiles.length > 0
+              ? "min-h-[80px] py-4"
+              : "min-h-[260px] py-10"
+          } ${
+            dragging
+              ? "border-blue-400 bg-blue-950/40"
+              : "border-slate-700 bg-slate-900 hover:border-slate-500"
+          }`}
+        >
+          <div className="text-sm font-semibold text-slate-300">
+            {uploading ? "Идёт загрузка…" : "Перетащите или выберите файлы"}
+          </div>
+          {pendingFiles.length === 0 && (
+            <div className="mt-1.5 max-w-lg text-xs text-slate-500">
+              PDF, DWG, DXF, SVG, PNG/JPG, DOCX, XLSX, TXT, STEP, XML, CSV
+              <br />
+              <span className="text-blue-500">
+                DWG/DXF → автоматически запускается анализ чертежа
+              </span>
+            </div>
+          )}
         </div>
-        <div className="mt-2 max-w-xl text-sm text-slate-400">
-          PDF, DWG, DXF, SVG, изображения, DOCX, XLSX, TXT, STEP/STP, XML, CSV,
-          JSON
-          <br />
-          <span className="text-xs text-blue-400">
-            DWG/DXF → автоматически запускается анализ чертежа
-          </span>
-        </div>
-        {uploading && (
-          <div className="mt-6 h-2 w-full max-w-md overflow-hidden rounded-full bg-slate-800">
-            <div className="h-full w-2/3 animate-pulse rounded-full bg-blue-500" />
+
+        {/* File queue */}
+        {pendingFiles.length > 0 && (
+          <div className="overflow-hidden rounded-md border border-slate-800">
+            <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-3 py-2">
+              <span className="text-xs text-slate-400">
+                Очередь: {pendingCount} ожидает
+                {doneCount > 0 && `, ${doneCount} загружено`}
+              </span>
+              {doneCount > 0 && (
+                <button
+                  onClick={onClearDone}
+                  className="text-xs text-slate-500 hover:text-slate-300"
+                >
+                  Очистить загруженные
+                </button>
+              )}
+            </div>
+            <div className="max-h-[340px] divide-y divide-slate-800 overflow-y-auto">
+              {pendingFiles.map((pf) => {
+                const typeLabel =
+                  DOC_TYPES.find((t) => t.value === pf.confirmedType)?.label ??
+                  "Авто";
+                const detectedLabel = pf.detectedType
+                  ? (DOC_TYPES.find((t) => t.value === pf.detectedType)
+                      ?.label ?? pf.detectedType)
+                  : null;
+
+                return (
+                  <div
+                    key={pf.id}
+                    className="flex items-start gap-2 px-3 py-2.5"
+                  >
+                    {/* Status icon */}
+                    <div className="mt-0.5 w-4 shrink-0 text-center text-sm">
+                      {pendingFileStatusIcon(pf.status)}
+                    </div>
+
+                    {/* File info */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="truncate text-xs font-medium text-slate-200">
+                          {pf.file.name}
+                        </span>
+                        <span className="shrink-0 text-xs text-slate-600">
+                          {fmtBytes(pf.file.size)}
+                        </span>
+                      </div>
+
+                      {/* Type row */}
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {pf.status === "pending" ||
+                        pf.status === "uploading" ? (
+                          <>
+                            {/* Editable type selector */}
+                            <select
+                              value={pf.confirmedType}
+                              disabled={
+                                pf.status === "uploading" ||
+                                (manualUploadType && !!uploadDocType)
+                              }
+                              onChange={(e) =>
+                                onSetFileType(pf.id, e.target.value)
+                              }
+                              className="rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-xs text-slate-200 disabled:opacity-50"
+                            >
+                              {DOC_TYPES.map((t) => (
+                                <option key={t.value} value={t.value}>
+                                  {t.label}
+                                </option>
+                              ))}
+                            </select>
+                            {/* Source badge — shown only when guessed from extension */}
+                            {pf.guessedType &&
+                              pf.guessedType === pf.confirmedType &&
+                              typeSourceBadge("extension", pf.guessedType)}
+                          </>
+                        ) : (
+                          <>
+                            {/* After upload: show confirmed + detected */}
+                            <span className="text-xs text-slate-400">
+                              {typeLabel}
+                            </span>
+                            {detectedLabel && detectedLabel !== typeLabel && (
+                              <>
+                                <span className="text-xs text-slate-600">
+                                  →
+                                </span>
+                                <span className="text-xs text-emerald-400">
+                                  {detectedLabel}
+                                </span>
+                                {typeSourceBadge(
+                                  pf.detectedTypeSource,
+                                  pf.detectedType ?? "",
+                                )}
+                              </>
+                            )}
+                            {detectedLabel &&
+                              detectedLabel === typeLabel &&
+                              typeSourceBadge(
+                                pf.detectedTypeSource,
+                                pf.detectedType ?? "",
+                              )}
+                          </>
+                        )}
+                      </div>
+
+                      {/* Result detail */}
+                      {pf.detail && (
+                        <div
+                          className={`mt-0.5 text-xs ${
+                            pf.status === "error"
+                              ? "text-red-400"
+                              : pf.status === "quarantined"
+                                ? "text-amber-400"
+                                : pf.status === "duplicate"
+                                  ? "text-slate-500"
+                                  : "text-emerald-400"
+                          }`}
+                        >
+                          {pf.detail}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Remove button (only for pending) */}
+                    {pf.status === "pending" && (
+                      <button
+                        onClick={() => onRemoveFile(pf.id)}
+                        className="ml-1 shrink-0 text-slate-600 hover:text-red-400"
+                        title="Убрать из очереди"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Upload button */}
+            {pendingCount > 0 && (
+              <div className="border-t border-slate-800 bg-slate-950 px-3 py-2">
+                <button
+                  onClick={onUpload}
+                  disabled={uploading}
+                  className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                >
+                  {uploading
+                    ? "Загружается…"
+                    : `Загрузить ${pendingCount} ${pendingCount === 1 ? "файл" : pendingCount < 5 ? "файла" : "файлов"}`}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {/* Settings panel */}
       <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
         <h2 className="text-sm font-semibold">Параметры партии</h2>
         <label className="mt-4 block text-xs text-slate-400">
-          Тип документа
+          Тип документа (для всей партии)
           <select
             value={uploadDocType}
             onChange={(event) => onUploadDocType(event.target.value)}
@@ -943,6 +1306,12 @@ function UploadPanel({
             ))}
           </select>
         </label>
+        {uploadDocType && (
+          <p className="mt-1 text-xs text-slate-500">
+            Тип применяется ко всей партии. Для каждого файла можно задать свой
+            тип в очереди выше.
+          </p>
+        )}
         <label className="mt-4 flex items-center gap-2 text-sm text-slate-300">
           <input
             type="checkbox"
@@ -951,7 +1320,12 @@ function UploadPanel({
             onChange={(event) => onManualUploadType(event.target.checked)}
             suppressHydrationWarning
           />
-          Закрепить выбранный тип
+          <span>
+            Закрепить тип (игнорировать авто)
+            <span className="block text-xs text-slate-500 mt-0.5">
+              Если включено — тип партии перекрывает авто-определение по файлу
+            </span>
+          </span>
         </label>
         <label className="mt-3 flex items-center gap-2 text-sm text-slate-300">
           <input
@@ -963,7 +1337,9 @@ function UploadPanel({
           Запускать полный пайплайн
         </label>
         <label
-          className={`mt-3 flex items-start gap-2 text-sm ${autoProcess ? "text-slate-300" : "text-slate-600 cursor-not-allowed"}`}
+          className={`mt-3 flex items-start gap-2 text-sm ${
+            autoProcess ? "text-slate-300" : "cursor-not-allowed text-slate-600"
+          }`}
         >
           <input
             type="checkbox"
@@ -975,37 +1351,28 @@ function UploadPanel({
           />
           <span>
             Автоматически проверять и утверждать
-            <span className="block text-xs text-slate-500 mt-0.5">
+            <span className="mt-0.5 block text-xs text-slate-500">
               Повторное извлечение проверочными моделями, утверждение при 95%+
               консенсусе
             </span>
           </span>
         </label>
-        <div className="mt-5 divide-y divide-slate-800">
-          {uploadResults.slice(0, 8).map((item) => (
-            <div
-              key={`${item.fileName}-${item.status}`}
-              className="py-2 text-sm"
-            >
-              <div className="truncate text-slate-200">{item.fileName}</div>
-              <div
-                className={
-                  item.status === "failed"
-                    ? "text-red-300"
-                    : item.status === "quarantined"
-                      ? "text-amber-300"
-                      : "text-emerald-300"
-                }
-              >
-                {item.detail}
-              </div>
-            </div>
-          ))}
-          {!uploadResults.length && (
-            <div className="py-8 text-sm text-slate-500">
-              Нет загруженных файлов
-            </div>
-          )}
+
+        {/* Legend */}
+        <div className="mt-5 border-t border-slate-800 pt-4">
+          <p className="text-xs font-medium text-slate-400">Источник типа</p>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {typeSourceBadge("extension", "drawing")}
+            <span className="text-xs text-slate-500">
+              — определён по расширению файла
+            </span>
+            {typeSourceBadge("ai", "")}
+            <span className="text-xs text-slate-500">
+              — определён ИИ после анализа
+            </span>
+            {typeSourceBadge("manual", "")}
+            <span className="text-xs text-slate-500">— задан вручную</span>
+          </div>
         </div>
       </div>
     </section>
