@@ -89,6 +89,10 @@ export default function SuppliersPage() {
   const [forceCreate, setForceCreate] = useState(false);
   const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deletingBulk, setDeletingBulk] = useState(false);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+
   const loadSuppliers = useCallback(async (q: string) => {
     setLoading(true);
     try {
@@ -197,23 +201,70 @@ export default function SuppliersPage() {
     }
   }
 
+  async function handleBulkDeleteSuppliers() {
+    if (!selectedIds.size) return;
+    setDeletingBulk(true);
+    try {
+      await fetch(`${API}/api/suppliers/bulk-delete`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          supplier_ids: Array.from(selectedIds),
+          confirm: true,
+        }),
+      });
+      setSelectedIds(new Set());
+      setConfirmBulkDelete(false);
+      await loadSuppliers(search);
+    } finally {
+      setDeletingBulk(false);
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-slate-100">Поставщики</h1>
-        <button
-          onClick={() => {
-            setShowCreate(true);
-            setForm({ ...EMPTY_FORM });
-            setDuplicates([]);
-            setDupChecked(false);
-            setCreateError("");
-            setForceCreate(false);
-          }}
-          className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
-        >
-          + Добавить
-        </button>
+        <div className="flex items-center gap-2">
+          {suppliers.length > 0 && (
+            <button
+              onClick={() => {
+                if (selectedIds.size === suppliers.length) {
+                  setSelectedIds(new Set());
+                } else {
+                  setSelectedIds(new Set(suppliers.map((s) => s.id)));
+                }
+              }}
+              className="px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 rounded transition-colors"
+            >
+              {selectedIds.size === suppliers.length
+                ? "Снять всё"
+                : "Выбрать всё"}
+            </button>
+          )}
+          <button
+            onClick={() => {
+              setShowCreate(true);
+              setForm({ ...EMPTY_FORM });
+              setDuplicates([]);
+              setDupChecked(false);
+              setCreateError("");
+              setForceCreate(false);
+            }}
+            className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+          >
+            + Добавить
+          </button>
+        </div>
       </div>
 
       <input
@@ -223,6 +274,48 @@ export default function SuppliersPage() {
         onChange={(e) => setSearch(e.target.value)}
         className="w-full px-4 py-2 mb-4 bg-slate-800 border border-slate-600 text-slate-200 placeholder-slate-500 rounded-lg outline-none focus:border-blue-400"
       />
+
+      {/* Bulk delete bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 mb-3 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2">
+          <span className="text-sm text-slate-300">
+            Выбрано: <strong className="text-white">{selectedIds.size}</strong>
+          </span>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-xs text-slate-400 hover:text-white px-2 transition-colors"
+          >
+            Снять
+          </button>
+          {confirmBulkDelete ? (
+            <>
+              <span className="text-red-400 text-sm">
+                Удалить {selectedIds.size} поставщиков? Это необратимо.
+              </span>
+              <button
+                onClick={handleBulkDeleteSuppliers}
+                disabled={deletingBulk}
+                className="px-3 py-1 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded text-sm"
+              >
+                {deletingBulk ? "Удаление..." : "Да, удалить"}
+              </button>
+              <button
+                onClick={() => setConfirmBulkDelete(false)}
+                className="px-3 py-1 bg-slate-600 text-white rounded text-sm"
+              >
+                Отмена
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setConfirmBulkDelete(true)}
+              className="ml-auto px-3 py-1 bg-red-700/60 hover:bg-red-700 text-white rounded text-sm"
+            >
+              Удалить выбранных
+            </button>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="text-slate-400 py-8 text-center text-sm">
@@ -237,20 +330,55 @@ export default function SuppliersPage() {
           <table className="w-full text-sm">
             <thead className="bg-slate-700/50 text-slate-400 text-xs uppercase">
               <tr>
+                <th className="w-8 px-3 py-2" />
                 <th className="text-left px-4 py-2">Название</th>
                 <th className="text-left px-4 py-2">ИНН</th>
                 <th className="text-left px-4 py-2">Email</th>
                 <th className="text-left px-4 py-2">Телефон</th>
                 <th className="text-center px-4 py-2">Рейтинг</th>
+                <th className="text-center px-4 py-2">Инструменты</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700">
               {suppliers.map((s) => (
                 <tr
                   key={s.id}
-                  className="cursor-pointer hover:bg-slate-700/50 transition-colors"
+                  className={`group cursor-pointer transition-colors ${selectedIds.has(s.id) ? "bg-blue-900/20" : "hover:bg-slate-700/50"}`}
                   onClick={() => router.push(`/suppliers/${s.id}`)}
                 >
+                  <td
+                    className="px-3 py-2.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() => toggleSelect(s.id)}
+                      className="w-4 h-4 rounded border flex items-center justify-center transition-colors"
+                      style={{
+                        background: selectedIds.has(s.id)
+                          ? "rgb(37 99 235)"
+                          : "rgba(51,65,85,0.8)",
+                        borderColor: selectedIds.has(s.id)
+                          ? "rgb(37 99 235)"
+                          : "rgba(100,116,139,0.5)",
+                      }}
+                    >
+                      {selectedIds.has(s.id) && (
+                        <svg
+                          className="w-2.5 h-2.5 text-white"
+                          fill="none"
+                          viewBox="0 0 10 10"
+                        >
+                          <path
+                            d="M1.5 5l2.5 2.5 4.5-4.5"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      )}
+                    </button>
+                  </td>
                   <td className="px-4 py-2.5 font-medium text-slate-100">
                     {s.name}
                   </td>
@@ -269,6 +397,18 @@ export default function SuppliersPage() {
                     ) : (
                       <span className="text-slate-600 text-xs">—</span>
                     )}
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/suppliers/${s.id}?tab=catalog`);
+                      }}
+                      className="text-xs px-2 py-1 rounded border border-slate-600 text-slate-400 hover:text-blue-400 hover:border-blue-500/50 transition-colors"
+                      title="Каталог инструментов"
+                    >
+                      Каталог
+                    </button>
                   </td>
                 </tr>
               ))}

@@ -38,6 +38,7 @@ _DEFAULT_CONFIG = {
     "model_agent": "qwen3.5:9b",
     "model_ocr": settings.ollama_model_ocr,
     "model_reasoning": settings.ollama_model_reasoning,
+    "model_vlm": settings.ollama_model_vlm,
     "embedding_model": "qwen3_embedding_8b_ollama",
     "reranker_model": "local_reranker_ollama",
     "verify_model_1": settings.ollama_model_ocr,
@@ -201,7 +202,7 @@ async def get_config_status() -> dict:
     except Exception as exc:
         warnings.append(f"Ollama unavailable: {exc}")
 
-    for key in ("model_agent", "model_ocr", "model_reasoning"):
+    for key in ("model_agent", "model_ocr", "model_reasoning", "model_vlm"):
         model_name = cfg.get(key)
         if model_name and installed_models and model_name not in installed_model_aliases:
             warnings.append(f"{key} points to a missing Ollama model: {model_name}")
@@ -240,6 +241,7 @@ class ConfigUpdate(BaseModel):
     model_agent: str | None = None
     model_ocr: str | None = None
     model_reasoning: str | None = None
+    model_vlm: str | None = None
     embedding_model: str | None = None
     reranker_model: str | None = None
     verify_model_1: str | None = None

@@ -3995,3 +3995,389 @@ tools:
   method: POST
   path: /api/email-templates/{template_id}/render
   approval_required: false
+# ── Drawing Intelligence (Epic 7) ────────────────────────────────────────────
+- name: drawing.upload_via_document
+  description: >-
+    Skill: drawing.upload_via_document — Upload a DWG or DXF file through the documents
+    ingest endpoint. The file is stored, a Drawing record is automatically created and linked
+    to the Document, and drawing analysis (DWG→DXF conversion + full entity extraction + VLM)
+    is queued. Supported formats: .dwg, .dxf, .svg.
+    DWG is converted via dwg2dxf (libredwg) covering all entity types:
+    CIRCLE, LINE, ARC, LWPOLYLINE, POLYLINE, SPLINE, ELLIPSE, HATCH, INSERT (block expansion),
+    TEXT, MTEXT, DIMENSION (all subtypes), LEADER, MULTILEADER, TOLERANCE (GD&T frames), ATTRIB.
+    If libredwg is unavailable, falls back to ezdxf odafc (ODA File Converter).
+  category: drawings
+  method: POST
+  path: /api/documents/ingest
+  approval_required: false
+- name: drawing.upload
+  description: 'Skill: drawing.upload — Upload a technical drawing file (DXF, DWG, PDF, STEP)
+    and enqueue AI analysis. Returns drawing_id and celery task_id.'
+  category: drawings
+  method: POST
+  path: /api/drawings
+  approval_required: false
+  parameters:
+    properties:
+      file:
+        type: string
+        format: binary
+        title: Drawing file (DXF/DWG/PDF/STEP)
+      document_id:
+        anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        title: Linked document ID
+      drawing_number:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Drawing number/designation
+    title: DrawingUpload
+    type: object
+- name: drawing.list
+  description: 'Skill: drawing.list — List all drawings with optional status/number filter.'
+  category: drawings
+  method: GET
+  path: /api/drawings
+  approval_required: false
+- name: drawing.get
+  description: 'Skill: drawing.get — Get a drawing with all extracted features, dimensions,
+    surface roughness, GD&T and tool bindings.'
+  category: drawings
+  method: GET
+  path: /api/drawings/{drawing_id}
+  approval_required: false
+- name: drawing.get_features
+  description: 'Skill: drawing.get_features — Get all manufacturing features of a drawing
+    (holes, pockets, surfaces, threads, etc.) with dimensions and tolerances.'
+  category: drawings
+  method: GET
+  path: /api/drawings/{drawing_id}/features
+  approval_required: false
+- name: drawing.update_feature
+  description: 'Skill: drawing.update_feature — Update name, type or metadata of a drawing
+    feature after AI extraction.'
+  category: drawings
+  method: PATCH
+  path: /api/drawings/{drawing_id}/features/{feature_id}
+  approval_required: false
+  parameters:
+    properties:
+      feature_type:
+        anyOf:
+          - type: string
+            enum: [hole, pocket, surface, boss, groove, thread, chamfer, radius, slot, contour, other]
+          - type: 'null'
+        title: Feature type
+      name:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Feature name
+      description:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Description
+    title: DrawingFeatureUpdate
+    type: object
+- name: drawing.update_contours
+  description: 'Skill: drawing.update_contours — Replace contour primitives for a feature
+    (circle, arc, rectangle, polyline, line) after manual editing.'
+  category: drawings
+  method: PUT
+  path: /api/drawings/{drawing_id}/features/{feature_id}/contours
+  approval_required: false
+- name: drawing.link_tool
+  description: 'Skill: drawing.link_tool — Bind a manufacturing tool to a drawing feature.
+    Requires approval gate before sending to production.'
+  category: drawings
+  method: POST
+  path: /api/drawings/{drawing_id}/features/{feature_id}/tool
+  approval_required: true
+  parameters:
+    properties:
+      tool_source:
+        type: string
+        enum: [warehouse, catalog, manual]
+        title: Tool source
+      warehouse_item_id:
+        anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        title: Warehouse item ID
+      catalog_entry_id:
+        anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        title: Catalog entry ID
+      manual_description:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Manual tool description
+      cutting_parameters:
+        anyOf:
+          - type: object
+          - type: 'null'
+        title: Cutting parameters (rpm, feed_rate, etc.)
+      notes:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Notes
+    required:
+      - tool_source
+    title: FeatureToolBindingCreate
+    type: object
+- name: drawing.reanalyze
+  description: 'Skill: drawing.reanalyze — Re-run AI analysis for a drawing. Use when
+    initial extraction quality was low or user corrected data.'
+  category: drawings
+  method: POST
+  path: /api/drawings/{drawing_id}/reanalyze
+  approval_required: false
+- name: drawing.delete_feature
+  description: 'Skill: drawing.delete_feature — Delete an incorrectly extracted feature.'
+  category: drawings
+  method: DELETE
+  path: /api/drawings/{drawing_id}/features/{feature_id}
+  approval_required: false
+- name: drawing.delete
+  description: 'Skill: drawing.delete — Delete a drawing and all its features, Qdrant vectors, graph nodes, and MinIO files.'
+  category: drawings
+  method: DELETE
+  path: /api/drawings/{drawing_id}
+  approval_required: false
+- name: drawing.bulk_delete
+  description: 'Skill: drawing.bulk_delete — Bulk delete multiple drawings with full cascade cleanup (SQL, Qdrant, graph, files). Requires confirmation.'
+  category: drawings
+  method: DELETE
+  path: /api/drawings/bulk-delete
+  approval_required: true
+  parameters:
+    properties:
+      drawing_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 500
+        minItems: 1
+        title: Drawing Ids
+        type: array
+      delete_files:
+        default: true
+        title: Delete Files
+        type: boolean
+    required:
+    - drawing_ids
+    title: DrawingBulkDeleteRequest
+    type: object
+# ── Tool Catalog ──────────────────────────────────────────────────────────────
+- name: tool_catalog.search
+  description: 'Skill: tool_catalog.search — Search tool catalog by parameters (type,
+    diameter, material) with semantic AI matching. Returns ranked tool list.'
+  category: tool_catalog
+  method: GET
+  path: /api/tool-catalog/search
+  approval_required: false
+  parameters:
+    properties:
+      query:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Free-text search query
+      tool_type:
+        anyOf:
+          - type: string
+            enum: [drill, endmill, insert, holder, tap, reamer, boring_bar, thread_mill, grinder, turning_tool, milling_cutter, countersink, counterbore, other]
+          - type: 'null'
+        title: Tool type filter
+      diameter_min:
+        anyOf:
+          - type: number
+          - type: 'null'
+        title: Minimum diameter mm
+      diameter_max:
+        anyOf:
+          - type: number
+          - type: 'null'
+        title: Maximum diameter mm
+      material:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Tool material (HSS, Carbide, etc.)
+      semantic:
+        type: boolean
+        default: true
+        title: Use semantic/vector search
+      page_size:
+        type: integer
+        default: 20
+    title: ToolCatalogSearch
+    type: object
+- name: tool_catalog.suggest
+  description: 'Skill: tool_catalog.suggest — AI-powered tool suggestion for a specific
+    drawing feature. Considers feature type, dimensions, roughness requirements and material.'
+  category: tool_catalog
+  method: GET
+  path: /api/tool-catalog/suggest/{feature_id}
+  approval_required: false
+- name: tool_catalog.import
+  description: 'Skill: tool_catalog.import — Import supplier tool catalog from PDF, Excel,
+    CSV or JSON file. Triggers async ingestion task.'
+  category: tool_catalog
+  method: POST
+  path: /api/tool-catalog/suppliers/{supplier_id}/catalog
+  approval_required: false
+# ── Supplier Catalog ──────────────────────────────────────────────────────────
+- name: supplier_catalog.create
+  description: 'Skill: supplier_catalog.create — Create a new tool supplier record.'
+  category: supplier_catalog
+  method: POST
+  path: /api/tool-catalog/suppliers
+  approval_required: false
+  parameters:
+    properties:
+      name:
+        type: string
+        title: Supplier name
+        minLength: 1
+      website:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Supplier website URL
+      country:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Country
+      catalog_format:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Catalog format (pdf, excel, csv, etc.)
+      notes:
+        anyOf:
+          - type: string
+          - type: 'null'
+        title: Notes
+    required:
+      - name
+    title: ToolSupplierCreate
+    type: object
+- name: supplier_catalog.list
+  description: 'Skill: supplier_catalog.list — List all tool suppliers with their catalog status.'
+  category: supplier_catalog
+  method: GET
+  path: /api/tool-catalog/suppliers
+  approval_required: false
+- name: supplier_catalog.get_entries
+  description: 'Skill: supplier_catalog.get_entries — List all tool catalog entries for
+    a specific supplier, filterable by tool type.'
+  category: supplier_catalog
+  method: GET
+  path: /api/tool-catalog/suppliers/{supplier_id}/entries
+  approval_required: false
+# ── Delete & Catalog Update skills ────────────────────────────────────────────
+- name: email.delete_message
+  description: 'Skill: email.delete_message — Delete a single email message.'
+  category: email
+  method: DELETE
+  path: /api/email/messages/{message_id}
+  approval_required: false
+- name: email.delete_thread
+  description: 'Skill: email.delete_thread — Delete an entire email thread with all its messages.'
+  category: email
+  method: DELETE
+  path: /api/email/threads/{thread_id}
+  approval_required: false
+- name: email.bulk_delete
+  description: 'Skill: email.bulk_delete — Bulk delete email messages by IDs list.'
+  category: email
+  method: DELETE
+  path: /api/email/messages/bulk-delete
+  approval_required: false
+  parameters:
+    properties:
+      message_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 500
+        minItems: 1
+        title: Message Ids
+        type: array
+    required:
+    - message_ids
+    title: EmailBulkDeleteRequest
+    type: object
+- name: tool_catalog.delete_entry
+  description: 'Skill: tool_catalog.delete_entry — Delete a single tool catalog entry with Qdrant and graph cleanup.'
+  category: tool_catalog
+  method: DELETE
+  path: /api/tool-catalog/entries/{entry_id}
+  approval_required: false
+- name: tool_catalog.bulk_delete
+  description: 'Skill: tool_catalog.bulk_delete — Bulk delete tool catalog entries with full cleanup.'
+  category: tool_catalog
+  method: DELETE
+  path: /api/tool-catalog/entries/bulk-delete
+  approval_required: false
+  parameters:
+    properties:
+      entry_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 1000
+        minItems: 1
+        title: Entry Ids
+        type: array
+    required:
+    - entry_ids
+    title: CatalogBulkDeleteRequest
+    type: object
+- name: tool_catalog.refresh
+  description: 'Skill: tool_catalog.refresh — Re-ingest the last uploaded catalog file for a tool supplier from MinIO storage.'
+  category: tool_catalog
+  method: POST
+  path: /api/tool-catalog/suppliers/{supplier_id}/refresh
+  approval_required: false
+- name: supplier.delete
+  description: 'Skill: supplier.delete — Delete a supplier/party and all associated data (tool catalogs, catalog entries, Qdrant vectors, graph nodes). Email threads are preserved with party reference nullified. Requires ?confirm=true.'
+  category: suppliers
+  method: DELETE
+  path: /api/suppliers/{supplier_id}
+  approval_required: true
+- name: supplier.bulk_delete
+  description: 'Skill: supplier.bulk_delete — Bulk delete multiple suppliers with full cascade cleanup. Requires confirm=true in body.'
+  category: suppliers
+  method: DELETE
+  path: /api/suppliers/bulk-delete
+  approval_required: true
+  parameters:
+    properties:
+      supplier_ids:
+        items:
+          format: uuid
+          type: string
+        maxItems: 200
+        minItems: 1
+        title: Supplier Ids
+        type: array
+      confirm:
+        default: false
+        title: Confirm
+        type: boolean
+    required:
+    - supplier_ids
+    title: SupplierBulkDeleteRequest
+    type: object

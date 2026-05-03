@@ -22,7 +22,9 @@
     "payments": "Платежи",
     "normalization": "Нормирование",
     "ntd": "НТД",
-    "boms": "Спецификации"
+    "boms": "Спецификации",
+    "drawings": "Чертежи",
+    "catalogs": "Каталоги"
   },
   "inbox": {
     "title": "Входящие",
@@ -114,6 +116,210 @@
     "placeholder": "Спросите Свету...",
     "sveta": "Света",
     "unavailable": "Автоматические функции временно недоступны"
+  },
+  "drawings": {
+    "title": "Чертежи",
+    "upload": "Загрузить чертёж",
+    "upload_hint": "Перетащите DXF, DWG или PDF сюда",
+    "uploading": "Загрузка...",
+    "analyzing": "Анализирует ИИ...",
+    "reanalyze": "Переанализировать",
+    "reanalyzing": "Запускаю анализ...",
+    "empty": "Нет загруженных чертежей",
+    "search_placeholder": "Поиск по чертежам...",
+    "status": {
+      "pending": "Ожидает",
+      "analyzing": "Анализируется",
+      "analyzed": "Проанализирован",
+      "error": "Ошибка",
+      "needs_review": "На проверку"
+    },
+    "feature_types": {
+      "hole": "Отверстие",
+      "pocket": "Карман",
+      "surface": "Поверхность",
+      "boss": "Бобышка",
+      "groove": "Канавка",
+      "thread": "Резьба",
+      "chamfer": "Фаска",
+      "radius": "Радиус",
+      "slot": "Паз",
+      "other": "Другое"
+    },
+    "features": {
+      "title": "Конструктивные элементы",
+      "empty": "Нет распознанных элементов",
+      "add": "Добавить элемент",
+      "edit": "Редактировать",
+      "delete": "Удалить",
+      "delete_confirm": "Удалить элемент?",
+      "mark_reviewed": "Отметить как проверенный",
+      "reviewed": "Проверен",
+      "confidence": "Уверенность ИИ",
+      "ai_raw": "Сырые данные ИИ",
+      "count_in_group": "{count} элементов"
+    },
+    "dimensions": {
+      "title": "Размеры",
+      "nominal": "Номинал",
+      "upper_tol": "Верхний допуск",
+      "lower_tol": "Нижний допуск",
+      "unit": "Единица",
+      "label": "Обозначение",
+      "types": {
+        "linear": "Линейный",
+        "angular": "Угловой",
+        "diameter": "Диаметр",
+        "radius": "Радиус"
+      }
+    },
+    "surfaces": {
+      "title": "Шероховатость",
+      "value": "Значение",
+      "direction": "Направление",
+      "types": {
+        "Ra": "Ra",
+        "Rz": "Rz",
+        "Rmax": "Rmax"
+      }
+    },
+    "gdt": {
+      "title": "Допуски формы и расположения",
+      "symbol": "Символ",
+      "tolerance": "Допуск",
+      "datum": "База"
+    },
+    "contours": {
+      "title": "Контур",
+      "edit_mode": "Режим редактирования",
+      "exit_edit": "Выйти из редактирования",
+      "save_contours": "Сохранить контуры",
+      "saving": "Сохранение...",
+      "saved": "Контуры сохранены",
+      "primitives": {
+        "circle": "Окружность",
+        "arc": "Дуга",
+        "rectangle": "Прямоугольник",
+        "polyline": "Полилиния",
+        "line": "Линия"
+      },
+      "line_types": {
+        "solid": "Сплошная",
+        "dashed": "Штриховая",
+        "dotted": "Пунктирная",
+        "center": "Осевая"
+      },
+      "snap_to_grid": "Привязка к сетке",
+      "delete_selected": "Удалить выбранный",
+      "clear_all": "Очистить всё"
+    },
+    "viewer": {
+      "zoom_in": "Увеличить",
+      "zoom_out": "Уменьшить",
+      "fit_to_screen": "По экрану",
+      "download_svg": "Скачать SVG",
+      "loading": "Загрузка чертежа..."
+    },
+    "title_block": {
+      "title": "Штамп",
+      "part_name": "Наименование",
+      "part_number": "Обозначение",
+      "material": "Материал",
+      "mass": "Масса",
+      "scale": "Масштаб",
+      "revision": "Ред.",
+      "author": "Разработал",
+      "approved_by": "Утвердил",
+      "date": "Дата"
+    }
+  },
+  "tool_binding": {
+    "title": "Инструмент",
+    "not_bound": "Инструмент не привязан",
+    "bind": "Привязать инструмент",
+    "unbind": "Отвязать",
+    "change": "Изменить",
+    "sources": {
+      "warehouse": "Со склада",
+      "catalog": "Из каталога",
+      "manual": "Вручную"
+    },
+    "warehouse_tab": "Склад",
+    "catalog_tab": "Каталог",
+    "manual_tab": "Вручную",
+    "ai_suggest": "Подобрать ИИ",
+    "ai_suggesting": "Подбираю...",
+    "ai_suggestion_title": "Предложения ИИ",
+    "ai_no_suggestions": "ИИ не нашёл подходящих инструментов",
+    "select_tool": "Выбрать",
+    "selected": "Выбран",
+    "bind_confirm": "Привязать",
+    "binding": "Привязываю...",
+    "bound_success": "Инструмент привязан",
+    "notes": "Примечания",
+    "notes_placeholder": "Дополнительные примечания...",
+    "manual_description": "Описание инструмента",
+    "manual_placeholder": "Например: Сверло Ø5 HSS, ГОСТ 10902",
+    "part_number": "Артикул",
+    "tool_type": "Тип",
+    "diameter": "Диаметр",
+    "material_label": "Материал",
+    "coating": "Покрытие",
+    "price": "Цена",
+    "catalog_page": "Стр. каталога",
+    "supplier": "Поставщик"
+  },
+  "catalogs": {
+    "title": "Каталоги инструментов",
+    "suppliers_title": "Поставщики",
+    "new_supplier": "Добавить поставщика",
+    "supplier_name": "Название поставщика",
+    "supplier_website": "Сайт",
+    "supplier_country": "Страна",
+    "supplier_contact": "Контакты",
+    "create_supplier": "Создать",
+    "creating": "Создаю...",
+    "supplier_created": "Поставщик создан",
+    "no_suppliers": "Нет поставщиков",
+    "entries_count": "{count} позиций",
+    "catalog_title": "Каталог: {name}",
+    "upload_catalog": "Загрузить каталог",
+    "uploading": "Загружаю...",
+    "upload_success": "Каталог загружен, обрабатывается",
+    "upload_formats": "PDF, Excel (.xlsx), CSV, JSON",
+    "drag_hint": "Перетащите файл каталога сюда или нажмите для выбора",
+    "browser": {
+      "title": "Позиции каталога",
+      "search_placeholder": "Поиск по каталогу...",
+      "filter_type": "Тип инструмента",
+      "filter_all_types": "Все типы",
+      "filter_diameter_min": "Ø мин",
+      "filter_diameter_max": "Ø макс",
+      "filter_material": "Материал",
+      "no_results": "Ничего не найдено",
+      "loading": "Загрузка...",
+      "load_more": "Загрузить ещё",
+      "part_number": "Артикул",
+      "name": "Наименование",
+      "type": "Тип",
+      "diameter": "Ø, мм",
+      "material": "Материал",
+      "coating": "Покрытие",
+      "price": "Цена",
+      "actions": "Действия",
+      "select": "Выбрать"
+    },
+    "tool_types": {
+      "drill": "Сверло",
+      "endmill": "Концевая фреза",
+      "insert": "Пластина",
+      "holder": "Держатель",
+      "tap": "Метчик",
+      "reamer": "Развёртка",
+      "boring_bar": "Расточная оправка",
+      "saw": "Дисковая пила",
+      "other": "Другое"
+    }
   },
   "keyboard": {
     "help_title": "Горячие клавиши",

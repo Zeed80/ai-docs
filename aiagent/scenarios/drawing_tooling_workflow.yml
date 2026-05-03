@@ -1,0 +1,143 @@
+name: drawing_tooling_workflow
+version: "1.0"
+description: |
+  Автоматический подбор инструментов для элементов чертежа.
+  Запускается при загрузке нового чертежа или по команде пользователя.
+  Анализирует каждый непривязанный элемент и предлагает инструменты из каталогов.
+
+trigger:
+  events:
+    - drawing_analyzed          # Webhook: drawing analysis completed
+    - user_request              # "Подбери инструменты для чертежа ..."
+
+context_required:
+  - drawing_id: "UUID чертежа для обработки"
+
+approval_gates:
+  - id: drawing.link_tool
+    action: "Привязать инструмент к элементу чертежа"
+    risk: medium
+    requires_human: true
+    can_bulk_approve: true
+    description: |
+      Агент запрашивает подтверждение привязки инструмента к каждому элементу.
+      Можно одобрить все сразу или по отдельности.
+
+steps:
+  - id: get_drawing
+    name: "Загрузить чертёж и все элементы"
+    skill: drawing.get
+    input:
+      drawing_id: "{{context.drawing_id}}"
+    output:
+      - drawing
+      - features
+
+  - id: filter_unbound_features
+    name: "Отфильтровать элементы без инструментов"
+    type: filter
+    source: "{{steps.get_drawing.features}}"
+    condition: "feature.tool_binding == null"
+    output:
+      - unbound_features
+    on_empty:
+      message: "Все элементы чертежа уже имеют привязанные инструменты."
+      action: stop
+
+  - id: suggest_tools_loop
+    name: "AI-подбор инструментов для каждого элемента"
+    type: parallel_loop
+    over: "{{steps.filter_unbound_features.unbound_features}}"
+    max_parallel: 3
+    for_each:
+      id: suggest_for_feature
+      skill: tool_catalog.suggest
+      input:
+        feature_id: "{{item.id}}"
+        limit: 3
+      output:
+        - suggestions_by_feature
+
+  - id: build_approval_list
+    name: "Сформировать список привязок для согласования"
+    type: aggregate
+    description: |
+      Для каждого элемента выбирается наилучшее предложение (score >= 0.7).
+      Элементы без подходящих инструментов помечаются для ручного выбора.
+    input:
+      features: "{{steps.filter_unbound_features.unbound_features}}"
+      suggestions: "{{steps.suggest_tools_loop.suggestions_by_feature}}"
+    output:
+      - proposed_bindings   # [{feature_id, feature_name, entry_id, tool_name, score, reason}]
+      - manual_required     # [{feature_id, feature_name, reason}]
+
+  - id: approval_gate
+    name: "Запросить согласование привязки инструментов"
+    type: approval
+    gate_id: drawing.link_tool
+    items: "{{steps.build_approval_list.proposed_bindings}}"
+    message: |
+      Предлагаю привязать следующие инструменты к элементам чертежа
+      **{{steps.get_drawing.drawing.title_block.title || steps.get_drawing.drawing.filename}}**:
+
+      {{#each steps.build_approval_list.proposed_bindings}}
+      - **{{this.feature_name}}**: {{this.tool_name}} (уверенность {{this.score_pct}}%)
+        _{{this.reason}}_
+      {{/each}}
+
+      {{#if steps.build_approval_list.manual_required}}
+      ⚠ Следующие элементы требуют ручного выбора инструмента:
+      {{#each steps.build_approval_list.manual_required}}
+      - {{this.feature_name}}: {{this.reason}}
+      {{/each}}
+      {{/if}}
+    on_approved:
+      proceed_to: execute_bindings
+    on_rejected:
+      message: "Привязка инструментов отменена пользователем."
+      action: stop
+    on_partial:
+      proceed_to: execute_bindings
+      with_approved_only: true
+
+  - id: execute_bindings
+    name: "Выполнить привязку одобренных инструментов"
+    type: parallel_loop
+    over: "{{steps.approval_gate.approved_items}}"
+    for_each:
+      id: bind_tool
+      skill: drawing.link_tool
+      input:
+        drawing_id: "{{context.drawing_id}}"
+        feature_id: "{{item.feature_id}}"
+        tool_source: "catalog"
+        catalog_entry_id: "{{item.entry_id}}"
+        bound_by: "sveta"
+        notes: "Привязано агентом Света (score={{item.score}})"
+
+  - id: optionally_draft_process_plan
+    name: "Предложить создание технологического процесса"
+    type: conditional
+    condition: "{{steps.execute_bindings.success_count}} > 0"
+    if_true:
+      message: |
+        ✅ Привязал инструменты к {{steps.execute_bindings.success_count}} элементам чертежа.
+
+        Хотите, чтобы я подготовил черновик технологического процесса на основе
+        привязанных инструментов и размерных требований?
+      actions:
+        - label: "Да, создать техпроцесс"
+          scenario: process_plan_draft
+          input:
+            drawing_id: "{{context.drawing_id}}"
+        - label: "Нет, пока достаточно"
+          action: stop
+
+output:
+  success_message: |
+    Подбор инструментов завершён.
+    Привязано: {{steps.execute_bindings.success_count}} инструментов.
+    {{#if steps.build_approval_list.manual_required}}
+    Требуется ручной выбор: {{steps.build_approval_list.manual_required.length}} элементов.
+    {{/if}}
+  failure_message: "Ошибка при подборе инструментов."

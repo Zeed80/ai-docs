@@ -886,6 +886,7 @@ function UploadPanel({
         ref={fileInputRef}
         type="file"
         multiple
+        accept=".pdf,.dwg,.dxf,.svg,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp,.gif,.docx,.xlsx,.xls,.csv,.json,.xml,.txt,.step,.stp,.iges,.igs"
         className="hidden"
         onChange={(event) => onUpload(event.target.files)}
       />
@@ -913,7 +914,12 @@ function UploadPanel({
             : "Выберите или перетащите документы"}
         </div>
         <div className="mt-2 max-w-xl text-sm text-slate-400">
-          PDF, изображения, DOCX, XLSX, TXT, DXF, STEP/STP, XML, CSV, JSON
+          PDF, DWG, DXF, SVG, изображения, DOCX, XLSX, TXT, STEP/STP, XML, CSV,
+          JSON
+          <br />
+          <span className="text-xs text-blue-400">
+            DWG/DXF → автоматически запускается анализ чертежа
+          </span>
         </div>
         {uploading && (
           <div className="mt-6 h-2 w-full max-w-md overflow-hidden rounded-full bg-slate-800">

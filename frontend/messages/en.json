@@ -22,7 +22,9 @@
     "payments": "Payments",
     "normalization": "Normalization",
     "ntd": "NTD",
-    "boms": "BOMs"
+    "boms": "BOMs",
+    "drawings": "Drawings",
+    "catalogs": "Catalogs"
   },
   "inbox": {
     "title": "Inbox",
@@ -71,6 +73,210 @@
     "placeholder": "Ask Sveta...",
     "sveta": "Sveta",
     "unavailable": "Automated features temporarily unavailable"
+  },
+  "drawings": {
+    "title": "Drawings",
+    "upload": "Upload Drawing",
+    "upload_hint": "Drag a DXF, DWG or PDF here",
+    "uploading": "Uploading...",
+    "analyzing": "AI is analyzing...",
+    "reanalyze": "Re-analyze",
+    "reanalyzing": "Starting analysis...",
+    "empty": "No drawings uploaded",
+    "search_placeholder": "Search drawings...",
+    "status": {
+      "pending": "Pending",
+      "analyzing": "Analyzing",
+      "analyzed": "Analyzed",
+      "error": "Error",
+      "needs_review": "Needs Review"
+    },
+    "feature_types": {
+      "hole": "Hole",
+      "pocket": "Pocket",
+      "surface": "Surface",
+      "boss": "Boss",
+      "groove": "Groove",
+      "thread": "Thread",
+      "chamfer": "Chamfer",
+      "radius": "Radius",
+      "slot": "Slot",
+      "other": "Other"
+    },
+    "features": {
+      "title": "Features",
+      "empty": "No recognized features",
+      "add": "Add Feature",
+      "edit": "Edit",
+      "delete": "Delete",
+      "delete_confirm": "Delete feature?",
+      "mark_reviewed": "Mark as Reviewed",
+      "reviewed": "Reviewed",
+      "confidence": "AI Confidence",
+      "ai_raw": "AI Raw Data",
+      "count_in_group": "{count} features"
+    },
+    "dimensions": {
+      "title": "Dimensions",
+      "nominal": "Nominal",
+      "upper_tol": "Upper Tolerance",
+      "lower_tol": "Lower Tolerance",
+      "unit": "Unit",
+      "label": "Label",
+      "types": {
+        "linear": "Linear",
+        "angular": "Angular",
+        "diameter": "Diameter",
+        "radius": "Radius"
+      }
+    },
+    "surfaces": {
+      "title": "Surface Finish",
+      "value": "Value",
+      "direction": "Direction",
+      "types": {
+        "Ra": "Ra",
+        "Rz": "Rz",
+        "Rmax": "Rmax"
+      }
+    },
+    "gdt": {
+      "title": "GD&T",
+      "symbol": "Symbol",
+      "tolerance": "Tolerance",
+      "datum": "Datum"
+    },
+    "contours": {
+      "title": "Contour",
+      "edit_mode": "Edit Mode",
+      "exit_edit": "Exit Edit Mode",
+      "save_contours": "Save Contours",
+      "saving": "Saving...",
+      "saved": "Contours saved",
+      "primitives": {
+        "circle": "Circle",
+        "arc": "Arc",
+        "rectangle": "Rectangle",
+        "polyline": "Polyline",
+        "line": "Line"
+      },
+      "line_types": {
+        "solid": "Solid",
+        "dashed": "Dashed",
+        "dotted": "Dotted",
+        "center": "Center"
+      },
+      "snap_to_grid": "Snap to Grid",
+      "delete_selected": "Delete Selected",
+      "clear_all": "Clear All"
+    },
+    "viewer": {
+      "zoom_in": "Zoom In",
+      "zoom_out": "Zoom Out",
+      "fit_to_screen": "Fit to Screen",
+      "download_svg": "Download SVG",
+      "loading": "Loading drawing..."
+    },
+    "title_block": {
+      "title": "Title Block",
+      "part_name": "Part Name",
+      "part_number": "Part Number",
+      "material": "Material",
+      "mass": "Mass",
+      "scale": "Scale",
+      "revision": "Rev.",
+      "author": "Drawn By",
+      "approved_by": "Approved By",
+      "date": "Date"
+    }
+  },
+  "tool_binding": {
+    "title": "Tool",
+    "not_bound": "No tool bound",
+    "bind": "Bind Tool",
+    "unbind": "Unbind",
+    "change": "Change",
+    "sources": {
+      "warehouse": "From Warehouse",
+      "catalog": "From Catalog",
+      "manual": "Manual"
+    },
+    "warehouse_tab": "Warehouse",
+    "catalog_tab": "Catalog",
+    "manual_tab": "Manual",
+    "ai_suggest": "AI Suggest",
+    "ai_suggesting": "Suggesting...",
+    "ai_suggestion_title": "AI Suggestions",
+    "ai_no_suggestions": "AI found no suitable tools",
+    "select_tool": "Select",
+    "selected": "Selected",
+    "bind_confirm": "Bind",
+    "binding": "Binding...",
+    "bound_success": "Tool bound",
+    "notes": "Notes",
+    "notes_placeholder": "Additional notes...",
+    "manual_description": "Tool Description",
+    "manual_placeholder": "E.g. Drill Ø5 HSS, GOST 10902",
+    "part_number": "Part Number",
+    "tool_type": "Type",
+    "diameter": "Diameter",
+    "material_label": "Material",
+    "coating": "Coating",
+    "price": "Price",
+    "catalog_page": "Catalog Page",
+    "supplier": "Supplier"
+  },
+  "catalogs": {
+    "title": "Tool Catalogs",
+    "suppliers_title": "Suppliers",
+    "new_supplier": "Add Supplier",
+    "supplier_name": "Supplier Name",
+    "supplier_website": "Website",
+    "supplier_country": "Country",
+    "supplier_contact": "Contact",
+    "create_supplier": "Create",
+    "creating": "Creating...",
+    "supplier_created": "Supplier created",
+    "no_suppliers": "No suppliers",
+    "entries_count": "{count} entries",
+    "catalog_title": "Catalog: {name}",
+    "upload_catalog": "Upload Catalog",
+    "uploading": "Uploading...",
+    "upload_success": "Catalog uploaded, processing",
+    "upload_formats": "PDF, Excel (.xlsx), CSV, JSON",
+    "drag_hint": "Drop catalog file here or click to browse",
+    "browser": {
+      "title": "Catalog Entries",
+      "search_placeholder": "Search catalog...",
+      "filter_type": "Tool Type",
+      "filter_all_types": "All Types",
+      "filter_diameter_min": "Ø min",
+      "filter_diameter_max": "Ø max",
+      "filter_material": "Material",
+      "no_results": "No results",
+      "loading": "Loading...",
+      "load_more": "Load More",
+      "part_number": "Part Number",
+      "name": "Name",
+      "type": "Type",
+      "diameter": "Ø, mm",
+      "material": "Material",
+      "coating": "Coating",
+      "price": "Price",
+      "actions": "Actions",
+      "select": "Select"
+    },
+    "tool_types": {
+      "drill": "Drill",
+      "endmill": "End Mill",
+      "insert": "Insert",
+      "holder": "Holder",
+      "tap": "Tap",
+      "reamer": "Reamer",
+      "boring_bar": "Boring Bar",
+      "saw": "Circular Saw",
+      "other": "Other"
+    }
   },
   "keyboard": {
     "help_title": "Keyboard Shortcuts",

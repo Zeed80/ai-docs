@@ -427,6 +427,120 @@ async def _claude_generate(
     return data["content"][0]["text"]
 
 
+async def chat_with_images(
+    prompt: str,
+    images: list[bytes],
+    *,
+    model: str | None = None,
+    system: str | None = None,
+    temperature: float = 0.1,
+    max_tokens: int = 8192,
+    timeout_seconds: float = 180.0,
+    format_json: bool = False,
+) -> OllamaResponse:
+    """Send a chat request to a VLM (Vision Language Model) with image attachments.
+
+    Images are passed as base64-encoded bytes in the Ollama /api/chat `images` field.
+    Supports models: gemma4, llava, llava-llama3, minicpm-v, qwen2-vl, etc.
+
+    Args:
+        prompt: Text prompt
+        images: List of raw image bytes (PNG, JPEG, etc.)
+        model: Ollama model name (defaults to settings.ollama_model_vlm)
+        system: System prompt
+        temperature: Sampling temperature
+        max_tokens: Max response tokens
+        timeout_seconds: Request timeout (VLM inference is slow)
+        format_json: Request JSON structured output
+    """
+    import base64
+
+    effective_model = model or getattr(settings, "ollama_model_vlm", settings.ollama_model_ocr)
+    breaker = _get_breaker(effective_model)
+
+    if not breaker.is_available:
+        raise RuntimeError(f"Circuit breaker open for VLM model {effective_model}")
+
+    b64_images = [base64.b64encode(img).decode("ascii") for img in images]
+
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({
+        "role": "user",
+        "content": prompt,
+        "images": b64_images,
+    })
+
+    payload: dict = {
+        "model": effective_model,
+        "messages": messages,
+        "stream": False,
+        "think": False,
+        "options": {
+            "temperature": temperature,
+            "num_predict": max_tokens,
+        },
+    }
+    if format_json:
+        payload["format"] = "json"
+
+    last_error: Exception | None = None
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                start = time.time()
+                response = await client.post(
+                    f"{settings.ollama_url}/api/chat",
+                    json=payload,
+                )
+                elapsed_ms = int((time.time() - start) * 1000)
+
+            response.raise_for_status()
+            data = response.json()
+            breaker.record_success()
+
+            result = OllamaResponse(
+                text=data.get("message", {}).get("content", ""),
+                model=effective_model,
+                total_duration_ms=data.get("total_duration", 0) // 1_000_000,
+                prompt_eval_count=data.get("prompt_eval_count", 0),
+                eval_count=data.get("eval_count", 0),
+            )
+
+            logger.info(
+                "ollama_vlm",
+                model=effective_model,
+                elapsed_ms=elapsed_ms,
+                images=len(images),
+                tokens=result.eval_count,
+                attempt=attempt + 1,
+            )
+            return result
+
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            last_error = e
+            breaker.record_failure()
+            logger.warning("ollama_vlm_retry", model=effective_model, attempt=attempt + 1, error=str(e))
+            if attempt < 2:
+                await _async_sleep(2 ** attempt)
+
+        except httpx.HTTPStatusError as e:
+            last_error = e
+            breaker.record_failure()
+            logger.error("ollama_vlm_http_error", model=effective_model, status=e.response.status_code)
+            break
+
+        except Exception as e:
+            last_error = e
+            breaker.record_failure()
+            logger.error("ollama_vlm_error", model=effective_model, error=str(e))
+            break
+
+    raise RuntimeError(f"VLM chat failed after attempts: {last_error}")
+
+
 async def check_health() -> dict:
     """Check Ollama health and list available models."""
     try:

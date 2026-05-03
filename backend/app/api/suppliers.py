@@ -7,12 +7,13 @@ from collections import defaultdict
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, or_
+from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete, select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
-from app.db.models import Invoice, InvoiceLine, InvoiceStatus, Party, PartyRole, SupplierProfile
+from app.db.models import EmailThread, Invoice, InvoiceLine, InvoiceStatus, Party, PartyRole, SupplierProfile
 from app.domain.suppliers import (
     DuplicateCheckResult,
     DuplicateMatch,
@@ -627,6 +628,146 @@ async def update_supplier(
     await db.commit()
     await db.refresh(party)
     return party
+
+
+# ── supplier.delete / supplier.bulk_delete ─────────────────────────────────
+
+
+class SupplierBulkDeleteRequest(BaseModel):
+    supplier_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=200)
+    confirm: bool = False
+
+
+async def _delete_supplier_cascade(party_id: uuid.UUID, db) -> dict:
+    """Full cascade delete of a Party/supplier:
+    1. ToolCatalogEntry: Qdrant + graph cleanup, then SQL delete
+    2. ToolSupplier records deleted
+    3. EmailThread.party_id set to NULL (preserve email history)
+    4. SupplierProfile deleted
+    5. Party deleted
+    """
+    from app.db.models import ToolCatalogEntry, ToolSupplier
+
+    # 1. Get all tool suppliers linked to this party
+    ts_result = await db.execute(
+        select(ToolSupplier.id).where(ToolSupplier.main_supplier_id == party_id)
+    )
+    ts_ids = list(ts_result.scalars().all())
+
+    if ts_ids:
+        # Qdrant: remove all catalog entries for these tool_suppliers
+        for ts_id in ts_ids:
+            try:
+                from app.vector.qdrant_store import delete_tool_catalog_by_supplier
+                delete_tool_catalog_by_supplier(str(ts_id))
+            except Exception:
+                pass
+
+        # Graph: remove catalog entry nodes
+        entries_result = await db.execute(
+            select(ToolCatalogEntry.id).where(ToolCatalogEntry.supplier_id.in_(ts_ids))
+        )
+        for entry_id in entries_result.scalars().all():
+            try:
+                from app.domain.drawing_graph import delete_tool_catalog_graph
+                await delete_tool_catalog_graph(entry_id, db)
+            except Exception:
+                pass
+
+        await db.execute(
+            sa_delete(ToolCatalogEntry).where(ToolCatalogEntry.supplier_id.in_(ts_ids))
+        )
+        await db.execute(sa_delete(ToolSupplier).where(ToolSupplier.id.in_(ts_ids)))
+
+    # 2. Graph: party-level nodes
+    try:
+        from app.domain.drawing_graph import delete_party_graph
+        await delete_party_graph(party_id, db)
+    except Exception:
+        pass
+
+    # 3. Nullify EmailThread references (preserve email history)
+    from sqlalchemy import update as sa_update
+    await db.execute(
+        sa_update(EmailThread)
+        .where(EmailThread.party_id == party_id)
+        .values(party_id=None)
+    )
+
+    # 4. SupplierProfile
+    profile_result = await db.execute(
+        select(SupplierProfile).where(SupplierProfile.party_id == party_id)
+    )
+    profile = profile_result.scalar_one_or_none()
+    if profile:
+        await db.delete(profile)
+
+    # 5. Party
+    party = await db.get(Party, party_id)
+    if party:
+        await db.delete(party)
+
+    await db.flush()
+    return {"deleted": 1, "party_id": str(party_id)}
+
+
+@router.delete("/bulk-delete", summary="Skill: supplier.bulk_delete — Bulk delete suppliers with cascade.")
+async def bulk_delete_suppliers(
+    payload: SupplierBulkDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if not payload.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Установите confirm=true для подтверждения массового удаления поставщиков",
+        )
+    deleted = 0
+    errors = []
+    for party_id in payload.supplier_ids:
+        try:
+            await _delete_supplier_cascade(party_id, db)
+            deleted += 1
+        except Exception as exc:
+            errors.append({"party_id": str(party_id), "error": str(exc)})
+
+    await db.commit()
+    await log_action(
+        db, action="supplier.bulk_delete", entity_type="supplier",
+        entity_id=None, details={"deleted": deleted, "errors": len(errors)},
+    )
+    logger.info("suppliers_bulk_deleted", deleted=deleted, errors=len(errors))
+    return {"deleted": deleted, "errors": errors}
+
+
+@router.delete("/{supplier_id}", summary="Skill: supplier.delete — Delete supplier with full cascade.")
+async def delete_supplier(
+    supplier_id: uuid.UUID,
+    confirm: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Delete a Party/supplier and all related data (catalog entries, tool suppliers).
+    Email threads are preserved with party_id set to NULL.
+    Requires confirm=true query parameter.
+    """
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Добавьте ?confirm=true для подтверждения удаления поставщика",
+        )
+    party = await db.get(Party, supplier_id)
+    if not party:
+        raise HTTPException(status_code=404, detail="Поставщик не найден")
+
+    party_name = party.name
+    result = await _delete_supplier_cascade(supplier_id, db)
+    await db.commit()
+
+    await log_action(
+        db, action="supplier.delete", entity_type="supplier",
+        entity_id=supplier_id, details={"name": party_name},
+    )
+    logger.info("supplier_deleted", supplier_id=str(supplier_id), name=party_name)
+    return result
 
 
 # ── List suppliers ─────────────────────────────────────────────────────────

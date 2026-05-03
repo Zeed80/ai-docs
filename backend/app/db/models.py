@@ -1604,6 +1604,325 @@ class NTDCheckFinding(UUIDPrimaryKey, TimestampMixin, Base):
     check: Mapped["NTDCheckRun"] = relationship(back_populates="findings")
 
 
+# ── Drawings & Tool Catalog ───────────────────────────────────────────────────
+
+
+class DrawingStatus(str, enum.Enum):
+    uploaded = "uploaded"
+    analyzing = "analyzing"
+    analyzed = "analyzed"
+    needs_review = "needs_review"
+    approved = "approved"
+    failed = "failed"
+
+
+class DrawingFeatureType(str, enum.Enum):
+    hole = "hole"
+    pocket = "pocket"
+    surface = "surface"
+    boss = "boss"
+    groove = "groove"
+    thread = "thread"
+    chamfer = "chamfer"
+    radius = "radius"
+    slot = "slot"
+    contour = "contour"
+    other = "other"
+
+
+class FeaturePrimitiveType(str, enum.Enum):
+    circle = "circle"
+    arc = "arc"
+    rectangle = "rectangle"
+    polyline = "polyline"
+    line = "line"
+    spline = "spline"
+    ellipse = "ellipse"
+
+
+class FeatureDimType(str, enum.Enum):
+    linear = "linear"
+    angular = "angular"
+    diameter = "diameter"
+    radius = "radius"
+    depth = "depth"
+    arc_length = "arc_length"
+
+
+class RoughnessType(str, enum.Enum):
+    Ra = "Ra"
+    Rz = "Rz"
+    Rmax = "Rmax"
+    Rq = "Rq"
+
+
+class ToolTypeEnum(str, enum.Enum):
+    drill = "drill"
+    endmill = "endmill"
+    insert = "insert"
+    holder = "holder"
+    tap = "tap"
+    reamer = "reamer"
+    boring_bar = "boring_bar"
+    thread_mill = "thread_mill"
+    grinder = "grinder"
+    turning_tool = "turning_tool"
+    milling_cutter = "milling_cutter"
+    countersink = "countersink"
+    counterbore = "counterbore"
+    other = "other"
+
+
+class ToolSourceEnum(str, enum.Enum):
+    warehouse = "warehouse"
+    catalog = "catalog"
+    manual = "manual"
+
+
+class Drawing(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "drawings"
+
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("documents.id"), nullable=True, index=True
+    )
+    drawing_number: Mapped[str | None] = mapped_column(String(200), index=True)
+    revision: Mapped[str | None] = mapped_column(String(50))
+    filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    format: Mapped[str] = mapped_column(String(20), nullable=False)
+    # dxf, dwg, pdf, step, iges, svg
+    svg_path: Mapped[str | None] = mapped_column(String(1000))
+    thumbnail_path: Mapped[str | None] = mapped_column(String(1000))
+    title_block: Mapped[dict | None] = mapped_column(JSON)
+    # {title, developer, checker, approver, date, scale, material, mass, sheet, sheets_total}
+    bounding_box: Mapped[dict | None] = mapped_column(JSON)
+    # {x_min, y_min, x_max, y_max, units}
+    status: Mapped[DrawingStatus] = mapped_column(
+        Enum(DrawingStatus), default=DrawingStatus.uploaded, nullable=False, index=True
+    )
+    analysis_error: Mapped[str | None] = mapped_column(Text)
+    celery_task_id: Mapped[str | None] = mapped_column(String(200))
+    embedding_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    features: Mapped[list["DrawingFeature"]] = relationship(
+        back_populates="drawing", cascade="all, delete-orphan"
+    )
+    document: Mapped["Document | None"] = relationship(foreign_keys=[document_id])
+
+
+class DrawingFeature(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "drawing_features"
+
+    drawing_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawings.id"), nullable=False, index=True
+    )
+    feature_type: Mapped[DrawingFeatureType] = mapped_column(
+        Enum(DrawingFeatureType), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    ai_raw: Mapped[dict | None] = mapped_column(JSON)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by: Mapped[str | None] = mapped_column(String(100))
+    embedding_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    drawing: Mapped["Drawing"] = relationship(back_populates="features")
+    contours: Mapped[list["FeatureContour"]] = relationship(
+        back_populates="feature", cascade="all, delete-orphan"
+    )
+    dimensions: Mapped[list["FeatureDimension"]] = relationship(
+        back_populates="feature", cascade="all, delete-orphan"
+    )
+    surfaces: Mapped[list["FeatureSurface"]] = relationship(
+        back_populates="feature", cascade="all, delete-orphan"
+    )
+    gdt_annotations: Mapped[list["FeatureGDT"]] = relationship(
+        back_populates="feature", cascade="all, delete-orphan"
+    )
+    tool_binding: Mapped["FeatureToolBinding | None"] = relationship(
+        back_populates="feature", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class FeatureContour(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "feature_contours"
+
+    feature_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawing_features.id"), nullable=False, index=True
+    )
+    primitive_type: Mapped[FeaturePrimitiveType] = mapped_column(
+        Enum(FeaturePrimitiveType), nullable=False
+    )
+    params: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # circle: {cx, cy, r}  arc: {cx, cy, r, start_angle, end_angle}
+    # rectangle: {x, y, width, height, rotation}  polyline: {points: [[x,y],...]}
+    # line: {x1, y1, x2, y2, line_type: solid|dashed|dotted|center}
+    layer: Mapped[str | None] = mapped_column(String(100))
+    line_type: Mapped[str] = mapped_column(String(30), default="solid", nullable=False)
+    # solid, dashed, dotted, center, phantom, cutting_plane
+    color: Mapped[str | None] = mapped_column(String(30))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_user_edited: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    feature: Mapped["DrawingFeature"] = relationship(back_populates="contours")
+
+
+class FeatureDimension(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "feature_dimensions"
+
+    feature_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawing_features.id"), nullable=False, index=True
+    )
+    dim_type: Mapped[FeatureDimType] = mapped_column(
+        Enum(FeatureDimType), nullable=False
+    )
+    nominal: Mapped[float] = mapped_column(Float, nullable=False)
+    upper_tol: Mapped[float | None] = mapped_column(Float)
+    lower_tol: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str] = mapped_column(String(20), default="mm", nullable=False)
+    fit_system: Mapped[str | None] = mapped_column(String(20))
+    # e.g. H7, h6, js5
+    label: Mapped[str | None] = mapped_column(String(200))
+    annotation_position: Mapped[dict | None] = mapped_column(JSON)
+    # {x, y, leader_x, leader_y}
+    is_reference: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    feature: Mapped["DrawingFeature"] = relationship(back_populates="dimensions")
+
+
+class FeatureSurface(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "feature_surfaces"
+
+    feature_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawing_features.id"), nullable=False, index=True
+    )
+    roughness_type: Mapped[RoughnessType] = mapped_column(
+        Enum(RoughnessType), default=RoughnessType.Ra, nullable=False
+    )
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    # e.g. 1.6 for Ra 1.6 µm
+    direction: Mapped[str | None] = mapped_column(String(50))
+    lay_symbol: Mapped[str | None] = mapped_column(String(10))
+    # =, ⊥, ×, M, C, R
+    machining_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    annotation_position: Mapped[dict | None] = mapped_column(JSON)
+
+    feature: Mapped["DrawingFeature"] = relationship(back_populates="surfaces")
+
+
+class FeatureGDT(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "feature_gdt"
+
+    feature_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawing_features.id"), nullable=False, index=True
+    )
+    symbol: Mapped[str] = mapped_column(String(50), nullable=False)
+    # flatness, straightness, circularity, cylindricity,
+    # perpendicularity, angularity, parallelism, position, concentricity, symmetry,
+    # circular_runout, total_runout, profile_line, profile_surface
+    tolerance_value: Mapped[float] = mapped_column(Float, nullable=False)
+    tolerance_zone: Mapped[str | None] = mapped_column(String(20))
+    # diameter, width, sphere
+    datum_reference: Mapped[str | None] = mapped_column(String(50))
+    material_condition: Mapped[str | None] = mapped_column(String(10))
+    # MMC, LMC, RFS
+    annotation_position: Mapped[dict | None] = mapped_column(JSON)
+
+    feature: Mapped["DrawingFeature"] = relationship(back_populates="gdt_annotations")
+
+
+class ToolSupplier(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "tool_suppliers"
+
+    name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    website: Mapped[str | None] = mapped_column(String(500))
+    country: Mapped[str | None] = mapped_column(String(100))
+    contact_info: Mapped[dict | None] = mapped_column(JSON)
+    # {email, phone, address, manager_name}
+    catalog_format: Mapped[str | None] = mapped_column(String(50))
+    # pdf, excel, csv, json, web
+    notes: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+
+    # Link to the main Party (procurement supplier from parties table)
+    main_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("parties.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    main_supplier: Mapped["Party | None"] = relationship(
+        "Party", foreign_keys=[main_supplier_id]
+    )
+
+    catalog_entries: Mapped[list["ToolCatalogEntry"]] = relationship(
+        back_populates="supplier", cascade="all, delete-orphan"
+    )
+
+
+class ToolCatalogEntry(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "tool_catalog_entries"
+
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("tool_suppliers.id"), nullable=True, index=True
+    )
+    part_number: Mapped[str | None] = mapped_column(String(200), index=True)
+    tool_type: Mapped[ToolTypeEnum] = mapped_column(
+        Enum(ToolTypeEnum), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    diameter_mm: Mapped[float | None] = mapped_column(Float, index=True)
+    length_mm: Mapped[float | None] = mapped_column(Float)
+    parameters: Mapped[dict | None] = mapped_column(JSON)
+    # {flutes, coating, helix_angle, point_angle, shank_diameter, cutting_depth, etc.}
+    material: Mapped[str | None] = mapped_column(String(200))
+    # HSS, HSS-Co, Carbide, CBN, PCD, Ceramic
+    coating: Mapped[str | None] = mapped_column(String(200))
+    # TiN, TiAlN, TiCN, DLC, uncoated
+    price_currency: Mapped[str] = mapped_column(String(3), default="RUB", nullable=False)
+    price_value: Mapped[float | None] = mapped_column(Float)
+    catalog_page: Mapped[int | None] = mapped_column(Integer)
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("documents.id"), nullable=True, index=True
+    )
+    embedding_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    supplier: Mapped["ToolSupplier | None"] = relationship(back_populates="catalog_entries")
+
+
+class FeatureToolBinding(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "feature_tool_bindings"
+
+    feature_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawing_features.id"), nullable=False, unique=True, index=True
+    )
+    tool_source: Mapped[ToolSourceEnum] = mapped_column(
+        Enum(ToolSourceEnum), nullable=False
+    )
+    warehouse_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("inventory_items.id"), nullable=True, index=True
+    )
+    catalog_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("tool_catalog_entries.id"), nullable=True, index=True
+    )
+    manual_description: Mapped[str | None] = mapped_column(Text)
+    cutting_parameters: Mapped[dict | None] = mapped_column(JSON)
+    # {rpm, feed_rate, depth_of_cut, coolant, passes}
+    notes: Mapped[str | None] = mapped_column(Text)
+    bound_by: Mapped[str] = mapped_column(String(100), default="user", nullable=False)
+
+    feature: Mapped["DrawingFeature"] = relationship(back_populates="tool_binding")
+    warehouse_item: Mapped["InventoryItem | None"] = relationship(
+        foreign_keys=[warehouse_item_id]
+    )
+    catalog_entry: Mapped["ToolCatalogEntry | None"] = relationship(
+        foreign_keys=[catalog_entry_id]
+    )
+
+
 # ── Mailbox / Email Templates ─────────────────────────────────────────────────
 
 

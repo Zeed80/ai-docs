@@ -71,6 +71,11 @@ const NAV_REF = [
   { href: "/settings/norm-cards", icon: "sliders", key: "normalization" },
 ] as const;
 
+const NAV_ENGINEERING = [
+  { href: "/drawings", icon: "drafting-compass", key: "drawings" },
+  { href: "/catalogs", icon: "tool-catalog", key: "catalogs" },
+] as const;
+
 const NAV_WAREHOUSE = [
   { href: "/warehouse", icon: "box", key: "warehouse" },
 ] as const;
@@ -341,6 +346,36 @@ function Icon({ name }: { name: string }) {
         />
       </svg>
     ),
+    "drafting-compass": (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M9 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2h-4M9 3V1m0 2v2m6-2V1m0 2v2M9 7h6M9 11h6M9 15h4"
+        />
+      </svg>
+    ),
+    "tool-catalog": (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
+        />
+      </svg>
+    ),
   };
   return <>{map[name] ?? null}</>;
 }
@@ -431,6 +466,21 @@ export function Sidebar() {
             Документы
           </p>
           {NAV_DOCS.map((item) => (
+            <NavItem
+              key={item.key}
+              href={item.href}
+              icon={item.icon}
+              label={t(item.key)}
+            />
+          ))}
+        </div>
+
+        {/* Производство */}
+        <div>
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+            Производство
+          </p>
+          {NAV_ENGINEERING.map((item) => (
             <NavItem
               key={item.key}
               href={item.href}

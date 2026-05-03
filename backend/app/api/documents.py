@@ -84,7 +84,9 @@ DEFAULT_ALLOWED_EXTENSIONS = {
     ".bmp",
     ".csv",
     ".docx",
+    ".dwg",
     ".dxf",
+    ".gif",
     ".iges",
     ".igs",
     ".jpeg",
@@ -94,9 +96,11 @@ DEFAULT_ALLOWED_EXTENSIONS = {
     ".png",
     ".step",
     ".stp",
+    ".svg",
     ".tif",
     ".tiff",
     ".txt",
+    ".webp",
     ".xls",
     ".xlsx",
     ".xml",
@@ -483,6 +487,33 @@ async def ingest_document(
     await db.commit()
 
     logger.info("document_ingested", doc_id=str(doc.id), file_name=doc.file_name)
+
+    # DWG / DXF → automatically route to drawing analysis pipeline
+    _drawing_formats = {".dwg", ".dxf", ".svg"}
+    file_ext_lower = Path(doc.file_name or "").suffix.lower()
+    if file_ext_lower in _drawing_formats:
+        try:
+            from app.db.models import Drawing, DrawingStatus
+            from app.tasks.drawing_analysis import analyze_drawing
+
+            drawing = Drawing(
+                document_id=doc.id,
+                filename=doc.file_name or "",
+                format=file_ext_lower.lstrip("."),
+                status=DrawingStatus.uploaded,
+            )
+            db.add(drawing)
+            await db.flush()
+            drawing_task = analyze_drawing.delay(str(drawing.id))
+            await db.commit()
+            logger.info(
+                "drawing_analysis_auto_queued",
+                doc_id=str(doc.id),
+                drawing_id=str(drawing.id),
+                task_id=drawing_task.id,
+            )
+        except Exception as e:
+            logger.warning("drawing_auto_queue_failed", doc_id=str(doc.id), error=str(e))
 
     if auto_process:
         # Auto-trigger extraction pipeline

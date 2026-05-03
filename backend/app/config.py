@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     ollama_model_ocr: str = "gemma4:e4b"
     ollama_model_reasoning: str = "gemma4:26b"
+    ollama_model_vlm: str = "gemma4:e4b"  # Vision LM for drawing analysis
 
     # AI reasoning backend
     ai_reasoning_backend: str = "ollama"  # ollama | anthropic | openrouter

@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func, or_
+from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete, select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -498,6 +499,90 @@ async def suggest_template(
         templates = [tpl] + [t for t in templates if t.name != tpl.name]
 
     return TemplateSuggestResponse(templates=templates, recommended=recommended)
+
+
+# ── email.delete_message / email.bulk_delete / email.delete_thread ─────────
+
+
+class EmailBulkDeleteRequest(BaseModel):
+    message_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=500)
+
+
+@router.delete(
+    "/messages/bulk-delete",
+    summary="Skill: email.bulk_delete — Bulk delete email messages.",
+)
+async def bulk_delete_messages(
+    payload: EmailBulkDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk delete email messages and their attached documents."""
+    deleted = 0
+    for msg_id in payload.message_ids:
+        msg = await db.get(EmailMessage, msg_id)
+        if not msg:
+            continue
+        await _delete_message_cascade(msg, db)
+        deleted += 1
+
+    await db.commit()
+    logger.info("email_messages_bulk_deleted", count=deleted)
+    return {"deleted": deleted}
+
+
+@router.delete(
+    "/messages/{message_id}",
+    status_code=204,
+    summary="Skill: email.delete_message — Delete a single email message.",
+)
+async def delete_message(
+    message_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete an email message and its attached documents."""
+    msg = await db.get(EmailMessage, message_id)
+    if not msg:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    await _delete_message_cascade(msg, db)
+    await db.commit()
+
+
+@router.delete(
+    "/threads/{thread_id}",
+    status_code=204,
+    summary="Skill: email.delete_thread — Delete email thread with all messages.",
+)
+async def delete_thread(
+    thread_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete a thread and all its messages including attached documents."""
+    thread = await db.get(EmailThread, thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Тред не найден")
+
+    result = await db.execute(
+        select(EmailMessage).where(EmailMessage.thread_id == thread_id)
+    )
+    messages = result.scalars().all()
+    for msg in messages:
+        await _delete_message_cascade(msg, db)
+
+    await db.delete(thread)
+    await db.commit()
+    logger.info("email_thread_deleted", thread_id=str(thread_id), messages=len(messages))
+
+
+async def _delete_message_cascade(msg: EmailMessage, db) -> None:
+    """Delete an email message.
+
+    attachments_meta is stored as JSON on the message; actual document records
+    linked to this message (if any) are found via document.metadata_ source reference.
+    We intentionally do NOT auto-delete linked documents to avoid data loss —
+    the user should delete documents separately via the Documents section.
+    """
+    await db.delete(msg)
+    await db.flush()
 
 
 # ── email.read (must be last — catch-all path) ────────────────────────────

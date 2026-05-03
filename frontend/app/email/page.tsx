@@ -57,6 +57,11 @@ export default function EmailPage() {
     risk_flags: string[];
     approved: boolean;
   } | null>(null);
+  const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [deletingThreads, setDeletingThreads] = useState(false);
+  const [confirmDeleteThreads, setConfirmDeleteThreads] = useState(false);
 
   const fetchThreads = useCallback(async () => {
     setLoading(true);
@@ -157,6 +162,42 @@ export default function EmailPage() {
     await fetchDrafts();
   }
 
+  function toggleSelectThread(id: string) {
+    setSelectedThreadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleDeleteThread(threadId: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    try {
+      await fetch(`${API_BASE}/api/email/threads/${threadId}`, {
+        method: "DELETE",
+      });
+      await fetchThreads();
+    } catch {}
+  }
+
+  async function handleBulkDeleteThreads() {
+    if (!selectedThreadIds.size) return;
+    setDeletingThreads(true);
+    try {
+      for (const tid of selectedThreadIds) {
+        await fetch(`${API_BASE}/api/email/threads/${tid}`, {
+          method: "DELETE",
+        });
+      }
+      setSelectedThreadIds(new Set());
+      setConfirmDeleteThreads(false);
+      await fetchThreads();
+    } finally {
+      setDeletingThreads(false);
+    }
+  }
+
   const mailboxes = ["", "procurement", "accounting", "general"];
   const mailboxLabels: Record<string, string> = {
     "": "Все",
@@ -231,53 +272,153 @@ export default function EmailPage() {
                   <p className="text-xs mt-1">IMAP не настроен или ящик пуст</p>
                 </div>
               ) : (
-                <div className="divide-y divide-slate-700">
-                  {threads.map((thread, i) => (
-                    <div
-                      key={thread.id}
-                      className={`px-4 py-3 cursor-pointer transition-colors ${
-                        i === selectedIndex
-                          ? "bg-blue-900/30 border-l-2 border-l-blue-500"
-                          : "hover:bg-slate-700/50"
-                      }`}
-                      onClick={() => {
-                        setSelectedIndex(i);
-                        router.push(`/email/${thread.id}`);
-                      }}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-sm font-medium truncate">
-                          {thread.subject ?? "(без темы)"}
-                        </p>
-                        <span
-                          className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full ${statusColors[thread.status] ?? "bg-slate-100 text-slate-600"}`}
+                <>
+                  <div className="divide-y divide-slate-700">
+                    {threads.map((thread, i) => (
+                      <div
+                        key={thread.id}
+                        className={`group relative px-4 py-3 cursor-pointer transition-colors ${
+                          selectedThreadIds.has(thread.id)
+                            ? "bg-blue-900/20 border-l-2 border-l-blue-400"
+                            : i === selectedIndex
+                              ? "bg-blue-900/30 border-l-2 border-l-blue-500"
+                              : "hover:bg-slate-700/50"
+                        }`}
+                        onClick={() => {
+                          setSelectedIndex(i);
+                          router.push(`/email/${thread.id}`);
+                        }}
+                      >
+                        {/* Checkbox */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSelectThread(thread.id);
+                          }}
+                          className="absolute left-1 top-3 w-4 h-4 rounded border flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                          style={{
+                            background: selectedThreadIds.has(thread.id)
+                              ? "rgb(37 99 235)"
+                              : "rgba(30,41,59,0.9)",
+                            borderColor: selectedThreadIds.has(thread.id)
+                              ? "rgb(37 99 235)"
+                              : "rgba(148,163,184,0.4)",
+                          }}
                         >
-                          {thread.status}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-xs text-slate-400 truncate">
-                          {thread.sender ?? "—"}
-                        </span>
-                        {thread.has_attachment && (
-                          <span className="text-[10px] text-slate-400">📎</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px] px-1 bg-slate-700 text-slate-400 rounded">
-                          {mailboxLabels[thread.mailbox] ?? thread.mailbox}
-                        </span>
-                        {thread.last_message_at && (
-                          <span className="text-[10px] text-slate-400">
-                            {new Date(
-                              thread.last_message_at,
-                            ).toLocaleDateString("ru-RU")}
+                          {selectedThreadIds.has(thread.id) && (
+                            <svg
+                              className="w-2.5 h-2.5 text-white"
+                              fill="none"
+                              viewBox="0 0 10 10"
+                            >
+                              <path
+                                d="M1.5 5l2.5 2.5 4.5-4.5"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          )}
+                        </button>
+
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm font-medium truncate">
+                            {thread.subject ?? "(без темы)"}
+                          </p>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded-full ${statusColors[thread.status] ?? "bg-slate-100 text-slate-600"}`}
+                            >
+                              {thread.status}
+                            </span>
+                            {/* Delete button */}
+                            <button
+                              onClick={(e) => handleDeleteThread(thread.id, e)}
+                              className="w-5 h-5 rounded flex items-center justify-center text-slate-500 hover:text-red-400 hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100"
+                              title="Удалить тред"
+                            >
+                              <svg
+                                className="w-3 h-3"
+                                fill="none"
+                                viewBox="0 0 12 12"
+                              >
+                                <path
+                                  d="M1.5 3h9M4 3V2h4v1M3.5 3l.5 7h4l.5-7"
+                                  stroke="currentColor"
+                                  strokeWidth="1.2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-xs text-slate-400 truncate">
+                            {thread.sender ?? "—"}
                           </span>
-                        )}
+                          {thread.has_attachment && (
+                            <span className="text-[10px] text-slate-400">
+                              📎
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] px-1 bg-slate-700 text-slate-400 rounded">
+                            {mailboxLabels[thread.mailbox] ?? thread.mailbox}
+                          </span>
+                          {thread.last_message_at && (
+                            <span className="text-[10px] text-slate-400">
+                              {new Date(
+                                thread.last_message_at,
+                              ).toLocaleDateString("ru-RU")}
+                            </span>
+                          )}
+                        </div>
                       </div>
+                    ))}
+                  </div>
+
+                  {/* Bulk actions bar */}
+                  {selectedThreadIds.size > 0 && (
+                    <div className="sticky bottom-0 bg-slate-800 border-t border-slate-600 p-2 flex items-center gap-2">
+                      <span className="text-xs text-slate-300">
+                        {selectedThreadIds.size} выбрано
+                      </span>
+                      <button
+                        onClick={() => setSelectedThreadIds(new Set())}
+                        className="text-xs text-slate-400 hover:text-white px-1"
+                      >
+                        Снять
+                      </button>
+                      {confirmDeleteThreads ? (
+                        <>
+                          <button
+                            onClick={handleBulkDeleteThreads}
+                            disabled={deletingThreads}
+                            className="text-xs px-2 py-1 bg-red-600 hover:bg-red-500 text-white rounded disabled:opacity-50"
+                          >
+                            {deletingThreads ? "..." : "Да"}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteThreads(false)}
+                            className="text-xs px-2 py-1 bg-slate-700 text-white rounded"
+                          >
+                            Отмена
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDeleteThreads(true)}
+                          className="text-xs px-2 py-1 bg-red-700/60 hover:bg-red-700 text-white rounded ml-auto"
+                        >
+                          Удалить
+                        </button>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  )}
+                </>
               )}
             </>
           )}

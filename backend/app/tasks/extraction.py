@@ -473,11 +473,138 @@ def _get_document_text(doc: Document) -> str:
             text = _ocr_image_content(content, doc.mime_type, doc)
         return text
 
+    # DWG: convert → DXF → extract text
+    if (doc.file_name or "").lower().endswith(".dwg"):
+        return _get_dwg_text(content)
+
+    # DXF: extract text entities directly
+    if (doc.file_name or "").lower().endswith(".dxf"):
+        return _get_dxf_text(content)
+
     # Plain text
     try:
         return content.decode("utf-8", errors="replace")
     except Exception:
         return ""
+
+
+def _get_dwg_text(content: bytes) -> str:
+    """
+    Extract text/annotation content from a DWG file for classification.
+
+    Converts DWG → DXF using dwg2dxf (libredwg), then parses DXF text entities.
+    Falls back to a descriptive stub if the converter is unavailable.
+    """
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="dwg_text_") as tmpdir:
+        dwg_path = os.path.join(tmpdir, "input.dwg")
+        dxf_path = os.path.join(tmpdir, "input.dxf")
+        with open(dwg_path, "wb") as f:
+            f.write(content)
+
+        dwg2dxf_bin = shutil.which("dwg2dxf")
+        if dwg2dxf_bin:
+            try:
+                result = subprocess.run(
+                    [dwg2dxf_bin, "--as", "R2018", "-o", dxf_path, dwg_path],
+                    timeout=60,
+                    capture_output=True,
+                )
+                if result.returncode == 0 and os.path.exists(dxf_path):
+                    with open(dxf_path, "rb") as f:
+                        dxf_bytes = f.read()
+                    text = _get_dxf_text(dxf_bytes)
+                    if text.strip():
+                        return f"[DWG конвертирован в DXF]\n{text}"
+            except Exception as exc:
+                logger.warning("dwg_text_extraction_failed", error=str(exc))
+
+    # Fallback: return a useful stub for classification
+    return f"Технический чертёж DWG. Размер файла: {len(content)} байт. Требуется конвертация."
+
+
+def _get_dxf_text(content: bytes) -> str:
+    """Extract all text annotations from DXF file using ezdxf."""
+    try:
+        import io as _io
+
+        import ezdxf
+        import ezdxf.recover as recover
+
+        doc = None
+        try:
+            doc = ezdxf.read(_io.StringIO(content.decode("utf-8", errors="replace")))
+        except Exception:
+            pass
+
+        if doc is None:
+            import os
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tf:
+                tf.write(content)
+                tmp_path = tf.name
+            try:
+                try:
+                    doc = ezdxf.readfile(tmp_path)
+                except Exception:
+                    doc, _ = recover.readfile(tmp_path)
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        if doc is None:
+            return content.decode("utf-8", errors="replace")[:2000]
+
+        texts: list[str] = []
+        msp = doc.modelspace()
+        for entity in msp:
+            etype = entity.dxftype()
+            try:
+                if etype in ("TEXT", "ATTRIB", "ATTDEF"):
+                    t = str(entity.dxf.text or "")
+                    if t:
+                        texts.append(t)
+                elif etype == "MTEXT":
+                    t = entity.plain_mtext()
+                    if t:
+                        texts.append(t)
+                elif etype == "DIMENSION":
+                    try:
+                        m = entity.dxf.actual_measurement
+                        if m:
+                            texts.append(str(m))
+                    except Exception:
+                        pass
+                    try:
+                        ov = entity.dxf.text
+                        if ov:
+                            texts.append(ov)
+                    except Exception:
+                        pass
+                elif etype == "TOLERANCE":
+                    try:
+                        t = entity.dxf.string or ""
+                        if t:
+                            texts.append(t)
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
+        return "\n".join(texts)
+
+    except ImportError:
+        return content.decode("utf-8", errors="replace")[:2000]
+    except Exception as exc:
+        logger.warning("dxf_text_extraction_failed", error=str(exc))
+        return content.decode("utf-8", errors="replace")[:2000]
 
 
 def _get_configured_ocr_model() -> str:

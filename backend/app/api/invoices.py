@@ -454,6 +454,15 @@ async def delete_invoice(
 
     await db.execute(sa_delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice_id))
     await db.delete(invoice)
+    await db.flush()
+
+    # Graph cleanup
+    try:
+        from app.domain.drawing_graph import delete_invoice_graph
+        await delete_invoice_graph(invoice_id, db)
+    except Exception:
+        pass
+
     await log_action(
         db,
         action="invoice.delete",
@@ -496,6 +505,15 @@ async def bulk_delete_invoices(
 
     await db.execute(sa_delete(InvoiceLine).where(InvoiceLine.invoice_id.in_(ids)))
     await db.execute(sa_delete(Invoice).where(Invoice.id.in_(ids)))
+
+    # Graph cleanup for all deleted invoices
+    try:
+        from app.domain.drawing_graph import delete_invoice_graph
+        for inv_id in ids:
+            await delete_invoice_graph(inv_id, db)
+    except Exception:
+        pass
+
     await log_action(
         db,
         action="invoice.bulk_delete",

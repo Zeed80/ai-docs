@@ -22,6 +22,7 @@ interface AiConfig {
   model_agent: string;
   model_ocr: string;
   model_reasoning: string;
+  model_vlm: string;
   embedding_model: string;
   reranker_model: string | null;
   verify_model_1: string;
@@ -1545,6 +1546,13 @@ export default function SettingsPage() {
                   value={config.model_ocr}
                   models={models}
                   onChange={(v) => setConfig({ ...config, model_ocr: v })}
+                />
+                <ModelSelector
+                  label="Модель VLM для чертежей"
+                  description="Vision Language Model для анализа чертежей (DXF, PDF, PNG, JPG, TIFF и др.). Должна поддерживать изображения. Рекомендуется: gemma4, llava, llava-llama3, minicpm-v, qwen2-vl."
+                  value={config.model_vlm ?? config.model_ocr}
+                  models={models}
+                  onChange={(v) => setConfig({ ...config, model_vlm: v })}
                 />
                 <ModelSelector
                   label="Модель reasoning"

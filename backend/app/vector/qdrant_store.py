@@ -23,6 +23,9 @@ from app.config import settings
 logger = structlog.get_logger()
 
 COLLECTION = "documents"
+COLLECTION_DRAWINGS = "drawings"
+COLLECTION_DRAWING_FEATURES = "drawing_features"
+COLLECTION_TOOL_CATALOG = "tool_catalog"
 VECTOR_SIZE = 4096
 
 
@@ -65,6 +68,238 @@ def ensure_collection(
         logger.info("qdrant_collection_created", collection=collection_name)
     else:
         logger.debug("qdrant_collection_exists", collection=collection_name)
+
+
+def ensure_drawing_collections(vector_size: int = VECTOR_SIZE) -> None:
+    """Create drawing-related Qdrant collections if they don't exist."""
+    for collection_name, payload_indexes in [
+        (
+            COLLECTION_DRAWINGS,
+            [("status", PayloadSchemaType.KEYWORD), ("drawing_number", PayloadSchemaType.KEYWORD)],
+        ),
+        (
+            COLLECTION_DRAWING_FEATURES,
+            [("drawing_id", PayloadSchemaType.KEYWORD), ("feature_type", PayloadSchemaType.KEYWORD)],
+        ),
+        (
+            COLLECTION_TOOL_CATALOG,
+            [("tool_type", PayloadSchemaType.KEYWORD), ("supplier_id", PayloadSchemaType.KEYWORD),
+             ("is_active", PayloadSchemaType.KEYWORD)],
+        ),
+    ]:
+        ensure_collection(collection_name=collection_name, vector_size=vector_size)
+        client = get_client()
+        existing_collection = client.get_collection(collection_name)
+        for field, schema_type in payload_indexes:
+            try:
+                client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field,
+                    field_schema=schema_type,
+                )
+            except Exception:
+                pass
+
+
+def upsert_drawing(
+    drawing_id: str,
+    vector: list[float],
+    *,
+    drawing_number: str | None,
+    status: str,
+    filename: str,
+    title: str | None = None,
+    embedding_model: str | None = None,
+) -> None:
+    """Upsert drawing embedding into Qdrant."""
+    client = get_client()
+    client.upsert(
+        collection_name=COLLECTION_DRAWINGS,
+        points=[
+            PointStruct(
+                id=_stable_point_uuid(f"drawing:{drawing_id}"),
+                vector=vector,
+                payload={
+                    "drawing_id": drawing_id,
+                    "drawing_number": drawing_number or "",
+                    "status": status,
+                    "filename": filename,
+                    "title": title or "",
+                    "embedding_model": embedding_model or "",
+                },
+            )
+        ],
+    )
+
+
+def upsert_drawing_feature(
+    feature_id: str,
+    vector: list[float],
+    *,
+    drawing_id: str,
+    feature_type: str,
+    name: str,
+    description: str | None = None,
+    embedding_model: str | None = None,
+) -> None:
+    """Upsert drawing feature embedding into Qdrant."""
+    client = get_client()
+    client.upsert(
+        collection_name=COLLECTION_DRAWING_FEATURES,
+        points=[
+            PointStruct(
+                id=_stable_point_uuid(f"drawing_feature:{feature_id}"),
+                vector=vector,
+                payload={
+                    "feature_id": feature_id,
+                    "drawing_id": drawing_id,
+                    "feature_type": feature_type,
+                    "name": name,
+                    "description": description or "",
+                    "embedding_model": embedding_model or "",
+                },
+            )
+        ],
+    )
+
+
+def upsert_tool_catalog_entry(
+    entry_id: str,
+    vector: list[float],
+    *,
+    tool_type: str,
+    name: str,
+    supplier_id: str | None = None,
+    diameter_mm: float | None = None,
+    material: str | None = None,
+    is_active: bool = True,
+    embedding_model: str | None = None,
+) -> None:
+    """Upsert tool catalog entry embedding into Qdrant."""
+    client = get_client()
+    client.upsert(
+        collection_name=COLLECTION_TOOL_CATALOG,
+        points=[
+            PointStruct(
+                id=_stable_point_uuid(f"tool_catalog:{entry_id}"),
+                vector=vector,
+                payload={
+                    "entry_id": entry_id,
+                    "tool_type": tool_type,
+                    "name": name,
+                    "supplier_id": supplier_id or "",
+                    "diameter_mm": diameter_mm,
+                    "material": material or "",
+                    "is_active": str(is_active).lower(),
+                    "embedding_model": embedding_model or "",
+                },
+            )
+        ],
+    )
+
+
+def search_drawing_features(
+    query_vector: list[float],
+    *,
+    drawing_id: str | None = None,
+    feature_type: str | None = None,
+    limit: int = 20,
+    score_threshold: float = 0.0,
+) -> list[dict]:
+    """Search drawing features by embedding similarity."""
+    client = get_client()
+    must = []
+    if drawing_id:
+        must.append(FieldCondition(key="drawing_id", match=MatchValue(value=drawing_id)))
+    if feature_type:
+        must.append(FieldCondition(key="feature_type", match=MatchValue(value=feature_type)))
+    query_filter = Filter(must=must) if must else None
+    response = client.query_points(
+        collection_name=COLLECTION_DRAWING_FEATURES,
+        query=query_vector,
+        query_filter=query_filter,
+        limit=limit,
+        score_threshold=score_threshold,
+    )
+    return [
+        {
+            "feature_id": hit.payload.get("feature_id", ""),
+            "drawing_id": hit.payload.get("drawing_id", ""),
+            "feature_type": hit.payload.get("feature_type", ""),
+            "name": hit.payload.get("name", ""),
+            "description": hit.payload.get("description", ""),
+            "score": hit.score,
+            "payload": hit.payload or {},
+        }
+        for hit in response.points
+    ]
+
+
+def search_tool_catalog(
+    query_vector: list[float],
+    *,
+    tool_type: str | None = None,
+    supplier_id: str | None = None,
+    limit: int = 20,
+    score_threshold: float = 0.0,
+) -> list[dict]:
+    """Search tool catalog entries by embedding similarity."""
+    client = get_client()
+    must: list = [FieldCondition(key="is_active", match=MatchValue(value="true"))]
+    if tool_type:
+        must.append(FieldCondition(key="tool_type", match=MatchValue(value=tool_type)))
+    if supplier_id:
+        must.append(FieldCondition(key="supplier_id", match=MatchValue(value=supplier_id)))
+    query_filter = Filter(must=must)
+    response = client.query_points(
+        collection_name=COLLECTION_TOOL_CATALOG,
+        query=query_vector,
+        query_filter=query_filter,
+        limit=limit,
+        score_threshold=score_threshold,
+    )
+    return [
+        {
+            "entry_id": hit.payload.get("entry_id", ""),
+            "tool_type": hit.payload.get("tool_type", ""),
+            "name": hit.payload.get("name", ""),
+            "supplier_id": hit.payload.get("supplier_id", ""),
+            "diameter_mm": hit.payload.get("diameter_mm"),
+            "material": hit.payload.get("material", ""),
+            "score": hit.score,
+            "payload": hit.payload or {},
+        }
+        for hit in response.points
+    ]
+
+
+def delete_drawing(drawing_id: str) -> None:
+    """Delete all Qdrant points for a drawing."""
+    from qdrant_client.models import FilterSelector
+    client = get_client()
+    for collection in [COLLECTION_DRAWINGS, COLLECTION_DRAWING_FEATURES]:
+        id_field = "drawing_id" if collection == COLLECTION_DRAWING_FEATURES else None
+        try:
+            if collection == COLLECTION_DRAWINGS:
+                client.delete(
+                    collection_name=collection,
+                    points_selector=FilterSelector(
+                        filter=Filter(
+                            must=[FieldCondition(key="drawing_id", match=MatchValue(value=drawing_id))]
+                        )
+                    ),
+                )
+            else:
+                client.delete(
+                    collection_name=collection,
+                    points_selector=FilterSelector(
+                        filter=Filter(
+                            must=[FieldCondition(key="drawing_id", match=MatchValue(value=drawing_id))]
+                        )
+                    ),
+                )
+        except Exception:
+            pass
 
 
 def upsert_document(
@@ -158,6 +393,40 @@ def search_similar(
         }
         for hit in response.points
     ]
+
+
+def delete_tool_catalog_entry(entry_id: str) -> None:
+    """Delete a single tool catalog entry from Qdrant by entry_id."""
+    from qdrant_client.models import FilterSelector
+    client = get_client()
+    try:
+        client.delete(
+            collection_name=COLLECTION_TOOL_CATALOG,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[FieldCondition(key="entry_id", match=MatchValue(value=entry_id))]
+                )
+            ),
+        )
+    except Exception as exc:
+        logger.warning("qdrant_delete_tool_entry_failed", entry_id=entry_id, error=str(exc))
+
+
+def delete_tool_catalog_by_supplier(supplier_id: str) -> None:
+    """Delete all tool catalog entries for a given supplier from Qdrant."""
+    from qdrant_client.models import FilterSelector
+    client = get_client()
+    try:
+        client.delete(
+            collection_name=COLLECTION_TOOL_CATALOG,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[FieldCondition(key="supplier_id", match=MatchValue(value=supplier_id))]
+                )
+            ),
+        )
+    except Exception as exc:
+        logger.warning("qdrant_delete_supplier_catalog_failed", supplier_id=supplier_id, error=str(exc))
 
 
 def delete_document(doc_id: str) -> None:

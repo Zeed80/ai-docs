@@ -12,10 +12,13 @@
     "@tanstack/react-query": "^5.65",
     "@tanstack/react-table": "^8.21.3",
     "clsx": "^2.1",
+    "konva": "^9.3",
+    "react-konva": "^18.2",
     "next": "^15.3",
     "next-intl": "^4.1",
     "react": "^19.1",
     "react-dom": "^19.1",
+    "use-image": "^1.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

@@ -212,6 +212,208 @@ def _mcp_tool_to_openai(tool: dict, server_prefix: str) -> dict:
     }
 
 
+# ── Built-in MCP tools (wrap internal FastAPI endpoints) ──────────────────────
+
+_BUILTIN_TOOL_SCHEMAS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "drawing_analysis_mcp",
+            "description": (
+                "Запустить или получить результат AI-анализа чертежа. "
+                "Возвращает структурированный результат: штамп, список конструктивных элементов "
+                "(отверстия, карманы, поверхности и др.) с размерами, допусками, шероховатостью."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "drawing_id": {
+                        "type": "string",
+                        "description": "UUID чертежа для анализа",
+                    },
+                    "include_dimensions": {
+                        "type": "boolean",
+                        "description": "Включить размеры и допуски в результат (по умолчанию true)",
+                        "default": True,
+                    },
+                    "include_surfaces": {
+                        "type": "boolean",
+                        "description": "Включить шероховатость поверхностей (по умолчанию true)",
+                        "default": True,
+                    },
+                    "include_gdt": {
+                        "type": "boolean",
+                        "description": "Включить допуски формы и расположения GD&T (по умолчанию true)",
+                        "default": True,
+                    },
+                    "reanalyze": {
+                        "type": "boolean",
+                        "description": "Перезапустить AI-анализ (по умолчанию false — вернуть кэш)",
+                        "default": False,
+                    },
+                },
+                "required": ["drawing_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tool_search_mcp",
+            "description": (
+                "Семантический поиск режущих инструментов в базе данных поставщиков. "
+                "Поддерживает поиск по тексту и фильтрацию по параметрам: тип, диаметр, материал. "
+                "Возвращает список инструментов с ценами и параметрами."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Текстовый запрос, например 'сверло Ø10 для нержавеющей стали'",
+                    },
+                    "tool_type": {
+                        "type": "string",
+                        "description": "Тип инструмента: drill, endmill, insert, holder, tap, reamer, boring_bar, saw, other",
+                        "enum": ["drill", "endmill", "insert", "holder", "tap", "reamer", "boring_bar", "saw", "other"],
+                    },
+                    "diameter_min": {
+                        "type": "number",
+                        "description": "Минимальный диаметр в мм",
+                    },
+                    "diameter_max": {
+                        "type": "number",
+                        "description": "Максимальный диаметр в мм",
+                    },
+                    "material": {
+                        "type": "string",
+                        "description": "Материал инструмента, например 'HSS', 'carbide', 'HSS-Co'",
+                    },
+                    "supplier_id": {
+                        "type": "string",
+                        "description": "UUID поставщика для фильтрации по конкретному каталогу",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Максимальное количество результатов (по умолчанию 10)",
+                        "default": 10,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+
+async def _handle_drawing_analysis_mcp(args: dict) -> dict:
+    """Call internal /drawings/{id} and optionally /drawings/{id}/reanalyze."""
+    import httpx
+    from app.core.config import settings
+
+    drawing_id = args.get("drawing_id")
+    if not drawing_id:
+        return {"error": "drawing_id is required"}
+
+    reanalyze = args.get("reanalyze", False)
+    base_url = f"http://localhost:{getattr(settings, 'PORT', 8000)}"
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        if reanalyze:
+            await client.post(f"{base_url}/drawings/{drawing_id}/reanalyze")
+
+        resp = await client.get(f"{base_url}/drawings/{drawing_id}")
+        resp.raise_for_status()
+        drawing = resp.json()
+
+        features_resp = await client.get(f"{base_url}/drawings/{drawing_id}/features")
+        features_resp.raise_for_status()
+        features_raw = features_resp.json()
+
+    include_dimensions = args.get("include_dimensions", True)
+    include_surfaces = args.get("include_surfaces", True)
+    include_gdt = args.get("include_gdt", True)
+
+    features_out = []
+    for f in features_raw:
+        entry: dict[str, Any] = {
+            "id": f.get("id"),
+            "feature_type": f.get("feature_type"),
+            "name": f.get("name"),
+            "description": f.get("description"),
+            "confidence": f.get("confidence"),
+            "reviewed_at": f.get("reviewed_at"),
+        }
+        if include_dimensions:
+            entry["dimensions"] = f.get("dimensions", [])
+        if include_surfaces:
+            entry["surfaces"] = f.get("surfaces", [])
+        if include_gdt:
+            entry["gdt"] = f.get("gdt", [])
+        entry["tool_binding"] = f.get("tool_binding")
+        features_out.append(entry)
+
+    return {
+        "drawing": {
+            "id": drawing.get("id"),
+            "filename": drawing.get("filename"),
+            "format": drawing.get("format"),
+            "status": drawing.get("status"),
+            "title_block": drawing.get("title_block"),
+        },
+        "features": features_out,
+        "total_features": len(features_out),
+    }
+
+
+async def _handle_tool_search_mcp(args: dict) -> dict:
+    """Call internal /tool-catalog/search endpoint."""
+    import httpx
+    from app.core.config import settings
+
+    query = args.get("query", "")
+    if not query:
+        return {"error": "query is required"}
+
+    base_url = f"http://localhost:{getattr(settings, 'PORT', 8000)}"
+    params: dict[str, Any] = {"q": query, "limit": args.get("limit", 10)}
+    if args.get("tool_type"):
+        params["tool_type"] = args["tool_type"]
+    if args.get("diameter_min") is not None:
+        params["diameter_min"] = args["diameter_min"]
+    if args.get("diameter_max") is not None:
+        params["diameter_max"] = args["diameter_max"]
+    if args.get("material"):
+        params["material"] = args["material"]
+    if args.get("supplier_id"):
+        params["supplier_id"] = args["supplier_id"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{base_url}/tool-catalog/search", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+    return {
+        "results": data.get("items", data) if isinstance(data, dict) else data,
+        "total": data.get("total", len(data)) if isinstance(data, dict) else len(data),
+        "query": query,
+    }
+
+
+_BUILTIN_HANDLERS: dict[str, Any] = {
+    "drawing_analysis_mcp": {
+        "name": "drawing_analysis_mcp",
+        "_method": "builtin",
+        "_handler": _handle_drawing_analysis_mcp,
+    },
+    "tool_search_mcp": {
+        "name": "tool_search_mcp",
+        "_method": "builtin",
+        "_handler": _handle_tool_search_mcp,
+    },
+}
+
+
 async def load_mcp_tools(
     server_configs: list[dict],
 ) -> tuple[list[dict], dict[str, Any]]:
@@ -220,8 +422,8 @@ async def load_mcp_tools(
     tools    — list of OpenAI function-calling dicts ready for AgentSession
     handlers — dict mapping sanitised function name → async callable(args) -> dict
     """
-    all_tools: list[dict] = []
-    handlers: dict[str, Any] = {}
+    all_tools: list[dict] = list(_BUILTIN_TOOL_SCHEMAS)
+    handlers: dict[str, Any] = dict(_BUILTIN_HANDLERS)
 
     for cfg in server_configs:
         transport = cfg.get("transport", "stdio")
