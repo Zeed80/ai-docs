@@ -5529,19 +5529,29 @@
     },
     {
       "name": "warehouse.update_item",
-      "description": "Skill: warehouse.update_item — Update inventory item fields (name, unit, sku, location, min_qty).",
+      "description": "Skill: warehouse.update_item — Update inventory item fields: name, unit, sku, location, min_qty.",
       "category": "warehouse",
       "method": "PATCH",
       "path": "/api/warehouse/inventory/{item_id}",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string", "description": "Новое наименование позиции"},
+          "unit": {"type": "string", "description": "Единица измерения (шт, кг, м и т.п.)"},
+          "sku": {"type": "string", "description": "Артикул (SKU)"},
+          "min_qty": {"type": "number", "description": "Минимальный остаток для сигнала дефицита"},
+          "location": {"type": "string", "description": "Место хранения (склад, стеллаж)"}
+        }
+      }
     },
     {
       "name": "warehouse.delete_item",
-      "description": "Skill: warehouse.delete_item — Delete inventory item (only allowed when quantity is 0).",
+      "description": "Skill: warehouse.delete_item — Delete inventory item permanently (approval gate). Works with any quantity.",
       "category": "warehouse",
       "method": "DELETE",
       "path": "/api/warehouse/inventory/{item_id}",
-      "approval_required": false
+      "approval_required": true
     },
     {
       "name": "warehouse.issue_stock",
@@ -5549,15 +5559,33 @@
       "category": "warehouse",
       "method": "POST",
       "path": "/api/warehouse/inventory/{item_id}/issue",
-      "approval_required": true
+      "approval_required": true,
+      "parameters": {
+        "type": "object",
+        "required": ["quantity", "reason"],
+        "properties": {
+          "quantity": {"type": "number", "description": "Количество для выдачи (положительное число)"},
+          "reason": {"type": "string", "description": "Причина выдачи (для кого, на что)"},
+          "performed_by": {"type": "string", "description": "Кто выдаёт (ФИО или должность)", "default": "user"}
+        }
+      }
     },
     {
       "name": "warehouse.adjust_stock",
-      "description": "Skill: warehouse.adjust_stock — Adjust inventory quantity by positive or negative delta with reason.",
+      "description": "Skill: warehouse.adjust_stock — Adjust inventory quantity by positive or negative delta.",
       "category": "warehouse",
       "method": "POST",
       "path": "/api/warehouse/inventory/{item_id}/adjust",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "type": "object",
+        "required": ["quantity", "reason"],
+        "properties": {
+          "quantity": {"type": "number", "description": "Изменение количества (+ увеличение, − уменьшение)"},
+          "reason": {"type": "string", "description": "Причина корректировки (инвентаризация, брак и т.п.)"},
+          "performed_by": {"type": "string", "description": "Кто выполняет корректировку", "default": "user"}
+        }
+      }
     },
     {
       "name": "warehouse.bulk_confirm",
@@ -5565,7 +5593,19 @@
       "category": "warehouse",
       "method": "POST",
       "path": "/api/warehouse/receipts/bulk-confirm",
-      "approval_required": false
+      "approval_required": false,
+      "parameters": {
+        "type": "object",
+        "required": ["receipt_ids"],
+        "properties": {
+          "receipt_ids": {
+            "type": "array",
+            "items": {"type": "string", "format": "uuid"},
+            "description": "Список ID приходных ордеров для подтверждения"
+          },
+          "received_by": {"type": "string", "description": "Кто принимает товар"}
+        }
+      }
     },
     {
       "name": "warehouse.list_movements",

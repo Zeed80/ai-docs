@@ -807,8 +807,11 @@ function InventoryTab() {
             </p>
             {deleteConfirm.current_qty !== 0 && (
               <p className="text-xs text-orange-400 mb-3">
-                Остаток {deleteConfirm.current_qty} {deleteConfirm.unit} —
-                сначала скорректируйте до 0.
+                Внимание: текущий остаток{" "}
+                <span className="font-mono font-semibold">
+                  {deleteConfirm.current_qty} {deleteConfirm.unit}
+                </span>{" "}
+                будет удалён вместе с позицией.
               </p>
             )}
             {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
@@ -824,7 +827,7 @@ function InventoryTab() {
               </button>
               <button
                 onClick={() => deleteItem(deleteConfirm)}
-                disabled={deleting || deleteConfirm.current_qty !== 0}
+                disabled={deleting}
                 className="px-4 py-1.5 text-sm bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white rounded transition-colors"
               >
                 {deleting ? "Удаляю..." : "Удалить"}

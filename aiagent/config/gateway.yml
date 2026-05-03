@@ -273,6 +273,7 @@ skills:
     - compare.decide
     - warehouse.confirm_receipt
     - warehouse.issue_stock
+    - warehouse.delete_item
     - payment.mark_paid
     - procurement.send_rfq
     - bom.approve

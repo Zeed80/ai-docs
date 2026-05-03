@@ -310,18 +310,17 @@ async def delete_inventory_item(
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: warehouse.delete_item — Delete inventory item (only if qty = 0)."""
+    """Skill: warehouse.delete_item — Delete inventory item with all movements (approval gate)."""
     item = await db.get(InventoryItem, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
-    if item.current_qty != 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot delete item with non-zero quantity ({item.current_qty} {item.unit}). Adjust to 0 first.",
-        )
+    item_name = item.name
+    item_qty = item.current_qty
     await db.delete(item)
+    await log_action(db, action="warehouse.delete_item", entity_type="inventory_item",
+                     entity_id=item_id, details={"name": item_name, "qty_at_delete": item_qty})
     await db.commit()
-    return {"deleted": str(item_id)}
+    return {"deleted": str(item_id), "name": item_name, "qty_was": item_qty}
 
 
 @router.post("/inventory/{item_id}/issue", response_model=StockMovementOut)
