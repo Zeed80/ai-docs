@@ -145,6 +145,7 @@ export function SvetaPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const agentWsModeRef = useRef<AgentWsMode>("legacy");
   const dragCounterRef = useRef(0);
+  const autoApproveRef = useRef(false);
 
   const connect = useCallback(() => {
     void (async () => {
@@ -264,6 +265,7 @@ export function SvetaPanel() {
         return;
       }
       streamingIdRef.current = null;
+      autoApproveRef.current = false;
       setIsStreaming(false);
       return;
     }
@@ -307,10 +309,36 @@ export function SvetaPanel() {
     // ── Approval (skip Telegram — handled by inline buttons) ─────────────────
     if (type === "approval_request") {
       if (isTelegram) return;
+      const approvalId = genId();
+
+      // Auto-approve mode: skip showing dialog, confirm immediately
+      if (
+        autoApproveRef.current &&
+        wsRef.current?.readyState === WebSocket.OPEN
+      ) {
+        wsRef.current.send(
+          JSON.stringify(
+            buildAgentApprovalMessage(true, agentWsModeRef.current),
+          ),
+        );
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: approvalId,
+            role: "approval",
+            tool: data.tool as string,
+            args: data.args as Record<string, unknown>,
+            preview: data.preview as string,
+            status: "approved",
+          },
+        ]);
+        return;
+      }
+
       setMessages((prev) => [
         ...prev,
         {
-          id: genId(),
+          id: approvalId,
           role: "approval",
           tool: data.tool as string,
           args: data.args as Record<string, unknown>,
@@ -345,6 +373,7 @@ export function SvetaPanel() {
         return;
       }
       streamingIdRef.current = null;
+      autoApproveRef.current = false;
       setIsStreaming(false);
       setMessages((prev) => [
         ...prev,
@@ -467,6 +496,7 @@ export function SvetaPanel() {
 
   function handleApproval(msgId: string, approved: boolean) {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!approved) autoApproveRef.current = false;
     wsRef.current.send(
       JSON.stringify(
         buildAgentApprovalMessage(approved, agentWsModeRef.current),
@@ -479,6 +509,11 @@ export function SvetaPanel() {
           : m,
       ),
     );
+  }
+
+  function handleApproveAll(msgId: string) {
+    autoApproveRef.current = true;
+    handleApproval(msgId, true);
   }
 
   const isUploading = attachedFiles.some((f) => f.status === "uploading");
@@ -667,18 +702,27 @@ export function SvetaPanel() {
                   {msg.preview}
                 </pre>
                 {isPending ? (
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleApproval(msg.id, true)}
+                        className="flex-1 py-1.5 bg-green-700 hover:bg-green-600 text-white rounded text-xs font-medium transition-colors"
+                      >
+                        Утвердить
+                      </button>
+                      <button
+                        onClick={() => handleApproval(msg.id, false)}
+                        className="flex-1 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs font-medium transition-colors"
+                      >
+                        Отклонить
+                      </button>
+                    </div>
                     <button
-                      onClick={() => handleApproval(msg.id, true)}
-                      className="flex-1 py-1.5 bg-green-700 hover:bg-green-600 text-white rounded text-xs font-medium transition-colors"
+                      onClick={() => handleApproveAll(msg.id)}
+                      className="w-full py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-medium transition-colors"
+                      title="Утвердить этот и все последующие запросы автоматически"
                     >
-                      Утвердить
-                    </button>
-                    <button
-                      onClick={() => handleApproval(msg.id, false)}
-                      className="flex-1 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs font-medium transition-colors"
-                    >
-                      Отклонить
+                      Утвердить все ⚡
                     </button>
                   </div>
                 ) : (
