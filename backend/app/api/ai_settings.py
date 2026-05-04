@@ -98,6 +98,16 @@ def save_ai_config(cfg: dict) -> None:
     _CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
 
 
+def _sync_ai_model_agent(model_name: str | None) -> None:
+    """Mirror built-in agent model into ai_config for backward compatibility."""
+    if not model_name:
+        return
+    cfg = get_ai_config()
+    cfg["model_agent"] = str(model_name)
+    cfg.pop("verify_model_2", None)
+    save_ai_config(cfg)
+
+
 # ── Models list ───────────────────────────────────────────────────────────────
 
 @router.get("/models")
@@ -292,6 +302,8 @@ async def patch_agent_config(
     payload: BuiltinAgentConfigUpdate,
 ) -> BuiltinAgentConfig:
     config = update_builtin_agent_config(payload)
+    if payload.model is not None:
+        _sync_ai_model_agent(payload.model)
     logger.info("builtin_agent_config_updated", **payload.model_dump(exclude_unset=True))
     return config
 
@@ -299,6 +311,7 @@ async def patch_agent_config(
 @router.post("/agent-config/reset", response_model=BuiltinAgentConfig)
 async def reset_agent_config() -> BuiltinAgentConfig:
     config = reset_builtin_agent_config()
+    _sync_ai_model_agent(config.model)
     logger.info("builtin_agent_config_reset")
     return config
 

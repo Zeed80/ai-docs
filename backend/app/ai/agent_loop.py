@@ -23,11 +23,14 @@ logger = structlog.get_logger()
 
 
 def _get_agent_model(config: BuiltinAgentConfig | None = None) -> str:
-    """Current agent model: ai_settings (UI) → built-in config → gateway default.
+    """Current agent model: built-in config → ai_settings override → gateway default.
 
-    ``/api/ai/config`` ``model_agent`` must win over ``agent_config.json`` / Redis
-    ``model`` so the Settings page and the chat/Telegram agent stay aligned.
+    Built-in agent config is used as primary source because provider/model are
+    edited together in the Agent settings UI. ``model_agent`` from ``ai_config``
+    remains a backward-compatible fallback and is kept in sync via API handlers.
     """
+    if config and config.model:
+        return config.model
     try:
         from app.api.ai_settings import get_ai_config
 
@@ -36,8 +39,6 @@ def _get_agent_model(config: BuiltinAgentConfig | None = None) -> str:
             return str(override).strip()
     except Exception:
         pass
-    if config and config.model:
-        return config.model
     return gateway_config.reasoning_model
 
 

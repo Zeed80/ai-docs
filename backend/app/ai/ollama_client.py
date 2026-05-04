@@ -81,6 +81,19 @@ def _get_breaker(model: str) -> CircuitBreaker:
     return _breakers[model]
 
 
+def _runtime_reasoning_model() -> str:
+    """Resolve reasoning model from runtime AI config with env fallback."""
+    try:
+        from app.api.ai_settings import get_ai_config
+
+        model = get_ai_config().get("model_reasoning")
+        if model and str(model).strip():
+            return str(model).strip()
+    except Exception:
+        pass
+    return settings.ollama_model_reasoning
+
+
 async def generate(
     prompt: str,
     *,
@@ -377,13 +390,20 @@ async def reasoning_generate(
 
     Automatically routes to the configured backend.
     """
+    model_name = _runtime_reasoning_model()
     if settings.ai_reasoning_backend == "claude" and settings.anthropic_api_key:
-        return await _claude_generate(prompt, system=system, temperature=temperature, max_tokens=max_tokens)
+        return await _claude_generate(
+            prompt,
+            model=model_name,
+            system=system,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
     # Default: local Ollama with reasoning model
     response = await generate(
         prompt,
-        model=settings.ollama_model_reasoning,
+        model=model_name,
         system=system,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -395,6 +415,7 @@ async def reasoning_generate(
 async def _claude_generate(
     prompt: str,
     *,
+    model: str = "claude-sonnet-4-6",
     system: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 4096,
@@ -403,7 +424,7 @@ async def _claude_generate(
     messages = [{"role": "user", "content": prompt}]
 
     payload: dict = {
-        "model": "claude-sonnet-4-6",
+        "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "messages": messages,
