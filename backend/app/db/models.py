@@ -917,6 +917,63 @@ class AgentAction(UUIDPrimaryKey, TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text)
 
 
+# ── Chat Sessions & Messages ─────────────────────────────────────────────────
+#
+# Persistent chat history for the built-in agent UI.
+
+
+class ChatSession(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "chat_sessions"
+
+    user_key: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(500), default="Новый чат", nullable=False)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
+
+
+class ChatMessage(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "chat_messages"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("chat_sessions.id"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    # user | assistant | tool | approval | error | system
+    content: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    session: Mapped["ChatSession"] = relationship(back_populates="messages")
+    attachments: Mapped[list["ChatMessageAttachment"]] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+    )
+
+
+class ChatMessageAttachment(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "chat_message_attachments"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("chat_sessions.id"), nullable=False, index=True
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("chat_messages.id"), nullable=True, index=True
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("documents.id"), nullable=True, index=True
+    )
+    file_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(100))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    message: Mapped["ChatMessage | None"] = relationship(back_populates="attachments")
+
+
 # ── Document Artifacts & Processing Jobs ───────────────────────────────────
 
 

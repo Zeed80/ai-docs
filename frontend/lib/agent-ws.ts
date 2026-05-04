@@ -7,6 +7,7 @@ export type AgentWsMode = "legacy";
 export interface AgentWsMessage extends Record<string, unknown> {
   type: string;
   content?: string;
+  session_id?: string;
   tool?: string;
   args?: Record<string, unknown>;
   result?: unknown;
@@ -50,9 +51,22 @@ export async function resolveAgentWsConfig(): Promise<AgentWsResolvedConfig> {
 
 export function buildAgentUserMessage(
   content: string,
+  sessionId?: string | null,
+  attachments?: Array<{
+    document_id: string;
+    file_name: string;
+    mime_type?: string;
+    size_bytes?: number;
+  }>,
   _mode?: AgentWsMode,
 ): Record<string, unknown> {
-  return { type: "message", content };
+  return {
+    type: "message",
+    content,
+    session_id: sessionId ?? undefined,
+    attachments:
+      attachments && attachments.length > 0 ? attachments : undefined,
+  };
 }
 
 export function buildAgentApprovalMessage(
@@ -81,6 +95,7 @@ export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
       "error",
       "tg_user",
       "canvas",
+      "session",
     ].includes(type)
   ) {
     return [data as unknown as AgentWsMessage];

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import add_timeline_event, log_action
+from app.chat.store import append_chat_attachment
 from app.db.models import (
     Document,
     DocumentArtifact,
@@ -369,6 +370,7 @@ async def get_document_presigned_url(
 async def ingest_document(
     file: UploadFile = File(...),
     source_channel: str = Query("upload"),
+    chat_session_id: uuid.UUID | None = Query(None),
     requested_doc_type: DocumentType | None = Query(None),
     auto_process: bool = Query(True),
     auto_verify: bool = Query(False),
@@ -512,6 +514,17 @@ async def ingest_document(
         )
 
     await log_action(db, action="doc.ingest", entity_type="document", entity_id=doc.id)
+    if source_channel == "chat" and chat_session_id is not None:
+        await append_chat_attachment(
+            db,
+            session_id=chat_session_id,
+            message_id=None,
+            document_id=doc.id,
+            file_name=doc.file_name,
+            mime_type=doc.mime_type,
+            size_bytes=doc.file_size,
+            metadata={"source": "ingest"},
+        )
     await add_timeline_event(
         db,
         entity_type="document",

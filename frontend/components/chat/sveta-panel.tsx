@@ -11,6 +11,13 @@ import {
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { genId } from "@/lib/ws-url";
 import { useCanvasDispatch, type CanvasBlock } from "@/lib/canvas-context";
+import {
+  createChatSession,
+  deleteChatSession,
+  getChatMessages,
+  listChatSessions,
+  type ChatSession,
+} from "@/lib/api";
 
 type MessageRole = "user" | "assistant" | "tool" | "approval" | "error";
 
@@ -23,7 +30,12 @@ interface ChatMessage {
   result?: unknown;
   status?: "calling" | "done" | "pending" | "approved" | "rejected";
   preview?: string;
-  attachments?: { name: string; docId: string }[];
+  attachments?: {
+    name: string;
+    docId: string;
+    mimeType?: string;
+    sizeBytes?: number;
+  }[];
   source?: "telegram";
 }
 
@@ -136,6 +148,9 @@ export function SvetaPanel() {
   const [isConnected, setIsConnected] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [isSessionsLoading, setIsSessionsLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -146,6 +161,86 @@ export function SvetaPanel() {
   const agentWsModeRef = useRef<AgentWsMode>("legacy");
   const dragCounterRef = useRef(0);
   const autoApproveRef = useRef(false);
+  const activeHistoryLoadRef = useRef<string | null>(null);
+
+  const restoreSessionFromStorage = useCallback(() => {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem("sveta.currentSessionId");
+  }, []);
+
+  const persistSessionToStorage = useCallback((sessionId: string | null) => {
+    if (typeof window === "undefined") return;
+    if (!sessionId) {
+      window.localStorage.removeItem("sveta.currentSessionId");
+      return;
+    }
+    window.localStorage.setItem("sveta.currentSessionId", sessionId);
+  }, []);
+
+  const hydrateMessages = useCallback(async (sessionId: string) => {
+    activeHistoryLoadRef.current = sessionId;
+    const history = await getChatMessages(sessionId);
+    if (activeHistoryLoadRef.current !== sessionId) return;
+    const nextMessages: ChatMessage[] = history
+      .map((msg) => {
+        const role = msg.role as MessageRole;
+        if (
+          !["user", "assistant", "tool", "approval", "error"].includes(role)
+        ) {
+          return null;
+        }
+        return {
+          id: msg.id,
+          role,
+          content: msg.content ?? undefined,
+          attachments:
+            msg.attachments
+              ?.filter((item) => item.document_id)
+              .map((item) => ({
+                name: item.file_name,
+                docId: item.document_id!,
+                mimeType: item.mime_type ?? undefined,
+                sizeBytes: item.size_bytes ?? undefined,
+              })) ?? [],
+        } as ChatMessage;
+      })
+      .filter(Boolean) as ChatMessage[];
+    setMessages(nextMessages);
+  }, []);
+
+  const refreshSessions = useCallback(async () => {
+    setIsSessionsLoading(true);
+    try {
+      const items = await listChatSessions();
+      setSessions(items);
+      const restored = restoreSessionFromStorage();
+      const fallback = items[0]?.id ?? null;
+      const nextSession =
+        currentSessionId && items.some((x) => x.id === currentSessionId)
+          ? currentSessionId
+          : restored && items.some((x) => x.id === restored)
+            ? restored
+            : fallback;
+      if (nextSession) {
+        setCurrentSessionId(nextSession);
+        persistSessionToStorage(nextSession);
+        await hydrateMessages(nextSession);
+      } else {
+        const created = await createChatSession("Новый чат");
+        setSessions([created]);
+        setCurrentSessionId(created.id);
+        persistSessionToStorage(created.id);
+        setMessages([]);
+      }
+    } finally {
+      setIsSessionsLoading(false);
+    }
+  }, [
+    currentSessionId,
+    hydrateMessages,
+    persistSessionToStorage,
+    restoreSessionFromStorage,
+  ]);
 
   const connect = useCallback(() => {
     void (async () => {
@@ -180,6 +275,10 @@ export function SvetaPanel() {
     connect();
     return () => wsRef.current?.close();
   }, [connect]);
+
+  useEffect(() => {
+    void refreshSessions();
+  }, [refreshSessions]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -267,6 +366,29 @@ export function SvetaPanel() {
       streamingIdRef.current = null;
       autoApproveRef.current = false;
       setIsStreaming(false);
+      return;
+    }
+
+    if (type === "session") {
+      const sessionId = (data.session_id as string) || null;
+      if (sessionId) {
+        setCurrentSessionId(sessionId);
+        persistSessionToStorage(sessionId);
+        setSessions((prev) => {
+          if (prev.some((x) => x.id === sessionId)) return prev;
+          return [
+            {
+              id: sessionId,
+              title: "Новый чат",
+              user_key: "anonymous",
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              last_message_at: new Date().toISOString(),
+            },
+            ...prev,
+          ];
+        });
+      }
       return;
     }
 
@@ -396,7 +518,9 @@ export function SvetaPanel() {
   async function uploadFile(af: AttachedFile): Promise<string | null> {
     const form = new FormData();
     form.append("file", af.file);
-    const res = await fetch("/api/documents/ingest?source_channel=chat", {
+    const params = new URLSearchParams({ source_channel: "chat" });
+    if (currentSessionId) params.set("chat_session_id", currentSessionId);
+    const res = await fetch(`/api/documents/ingest?${params.toString()}`, {
       method: "POST",
       body: form,
     });
@@ -474,7 +598,12 @@ export function SvetaPanel() {
     const displayContent = input.trim() || undefined;
     const msgAttachments = uploadedFiles
       .filter((f) => f.docId)
-      .map((f) => ({ name: f.name, docId: f.docId! }));
+      .map((f) => ({
+        name: f.name,
+        docId: f.docId!,
+        mimeType: f.file.type || undefined,
+        sizeBytes: f.size,
+      }));
 
     setMessages((prev) => [
       ...prev,
@@ -487,7 +616,19 @@ export function SvetaPanel() {
     ]);
 
     wsRef.current.send(
-      JSON.stringify(buildAgentUserMessage(content, agentWsModeRef.current)),
+      JSON.stringify(
+        buildAgentUserMessage(
+          content,
+          currentSessionId,
+          msgAttachments.map((item) => ({
+            document_id: item.docId,
+            file_name: item.name,
+            mime_type: item.mimeType,
+            size_bytes: item.sizeBytes,
+          })),
+          agentWsModeRef.current,
+        ),
+      ),
     );
     setInput("");
     setAttachedFiles([]);
@@ -514,6 +655,39 @@ export function SvetaPanel() {
   function handleApproveAll(msgId: string) {
     autoApproveRef.current = true;
     handleApproval(msgId, true);
+  }
+
+  async function handleCreateNewChat() {
+    const created = await createChatSession("Новый чат");
+    setSessions((prev) => [created, ...prev]);
+    setCurrentSessionId(created.id);
+    persistSessionToStorage(created.id);
+    setMessages([]);
+  }
+
+  async function handleSelectChat(sessionId: string) {
+    setCurrentSessionId(sessionId);
+    persistSessionToStorage(sessionId);
+    await hydrateMessages(sessionId);
+  }
+
+  async function handleDeleteCurrentChat() {
+    if (!currentSessionId) return;
+    await deleteChatSession(currentSessionId);
+    const updated = sessions.filter((x) => x.id !== currentSessionId);
+    setSessions(updated);
+    const fallback = updated[0]?.id ?? null;
+    if (fallback) {
+      setCurrentSessionId(fallback);
+      persistSessionToStorage(fallback);
+      await hydrateMessages(fallback);
+    } else {
+      const created = await createChatSession("Новый чат");
+      setSessions([created]);
+      setCurrentSessionId(created.id);
+      persistSessionToStorage(created.id);
+      setMessages([]);
+    }
   }
 
   const isUploading = attachedFiles.some((f) => f.status === "uploading");
@@ -565,6 +739,33 @@ export function SvetaPanel() {
         {!isConnected && (
           <span className="ml-auto text-[10px] text-amber-400">офлайн</span>
         )}
+      </div>
+      <div className="px-3 py-2 border-b border-slate-700 flex items-center gap-2">
+        <select
+          value={currentSessionId ?? ""}
+          onChange={(e) => void handleSelectChat(e.target.value)}
+          className="flex-1 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100"
+          disabled={isSessionsLoading}
+        >
+          {sessions.map((session) => (
+            <option key={session.id} value={session.id}>
+              {session.title}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => void handleCreateNewChat()}
+          className="px-2 py-1 text-xs rounded bg-slate-700 border border-slate-600 text-slate-200 hover:bg-slate-600"
+        >
+          + Новый чат
+        </button>
+        <button
+          onClick={() => void handleDeleteCurrentChat()}
+          className="px-2 py-1 text-xs rounded bg-red-900/50 border border-red-700/50 text-red-200 hover:bg-red-800/60"
+          disabled={!currentSessionId}
+        >
+          Удалить
+        </button>
       </div>
 
       {/* Drag overlay */}

@@ -84,7 +84,37 @@ export type CaseBundle = {
   tasks: TaskJob[];
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+export type ChatSession = {
+  id: string;
+  title: string;
+  user_key: string;
+  created_at: string;
+  updated_at: string;
+  last_message_at: string | null;
+};
+
+export type ChatAttachment = {
+  id: string;
+  message_id: string | null;
+  document_id: string | null;
+  file_name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  created_at: string;
+};
+
+export type ChatHistoryMessage = {
+  id: string;
+  session_id: string;
+  role: string;
+  content: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  attachments: ChatAttachment[];
+};
+
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -93,6 +123,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
+  }
+  if (response.status === 204) {
+    return undefined as T;
   }
   return (await response.json()) as T;
 }
@@ -125,7 +158,10 @@ export async function createCase(payload: {
   });
 }
 
-export async function uploadDocument(caseId: string, file: File): Promise<WorkspaceDocument> {
+export async function uploadDocument(
+  caseId: string,
+  file: File,
+): Promise<WorkspaceDocument> {
   const form = new FormData();
   form.append("file", file);
   return apiFetch<WorkspaceDocument>(`/api/cases/${caseId}/documents`, {
@@ -135,18 +171,27 @@ export async function uploadDocument(caseId: string, file: File): Promise<Worksp
 }
 
 export async function processDocument(documentId: string): Promise<TaskJob> {
-  return apiFetch<TaskJob>(`/api/documents/${documentId}/process`, { method: "POST" });
+  return apiFetch<TaskJob>(`/api/documents/${documentId}/process`, {
+    method: "POST",
+  });
 }
 
 export async function runTask(taskId: string): Promise<TaskJob> {
   return apiFetch<TaskJob>(`/api/tasks/${taskId}/run`, { method: "POST" });
 }
 
-export async function createDocumentDownloadUrl(documentId: string): Promise<SignedFileUrl> {
-  return apiFetch<SignedFileUrl>(`/api/documents/${documentId}/download-url`, { method: "POST" });
+export async function createDocumentDownloadUrl(
+  documentId: string,
+): Promise<SignedFileUrl> {
+  return apiFetch<SignedFileUrl>(`/api/documents/${documentId}/download-url`, {
+    method: "POST",
+  });
 }
 
-export async function approveGate(gateId: string, reason: string): Promise<unknown> {
+export async function approveGate(
+  gateId: string,
+  reason: string,
+): Promise<unknown> {
   return apiFetch(`/api/approvals/${gateId}/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -154,7 +199,10 @@ export async function approveGate(gateId: string, reason: string): Promise<unkno
   });
 }
 
-export async function rejectGate(gateId: string, reason: string): Promise<unknown> {
+export async function rejectGate(
+  gateId: string,
+  reason: string,
+): Promise<unknown> {
   return apiFetch(`/api/approvals/${gateId}/reject`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -162,7 +210,10 @@ export async function rejectGate(gateId: string, reason: string): Promise<unknow
   });
 }
 
-export async function runAgentScenario(caseId: string, scenario: string): Promise<unknown> {
+export async function runAgentScenario(
+  caseId: string,
+  scenario: string,
+): Promise<unknown> {
   return apiFetch(`/api/agent/scenarios/${scenario}/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -171,9 +222,39 @@ export async function runAgentScenario(caseId: string, scenario: string): Promis
 }
 
 export async function analyzeDrawing(documentId: string): Promise<unknown> {
-  return apiFetch(`/api/documents/${documentId}/drawing-analysis`, { method: "POST" });
+  return apiFetch(`/api/documents/${documentId}/drawing-analysis`, {
+    method: "POST",
+  });
 }
 
 export async function extractInvoice(documentId: string): Promise<unknown> {
-  return apiFetch(`/api/documents/${documentId}/invoice-extraction`, { method: "POST" });
+  return apiFetch(`/api/documents/${documentId}/invoice-extraction`, {
+    method: "POST",
+  });
+}
+
+export async function listChatSessions(): Promise<ChatSession[]> {
+  return apiFetch<ChatSession[]>("/api/chat/sessions");
+}
+
+export async function createChatSession(
+  title = "Новый чат",
+): Promise<ChatSession> {
+  return apiFetch<ChatSession>("/api/chat/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  await apiFetch<void>(`/api/chat/sessions/${sessionId}`, { method: "DELETE" });
+}
+
+export async function getChatMessages(
+  sessionId: string,
+): Promise<ChatHistoryMessage[]> {
+  return apiFetch<ChatHistoryMessage[]>(
+    `/api/chat/sessions/${sessionId}/messages`,
+  );
 }

@@ -55,26 +55,26 @@ export function ChatWidget() {
         agentWsModeRef.current = config.mode;
         const ws = new WebSocket(config.endpoint);
 
-      ws.onopen = () => setIsConnected(true);
+        ws.onopen = () => setIsConnected(true);
 
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data) as Record<string, unknown>;
-          for (const message of normalizeAgentMessages(data)) {
-            handleServerMessage(message);
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data) as Record<string, unknown>;
+            for (const message of normalizeAgentMessages(data)) {
+              handleServerMessage(message);
+            }
+          } catch {
+            // plain text fallback
+            appendAssistant(String(event.data));
           }
-        } catch {
-          // plain text fallback
-          appendAssistant(String(event.data));
-        }
-      };
+        };
 
-      ws.onclose = () => {
-        setIsConnected(false);
-        setTimeout(connect, 5000);
-      };
+        ws.onclose = () => {
+          setIsConnected(false);
+          setTimeout(connect, 5000);
+        };
 
-      ws.onerror = () => setIsConnected(false);
+        ws.onerror = () => setIsConnected(false);
 
         wsRef.current = ws;
       } catch {
@@ -189,12 +189,16 @@ export function ChatWidget() {
     )
       return;
     const content = input.trim();
-    setMessages((prev) => [
-      ...prev,
-      { id: genId(), role: "user", content },
-    ]);
+    setMessages((prev) => [...prev, { id: genId(), role: "user", content }]);
     wsRef.current.send(
-      JSON.stringify(buildAgentUserMessage(content, agentWsModeRef.current)),
+      JSON.stringify(
+        buildAgentUserMessage(
+          content,
+          undefined,
+          undefined,
+          agentWsModeRef.current,
+        ),
+      ),
     );
     setInput("");
     setIsStreaming(true);
@@ -203,7 +207,9 @@ export function ChatWidget() {
   function handleApproval(msgId: string, approved: boolean) {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(
-      JSON.stringify(buildAgentApprovalMessage(approved, agentWsModeRef.current)),
+      JSON.stringify(
+        buildAgentApprovalMessage(approved, agentWsModeRef.current),
+      ),
     );
     setMessages((prev) =>
       prev.map((m) =>

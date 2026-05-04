@@ -18,6 +18,7 @@ from app.api import (
     graph, memory, technology, ntd, telegram,
     canvas, mailbox, email_templates,
     drawings, tool_catalog,
+    chat_sessions,
 )
 
 
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(email_templates.router, prefix="/api/email-templates", tags=["email-templates"])
     app.include_router(drawings.router, prefix="/api/drawings", tags=["drawings"])
     app.include_router(tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"])
+    app.include_router(chat_sessions.router, prefix="/api/chat", tags=["chat"])
 
     return app
 
