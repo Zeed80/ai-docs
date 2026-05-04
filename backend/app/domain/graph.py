@@ -283,6 +283,8 @@ class MemoryExplainRequest(BaseModel):
     node_types: list[str] | None = None
     limit: int = Field(10, ge=1, le=50)
     neighborhood_depth: int = Field(1, ge=0, le=2)
+    retrieval_mode: Literal["sql", "sql_vector", "sql_vector_rerank", "graph", "hybrid"] = "hybrid"
+    include_explain: bool = True
 
 
 class MemoryExplainResponse(BaseModel):

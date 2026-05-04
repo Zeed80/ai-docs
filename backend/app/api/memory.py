@@ -66,8 +66,15 @@ async def search_memory(
 
     hits = _merge_memory_hits(hits)
 
+    # sql_vector_rerank: use cross-encoder only when reranker_model is set in AI settings.
+    # Without it, fall back to weighted SQL/vector/graph blending — otherwise scores stay raw
+    # and ordering looks arbitrary vs other modes ("режим не работает").
     if payload.retrieval_mode == "sql_vector_rerank" and hits:
-        hits = await _try_rerank_hits(payload.query, hits)
+        cfg = get_ai_config()
+        if cfg.get("reranker_model"):
+            hits = await _try_rerank_hits(payload.query, hits)
+        else:
+            hits = _rank_memory_hits(hits)
     else:
         hits = _rank_memory_hits(hits)
 
@@ -363,6 +370,8 @@ async def explain_memory(
             node_types=payload.node_types,
             document_id=payload.document_id,
             limit=payload.limit,
+            retrieval_mode=payload.retrieval_mode,
+            include_explain=payload.include_explain,
         ),
         db,
     )

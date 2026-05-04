@@ -1247,6 +1247,14 @@ export default function SettingsPage() {
                         <option value="hybrid">Hybrid</option>
                         <option value="graph">Graph</option>
                       </select>
+                      <p className="text-[11px] text-slate-500 mt-1 leading-snug">
+                        Режим задаёт состав поиска на сервере: vector и rerank
+                        нужны индекс в Qdrant и модель reranker на вкладке
+                        «Модели»; graph — узлы графа из памяти документов; без
+                        данных ответ будет пустым. После смены режима сохраните
+                        настройки и при необходимости переподключите чат (новый
+                        WebSocket).
+                      </p>
                     </Field>
                     <Field label="Top-K результатов">
                       <input
