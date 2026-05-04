@@ -381,6 +381,8 @@ export default function SettingsPage() {
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [agentSkills, setAgentSkills] = useState<AgentSkill[]>([]);
   const [agentSkillFilter, setAgentSkillFilter] = useState("");
+  const selectAllSkillsRef = useRef<HTMLInputElement | null>(null);
+  const agentSkillToggleRefs = useRef<Array<HTMLInputElement | null>>([]);
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentSaved, setAgentSaved] = useState(false);
 
@@ -835,6 +837,63 @@ export default function SettingsPage() {
       skill.path.toLowerCase().includes(q)
     );
   });
+
+  const selectedSkillsCount = agentConfig
+    ? agentSkills.filter((skill) =>
+        agentConfig.exposed_skills.includes(skill.name),
+      ).length
+    : 0;
+  const allSkillsSelected =
+    !!agentConfig &&
+    agentSkills.length > 0 &&
+    selectedSkillsCount === agentSkills.length;
+  const someSkillsSelected =
+    !!agentConfig && selectedSkillsCount > 0 && !allSkillsSelected;
+
+  useEffect(() => {
+    if (selectAllSkillsRef.current) {
+      selectAllSkillsRef.current.indeterminate = someSkillsSelected;
+    }
+  }, [someSkillsSelected]);
+
+  useEffect(() => {
+    agentSkillToggleRefs.current = agentSkillToggleRefs.current.slice(
+      0,
+      filteredAgentSkills.length,
+    );
+  }, [filteredAgentSkills.length]);
+
+  function toggleAllSkills(enabled: boolean) {
+    if (!agentConfig) return;
+    const nextExposed = enabled
+      ? agentSkills.map((skill) => skill.name).sort()
+      : [];
+    const nextGates = agentConfig.approval_gates.filter((gate) =>
+      nextExposed.includes(gate),
+    );
+    setAgentConfig({
+      ...agentConfig,
+      exposed_skills: nextExposed,
+      approval_gates: nextGates,
+    });
+  }
+
+  function handleSkillArrowNavigation(
+    event: React.KeyboardEvent<HTMLInputElement>,
+    index: number,
+  ) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+      return;
+    }
+    event.preventDefault();
+    const delta = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex = index + delta;
+    const target = agentSkillToggleRefs.current[nextIndex];
+    if (target) {
+      target.focus();
+      target.scrollIntoView({ block: "nearest" });
+    }
+  }
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -1378,11 +1437,21 @@ export default function SettingsPage() {
               <SectionCard title="Инструменты (Skills)">
                 <div className="space-y-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-xs text-slate-400">
-                      Включено {agentConfig.exposed_skills.length} из{" "}
-                      {agentSkills.length} · подтверждений{" "}
-                      {agentConfig.approval_gates.length}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <p className="text-xs text-slate-400">
+                        Включено {selectedSkillsCount} из {agentSkills.length} ·
+                        подтверждений {agentConfig.approval_gates.length}
+                      </p>
+                      <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+                        <input
+                          ref={selectAllSkillsRef}
+                          type="checkbox"
+                          checked={allSkillsSelected}
+                          onChange={(e) => toggleAllSkills(e.target.checked)}
+                        />
+                        Выбрать все скиллы
+                      </label>
+                    </div>
                     <input
                       className="w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 sm:w-64 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       value={agentSkillFilter}
@@ -1403,7 +1472,7 @@ export default function SettingsPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800">
-                        {filteredAgentSkills.map((skill) => {
+                        {filteredAgentSkills.map((skill, index) => {
                           const isExposed = agentConfig.exposed_skills.includes(
                             skill.name,
                           );
@@ -1418,6 +1487,12 @@ export default function SettingsPage() {
                                 <input
                                   type="checkbox"
                                   checked={isExposed}
+                                  ref={(el) => {
+                                    agentSkillToggleRefs.current[index] = el;
+                                  }}
+                                  onKeyDown={(event) =>
+                                    handleSkillArrowNavigation(event, index)
+                                  }
                                   onChange={(e) =>
                                     updateAgentSkill(
                                       skill.name,
