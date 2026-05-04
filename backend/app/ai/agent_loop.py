@@ -690,6 +690,7 @@ class AgentSession:
 
             await self._append_memory_context()
 
+            consecutive_empty_responses = 0
             for iteration in range(self._config.max_steps):
                 self._iteration = iteration
 
@@ -728,6 +729,36 @@ class AgentSession:
                 ))
 
                 if not tool_calls:
+                    if not full_text.strip():
+                        consecutive_empty_responses += 1
+                        logger.warning(
+                            "agent_empty_llm_response",
+                            session_id=self._session_id,
+                            iteration=iteration,
+                            consecutive_empty=consecutive_empty_responses,
+                        )
+                        if consecutive_empty_responses >= 2:
+                            await self._send({
+                                "type": "error",
+                                "content": (
+                                    "Модель вернула пустой ответ после вызова инструмента. "
+                                    "Попробуйте повторить запрос или выбрать другую модель агента."
+                                ),
+                            })
+                            break
+                        # Nudge the next iteration so model finishes with either
+                        # the next tool call or a final textual answer.
+                        self.messages.append({
+                            "role": "system",
+                            "content": (
+                                "Продолжи выполнение задачи: используй уже полученные "
+                                "результаты инструментов и выдай следующий шаг "
+                                "или финальный ответ пользователю."
+                            ),
+                        })
+                        self._trim_history()
+                        continue
+                    consecutive_empty_responses = 0
                     # Fire-and-forget: index this turn into memory
                     if self._config.memory_enabled and full_text:
                         latest_user = next(

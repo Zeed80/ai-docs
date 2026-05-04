@@ -182,3 +182,76 @@ tools:
 
 async def _noop_log_action(self, **kwargs):
     return None
+
+
+@pytest.mark.asyncio
+async def test_agent_retries_on_empty_response_after_tool_result(tmp_path, monkeypatch):
+    registry_path = tmp_path / "_registry.yml"
+    registry_path.write_text(
+        """
+tools:
+  - name: invoice.list
+    description: List invoices.
+    method: GET
+    path: /api/invoices
+""",
+        encoding="utf-8",
+    )
+    config = BuiltinAgentConfig(
+        model="mock-model",
+        ollama_url="http://ollama",
+        backend_url="http://backend",
+        exposed_skills=["invoice.list"],
+        approval_gates=[],
+        memory_enabled=False,
+        max_steps=4,
+    )
+    sent: list[dict] = []
+    call_count = 0
+
+    monkeypatch.setattr(agent_loop, "get_builtin_agent_config", lambda: config)
+    monkeypatch.setattr(
+        agent_loop,
+        "gateway_config",
+        SimpleNamespace(registry_path=registry_path, base_prompt_path=tmp_path / "base.md"),
+    )
+    monkeypatch.setattr(agent_loop.AgentSession, "_log_action", _noop_log_action)
+
+    async def fake_call_provider_streaming(
+        messages,
+        tools,
+        system_prompt,
+        runtime_config,
+        on_token,
+        model_override=None,
+    ):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "invoice__list", "arguments": {}}}],
+            }
+        if call_count == 2:
+            # Reproduces the bug: empty assistant response after tool result.
+            return {"role": "assistant", "content": ""}
+        await on_token("Готово, анализ завершен")
+        return {"role": "assistant", "content": "Готово, анализ завершен"}
+
+    async def fake_execute_skill(skill, args, runtime_config):
+        assert skill["name"] == "invoice.list"
+        return {"items": [{"id": "inv-1"}], "total": 1}
+
+    monkeypatch.setattr(agent_loop, "_call_provider_streaming", fake_call_provider_streaming)
+    monkeypatch.setattr(agent_loop, "_execute_skill", fake_execute_skill)
+
+    async def capture(message: dict):
+        sent.append(message)
+
+    session = agent_loop.AgentSession(send=capture)
+    await session.on_user_message("Построй связи по всем счетам")
+
+    assert call_count == 3
+    assert {"type": "text", "content": "Готово, анализ завершен"} in sent
+    assert sent[-1] == {"type": "done"}
