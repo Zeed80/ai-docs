@@ -9,6 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.ai.agent_loop import AgentSession
 from app.chat.store import (
+    ChatSessionNotFoundError,
     append_chat_attachment,
     append_chat_message,
     ensure_chat_session,
@@ -133,57 +134,68 @@ async def chat_ws(ws: WebSocket) -> None:
                             incoming_session_id = uuid.UUID(raw_session_id)
                         except ValueError:
                             incoming_session_id = None
-                    async with db_factory() as db:
-                        chat_session = await ensure_chat_session(
-                            db,
-                            user_key=user_key,
-                            session_id=incoming_session_id,
-                        )
-                        active_session_id = chat_session.id
-                        user_message = await append_chat_message(
-                            db,
-                            session_id=chat_session.id,
-                            role="user",
-                            content=content,
-                        )
-                        attachments = data.get("attachments")
-                        attachment_doc_ids: list[uuid.UUID] = []
-                        if isinstance(attachments, list):
-                            for item in attachments:
-                                if not isinstance(item, dict):
-                                    continue
-                                raw_doc = item.get("document_id")
-                                parsed_doc: uuid.UUID | None = None
-                                if isinstance(raw_doc, str):
-                                    try:
-                                        parsed_doc = uuid.UUID(raw_doc)
-                                        attachment_doc_ids.append(parsed_doc)
-                                    except ValueError:
-                                        parsed_doc = None
-                                await append_chat_attachment(
-                                    db,
-                                    session_id=chat_session.id,
-                                    message_id=user_message.id,
-                                    document_id=parsed_doc,
-                                    file_name=str(item.get("file_name") or "attachment"),
-                                    mime_type=str(item.get("mime_type")) if item.get("mime_type") else None,
-                                    size_bytes=(
-                                        int(item.get("size_bytes"))
-                                        if isinstance(item.get("size_bytes"), int)
-                                        else None
-                                    ),
-                                )
-                        await link_pending_attachments_to_message(
-                            db,
-                            session_id=chat_session.id,
-                            message_id=user_message.id,
-                            document_ids=attachment_doc_ids,
-                        )
-                        await db.commit()
+                    try:
+                        async with db_factory() as db:
+                            chat_session = await ensure_chat_session(
+                                db,
+                                user_key=user_key,
+                                session_id=incoming_session_id,
+                            )
+                            active_session_id = chat_session.id
+                            user_message = await append_chat_message(
+                                db,
+                                session_id=chat_session.id,
+                                role="user",
+                                content=content,
+                            )
+                            attachments = data.get("attachments")
+                            attachment_doc_ids: list[uuid.UUID] = []
+                            if isinstance(attachments, list):
+                                for item in attachments:
+                                    if not isinstance(item, dict):
+                                        continue
+                                    raw_doc = item.get("document_id")
+                                    parsed_doc: uuid.UUID | None = None
+                                    if isinstance(raw_doc, str):
+                                        try:
+                                            parsed_doc = uuid.UUID(raw_doc)
+                                            attachment_doc_ids.append(parsed_doc)
+                                        except ValueError:
+                                            parsed_doc = None
+                                    await append_chat_attachment(
+                                        db,
+                                        session_id=chat_session.id,
+                                        message_id=user_message.id,
+                                        document_id=parsed_doc,
+                                        file_name=str(item.get("file_name") or "attachment"),
+                                        mime_type=str(item.get("mime_type")) if item.get("mime_type") else None,
+                                        size_bytes=(
+                                            int(item.get("size_bytes"))
+                                            if isinstance(item.get("size_bytes"), int)
+                                            else None
+                                        ),
+                                    )
+                            await link_pending_attachments_to_message(
+                                db,
+                                session_id=chat_session.id,
+                                message_id=user_message.id,
+                                document_ids=attachment_doc_ids,
+                            )
+                            await db.commit()
+                    except ChatSessionNotFoundError:
+                        await send({
+                            "type": "error",
+                            "content": "Чат не найден или устарел. Выберите чат из списка или создайте новый.",
+                        })
+                        continue
                     await send({"type": "session", "session_id": str(active_session_id)})
                     turn_in_progress = True
                     assistant_buffer = []
                     current_turn = asyncio.create_task(session.on_user_message(content))
+
+            elif msg_type == "stop":
+                if current_turn and not current_turn.done():
+                    current_turn.cancel()
 
             elif msg_type == "approve":
                 await session.on_approval(True)

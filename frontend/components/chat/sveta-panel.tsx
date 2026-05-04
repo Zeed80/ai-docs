@@ -162,6 +162,7 @@ export function SvetaPanel() {
   const dragCounterRef = useRef(0);
   const autoApproveRef = useRef(false);
   const activeHistoryLoadRef = useRef<string | null>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
 
   const restoreSessionFromStorage = useCallback(() => {
     if (typeof window === "undefined") return null;
@@ -215,18 +216,21 @@ export function SvetaPanel() {
       setSessions(items);
       const restored = restoreSessionFromStorage();
       const fallback = items[0]?.id ?? null;
+      const cur = currentSessionIdRef.current;
       const nextSession =
-        currentSessionId && items.some((x) => x.id === currentSessionId)
-          ? currentSessionId
+        cur && items.some((x) => x.id === cur)
+          ? cur
           : restored && items.some((x) => x.id === restored)
             ? restored
             : fallback;
       if (nextSession) {
+        currentSessionIdRef.current = nextSession;
         setCurrentSessionId(nextSession);
         persistSessionToStorage(nextSession);
         await hydrateMessages(nextSession);
       } else {
         const created = await createChatSession("Новый чат");
+        currentSessionIdRef.current = created.id;
         setSessions([created]);
         setCurrentSessionId(created.id);
         persistSessionToStorage(created.id);
@@ -235,12 +239,16 @@ export function SvetaPanel() {
     } finally {
       setIsSessionsLoading(false);
     }
-  }, [
-    currentSessionId,
-    hydrateMessages,
-    persistSessionToStorage,
-    restoreSessionFromStorage,
-  ]);
+  }, [hydrateMessages, persistSessionToStorage, restoreSessionFromStorage]);
+
+  const reloadSessionListOnly = useCallback(async () => {
+    try {
+      const items = await listChatSessions();
+      setSessions(items);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const connect = useCallback(() => {
     void (async () => {
@@ -277,8 +285,14 @@ export function SvetaPanel() {
   }, [connect]);
 
   useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+
+  useEffect(() => {
     void refreshSessions();
-  }, [refreshSessions]);
+    // Initial bootstrap only; avoid re-running when session id changes (would reset selection / hydrate).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -372,6 +386,7 @@ export function SvetaPanel() {
     if (type === "session") {
       const sessionId = (data.session_id as string) || null;
       if (sessionId) {
+        currentSessionIdRef.current = sessionId;
         setCurrentSessionId(sessionId);
         persistSessionToStorage(sessionId);
         setSessions((prev) => {
@@ -657,15 +672,36 @@ export function SvetaPanel() {
     handleApproval(msgId, true);
   }
 
+  function stopGeneration() {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      streamingIdRef.current = null;
+      setIsStreaming(false);
+      return;
+    }
+    wsRef.current.send(JSON.stringify({ type: "stop" }));
+    streamingIdRef.current = null;
+    setIsStreaming(false);
+  }
+
   async function handleCreateNewChat() {
-    const created = await createChatSession("Новый чат");
-    setSessions((prev) => [created, ...prev]);
-    setCurrentSessionId(created.id);
-    persistSessionToStorage(created.id);
-    setMessages([]);
+    try {
+      const created = await createChatSession("Новый чат");
+      currentSessionIdRef.current = created.id;
+      setSessions((prev) => [
+        created,
+        ...prev.filter((x) => x.id !== created.id),
+      ]);
+      setCurrentSessionId(created.id);
+      persistSessionToStorage(created.id);
+      setMessages([]);
+      await reloadSessionListOnly();
+    } catch {
+      /* create failed — keep current UI */
+    }
   }
 
   async function handleSelectChat(sessionId: string) {
+    currentSessionIdRef.current = sessionId;
     setCurrentSessionId(sessionId);
     persistSessionToStorage(sessionId);
     await hydrateMessages(sessionId);
@@ -673,20 +709,33 @@ export function SvetaPanel() {
 
   async function handleDeleteCurrentChat() {
     if (!currentSessionId) return;
-    await deleteChatSession(currentSessionId);
-    const updated = sessions.filter((x) => x.id !== currentSessionId);
-    setSessions(updated);
-    const fallback = updated[0]?.id ?? null;
-    if (fallback) {
-      setCurrentSessionId(fallback);
-      persistSessionToStorage(fallback);
-      await hydrateMessages(fallback);
+    try {
+      await deleteChatSession(currentSessionId);
+    } catch {
+      return;
+    }
+    const remainingAfterDelete = await listChatSessions();
+    setSessions(remainingAfterDelete);
+    if (remainingAfterDelete.length > 0) {
+      const next = remainingAfterDelete[0]!.id;
+      currentSessionIdRef.current = next;
+      setCurrentSessionId(next);
+      persistSessionToStorage(next);
+      await hydrateMessages(next);
     } else {
-      const created = await createChatSession("Новый чат");
-      setSessions([created]);
-      setCurrentSessionId(created.id);
-      persistSessionToStorage(created.id);
-      setMessages([]);
+      try {
+        const created = await createChatSession("Новый чат");
+        currentSessionIdRef.current = created.id;
+        setSessions([created]);
+        setCurrentSessionId(created.id);
+        persistSessionToStorage(created.id);
+        setMessages([]);
+      } catch {
+        currentSessionIdRef.current = null;
+        setCurrentSessionId(null);
+        persistSessionToStorage(null);
+        setMessages([]);
+      }
     }
   }
 
@@ -1024,10 +1073,27 @@ export function SvetaPanel() {
             disabled={isDegraded || isStreaming}
             className="flex-1 px-3 py-2 text-sm bg-slate-700 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
           />
+          {isStreaming && (
+            <button
+              type="button"
+              onClick={stopGeneration}
+              title="Остановить генерацию"
+              className="px-3 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-500 border border-slate-500 transition-colors shrink-0"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden
+              >
+                <rect x="6" y="6" width="12" height="12" rx="1" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={sendMessage}
             disabled={!canSend}
-            className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0"
           >
             <svg
               className="w-4 h-4"

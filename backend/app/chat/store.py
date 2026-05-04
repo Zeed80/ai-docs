@@ -9,6 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import ChatMessage, ChatMessageAttachment, ChatSession
 
 
+class ChatSessionNotFoundError(LookupError):
+    """No chat session for the given id and user_key."""
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -56,6 +60,7 @@ async def ensure_chat_session(
         existing = await get_chat_session(db, session_id=session_id, user_key=user_key)
         if existing is not None:
             return existing
+        raise ChatSessionNotFoundError(str(session_id))
     return await create_chat_session(db, user_key=user_key)
 
 

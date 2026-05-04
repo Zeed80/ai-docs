@@ -113,11 +113,19 @@ export type ChatHistoryMessage = {
   attachments: ChatAttachment[];
 };
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+/** Browser: same-origin `/api` via Next rewrites. SSR: direct backend or INTERNAL_API_URL. */
+function getApiBaseUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_BASE_URL) {
+    return process.env.NEXT_PUBLIC_API_BASE_URL;
+  }
+  if (typeof window !== "undefined") {
+    return "";
+  }
+  return process.env.INTERNAL_API_URL ?? "http://127.0.0.1:8000";
+}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
     cache: "no-store",
   });
