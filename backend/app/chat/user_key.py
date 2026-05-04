@@ -4,6 +4,7 @@ from fastapi import Depends, WebSocket
 
 from app.auth.jwt import get_current_user_optional
 from app.auth.models import UserInfo
+from app.config import settings
 
 
 def to_user_key(user: UserInfo | None) -> str:
@@ -25,6 +26,10 @@ async def get_user_key(user: UserInfo | None = Depends(get_current_user_optional
 async def get_ws_user_key(ws: WebSocket) -> str:
     # WebSocket auth is currently optional for the built-in panel;
     # keep behavior compatible and isolate chats by authenticated subject when available.
+    if not settings.auth_enabled:
+        # Keep WS behavior consistent with REST dependencies in dev mode.
+        return "dev-user"
+
     auth_header = ws.headers.get("authorization") or ""
     if not auth_header.lower().startswith("bearer "):
         return "anonymous"

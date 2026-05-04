@@ -27,7 +27,67 @@ _OPERATIONAL_POLICY = """
 - Не задавай уточняющие вопросы, если сущность уже явно названа пользователем (например "счетов" => invoices).
 - После уточнения пользователя (например: "только счетов") немедленно выполняй tool-вызов без повторного уточнения.
 - Для простых запросов не объясняй внутреннюю механику ("мне нужно вызвать инструмент"), а сразу выполняй и отвечай результатом.
+- Про склад и ТМЦ (остатки, «сколько фрез», «перечисли фрезы»): сразу вызывай `warehouse.list_inventory` с `search` по ключевому слову (например `фрез` покроет «фреза/фрезы» в названии), без уточняющих вопросов про «типы» или «категории».
+- Короткие ответы «все», «да», «ок» после вопроса про фрезы — это согласие на полный охват; выполняй тот же list/count и не переспрашивай.
 """.strip()
+
+
+def _normalize_ru_yo(text: str) -> str:
+    return text.replace("ё", "е").replace("Ё", "Е")
+
+
+_FREZ_SUBSTRINGS = ("фрез", "endmill", "фреза")
+
+
+def _mentions_frez_intent(text: str) -> bool:
+    t = _normalize_ru_yo(text.lower())
+    return any(s in t for s in _FREZ_SUBSTRINGS)
+
+
+_SHORT_SCOPE_ACK = frozenset({
+    "все", "всё", "все.", "всё.", "да", "да.", "ок", "ок.", "ладно", "давай",
+    "хорошо", "угу", "ага", "yes", "all",
+})
+
+
+def _is_short_scope_followup(text: str) -> bool:
+    t = _normalize_ru_yo(text.strip().lower().rstrip(".!"))
+    if not t:
+        return False
+    if t in _SHORT_SCOPE_ACK:
+        return True
+    if len(t) <= 4 and t in {"все", "всё", "да", "ок"}:
+        return True
+    return False
+
+
+def _frez_inventory_intent(text: str) -> str | None:
+    """Return 'count', 'list', or None for the current message (frez-related)."""
+    t = _normalize_ru_yo(text.strip().lower())
+    if not _mentions_frez_intent(t):
+        return None
+    list_markers = (
+        "перечисли", "перечислить", "список", "покажи", "назови", "выведи",
+        "дай список", "выведи список",
+        "какие", "какая", "какой", "какое",
+    )
+    count_markers = ("сколько", "количество", "число", "всего")
+    if any(m in t for m in list_markers):
+        return "list"
+    if any(m in t for m in count_markers):
+        return "count"
+    if "все" in t or "всё" in t:
+        return "list"
+    return None
+
+
+def _frez_followup_intent_from_prior_user_message(prior_user: str) -> str:
+    p = _normalize_ru_yo(prior_user.strip().lower())
+    if any(m in p for m in ("перечисли", "список", "покажи", "назови", "выведи")):
+        return "list"
+    if any(m in p for m in ("сколько", "количество", "число")):
+        return "count"
+    return "count"
 
 
 def _get_agent_model(config: BuiltinAgentConfig | None = None) -> str:
@@ -614,29 +674,7 @@ class AgentSession:
         self._iteration = 0
 
         self._config = get_builtin_agent_config()
-
-        exposed = set(self._config.exposed_skills)
-        self._tools, self._skill_map = _load_registry(
-            expose_filter=exposed if exposed else None
-        )
-        self._system = _load_system_prompt(self._config)
-        self._approval_gates = set(self._config.approval_gates)
-
-        from app.ai.context_compressor import ContextCompressor
-        self._compressor = ContextCompressor(
-            model=_get_agent_model(self._config),
-            threshold_percent=self._config.context_compression_threshold,
-            compression_model=self._config.compression_model,
-        ) if self._config.context_compression_enabled else None
-
-        from app.ai.memory_manager import MemoryManager
-        self._memory_mgr = MemoryManager(
-            base_url=self._config.backend_url,
-            top_k=self._config.memory_top_k,
-            max_chars=self._config.memory_max_chars,
-            retrieval_mode=self._config.memory_mode,
-        )
-
+        self._rebuild_runtime_components(self._config)
         self._mcp_initialised = False
 
     async def _call_for_compression(
@@ -685,11 +723,54 @@ class AgentSession:
         except Exception as exc:
             logger.warning("mcp_init_failed", error=str(exc))
 
+    def _rebuild_runtime_components(self, config: BuiltinAgentConfig) -> None:
+        """Rebuild tools/system/dependencies when runtime agent config changes."""
+        self._config = config
+        exposed = set(self._config.exposed_skills)
+        self._tools, self._skill_map = _load_registry(
+            expose_filter=exposed if exposed else None
+        )
+        self._system = _load_system_prompt(self._config)
+        self._approval_gates = set(self._config.approval_gates)
+
+        from app.ai.context_compressor import ContextCompressor
+        self._compressor = ContextCompressor(
+            model=_get_agent_model(self._config),
+            threshold_percent=self._config.context_compression_threshold,
+            compression_model=self._config.compression_model,
+        ) if self._config.context_compression_enabled else None
+
+        from app.ai.memory_manager import MemoryManager
+        self._memory_mgr = MemoryManager(
+            base_url=self._config.backend_url,
+            top_k=self._config.memory_top_k,
+            max_chars=self._config.memory_max_chars,
+            retrieval_mode=self._config.memory_mode,
+        )
+        # Re-init MCP tools with updated server config on next message.
+        self._mcp_initialised = False
+
+    def _refresh_runtime_config(self) -> None:
+        """Reload config so model/skills changes apply without reconnect."""
+        latest_config = get_builtin_agent_config()
+        if latest_config.model_dump(mode="json") == self._config.model_dump(mode="json"):
+            return
+        self._rebuild_runtime_components(latest_config)
+        logger.info(
+            "agent_runtime_config_reloaded",
+            model=_get_agent_model(self._config),
+            provider=self._config.provider,
+            exposed_skills=len(self._config.exposed_skills),
+        )
+
     async def on_user_message(self, content: str) -> None:
+        self._refresh_runtime_config()
         await self._init_mcp()
         self.messages.append({"role": "user", "content": content})
         self._trim_history()
         if await self._try_handle_simple_count_query(content):
+            return
+        if await self._try_handle_frez_inventory_query(content):
             return
         await self._run()
 
@@ -745,6 +826,95 @@ class AgentSession:
             return True
 
         return False
+
+    async def _try_handle_frez_inventory_query(self, content: str) -> bool:
+        """Fast-path for warehouse cutter/mill (фреза) queries — avoids clarification loops."""
+        raw = (content or "").strip()
+        if not raw:
+            return False
+
+        tl = _normalize_ru_yo(raw.lower())
+        intent = _frez_inventory_intent(raw)
+
+        if intent is None and _is_short_scope_followup(tl):
+            prior_users = [
+                str(m.get("content", ""))
+                for m in self.messages[:-1]
+                if m.get("role") == "user"
+            ]
+            if not prior_users:
+                return False
+            prev_u = prior_users[-1]
+            if not _mentions_frez_intent(prev_u):
+                return False
+            intent = _frez_followup_intent_from_prior_user_message(prev_u)
+
+        if intent is None:
+            return False
+
+        search_q = "фрез"
+        skill = self._skill_map.get("warehouse__list_inventory")
+        args: dict[str, Any] = {"search": search_q, "limit": 200, "offset": 0}
+
+        if skill:
+            await self._send({"type": "tool_call", "tool": "warehouse__list_inventory", "args": args})
+            result = await _execute_skill(skill, args, self._config)
+            await self._send({"type": "tool_result", "tool": "warehouse__list_inventory", "result": result})
+        else:
+            result = await _fetch_inventory_search_direct(self._config, search=search_q, limit=200, offset=0)
+            if result is None:
+                return False
+
+        total = _extract_list_count(result)
+        items: list[Any] = []
+        if isinstance(result, dict) and isinstance(result.get("items"), list):
+            items = result["items"]
+
+        if intent == "count":
+            await self._send({
+                "type": "text",
+                "content": (
+                    f"Позиций на складе с «{search_q}» в наименовании (поиск по названию): **{total}**."
+                ),
+            })
+            await self._send({"type": "done"})
+            return True
+
+        # list
+        lines: list[str] = []
+        max_lines = 180
+        max_chars = 14000
+        used = 0
+        for idx, it in enumerate(items[:max_lines], start=1):
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name") or "").strip() or "(без названия)"
+            qty = it.get("current_qty")
+            unit = str(it.get("unit") or "шт").strip()
+            sku = it.get("sku")
+            sku_part = f", SKU {sku}" if sku else ""
+            line = f"{idx}. {name} — {qty} {unit}{sku_part}"
+            if used + len(line) > max_chars:
+                break
+            lines.append(line)
+            used += len(line) + 1
+
+        body = "\n".join(lines) if lines else "(Пустой список — совпадений не найдено.)"
+        suffix = ""
+        if total > len(lines):
+            suffix = (
+                f"\n\nВсего совпадающих позиций: **{total}**. "
+                f"Показаны первые **{len(lines)}**."
+            )
+        elif total and len(lines) >= max_lines:
+            suffix = f"\n\nПоказаны первые **{max_lines}** из **{total}**."
+
+        await self._send({
+            "type": "text",
+            "content": f"Позиции склада (поиск «{search_q}» в наименовании):\n\n{body}{suffix}",
+        })
+        await self._send({"type": "done"})
+        return True
 
     async def on_approval(self, approved: bool) -> None:
         if self._approval_future and not self._approval_future.done():
@@ -1066,6 +1236,28 @@ async def _fetch_invoice_count_direct(config: BuiltinAgentConfig) -> int | None:
             return None
         data = resp.json()
         return _extract_list_count(data)
+    except Exception:
+        return None
+
+
+async def _fetch_inventory_search_direct(
+    config: BuiltinAgentConfig,
+    *,
+    search: str,
+    limit: int,
+    offset: int,
+) -> dict[str, Any] | None:
+    url = f"{config.backend_url.rstrip('/')}/api/warehouse/inventory"
+    try:
+        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+            resp = await client.get(
+                url,
+                params={"search": search, "limit": limit, "offset": offset},
+            )
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        return data if isinstance(data, dict) else None
     except Exception:
         return None
 

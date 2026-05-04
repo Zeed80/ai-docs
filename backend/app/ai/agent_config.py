@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
+import yaml
 
 from app.ai.gateway_config import gateway_config
 
@@ -76,14 +77,34 @@ class BuiltinAgentConfigUpdate(BaseModel):
     mcp_servers: list[dict] | None = None
 
 
+def _all_registry_skill_names() -> list[str]:
+    """Return all skill names from YAML registry."""
+    try:
+        registry_path = gateway_config.registry_path
+        if not registry_path.exists():
+            return []
+        data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+        skills = data.get("skills") or data.get("tools") or []
+        names = sorted({
+            str(skill.get("name", "")).strip()
+            for skill in skills
+            if str(skill.get("name", "")).strip()
+        })
+        return names
+    except Exception:
+        return []
+
+
 def _default_config() -> BuiltinAgentConfig:
+    registry_skills = _all_registry_skill_names()
+    default_skills = registry_skills or sorted(gateway_config.exposed_skills)
     return BuiltinAgentConfig(
         agent_name=gateway_config.agent_name,
         model=gateway_config.reasoning_model,
         ollama_url=gateway_config.reasoning_base_url,
         backend_url=gateway_config.backend_url,
         backend_timeout_seconds=gateway_config.backend_timeout,
-        exposed_skills=sorted(gateway_config.exposed_skills),
+        exposed_skills=default_skills,
         approval_gates=sorted(gateway_config.approval_gates),
     )
 
@@ -143,9 +164,9 @@ def get_builtin_agent_config() -> BuiltinAgentConfig:
 
     merged = {**defaults, **saved}
 
-    # If exposed_skills is empty, reload from gateway.yml
+    # If exposed_skills is empty, fallback to full registry.
     if not merged.get("exposed_skills"):
-        merged["exposed_skills"] = sorted(gateway_config.exposed_skills)
+        merged["exposed_skills"] = _all_registry_skill_names() or sorted(gateway_config.exposed_skills)
     if not merged.get("approval_gates"):
         merged["approval_gates"] = sorted(gateway_config.approval_gates)
 
