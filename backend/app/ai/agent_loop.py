@@ -21,6 +21,14 @@ from app.ai.streaming_scrubber import StreamingContextScrubber
 
 logger = structlog.get_logger()
 
+_OPERATIONAL_POLICY = """
+Операционные правила (обязательно):
+- Если пользователь просит простую метрику/подсчет ("сколько", "какое количество", "всего"), сначала вызови подходящий list/search tool и верни число.
+- Не задавай уточняющие вопросы, если сущность уже явно названа пользователем (например "счетов" => invoices).
+- После уточнения пользователя (например: "только счетов") немедленно выполняй tool-вызов без повторного уточнения.
+- Для простых запросов не объясняй внутреннюю механику ("мне нужно вызвать инструмент"), а сразу выполняй и отвечай результатом.
+""".strip()
+
 
 def _get_agent_model(config: BuiltinAgentConfig | None = None) -> str:
     """Current agent model: built-in config → ai_settings override → gateway default.
@@ -115,15 +123,19 @@ def _load_registry(
 
 def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
     if config and config.system_prompt:
-        return config.system_prompt.strip()
+        return f"{config.system_prompt.strip()}\n\n{_OPERATIONAL_POLICY}"
     path = gateway_config.base_prompt_path
     if path.exists():
         raw = path.read_text()
-        return raw.replace(
+        base_prompt = raw.replace(
             "[ИНСТРУМЕНТЫ ЗАГРУЖАЮТСЯ АВТОМАТИЧЕСКИ ИЗ РЕЕСТРА SKILLS]", ""
         ).strip()
+        return f"{base_prompt}\n\n{_OPERATIONAL_POLICY}"
     agent_name = config.agent_name if config else gateway_config.agent_name
-    return f"Ты — AI-ассистент производственного предприятия. Твоё имя: {agent_name}."
+    return (
+        f"Ты — AI-ассистент производственного предприятия. Твоё имя: {agent_name}.\n\n"
+        f"{_OPERATIONAL_POLICY}"
+    )
 
 
 # ── HTTP skill executor ───────────────────────────────────────────────────────
@@ -677,7 +689,62 @@ class AgentSession:
         await self._init_mcp()
         self.messages.append({"role": "user", "content": content})
         self._trim_history()
+        if await self._try_handle_simple_count_query(content):
+            return
         await self._run()
+
+    async def _try_handle_simple_count_query(self, content: str) -> bool:
+        text = (content or "").strip().lower()
+        if not text:
+            return False
+
+        is_count_intent = any(token in text for token in ("сколько", "количество", "всего"))
+        is_invoices_only = any(token in text for token in ("счет", "счёт", "invoice"))
+        force_invoices = "только счет" in text or "только счёт" in text
+        if not ((is_count_intent and is_invoices_only) or force_invoices):
+            return False
+
+        # Prefer invoice.list for invoice count questions.
+        invoice_skill = self._skill_map.get("invoice__list")
+        if invoice_skill:
+            args: dict[str, Any] = {}
+            await self._send({"type": "tool_call", "tool": "invoice__list", "args": args})
+            result = await _execute_skill(invoice_skill, args, self._config)
+            await self._send({"type": "tool_result", "tool": "invoice__list", "result": result})
+            total = _extract_list_count(result)
+            await self._send({
+                "type": "text",
+                "content": f"Всего загружено счетов: {total}.",
+            })
+            await self._send({"type": "done"})
+            return True
+
+        # Hard fallback: direct backend API call when invoice.list skill is not exposed.
+        total = await _fetch_invoice_count_direct(self._config)
+        if total is not None:
+            await self._send({
+                "type": "text",
+                "content": f"Всего загружено счетов: {total}.",
+            })
+            await self._send({"type": "done"})
+            return True
+
+        # Fallback: count documents if invoice.list is unavailable.
+        doc_skill = self._skill_map.get("doc__list")
+        if doc_skill:
+            args = {}
+            await self._send({"type": "tool_call", "tool": "doc__list", "args": args})
+            result = await _execute_skill(doc_skill, args, self._config)
+            await self._send({"type": "tool_result", "tool": "doc__list", "result": result})
+            total = _extract_list_count(result)
+            await self._send({
+                "type": "text",
+                "content": f"Сейчас в системе документов: {total}.",
+            })
+            await self._send({"type": "done"})
+            return True
+
+        return False
 
     async def on_approval(self, approved: bool) -> None:
         if self._approval_future and not self._approval_future.done():
@@ -972,6 +1039,35 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
         lines.append(line)
         used_chars += len(line)
     return "\n".join(lines)
+
+
+def _extract_list_count(payload: Any) -> int:
+    if isinstance(payload, dict):
+        for key in ("total", "count", "items_total", "results_count"):
+            value = payload.get(key)
+            if isinstance(value, int):
+                return value
+        for list_key in ("items", "results", "data", "rows"):
+            value = payload.get(list_key)
+            if isinstance(value, list):
+                return len(value)
+        return 0
+    if isinstance(payload, list):
+        return len(payload)
+    return 0
+
+
+async def _fetch_invoice_count_direct(config: BuiltinAgentConfig) -> int | None:
+    url = f"{config.backend_url.rstrip('/')}/api/invoices"
+    try:
+        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+            resp = await client.get(url)
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        return _extract_list_count(data)
+    except Exception:
+        return None
 
 
 # ── DB approval helpers ───────────────────────────────────────────────────────
