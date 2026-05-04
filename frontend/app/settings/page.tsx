@@ -81,6 +81,7 @@ interface AgentConfig {
   provider: string;
   fallback_providers: string[];
   prompt_cache_enabled: boolean;
+  disable_thinking: boolean;
   ollama_url: string;
   backend_url: string;
   temperature: number;
@@ -1038,6 +1039,30 @@ export default function SettingsPage() {
                       </Field>
                     )}
                   </div>
+                  <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3 cursor-pointer hover:bg-slate-900/80 transition-colors">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={agentConfig.disable_thinking}
+                      onChange={(e) =>
+                        setAgentConfig({
+                          ...agentConfig,
+                          disable_thinking: e.target.checked,
+                        })
+                      }
+                    />
+                    <div>
+                      <span className="text-sm text-slate-200">
+                        Отключить размышление для thinking-моделей
+                      </span>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        Агент будет запрашивать прямой ответ без цепочки
+                        рассуждений там, где провайдер это поддерживает
+                        (например, OpenAI-compatible API и Ollama
+                        thinking-модели).
+                      </p>
+                    </div>
+                  </label>
 
                   {/* API key hint */}
                   {agentConfig.provider !== "ollama" && (

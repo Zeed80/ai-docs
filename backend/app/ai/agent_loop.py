@@ -201,6 +201,8 @@ async def _call_ollama_streaming(
         "stream": True,
         "options": {"temperature": config.temperature},
     }
+    if config.disable_thinking:
+        payload["think"] = False
 
     full_content = ""
     final_message: dict = {}
@@ -294,6 +296,10 @@ async def _call_openai_streaming(
     }
     if tools:
         payload["tools"] = tools
+    if config.disable_thinking:
+        # OpenAI-compatible providers may honor this to suppress reasoning traces
+        # and force concise direct outputs on "thinking" models.
+        payload["reasoning"] = {"enabled": False}
 
     full_content = ""
     scrubber = StreamingContextScrubber()

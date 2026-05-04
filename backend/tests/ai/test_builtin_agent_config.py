@@ -32,6 +32,7 @@ def test_builtin_agent_config_persists_runtime_settings(tmp_path, monkeypatch):
     config = update_builtin_agent_config(
         BuiltinAgentConfigUpdate(
             model="qwen3.6:35b",
+            disable_thinking=True,
             memory_mode="sql_vector_rerank",
             memory_top_k=12,
             exposed_skills=["memory.search"],
@@ -39,6 +40,7 @@ def test_builtin_agent_config_persists_runtime_settings(tmp_path, monkeypatch):
     )
 
     assert config.model == "qwen3.6:35b"
+    assert config.disable_thinking is True
     assert config.memory_mode == "sql_vector_rerank"
     assert config.memory_top_k == 12
     assert get_builtin_agent_config().exposed_skills == ["memory.search"]

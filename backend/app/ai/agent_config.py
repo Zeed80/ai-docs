@@ -25,6 +25,7 @@ class BuiltinAgentConfig(BaseModel):
     fallback_providers: list[str] = Field(default_factory=list)
     # Inject Anthropic prompt-cache headers (only effective with provider="anthropic")
     prompt_cache_enabled: bool = False
+    disable_thinking: bool = False
     ollama_url: str = "http://localhost:11434"
     backend_url: str = "http://localhost:8000"
     temperature: float = Field(0.1, ge=0.0, le=2.0)
@@ -53,6 +54,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     provider: str | None = None
     fallback_providers: list[str] | None = None
     prompt_cache_enabled: bool | None = None
+    disable_thinking: bool | None = None
     ollama_url: str | None = None
     backend_url: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
