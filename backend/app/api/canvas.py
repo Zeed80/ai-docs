@@ -17,12 +17,22 @@ logger = structlog.get_logger()
 class CanvasColumn(BaseModel):
     key: str
     header: str
-    type: Literal["text", "number", "date", "boolean"] = "text"
+    type: Literal["text", "number", "date", "boolean", "link", "download", "delete"] = "text"
     width: int | None = None
 
 
+class CanvasDocumentItem(BaseModel):
+    id: str
+    title: str
+    filename: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    download_url: str | None = None
+    delete_url: str | None = None
+
+
 class CanvasBlockPayload(BaseModel):
-    type: Literal["markdown", "table", "image", "chart"]
+    type: Literal["markdown", "table", "image", "chart", "document"]
     title: str | None = None
     # markdown
     content: str | None = None
@@ -35,6 +45,8 @@ class CanvasBlockPayload(BaseModel):
     # chart
     chart_type: Literal["bar", "line", "pie", "area"] | None = None
     chart_data: dict[str, Any] | None = None
+    # document
+    documents: list[CanvasDocumentItem] | None = None
 
 
 class CanvasPublishRequest(BaseModel):

@@ -9,6 +9,7 @@ import { CanvasMarkdown } from "./canvas-markdown";
 import { CanvasTable } from "./canvas-table";
 import { CanvasImage } from "./canvas-image";
 import { CanvasChart } from "./canvas-chart";
+import { CanvasDocuments } from "./canvas-documents";
 
 function BlockView({ block }: { block: CanvasBlock }) {
   const dispatch = useCanvasDispatch();
@@ -50,6 +51,9 @@ function BlockView({ block }: { block: CanvasBlock }) {
             title={block.title}
           />
         )}
+        {block.type === "document" && block.documents && (
+          <CanvasDocuments documents={block.documents} />
+        )}
       </div>
     </div>
   );
@@ -65,7 +69,7 @@ export function AgentCanvas() {
     <div className="flex flex-col h-full bg-slate-950 border-l border-slate-700">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-slate-900 border-b border-slate-700 shrink-0">
-        <span className="text-sm font-semibold text-slate-200">Холст</span>
+        <span className="text-sm font-semibold text-slate-200">Рабочий стол</span>
         <div className="flex items-center gap-1">
           {state.blocks.length > 0 && (
             <button
@@ -89,8 +93,8 @@ export function AgentCanvas() {
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {state.blocks.length === 0 ? (
           <div className="text-center mt-16 text-slate-600 text-sm">
-            <div className="text-3xl mb-3">🖼</div>
-            <p>Холст пуст</p>
+            <div className="text-3xl mb-3">▦</div>
+            <p>Рабочий стол пуст</p>
             <p className="text-xs mt-1">
               Попросите агента вывести таблицу,
               <br />

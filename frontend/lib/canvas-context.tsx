@@ -8,13 +8,23 @@ import {
   useReducer,
 } from "react";
 
-export type CanvasBlockType = "markdown" | "table" | "image" | "chart";
+export type CanvasBlockType = "markdown" | "table" | "image" | "chart" | "document";
 
 export interface CanvasColumn {
   key: string;
   header: string;
-  type?: "text" | "number" | "date" | "boolean";
+  type?: "text" | "number" | "date" | "boolean" | "link" | "download" | "delete";
   width?: number;
+}
+
+export interface CanvasDocumentItem {
+  id: string;
+  title: string;
+  filename?: string;
+  mime_type?: string;
+  size_bytes?: number;
+  download_url?: string;
+  delete_url?: string;
 }
 
 export interface CanvasBlock {
@@ -32,6 +42,8 @@ export interface CanvasBlock {
   // chart
   chart_type?: "bar" | "line" | "pie" | "area";
   chart_data?: Record<string, unknown>;
+  // document
+  documents?: CanvasDocumentItem[];
 }
 
 export interface CanvasState {

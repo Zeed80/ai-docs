@@ -46,6 +46,21 @@ _OPERATIONAL_POLICY = """
 - Рабочий стол/холст — основной визуальный вывод. Для таблиц, списков,
   графиков, ссылок, изображений и длинных структурированных результатов
   публикуй rich-блок через `canvas.publish`, а в чат давай краткое резюме.
+- Чат предназначен только для простых текстовых ответов: число, короткий вывод,
+  уточнение, статус выполнения. Не пиши markdown-таблицы в чат.
+- Если пользователь просит таблицу, полный список, документ, ссылку, чертёж,
+  график, файл, сравнение или большой отчёт — сначала открой Рабочий стол через
+  `canvas.publish`, затем в чат напиши одну короткую фразу о том, что показано.
+- Табличные шаблоны по умолчанию:
+  счета: №, номер, дата, поставщик, сумма, валюта, статус, документ, удалить;
+  документы: название, тип, статус, дата, скачать, удалить;
+  склад: наименование, SKU, количество, единица, минимум, место хранения;
+  поставщики: название, ИНН, trust score, контакт, открытые риски.
+- Если пользователь просит изменить таблицу ("добавь столбец", "убери поле",
+  "отсортируй", "покажи ещё"), обнови существующий canvas-блок через тот же
+  `canvas_id` и `append=false`, не создавай новую чат-таблицу.
+- Для каждого выведенного документа, изображения, чертежа или экспортного файла
+  указывай доступные действия скачивания и удаления, если API это поддерживает.
 """.strip()
 
 
@@ -54,6 +69,39 @@ def _normalize_ru_yo(text: str) -> str:
 
 
 _FREZ_SUBSTRINGS = ("фрез", "endmill", "фреза")
+
+
+def _agent_canvas_id(kind: str) -> str:
+    return f"agent:{kind}"
+
+
+def _is_workspace_output_request(text: str) -> bool:
+    t = _normalize_ru_yo((text or "").lower())
+    return any(
+        marker in t
+        for marker in (
+            "таблиц", "полный список", "все списком", "выведи список",
+            "покажи список", "ссылк", "документ", "чертеж", "чертёж",
+            "график", "диаграм", "excel", "скача", "файл",
+        )
+    )
+
+
+def _mentions_invoice_entity(text: str) -> bool:
+    t = _normalize_ru_yo((text or "").lower())
+    return any(marker in t for marker in ("счет", "счёт", "invoice", "инвойс"))
+
+
+def _is_invoice_table_request(text: str, prior_user: str | None = None) -> bool:
+    t = _normalize_ru_yo((text or "").lower())
+    if _mentions_invoice_entity(t) and _is_workspace_output_request(t):
+        return True
+    if not prior_user or not _mentions_invoice_entity(prior_user):
+        return False
+    return _is_workspace_output_request(t) and any(
+        marker in t
+        for marker in ("их", "они", "полный", "таблиц", "список", "все", "всё")
+    )
 
 
 def _mentions_frez_intent(text: str) -> bool:
@@ -256,13 +304,7 @@ async def _execute_skill(
 
             if resp.status_code < 400:
                 try:
-                    result = resp.json()
-                    if isinstance(result, list) and len(result) > 20:
-                        result = result[:20]
-                    elif isinstance(result, dict) and "items" in result:
-                        if isinstance(result["items"], list) and len(result["items"]) > 20:
-                            result["items"] = result["items"][:20]
-                    return result
+                    return resp.json()
                 except Exception:
                     return {"text": resp.text[:2000]}
             else:
@@ -809,6 +851,8 @@ class AgentSession:
         self._trim_history()
         if await self._try_handle_simple_count_query(content):
             return
+        if await self._try_handle_invoice_table_query(content):
+            return
         if await self._try_handle_frez_inventory_query(content):
             return
         await self._run()
@@ -865,6 +909,83 @@ class AgentSession:
             return True
 
         return False
+
+    async def _publish_canvas(
+        self,
+        block: dict[str, Any],
+        *,
+        canvas_id: str | None = None,
+        append: bool = True,
+    ) -> None:
+        await self._send({
+            "type": "canvas",
+            "canvas_id": canvas_id,
+            "block": block,
+            "append": append,
+        })
+
+    async def _try_handle_invoice_table_query(self, content: str) -> bool:
+        prior_users = [
+            str(m.get("content", ""))
+            for m in self.messages[:-1]
+            if m.get("role") == "user"
+        ]
+        prior_user = prior_users[-1] if prior_users else None
+        if not _is_invoice_table_request(content, prior_user):
+            return False
+
+        skill_name = "invoice__list"
+        await self._send({
+            "type": "tool_call",
+            "tool": skill_name,
+            "args": {"limit": 200, "offset": 0},
+        })
+        data = await _fetch_invoices_direct(self._config, limit=200, max_items=5000)
+        if data is None:
+            skill = self._skill_map.get(skill_name)
+            if not skill:
+                return False
+            data = await _execute_skill(skill, {"limit": 200, "offset": 0}, self._config)
+        await self._send({"type": "tool_result", "tool": skill_name, "result": data})
+
+        items = data.get("items") if isinstance(data, dict) else []
+        if not isinstance(items, list):
+            items = []
+        total = _extract_list_count(data)
+        columns = [
+            {"key": "index", "header": "№", "type": "number", "width": 56},
+            {"key": "invoice_number", "header": "Номер счета", "type": "text"},
+            {"key": "invoice_date", "header": "Дата", "type": "date"},
+            {"key": "supplier", "header": "Поставщик", "type": "text"},
+            {"key": "total_amount", "header": "Сумма", "type": "number"},
+            {"key": "currency", "header": "Валюта", "type": "text", "width": 72},
+            {"key": "status", "header": "Статус", "type": "text"},
+            {"key": "document_download", "header": "Документ", "type": "download"},
+            {"key": "invoice_delete", "header": "Удалить счет", "type": "delete"},
+            {"key": "document_delete", "header": "Удалить документ", "type": "delete"},
+        ]
+        rows = [_invoice_canvas_row(item, index) for index, item in enumerate(items, start=1)]
+
+        canvas_id = _agent_canvas_id("invoice-list")
+        await self._publish_canvas(
+            {
+                "type": "table",
+                "title": f"Счета: полный список ({total})",
+                "columns": columns,
+                "rows": rows,
+            },
+            canvas_id=canvas_id,
+            append=False,
+        )
+        await self._send({
+            "type": "text",
+            "content": (
+                f"Открыл на Рабочем столе таблицу со счетами: {len(rows)} из {total}. "
+                "Там доступны фильтр, Excel/CSV, скачивание и удаление документов."
+            ),
+        })
+        await self._send({"type": "done"})
+        return True
 
     async def _try_handle_frez_inventory_query(self, content: str) -> bool:
         """Fast-path for warehouse cutter/mill (фреза) queries — avoids clarification loops."""
@@ -940,38 +1061,41 @@ class AgentSession:
             await self._send({"type": "done"})
             return True
 
-        # list
-        lines: list[str] = []
-        max_lines = min(max_items, max(total, len(items)) or max_items)
-        max_chars = 30000
-        used = 0
-        for idx, it in enumerate(items[:max_lines], start=1):
+        rows = []
+        for idx, it in enumerate(items[:max_items], start=1):
             if not isinstance(it, dict):
                 continue
-            name = str(it.get("name") or "").strip() or "(без названия)"
-            qty = it.get("current_qty")
-            unit = str(it.get("unit") or "шт").strip()
-            sku = it.get("sku")
-            sku_part = f", SKU {sku}" if sku else ""
-            line = f"{idx}. {name} — {qty} {unit}{sku_part}"
-            if used + len(line) > max_chars:
-                break
-            lines.append(line)
-            used += len(line) + 1
+            rows.append({
+                "index": idx,
+                "name": it.get("name"),
+                "sku": it.get("sku"),
+                "current_qty": it.get("current_qty"),
+                "unit": it.get("unit"),
+                "min_qty": it.get("min_qty"),
+                "location": it.get("location"),
+            })
 
-        body = "\n".join(lines) if lines else "(Пустой список — совпадений не найдено.)"
-        suffix = ""
-        if total > len(lines):
-            suffix = (
-                f"\n\nВсего совпадающих позиций: **{total}**. "
-                f"Показаны первые **{len(lines)}**."
-            )
-        elif total and len(lines) >= max_lines:
-            suffix = f"\n\nПоказаны первые **{max_lines}** из **{total}**."
-
+        await self._publish_canvas(
+            {
+                "type": "table",
+                "title": f"Склад: позиции по запросу «{search_q}» ({total})",
+                "columns": [
+                    {"key": "index", "header": "№", "type": "number", "width": 56},
+                    {"key": "name", "header": "Наименование", "type": "text"},
+                    {"key": "sku", "header": "SKU", "type": "text"},
+                    {"key": "current_qty", "header": "Количество", "type": "number"},
+                    {"key": "unit", "header": "Ед.", "type": "text", "width": 64},
+                    {"key": "min_qty", "header": "Минимум", "type": "number"},
+                    {"key": "location", "header": "Место", "type": "text"},
+                ],
+                "rows": rows,
+            },
+            canvas_id=_agent_canvas_id("warehouse-frez"),
+            append=False,
+        )
         await self._send({
             "type": "text",
-            "content": f"Позиции склада (поиск «{search_q}» в наименовании):\n\n{body}{suffix}",
+            "content": f"Открыл на Рабочем столе таблицу позиций склада: {len(rows)} из {total}.",
         })
         await self._send({"type": "done"})
         return True
@@ -1018,7 +1142,6 @@ class AgentSession:
 
                 async def on_token(token: str) -> None:
                     accumulated_text.append(token)
-                    await self._send({"type": "text", "content": token})
 
                 message = await _call_provider_streaming(
                     self.messages, self._tools, self._system, self._config, on_token
@@ -1066,8 +1189,9 @@ class AgentSession:
                         self._trim_history()
                         continue
                     consecutive_empty_responses = 0
+                    delivered_text = await self._deliver_final_content(full_text)
                     # Fire-and-forget: index this turn into memory
-                    if self._config.memory_enabled and full_text:
+                    if self._config.memory_enabled and delivered_text:
                         latest_user = next(
                             (
                                 m.get("content", "")
@@ -1076,7 +1200,9 @@ class AgentSession:
                             ),
                             "",
                         )
-                        asyncio.create_task(self._memory_mgr.sync_turn(latest_user, full_text))
+                        asyncio.create_task(
+                            self._memory_mgr.sync_turn(latest_user, delivered_text)
+                        )
                     break
 
                 self.messages.append(message)
@@ -1098,6 +1224,49 @@ class AgentSession:
                 await self._send({"type": "done"})
             except Exception:
                 pass
+
+    async def _deliver_final_content(self, full_text: str) -> str:
+        text = (full_text or "").strip()
+        if not text:
+            return ""
+
+        latest_user = next(
+            (
+                str(m.get("content", ""))
+                for m in reversed(self.messages)
+                if m.get("role") == "user"
+            ),
+            "",
+        )
+        parsed_table = _parse_markdown_table(text)
+        if parsed_table:
+            title, columns, rows = parsed_table
+            await self._publish_canvas(
+                {
+                    "type": "table",
+                    "title": title,
+                    "columns": columns,
+                    "rows": rows,
+                },
+                canvas_id=_agent_canvas_id("llm-table"),
+                append=False,
+            )
+            summary = f"Открыл таблицу на Рабочем столе: {len(rows)} строк."
+            await self._send({"type": "text", "content": summary})
+            return summary
+
+        if _is_workspace_output_request(latest_user) and len(text) > 500:
+            await self._publish_canvas(
+                {"type": "markdown", "title": "Результат", "content": text},
+                canvas_id=_agent_canvas_id("llm-result"),
+                append=False,
+            )
+            summary = "Открыл результат на Рабочем столе."
+            await self._send({"type": "text", "content": summary})
+            return summary
+
+        await self._send({"type": "text", "content": text})
+        return text
 
     async def _execute_single_tool(
         self, tc: dict, iteration: int
@@ -1307,6 +1476,144 @@ async def _fetch_invoice_count_direct(config: BuiltinAgentConfig) -> int | None:
         return _extract_list_count(data)
     except Exception:
         return None
+
+
+async def _fetch_invoices_direct(
+    config: BuiltinAgentConfig,
+    *,
+    limit: int = 200,
+    max_items: int = 5000,
+) -> dict[str, Any] | None:
+    url = f"{config.backend_url.rstrip('/')}/api/invoices"
+    items: list[dict[str, Any]] = []
+    total = 0
+    offset = 0
+    try:
+        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+            while offset < max_items:
+                resp = await client.get(url, params={"limit": limit, "offset": offset})
+                if resp.status_code >= 400:
+                    return None
+                data = resp.json()
+                if not isinstance(data, dict):
+                    return None
+                if offset == 0:
+                    total = _extract_list_count(data)
+                page_items = data.get("items")
+                if not isinstance(page_items, list):
+                    page_items = []
+                items.extend([item for item in page_items if isinstance(item, dict)])
+                if not page_items or len(items) >= total or len(page_items) < limit:
+                    break
+                offset += limit
+    except Exception:
+        return None
+    return {"items": items, "total": total or len(items), "offset": 0, "limit": len(items)}
+
+
+def _format_date(value: Any) -> str:
+    if not value:
+        return ""
+    text = str(value)
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return f"{text[8:10]}.{text[5:7]}.{text[0:4]}"
+    return text
+
+
+def _format_money(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{number:,.2f}".replace(",", " ").replace(".00", "")
+
+
+def _invoice_canvas_row(item: dict[str, Any], index: int) -> dict[str, Any]:
+    invoice_id = str(item.get("id") or "")
+    document_id = str(item.get("document_id") or "")
+    supplier = item.get("supplier")
+    supplier_name = ""
+    if isinstance(supplier, dict):
+        supplier_name = str(supplier.get("name") or "")
+    return {
+        "index": index,
+        "id": invoice_id,
+        "document_id": document_id,
+        "invoice_number": item.get("invoice_number") or "",
+        "invoice_date": _format_date(item.get("invoice_date")),
+        "supplier": supplier_name,
+        "total_amount": _format_money(item.get("total_amount")),
+        "currency": item.get("currency") or "RUB",
+        "status": item.get("status") or "",
+        "document_download": {
+            "href": f"/api/documents/{document_id}/download",
+            "label": "Скачать",
+        } if document_id else None,
+        "invoice_delete": {
+            "href": f"/api/invoices/{invoice_id}",
+            "label": "Удалить",
+            "confirm": f"Удалить счет {item.get('invoice_number') or invoice_id}?",
+            "method": "DELETE",
+        } if invoice_id else None,
+        "document_delete": {
+            "href": f"/api/documents/{document_id}",
+            "label": "Удалить",
+            "confirm": f"Удалить документ счета {item.get('invoice_number') or invoice_id}?",
+            "method": "DELETE",
+        } if document_id else None,
+    }
+
+
+def _parse_markdown_table(
+    text: str,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]] | None:
+    lines = [line.strip() for line in text.splitlines()]
+    start = -1
+    for idx in range(len(lines) - 1):
+        if "|" not in lines[idx] or "|" not in lines[idx + 1]:
+            continue
+        separator = lines[idx + 1].replace("|", "").replace(":", "").replace("-", "").strip()
+        if not separator:
+            start = idx
+            break
+    if start < 0:
+        return None
+
+    def split_row(line: str) -> list[str]:
+        return [cell.strip() for cell in line.strip("|").split("|")]
+
+    headers = split_row(lines[start])
+    if len(headers) < 2:
+        return None
+    rows: list[dict[str, Any]] = []
+    for line in lines[start + 2:]:
+        if "|" not in line:
+            break
+        cells = split_row(line)
+        if len(cells) < 2:
+            break
+        row: dict[str, Any] = {}
+        for col_idx, header in enumerate(headers):
+            key = f"col_{col_idx + 1}"
+            row[key] = cells[col_idx] if col_idx < len(cells) else ""
+        rows.append(row)
+    if not rows:
+        return None
+    columns = [
+        {"key": f"col_{idx + 1}", "header": header or f"Колонка {idx + 1}", "type": "text"}
+        for idx, header in enumerate(headers)
+    ]
+    title = "Таблица"
+    for line in reversed(lines[:start]):
+        clean = line.strip("#* ")
+        if clean:
+            title = clean[:120]
+            break
+    return title, columns, rows
 
 
 async def _fetch_inventory_search_direct(
