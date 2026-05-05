@@ -1,32 +1,41 @@
-# Traefik dynamic routing configuration for local development.
+# Traefik dynamic routing configuration for production.
+# Replace example.com with the public application domain before mounting this file.
 http:
   routers:
     frontend:
-      rule: "Host(`localhost`)"
+      rule: "Host(`example.com`)"
       service: frontend
       entryPoints:
-        - web
+        - websecure
+      tls:
+        certResolver: letsencrypt
       priority: 1
 
     backend-api:
-      rule: "Host(`localhost`) && PathPrefix(`/api`)"
+      rule: "Host(`example.com`) && PathPrefix(`/api`)"
       service: backend
       entryPoints:
-        - web
+        - websecure
+      tls:
+        certResolver: letsencrypt
       priority: 100
 
     backend-health:
-      rule: "Host(`localhost`) && Path(`/health`)"
+      rule: "Host(`example.com`) && Path(`/health`)"
       service: backend
       entryPoints:
-        - web
+        - websecure
+      tls:
+        certResolver: letsencrypt
       priority: 100
 
     minio-console:
-      rule: "Host(`minio.localhost`)"
+      rule: "Host(`minio.example.com`)"
       service: minio-console
       entryPoints:
-        - web
+        - websecure
+      tls:
+        certResolver: letsencrypt
 
   services:
     frontend:

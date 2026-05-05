@@ -1,34 +1,16 @@
-# Traefik static configuration
+# Traefik static configuration for local development.
 api:
   dashboard: true
-  insecure: true  # Dashboard on :8080 (disable in production)
+  insecure: true
 
 entryPoints:
   web:
     address: ":80"
-    http:
-      redirections:
-        entryPoint:
-          to: websecure
-          scheme: https
-  websecure:
-    address: ":443"
 
 providers:
-  docker:
-    network: app
-    exposedByDefault: false
   file:
     directory: /etc/traefik/dynamic
     watch: true
-
-certificatesResolvers:
-  letsencrypt:
-    acme:
-      email: "${TRAEFIK_ACME_EMAIL:-admin@company.com}"
-      storage: /etc/traefik/acme.json
-      httpChallenge:
-        entryPoint: web
 
 log:
   level: INFO

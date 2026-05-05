@@ -1,5 +1,3 @@
-version: "3.9"
-
 x-backend-env: &backend-env
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
