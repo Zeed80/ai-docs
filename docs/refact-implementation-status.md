@@ -127,6 +127,14 @@
 - [x] Добавить API/UI реального индексирования queued/stale memory embedding records в Qdrant.
 - [x] Добавить optional reranker поверх SQL/vector candidates.
 
+### P2.6.1. Единая auto-hybrid память агента
+
+- [x] Убрать ручной выбор `sql/vector/graph` и `top-k` из настроек агента.
+- [x] Перевести `memory.search` на автоматический hybrid retrieval с совместимостью старого `retrieval_mode`.
+- [x] Добавить cursor/page обход памяти и `need_full_coverage` для агентских запросов.
+- [x] Подключить историю чата как эпизодический SQL-слой памяти.
+- [x] Научить prefetch агента читать память страницами до серверного лимита и передавать в LLM evidence pack.
+
 ### P2.7. TurboQuant
 
 - [x] Принять архитектурное решение: TurboQuant использовать для vLLM long-context KV-cache, а не как основной механизм embeddings/rerankers.

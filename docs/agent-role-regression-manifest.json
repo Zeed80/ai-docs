@@ -2,7 +2,7 @@
   "version": 1,
   "dataset": "builtin-agent-role-regression",
   "privacy": "synthetic_no_customer_documents",
-  "default_memory_mode": "sql",
+  "default_memory_mode": "auto_hybrid",
   "roles": [
     {
       "id": "technologist_process_plan",

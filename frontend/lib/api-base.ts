@@ -36,3 +36,15 @@ export function getWebSocketBaseUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${apiUrl.hostname}:${apiUrl.port || "8000"}`;
 }
+
+export function getAiAgentWebSocketUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_AIAGENT_WS_URL;
+  if (configured) return configured;
+
+  if (typeof window === "undefined") {
+    return "ws://localhost:18789";
+  }
+
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.hostname}:18789`;
+}

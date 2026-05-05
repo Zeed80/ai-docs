@@ -5,10 +5,12 @@ import os
 import uuid
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.ai_settings import get_ai_config
 from app.db.models import (
+    ChatMessage,
     Document,
     DocumentChunk,
     DocumentExtraction,
@@ -20,13 +22,13 @@ from app.db.models import (
 from app.db.session import get_db
 from app.domain.graph import (
     EvidenceSpanOut,
-    MemoryExplainRequest,
-    MemoryExplainResponse,
-    MemoryEmbeddingRebuildRequest,
-    MemoryEmbeddingRebuildResponse,
     MemoryEmbeddingIndexRequest,
     MemoryEmbeddingIndexResponse,
+    MemoryEmbeddingRebuildRequest,
+    MemoryEmbeddingRebuildResponse,
     MemoryEmbeddingStatsResponse,
+    MemoryExplainRequest,
+    MemoryExplainResponse,
     MemoryReindexItem,
     MemoryReindexRequest,
     MemoryReindexResponse,
@@ -35,7 +37,6 @@ from app.domain.graph import (
     MemorySearchResponse,
 )
 from app.domain.memory_builder import build_document_memory_async
-from app.api.ai_settings import get_ai_config
 
 router = APIRouter()
 
@@ -43,6 +44,8 @@ _TEXT_WEIGHT = float(os.getenv("MEMORY_TEXT_WEIGHT", "0.45"))
 _VECTOR_WEIGHT = float(os.getenv("MEMORY_VECTOR_WEIGHT", "0.40"))
 _GRAPH_WEIGHT = float(os.getenv("MEMORY_GRAPH_WEIGHT", "0.15"))
 _VECTOR_SCORE_THRESHOLD = float(os.getenv("MEMORY_VECTOR_SCORE_THRESHOLD", "0.3"))
+_AUTO_CANDIDATE_LIMIT = int(os.getenv("MEMORY_AUTO_CANDIDATE_LIMIT", "1000"))
+_RERANK_CANDIDATE_LIMIT = int(os.getenv("MEMORY_RERANK_CANDIDATE_LIMIT", "120"))
 
 
 @router.post("/search", response_model=MemorySearchResponse)
@@ -50,41 +53,96 @@ async def search_memory(
     payload: MemorySearchRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: memory.search — Search graph nodes, chunks, and evidence spans."""
-    pattern = f"%{payload.query}%"
+    """Skill: memory.search — Search graph nodes, chunks, and evidence spans.
+
+    The public API still accepts historical retrieval modes, but execution is
+    always automatic hybrid retrieval. The old mode value is treated as a
+    compatibility hint only; users should not have to choose SQL vs vector vs
+    graph manually.
+    """
+    offset = _decode_cursor(payload.cursor)
+    page_limit = payload.limit
+    internal_limit = _memory_candidate_limit(payload)
+    search_payload = payload.model_copy(
+        update={
+            "limit": internal_limit,
+            "retrieval_mode": "auto_hybrid",
+        }
+    )
     hits: list[MemorySearchHit] = []
+    diagnostics: list[str] = []
 
-    if payload.retrieval_mode in {"graph", "hybrid"}:
-        hits.extend(await _search_graph_nodes(db, payload, pattern))
+    for query_text in _expanded_memory_queries(payload):
+        query_payload = search_payload.model_copy(update={"query": query_text})
+        pattern = f"%{query_text}%"
+        hits.extend(await _search_graph_nodes(db, query_payload, pattern))
+        hits.extend(await _search_sql_memory(db, query_payload, pattern, remaining=internal_limit))
 
-    if payload.retrieval_mode in {"sql", "sql_vector", "sql_vector_rerank", "hybrid"}:
-        candidate_limit = payload.limit if payload.retrieval_mode == "sql" else payload.limit * 2
-        hits.extend(await _search_sql_memory(db, payload, pattern, remaining=candidate_limit))
+    vector_hits = await _search_vector_memory(db, search_payload, limit=internal_limit)
+    if vector_hits:
+        hits.extend(vector_hits)
+    else:
+        diagnostics.append("vector_memory_empty_or_unavailable")
 
-    if payload.retrieval_mode in {"sql_vector", "sql_vector_rerank", "hybrid"}:
-        hits.extend(await _search_vector_memory(db, payload, limit=payload.limit * 2))
+    if payload.retrieval_mode != "auto_hybrid":
+        diagnostics.append(f"retrieval_mode_deprecated:{payload.retrieval_mode}")
 
     hits = _merge_memory_hits(hits)
+    hits = _rank_memory_hits(hits)
 
-    # sql_vector_rerank: use cross-encoder only when reranker_model is set in AI settings.
-    # Without it, fall back to weighted SQL/vector/graph blending — otherwise scores stay raw
-    # and ordering looks arbitrary vs other modes ("режим не работает").
-    if payload.retrieval_mode == "sql_vector_rerank" and hits:
+    if hits:
         cfg = get_ai_config()
         if cfg.get("reranker_model"):
-            hits = await _try_rerank_hits(payload.query, hits)
-        else:
-            hits = _rank_memory_hits(hits)
-    else:
-        hits = _rank_memory_hits(hits)
+            hits = sorted(hits, key=lambda hit: hit.score, reverse=True)
+            reranked = await _try_rerank_hits(payload.query, hits[:_RERANK_CANDIDATE_LIMIT])
+            hits = reranked + hits[_RERANK_CANDIDATE_LIMIT:]
 
-    hits = sorted(hits, key=lambda hit: hit.score, reverse=True)[: payload.limit]
+    hits = sorted(hits, key=lambda hit: hit.score, reverse=True)
+    total_available = len(hits)
+    page = hits[offset: offset + page_limit]
+    next_offset = offset + len(page)
+    next_cursor = str(next_offset) if next_offset < total_available else None
     return MemorySearchResponse(
         query=payload.query,
-        retrieval_mode=payload.retrieval_mode,
-        hits=hits,
-        total=len(hits),
+        retrieval_mode="auto_hybrid",
+        hits=page,
+        total=len(page),
+        total_available=total_available,
+        next_cursor=next_cursor,
+        coverage="complete" if next_cursor is None else "paged",
+        diagnostics=diagnostics,
     )
+
+
+def _memory_candidate_limit(payload: MemorySearchRequest) -> int:
+    base = _AUTO_CANDIDATE_LIMIT if payload.need_full_coverage else max(payload.limit * 4, 200)
+    return max(payload.limit, min(base, _AUTO_CANDIDATE_LIMIT))
+
+
+def _decode_cursor(cursor: str | None) -> int:
+    if not cursor:
+        return 0
+    try:
+        return max(0, int(cursor))
+    except ValueError:
+        return 0
+
+
+def _expanded_memory_queries(payload: MemorySearchRequest) -> list[str]:
+    seen: set[str] = set()
+    queries: list[str] = []
+    for value in [payload.query, *(payload.entity_hints or [])]:
+        text_value = " ".join(str(value or "").strip().split())
+        if not text_value:
+            continue
+        key = text_value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        queries.append(text_value)
+        if len(queries) >= 8:
+            break
+    return queries or [payload.query]
 
 
 def _fts_condition(column, query: str):
@@ -255,11 +313,15 @@ def _merge_memory_hits(hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
             update={
                 "score": max(existing.score, hit.score),
                 "source": "+".join(sources),
-                "text_score": existing.text_score if existing.text_score is not None else hit.text_score,
+                "text_score": (
+                    existing.text_score if existing.text_score is not None else hit.text_score
+                ),
                 "vector_score": (
                     existing.vector_score if existing.vector_score is not None else hit.vector_score
                 ),
-                "graph_score": existing.graph_score if existing.graph_score is not None else hit.graph_score,
+                "graph_score": (
+                    existing.graph_score if existing.graph_score is not None else hit.graph_score
+                ),
                 "rerank_score": (
                     existing.rerank_score if existing.rerank_score is not None else hit.rerank_score
                 ),
@@ -321,7 +383,7 @@ async def _search_sql_memory(
             )
         )
 
-    remaining = payload.limit - len(hits)
+    remaining = remaining - len(hits)
     if remaining > 0:
         evidence_query = select(EvidenceSpan).where(
             _fts_condition(EvidenceSpan.text, payload.query)
@@ -344,6 +406,32 @@ async def _search_sql_memory(
                     text_score=score,
                     source_document_id=evidence.document_id,
                     evidence=EvidenceSpanOut.model_validate(evidence),
+                )
+            )
+    remaining = remaining - len(hits)
+    if remaining > 0 and not payload.document_id:
+        chat_query = (
+            select(ChatMessage)
+            .where(
+                ChatMessage.role.in_(["user", "assistant"]),
+                _fts_condition(ChatMessage.content, payload.query),
+            )
+            .order_by(ChatMessage.created_at.desc())
+            .limit(remaining)
+        )
+        chat_result = await db.execute(chat_query)
+        for message in chat_result.scalars().all():
+            content = message.content or ""
+            score = _simple_score(payload.query, content)
+            hits.append(
+                MemorySearchHit(
+                    kind="chat_message",
+                    id=message.id,
+                    title=f"Chat {message.role}",
+                    summary=content[:500],
+                    score=score,
+                    source="chat",
+                    text_score=score,
                 )
             )
     return hits
@@ -513,7 +601,7 @@ async def rebuild_active_memory_embeddings(
     payload: MemoryEmbeddingRebuildRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: memory.embeddings_rebuild_active — Rebuild records for the active embedding profile."""
+    """Skill: memory.embeddings_rebuild_active — Rebuild records for active profile."""
     from app.ai.embeddings import get_active_embedding_profile
 
     profile = get_active_embedding_profile()

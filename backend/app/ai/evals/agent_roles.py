@@ -14,7 +14,7 @@ REQUIRED_ROLE_IDS = {
     "buyer_procurement_rfq",
 }
 
-ALLOWED_MEMORY_MODES = {"sql", "sql_vector", "sql_vector_rerank", "graph", "hybrid"}
+ALLOWED_MEMORY_MODES = {"auto_hybrid", "sql", "sql_vector", "sql_vector_rerank", "graph", "hybrid"}
 
 
 def validate_agent_role_manifest(

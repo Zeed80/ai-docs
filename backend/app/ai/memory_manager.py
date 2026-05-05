@@ -9,7 +9,6 @@ Pattern adapted from hermes-agent/agent/memory_manager.py.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -20,8 +19,10 @@ logger = logging.getLogger(__name__)
 _MEMORY_CONTEXT_TAG_OPEN = "<memory-context>"
 _MEMORY_CONTEXT_TAG_CLOSE = "</memory-context>"
 
-# Max chars for a single prefetched memory block injected into context.
-_MAX_MEMORY_CHARS = 4000
+# Max chars for the evidence pack injected into the model context. Retrieval can
+# inspect far more records server-side; this only bounds the final LLM payload.
+_MAX_MEMORY_CHARS = 20000
+_MEMORY_PAGE_SIZE = 120
 
 
 class MemoryManager:
@@ -29,7 +30,7 @@ class MemoryManager:
 
     Usage in AgentSession::
 
-        mgr = MemoryManager(base_url="http://localhost:8000", top_k=8)
+        mgr = MemoryManager(base_url="http://localhost:8000")
         context_block = await mgr.prefetch(user_text)
         # inject context_block as a system-level user message before the LLM call
 
@@ -39,21 +40,17 @@ class MemoryManager:
     def __init__(
         self,
         base_url: str,
-        top_k: int = 8,
         max_chars: int = _MAX_MEMORY_CHARS,
         timeout: float = 25.0,
-        retrieval_mode: str = "hybrid",
     ) -> None:
         self._base_url = base_url.rstrip("/")
-        self._top_k = top_k
         self._max_chars = max_chars
         self._timeout = timeout
-        self._retrieval_mode = retrieval_mode
 
     async def prefetch(self, query: str, session_id: str = "") -> str:
         """Search memory for context relevant to *query*.
 
-        Calls ``POST /api/memory/search`` (same contract as :func:`agent_loop._load_memory_context`).
+        Calls ``POST /api/memory/search``.
 
         Returns a formatted ``<memory-context>`` block, or an empty string
         if nothing relevant was found or the call failed.
@@ -61,27 +58,13 @@ class MemoryManager:
         if not query.strip():
             return ""
         try:
-            body: dict[str, Any] = {
-                "query": query[:500],
-                "limit": self._top_k,
-                "retrieval_mode": self._retrieval_mode,
-                "include_explain": False,
-            }
-            if session_id:
-                body["session_id"] = session_id
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(
-                    f"{self._base_url}/api/memory/search",
-                    json=body,
-                )
-                if resp.status_code != 200:
-                    return ""
-                data = resp.json()
+                data = await self._read_memory_pages(client, query, session_id=session_id)
         except Exception as exc:
             logger.debug("memory prefetch failed (non-fatal): %s", exc)
             return ""
 
-        hits: list[dict] = data.get("hits") or []
+        hits: list[dict] = data
         if not hits:
             return ""
 
@@ -105,6 +88,47 @@ class MemoryManager:
             return ""
 
         return self.build_context_block("\n".join(lines))
+
+    async def _read_memory_pages(
+        self,
+        client: httpx.AsyncClient,
+        query: str,
+        *,
+        session_id: str = "",
+    ) -> list[dict]:
+        cursor: str | None = None
+        hits: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        while True:
+            body: dict[str, Any] = {
+                "query": query[:500],
+                "limit": _MEMORY_PAGE_SIZE,
+                "retrieval_mode": "auto_hybrid",
+                "need_full_coverage": True,
+                "include_explain": False,
+            }
+            if cursor:
+                body["cursor"] = cursor
+            if session_id:
+                body["session_id"] = session_id
+            resp = await client.post(
+                f"{self._base_url}/api/memory/search",
+                json=body,
+            )
+            if resp.status_code != 200:
+                return hits
+            data = resp.json()
+            for hit in data.get("hits") or []:
+                if not isinstance(hit, dict):
+                    continue
+                key = (str(hit.get("kind") or ""), str(hit.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                hits.append(hit)
+            cursor = data.get("next_cursor")
+            if not cursor or len(hits) >= 1000:
+                return hits
 
     async def sync_turn(self, user_text: str, assistant_text: str) -> None:
         """Persist chat turn into long-term memory.

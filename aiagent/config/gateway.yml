@@ -59,6 +59,8 @@ skills:
     - doc.dependencies
     - doc.memory_rebuild
     - doc.batch_memory_rebuild
+    - doc.batch_embeddings_reindex
+    - doc.batch_ntd_check
     - doc.batch_process
     - doc.management
     # Invoices
@@ -139,11 +141,14 @@ skills:
     - email.templates.create
     - email.templates.update
     - email.templates.from_message
+    - email.templates.delete
     # Mailboxes
     - mailbox.list
     - mailbox.get
     - mailbox.create
     - mailbox.update
+    - mailbox.delete
+    - mailbox.test
     # Approvals
     - approval.list_pending
     - approval.status
@@ -187,8 +192,11 @@ skills:
     - calendar.create_event
     - calendar.list_reminders
     - calendar.extract_dates
+    - calendar.mark_sent
     # Dashboard
     - dashboard.today
+    # Agent desktop / canvas
+    - canvas.publish
     # Quarantine
     - quarantine.list
     # Collections
@@ -258,6 +266,10 @@ skills:
     - ntd.requirement_search
     - ntd.clause_create
     - ntd.control_settings_get
+    - ntd.control_settings_update
+    - ntd.document_create_from_source
+    - ntd.document_index
+    - ntd.norm_control_run_payload
 
   # Approval gates: agent pauses and waits for explicit human confirmation.
   # Editing this list takes effect for the NEXT conversation (hot-reload).
@@ -267,6 +279,7 @@ skills:
     - invoice.bulk_delete
     - invoice.delete
     - email.send
+    - email.templates.delete
     - anomaly.resolve
     - norm.activate_rule
     - norm.apply_rules
@@ -284,10 +297,14 @@ skills:
     - table.apply_diff
     - table.import_excel
     - doc.bulk_delete
+    - doc.batch_ntd_check
     - ntd.norm_control_run
+    - ntd.norm_control_run_payload
     - ntd.finding_decide
+    - ntd.control_settings_update
     - mailbox.create
     - mailbox.delete
+    - mailbox.test
 
 # ── Scenarios ─────────────────────────────────────────────────────────────────
 # Pipelines that run automatically or on-demand.

@@ -61,6 +61,13 @@ lint-fix:
 skills:
 	cd backend && python3 -m app.scripts.generate_skill_registry
 
+aiagent-contract:
+	python3 scripts/check_aiagent_contract.py --strict
+
+aiagent-strict:
+	python3 scripts/generate_aiagent_strict_gateway.py
+	python3 scripts/generate_aiagent_official_sample.py
+
 # === Docker Ops ===
 logs:
 	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs -f

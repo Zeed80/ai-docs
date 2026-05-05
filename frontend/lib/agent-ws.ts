@@ -1,8 +1,9 @@
 "use client";
 
 import { getWsUrl } from "@/lib/ws-url";
+import { getAiAgentWebSocketUrl } from "@/lib/api-base";
 
-export type AgentWsMode = "legacy";
+export type AgentWsMode = "legacy" | "aiagent";
 
 export interface AgentWsMessage extends Record<string, unknown> {
   type: string;
@@ -24,28 +25,65 @@ function getLegacyWsEndpoint(): string {
   return `${getWsUrl()}/ws/chat`;
 }
 
+function getConfiguredAgentWsMode(): AgentWsMode {
+  return process.env.NEXT_PUBLIC_AGENT_WS_MODE === "aiagent"
+    ? "aiagent"
+    : "legacy";
+}
+
+function getFallbackMode(): AgentWsMode | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage?.getItem("agent_ws_fallback_mode") === "legacy"
+      ? "legacy"
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getAgentWsMode(): AgentWsMode {
+  return getFallbackMode() ?? getConfiguredAgentWsMode();
+}
+
 export function setLegacyAgentWsFallback(): void {
-  // no-op: single-mode setup, kept for API compatibility
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage?.setItem("agent_ws_fallback_mode", "legacy");
+  } catch {
+    // sessionStorage can be unavailable in privacy-restricted browsers.
+  }
 }
 
 export function clearAgentWsFallback(): void {
-  // no-op: single-mode setup, kept for API compatibility
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage?.removeItem("agent_ws_fallback_mode");
+  } catch {
+    // sessionStorage can be unavailable in privacy-restricted browsers.
+  }
 }
 
 export function getAgentWsEndpoint(): string {
-  return getLegacyWsEndpoint();
+  return getAgentWsMode() === "aiagent"
+    ? getAiAgentWebSocketUrl()
+    : getLegacyWsEndpoint();
 }
 
 export function getAgentWsHealthCheckEndpoints(): string[] {
-  return [getLegacyWsEndpoint()];
+  if (getConfiguredAgentWsMode() !== "aiagent") {
+    return [getLegacyWsEndpoint()];
+  }
+  return [getAiAgentWebSocketUrl(), getLegacyWsEndpoint()];
 }
 
 export async function resolveAgentWsConfig(): Promise<AgentWsResolvedConfig> {
-  const endpoint = getLegacyWsEndpoint();
+  const mode = getAgentWsMode();
+  const endpoint = getAgentWsEndpoint();
   return {
-    mode: "legacy",
+    mode,
     endpoint,
-    healthCheckEndpoints: [endpoint],
+    healthCheckEndpoints: getAgentWsHealthCheckEndpoints(),
   };
 }
 
@@ -58,8 +96,19 @@ export function buildAgentUserMessage(
     mime_type?: string;
     size_bytes?: number;
   }>,
-  _mode?: AgentWsMode,
+  mode: AgentWsMode = getAgentWsMode(),
 ): Record<string, unknown> {
+  if (mode === "aiagent") {
+    return {
+      type: "chat",
+      payload: {
+        text: content,
+        session_id: sessionId ?? undefined,
+        attachments:
+          attachments && attachments.length > 0 ? attachments : undefined,
+      },
+    };
+  }
   return {
     type: "message",
     content,
@@ -71,8 +120,14 @@ export function buildAgentUserMessage(
 
 export function buildAgentApprovalMessage(
   approved: boolean,
-  _mode?: AgentWsMode,
+  mode: AgentWsMode = getAgentWsMode(),
 ): Record<string, unknown> {
+  if (mode === "aiagent") {
+    return {
+      type: "approval",
+      payload: { approved },
+    };
+  }
   return { type: approved ? "approve" : "reject" };
 }
 
@@ -99,6 +154,17 @@ export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
     ].includes(type)
   ) {
     return [data as unknown as AgentWsMessage];
+  }
+
+  if (type === "canvas.publish" || type === "canvas.block") {
+    return [
+      {
+        type: "canvas",
+        canvas_id: String(payload.canvas_id ?? data.canvas_id ?? ""),
+        block: (payload.block ?? data.block) as Record<string, unknown>,
+        append: payload.append ?? data.append ?? true,
+      },
+    ];
   }
 
   if (type === "chat.delta" || type === "delta" || type === "assistant.delta") {

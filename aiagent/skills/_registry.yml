@@ -36,7 +36,7 @@ tools:
   category: documents
   method: DELETE
   path: /api/documents/bulk-delete
-  approval_required: false
+  approval_required: true
   parameters:
     properties:
       document_ids:
@@ -182,7 +182,7 @@ tools:
   category: documents
   method: POST
   path: /api/documents/batch/ntd-check
-  approval_required: false
+  approval_required: true
   parameters:
     properties:
       document_ids:
@@ -542,7 +542,7 @@ tools:
   category: invoices
   method: DELETE
   path: /api/invoices/{invoice_id}
-  approval_required: false
+  approval_required: true
 - name: invoice.bulk_delete
   description: 'Skill: invoice.bulk_delete — Bulk delete invoices by ids list, filter,
     or all.'
@@ -1010,7 +1010,7 @@ tools:
   category: normalization
   method: POST
   path: /api/normalization/apply
-  approval_required: false
+  approval_required: true
   parameters:
     properties:
       document_id:
@@ -1488,7 +1488,7 @@ tools:
   category: tables
   method: POST
   path: /api/tables/import
-  approval_required: false
+  approval_required: true
 - name: table.apply_diff
   description: 'Skill: table.apply_diff — Apply import diff rows to the database.'
   category: tables
@@ -2535,14 +2535,39 @@ tools:
         default: null
         title: Document Id
       limit:
-        default: 20
-        maximum: 100
+        default: 50
+        maximum: 500
         minimum: 1
         title: Limit
         type: integer
+      cursor:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Cursor
+      intent:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Intent
+      entity_hints:
+        anyOf:
+        - items:
+            type: string
+          type: array
+        - type: 'null'
+        default: null
+        title: Entity Hints
+      need_full_coverage:
+        default: false
+        title: Need Full Coverage
+        type: boolean
       retrieval_mode:
-        default: sql
+        default: auto_hybrid
         enum:
+        - auto_hybrid
         - sql
         - sql_vector
         - sql_vector_rerank
@@ -2587,8 +2612,8 @@ tools:
         default: null
         title: Node Types
       limit:
-        default: 10
-        maximum: 50
+        default: 50
+        maximum: 500
         minimum: 1
         title: Limit
         type: integer
@@ -2598,6 +2623,21 @@ tools:
         minimum: 0
         title: Neighborhood Depth
         type: integer
+      retrieval_mode:
+        default: auto_hybrid
+        enum:
+        - auto_hybrid
+        - sql
+        - sql_vector
+        - sql_vector_rerank
+        - graph
+        - hybrid
+        title: Retrieval Mode
+        type: string
+      include_explain:
+        default: true
+        title: Include Explain
+        type: boolean
     required:
     - query
     title: MemoryExplainRequest
@@ -2660,8 +2700,8 @@ tools:
   path: /api/memory/embeddings/stats
   approval_required: false
 - name: memory.embeddings_rebuild_active
-  description: 'Skill: memory.embeddings_rebuild_active — Rebuild records for the
-    active embedding profile.'
+  description: 'Skill: memory.embeddings_rebuild_active — Rebuild records for active
+    profile.'
   category: memory
   method: POST
   path: /api/memory/embeddings/rebuild-active
@@ -3547,11 +3587,49 @@ tools:
   method: GET
   path: /api/warehouse/inventory/{item_id}
   approval_required: false
+- name: warehouse.update_item
+  description: 'Skill: warehouse.update_item — Update inventory item fields.'
+  category: warehouse
+  method: PATCH
+  path: /api/warehouse/inventory/{item_id}
+  approval_required: false
+- name: warehouse.delete_item
+  description: 'Skill: warehouse.delete_item — Delete inventory item with all movements
+    (approval gate).'
+  category: warehouse
+  method: DELETE
+  path: /api/warehouse/inventory/{item_id}
+  approval_required: true
+- name: warehouse.issue_stock
+  description: 'Skill: warehouse.issue_stock — Issue stock from warehouse (approval
+    gate).'
+  category: warehouse
+  method: POST
+  path: /api/warehouse/inventory/{item_id}/issue
+  approval_required: true
+- name: warehouse.adjust_stock
+  description: 'Skill: warehouse.adjust_stock — Adjust inventory quantity (±).'
+  category: warehouse
+  method: POST
+  path: /api/warehouse/inventory/{item_id}/adjust
+  approval_required: false
+- name: warehouse.list_movements
+  description: 'Skill: warehouse.list_movements — List all stock movements with filters.'
+  category: warehouse
+  method: GET
+  path: /api/warehouse/movements
+  approval_required: false
 - name: warehouse.list_receipts
   description: 'Skill: warehouse.list_receipts — List warehouse receipts.'
   category: warehouse
   method: GET
   path: /api/warehouse/receipts
+  approval_required: false
+- name: warehouse.bulk_confirm
+  description: 'Skill: warehouse.bulk_confirm — Bulk accept pending/draft receipts.'
+  category: warehouse
+  method: POST
+  path: /api/warehouse/receipts/bulk-confirm
   approval_required: false
 - name: warehouse.create_receipt
   description: 'Skill: warehouse.create_receipt — Create receipt from invoice lines.'
@@ -3577,106 +3655,6 @@ tools:
   category: warehouse
   method: PATCH
   path: /api/warehouse/receipts/{receipt_id}/status
-  approval_required: false
-- name: warehouse.update_item
-  description: 'Skill: warehouse.update_item — Update inventory item fields: name, unit, sku, location, min_qty.'
-  category: warehouse
-  method: PATCH
-  path: /api/warehouse/inventory/{item_id}
-  approval_required: false
-  parameters:
-    type: object
-    properties:
-      name:
-        type: string
-        description: Новое наименование позиции
-      unit:
-        type: string
-        description: Единица измерения (шт, кг, м и т.п.)
-      sku:
-        type: string
-        description: Артикул (SKU)
-      min_qty:
-        type: number
-        description: Минимальный остаток для сигнала дефицита
-      location:
-        type: string
-        description: Место хранения (склад, стеллаж)
-- name: warehouse.delete_item
-  description: 'Skill: warehouse.delete_item — Delete inventory item permanently (approval gate). Works with any quantity.'
-  category: warehouse
-  method: DELETE
-  path: /api/warehouse/inventory/{item_id}
-  approval_required: true
-- name: warehouse.issue_stock
-  description: 'Skill: warehouse.issue_stock — Issue stock from warehouse, reduces inventory quantity (approval gate).'
-  category: warehouse
-  method: POST
-  path: /api/warehouse/inventory/{item_id}/issue
-  approval_required: true
-  parameters:
-    type: object
-    required:
-      - quantity
-      - reason
-    properties:
-      quantity:
-        type: number
-        description: Количество для выдачи (положительное число)
-      reason:
-        type: string
-        description: Причина выдачи (для кого, на что)
-      performed_by:
-        type: string
-        description: Кто выдаёт (ФИО или должность)
-        default: user
-- name: warehouse.adjust_stock
-  description: 'Skill: warehouse.adjust_stock — Adjust inventory quantity by positive or negative delta.'
-  category: warehouse
-  method: POST
-  path: /api/warehouse/inventory/{item_id}/adjust
-  approval_required: false
-  parameters:
-    type: object
-    required:
-      - quantity
-      - reason
-    properties:
-      quantity:
-        type: number
-        description: Изменение количества (положительное = увеличение, отрицательное = уменьшение)
-      reason:
-        type: string
-        description: Причина корректировки (инвентаризация, брак и т.п.)
-      performed_by:
-        type: string
-        description: Кто выполняет корректировку
-        default: user
-- name: warehouse.bulk_confirm
-  description: 'Skill: warehouse.bulk_confirm — Bulk accept multiple pending warehouse receipts at once.'
-  category: warehouse
-  method: POST
-  path: /api/warehouse/receipts/bulk-confirm
-  approval_required: false
-  parameters:
-    type: object
-    required:
-      - receipt_ids
-    properties:
-      receipt_ids:
-        type: array
-        items:
-          type: string
-          format: uuid
-        description: Список ID приходных ордеров для подтверждения
-      received_by:
-        type: string
-        description: Кто принимает товар
-- name: warehouse.list_movements
-  description: 'Skill: warehouse.list_movements — List all stock movements with optional filter by type or item.'
-  category: warehouse
-  method: GET
-  path: /api/warehouse/movements
   approval_required: false
 - name: procurement.list_requests
   description: 'Skill: procurement.list_requests — List purchase requests.'
@@ -3825,7 +3803,7 @@ tools:
   category: ntd
   method: PATCH
   path: /api/settings/ntd-control
-  approval_required: false
+  approval_required: true
 - name: ntd.document_list
   description: 'Skill: ntd.document_list — List normative documents.'
   category: ntd
@@ -3876,7 +3854,7 @@ tools:
   category: ntd
   method: POST
   path: /api/documents/{document_id}/ntd-check
-  approval_required: false
+  approval_required: true
 - name: ntd.check_availability
   description: 'Skill: ntd.check_availability — Explain whether NTD check can run
     for a document.'
@@ -3890,7 +3868,7 @@ tools:
   category: ntd
   method: POST
   path: /api/ntd/checks/run
-  approval_required: false
+  approval_required: true
 - name: ntd.check_list
   description: 'Skill: ntd.check_list — List NTD checks for a document.'
   category: ntd
@@ -3908,7 +3886,7 @@ tools:
   category: ntd
   method: POST
   path: /api/ntd/checks/{check_id}/findings/{finding_id}/decide
-  approval_required: false
+  approval_required: true
 - name: canvas.publish
   description: 'Skill: canvas.publish — Send a rich content block to the agent canvas
     panel.'
@@ -3921,7 +3899,7 @@ tools:
   category: mailbox
   method: POST
   path: /api/mailbox/configs
-  approval_required: false
+  approval_required: true
 - name: mailbox.list
   description: 'Skill: mailbox.list — List all configured mailboxes.'
   category: mailbox
@@ -3945,13 +3923,13 @@ tools:
   category: mailbox
   method: DELETE
   path: /api/mailbox/configs/{mailbox_id}
-  approval_required: false
+  approval_required: true
 - name: mailbox.test
   description: 'Skill: mailbox.test — Test IMAP and SMTP connectivity.'
   category: mailbox
   method: POST
   path: /api/mailbox/configs/{mailbox_id}/test
-  approval_required: false
+  approval_required: true
 - name: email.templates.list
   description: 'Skill: email.templates.list — List email templates with optional filters.'
   category: email_templates
@@ -3981,7 +3959,7 @@ tools:
   category: email_templates
   method: DELETE
   path: /api/email-templates/{template_id}
-  approval_required: false
+  approval_required: true
 - name: email.templates.from_message
   description: 'Skill: email.templates.from_message — Create a template from an existing
     email.'
@@ -3995,389 +3973,3 @@ tools:
   method: POST
   path: /api/email-templates/{template_id}/render
   approval_required: false
-# ── Drawing Intelligence (Epic 7) ────────────────────────────────────────────
-- name: drawing.upload_via_document
-  description: >-
-    Skill: drawing.upload_via_document — Upload a DWG or DXF file through the documents
-    ingest endpoint. The file is stored, a Drawing record is automatically created and linked
-    to the Document, and drawing analysis (DWG→DXF conversion + full entity extraction + VLM)
-    is queued. Supported formats: .dwg, .dxf, .svg.
-    DWG is converted via dwg2dxf (libredwg) covering all entity types:
-    CIRCLE, LINE, ARC, LWPOLYLINE, POLYLINE, SPLINE, ELLIPSE, HATCH, INSERT (block expansion),
-    TEXT, MTEXT, DIMENSION (all subtypes), LEADER, MULTILEADER, TOLERANCE (GD&T frames), ATTRIB.
-    If libredwg is unavailable, falls back to ezdxf odafc (ODA File Converter).
-  category: drawings
-  method: POST
-  path: /api/documents/ingest
-  approval_required: false
-- name: drawing.upload
-  description: 'Skill: drawing.upload — Upload a technical drawing file (DXF, DWG, PDF, STEP)
-    and enqueue AI analysis. Returns drawing_id and celery task_id.'
-  category: drawings
-  method: POST
-  path: /api/drawings
-  approval_required: false
-  parameters:
-    properties:
-      file:
-        type: string
-        format: binary
-        title: Drawing file (DXF/DWG/PDF/STEP)
-      document_id:
-        anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-        title: Linked document ID
-      drawing_number:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Drawing number/designation
-    title: DrawingUpload
-    type: object
-- name: drawing.list
-  description: 'Skill: drawing.list — List all drawings with optional status/number filter.'
-  category: drawings
-  method: GET
-  path: /api/drawings
-  approval_required: false
-- name: drawing.get
-  description: 'Skill: drawing.get — Get a drawing with all extracted features, dimensions,
-    surface roughness, GD&T and tool bindings.'
-  category: drawings
-  method: GET
-  path: /api/drawings/{drawing_id}
-  approval_required: false
-- name: drawing.get_features
-  description: 'Skill: drawing.get_features — Get all manufacturing features of a drawing
-    (holes, pockets, surfaces, threads, etc.) with dimensions and tolerances.'
-  category: drawings
-  method: GET
-  path: /api/drawings/{drawing_id}/features
-  approval_required: false
-- name: drawing.update_feature
-  description: 'Skill: drawing.update_feature — Update name, type or metadata of a drawing
-    feature after AI extraction.'
-  category: drawings
-  method: PATCH
-  path: /api/drawings/{drawing_id}/features/{feature_id}
-  approval_required: false
-  parameters:
-    properties:
-      feature_type:
-        anyOf:
-          - type: string
-            enum: [hole, pocket, surface, boss, groove, thread, chamfer, radius, slot, contour, other]
-          - type: 'null'
-        title: Feature type
-      name:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Feature name
-      description:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Description
-    title: DrawingFeatureUpdate
-    type: object
-- name: drawing.update_contours
-  description: 'Skill: drawing.update_contours — Replace contour primitives for a feature
-    (circle, arc, rectangle, polyline, line) after manual editing.'
-  category: drawings
-  method: PUT
-  path: /api/drawings/{drawing_id}/features/{feature_id}/contours
-  approval_required: false
-- name: drawing.link_tool
-  description: 'Skill: drawing.link_tool — Bind a manufacturing tool to a drawing feature.
-    Requires approval gate before sending to production.'
-  category: drawings
-  method: POST
-  path: /api/drawings/{drawing_id}/features/{feature_id}/tool
-  approval_required: true
-  parameters:
-    properties:
-      tool_source:
-        type: string
-        enum: [warehouse, catalog, manual]
-        title: Tool source
-      warehouse_item_id:
-        anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-        title: Warehouse item ID
-      catalog_entry_id:
-        anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-        title: Catalog entry ID
-      manual_description:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Manual tool description
-      cutting_parameters:
-        anyOf:
-          - type: object
-          - type: 'null'
-        title: Cutting parameters (rpm, feed_rate, etc.)
-      notes:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Notes
-    required:
-      - tool_source
-    title: FeatureToolBindingCreate
-    type: object
-- name: drawing.reanalyze
-  description: 'Skill: drawing.reanalyze — Re-run AI analysis for a drawing. Use when
-    initial extraction quality was low or user corrected data.'
-  category: drawings
-  method: POST
-  path: /api/drawings/{drawing_id}/reanalyze
-  approval_required: false
-- name: drawing.delete_feature
-  description: 'Skill: drawing.delete_feature — Delete an incorrectly extracted feature.'
-  category: drawings
-  method: DELETE
-  path: /api/drawings/{drawing_id}/features/{feature_id}
-  approval_required: false
-- name: drawing.delete
-  description: 'Skill: drawing.delete — Delete a drawing and all its features, Qdrant vectors, graph nodes, and MinIO files.'
-  category: drawings
-  method: DELETE
-  path: /api/drawings/{drawing_id}
-  approval_required: false
-- name: drawing.bulk_delete
-  description: 'Skill: drawing.bulk_delete — Bulk delete multiple drawings with full cascade cleanup (SQL, Qdrant, graph, files). Requires confirmation.'
-  category: drawings
-  method: DELETE
-  path: /api/drawings/bulk-delete
-  approval_required: true
-  parameters:
-    properties:
-      drawing_ids:
-        items:
-          format: uuid
-          type: string
-        maxItems: 500
-        minItems: 1
-        title: Drawing Ids
-        type: array
-      delete_files:
-        default: true
-        title: Delete Files
-        type: boolean
-    required:
-    - drawing_ids
-    title: DrawingBulkDeleteRequest
-    type: object
-# ── Tool Catalog ──────────────────────────────────────────────────────────────
-- name: tool_catalog.search
-  description: 'Skill: tool_catalog.search — Search tool catalog by parameters (type,
-    diameter, material) with semantic AI matching. Returns ranked tool list.'
-  category: tool_catalog
-  method: GET
-  path: /api/tool-catalog/search
-  approval_required: false
-  parameters:
-    properties:
-      query:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Free-text search query
-      tool_type:
-        anyOf:
-          - type: string
-            enum: [drill, endmill, insert, holder, tap, reamer, boring_bar, thread_mill, grinder, turning_tool, milling_cutter, countersink, counterbore, other]
-          - type: 'null'
-        title: Tool type filter
-      diameter_min:
-        anyOf:
-          - type: number
-          - type: 'null'
-        title: Minimum diameter mm
-      diameter_max:
-        anyOf:
-          - type: number
-          - type: 'null'
-        title: Maximum diameter mm
-      material:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Tool material (HSS, Carbide, etc.)
-      semantic:
-        type: boolean
-        default: true
-        title: Use semantic/vector search
-      page_size:
-        type: integer
-        default: 20
-    title: ToolCatalogSearch
-    type: object
-- name: tool_catalog.suggest
-  description: 'Skill: tool_catalog.suggest — AI-powered tool suggestion for a specific
-    drawing feature. Considers feature type, dimensions, roughness requirements and material.'
-  category: tool_catalog
-  method: GET
-  path: /api/tool-catalog/suggest/{feature_id}
-  approval_required: false
-- name: tool_catalog.import
-  description: 'Skill: tool_catalog.import — Import supplier tool catalog from PDF, Excel,
-    CSV or JSON file. Triggers async ingestion task.'
-  category: tool_catalog
-  method: POST
-  path: /api/tool-catalog/suppliers/{supplier_id}/catalog
-  approval_required: false
-# ── Supplier Catalog ──────────────────────────────────────────────────────────
-- name: supplier_catalog.create
-  description: 'Skill: supplier_catalog.create — Create a new tool supplier record.'
-  category: supplier_catalog
-  method: POST
-  path: /api/tool-catalog/suppliers
-  approval_required: false
-  parameters:
-    properties:
-      name:
-        type: string
-        title: Supplier name
-        minLength: 1
-      website:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Supplier website URL
-      country:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Country
-      catalog_format:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Catalog format (pdf, excel, csv, etc.)
-      notes:
-        anyOf:
-          - type: string
-          - type: 'null'
-        title: Notes
-    required:
-      - name
-    title: ToolSupplierCreate
-    type: object
-- name: supplier_catalog.list
-  description: 'Skill: supplier_catalog.list — List all tool suppliers with their catalog status.'
-  category: supplier_catalog
-  method: GET
-  path: /api/tool-catalog/suppliers
-  approval_required: false
-- name: supplier_catalog.get_entries
-  description: 'Skill: supplier_catalog.get_entries — List all tool catalog entries for
-    a specific supplier, filterable by tool type.'
-  category: supplier_catalog
-  method: GET
-  path: /api/tool-catalog/suppliers/{supplier_id}/entries
-  approval_required: false
-# ── Delete & Catalog Update skills ────────────────────────────────────────────
-- name: email.delete_message
-  description: 'Skill: email.delete_message — Delete a single email message.'
-  category: email
-  method: DELETE
-  path: /api/email/messages/{message_id}
-  approval_required: false
-- name: email.delete_thread
-  description: 'Skill: email.delete_thread — Delete an entire email thread with all its messages.'
-  category: email
-  method: DELETE
-  path: /api/email/threads/{thread_id}
-  approval_required: false
-- name: email.bulk_delete
-  description: 'Skill: email.bulk_delete — Bulk delete email messages by IDs list.'
-  category: email
-  method: DELETE
-  path: /api/email/messages/bulk-delete
-  approval_required: false
-  parameters:
-    properties:
-      message_ids:
-        items:
-          format: uuid
-          type: string
-        maxItems: 500
-        minItems: 1
-        title: Message Ids
-        type: array
-    required:
-    - message_ids
-    title: EmailBulkDeleteRequest
-    type: object
-- name: tool_catalog.delete_entry
-  description: 'Skill: tool_catalog.delete_entry — Delete a single tool catalog entry with Qdrant and graph cleanup.'
-  category: tool_catalog
-  method: DELETE
-  path: /api/tool-catalog/entries/{entry_id}
-  approval_required: false
-- name: tool_catalog.bulk_delete
-  description: 'Skill: tool_catalog.bulk_delete — Bulk delete tool catalog entries with full cleanup.'
-  category: tool_catalog
-  method: DELETE
-  path: /api/tool-catalog/entries/bulk-delete
-  approval_required: false
-  parameters:
-    properties:
-      entry_ids:
-        items:
-          format: uuid
-          type: string
-        maxItems: 1000
-        minItems: 1
-        title: Entry Ids
-        type: array
-    required:
-    - entry_ids
-    title: CatalogBulkDeleteRequest
-    type: object
-- name: tool_catalog.refresh
-  description: 'Skill: tool_catalog.refresh — Re-ingest the last uploaded catalog file for a tool supplier from MinIO storage.'
-  category: tool_catalog
-  method: POST
-  path: /api/tool-catalog/suppliers/{supplier_id}/refresh
-  approval_required: false
-- name: supplier.delete
-  description: 'Skill: supplier.delete — Delete a supplier/party and all associated data (tool catalogs, catalog entries, Qdrant vectors, graph nodes). Email threads are preserved with party reference nullified. Requires ?confirm=true.'
-  category: suppliers
-  method: DELETE
-  path: /api/suppliers/{supplier_id}
-  approval_required: true
-- name: supplier.bulk_delete
-  description: 'Skill: supplier.bulk_delete — Bulk delete multiple suppliers with full cascade cleanup. Requires confirm=true in body.'
-  category: suppliers
-  method: DELETE
-  path: /api/suppliers/bulk-delete
-  approval_required: true
-  parameters:
-    properties:
-      supplier_ids:
-        items:
-          format: uuid
-          type: string
-        maxItems: 200
-        minItems: 1
-        title: Supplier Ids
-        type: array
-      confirm:
-        default: false
-        title: Confirm
-        type: boolean
-    required:
-    - supplier_ids
-    title: SupplierBulkDeleteRequest
-    type: object

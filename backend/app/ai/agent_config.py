@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Literal
 
-from pydantic import BaseModel, Field
 import yaml
+from pydantic import BaseModel, Field
 
 from app.ai.gateway_config import gateway_config
 
@@ -35,9 +34,6 @@ class BuiltinAgentConfig(BaseModel):
     backend_timeout_seconds: int = Field(30, ge=5, le=300)
     approval_timeout_seconds: int = Field(120, ge=10, le=1800)
     memory_enabled: bool = True
-    memory_mode: Literal["sql", "sql_vector", "sql_vector_rerank", "graph", "hybrid"] = "sql"
-    memory_top_k: int = Field(8, ge=1, le=30)
-    memory_max_chars: int = Field(6000, ge=1000, le=30000)
     max_history_messages: int = Field(40, ge=4, le=200)
     exposed_skills: list[str] = Field(default_factory=list)
     approval_gates: list[str] = Field(default_factory=list)
@@ -64,9 +60,6 @@ class BuiltinAgentConfigUpdate(BaseModel):
     backend_timeout_seconds: int | None = Field(default=None, ge=5, le=300)
     approval_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)
     memory_enabled: bool | None = None
-    memory_mode: Literal["sql", "sql_vector", "sql_vector_rerank", "graph", "hybrid"] | None = None
-    memory_top_k: int | None = Field(default=None, ge=1, le=30)
-    memory_max_chars: int | None = Field(default=None, ge=1000, le=30000)
     max_history_messages: int | None = Field(default=None, ge=4, le=200)
     exposed_skills: list[str] | None = None
     approval_gates: list[str] | None = None
@@ -112,6 +105,7 @@ def _default_config() -> BuiltinAgentConfig:
 def _redis_get_agent_config() -> dict | None:
     try:
         import redis as _redis
+
         from app.config import settings
         r = _redis.from_url(settings.redis_url, decode_responses=True)
         raw = r.get(_REDIS_KEY)
@@ -125,6 +119,7 @@ def _redis_get_agent_config() -> dict | None:
 def _redis_set_agent_config(data: dict) -> None:
     try:
         import redis as _redis
+
         from app.config import settings
         r = _redis.from_url(settings.redis_url, decode_responses=True)
         r.set(_REDIS_KEY, json.dumps(data, ensure_ascii=False))
@@ -166,7 +161,9 @@ def get_builtin_agent_config() -> BuiltinAgentConfig:
 
     # If exposed_skills is empty, fallback to full registry.
     if not merged.get("exposed_skills"):
-        merged["exposed_skills"] = _all_registry_skill_names() or sorted(gateway_config.exposed_skills)
+        merged["exposed_skills"] = _all_registry_skill_names() or sorted(
+            gateway_config.exposed_skills
+        )
     if not merged.get("approval_gates"):
         merged["approval_gates"] = sorted(gateway_config.approval_gates)
 

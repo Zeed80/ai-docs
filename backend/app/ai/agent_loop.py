@@ -23,12 +23,29 @@ logger = structlog.get_logger()
 
 _OPERATIONAL_POLICY = """
 Операционные правила (обязательно):
-- Если пользователь просит простую метрику/подсчет ("сколько", "какое количество", "всего"), сначала вызови подходящий list/search tool и верни число.
-- Не задавай уточняющие вопросы, если сущность уже явно названа пользователем (например "счетов" => invoices).
-- После уточнения пользователя (например: "только счетов") немедленно выполняй tool-вызов без повторного уточнения.
-- Для простых запросов не объясняй внутреннюю механику ("мне нужно вызвать инструмент"), а сразу выполняй и отвечай результатом.
-- Про склад и ТМЦ (остатки, «сколько фрез», «перечисли фрезы»): сразу вызывай `warehouse.list_inventory` с `search` по ключевому слову (например `фрез` покроет «фреза/фрезы» в названии), без уточняющих вопросов про «типы» или «категории».
-- Короткие ответы «все», «да», «ок» после вопроса про фрезы — это согласие на полный охват; выполняй тот же list/count и не переспрашивай.
+- Если пользователь просит простую метрику/подсчет ("сколько", "какое количество",
+  "всего"), сначала вызови подходящий list/search tool и верни число.
+- Не задавай уточняющие вопросы, если сущность уже явно названа пользователем
+  (например "счетов" => invoices).
+- После уточнения пользователя (например: "только счетов") немедленно выполняй
+  tool-вызов без повторного уточнения.
+- Для простых запросов не объясняй внутреннюю механику ("мне нужно вызвать
+  инструмент"), а сразу выполняй и отвечай результатом.
+- Про склад и ТМЦ (остатки, «сколько фрез», «перечисли фрезы»): сразу вызывай
+  `warehouse.list_inventory` с `search` по ключевому слову (например `фрез`
+  покроет «фреза/фрезы» в названии), без уточняющих вопросов про «типы» или
+  «категории».
+- Короткие ответы «все», «да», «ок» после вопроса про фрезы — это согласие на
+  полный охват; выполняй тот же list/count и не переспрашивай.
+- Память всегда автоматическая: не выбирай режим SQL/vector/graph вручную.
+  Для запросов по знаниям используй `memory.search`/`memory.explain`
+  с `retrieval_mode=auto_hybrid` и `need_full_coverage=true`.
+- Если пользователь просит "все", "полный список" или аналогичный полный охват,
+  обходи результаты страницами/offset/cursor до исчерпания или до явного
+  серверного лимита, а не останавливайся на первой странице.
+- Рабочий стол/холст — основной визуальный вывод. Для таблиц, списков,
+  графиков, ссылок, изображений и длинных структурированных результатов
+  публикуй rich-блок через `canvas.publish`, а в чат давай краткое резюме.
 """.strip()
 
 
@@ -484,17 +501,30 @@ def _convert_messages_to_anthropic(
                     fn = tc.get("function", {})
                     name = fn.get("name", "unknown")
                     raw_args = fn.get("arguments", {})
-                    args_dict = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
+                    args_dict = (
+                        raw_args
+                        if isinstance(raw_args, dict)
+                        else json.loads(raw_args or "{}")
+                    )
                     tc_id = tc.get("id") or f"toolu_{name}_{i}"
                     pending_ids.append(tc_id)
-                    blocks.append({"type": "tool_use", "id": tc_id, "name": name, "input": args_dict})
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc_id,
+                        "name": name,
+                        "input": args_dict,
+                    })
                 result.append({"role": "assistant", "content": blocks})
             elif content:
                 result.append({"role": "assistant", "content": content})
 
         elif role == "tool":
             tc_id = pending_ids.pop(0) if pending_ids else f"toolu_unknown_{len(pending_results)}"
-            pending_results.append({"type": "tool_result", "tool_use_id": tc_id, "content": content})
+            pending_results.append({
+                "type": "tool_result",
+                "tool_use_id": tc_id,
+                "content": content,
+            })
 
     _flush()
     return "\n\n".join(p for p in system_parts if p), result
@@ -530,7 +560,11 @@ async def _call_anthropic_streaming(
 
     system_payload: Any = system_text
     if config.prompt_cache_enabled and system_text:
-        system_payload = [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}]
+        system_payload = [{
+            "type": "text",
+            "text": system_text,
+            "cache_control": {"type": "ephemeral"},
+        }]
 
     payload: dict[str, Any] = {
         "model": model,
@@ -639,14 +673,22 @@ async def _call_provider_streaming(
     for p in providers_to_try:
         try:
             if p == "ollama":
-                return await _call_ollama_streaming(messages, tools, system_prompt, config, on_token)
+                return await _call_ollama_streaming(
+                    messages, tools, system_prompt, config, on_token
+                )
             elif p in ("openrouter", "deepseek"):
-                return await _call_openai_streaming(messages, tools, system_prompt, config, on_token, provider=p)
+                return await _call_openai_streaming(
+                    messages, tools, system_prompt, config, on_token, provider=p
+                )
             elif p == "anthropic":
-                return await _call_anthropic_streaming(messages, tools, system_prompt, config, on_token)
+                return await _call_anthropic_streaming(
+                    messages, tools, system_prompt, config, on_token
+                )
             else:
                 logger.warning("unknown_provider_falling_back", provider=p)
-                return await _call_ollama_streaming(messages, tools, system_prompt, config, on_token)
+                return await _call_ollama_streaming(
+                    messages, tools, system_prompt, config, on_token
+                )
         except Exception as exc:
             last_exc = exc
             logger.warning("provider_call_failed_trying_fallback", provider=p, error=str(exc))
@@ -743,9 +785,6 @@ class AgentSession:
         from app.ai.memory_manager import MemoryManager
         self._memory_mgr = MemoryManager(
             base_url=self._config.backend_url,
-            top_k=self._config.memory_top_k,
-            max_chars=self._config.memory_max_chars,
-            retrieval_mode=self._config.memory_mode,
         )
         # Re-init MCP tools with updated server config on next message.
         self._mcp_initialised = False
@@ -854,36 +893,57 @@ class AgentSession:
 
         search_q = "фрез"
         skill = self._skill_map.get("warehouse__list_inventory")
-        args: dict[str, Any] = {"search": search_q, "limit": 200, "offset": 0}
-
-        if skill:
-            await self._send({"type": "tool_call", "tool": "warehouse__list_inventory", "args": args})
-            result = await _execute_skill(skill, args, self._config)
-            await self._send({"type": "tool_result", "tool": "warehouse__list_inventory", "result": result})
-        else:
-            result = await _fetch_inventory_search_direct(self._config, search=search_q, limit=200, offset=0)
-            if result is None:
-                return False
-
-        total = _extract_list_count(result)
+        page_size = 200
+        max_items = 1000
+        total = 0
         items: list[Any] = []
-        if isinstance(result, dict) and isinstance(result.get("items"), list):
-            items = result["items"]
+        offset = 0
+        while offset < max_items:
+            args: dict[str, Any] = {"search": search_q, "limit": page_size, "offset": offset}
+            if skill:
+                await self._send({
+                    "type": "tool_call",
+                    "tool": "warehouse__list_inventory",
+                    "args": args,
+                })
+                result = await _execute_skill(skill, args, self._config)
+                await self._send({
+                    "type": "tool_result",
+                    "tool": "warehouse__list_inventory",
+                    "result": result,
+                })
+            else:
+                result = await _fetch_inventory_search_direct(
+                    self._config,
+                    search=search_q,
+                    limit=page_size,
+                    offset=offset,
+                )
+                if result is None:
+                    return False
+            if offset == 0:
+                total = _extract_list_count(result)
+            page_items: list[Any] = []
+            if isinstance(result, dict) and isinstance(result.get("items"), list):
+                page_items = result["items"]
+            items.extend(page_items)
+            if not page_items or len(items) >= total or len(page_items) < page_size:
+                break
+            offset += page_size
 
         if intent == "count":
             await self._send({
                 "type": "text",
-                "content": (
-                    f"Позиций на складе с «{search_q}» в наименовании (поиск по названию): **{total}**."
-                ),
+                "content": f"Позиций на складе с «{search_q}» в наименовании "
+                f"(поиск по названию): **{total}**.",
             })
             await self._send({"type": "done"})
             return True
 
         # list
         lines: list[str] = []
-        max_lines = 180
-        max_chars = 14000
+        max_lines = min(max_items, max(total, len(items)) or max_items)
+        max_chars = 30000
         used = 0
         for idx, it in enumerate(items[:max_lines], start=1):
             if not isinstance(it, dict):
@@ -939,7 +999,11 @@ class AgentSession:
 
                 # Context compression before each LLM call
                 if self._compressor and self._compressor.should_compress(self.messages):
-                    logger.info("compressing context", session=self._session_id, iteration=iteration)
+                    logger.info(
+                        "compressing context",
+                        session=self._session_id,
+                        iteration=iteration,
+                    )
                     await self._send({
                         "type": "status",
                         "content": "Сжимаю контекст сессии…",
@@ -1005,7 +1069,11 @@ class AgentSession:
                     # Fire-and-forget: index this turn into memory
                     if self._config.memory_enabled and full_text:
                         latest_user = next(
-                            (m.get("content", "") for m in reversed(self.messages) if m.get("role") == "user"),
+                            (
+                                m.get("content", "")
+                                for m in reversed(self.messages)
+                                if m.get("role") == "user"
+                            ),
                             "",
                         )
                         asyncio.create_task(self._memory_mgr.sync_turn(latest_user, full_text))
@@ -1162,7 +1230,7 @@ class AgentSession:
         )
         if not latest_user:
             return
-        context = await self._memory_mgr.prefetch(latest_user)
+        context = await self._memory_mgr.prefetch(latest_user, session_id=self._session_id)
         if not context:
             # Fall back to existing HTTP search if MemoryManager returned nothing
             context = await _load_memory_context(latest_user, self._config)
@@ -1186,8 +1254,9 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
                 f"{config.backend_url.rstrip('/')}/api/memory/search",
                 json={
                     "query": query,
-                    "limit": config.memory_top_k,
-                    "retrieval_mode": config.memory_mode,
+                    "limit": 120,
+                    "retrieval_mode": "auto_hybrid",
+                    "need_full_coverage": True,
                     "include_explain": False,
                 },
             )
@@ -1204,7 +1273,7 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
         summary = str(hit.get("summary") or "")[:1200]
         source = str(hit.get("source") or "memory")
         line = f"{index}. [{source}] {title}: {summary}".strip()
-        if used_chars + len(line) > config.memory_max_chars:
+        if used_chars + len(line) > 20000:
             break
         lines.append(line)
         used_chars += len(line)

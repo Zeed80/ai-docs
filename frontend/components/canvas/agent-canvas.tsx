@@ -8,6 +8,7 @@ import {
 import { CanvasMarkdown } from "./canvas-markdown";
 import { CanvasTable } from "./canvas-table";
 import { CanvasImage } from "./canvas-image";
+import { CanvasChart } from "./canvas-chart";
 
 function BlockView({ block }: { block: CanvasBlock }) {
   const dispatch = useCanvasDispatch();
@@ -43,9 +44,11 @@ function BlockView({ block }: { block: CanvasBlock }) {
           <CanvasImage url={block.url} alt={block.alt} title={block.title} />
         )}
         {block.type === "chart" && (
-          <div className="text-slate-400 text-xs italic">
-            График: {block.chart_type} — {block.title}
-          </div>
+          <CanvasChart
+            chartType={block.chart_type}
+            chartData={block.chart_data}
+            title={block.title}
+          />
         )}
       </div>
     </div>

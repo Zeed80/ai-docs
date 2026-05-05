@@ -250,8 +250,19 @@ class MemorySearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
     node_types: list[str] | None = None
     document_id: uuid.UUID | None = None
-    limit: int = Field(20, ge=1, le=100)
-    retrieval_mode: Literal["sql", "sql_vector", "sql_vector_rerank", "graph", "hybrid"] = "sql"
+    limit: int = Field(50, ge=1, le=500)
+    cursor: str | None = None
+    intent: str | None = None
+    entity_hints: list[str] | None = None
+    need_full_coverage: bool = False
+    retrieval_mode: Literal[
+        "auto_hybrid",
+        "sql",
+        "sql_vector",
+        "sql_vector_rerank",
+        "graph",
+        "hybrid",
+    ] = "auto_hybrid"
     include_explain: bool = True
 
 
@@ -272,18 +283,29 @@ class MemorySearchHit(BaseModel):
 
 class MemorySearchResponse(BaseModel):
     query: str
-    retrieval_mode: str = "sql"
+    retrieval_mode: str = "auto_hybrid"
     hits: list[MemorySearchHit]
     total: int
+    total_available: int | None = None
+    next_cursor: str | None = None
+    coverage: str = "complete"
+    diagnostics: list[str] = []
 
 
 class MemoryExplainRequest(BaseModel):
     query: str = Field(..., min_length=1)
     document_id: uuid.UUID | None = None
     node_types: list[str] | None = None
-    limit: int = Field(10, ge=1, le=50)
+    limit: int = Field(50, ge=1, le=500)
     neighborhood_depth: int = Field(1, ge=0, le=2)
-    retrieval_mode: Literal["sql", "sql_vector", "sql_vector_rerank", "graph", "hybrid"] = "hybrid"
+    retrieval_mode: Literal[
+        "auto_hybrid",
+        "sql",
+        "sql_vector",
+        "sql_vector_rerank",
+        "graph",
+        "hybrid",
+    ] = "auto_hybrid"
     include_explain: bool = True
 
 

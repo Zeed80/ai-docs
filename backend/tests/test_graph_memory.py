@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from app.api.memory import _merge_memory_hits, _rank_memory_hit
 from app.db.base import Base
 from app.db.models import (
     Document,
@@ -18,8 +19,12 @@ from app.db.models import (
     KnowledgeNode,
     MemoryEmbeddingRecord,
 )
-from app.api.memory import _merge_memory_hits, _rank_memory_hit
-from app.domain.graph import KnowledgeNodeCreate, MemoryExplainResponse, MemorySearchHit, MemorySearchRequest
+from app.domain.graph import (
+    KnowledgeNodeCreate,
+    MemoryExplainResponse,
+    MemorySearchHit,
+    MemorySearchRequest,
+)
 from app.domain.memory_builder import build_document_memory_sync, determine_graph_build_scope
 
 
@@ -142,11 +147,13 @@ def test_memory_explain_schema_carries_evidence_and_graph_context() -> None:
     assert response.total_hits == 1
 
 
-def test_memory_search_schema_supports_sql_first_modes() -> None:
+def test_memory_search_schema_supports_auto_hybrid_with_legacy_modes() -> None:
+    default_request = MemorySearchRequest(query="контроль")
     request = MemorySearchRequest(
         query="контроль",
         retrieval_mode="sql_vector_rerank",
         include_explain=True,
+        need_full_coverage=True,
     )
     hit = MemorySearchHit(
         kind="chunk",
@@ -157,7 +164,9 @@ def test_memory_search_schema_supports_sql_first_modes() -> None:
         text_score=0.8,
     )
 
+    assert default_request.retrieval_mode == "auto_hybrid"
     assert request.retrieval_mode == "sql_vector_rerank"
+    assert request.need_full_coverage is True
     assert hit.source == "sql"
     assert hit.text_score == 0.8
 

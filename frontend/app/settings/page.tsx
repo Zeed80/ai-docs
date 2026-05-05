@@ -90,9 +90,6 @@ interface AgentConfig {
   backend_timeout_seconds: number;
   approval_timeout_seconds: number;
   memory_enabled: boolean;
-  memory_mode: "sql" | "sql_vector" | "sql_vector_rerank" | "graph" | "hybrid";
-  memory_top_k: number;
-  memory_max_chars: number;
   max_history_messages: number;
   exposed_skills: string[];
   approval_gates: string[];
@@ -1226,67 +1223,15 @@ export default function SettingsPage() {
                     />
                     Подключать память к каждому запросу
                   </label>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <Field label="Режим поиска">
-                      <select
-                        value={agentConfig.memory_mode}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            memory_mode: e.target
-                              .value as AgentConfig["memory_mode"],
-                          })
-                        }
-                        className={selectCls}
-                      >
-                        <option value="sql">SQL (FTS)</option>
-                        <option value="sql_vector">SQL + vector</option>
-                        <option value="sql_vector_rerank">
-                          SQL + vector + rerank
-                        </option>
-                        <option value="hybrid">Hybrid</option>
-                        <option value="graph">Graph</option>
-                      </select>
-                      <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                        Режим задаёт состав поиска на сервере: vector и rerank
-                        нужны индекс в Qdrant и модель reranker на вкладке
-                        «Модели»; graph — узлы графа из памяти документов; без
-                        данных ответ будет пустым. После смены режима сохраните
-                        настройки и при необходимости переподключите чат (новый
-                        WebSocket).
-                      </p>
-                    </Field>
-                    <Field label="Top-K результатов">
-                      <input
-                        className={inputCls}
-                        type="number"
-                        min={1}
-                        max={30}
-                        value={agentConfig.memory_top_k}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            memory_top_k: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field label="Макс. символов контекста">
-                      <input
-                        className={inputCls}
-                        type="number"
-                        min={1000}
-                        max={30000}
-                        step={500}
-                        value={agentConfig.memory_max_chars}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            memory_max_chars: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </Field>
+                  <div className="rounded-md border border-slate-800 bg-slate-900/40 p-3">
+                    <p className="text-sm font-medium text-slate-100">
+                      Автоматическая гибридная память
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                      Агент сам использует SQL, Qdrant, rerank, граф связей и
+                      историю чата. Ограничения выборки управляются сервером и
+                      не требуют ручной настройки.
+                    </p>
                   </div>
                   <Field
                     label="Макс. сообщений в истории"
