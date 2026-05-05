@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.chat_bus import chat_bus
-from app.db.models import Invoice
+from app.db.models import Invoice, InvoiceLine
 from app.db.session import get_db
 from app.domain.workspace import (
     clear_workspace_blocks,
@@ -32,6 +32,12 @@ class WorkspaceInvoiceTableRequest(BaseModel):
     canvas_id: str = "agent:invoice-list"
     limit: int = 5000
     include_delete_actions: bool = True
+
+
+class WorkspaceInvoiceItemsTableRequest(BaseModel):
+    canvas_id: str = "agent:invoice-items"
+    limit: int = 10000
+    include_invoice_actions: bool = True
 
 
 class WorkspaceToolResponse(BaseModel):
@@ -113,6 +119,64 @@ async def publish_invoice_table(
     )
 
 
+@router.post("/agent/invoices/items-table", response_model=WorkspaceToolResponse)
+async def publish_invoice_items_table(
+    payload: WorkspaceInvoiceItemsTableRequest,
+    db: AsyncSession = Depends(get_db),
+) -> WorkspaceToolResponse:
+    """Skill: workspace.invoice_items_table — Build and publish invoice line items.
+
+    This orchestrator prepares the table template, fills it from SQL invoice
+    lines, stores the result in the existing Workspace, and notifies clients.
+    """
+    await _publish_workspace_status("Готовлю шаблон таблицы товаров по счетам")
+    columns = _invoice_item_columns(include_invoice_actions=payload.include_invoice_actions)
+
+    await _publish_workspace_status("Заполняю таблицу строками счетов из БД")
+    total = (
+        await db.execute(select(func.count()).select_from(InvoiceLine))
+    ).scalar_one()
+    result = await db.execute(
+        select(InvoiceLine, Invoice)
+        .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
+        .options(selectinload(Invoice.supplier))
+        .order_by(Invoice.created_at.desc(), InvoiceLine.line_number.asc())
+        .limit(min(max(payload.limit, 1), 10000))
+    )
+    rows = [
+        _invoice_item_workspace_row(
+            line,
+            invoice,
+            index,
+            include_invoice_actions=payload.include_invoice_actions,
+        )
+        for index, (line, invoice) in enumerate(result.all(), start=1)
+    ]
+
+    await _publish_workspace_status("Публикую таблицу на Рабочий стол")
+    block = {
+        "id": payload.canvas_id,
+        "type": "table",
+        "title": f"Товары по счетам ({total})",
+        "columns": columns,
+        "rows": rows,
+        "source": "workspace.invoice_items_table",
+    }
+    stored = upsert_workspace_block(payload.canvas_id, block)
+    await chat_bus.publish({
+        "type": "workspace.updated",
+        "canvas_id": payload.canvas_id,
+        "block": stored,
+    })
+    return WorkspaceToolResponse(
+        status="published",
+        canvas_id=payload.canvas_id,
+        total=total,
+        shown=len(rows),
+        message=f"Открыл на Рабочем столе таблицу товаров по счетам: {len(rows)} из {total}.",
+    )
+
+
 def _invoice_columns(*, include_delete: bool) -> list[dict[str, Any]]:
     columns: list[dict[str, Any]] = [
         {"key": "index", "header": "№", "type": "number", "width": 56},
@@ -129,6 +193,30 @@ def _invoice_columns(*, include_delete: bool) -> list[dict[str, Any]]:
             {"key": "invoice_delete", "header": "Удалить счет", "type": "delete"},
             {"key": "document_delete", "header": "Удалить документ", "type": "delete"},
         ])
+    return columns
+
+
+def _invoice_item_columns(*, include_invoice_actions: bool) -> list[dict[str, Any]]:
+    columns: list[dict[str, Any]] = [
+        {"key": "index", "header": "№", "type": "number", "width": 56},
+        {"key": "invoice_number", "header": "Счет", "type": "text"},
+        {"key": "invoice_date", "header": "Дата счета", "type": "date"},
+        {"key": "supplier", "header": "Поставщик", "type": "text"},
+        {"key": "line_number", "header": "Строка", "type": "number", "width": 72},
+        {"key": "sku", "header": "Артикул/SKU", "type": "text"},
+        {"key": "description", "header": "Наименование товара", "type": "text"},
+        {"key": "quantity", "header": "Количество", "type": "number"},
+        {"key": "unit", "header": "Ед.", "type": "text", "width": 64},
+        {"key": "unit_price", "header": "Цена", "type": "number"},
+        {"key": "amount", "header": "Сумма строки", "type": "number"},
+        {"key": "tax_rate", "header": "НДС %", "type": "number"},
+        {"key": "tax_amount", "header": "НДС", "type": "number"},
+        {"key": "currency", "header": "Валюта", "type": "text", "width": 72},
+        {"key": "invoice_status", "header": "Статус счета", "type": "text"},
+        {"key": "document_download", "header": "Документ", "type": "download"},
+    ]
+    if include_invoice_actions:
+        columns.append({"key": "invoice_delete", "header": "Удалить счет", "type": "delete"})
     return columns
 
 
@@ -172,6 +260,52 @@ def _invoice_workspace_row(
     return row
 
 
+def _invoice_item_workspace_row(
+    line: InvoiceLine,
+    invoice: Invoice,
+    index: int,
+    *,
+    include_invoice_actions: bool,
+) -> dict[str, Any]:
+    document_id = str(invoice.document_id)
+    invoice_id = str(invoice.id)
+    invoice_title = invoice.invoice_number or invoice_id
+    row: dict[str, Any] = {
+        "index": index,
+        "line_id": str(line.id),
+        "invoice_id": invoice_id,
+        "document_id": document_id,
+        "invoice_number": invoice.invoice_number or "",
+        "invoice_date": _format_date(invoice.invoice_date),
+        "supplier": invoice.supplier.name if invoice.supplier else "",
+        "line_number": line.line_number,
+        "sku": line.sku or "",
+        "description": line.description or "",
+        "quantity": _format_number(line.quantity),
+        "unit": line.unit or "",
+        "unit_price": _format_money(line.unit_price),
+        "amount": _format_money(line.amount),
+        "tax_rate": _format_number(line.tax_rate),
+        "tax_amount": _format_money(line.tax_amount),
+        "currency": invoice.currency or "RUB",
+        "invoice_status": (
+            invoice.status.value if hasattr(invoice.status, "value") else str(invoice.status)
+        ),
+        "document_download": {
+            "href": f"/api/documents/{document_id}/download",
+            "label": "Скачать",
+        },
+    }
+    if include_invoice_actions:
+        row["invoice_delete"] = {
+            "href": f"/api/invoices/{invoice_id}",
+            "label": "Удалить",
+            "confirm": f"Удалить счет {invoice_title}?",
+            "method": "DELETE",
+        }
+    return row
+
+
 def _format_date(value: Any) -> str:
     if not value:
         return ""
@@ -186,3 +320,17 @@ def _format_money(value: Any) -> str:
     except (TypeError, ValueError):
         return str(value)
     return f"{number:,.2f}".replace(",", " ").replace(".00", "")
+
+
+def _format_number(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{number:,.4f}".replace(",", " ").rstrip("0").rstrip(".")
+
+
+async def _publish_workspace_status(message: str) -> None:
+    await chat_bus.publish({"type": "status", "content": message})

@@ -223,6 +223,7 @@
         "warehouse.low_stock",
         "warehouse.update_item",
         "warehouse.update_status",
+        "workspace.invoice_items_table",
         "workspace.invoice_table"
       ]
     }

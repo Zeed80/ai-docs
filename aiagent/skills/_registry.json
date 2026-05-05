@@ -5951,6 +5951,14 @@
       "approval_required": false
     },
     {
+      "name": "workspace.invoice_items_table",
+      "description": "Skill: workspace.invoice_items_table — Build and publish invoice line items.",
+      "category": "workspace",
+      "method": "POST",
+      "path": "/api/workspace/agent/invoices/items-table",
+      "approval_required": false
+    },
+    {
       "name": "mailbox.create",
       "description": "Skill: mailbox.create — Add a new IMAP/SMTP mailbox configuration.",
       "category": "mailbox",

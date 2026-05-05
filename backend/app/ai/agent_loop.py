@@ -104,6 +104,21 @@ def _is_invoice_table_request(text: str, prior_user: str | None = None) -> bool:
     )
 
 
+def _is_invoice_items_table_request(text: str, prior_user: str | None = None) -> bool:
+    t = _normalize_ru_yo((text or "").lower())
+    mentions_items = any(
+        marker in t
+        for marker in (
+            "товар", "товары", "позици", "строк", "номенклатур", "материал",
+            "тмц", "что куп", "состав счет",
+        )
+    )
+    mentions_invoice_scope = _mentions_invoice_entity(t) or (
+        prior_user is not None and _mentions_invoice_entity(prior_user)
+    )
+    return mentions_items and mentions_invoice_scope and _is_workspace_output_request(t)
+
+
 def _mentions_frez_intent(text: str) -> bool:
     t = _normalize_ru_yo(text.lower())
     return any(s in t for s in _FREZ_SUBSTRINGS)
@@ -851,6 +866,8 @@ class AgentSession:
         self._trim_history()
         if await self._try_handle_simple_count_query(content):
             return
+        if await self._try_handle_invoice_items_table_query(content):
+            return
         if await self._try_handle_invoice_table_query(content):
             return
         if await self._try_handle_frez_inventory_query(content):
@@ -962,6 +979,51 @@ class AgentSession:
                 message
                 or f"Открыл на Рабочем столе таблицу со счетами: {shown} из {total}."
             ),
+        })
+        await self._send({"type": "done"})
+        return True
+
+    async def _try_handle_invoice_items_table_query(self, content: str) -> bool:
+        prior_users = [
+            str(m.get("content", ""))
+            for m in self.messages[:-1]
+            if m.get("role") == "user"
+        ]
+        prior_user = prior_users[-1] if prior_users else None
+        if not _is_invoice_items_table_request(content, prior_user):
+            return False
+
+        await self._send({
+            "type": "status",
+            "content": "Оркестратор: выбираю шаблон таблицы товаров по счетам",
+        })
+        skill_name = "workspace__invoice_items_table"
+        args = {
+            "canvas_id": _agent_canvas_id("invoice-items"),
+            "limit": 10000,
+            "include_invoice_actions": True,
+        }
+        await self._send({
+            "type": "tool_call",
+            "tool": skill_name,
+            "args": args,
+        })
+        await self._send({
+            "type": "status",
+            "content": "Инструмент: заполняю таблицу строками счетов из БД",
+        })
+        skill = self._skill_map.get(skill_name)
+        if skill:
+            data = await _execute_skill(skill, args, self._config)
+        else:
+            data = await _publish_invoice_items_table_direct(self._config, args)
+            if data is None:
+                return False
+        await self._send({"type": "tool_result", "tool": skill_name, "result": data})
+        message = str(data.get("message") or "") if isinstance(data, dict) else ""
+        await self._send({
+            "type": "text",
+            "content": message or "Открыл на Рабочем столе таблицу товаров по счетам.",
         })
         await self._send({"type": "done"})
         return True
@@ -1462,6 +1524,22 @@ async def _publish_invoice_table_direct(
     args: dict[str, Any],
 ) -> dict[str, Any] | None:
     url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/table"
+    try:
+        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+            resp = await client.post(url, json=args)
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+async def _publish_invoice_items_table_direct(
+    config: BuiltinAgentConfig,
+    args: dict[str, Any],
+) -> dict[str, Any] | None:
+    url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/items-table"
     try:
         async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
             resp = await client.post(url, json=args)

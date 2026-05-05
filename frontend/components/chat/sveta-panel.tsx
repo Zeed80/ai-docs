@@ -19,7 +19,7 @@ import {
   type ChatSession,
 } from "@/lib/api";
 
-type MessageRole = "user" | "assistant" | "tool" | "approval" | "error";
+type MessageRole = "user" | "assistant" | "tool" | "approval" | "error" | "status";
 
 interface ChatMessage {
   id: string;
@@ -186,7 +186,7 @@ export function SvetaPanel() {
       .map((msg) => {
         const role = msg.role as MessageRole;
         if (
-          !["user", "assistant", "tool", "approval", "error"].includes(role)
+          !["user", "assistant", "tool", "approval", "error", "status"].includes(role)
         ) {
           return null;
         }
@@ -380,6 +380,19 @@ export function SvetaPanel() {
       streamingIdRef.current = null;
       autoApproveRef.current = false;
       setIsStreaming(false);
+      return;
+    }
+
+    if (type === "status") {
+      if (isTelegram) return;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: genId(),
+          role: "status",
+          content: data.content as string,
+        },
+      ]);
       return;
     }
 
@@ -929,6 +942,16 @@ export function SvetaPanel() {
                 <span className="text-[10px] text-slate-500 font-mono truncate">
                   {msg.tool?.replace("__", ".")}{" "}
                   {msg.status === "calling" ? "…" : "✓"}
+                </span>
+              </div>
+            );
+          }
+          if (msg.role === "status") {
+            return (
+              <div key={msg.id} className="flex items-center gap-2 px-1">
+                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-400" />
+                <span className="truncate text-[10px] text-slate-400">
+                  {msg.content}
                 </span>
               </div>
             );
