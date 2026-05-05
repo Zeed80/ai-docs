@@ -229,6 +229,7 @@ skills:
   - warehouse.low_stock
   - warehouse.update_item
   - warehouse.update_status
+  - workspace.invoice_table
   approval_gates:
   - anomaly.resolve
   - bom.approve

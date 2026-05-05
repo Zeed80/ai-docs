@@ -934,54 +934,33 @@ class AgentSession:
         if not _is_invoice_table_request(content, prior_user):
             return False
 
-        skill_name = "invoice__list"
+        skill_name = "workspace__invoice_table"
+        args = {
+            "canvas_id": _agent_canvas_id("invoice-list"),
+            "limit": 5000,
+            "include_delete_actions": True,
+        }
         await self._send({
             "type": "tool_call",
             "tool": skill_name,
-            "args": {"limit": 200, "offset": 0},
+            "args": args,
         })
-        data = await _fetch_invoices_direct(self._config, limit=200, max_items=5000)
-        if data is None:
-            skill = self._skill_map.get(skill_name)
-            if not skill:
+        skill = self._skill_map.get(skill_name)
+        if skill:
+            data = await _execute_skill(skill, args, self._config)
+        else:
+            data = await _publish_invoice_table_direct(self._config, args)
+            if data is None:
                 return False
-            data = await _execute_skill(skill, {"limit": 200, "offset": 0}, self._config)
         await self._send({"type": "tool_result", "tool": skill_name, "result": data})
-
-        items = data.get("items") if isinstance(data, dict) else []
-        if not isinstance(items, list):
-            items = []
-        total = _extract_list_count(data)
-        columns = [
-            {"key": "index", "header": "№", "type": "number", "width": 56},
-            {"key": "invoice_number", "header": "Номер счета", "type": "text"},
-            {"key": "invoice_date", "header": "Дата", "type": "date"},
-            {"key": "supplier", "header": "Поставщик", "type": "text"},
-            {"key": "total_amount", "header": "Сумма", "type": "number"},
-            {"key": "currency", "header": "Валюта", "type": "text", "width": 72},
-            {"key": "status", "header": "Статус", "type": "text"},
-            {"key": "document_download", "header": "Документ", "type": "download"},
-            {"key": "invoice_delete", "header": "Удалить счет", "type": "delete"},
-            {"key": "document_delete", "header": "Удалить документ", "type": "delete"},
-        ]
-        rows = [_invoice_canvas_row(item, index) for index, item in enumerate(items, start=1)]
-
-        canvas_id = _agent_canvas_id("invoice-list")
-        await self._publish_canvas(
-            {
-                "type": "table",
-                "title": f"Счета: полный список ({total})",
-                "columns": columns,
-                "rows": rows,
-            },
-            canvas_id=canvas_id,
-            append=False,
-        )
+        total = int(data.get("total") or 0) if isinstance(data, dict) else 0
+        shown = int(data.get("shown") or total) if isinstance(data, dict) else total
+        message = str(data.get("message") or "") if isinstance(data, dict) else ""
         await self._send({
             "type": "text",
             "content": (
-                f"Открыл на Рабочем столе таблицу со счетами: {len(rows)} из {total}. "
-                "Там доступны фильтр, Excel/CSV, скачивание и удаление документов."
+                message
+                or f"Открыл на Рабочем столе таблицу со счетами: {shown} из {total}."
             ),
         })
         await self._send({"type": "done"})
@@ -1474,6 +1453,22 @@ async def _fetch_invoice_count_direct(config: BuiltinAgentConfig) -> int | None:
             return None
         data = resp.json()
         return _extract_list_count(data)
+    except Exception:
+        return None
+
+
+async def _publish_invoice_table_direct(
+    config: BuiltinAgentConfig,
+    args: dict[str, Any],
+) -> dict[str, Any] | None:
+    url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/table"
+    try:
+        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+            resp = await client.post(url, json=args)
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        return data if isinstance(data, dict) else None
     except Exception:
         return None
 

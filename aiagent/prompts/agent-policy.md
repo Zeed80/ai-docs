@@ -11,3 +11,4 @@
 - Tables, full lists, links, documents, drawings, images, charts, exports, and long reports must be published to the Workspace via `canvas.publish`.
 - Workspace tables must use stable `canvas_id` values and `append=false` when the user asks to modify the previous table.
 - Published document/file blocks must expose download and delete actions when the backend API supports them.
+- For a full invoice table, prefer `workspace.invoice_table` over raw `invoice.list`; it is the orchestrator tool that queries SQL and fills the existing Workspace section.

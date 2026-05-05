@@ -197,6 +197,7 @@ skills:
     - dashboard.today
     # Agent desktop / canvas
     - canvas.publish
+    - workspace.invoice_table
     # Quarantine
     - quarantine.list
     # Collections

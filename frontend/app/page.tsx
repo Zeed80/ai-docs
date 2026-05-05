@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { AgentWorkspaceBlocks } from "@/components/workspace/agent-workspace-blocks";
 
 const API = getApiBaseUrl();
 
@@ -213,6 +214,9 @@ export default function FeedPage() {
 
       {/* Feed */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="mb-4 max-w-6xl">
+          <AgentWorkspaceBlocks />
+        </div>
         {loading ? (
           <div className="space-y-3">
             {[...Array(3)].map((_, i) => (

@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.core.chat_bus import chat_bus
+from app.domain.workspace import append_workspace_block, upsert_workspace_block
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -67,12 +68,18 @@ async def publish_to_canvas(payload: CanvasPublishRequest) -> CanvasPublishRespo
     Supports markdown text, Excel-style tables, images, and charts.
     The block is broadcast to all active WebSocket clients via chat_bus.
     """
+    block = payload.block.model_dump(exclude_none=True)
+    if payload.canvas_id:
+        stored = upsert_workspace_block(payload.canvas_id, block)
+    else:
+        stored = append_workspace_block(block)
+
     event = {
         "type": "canvas",
-        "canvas_id": payload.canvas_id,
-        "block": payload.block.model_dump(exclude_none=True),
+        "canvas_id": stored["id"],
+        "block": stored,
         "append": payload.append,
     }
     await chat_bus.publish(event)
     logger.info("canvas_published", block_type=payload.block.type, canvas_id=payload.canvas_id)
-    return CanvasPublishResponse(status="published", canvas_id=payload.canvas_id)
+    return CanvasPublishResponse(status="published", canvas_id=stored["id"])

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   buildAgentApprovalMessage,
   buildAgentUserMessage,
@@ -10,7 +11,6 @@ import {
 } from "@/lib/agent-ws";
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { genId } from "@/lib/ws-url";
-import { useCanvasDispatch, type CanvasBlock } from "@/lib/canvas-context";
 import {
   createChatSession,
   deleteChatSession,
@@ -142,7 +142,7 @@ function FileChip({
 
 export function SvetaPanel() {
   const { isDegraded } = useDegradedMode();
-  const canvasDispatch = useCanvasDispatch();
+  const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -488,18 +488,14 @@ export function SvetaPanel() {
 
     // ── Canvas ────────────────────────────────────────────────────────────────
     if (type === "canvas") {
-      const rawBlock = data.block as Omit<CanvasBlock, "id">;
-      const canvasId = data.canvas_id as string | undefined;
-      if (data.append === false && canvasId) {
-        canvasDispatch({
-          type: "REPLACE_BLOCK",
-          id: canvasId,
-          block: rawBlock,
-        });
-      } else {
-        canvasDispatch({ type: "APPEND_BLOCK", block: rawBlock });
-      }
-      canvasDispatch({ type: "OPEN" });
+      window.dispatchEvent(new CustomEvent("workspace-blocks-updated"));
+      router.push("/");
+      return;
+    }
+
+    if (type === "workspace.updated") {
+      window.dispatchEvent(new CustomEvent("workspace-blocks-updated"));
+      router.push("/");
       return;
     }
 

@@ -1,33 +1,64 @@
 import logging
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import structlog
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import (
+    agent,
+    agent_actions,
+    ai_settings,
+    anomalies,
+    approvals,
+    auth,
+    boms,
+    calendar,
+    canvas,
+    chat_sessions,
+    collections,
+    compare,
+    dashboard,
+    documents,
+    draft_email,
+    drawings,
+    email,
+    email_templates,
+    export,
+    graph,
+    invoices,
+    mailbox,
+    memory,
+    normalization,
+    ntd,
+    payments,
+    procurement,
+    quarantine,
+    scenarios,
+    search,
+    suppliers,
+    tables,
+    technology,
+    telegram,
+    tool_catalog,
+    warehouse,
+    workspace,
+)
 from app.config import settings
 from app.db.session import engine  # lazy proxy
-from app.api import (
-    documents, invoices, email, approvals, search, normalization, tables,
-    suppliers, collections, anomalies, compare, calendar, agent, auth, ai_settings,
-    agent_actions, export, draft_email, quarantine, dashboard, warehouse,
-    procurement, payments, boms, scenarios,
-    graph, memory, technology, ntd, telegram,
-    canvas, mailbox, email_templates,
-    drawings, tool_catalog,
-    chat_sessions,
-)
-
 
 structlog.configure(
     processors=[
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer() if settings.app_debug else structlog.processors.JSONRenderer(),
+        (
+            structlog.dev.ConsoleRenderer()
+            if settings.app_debug
+            else structlog.processors.JSONRenderer()
+        ),
     ],
     wrapper_class=structlog.make_filtering_bound_logger(
         logging.getLevelName(settings.app_log_level.upper())
@@ -59,8 +90,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("telegram bot init error", error=str(exc))
 
     try:
-        from app.db.session import _get_session_factory
         from app.db.seeds.email_templates import seed_builtin_templates
+        from app.db.session import _get_session_factory
         async with _get_session_factory()() as db:
             await seed_builtin_templates(db)
     except Exception as exc:
@@ -127,8 +158,13 @@ def create_app() -> FastAPI:
     app.include_router(ntd.router, prefix="/api", tags=["ntd"])
     app.include_router(telegram.router, prefix="/api/telegram", tags=["telegram"])
     app.include_router(canvas.router, prefix="/api/canvas", tags=["canvas"])
+    app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
     app.include_router(mailbox.router, prefix="/api/mailbox", tags=["mailbox"])
-    app.include_router(email_templates.router, prefix="/api/email-templates", tags=["email-templates"])
+    app.include_router(
+        email_templates.router,
+        prefix="/api/email-templates",
+        tags=["email-templates"],
+    )
     app.include_router(drawings.router, prefix="/api/drawings", tags=["drawings"])
     app.include_router(tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"])
     app.include_router(chat_sessions.router, prefix="/api/chat", tags=["chat"])

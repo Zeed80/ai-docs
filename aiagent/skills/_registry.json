@@ -5943,6 +5943,14 @@
       "approval_required": false
     },
     {
+      "name": "workspace.invoice_table",
+      "description": "Skill: workspace.invoice_table — Build and publish the full invoice table.",
+      "category": "workspace",
+      "method": "POST",
+      "path": "/api/workspace/agent/invoices/table",
+      "approval_required": false
+    },
+    {
       "name": "mailbox.create",
       "description": "Skill: mailbox.create — Add a new IMAP/SMTP mailbox configuration.",
       "category": "mailbox",

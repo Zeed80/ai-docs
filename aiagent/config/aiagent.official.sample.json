@@ -222,7 +222,8 @@
         "warehouse.list_receipts",
         "warehouse.low_stock",
         "warehouse.update_item",
-        "warehouse.update_status"
+        "warehouse.update_status",
+        "workspace.invoice_table"
       ]
     }
   },
