@@ -917,6 +917,109 @@ class AgentAction(UUIDPrimaryKey, TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text)
 
 
+# ── Agent Control Plane ─────────────────────────────────────────────────────
+
+
+class AgentConfigProposal(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "agent_config_proposals"
+
+    setting_path: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    proposed_value: Mapped[dict | None] = mapped_column(JSON)
+    current_value: Mapped[dict | None] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(30), default="medium", nullable=False)
+    protected: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False, index=True)
+    requested_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(100))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_comment: Mapped[str | None] = mapped_column(Text)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentTask(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "agent_tasks"
+
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(80), default="worker", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(30), default="created", nullable=False, index=True)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("agent_teams.id"))
+    output: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+
+class AgentTeam(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "agent_teams"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="created", nullable=False, index=True)
+    purpose: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    tasks: Mapped[list["AgentTask"]] = relationship()
+
+
+class AgentCron(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "agent_crons"
+
+    schedule: Mapped[str] = mapped_column(String(120), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    run_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+
+class AgentPlugin(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "agent_plugins"
+
+    plugin_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    version: Mapped[str] = mapped_column(String(50), default="0.1.0", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    manifest: Mapped[dict] = mapped_column(JSON, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    risk_level: Mapped[str] = mapped_column(String(30), default="medium", nullable=False)
+    installed_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
+
+
+class CapabilityProposal(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "capability_proposals"
+
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    missing_capability: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    suggested_artifact: Mapped[str] = mapped_column(String(80), default="tool", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False, index=True)
+    risk_level: Mapped[str] = mapped_column(String(30), default="medium", nullable=False)
+    sandbox_status: Mapped[str] = mapped_column(String(30), default="not_started", nullable=False)
+    test_status: Mapped[str] = mapped_column(String(30), default="not_run", nullable=False)
+    audit_status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    draft: Mapped[dict] = mapped_column(JSON, nullable=False)
+    rollback_plan: Mapped[list | None] = mapped_column(JSON)
+    requested_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(100))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_comment: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+
+class MemoryFact(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "memory_facts"
+
+    scope: Mapped[str] = mapped_column(String(80), default="project", nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(80), default="chat_turn", nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(120), default="chat", nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.7, nullable=False)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+
 # ── Chat Sessions & Messages ─────────────────────────────────────────────────
 #
 # Persistent chat history for the built-in agent UI.

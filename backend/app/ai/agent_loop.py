@@ -41,6 +41,15 @@ _OPERATIONAL_POLICY = """
 - Память всегда автоматическая: не выбирай режим SQL/vector/graph вручную.
   Для запросов по знаниям используй `memory.search`/`memory.explain`
   с `retrieval_mode=auto_hybrid` и `need_full_coverage=true`.
+- Самонастройка идет только через Agent Control Plane. Если для выполнения
+  задачи нужна новая настройка агента — вызови `config.propose` с причиной и
+  risk_level. Не меняй protected settings обходными путями.
+- Если не хватает tool/skill/API для задачи, вызови `capability.propose` с
+  draft: tool_name, endpoint_path или implementation_plan. После создания
+  proposal проверь его через `capability.status`; для низкого/среднего риска
+  можно вызвать `capability.sandbox_apply`, чтобы подготовить sandbox-пакет.
+- Если работа требует отдельного исполнителя отдела ИИ, создай задачу через
+  `task.create` с ролью и metadata, вместо того чтобы держать всё в одном ответе.
 - Если пользователь просит "все", "полный список" или аналогичный полный охват,
   обходи результаты страницами/offset/cursor до исчерпания или до явного
   серверного лимита, а не останавливайся на первой странице.
@@ -1639,6 +1648,23 @@ class AgentSession:
 
         skill = self._skill_map.get(fn_name)
         original_name = skill["name"] if skill else fn_name.replace("__", ".")
+
+        from app.ai.policy_engine import check_tool_execution
+        policy = check_tool_execution(
+            skill_name=original_name,
+            args=args,
+            config=self._config,
+            approval_gates=self._approval_gates,
+        )
+        if not policy.allowed:
+            result = {
+                "status": "blocked",
+                "message": policy.reason,
+                "risk_level": policy.risk_level,
+                "required_approval": policy.required_approval,
+            }
+            await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+            return fn_name, result
 
         if original_name in self._approval_gates:
             asyncio.create_task(self._log_action(

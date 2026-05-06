@@ -133,13 +133,23 @@ class MemoryManager:
     async def sync_turn(self, user_text: str, assistant_text: str) -> None:
         """Persist chat turn into long-term memory.
 
-        Episodic chat indexing (dedicated HTTP route) is not implemented yet;
-        document/graph memory is updated through ingest and approval pipelines.
+        The server stores this as episodic memory. Failures are non-fatal
+        because chat delivery must not depend on memory indexing.
         """
         if not user_text.strip() and not assistant_text.strip():
             return
-        # Reserved for future POST /api/memory/chat-turn or embedding queue.
-        return
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                await client.post(
+                    f"{self._base_url}/api/memory/chat-turn",
+                    json={
+                        "user_text": user_text,
+                        "assistant_text": assistant_text,
+                        "scope": "project",
+                    },
+                )
+        except Exception as exc:
+            logger.debug("memory sync_turn failed (non-fatal): %s", exc)
 
     @staticmethod
     def build_context_block(raw: str) -> str:

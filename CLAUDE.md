@@ -24,8 +24,10 @@ AI-сотрудник **Света** (AiAgent agent) обрабатывает с
 
 ## Архитектурные принципы
 - AiAgent = мозг (planning, reasoning), FastAPI = руки (CRUD, data, async tasks)
+- **Agent Control Plane**: настройки, политики, skills/plugins, task/team/cron и память управляются через typed API + GUI, а не через ручное редактирование промптов
 - **Degraded mode**: UI работает через REST без AiAgent
 - **Draft-first**: внешние действия только через approval gates
+- **Protected settings**: личность агента, system prompt, память, аудит, approval gates, режим прав и auto-apply не меняются молча; нужен risk diff и подтверждение
 - **Dual AI**: конфиденциальные документы — только локальный Ollama
 - **Keyboard-first UX**: все ежедневные действия с клавиатуры
 - **i18n-ready** с первого дня
@@ -77,6 +79,19 @@ make agent-test   # AiAgent scenarios на mock skills
 Категории skills: Documents, Invoices, Email, Suppliers, Anomalies, Tables & Export, Approvals, Calendar, Collections, Normalization, NL & Search, Compare (КП), Audit.
 
 9 approval gates — только они блокируют агента и требуют явного подтверждения человеком. Примеры: `invoice.approve`, `email.send`, `anomaly.resolve`, `table.apply_diff`.
+
+## Agent Control Plane
+
+Первый слой control plane реализован в `/api/agent/*`:
+- `/api/agent/control-plane/status` — здоровье автономии, политики, plugins, tasks, cron, memory facts.
+- `/api/agent/config/proposals` — предложения изменения настроек; protected settings требуют решения.
+- `/api/agent/config/propose` — agent-facing alias для предложения изменений настроек.
+- `/api/agent/tasks`, `/api/agent/teams`, `/api/agent/cron` — registry автономной работы отдела ИИ.
+- `/api/agent/plugins` — manifest-based plugin drafts и enable/disable.
+- `/api/agent/capabilities/*` — предложения новых tools/skills, статус lifecycle и sandbox validation skeleton.
+- `/api/memory/chat-turn`, `/api/memory/pin` — episodic и pinned memory facts.
+
+Целевой режим автономии — `max_autonomy`: агент может сам готовить и проверять изменения в sandbox, но продакшен-код, внешние действия, права, память/аудит/approval gates и личность агента применяются только через объяснимое подтверждение.
 
 ## Поддержка нескольких IMAP-ящиков
 

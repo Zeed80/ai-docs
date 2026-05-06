@@ -97,6 +97,12 @@ skills:
     - memory.embeddings_rebuild_active
     - memory.embeddings_index_active
     - memory.embeddings_stats
+    # Agent control plane
+    - config.propose
+    - capability.propose
+    - capability.status
+    - capability.sandbox_apply
+    - task.create
     # Manufacturing technology
     - tech.resource_list
     - tech.resource_create

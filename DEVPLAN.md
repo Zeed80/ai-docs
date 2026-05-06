@@ -50,6 +50,20 @@
 
 ## Архитектура: AiAgent как AI-сотрудник
 
+### Agent Control Plane (Claw-code inspired)
+
+Над текущими `AgentOrchestrator` и `AgentSession` вводится control plane. Он не заменяет FastAPI/AIRouter foundation, а добавляет управляемую автономию:
+
+- Runtime config: `autonomy_mode=max_autonomy`, `permission_mode`, `safe_auto_apply_enabled`, protected setting proposals.
+- Policy engine: блокирует high-risk tools без approval gate, external skills при `local_only/confidential`, mutating tools в read-only mode.
+- Memory: документная hybrid memory дополняется episodic `chat_turn` и pinned facts; агент пишет успешные диалоги через `/api/memory/chat-turn`.
+- Work registry: `/api/agent/tasks`, `/api/agent/teams`, `/api/agent/cron` фиксируют автономные задачи, команды и proactive workflows.
+- Plugin registry: `/api/agent/plugins` хранит manifest drafts и enable/disable state; shell execution не входит в первый срез.
+- Capability builder: `/api/agent/capabilities/propose`, `/status`, `/sandbox-apply` позволяют агенту фиксировать недостающие tools/skills, подготовить sandbox validation и передать решение человеку.
+- GUI: настройки агента показывают автономию, режим прав, safe auto-apply, статус control plane, protected config proposals и capability proposals с approve/reject/sandbox действиями.
+
+Protected settings: `agent_name`, `system_prompt`, `memory_enabled`, `audit_enabled`, `approval_gates`, `allow_capability_builder`, `capability_builder_requires_approval`, `permission_mode`, `safe_auto_apply_enabled`. Изменения этих полей требуют отдельного объяснения, risk diff и подтверждения.
+
 ### Потоки данных
 
 ```

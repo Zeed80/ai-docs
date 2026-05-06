@@ -61,7 +61,11 @@ example-drawings/*
 hermes-agent/
 
 # OpenClaw local runtime, device identity, logs, and downloaded runtime deps
-aiagent/official/
+#aiagent/official/
+
+#Claw-code - claude code
+claw-code
+
 
 # MinIO data
 minio_data/

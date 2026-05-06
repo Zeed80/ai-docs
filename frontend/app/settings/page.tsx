@@ -114,6 +114,9 @@ interface AgentConfig {
   audit_enabled: boolean;
   allow_capability_builder: boolean;
   capability_builder_requires_approval: boolean;
+  autonomy_mode: string;
+  permission_mode: string;
+  safe_auto_apply_enabled: boolean;
   max_history_messages: number;
   exposed_skills: string[];
   approval_gates: string[];
@@ -137,6 +140,56 @@ interface AgentSkill {
   path: string;
   enabled: boolean;
   approval_required: boolean;
+}
+
+interface AgentControlPlaneStatus {
+  ok: boolean;
+  autonomy_mode: string;
+  permission_mode: string;
+  safe_auto_apply_enabled: boolean;
+  protected_settings: string[];
+  skills_total: number;
+  approval_gates_total: number;
+  plugins_total: number;
+  plugins_enabled: number;
+  tasks_open: number;
+  crons_enabled: number;
+  memory_facts_total: number;
+  mcp_servers_total: number;
+  capability_proposals_open: number;
+}
+
+interface AgentConfigProposal {
+  id: string;
+  setting_path: string;
+  proposed_value: unknown;
+  current_value: unknown;
+  reason: string;
+  risk_level: string;
+  protected: boolean;
+  status: string;
+  requested_by: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_comment: string | null;
+  created_at: string;
+}
+
+interface CapabilityProposal {
+  id: string;
+  title: string;
+  missing_capability: string;
+  reason: string;
+  suggested_artifact: string;
+  status: string;
+  risk_level: string;
+  sandbox_status: string;
+  test_status: string;
+  audit_status: string;
+  draft: Record<string, unknown>;
+  rollback_plan: string[] | null;
+  requested_by: string;
+  created_at: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -266,6 +319,26 @@ function fmtBytes(b: number) {
   if (b >= 1e9) return (b / 1e9).toFixed(1) + " GB";
   if (b >= 1e6) return (b / 1e6).toFixed(0) + " MB";
   return b + " B";
+}
+
+function unwrapProposalValue(value: unknown): unknown {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 1 &&
+    "value" in value
+  ) {
+    return (value as { value: unknown }).value;
+  }
+  return value;
+}
+
+function formatProposalValue(value: unknown): string {
+  const unwrapped = unwrapProposalValue(value);
+  if (unwrapped === null || unwrapped === undefined) return "null";
+  if (typeof unwrapped === "string") return unwrapped;
+  return JSON.stringify(unwrapped, null, 2);
 }
 
 function Field({
@@ -598,7 +671,17 @@ export default function SettingsPage() {
 
   // Agent
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
+  const [agentConfigBaseline, setAgentConfigBaseline] =
+    useState<AgentConfig | null>(null);
   const [agentSkills, setAgentSkills] = useState<AgentSkill[]>([]);
+  const [agentControlPlane, setAgentControlPlane] =
+    useState<AgentControlPlaneStatus | null>(null);
+  const [agentConfigProposals, setAgentConfigProposals] = useState<
+    AgentConfigProposal[]
+  >([]);
+  const [capabilityProposals, setCapabilityProposals] = useState<
+    CapabilityProposal[]
+  >([]);
   const [agentSkillFilter, setAgentSkillFilter] = useState("");
   const selectAllSkillsRef = useRef<HTMLInputElement | null>(null);
   const agentSkillToggleRefs = useRef<Array<HTMLInputElement | null>>([]);
@@ -707,9 +790,12 @@ export default function SettingsPage() {
   async function loadAgentConfig() {
     try {
       const r = await fetch(`${API}/api/ai/agent-config`);
-      setAgentConfig(await r.json());
+      const data = await r.json();
+      setAgentConfig(data);
+      setAgentConfigBaseline(data);
     } catch {
       setAgentConfig(null);
+      setAgentConfigBaseline(null);
     }
   }
 
@@ -720,6 +806,33 @@ export default function SettingsPage() {
       setAgentSkills(d.skills ?? []);
     } catch {
       setAgentSkills([]);
+    }
+  }
+
+  async function loadAgentControlPlane() {
+    try {
+      const r = await fetch(`${API}/api/agent/control-plane/status`);
+      setAgentControlPlane(await r.json());
+    } catch {
+      setAgentControlPlane(null);
+    }
+  }
+
+  async function loadAgentConfigProposals() {
+    try {
+      const r = await fetch(`${API}/api/agent/config/proposals?status=pending`);
+      setAgentConfigProposals(await r.json());
+    } catch {
+      setAgentConfigProposals([]);
+    }
+  }
+
+  async function loadCapabilityProposals() {
+    try {
+      const r = await fetch(`${API}/api/agent/capabilities`);
+      setCapabilityProposals(await r.json());
+    } catch {
+      setCapabilityProposals([]);
     }
   }
 
@@ -741,6 +854,9 @@ export default function SettingsPage() {
     loadNtdConfig();
     loadAgentConfig();
     loadAgentSkills();
+    loadAgentControlPlane();
+    loadAgentConfigProposals();
+    loadCapabilityProposals();
     loadTgStatus();
   }, []);
 
@@ -896,13 +1012,64 @@ export default function SettingsPage() {
     if (!agentConfig) return;
     setAgentSaving(true);
     try {
-      const r = await fetch(`${API}/api/ai/agent-config`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(agentConfig),
-      });
-      setAgentConfig(await r.json());
+      const protectedSettings = new Set(
+        agentControlPlane?.protected_settings ?? [],
+      );
+      const baseline = agentConfigBaseline;
+      const entries = Object.entries(agentConfig) as Array<
+        [keyof AgentConfig, AgentConfig[keyof AgentConfig]]
+      >;
+      const safePatch: Partial<AgentConfig> = {};
+      const protectedChanges: Array<
+        [keyof AgentConfig, AgentConfig[keyof AgentConfig]]
+      > = [];
+
+      for (const [key, value] of entries) {
+        const previous = baseline?.[key];
+        if (JSON.stringify(previous) === JSON.stringify(value)) continue;
+        if (protectedSettings.has(String(key))) {
+          protectedChanges.push([key, value]);
+        } else {
+          safePatch[key] = value as never;
+        }
+      }
+
+      let nextConfig = agentConfig;
+      if (Object.keys(safePatch).length > 0) {
+        const r = await fetch(`${API}/api/ai/agent-config`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(safePatch),
+        });
+        nextConfig = await r.json();
+      }
+
+      for (const [key, value] of protectedChanges) {
+        await fetch(`${API}/api/agent/config/proposals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            setting_path: key,
+            proposed_value: value,
+            reason:
+              "Изменение защищенной настройки из GUI. Требуется подтверждение, чтобы не ухудшить личность агента, память, аудит или контур безопасности.",
+            risk_level:
+              key === "system_prompt" ||
+              key === "agent_name" ||
+              key === "approval_gates"
+                ? "critical"
+                : "high",
+            requested_by: "user",
+          }),
+        });
+      }
+
+      setAgentConfig(nextConfig);
+      setAgentConfigBaseline(nextConfig);
       await loadAgentSkills();
+      await loadAgentControlPlane();
+      await loadAgentConfigProposals();
+      await loadCapabilityProposals();
       setAgentSaved(true);
       setTimeout(() => setAgentSaved(false), 2000);
     } catch {}
@@ -915,10 +1082,63 @@ export default function SettingsPage() {
       const r = await fetch(`${API}/api/ai/agent-config/reset`, {
         method: "POST",
       });
-      setAgentConfig(await r.json());
+      const data = await r.json();
+      setAgentConfig(data);
+      setAgentConfigBaseline(data);
       await loadAgentSkills();
+      await loadAgentControlPlane();
+      await loadAgentConfigProposals();
+      await loadCapabilityProposals();
       setAgentSaved(true);
       setTimeout(() => setAgentSaved(false), 2000);
+    } catch {}
+    setAgentSaving(false);
+  }
+
+  async function decideAgentConfigProposal(
+    proposalId: string,
+    approved: boolean,
+  ) {
+    setAgentSaving(true);
+    try {
+      await fetch(`${API}/api/agent/config/proposals/${proposalId}/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved, decided_by: "user" }),
+      });
+      await loadAgentConfig();
+      await loadAgentSkills();
+      await loadAgentControlPlane();
+      await loadAgentConfigProposals();
+    } catch {}
+    setAgentSaving(false);
+  }
+
+  async function decideCapabilityProposal(
+    proposalId: string,
+    approved: boolean,
+  ) {
+    setAgentSaving(true);
+    try {
+      await fetch(`${API}/api/agent/capabilities/${proposalId}/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved, decided_by: "user" }),
+      });
+      await loadAgentControlPlane();
+      await loadCapabilityProposals();
+    } catch {}
+    setAgentSaving(false);
+  }
+
+  async function sandboxApplyCapabilityProposal(proposalId: string) {
+    setAgentSaving(true);
+    try {
+      await fetch(`${API}/api/agent/capabilities/${proposalId}/sandbox-apply`, {
+        method: "POST",
+      });
+      await loadAgentControlPlane();
+      await loadCapabilityProposals();
     } catch {}
     setAgentSaving(false);
   }
@@ -1200,6 +1420,228 @@ export default function SettingsPage() {
                 subtitle="Оркестратор управляет задачей: назначает исполнителя, контролирует инструменты, Рабочий стол и аудит результата."
               >
                 <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
+                    <Field
+                      label="Режим автономии"
+                      hint="Max autonomy применяет безопасные изменения в sandbox, защищённые — через подтверждение"
+                    >
+                      <select
+                        className={selectCls}
+                        value={agentConfig.autonomy_mode}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            autonomy_mode: e.target.value,
+                          })
+                        }
+                      >
+                        <option value="draft_approval">Draft + approval</option>
+                        <option value="auto_safe_changes">Auto safe changes</option>
+                        <option value="max_autonomy">Max autonomy</option>
+                      </select>
+                    </Field>
+                    <Field
+                      label="Режим прав"
+                      hint="Определяет, какие tools агент может запускать без блокировки"
+                    >
+                      <select
+                        className={selectCls}
+                        value={agentConfig.permission_mode}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            permission_mode: e.target.value,
+                          })
+                        }
+                      >
+                        <option value="read_only">Read-only</option>
+                        <option value="workspace_write">Workspace write</option>
+                        <option value="danger_full_access">Danger full access</option>
+                      </select>
+                    </Field>
+                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={agentConfig.safe_auto_apply_enabled}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            safe_auto_apply_enabled: e.target.checked,
+                          })
+                        }
+                      />
+                      <span className="text-sm text-slate-200">
+                        Auto-apply безопасных изменений
+                      </span>
+                    </label>
+                    <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs text-slate-300">
+                      <div className="font-medium text-slate-100">
+                        Control Plane
+                      </div>
+                      {agentControlPlane ? (
+                        <div className="mt-2 space-y-1 text-slate-400">
+                          <div>Tasks: {agentControlPlane.tasks_open}</div>
+                          <div>
+                            Plugins: {agentControlPlane.plugins_enabled}/
+                            {agentControlPlane.plugins_total}
+                          </div>
+                          <div>
+                            Memory facts: {agentControlPlane.memory_facts_total}
+                          </div>
+                          <div>
+                            Capabilities:{" "}
+                            {agentControlPlane.capability_proposals_open}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-slate-500">
+                          Статус недоступен
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {agentConfigProposals.length > 0 && (
+                    <div className="rounded-md border border-amber-800/50 bg-amber-950/20 p-3">
+                      <div className="text-sm font-medium text-amber-200">
+                        Ожидают подтверждения защищенные настройки
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        {agentConfigProposals.slice(0, 5).map((proposal) => (
+                          <div
+                            key={proposal.id}
+                            className="rounded border border-amber-900/60 bg-slate-950/40 p-3 text-xs"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-mono text-amber-100">
+                                    {proposal.setting_path}
+                                  </span>
+                                  <span className="rounded bg-amber-900/50 px-1.5 py-0.5 text-amber-200">
+                                    {proposal.risk_level}
+                                  </span>
+                                  <span className="text-slate-500">
+                                    {proposal.requested_by}
+                                  </span>
+                                </div>
+                                <div className="mt-1 line-clamp-2 text-slate-400">
+                                  {proposal.reason}
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  disabled={agentSaving}
+                                  onClick={() =>
+                                    decideAgentConfigProposal(proposal.id, true)
+                                  }
+                                  className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-50"
+                                >
+                                  Разрешить
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={agentSaving}
+                                  onClick={() =>
+                                    decideAgentConfigProposal(proposal.id, false)
+                                  }
+                                  className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
+                                >
+                                  Отклонить
+                                </button>
+                              </div>
+                            </div>
+                            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                              <pre className="max-h-28 overflow-auto rounded bg-slate-950/70 p-2 text-slate-500">
+                                {formatProposalValue(proposal.current_value)}
+                              </pre>
+                              <pre className="max-h-28 overflow-auto rounded bg-slate-950/70 p-2 text-amber-100">
+                                {formatProposalValue(proposal.proposed_value)}
+                              </pre>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {capabilityProposals.length > 0 && (
+                    <div className="rounded-md border border-blue-800/50 bg-blue-950/20 p-3">
+                      <div className="text-sm font-medium text-blue-200">
+                        Capability proposals
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        {capabilityProposals.slice(0, 5).map((proposal) => (
+                          <div
+                            key={proposal.id}
+                            className="rounded border border-blue-900/60 bg-slate-950/40 p-3 text-xs"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-medium text-blue-100">
+                                    {proposal.title}
+                                  </span>
+                                  <span className="rounded bg-blue-900/50 px-1.5 py-0.5 text-blue-200">
+                                    {proposal.status}
+                                  </span>
+                                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
+                                    {proposal.risk_level}
+                                  </span>
+                                  <span className="text-slate-500">
+                                    {proposal.suggested_artifact}
+                                  </span>
+                                </div>
+                                <div className="mt-1 line-clamp-2 text-slate-400">
+                                  {proposal.missing_capability}
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-2 text-slate-500">
+                                  <span>Sandbox: {proposal.sandbox_status}</span>
+                                  <span>Tests: {proposal.test_status}</span>
+                                  <span>Audit: {proposal.audit_status}</span>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  disabled={agentSaving}
+                                  onClick={() =>
+                                    sandboxApplyCapabilityProposal(proposal.id)
+                                  }
+                                  className="rounded bg-blue-700 px-2 py-1 text-xs text-white hover:bg-blue-600 disabled:opacity-50"
+                                >
+                                  Sandbox
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={agentSaving}
+                                  onClick={() =>
+                                    decideCapabilityProposal(proposal.id, true)
+                                  }
+                                  className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-50"
+                                >
+                                  Разрешить
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={agentSaving}
+                                  onClick={() =>
+                                    decideCapabilityProposal(proposal.id, false)
+                                  }
+                                  className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
+                                >
+                                  Отклонить
+                                </button>
+                              </div>
+                            </div>
+                            <pre className="mt-3 max-h-32 overflow-auto rounded bg-slate-950/70 p-2 text-slate-400">
+                              {JSON.stringify(proposal.draft, null, 2)}
+                            </pre>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
                       <input

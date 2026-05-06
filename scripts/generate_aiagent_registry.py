@@ -174,6 +174,31 @@ TOOL_MAP: dict[tuple[str, str], dict[str, Any]] = {
         "approval_required": False,
         "description": "Index queued/stale memory embedding records into Qdrant.",
     },
+    ("POST", "/api/agent/config/propose"): {
+        "name": "config.propose",
+        "approval_required": False,
+        "description": "Propose an agent configuration change for review.",
+    },
+    ("POST", "/api/agent/capabilities/propose"): {
+        "name": "capability.propose",
+        "approval_required": False,
+        "description": "Propose a missing capability draft.",
+    },
+    ("GET", "/api/agent/capabilities/{proposal_id}/status"): {
+        "name": "capability.status",
+        "approval_required": False,
+        "description": "Read capability proposal lifecycle state.",
+    },
+    ("POST", "/api/agent/capabilities/{proposal_id}/sandbox-apply"): {
+        "name": "capability.sandbox_apply",
+        "approval_required": False,
+        "description": "Prepare sandbox validation for a draft capability.",
+    },
+    ("POST", "/api/agent/tasks/create"): {
+        "name": "task.create",
+        "approval_required": False,
+        "description": "Create an agent work item.",
+    },
     ("GET", "/api/settings/ntd-control"): {
         "name": "ntd.control_settings_get",
         "approval_required": False,

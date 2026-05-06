@@ -2810,6 +2810,37 @@ tools:
         type: integer
     title: MemoryReindexRequest
     type: object
+- name: config.propose
+  description: 'Skill: config.propose — Propose an agent configuration change.'
+  category: agent_control
+  method: POST
+  path: /api/agent/config/propose
+  approval_required: false
+- name: capability.propose
+  description: 'Skill: capability.propose — Propose a missing capability draft.'
+  category: agent_control
+  method: POST
+  path: /api/agent/capabilities/propose
+  approval_required: false
+- name: capability.status
+  description: 'Skill: capability.status — Read capability proposal lifecycle state.'
+  category: agent_control
+  method: GET
+  path: /api/agent/capabilities/{proposal_id}/status
+  approval_required: false
+- name: capability.sandbox_apply
+  description: 'Skill: capability.sandbox_apply — Prepare sandbox validation for
+    a draft capability.'
+  category: agent_control
+  method: POST
+  path: /api/agent/capabilities/{proposal_id}/sandbox-apply
+  approval_required: false
+- name: task.create
+  description: 'Skill: task.create — Create an agent work item.'
+  category: agent_control
+  method: POST
+  path: /api/agent/tasks/create
+  approval_required: false
 - name: tech.resource_list
   description: 'Skill: tech.resource_list — List machines, tools, fixtures, and equipment.'
   category: technology

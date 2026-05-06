@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     agent,
     agent_actions,
+    agent_control_plane,
     ai_settings,
     anomalies,
     approvals,
@@ -141,6 +142,11 @@ def create_app() -> FastAPI:
     app.include_router(compare.router, prefix="/api/compare", tags=["compare"])
     app.include_router(calendar.router, prefix="/api/calendar", tags=["calendar"])
     app.include_router(agent.router, tags=["agent"])
+    app.include_router(
+        agent_control_plane.router,
+        prefix="/api/agent",
+        tags=["agent-control-plane"],
+    )
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(ai_settings.router, prefix="/api/ai", tags=["ai"])
     app.include_router(agent_actions.router, prefix="/api/agent-actions", tags=["agent"])

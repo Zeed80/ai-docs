@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const mockApi = process.env.PLAYWRIGHT_MOCK_API === "1";
+
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
@@ -17,13 +19,19 @@ export default defineConfig({
     },
   ],
   webServer: [
-    {
-      command:
-        "cd .. && APP_ENV=development AUTO_CREATE_SCHEMA=true DATABASE_URL=sqlite:///./data/e2e.db STORAGE_ROOT=./data/e2e-storage python3 -m uvicorn backend.app.main:app --host 127.0.0.1 --port 18000",
-      url: "http://127.0.0.1:18000/health",
-      reuseExistingServer: true,
-      timeout: 20_000,
-    },
+    ...(
+      mockApi
+        ? []
+        : [
+            {
+              command:
+                "cd .. && PYTHONPATH=backend APP_ENV=development AUTO_CREATE_SCHEMA=true DATABASE_URL=sqlite:///./data/e2e.db STORAGE_ROOT=./data/e2e-storage python3 -m uvicorn app.main:app --host 127.0.0.1 --port 18000",
+              url: "http://127.0.0.1:18000/health",
+              reuseExistingServer: true,
+              timeout: 20_000,
+            },
+          ]
+    ),
     {
       command: "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:18000 npx next dev --hostname 127.0.0.1 --port 13000",
       url: "http://127.0.0.1:13000",

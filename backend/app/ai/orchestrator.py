@@ -586,10 +586,12 @@ class AgentOrchestrator:
             "gap": gap.model_dump(mode="json"),
         })
         draft = await self._build_capability_draft(gap, plan, config)
+        proposal_id = await self._persist_capability_proposal(gap, draft, plan, audit, config)
         await self._outer_send({
             "type": "capability_gap.builder_draft",
             "content": "Builder: подготовил проект недостающего инструмента и skill-записи.",
             "draft": draft.model_dump(mode="json"),
+            "proposal_id": proposal_id,
         })
         upsert_workspace_block(
             "agent:capability-builder-draft",
@@ -597,7 +599,7 @@ class AgentOrchestrator:
                 "id": "agent:capability-builder-draft",
                 "type": "markdown",
                 "title": "Проект недостающей возможности",
-                "content": _format_capability_draft_markdown(draft),
+                "content": _format_capability_draft_markdown(draft, proposal_id=proposal_id),
                 "source": "orchestrator.capability_builder",
             },
         )
@@ -647,6 +649,64 @@ class AgentOrchestrator:
         except Exception:
             pass
         return _fallback_capability_draft(gap, plan)
+
+    async def _persist_capability_proposal(
+        self,
+        gap: CapabilityGapRequest,
+        draft: CapabilityBuildDraft,
+        plan: OrchestratorPlan,
+        audit: AuditReport,
+        config: BuiltinAgentConfig,
+    ) -> str | None:
+        try:
+            async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                resp = await client.post(
+                    f"{config.backend_url.rstrip('/')}/api/agent/capabilities/propose",
+                    json={
+                        "title": draft.title,
+                        "missing_capability": gap.missing_capability,
+                        "reason": gap.reason,
+                        "suggested_artifact": gap.suggested_artifact,
+                        "draft": draft.model_dump(mode="json"),
+                        "risk_level": _capability_risk_level(gap, audit),
+                        "rollback_plan": [
+                            "Do not promote generated files until tests and audit pass.",
+                            "Disable the generated skill and remove it from exposed_skills on rollback.",
+                            "Revert sandbox branch or discard draft files if promotion is rejected.",
+                        ],
+                        "metadata": {
+                            "plan": plan.model_dump(mode="json"),
+                            "audit": audit.model_dump(mode="json"),
+                            "used_tools": self._trace.tool_calls,
+                        },
+                    },
+                )
+            if resp.status_code >= 400:
+                return None
+            data = resp.json()
+            proposal_id = data.get("id")
+            if proposal_id and config.safe_auto_apply_enabled and data.get("risk_level") in {
+                "low",
+                "medium",
+            }:
+                await self._sandbox_capability_proposal(str(proposal_id), config)
+            return str(proposal_id) if proposal_id else None
+        except Exception:
+            return None
+
+    async def _sandbox_capability_proposal(
+        self,
+        proposal_id: str,
+        config: BuiltinAgentConfig,
+    ) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                await client.post(
+                    f"{config.backend_url.rstrip('/')}/api/agent/capabilities/"
+                    f"{proposal_id}/sandbox-apply",
+                )
+        except Exception:
+            pass
 
 
 def _norm(text: str) -> str:
@@ -887,9 +947,23 @@ def _fallback_capability_draft(
     )
 
 
-def _format_capability_draft_markdown(draft: CapabilityBuildDraft) -> str:
+def _capability_risk_level(gap: CapabilityGapRequest, audit: AuditReport) -> str:
+    text = f"{gap.reason} {' '.join(audit.issues)}".lower()
+    if any(marker in text for marker in ("external", "email.send", "delete", "approval")):
+        return "high"
+    if gap.suggested_artifact in {"script", "tool"}:
+        return "medium"
+    return "low"
+
+
+def _format_capability_draft_markdown(
+    draft: CapabilityBuildDraft,
+    *,
+    proposal_id: str | None = None,
+) -> str:
     return "\n\n".join([
         f"# {draft.title}",
+        f"Proposal ID: `{proposal_id}`" if proposal_id else "Proposal: not persisted",
         f"Tool: `{draft.tool_name}`",
         f"Endpoint: `{draft.method} {draft.endpoint_path}`",
         "## Skill registry entry\n"

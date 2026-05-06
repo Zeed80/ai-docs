@@ -58,6 +58,9 @@ class BuiltinAgentConfig(BaseModel):
     audit_enabled: bool = True
     allow_capability_builder: bool = True
     capability_builder_requires_approval: bool = True
+    autonomy_mode: str = "max_autonomy"
+    permission_mode: str = "workspace_write"
+    safe_auto_apply_enabled: bool = True
     max_history_messages: int = Field(40, ge=4, le=200)
     exposed_skills: list[str] = Field(default_factory=list)
     approval_gates: list[str] = Field(default_factory=list)
@@ -108,6 +111,9 @@ class BuiltinAgentConfigUpdate(BaseModel):
     audit_enabled: bool | None = None
     allow_capability_builder: bool | None = None
     capability_builder_requires_approval: bool | None = None
+    autonomy_mode: str | None = None
+    permission_mode: str | None = None
+    safe_auto_apply_enabled: bool | None = None
     max_history_messages: int | None = Field(default=None, ge=4, le=200)
     exposed_skills: list[str] | None = None
     approval_gates: list[str] | None = None
@@ -155,7 +161,12 @@ def _redis_get_agent_config() -> dict | None:
         import redis as _redis
 
         from app.config import settings
-        r = _redis.from_url(settings.redis_url, decode_responses=True)
+        r = _redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=0.2,
+            socket_timeout=0.2,
+        )
         raw = r.get(_REDIS_KEY)
         if raw:
             return json.loads(raw)
@@ -169,7 +180,12 @@ def _redis_set_agent_config(data: dict) -> None:
         import redis as _redis
 
         from app.config import settings
-        r = _redis.from_url(settings.redis_url, decode_responses=True)
+        r = _redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=0.2,
+            socket_timeout=0.2,
+        )
         r.set(_REDIS_KEY, json.dumps(data, ensure_ascii=False))
     except Exception:
         pass

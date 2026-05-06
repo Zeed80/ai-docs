@@ -4,7 +4,8 @@ import json
 import os
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +18,7 @@ from app.db.models import (
     EvidenceSpan,
     KnowledgeEdge,
     KnowledgeNode,
+    MemoryFact,
     MemoryEmbeddingRecord,
 )
 from app.db.session import get_db
@@ -48,6 +50,38 @@ _AUTO_CANDIDATE_LIMIT = int(os.getenv("MEMORY_AUTO_CANDIDATE_LIMIT", "1000"))
 _RERANK_CANDIDATE_LIMIT = int(os.getenv("MEMORY_RERANK_CANDIDATE_LIMIT", "120"))
 
 
+class MemoryChatTurnRequest(BaseModel):
+    user_text: str = Field("", max_length=12000)
+    assistant_text: str = Field("", max_length=12000)
+    session_id: str | None = None
+    scope: str = "project"
+    confidence: float = Field(0.7, ge=0.0, le=1.0)
+    metadata: dict | None = None
+
+
+class MemoryPinRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    summary: str = Field(..., min_length=1)
+    scope: str = "project"
+    kind: str = "pinned_fact"
+    confidence: float = Field(1.0, ge=0.0, le=1.0)
+    metadata: dict | None = None
+
+
+class MemoryFactOut(BaseModel):
+    id: uuid.UUID
+    scope: str
+    kind: str
+    title: str
+    summary: str
+    source: str
+    confidence: float
+    pinned: bool
+    metadata_: dict | None = Field(None, serialization_alias="metadata")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
 @router.post("/search", response_model=MemorySearchResponse)
 async def search_memory(
     payload: MemorySearchRequest,
@@ -75,6 +109,7 @@ async def search_memory(
     for query_text in _expanded_memory_queries(payload):
         query_payload = search_payload.model_copy(update={"query": query_text})
         pattern = f"%{query_text}%"
+        hits.extend(await _search_memory_facts(db, query_payload, pattern))
         hits.extend(await _search_graph_nodes(db, query_payload, pattern))
         hits.extend(await _search_sql_memory(db, query_payload, pattern, remaining=internal_limit))
 
@@ -112,6 +147,62 @@ async def search_memory(
         coverage="complete" if next_cursor is None else "paged",
         diagnostics=diagnostics,
     )
+
+
+@router.post("/chat-turn", response_model=MemoryFactOut)
+async def store_chat_turn_memory(
+    payload: MemoryChatTurnRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MemoryFact:
+    """Store an episodic chat turn as long-term memory."""
+    user_text = " ".join((payload.user_text or "").split())
+    assistant_text = " ".join((payload.assistant_text or "").split())
+    if not user_text and not assistant_text:
+        raise HTTPException(status_code=400, detail="user_text or assistant_text is required")
+    title = user_text[:180] or "Assistant response"
+    summary = "\n".join(
+        part
+        for part in [
+            f"User: {user_text}" if user_text else "",
+            f"Assistant: {assistant_text}" if assistant_text else "",
+        ]
+        if part
+    )
+    fact = MemoryFact(
+        scope=payload.scope,
+        kind="chat_turn",
+        title=title,
+        summary=summary[:4000],
+        source="chat",
+        confidence=payload.confidence,
+        metadata_={"session_id": payload.session_id, **(payload.metadata or {})},
+    )
+    db.add(fact)
+    await db.commit()
+    await db.refresh(fact)
+    return fact
+
+
+@router.post("/pin", response_model=MemoryFactOut)
+async def pin_memory_fact(
+    payload: MemoryPinRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MemoryFact:
+    """Pin a verified memory fact so retrieval ranks it above ordinary turns."""
+    fact = MemoryFact(
+        scope=payload.scope,
+        kind=payload.kind,
+        title=payload.title,
+        summary=payload.summary,
+        source="user_pin",
+        confidence=payload.confidence,
+        pinned=True,
+        metadata_=payload.metadata,
+    )
+    db.add(fact)
+    await db.commit()
+    await db.refresh(fact)
+    return fact
 
 
 def _memory_candidate_limit(payload: MemorySearchRequest) -> int:
@@ -186,6 +277,40 @@ async def _search_graph_nodes(
                 source="graph",
                 graph_score=score,
                 source_document_id=node.source_document_id,
+            )
+        )
+    return hits
+
+
+async def _search_memory_facts(
+    db: AsyncSession,
+    payload: MemorySearchRequest,
+    pattern: str,
+) -> list[MemorySearchHit]:
+    hits: list[MemorySearchHit] = []
+    query = select(MemoryFact).where(
+        or_(
+            MemoryFact.title.ilike(pattern),
+            MemoryFact.summary.ilike(pattern),
+            MemoryFact.kind.ilike(pattern),
+        )
+    )
+    result = await db.execute(
+        query.order_by(MemoryFact.pinned.desc(), MemoryFact.created_at.desc()).limit(payload.limit)
+    )
+    for fact in result.scalars().all():
+        score = _simple_score(payload.query, f"{fact.title} {fact.summary}")
+        if fact.pinned:
+            score = min(1.0, score + 0.15)
+        hits.append(
+            MemorySearchHit(
+                kind="fact",
+                id=fact.id,
+                title=fact.title,
+                summary=fact.summary,
+                score=score,
+                source=fact.source,
+                text_score=score,
             )
         )
     return hits
