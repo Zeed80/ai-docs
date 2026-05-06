@@ -30,6 +30,10 @@ def list_workspace_blocks() -> list[dict[str, Any]]:
     return sorted(_BLOCKS.values(), key=lambda item: str(item.get("updated_at")), reverse=True)
 
 
+def get_workspace_block(block_id: str) -> dict[str, Any] | None:
+    return _BLOCKS.get(block_id)
+
+
 def delete_workspace_block(block_id: str) -> bool:
     return _BLOCKS.pop(block_id, None) is not None
 

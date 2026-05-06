@@ -45,6 +45,7 @@ from app.api import (
     tool_catalog,
     warehouse,
     workspace,
+    workspace_export,
 )
 from app.config import settings
 from app.db.session import engine  # lazy proxy
@@ -159,6 +160,7 @@ def create_app() -> FastAPI:
     app.include_router(telegram.router, prefix="/api/telegram", tags=["telegram"])
     app.include_router(canvas.router, prefix="/api/canvas", tags=["canvas"])
     app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
+    app.include_router(workspace_export.router, prefix="/api/workspace", tags=["workspace"])
     app.include_router(mailbox.router, prefix="/api/mailbox", tags=["mailbox"])
     app.include_router(
         email_templates.router,

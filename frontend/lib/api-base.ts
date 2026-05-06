@@ -6,35 +6,43 @@ function isLocalHost(hostname: string): boolean {
   );
 }
 
-export function getApiBaseUrl(): string {
-  const configured =
-    process.env.NEXT_PUBLIC_API_URL ??
-    process.env.NEXT_PUBLIC_API_BASE_URL ??
-    "http://localhost:8000";
+function configuredApiUrl(): string {
+  return (
+    process.env.NEXT_PUBLIC_API_URL?.trim() ||
+    process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
+    ""
+  );
+}
 
-  if (typeof window === "undefined") return configured;
+export function getApiBaseUrl(): string {
+  const configured = configuredApiUrl();
+
+  if (typeof window === "undefined") return configured || "http://backend:8000";
+  if (!configured) return "";
 
   try {
     const url = new URL(configured);
-    if (isLocalHost(url.hostname)) {
-      return `${url.protocol}//${window.location.hostname}:${url.port || "8000"}`;
+    if (isLocalHost(url.hostname) && url.port === "8000") {
+      return "";
     }
     return configured;
   } catch {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
+    return "";
   }
 }
 
 export function getWebSocketBaseUrl(): string {
   if (typeof window === "undefined") {
-    return getApiBaseUrl().replace(/^https?/, (p) =>
+    return (getApiBaseUrl() || "http://backend:8000").replace(/^https?/, (p) =>
       p === "https" ? "wss" : "ws",
     );
   }
 
-  const apiUrl = new URL(getApiBaseUrl());
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${apiUrl.hostname}:${apiUrl.port || "8000"}`;
+  const apiBase = getApiBaseUrl();
+  if (!apiBase) return `${proto}//${window.location.host}`;
+  const apiUrl = new URL(apiBase);
+  return `${proto}//${apiUrl.host}`;
 }
 
 export function getAiAgentWebSocketUrl(): string {

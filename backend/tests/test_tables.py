@@ -1,12 +1,18 @@
 """Tests for Tables & Export API."""
 
-import io
-import uuid
 
 import pytest
 from httpx import AsyncClient
 
-from app.db.models import Document, DocumentStatus, Invoice, InvoiceLine, InvoiceStatus, Party, PartyRole
+from app.db.models import (
+    Document,
+    DocumentStatus,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    Party,
+    PartyRole,
+)
 
 
 @pytest.fixture
@@ -116,6 +122,8 @@ async def test_export_csv(client: AsyncClient, sample_invoice):
     text = resp.content.decode("utf-8-sig")
     assert "Номер счёта" in text
     assert "T-100" in text
+    assert "10 000,00" in text
+    assert ";" in text.splitlines()[0]
 
 
 @pytest.mark.asyncio

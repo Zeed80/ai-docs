@@ -213,10 +213,8 @@ export default function FeedPage() {
       </div>
 
       {/* Feed */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
-        <div className="mb-4 max-w-6xl">
-          <AgentWorkspaceBlocks />
-        </div>
+      <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+        <AgentWorkspaceBlocks className="mb-4 min-h-[calc(100vh-8.5rem)]" />
         {loading ? (
           <div className="space-y-3">
             {[...Array(3)].map((_, i) => (

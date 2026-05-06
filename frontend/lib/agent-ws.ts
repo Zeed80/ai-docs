@@ -150,7 +150,17 @@ export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
       "error",
       "tg_user",
       "canvas",
+      "status",
+      "orchestrator.status",
+      "worker.assigned",
+      "workspace.publish_started",
+      "workspace.publish_verified",
+      "audit.passed",
+      "audit.failed",
+      "capability_gap.detected",
       "session",
+      "chat.session_updated",
+      "workspace.updated",
     ].includes(type)
   ) {
     return [data as unknown as AgentWsMessage];

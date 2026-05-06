@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.store import (
@@ -14,7 +15,7 @@ from app.chat.store import (
     list_chat_sessions,
 )
 from app.chat.user_key import get_user_key
-from app.db.models import ChatMessageAttachment
+from app.db.models import ChatMessage, ChatMessageAttachment
 from app.db.session import get_db
 
 router = APIRouter()
@@ -53,16 +54,51 @@ class ChatSessionCreateRequest(BaseModel):
     title: str = "Новый чат"
 
 
+def _session_title_from_message(content: str | None) -> str:
+    text = " ".join((content or "").strip().split())
+    return text[:80] if text else "Новый чат"
+
+
+async def _fallback_titles(
+    db: AsyncSession,
+    session_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, str]:
+    if not session_ids:
+        return {}
+    result = await db.execute(
+        select(ChatMessage.session_id, ChatMessage.content, ChatMessage.created_at)
+        .where(
+            ChatMessage.session_id.in_(session_ids),
+            ChatMessage.role == "user",
+            ChatMessage.content.is_not(None),
+        )
+        .order_by(ChatMessage.session_id.asc(), ChatMessage.created_at.asc())
+    )
+    titles: dict[uuid.UUID, str] = {}
+    for session_id, content, _created_at in result.all():
+        if session_id not in titles:
+            titles[session_id] = _session_title_from_message(content)
+    return titles
+
+
 @router.get("/sessions", response_model=list[ChatSessionRead])
 async def get_sessions(
     db: AsyncSession = Depends(get_db),
     user_key: str = Depends(get_user_key),
 ) -> list[ChatSessionRead]:
     sessions = await list_chat_sessions(db, user_key=user_key)
+    fallback_titles = await _fallback_titles(
+        db,
+        [
+            session.id
+            for session in sessions
+            if session.title.strip().lower() == "новый чат"
+        ],
+    )
     return [
         ChatSessionRead(
             id=session.id,
-            title=session.title,
+            title=fallback_titles.get(session.id, session.title),
             user_key=session.user_key,
             created_at=session.created_at,
             updated_at=session.updated_at,

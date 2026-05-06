@@ -25,7 +25,7 @@ function BlockView({ block, onDeleted }: { block: CanvasBlock; onDeleted: () => 
   }
 
   return (
-    <section className="rounded-lg border border-slate-700 bg-slate-900 overflow-hidden">
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900">
       <div className="flex items-center justify-between border-b border-slate-700 bg-slate-800 px-3 py-2">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold text-slate-100">
@@ -39,12 +39,18 @@ function BlockView({ block, onDeleted }: { block: CanvasBlock; onDeleted: () => 
           Удалить
         </button>
       </div>
-      <div className="p-3">
+      <div className="min-h-0 flex-1 p-3">
         {block.type === "markdown" && block.content && (
           <CanvasMarkdown content={block.content} />
         )}
         {block.type === "table" && block.columns && block.rows && (
-          <CanvasTable columns={block.columns} rows={block.rows} title={block.title} />
+          <CanvasTable
+            columns={block.columns}
+            rows={block.rows}
+            title={block.title}
+            fill
+            blockId={block.id}
+          />
         )}
         {block.type === "image" && block.url && (
           <CanvasImage url={block.url} alt={block.alt} title={block.title} />
@@ -64,7 +70,7 @@ function BlockView({ block, onDeleted }: { block: CanvasBlock; onDeleted: () => 
   );
 }
 
-export function AgentWorkspaceBlocks() {
+export function AgentWorkspaceBlocks({ className = "" }: { className?: string }) {
   const [blocks, setBlocks] = useState<CanvasBlock[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -95,7 +101,7 @@ export function AgentWorkspaceBlocks() {
 
   if (loading) {
     return (
-      <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-500">
+      <div className={`rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-500 ${className}`}>
         Загружаю рабочий стол...
       </div>
     );
@@ -104,8 +110,8 @@ export function AgentWorkspaceBlocks() {
   if (blocks.length === 0) return null;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
+    <div className={`flex min-h-0 w-full flex-col gap-3 ${className}`}>
+      <div className="flex shrink-0 items-center justify-between">
         <div>
           <h2 className="text-sm font-semibold text-slate-100">Вывод Светы</h2>
           <p className="mt-0.5 text-xs text-slate-500">
@@ -119,9 +125,11 @@ export function AgentWorkspaceBlocks() {
           Очистить
         </button>
       </div>
-      {blocks.map((block) => (
-        <BlockView key={block.id} block={block} onDeleted={load} />
-      ))}
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        {blocks.map((block) => (
+          <BlockView key={block.id} block={block} onDeleted={load} />
+        ))}
+      </div>
     </div>
   );
 }

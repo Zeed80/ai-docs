@@ -78,6 +78,12 @@ interface AgentConfig {
   enabled: boolean;
   agent_name: string;
   model: string;
+  department_enabled: boolean;
+  orchestrator_model: string | null;
+  worker_model: string | null;
+  auditor_model: string | null;
+  builder_model: string | null;
+  fast_model: string | null;
   provider: string;
   fallback_providers: string[];
   prompt_cache_enabled: boolean;
@@ -89,7 +95,12 @@ interface AgentConfig {
   llm_timeout_seconds: number;
   backend_timeout_seconds: number;
   approval_timeout_seconds: number;
+  max_worker_steps: number;
+  max_audit_retries: number;
   memory_enabled: boolean;
+  audit_enabled: boolean;
+  allow_capability_builder: boolean;
+  capability_builder_requires_approval: boolean;
   max_history_messages: number;
   exposed_skills: string[];
   approval_gates: string[];
@@ -894,6 +905,12 @@ export default function SettingsPage() {
   }
 
   // ── Render ───────────────────────────────────────────────────────────────
+  const agentModelOptions = Array.from(
+    new Set([
+      ...registryModels.map((model) => model.name),
+      ...models.map((model) => model.name),
+    ]),
+  ).filter(Boolean);
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
@@ -967,6 +984,191 @@ export default function SettingsPage() {
                           setAgentConfig({
                             ...agentConfig,
                             backend_url: e.target.value,
+                          })
+                        }
+                      />
+                    </Field>
+                  </div>
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Отдел ИИ"
+                subtitle="Оркестратор управляет задачей: назначает исполнителя, контролирует инструменты, Рабочий стол и аудит результата."
+              >
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={agentConfig.department_enabled}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            department_enabled: e.target.checked,
+                          })
+                        }
+                      />
+                      <span className="text-sm text-slate-200">
+                        Включить оркестратор отдела
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={agentConfig.audit_enabled}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            audit_enabled: e.target.checked,
+                          })
+                        }
+                      />
+                      <span className="text-sm text-slate-200">
+                        Проверять результат аудитором
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={agentConfig.allow_capability_builder}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            allow_capability_builder: e.target.checked,
+                          })
+                        }
+                      />
+                      <span className="text-sm text-slate-200">
+                        Разрешить выявлять недостающие tools/skills
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={agentConfig.capability_builder_requires_approval}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            capability_builder_requires_approval: e.target.checked,
+                          })
+                        }
+                      />
+                      <span className="text-sm text-slate-200">
+                        Требовать подтверждение перед builder-режимом
+                      </span>
+                    </label>
+                  </div>
+
+                  <datalist id="agent-department-models">
+                    {agentModelOptions.map((model) => (
+                      <option key={model} value={model} />
+                    ))}
+                  </datalist>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Field
+                      label="Модель оркестратора"
+                      hint="Для понимания задачи, выбора роли и канала вывода. Лучше указывать ключ из registry; пусто = основная модель агента."
+                    >
+                      <input
+                        className={inputCls}
+                        list="agent-department-models"
+                        value={agentConfig.orchestrator_model ?? ""}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            orchestrator_model: e.target.value.trim() || null,
+                          })
+                        }
+                        placeholder={agentConfig.model}
+                      />
+                    </Field>
+                    <Field
+                      label="Большая модель для builder-задач"
+                      hint="Для создания недостающих tools, skills, скриптов и сложного анализа. Пусто = модель оркестратора или основная модель."
+                    >
+                      <input
+                        className={inputCls}
+                        list="agent-department-models"
+                        value={agentConfig.builder_model ?? ""}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            builder_model: e.target.value.trim() || null,
+                          })
+                        }
+                        placeholder={agentConfig.orchestrator_model || agentConfig.model}
+                      />
+                    </Field>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    {(
+                      [
+                        ["worker_model", "Модель исполнителей"],
+                        ["auditor_model", "Модель аудитора"],
+                        ["fast_model", "Быстрая модель"],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <Field
+                        key={key}
+                        label={label}
+                        hint="Пусто = использовать основную модель агента"
+                      >
+                        <input
+                          className={inputCls}
+                          list="agent-department-models"
+                          value={agentConfig[key] ?? ""}
+                          onChange={(e) =>
+                            setAgentConfig({
+                              ...agentConfig,
+                              [key]: e.target.value.trim() || null,
+                            })
+                          }
+                          placeholder={agentConfig.model}
+                        />
+                      </Field>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Field
+                      label="Max worker steps"
+                      hint="Сколько шагов может сделать назначенный исполнитель"
+                    >
+                      <input
+                        className={`${inputCls} max-w-xs`}
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={agentConfig.max_worker_steps}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            max_worker_steps: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field
+                      label="Audit retries"
+                      hint="Сколько раз оркестратор может пытаться исправить провал аудита"
+                    >
+                      <input
+                        className={`${inputCls} max-w-xs`}
+                        type="number"
+                        min={0}
+                        max={5}
+                        value={agentConfig.max_audit_retries}
+                        onChange={(e) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            max_audit_retries: Number(e.target.value),
                           })
                         }
                       />

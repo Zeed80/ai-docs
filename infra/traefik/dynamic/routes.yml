@@ -15,6 +15,13 @@ http:
         - web
       priority: 100
 
+    backend-ws:
+      rule: "Host(`localhost`) && PathPrefix(`/ws`)"
+      service: backend
+      entryPoints:
+        - web
+      priority: 100
+
     backend-health:
       rule: "Host(`localhost`) && Path(`/health`)"
       service: backend

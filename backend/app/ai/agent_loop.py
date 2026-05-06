@@ -18,6 +18,7 @@ import yaml
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.gateway_config import gateway_config
 from app.ai.streaming_scrubber import StreamingContextScrubber
+from app.formatting import format_money
 
 logger = structlog.get_logger()
 
@@ -43,14 +44,19 @@ _OPERATIONAL_POLICY = """
 - Если пользователь просит "все", "полный список" или аналогичный полный охват,
   обходи результаты страницами/offset/cursor до исчерпания или до явного
   серверного лимита, а не останавливайся на первой странице.
-- Рабочий стол/холст — основной визуальный вывод. Для таблиц, списков,
+- В приложении есть только один пользовательский Рабочий стол: существующий
+  основной раздел, который читает блоки из `/api/workspace/blocks`. Никогда не
+  создавай второй рабочий стол, отдельный canvas или пустую боковую область.
+- Рабочий стол — основной визуальный вывод. Для таблиц, списков,
   графиков, ссылок, изображений и длинных структурированных результатов
-  публикуй rich-блок через `canvas.publish`, а в чат давай краткое резюме.
+  публикуй rich-блок через `canvas.publish` или `workspace.*`; они обновляют
+  существующий Рабочий стол, а в чат давай краткое резюме.
 - Чат предназначен только для простых текстовых ответов: число, короткий вывод,
   уточнение, статус выполнения. Не пиши markdown-таблицы в чат.
 - Если пользователь просит таблицу, полный список, документ, ссылку, чертёж,
-  график, файл, сравнение или большой отчёт — сначала открой Рабочий стол через
-  `canvas.publish`, затем в чат напиши одну короткую фразу о том, что показано.
+  график, файл, сравнение или большой отчёт — сначала опубликуй блок в
+  существующий Рабочий стол через `canvas.publish`/`workspace.*`, затем в чат
+  напиши одну короткую фразу о том, что показано.
 - Табличные шаблоны по умолчанию:
   счета: №, номер, дата, поставщик, сумма, валюта, статус, документ, удалить;
   документы: название, тип, статус, дата, скачать, удалить;
@@ -83,6 +89,8 @@ def _is_workspace_output_request(text: str) -> bool:
             "таблиц", "полный список", "все списком", "выведи список",
             "покажи список", "ссылк", "документ", "чертеж", "чертёж",
             "график", "диаграм", "excel", "скача", "файл",
+            "столбец", "столбц", "колонк", "добавь поле", "убери поле",
+            "отсортируй", "сортировк",
         )
     )
 
@@ -117,6 +125,30 @@ def _is_invoice_items_table_request(text: str, prior_user: str | None = None) ->
         prior_user is not None and _mentions_invoice_entity(prior_user)
     )
     return mentions_items and mentions_invoice_scope and _is_workspace_output_request(t)
+
+
+def _is_invoice_items_grouped_table_request(text: str, prior_user: str | None = None) -> bool:
+    t = _normalize_ru_yo((text or "").lower())
+    grouped = any(marker in t for marker in ("сгрупп", "по счет", "по счёт"))
+    one_cell = any(marker in t for marker in ("одной ячей", "в одной ячей", "перенос"))
+    return _is_invoice_items_table_request(text, prior_user) and (grouped or one_cell)
+
+
+def _is_table_edit_request(text: str) -> bool:
+    t = _normalize_ru_yo((text or "").lower())
+    return any(
+        marker in t
+        for marker in (
+            "добавь столб", "добавить столб", "добавь колон", "добавить колон",
+            "убери столб", "убрать столб", "убери колон", "убрать колон",
+            "перед номер", "после номер", "перестав", "отсортируй",
+        )
+    )
+
+
+def _wants_supplier_column(text: str) -> bool:
+    t = _normalize_ru_yo((text or "").lower())
+    return "поставщик" in t or "поставщика" in t
 
 
 def _mentions_frez_intent(text: str) -> bool:
@@ -177,6 +209,8 @@ def _get_agent_model(config: BuiltinAgentConfig | None = None) -> str:
     edited together in the Agent settings UI. ``model_agent`` from ``ai_config``
     remains a backward-compatible fallback and is kept in sync via API handlers.
     """
+    if config and config.department_enabled and config.worker_model:
+        return config.worker_model
     if config and config.model:
         return config.model
     try:
@@ -859,27 +893,56 @@ class AgentSession:
             exposed_skills=len(self._config.exposed_skills),
         )
 
+    def hydrate_history(self, messages: list[dict[str, str]]) -> None:
+        """Restore chat-local dialogue context from persisted messages."""
+        self.messages = [
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in messages
+            if msg.get("role") in {"user", "assistant"} and msg.get("content")
+        ]
+        self._trim_history()
+
     async def on_user_message(self, content: str) -> None:
         self._refresh_runtime_config()
         await self._init_mcp()
         self.messages.append({"role": "user", "content": content})
         self._trim_history()
-        if await self._try_handle_simple_count_query(content):
+        if await self._try_handle_workspace_table_edit_query(content):
             return
         if await self._try_handle_invoice_items_table_query(content):
             return
         if await self._try_handle_invoice_table_query(content):
             return
+        if await self._try_handle_simple_count_query(content):
+            return
         if await self._try_handle_frez_inventory_query(content):
             return
         await self._run()
+
+    async def _try_handle_workspace_table_edit_query(self, content: str) -> bool:
+        if not _is_table_edit_request(content):
+            return False
+        prior_users = [
+            str(m.get("content", ""))
+            for m in self.messages[:-1]
+            if m.get("role") == "user"
+        ]
+        prior_text = "\n".join(prior_users[-4:])
+        if (
+            _wants_supplier_column(content)
+            and _is_invoice_items_grouped_table_request(prior_text)
+        ):
+            return await self._publish_invoice_items_grouped_table(include_supplier=True)
+        return False
 
     async def _try_handle_simple_count_query(self, content: str) -> bool:
         text = (content or "").strip().lower()
         if not text:
             return False
+        if _is_workspace_output_request(text):
+            return False
 
-        is_count_intent = any(token in text for token in ("сколько", "количество", "всего"))
+        is_count_intent = bool(re.search(r"\b(сколько|всего)\b", text))
         is_invoices_only = any(token in text for token in ("счет", "счёт", "invoice"))
         force_invoices = "только счет" in text or "только счёт" in text
         if not ((is_count_intent and is_invoices_only) or force_invoices):
@@ -934,6 +997,16 @@ class AgentSession:
         canvas_id: str | None = None,
         append: bool = True,
     ) -> None:
+        try:
+            async with httpx.AsyncClient(
+                timeout=float(self._config.backend_timeout_seconds)
+            ) as client:
+                await client.post(
+                    f"{self._config.backend_url.rstrip('/')}/api/canvas/publish",
+                    json={"canvas_id": canvas_id, "block": block, "append": append},
+                )
+        except Exception:
+            pass
         await self._send({
             "type": "canvas",
             "canvas_id": canvas_id,
@@ -993,6 +1066,9 @@ class AgentSession:
         if not _is_invoice_items_table_request(content, prior_user):
             return False
 
+        if _is_invoice_items_grouped_table_request(content, prior_user):
+            return await self._publish_invoice_items_grouped_table()
+
         await self._send({
             "type": "status",
             "content": "Оркестратор: выбираю шаблон таблицы товаров по счетам",
@@ -1024,6 +1100,56 @@ class AgentSession:
         await self._send({
             "type": "text",
             "content": message or "Открыл на Рабочем столе таблицу товаров по счетам.",
+        })
+        await self._send({"type": "done"})
+        return True
+
+    async def _publish_invoice_items_grouped_table(
+        self,
+        *,
+        include_supplier: bool = False,
+    ) -> bool:
+        await self._send({
+            "type": "status",
+            "content": (
+                "Оркестратор: обновляю шаблон группировки товаров по счетам"
+                if include_supplier
+                else "Оркестратор: выбираю шаблон группировки товаров по счетам"
+            ),
+        })
+        skill_name = "workspace__invoice_items_grouped_table"
+        args = {
+            "canvas_id": _agent_canvas_id("invoice-items-grouped"),
+            "limit": 5000,
+            "include_supplier": include_supplier,
+        }
+        await self._send({
+            "type": "tool_call",
+            "tool": skill_name,
+            "args": args,
+        })
+        await self._send({
+            "type": "status",
+            "content": "Инструмент: собираю товары в одну ячейку по каждому счету",
+        })
+        skill = self._skill_map.get(skill_name)
+        if skill:
+            data = await _execute_skill(skill, args, self._config)
+        else:
+            data = await _publish_invoice_items_grouped_table_direct(self._config, args)
+            if data is None:
+                return False
+        await self._send({"type": "tool_result", "tool": skill_name, "result": data})
+        message = str(data.get("message") or "") if isinstance(data, dict) else ""
+        await self._send({
+            "type": "text",
+            "content": (
+                "Обновил на Рабочем столе сгруппированную таблицу товаров: "
+                "добавил колонку поставщика перед номером счета."
+                if include_supplier
+                else message
+                or "Открыл на Рабочем столе таблицу товаров, сгруппированных по счетам."
+            ),
         })
         await self._send({"type": "done"})
         return True
@@ -1551,6 +1677,22 @@ async def _publish_invoice_items_table_direct(
         return None
 
 
+async def _publish_invoice_items_grouped_table_direct(
+    config: BuiltinAgentConfig,
+    args: dict[str, Any],
+) -> dict[str, Any] | None:
+    url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/items-grouped-table"
+    try:
+        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+            resp = await client.post(url, json=args)
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
 async def _fetch_invoices_direct(
     config: BuiltinAgentConfig,
     *,
@@ -1596,13 +1738,7 @@ def _format_date(value: Any) -> str:
 
 
 def _format_money(value: Any) -> str:
-    if value is None:
-        return ""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return str(value)
-    return f"{number:,.2f}".replace(",", " ").replace(".00", "")
+    return format_money(value)
 
 
 def _invoice_canvas_row(item: dict[str, Any], index: int) -> dict[str, Any]:

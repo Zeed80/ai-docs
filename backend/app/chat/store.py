@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,6 +86,25 @@ async def append_chat_message(
         chat_session.last_message_at = _now()
         chat_session.updated_at = _now()
     return msg
+
+
+async def update_chat_session_title(
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    user_key: str,
+    title: str,
+) -> ChatSession | None:
+    session = await get_chat_session(db, session_id=session_id, user_key=user_key)
+    if session is None:
+        return None
+    clean_title = " ".join(title.strip().split())[:80]
+    if not clean_title:
+        return session
+    session.title = clean_title
+    session.updated_at = _now()
+    await db.flush()
+    return session
 
 
 async def append_chat_attachment(

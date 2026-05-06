@@ -57,6 +57,23 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1048576).toFixed(1)} МБ`;
 }
 
+function formatSessionTime(iso: string | null): string {
+  if (!iso) return "без сообщений";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatSessionLabel(session: ChatSession): string {
+  const title = session.title?.trim() || "Новый чат";
+  return `${title} · ${formatSessionTime(session.last_message_at ?? session.updated_at)}`;
+}
+
 function FileChip({
   af,
   onRemove,
@@ -151,6 +168,7 @@ export function SvetaPanel() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isSessionsLoading, setIsSessionsLoading] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -180,33 +198,44 @@ export function SvetaPanel() {
 
   const hydrateMessages = useCallback(async (sessionId: string) => {
     activeHistoryLoadRef.current = sessionId;
-    const history = await getChatMessages(sessionId);
-    if (activeHistoryLoadRef.current !== sessionId) return;
-    const nextMessages: ChatMessage[] = history
-      .map((msg) => {
-        const role = msg.role as MessageRole;
-        if (
-          !["user", "assistant", "tool", "approval", "error", "status"].includes(role)
-        ) {
-          return null;
-        }
-        return {
-          id: msg.id,
-          role,
-          content: msg.content ?? undefined,
-          attachments:
-            msg.attachments
-              ?.filter((item) => item.document_id)
-              .map((item) => ({
-                name: item.file_name,
-                docId: item.document_id!,
-                mimeType: item.mime_type ?? undefined,
-                sizeBytes: item.size_bytes ?? undefined,
-              })) ?? [],
-        } as ChatMessage;
-      })
-      .filter(Boolean) as ChatMessage[];
-    setMessages(nextMessages);
+    setIsHistoryLoading(true);
+    try {
+      const history = await getChatMessages(sessionId);
+      if (activeHistoryLoadRef.current !== sessionId) return;
+      const nextMessages: ChatMessage[] = history
+        .map((msg) => {
+          const role = msg.role as MessageRole;
+          if (
+            !["user", "assistant", "tool", "approval", "error", "status"].includes(role)
+          ) {
+            return null;
+          }
+          return {
+            id: msg.id,
+            role,
+            content: msg.content ?? undefined,
+            attachments:
+              msg.attachments
+                ?.filter((item) => item.document_id)
+                .map((item) => ({
+                  name: item.file_name,
+                  docId: item.document_id!,
+                  mimeType: item.mime_type ?? undefined,
+                  sizeBytes: item.size_bytes ?? undefined,
+                })) ?? [],
+          } as ChatMessage;
+        })
+        .filter(Boolean) as ChatMessage[];
+      setMessages(nextMessages);
+    } catch {
+      if (activeHistoryLoadRef.current === sessionId) {
+        setMessages([]);
+      }
+    } finally {
+      if (activeHistoryLoadRef.current === sessionId) {
+        setIsHistoryLoading(false);
+      }
+    }
   }, []);
 
   const refreshSessions = useCallback(async () => {
@@ -235,7 +264,10 @@ export function SvetaPanel() {
         setCurrentSessionId(created.id);
         persistSessionToStorage(created.id);
         setMessages([]);
+        setIsHistoryLoading(false);
       }
+    } catch {
+      setIsHistoryLoading(false);
     } finally {
       setIsSessionsLoading(false);
     }
@@ -293,6 +325,20 @@ export function SvetaPanel() {
     // Initial bootstrap only; avoid re-running when session id changes (would reset selection / hydrate).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    function refreshIfVisible() {
+      if (document.visibilityState === "visible") {
+        void reloadSessionListOnly();
+      }
+    }
+    window.addEventListener("focus", refreshIfVisible);
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    return () => {
+      window.removeEventListener("focus", refreshIfVisible);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+    };
+  }, [reloadSessionListOnly]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -380,10 +426,20 @@ export function SvetaPanel() {
       streamingIdRef.current = null;
       autoApproveRef.current = false;
       setIsStreaming(false);
+      void reloadSessionListOnly();
       return;
     }
 
-    if (type === "status") {
+    if (
+      type === "status" ||
+      type === "orchestrator.status" ||
+      type === "worker.assigned" ||
+      type === "workspace.publish_started" ||
+      type === "workspace.publish_verified" ||
+      type === "audit.passed" ||
+      type === "audit.failed" ||
+      type === "capability_gap.detected"
+    ) {
       if (isTelegram) return;
       setMessages((prev) => [
         ...prev,
@@ -416,7 +472,22 @@ export function SvetaPanel() {
             ...prev,
           ];
         });
+        void reloadSessionListOnly();
       }
+      return;
+    }
+
+    if (type === "chat.session_updated") {
+      const sessionId = data.session_id as string | undefined;
+      const title = data.title as string | undefined;
+      if (sessionId && title) {
+        setSessions((prev) =>
+          prev.map((session) =>
+            session.id === sessionId ? { ...session, title } : session,
+          ),
+        );
+      }
+      void reloadSessionListOnly();
       return;
     }
 
@@ -693,6 +764,7 @@ export function SvetaPanel() {
   }
 
   async function handleCreateNewChat() {
+    if (isStreaming) return;
     try {
       const created = await createChatSession("Новый чат");
       currentSessionIdRef.current = created.id;
@@ -703,6 +775,10 @@ export function SvetaPanel() {
       setCurrentSessionId(created.id);
       persistSessionToStorage(created.id);
       setMessages([]);
+      setInput("");
+      setAttachedFiles([]);
+      streamingIdRef.current = null;
+      tgStreamingIdRef.current = null;
       await reloadSessionListOnly();
     } catch {
       /* create failed — keep current UI */
@@ -710,9 +786,14 @@ export function SvetaPanel() {
   }
 
   async function handleSelectChat(sessionId: string) {
+    if (!sessionId || sessionId === currentSessionId || isStreaming) return;
     currentSessionIdRef.current = sessionId;
     setCurrentSessionId(sessionId);
     persistSessionToStorage(sessionId);
+    setMessages([]);
+    setAttachedFiles([]);
+    streamingIdRef.current = null;
+    tgStreamingIdRef.current = null;
     await hydrateMessages(sessionId);
   }
 
@@ -758,7 +839,7 @@ export function SvetaPanel() {
 
   return (
     <aside
-      className={`relative w-full h-full bg-slate-800 border-l flex flex-col overflow-hidden transition-colors ${isDragging ? "border-blue-500 bg-slate-700" : "border-slate-700"}`}
+      className={`relative w-full min-w-0 h-full bg-slate-800 border-l flex flex-col overflow-hidden transition-colors ${isDragging ? "border-blue-500 bg-slate-700" : "border-slate-700"}`}
       onDragEnter={(e) => {
         e.preventDefault();
         dragCounterRef.current++;
@@ -779,51 +860,61 @@ export function SvetaPanel() {
       }}
     >
       {/* Header */}
-      <div className="px-4 py-3 border-b border-slate-700 flex items-center gap-2">
+      <div className="px-4 py-3 border-b border-slate-700 flex min-w-0 items-center gap-2">
         <span
           className={`w-2 h-2 rounded-full shrink-0 ${isConnected ? "bg-green-400" : "bg-slate-500"}`}
         />
-        <span className="font-semibold text-sm text-slate-100">Света</span>
+        <span className="min-w-0 truncate font-semibold text-sm text-slate-100">
+          Света
+        </span>
         {isStreaming && (
-          <span className="text-[10px] text-blue-400 animate-pulse ml-1">
+          <span className="shrink-0 text-[10px] text-blue-400 animate-pulse ml-1">
             думает...
           </span>
         )}
         {isUploading && (
-          <span className="text-[10px] text-amber-400 animate-pulse ml-1">
+          <span className="shrink-0 text-[10px] text-amber-400 animate-pulse ml-1">
             загружаю...
           </span>
         )}
         {!isConnected && (
-          <span className="ml-auto text-[10px] text-amber-400">офлайн</span>
+          <span className="ml-auto shrink-0 text-[10px] text-amber-400">
+            офлайн
+          </span>
         )}
       </div>
-      <div className="px-3 py-2 border-b border-slate-700 flex items-center gap-2">
+      <div className="min-w-0 px-3 py-2 border-b border-slate-700 flex flex-col gap-2">
         <select
           value={currentSessionId ?? ""}
           onChange={(e) => void handleSelectChat(e.target.value)}
-          className="flex-1 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100"
-          disabled={isSessionsLoading}
+          className="block w-full max-w-full min-w-0 appearance-none truncate bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100"
+          disabled={isSessionsLoading || isStreaming}
+          title="Выбор сохраненного чата"
         >
           {sessions.map((session) => (
             <option key={session.id} value={session.id}>
-              {session.title}
+              {formatSessionLabel(session)}
             </option>
           ))}
         </select>
-        <button
-          onClick={() => void handleCreateNewChat()}
-          className="px-2 py-1 text-xs rounded bg-slate-700 border border-slate-600 text-slate-200 hover:bg-slate-600"
-        >
-          + Новый чат
-        </button>
-        <button
-          onClick={() => void handleDeleteCurrentChat()}
-          className="px-2 py-1 text-xs rounded bg-red-900/50 border border-red-700/50 text-red-200 hover:bg-red-800/60"
-          disabled={!currentSessionId}
-        >
-          Удалить
-        </button>
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
+          <button
+            onClick={() => void handleCreateNewChat()}
+            className="w-full min-w-0 overflow-hidden truncate whitespace-nowrap px-2 py-1 text-xs rounded bg-slate-700 border border-slate-600 text-slate-200 hover:bg-slate-600 disabled:opacity-50"
+            disabled={isStreaming}
+            title="Создать новый чат"
+          >
+            + Чат
+          </button>
+          <button
+            onClick={() => void handleDeleteCurrentChat()}
+            className="w-full min-w-0 overflow-hidden truncate whitespace-nowrap px-2 py-1 text-xs rounded bg-red-900/50 border border-red-700/50 text-red-200 hover:bg-red-800/60 disabled:opacity-50"
+            disabled={!currentSessionId || isStreaming}
+            title="Удалить текущий чат"
+          >
+            Удалить
+          </button>
+        </div>
       </div>
 
       {/* Drag overlay */}
@@ -837,7 +928,12 @@ export function SvetaPanel() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-3 space-y-2">
-        {messages.length === 0 && (
+        {isHistoryLoading && (
+          <div className="text-center text-slate-500 text-xs mt-10">
+            Загружаю историю чата...
+          </div>
+        )}
+        {!isHistoryLoading && messages.length === 0 && (
           <div className="text-center text-slate-500 text-xs mt-10 space-y-1">
             <p className="text-2xl">👋</p>
             <p className="font-medium text-slate-400">Привет! Я Света.</p>

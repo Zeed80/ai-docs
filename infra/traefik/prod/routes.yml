@@ -20,6 +20,15 @@ http:
         certResolver: letsencrypt
       priority: 100
 
+    backend-ws:
+      rule: "Host(`example.com`) && PathPrefix(`/ws`)"
+      service: backend
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+      priority: 100
+
     backend-health:
       rule: "Host(`example.com`) && Path(`/health`)"
       service: backend

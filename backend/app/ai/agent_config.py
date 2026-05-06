@@ -19,6 +19,12 @@ class BuiltinAgentConfig(BaseModel):
     enabled: bool = True
     agent_name: str = "Света"
     model: str = "qwen3.5:9b"
+    department_enabled: bool = True
+    orchestrator_model: str | None = None
+    worker_model: str | None = None
+    auditor_model: str | None = None
+    builder_model: str | None = None
+    fast_model: str | None = None
     # LLM provider: "ollama" | "openrouter" | "anthropic" | "deepseek" | "openai_compatible"
     provider: str = "ollama"
     # Ordered fallback chain tried when primary provider fails
@@ -33,7 +39,12 @@ class BuiltinAgentConfig(BaseModel):
     llm_timeout_seconds: int = Field(180, ge=10, le=1800)
     backend_timeout_seconds: int = Field(30, ge=5, le=300)
     approval_timeout_seconds: int = Field(120, ge=10, le=1800)
+    max_worker_steps: int = Field(12, ge=1, le=60)
+    max_audit_retries: int = Field(1, ge=0, le=5)
     memory_enabled: bool = True
+    audit_enabled: bool = True
+    allow_capability_builder: bool = True
+    capability_builder_requires_approval: bool = True
     max_history_messages: int = Field(40, ge=4, le=200)
     exposed_skills: list[str] = Field(default_factory=list)
     approval_gates: list[str] = Field(default_factory=list)
@@ -48,6 +59,12 @@ class BuiltinAgentConfigUpdate(BaseModel):
     enabled: bool | None = None
     agent_name: str | None = None
     model: str | None = None
+    department_enabled: bool | None = None
+    orchestrator_model: str | None = None
+    worker_model: str | None = None
+    auditor_model: str | None = None
+    builder_model: str | None = None
+    fast_model: str | None = None
     provider: str | None = None
     fallback_providers: list[str] | None = None
     prompt_cache_enabled: bool | None = None
@@ -59,7 +76,12 @@ class BuiltinAgentConfigUpdate(BaseModel):
     llm_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)
     backend_timeout_seconds: int | None = Field(default=None, ge=5, le=300)
     approval_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)
+    max_worker_steps: int | None = Field(default=None, ge=1, le=60)
+    max_audit_retries: int | None = Field(default=None, ge=0, le=5)
     memory_enabled: bool | None = None
+    audit_enabled: bool | None = None
+    allow_capability_builder: bool | None = None
+    capability_builder_requires_approval: bool | None = None
     max_history_messages: int | None = Field(default=None, ge=4, le=200)
     exposed_skills: list[str] | None = None
     approval_gates: list[str] | None = None
@@ -143,6 +165,7 @@ def _env_overrides() -> dict:
 def get_builtin_agent_config() -> BuiltinAgentConfig:
     """Load config from Redis → local file → defaults. Env vars always win for URLs."""
     defaults = _default_config().model_dump()
+    registry_skills = _all_registry_skill_names()
 
     # Load saved overrides (Redis first, then file)
     saved: dict = {}
@@ -161,11 +184,18 @@ def get_builtin_agent_config() -> BuiltinAgentConfig:
 
     # If exposed_skills is empty, fallback to full registry.
     if not merged.get("exposed_skills"):
-        merged["exposed_skills"] = _all_registry_skill_names() or sorted(
-            gateway_config.exposed_skills
-        )
+        merged["exposed_skills"] = registry_skills or sorted(gateway_config.exposed_skills)
+    elif registry_skills:
+        # Keep runtime configs forward-compatible with newly generated skills.
+        merged["exposed_skills"] = sorted(set(merged["exposed_skills"]) | set(registry_skills))
     if not merged.get("approval_gates"):
         merged["approval_gates"] = sorted(gateway_config.approval_gates)
+    else:
+        # Approval gates are safety invariants; never let an older saved config
+        # silently drop gates required by the current gateway/registry contract.
+        merged["approval_gates"] = sorted(
+            set(merged["approval_gates"]) | set(gateway_config.approval_gates)
+        )
 
     # Environment always wins for connection URLs
     merged.update(_env_overrides())

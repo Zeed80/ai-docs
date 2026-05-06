@@ -1,4 +1,4 @@
-"""Canvas API — agent publishes rich content blocks to the web UI canvas panel."""
+"""Canvas API — compatibility endpoint for publishing blocks to Workspace."""
 
 from __future__ import annotations
 
@@ -63,10 +63,11 @@ class CanvasPublishResponse(BaseModel):
 
 @router.post("/publish", response_model=CanvasPublishResponse)
 async def publish_to_canvas(payload: CanvasPublishRequest) -> CanvasPublishResponse:
-    """Skill: canvas.publish — Send a rich content block to the agent canvas panel.
+    """Skill: canvas.publish — Publish a rich content block to the existing Workspace.
 
-    Supports markdown text, Excel-style tables, images, and charts.
-    The block is broadcast to all active WebSocket clients via chat_bus.
+    This endpoint is kept for skill compatibility. It must not create a
+    separate canvas/desktop; blocks are stored in the main Workspace store so
+    the UI renders them in the single existing Рабочий стол section.
     """
     block = payload.block.model_dump(exclude_none=True)
     if payload.canvas_id:
@@ -75,7 +76,7 @@ async def publish_to_canvas(payload: CanvasPublishRequest) -> CanvasPublishRespo
         stored = append_workspace_block(block)
 
     event = {
-        "type": "canvas",
+        "type": "workspace.updated",
         "canvas_id": stored["id"],
         "block": stored,
         "append": payload.append,

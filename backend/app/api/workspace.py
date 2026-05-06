@@ -16,9 +16,11 @@ from app.db.session import get_db
 from app.domain.workspace import (
     clear_workspace_blocks,
     delete_workspace_block,
+    get_workspace_block,
     list_workspace_blocks,
     upsert_workspace_block,
 )
+from app.formatting import format_money, format_number
 
 router = APIRouter()
 
@@ -40,6 +42,12 @@ class WorkspaceInvoiceItemsTableRequest(BaseModel):
     include_invoice_actions: bool = True
 
 
+class WorkspaceInvoiceItemsGroupedTableRequest(BaseModel):
+    canvas_id: str = "agent:invoice-items-grouped"
+    limit: int = 5000
+    include_supplier: bool = False
+
+
 class WorkspaceToolResponse(BaseModel):
     status: str
     canvas_id: str
@@ -48,11 +56,53 @@ class WorkspaceToolResponse(BaseModel):
     message: str
 
 
+class WorkspaceVerifyBlockRequest(BaseModel):
+    canvas_id: str
+
+
+class WorkspaceVerifyBlockResponse(BaseModel):
+    exists: bool
+    canvas_id: str
+    block_type: str | None = None
+    row_count: int | None = None
+    updated_at: str | None = None
+
+
 @router.get("/blocks", response_model=WorkspaceBlockResponse)
 async def get_workspace_blocks() -> WorkspaceBlockResponse:
     """List current agent Workspace blocks."""
     items = list_workspace_blocks()
     return WorkspaceBlockResponse(items=items, total=len(items))
+
+
+@router.get("/blocks/{block_id}", response_model=dict[str, Any] | None)
+async def get_workspace_block_endpoint(block_id: str) -> dict[str, Any] | None:
+    """Get one Workspace block by ID."""
+    return get_workspace_block(block_id)
+
+
+@router.post("/agent/verify-block", response_model=WorkspaceVerifyBlockResponse)
+async def verify_workspace_block(
+    payload: WorkspaceVerifyBlockRequest,
+) -> WorkspaceVerifyBlockResponse:
+    """Skill: workspace.verify_block — Verify that a block exists on the Workspace."""
+    block = get_workspace_block(payload.canvas_id)
+    rows = block.get("rows") if isinstance(block, dict) else None
+    return WorkspaceVerifyBlockResponse(
+        exists=block is not None,
+        canvas_id=payload.canvas_id,
+        block_type=(
+            str(block.get("type"))
+            if isinstance(block, dict) and block.get("type")
+            else None
+        ),
+        row_count=len(rows) if isinstance(rows, list) else None,
+        updated_at=(
+            str(block.get("updated_at"))
+            if isinstance(block, dict) and block.get("updated_at")
+            else None
+        ),
+    )
 
 
 @router.delete("/blocks/{block_id}", status_code=200)
@@ -177,6 +227,62 @@ async def publish_invoice_items_table(
     )
 
 
+@router.post("/agent/invoices/items-grouped-table", response_model=WorkspaceToolResponse)
+async def publish_invoice_items_grouped_table(
+    payload: WorkspaceInvoiceItemsGroupedTableRequest,
+    db: AsyncSession = Depends(get_db),
+) -> WorkspaceToolResponse:
+    """Skill: workspace.invoice_items_grouped_table — Group invoice items by invoice."""
+    await _publish_workspace_status("Готовлю шаблон: товары сгруппированы по счетам")
+    total = (
+        await db.execute(select(func.count()).select_from(Invoice))
+    ).scalar_one()
+    await _publish_workspace_status("Загружаю счета и строки товаров из БД")
+    result = await db.execute(
+        select(Invoice)
+        .options(selectinload(Invoice.lines), selectinload(Invoice.supplier))
+        .order_by(Invoice.created_at.desc())
+        .limit(min(max(payload.limit, 1), 5000))
+    )
+    invoices = result.scalars().all()
+    rows = [
+        _invoice_items_grouped_workspace_row(
+            invoice,
+            index,
+            include_supplier=payload.include_supplier,
+        )
+        for index, invoice in enumerate(invoices, start=1)
+    ]
+
+    await _publish_workspace_status("Публикую сгруппированную таблицу на Рабочий стол")
+    block = {
+        "id": payload.canvas_id,
+        "type": "table",
+        "title": f"Товары, сгруппированные по счетам ({total})",
+        "columns": _invoice_items_grouped_columns(include_supplier=payload.include_supplier),
+        "rows": rows,
+        "source": "workspace.invoice_items_grouped_table",
+        "source_agent_role": "invoice_specialist",
+        "audit_status": "pending",
+    }
+    stored = upsert_workspace_block(payload.canvas_id, block)
+    await chat_bus.publish({
+        "type": "workspace.updated",
+        "canvas_id": payload.canvas_id,
+        "block": stored,
+    })
+    return WorkspaceToolResponse(
+        status="published",
+        canvas_id=payload.canvas_id,
+        total=total,
+        shown=len(rows),
+        message=(
+            "Открыл на Рабочем столе таблицу товаров, сгруппированных по счетам: "
+            f"{len(rows)} из {total}."
+        ),
+    )
+
+
 def _invoice_columns(*, include_delete: bool) -> list[dict[str, Any]]:
     columns: list[dict[str, Any]] = [
         {"key": "index", "header": "№", "type": "number", "width": 56},
@@ -193,6 +299,19 @@ def _invoice_columns(*, include_delete: bool) -> list[dict[str, Any]]:
             {"key": "invoice_delete", "header": "Удалить счет", "type": "delete"},
             {"key": "document_delete", "header": "Удалить документ", "type": "delete"},
         ])
+    return columns
+
+
+def _invoice_items_grouped_columns(*, include_supplier: bool = False) -> list[dict[str, Any]]:
+    columns: list[dict[str, Any]] = [
+        {"key": "index", "header": "№", "type": "number", "width": 56},
+        {"key": "invoice_number", "header": "Номер счета", "type": "text"},
+        {"key": "invoice_date", "header": "Дата счета", "type": "date"},
+        {"key": "items", "header": "Товары", "type": "text"},
+        {"key": "total_amount", "header": "Общая сумма счета", "type": "number"},
+    ]
+    if include_supplier:
+        columns.insert(1, {"key": "supplier", "header": "Поставщик", "type": "text"})
     return columns
 
 
@@ -260,6 +379,41 @@ def _invoice_workspace_row(
     return row
 
 
+def _invoice_items_grouped_workspace_row(
+    invoice: Invoice,
+    index: int,
+    *,
+    include_supplier: bool = False,
+) -> dict[str, Any]:
+    lines = sorted(invoice.lines, key=lambda line: line.line_number)
+    item_lines = [_format_grouped_item_line(line) for line in lines]
+    row = {
+        "index": index,
+        "invoice_id": str(invoice.id),
+        "document_id": str(invoice.document_id),
+        "invoice_number": invoice.invoice_number or "",
+        "invoice_date": _format_date(invoice.invoice_date),
+        "items": "\n".join(line for line in item_lines if line),
+        "total_amount": _format_money(invoice.total_amount),
+    }
+    if include_supplier:
+        row["supplier"] = invoice.supplier.name if invoice.supplier else ""
+    return row
+
+
+def _format_grouped_item_line(line: InvoiceLine) -> str:
+    description = (line.description or line.sku or "").strip()
+    quantity = _format_number(line.quantity)
+    unit = (line.unit or "").strip()
+    if quantity and unit:
+        suffix = f" — {quantity} {unit}"
+    elif quantity:
+        suffix = f" — {quantity}"
+    else:
+        suffix = ""
+    return f"{description}{suffix}".strip()
+
+
 def _invoice_item_workspace_row(
     line: InvoiceLine,
     invoice: Invoice,
@@ -313,23 +467,11 @@ def _format_date(value: Any) -> str:
 
 
 def _format_money(value: Any) -> str:
-    if value is None:
-        return ""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return str(value)
-    return f"{number:,.2f}".replace(",", " ").replace(".00", "")
+    return format_money(value)
 
 
 def _format_number(value: Any) -> str:
-    if value is None:
-        return ""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return str(value)
-    return f"{number:,.4f}".replace(",", " ").rstrip("0").rstrip(".")
+    return format_number(value)
 
 
 async def _publish_workspace_status(message: str) -> None:

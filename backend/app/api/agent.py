@@ -2,18 +2,22 @@
 
 import asyncio
 import json
+import re
 import uuid
 
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.ai.agent_loop import AgentSession
+from app.ai.orchestrator import AgentOrchestrator
+from app.ai.router import ai_router
 from app.chat.store import (
     ChatSessionNotFoundError,
     append_chat_attachment,
     append_chat_message,
     ensure_chat_session,
     link_pending_attachments_to_message,
+    list_chat_messages,
+    update_chat_session_title,
 )
 from app.chat.user_key import get_ws_user_key
 from app.core.chat_bus import chat_bus
@@ -21,6 +25,19 @@ from app.db.session import _get_session_factory
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+
+def _fallback_chat_title(first_message: str) -> str:
+    text = re.sub(r"\s+", " ", (first_message or "").strip())
+    if not text:
+        return "Новый чат"
+    text = re.sub(
+        r"^(пожалуйста|света|выведи|покажи|сделай|напиши|расскажи|найди)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return " ".join(text.split()[:5])[:45].strip(" ,.;:!?") or "Новый чат"
 
 
 @router.websocket("/ws/chat")
@@ -32,6 +49,28 @@ async def chat_ws(ws: WebSocket) -> None:
     active_session_id: uuid.UUID | None = None
     assistant_buffer: list[str] = []
     turn_in_progress = False
+    agent_sessions: dict[uuid.UUID, AgentOrchestrator] = {}
+    active_agent_session: AgentOrchestrator | None = None
+
+    async def generate_session_title(session_id: uuid.UUID, first_message: str) -> None:
+        try:
+            title = await ai_router.generate_chat_title(first_message)
+        except Exception as exc:
+            logger.warning("chat_title_generation_failed", error=str(exc))
+            title = _fallback_chat_title(first_message)
+        async with db_factory() as db:
+            await update_chat_session_title(
+                db,
+                session_id=session_id,
+                user_key=user_key,
+                title=title,
+            )
+            await db.commit()
+        await chat_bus.publish({
+            "type": "chat.session_updated",
+            "session_id": str(session_id),
+            "title": title,
+        })
 
     async def send(data: dict) -> None:
         try:
@@ -97,16 +136,7 @@ async def chat_ws(ws: WebSocket) -> None:
     # Mirror Telegram conversations to this WebSocket client
     sub_id = chat_bus.subscribe(send)
 
-    session = AgentSession(send)
     current_turn: asyncio.Task | None = None
-
-    # Greeting — may fail if health-check client disconnects immediately
-    try:
-        await send({"type": "text", "content": "Привет! Я Света. Чем могу помочь?"})
-        await send({"type": "done"})
-    except Exception:
-        chat_bus.unsubscribe(sub_id)
-        return
 
     try:
         while True:
@@ -168,7 +198,11 @@ async def chat_ws(ws: WebSocket) -> None:
                                         message_id=user_message.id,
                                         document_id=parsed_doc,
                                         file_name=str(item.get("file_name") or "attachment"),
-                                        mime_type=str(item.get("mime_type")) if item.get("mime_type") else None,
+                                        mime_type=(
+                                            str(item.get("mime_type"))
+                                            if item.get("mime_type")
+                                            else None
+                                        ),
                                         size_bytes=(
                                             int(item.get("size_bytes"))
                                             if isinstance(item.get("size_bytes"), int)
@@ -182,26 +216,58 @@ async def chat_ws(ws: WebSocket) -> None:
                                 document_ids=attachment_doc_ids,
                             )
                             await db.commit()
+                            session_id = chat_session.id
+                            if session_id not in agent_sessions:
+                                _, history, _ = await list_chat_messages(
+                                    db,
+                                    session_id=session_id,
+                                    user_key=user_key,
+                                )
+                                restored = [
+                                    {"role": msg.role, "content": msg.content or ""}
+                                    for msg in history
+                                    if msg.role in {"user", "assistant"}
+                                    and msg.content
+                                    and msg.id != user_message.id
+                                ]
+                                agent = AgentOrchestrator(send)
+                                agent.hydrate_history(restored)
+                                agent_sessions[session_id] = agent
+                                if (
+                                    not restored
+                                    and chat_session.title.strip().lower() == "новый чат"
+                                ):
+                                    asyncio.create_task(
+                                        generate_session_title(session_id, content)
+                                    )
+                            active_agent_session = agent_sessions[session_id]
                     except ChatSessionNotFoundError:
                         await send({
                             "type": "error",
-                            "content": "Чат не найден или устарел. Выберите чат из списка или создайте новый.",
+                            "content": (
+                                "Чат не найден или устарел. "
+                                "Выберите чат из списка или создайте новый."
+                            ),
                         })
                         continue
                     await send({"type": "session", "session_id": str(active_session_id)})
                     turn_in_progress = True
                     assistant_buffer = []
-                    current_turn = asyncio.create_task(session.on_user_message(content))
+                    current_turn = asyncio.create_task(
+                        active_agent_session.on_user_message(content)
+                    )
 
             elif msg_type == "stop":
                 if current_turn and not current_turn.done():
                     current_turn.cancel()
 
             elif msg_type == "approve":
-                await session.on_approval(True)
+                if active_agent_session is not None:
+                    await active_agent_session.on_approval(True)
 
             elif msg_type == "reject":
-                await session.on_approval(False)
+                if active_agent_session is not None:
+                    await active_agent_session.on_approval(False)
 
     except WebSocketDisconnect:
         logger.info("ws_chat_disconnected")

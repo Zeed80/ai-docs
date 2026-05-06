@@ -6,29 +6,28 @@ import uuid
 from datetime import datetime
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.session import get_db
+from app.audit.service import log_action
+from app.auth.jwt import require_role
+from app.auth.models import UserInfo, UserRole
 from app.db.models import (
     Document,
     DocumentStatus,
     DocumentType,
     Invoice,
-    InvoiceLine,
     InvoiceStatus,
-    Party,
     SavedView,
 )
+from app.db.session import get_db
 from app.domain.tables import (
-    ExportRequest,
-    ExportResponse,
     Export1CRequest,
-    Export1CResponse,
+    ExportRequest,
     ImportDiffResponse,
     ImportDiffRow,
     SavedViewCreate,
@@ -40,9 +39,7 @@ from app.domain.tables import (
     TableRow,
     TableSort,
 )
-from app.audit.service import log_action
-from app.auth.jwt import require_role
-from app.auth.models import UserInfo, UserRole
+from app.formatting import format_money, format_number, is_money_key, to_decimal
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -290,32 +287,58 @@ async def export_excel(
 
 def _export_xlsx(data: TableQueryResponse, table_name: str) -> StreamingResponse:
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.table import Table, TableStyleInfo
 
     wb = Workbook()
     ws = wb.active
     ws.title = table_name.capitalize()
+    ws.freeze_panes = "A2"
+    ws.sheet_view.showGridLines = False
 
     # Header style
-    header_font = Font(bold=True, size=11)
-    header_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
-    thin_border = Border(
-        bottom=Side(style="thin", color="999999"),
+    header_font = Font(bold=True, size=11, color="FFFFFF")
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    thin_side = Side(style="thin", color="B7C9D6")
+    header_border = Border(
+        left=thin_side,
+        right=thin_side,
+        top=thin_side,
+        bottom=thin_side,
     )
+    cell_border = Border(
+        left=thin_side,
+        right=thin_side,
+        top=thin_side,
+        bottom=thin_side,
+    )
+    wrap_top = Alignment(vertical="top", wrap_text=True)
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    right_top = Alignment(horizontal="right", vertical="top", wrap_text=True)
+    money_format = '# ##0,00'
 
     # Headers
     for col_idx, col in enumerate(data.columns, 1):
         cell = ws.cell(row=1, column=col_idx, value=col.label)
         cell.font = header_font
         cell.fill = header_fill
-        cell.border = thin_border
-        cell.alignment = Alignment(horizontal="center")
+        cell.border = header_border
+        cell.alignment = center
 
     # Data rows — hidden ID column at end
     for row_idx, row in enumerate(data.rows, 2):
         for col_idx, col in enumerate(data.columns, 1):
-            val = row.data.get(col.key)
-            ws.cell(row=row_idx, column=col_idx, value=val)
+            value = _excel_cell_value(row.data.get(col.key), col.key, col.data_type)
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.border = cell_border
+            cell.alignment = wrap_top
+            if is_money_key(col.key):
+                cell.number_format = money_format
+                cell.alignment = right_top
+            elif col.data_type == "number":
+                cell.number_format = '# ##0,####'
+                cell.alignment = right_top
         # Hidden ID column
         ws.cell(row=row_idx, column=len(data.columns) + 1, value=row.id)
 
@@ -328,8 +351,34 @@ def _export_xlsx(data: TableQueryResponse, table_name: str) -> StreamingResponse
         max_len = len(col.label)
         for row in data.rows:
             val = str(row.data.get(col.key, "") or "")
-            max_len = max(max_len, len(val))
-        ws.column_dimensions[_col_letter(col_idx)].width = min(max_len + 3, 40)
+            max_len = max(max_len, max((len(line) for line in val.splitlines()), default=0))
+        width = min(max(max_len + 3, 12), 60)
+        if is_money_key(col.key):
+            width = max(width, 16)
+        ws.column_dimensions[_col_letter(col_idx)].width = width
+
+    for row_idx in range(2, len(data.rows) + 2):
+        max_lines = 1
+        for col_idx in range(1, len(data.columns) + 1):
+            value = ws.cell(row=row_idx, column=col_idx).value
+            if isinstance(value, str):
+                max_lines = max(max_lines, value.count("\n") + 1)
+        ws.row_dimensions[row_idx].height = min(max(18, max_lines * 16), 180)
+
+    if data.columns:
+        last_col = get_column_letter(len(data.columns))
+        last_row = max(len(data.rows) + 1, 1)
+        display_name = f"{table_name[:20].replace('-', '_')}_export"
+        table = Table(displayName=display_name, ref=f"A1:{last_col}{last_row}")
+        table.tableStyleInfo = TableStyleInfo(
+            name="TableStyleMedium2",
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=False,
+        )
+        ws.add_table(table)
+        ws.auto_filter.ref = f"A1:{last_col}{last_row}"
 
     # Footer with metadata
     footer_row = len(data.rows) + 3
@@ -354,10 +403,12 @@ def _export_csv(data: TableQueryResponse) -> StreamingResponse:
     import csv
 
     buf = io.StringIO()
-    writer = csv.writer(buf)
+    writer = csv.writer(buf, delimiter=";", lineterminator="\n")
     writer.writerow([c.label for c in data.columns])
     for row in data.rows:
-        writer.writerow([row.data.get(c.key, "") for c in data.columns])
+        writer.writerow(
+            [_csv_cell_value(row.data.get(c.key), c.key, c.data_type) for c in data.columns]
+        )
 
     output = io.BytesIO(buf.getvalue().encode("utf-8-sig"))
     filename = f"export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
@@ -374,6 +425,26 @@ def _col_letter(idx: int) -> str:
         idx, remainder = divmod(idx - 1, 26)
         result = chr(65 + remainder) + result
     return result
+
+
+def _excel_cell_value(value, key: str, data_type: str):
+    if value is None:
+        return None
+    if is_money_key(key) or data_type == "number":
+        number = to_decimal(value)
+        if number is not None:
+            return float(number)
+    return value
+
+
+def _csv_cell_value(value, key: str, data_type: str) -> str:
+    if value is None:
+        return ""
+    if is_money_key(key):
+        return format_money(value)
+    if data_type == "number":
+        return format_number(value)
+    return str(value)
 
 
 # ── table.export_1c (CommerceML XML) ──────────────────────────────────────
@@ -466,7 +537,11 @@ def _build_commerceml_xml(invoices: list) -> str:
             _add_text(item_el, "Наименование", line.description or f"Позиция {line.line_number}")
             _add_text(item_el, "ЕдиницаИзмерения", line.unit or "шт")
             _add_text(item_el, "Количество", f"{line.quantity:.3f}" if line.quantity else "0")
-            _add_text(item_el, "ЦенаЗаЕдиницу", f"{line.unit_price:.2f}" if line.unit_price else "0.00")
+            _add_text(
+                item_el,
+                "ЦенаЗаЕдиницу",
+                f"{line.unit_price:.2f}" if line.unit_price else "0.00",
+            )
             _add_text(item_el, "Сумма", f"{line.amount:.2f}" if line.amount else "0.00")
 
             if line.tax_rate is not None:
@@ -481,7 +556,12 @@ def _build_commerceml_xml(invoices: list) -> str:
                 _add_text(tax_item, "Наименование", "НДС")
                 _add_text(tax_item, "Сумма", f"{line.tax_amount:.2f}")
 
-    return etree.tostring(root, pretty_print=True, xml_declaration=True, encoding="UTF-8").decode("utf-8")
+    return etree.tostring(
+        root,
+        pretty_print=True,
+        xml_declaration=True,
+        encoding="UTF-8",
+    ).decode("utf-8")
 
 
 def _add_text(parent, tag: str, text: str):
@@ -703,7 +783,7 @@ async def apply_diff(
     skipped = 0
     errors: list[str] = []
 
-    NUMERIC_FIELDS = {"total_amount", "tax_amount", "subtotal", "unit_price"}
+    numeric_fields = {"total_amount", "tax_amount", "subtotal", "unit_price"}
 
     for row in payload.rows:
         if row.action == "skip":
@@ -721,7 +801,7 @@ async def apply_diff(
                     continue
                 for field, change in row.changes.items():
                     new_val = change.get("new") if isinstance(change, dict) else change
-                    if field in NUMERIC_FIELDS:
+                    if field in numeric_fields:
                         try:
                             new_val = float(new_val)
                         except (ValueError, TypeError):
@@ -828,8 +908,9 @@ async def batch_action(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: table.batch_action — Apply action to multiple invoices."""
-    from app.db.models import Invoice as InvoiceModel, InvoiceStatus as IS
     from app.audit.service import add_timeline_event as ate
+    from app.db.models import Invoice as InvoiceModel
+    from app.db.models import InvoiceStatus as InvoiceStatusModel
 
     succeeded = 0
     errors: list[str] = []
@@ -842,19 +923,19 @@ async def batch_action(
             continue
 
         if payload.action == "approve":
-            if inv.status not in (IS.needs_review, IS.draft):
+            if inv.status not in (InvoiceStatusModel.needs_review, InvoiceStatusModel.draft):
                 errors.append(f"{eid}: cannot approve (status={inv.status.value})")
                 continue
-            inv.status = IS.approved
+            inv.status = InvoiceStatusModel.approved
             await ate(db, entity_type="invoice", entity_id=inv.id,
                       event_type="approved", summary="Batch approved", actor="user")
             succeeded += 1
 
         elif payload.action == "reject":
-            if inv.status not in (IS.needs_review, IS.draft):
+            if inv.status not in (InvoiceStatusModel.needs_review, InvoiceStatusModel.draft):
                 errors.append(f"{eid}: cannot reject (status={inv.status.value})")
                 continue
-            inv.status = IS.rejected
+            inv.status = InvoiceStatusModel.rejected
             await ate(db, entity_type="invoice", entity_id=inv.id,
                       event_type="rejected",
                       summary=f"Batch rejected: {payload.reason or 'no reason'}",

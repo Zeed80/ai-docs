@@ -4,13 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const SIDEBAR_DEFAULT = 192; // w-48
 const CHAT_DEFAULT = 320; // w-80
-const CANVAS_DEFAULT = 400;
 const SIDEBAR_MIN = 140;
 const SIDEBAR_MAX = 480;
 const CHAT_MIN = 220;
-const CHAT_MAX = 640;
-const CANVAS_MIN = 280;
-const CANVAS_MAX = 800;
+const CHAT_MAX = 360;
+const MAIN_MIN = 720;
+const STACK_BREAKPOINT = 1280;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -41,6 +40,21 @@ function usePersistentWidth(key: string, defaultValue: number) {
   );
 
   return [width, update] as const;
+}
+
+function useViewportWidth() {
+  const [width, setWidth] = useState(1440);
+
+  useEffect(() => {
+    function update() {
+      setWidth(window.innerWidth || 1440);
+    }
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  return width;
 }
 
 function DragHandle({
@@ -91,16 +105,13 @@ function DragHandle({
 export function ResizableLayout({
   sidebar,
   chat,
-  canvas,
-  canvasOpen,
   children,
 }: {
   sidebar: React.ReactNode;
   chat: React.ReactNode;
-  canvas?: React.ReactNode;
-  canvasOpen?: boolean;
   children: React.ReactNode;
 }) {
+  const viewportWidth = useViewportWidth();
   const [sidebarWidth, setSidebarWidth] = usePersistentWidth(
     "layout:sidebarWidth",
     SIDEBAR_DEFAULT,
@@ -109,38 +120,63 @@ export function ResizableLayout({
     "layout:chatWidth",
     CHAT_DEFAULT,
   );
-  const [canvasWidth, setCanvasWidth] = usePersistentWidth(
-    "layout:canvasWidth",
-    CANVAS_DEFAULT,
-  );
 
   const sidebarDragRef = useRef<(delta: number) => void>(() => {});
   const chatDragRef = useRef<(delta: number) => void>(() => {});
-  const canvasDragRef = useRef<(delta: number) => void>(() => {});
+  const isStacked = viewportWidth < STACK_BREAKPOINT;
+  const maxSidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, viewportWidth * 0.18));
+  const safeSidebarWidth = isStacked
+    ? viewportWidth
+    : clamp(sidebarWidth, SIDEBAR_MIN, maxSidebarWidth);
+  const availableForChat = viewportWidth - safeSidebarWidth - MAIN_MIN - 8;
+  const maxChatWidth = Math.min(
+    CHAT_MAX,
+    Math.max(CHAT_MIN, availableForChat > CHAT_MIN ? availableForChat : viewportWidth * 0.32),
+  );
+  const safeChatWidth = isStacked
+    ? viewportWidth
+    : clamp(chatWidth, CHAT_MIN, maxChatWidth);
 
   sidebarDragRef.current = (delta: number) => {
-    setSidebarWidth((prev) => clamp(prev + delta, SIDEBAR_MIN, SIDEBAR_MAX));
+    setSidebarWidth((prev) => clamp(prev + delta, SIDEBAR_MIN, maxSidebarWidth));
   };
   chatDragRef.current = (delta: number) => {
-    setChatWidth((prev) => clamp(prev - delta, CHAT_MIN, CHAT_MAX));
+    setChatWidth((prev) => clamp(prev - delta, CHAT_MIN, maxChatWidth));
   };
-  canvasDragRef.current = (delta: number) => {
-    setCanvasWidth((prev) => clamp(prev - delta, CANVAS_MIN, CANVAS_MAX));
-  };
+
+  useEffect(() => {
+    if (!isStacked && chatWidth !== safeChatWidth) {
+      setChatWidth(safeChatWidth);
+    }
+  }, [chatWidth, isStacked, safeChatWidth, setChatWidth]);
+
+  useEffect(() => {
+    if (!isStacked && sidebarWidth !== safeSidebarWidth) {
+      setSidebarWidth(safeSidebarWidth);
+    }
+  }, [isStacked, safeSidebarWidth, setSidebarWidth, sidebarWidth]);
+
+  if (isStacked) {
+    return (
+      <div className="flex h-screen flex-col overflow-hidden">
+        <div className="max-h-[32vh] overflow-auto border-b border-slate-700">
+          {sidebar}
+        </div>
+        <main className="min-h-0 flex-1 overflow-auto">{children}</main>
+        <div className="h-[42vh] min-h-[320px] border-t border-slate-700">
+          {chat}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <div style={{ width: sidebarWidth, flexShrink: 0 }}>{sidebar}</div>
+      <div style={{ width: safeSidebarWidth, flexShrink: 0 }}>{sidebar}</div>
       <DragHandle onDragRef={sidebarDragRef} />
       <main className="flex-1 overflow-auto min-w-0">{children}</main>
-      {canvasOpen && canvas && (
-        <>
-          <DragHandle onDragRef={canvasDragRef} />
-          <div style={{ width: canvasWidth, flexShrink: 0 }}>{canvas}</div>
-        </>
-      )}
       <DragHandle onDragRef={chatDragRef} />
-      <div style={{ width: chatWidth, flexShrink: 0 }}>{chat}</div>
+      <div style={{ width: safeChatWidth, flexShrink: 0 }}>{chat}</div>
     </div>
   );
 }

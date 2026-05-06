@@ -5936,10 +5936,18 @@
     },
     {
       "name": "canvas.publish",
-      "description": "Skill: canvas.publish — Send a rich content block to the agent canvas panel.",
+      "description": "Skill: canvas.publish — Publish a rich content block to the existing Workspace.",
       "category": "canvas",
       "method": "POST",
       "path": "/api/canvas/publish",
+      "approval_required": false
+    },
+    {
+      "name": "workspace.verify_block",
+      "description": "Skill: workspace.verify_block — Verify that a block exists on the Workspace.",
+      "category": "workspace",
+      "method": "POST",
+      "path": "/api/workspace/agent/verify-block",
       "approval_required": false
     },
     {
@@ -5956,6 +5964,14 @@
       "category": "workspace",
       "method": "POST",
       "path": "/api/workspace/agent/invoices/items-table",
+      "approval_required": false
+    },
+    {
+      "name": "workspace.invoice_items_grouped_table",
+      "description": "Skill: workspace.invoice_items_grouped_table — Group invoice items by invoice.",
+      "category": "workspace",
+      "method": "POST",
+      "path": "/api/workspace/agent/invoices/items-grouped-table",
       "approval_required": false
     },
     {
