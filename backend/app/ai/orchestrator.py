@@ -389,7 +389,11 @@ class AgentOrchestrator:
             missing_capability=plan.workspace.description or plan.intent,
             reason="; ".join(audit.issues) or "Недостаточно существующих инструментов.",
             suggested_artifact="workspace_template" if plan.workspace.required else "tool",
-            builder_model=config.builder_model or config.orchestrator_model or config.model,
+            builder_model=(
+                config.builder_model
+                or config.orchestrator_model
+                or config.model
+            ),
         )
         await self._outer_send({
             "type": "capability_gap.detected",

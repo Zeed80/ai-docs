@@ -21,11 +21,21 @@ class BuiltinAgentConfig(BaseModel):
     model: str = "qwen3.5:9b"
     department_enabled: bool = True
     orchestrator_model: str | None = None
+    orchestrator_provider: str | None = None
+    orchestrator_disable_thinking: bool = False
     worker_model: str | None = None
+    worker_provider: str | None = None
+    worker_disable_thinking: bool = False
     auditor_model: str | None = None
+    auditor_provider: str | None = None
+    auditor_disable_thinking: bool = False
     builder_model: str | None = None
+    builder_provider: str | None = None
+    builder_disable_thinking: bool = False
     fast_model: str | None = None
-    # LLM provider: "ollama" | "openrouter" | "anthropic" | "deepseek" | "openai_compatible"
+    fast_provider: str | None = None
+    fast_disable_thinking: bool = False
+    # LLM provider: ollama, vllm, lmstudio, openai-compatible or supported cloud provider.
     provider: str = "ollama"
     # Ordered fallback chain tried when primary provider fails
     fallback_providers: list[str] = Field(default_factory=list)
@@ -33,6 +43,9 @@ class BuiltinAgentConfig(BaseModel):
     prompt_cache_enabled: bool = False
     disable_thinking: bool = False
     ollama_url: str = "http://localhost:11434"
+    vllm_url: str = "http://localhost:8001/v1"
+    lmstudio_url: str = "http://localhost:1234/v1"
+    openai_compatible_url: str = "http://localhost:8001/v1"
     backend_url: str = "http://localhost:8000"
     temperature: float = Field(0.1, ge=0.0, le=2.0)
     max_steps: int = Field(10, ge=1, le=30)
@@ -61,15 +74,28 @@ class BuiltinAgentConfigUpdate(BaseModel):
     model: str | None = None
     department_enabled: bool | None = None
     orchestrator_model: str | None = None
+    orchestrator_provider: str | None = None
+    orchestrator_disable_thinking: bool | None = None
     worker_model: str | None = None
+    worker_provider: str | None = None
+    worker_disable_thinking: bool | None = None
     auditor_model: str | None = None
+    auditor_provider: str | None = None
+    auditor_disable_thinking: bool | None = None
     builder_model: str | None = None
+    builder_provider: str | None = None
+    builder_disable_thinking: bool | None = None
     fast_model: str | None = None
+    fast_provider: str | None = None
+    fast_disable_thinking: bool | None = None
     provider: str | None = None
     fallback_providers: list[str] | None = None
     prompt_cache_enabled: bool | None = None
     disable_thinking: bool | None = None
     ollama_url: str | None = None
+    vllm_url: str | None = None
+    lmstudio_url: str | None = None
+    openai_compatible_url: str | None = None
     backend_url: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_steps: int | None = Field(default=None, ge=1, le=30)

@@ -80,15 +80,28 @@ interface AgentConfig {
   model: string;
   department_enabled: boolean;
   orchestrator_model: string | null;
+  orchestrator_provider: string | null;
+  orchestrator_disable_thinking: boolean;
   worker_model: string | null;
+  worker_provider: string | null;
+  worker_disable_thinking: boolean;
   auditor_model: string | null;
+  auditor_provider: string | null;
+  auditor_disable_thinking: boolean;
   builder_model: string | null;
+  builder_provider: string | null;
+  builder_disable_thinking: boolean;
   fast_model: string | null;
+  fast_provider: string | null;
+  fast_disable_thinking: boolean;
   provider: string;
   fallback_providers: string[];
   prompt_cache_enabled: boolean;
   disable_thinking: boolean;
   ollama_url: string;
+  vllm_url: string;
+  lmstudio_url: string;
+  openai_compatible_url: string;
   backend_url: string;
   temperature: number;
   max_steps: number;
@@ -130,21 +143,101 @@ interface AgentSkill {
 
 const PROVIDERS = [
   { value: "ollama", label: "Ollama (локально)" },
+  { value: "vllm", label: "vLLM (локально)" },
+  { value: "lmstudio", label: "LM Studio (локально)" },
+  { value: "openai_compatible", label: "OpenAI-compatible" },
   { value: "openrouter", label: "OpenRouter (200+ моделей)" },
+  { value: "openai", label: "OpenAI" },
   { value: "anthropic", label: "Anthropic (Claude)" },
   { value: "deepseek", label: "DeepSeek" },
+  { value: "gemini", label: "Google Gemini" },
+  { value: "mistral", label: "Mistral AI" },
+  { value: "groq", label: "Groq" },
+  { value: "together", label: "Together AI" },
+  { value: "fireworks", label: "Fireworks AI" },
+  { value: "xai", label: "xAI" },
+  { value: "cohere", label: "Cohere" },
+  { value: "perplexity", label: "Perplexity" },
+  { value: "minimax", label: "MiniMax" },
+  { value: "kimi", label: "Kimi / Moonshot" },
+  { value: "qwen", label: "Qwen / DashScope" },
 ] as const;
 
 const PROVIDER_ENV: Record<string, string> = {
+  vllm: "VLLM_API_KEY",
+  lmstudio: "LMSTUDIO_API_KEY",
+  openai_compatible: "OPENAI_COMPATIBLE_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
+  openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
   deepseek: "DEEPSEEK_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  groq: "GROQ_API_KEY",
+  together: "TOGETHER_API_KEY",
+  fireworks: "FIREWORKS_API_KEY",
+  xai: "XAI_API_KEY",
+  cohere: "COHERE_API_KEY",
+  perplexity: "PERPLEXITY_API_KEY",
+  minimax: "MINIMAX_API_KEY",
+  kimi: "MOONSHOT_API_KEY",
+  qwen: "DASHSCOPE_API_KEY",
 };
 
 const PROVIDER_MODEL_PLACEHOLDER: Record<string, string> = {
+  ollama: "qwen3.5:9b",
+  vllm: "Qwen/Qwen3-32B-AWQ",
+  lmstudio: "local-model",
+  openai_compatible: "model-name",
   openrouter: "deepseek/deepseek-r1  или  qwen/qwen3-235b-a22b",
+  openai: "gpt-4.1  или  gpt-4.1-mini",
   anthropic: "claude-sonnet-4-6  или  claude-haiku-4-5",
   deepseek: "deepseek-chat  или  deepseek-reasoner",
+  gemini: "gemini-2.5-pro  или  gemini-2.5-flash",
+  mistral: "mistral-large-latest",
+  groq: "llama-3.3-70b-versatile",
+  together: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+  fireworks: "accounts/fireworks/models/llama-v3p1-70b-instruct",
+  xai: "grok-3  или  grok-3-mini",
+  cohere: "command-r-plus",
+  perplexity: "sonar-pro",
+  minimax: "MiniMax-M1",
+  kimi: "moonshot-v1-128k",
+  qwen: "qwen-plus  или  qwen-max",
+};
+
+const PROVIDER_COMMON_MODELS: Record<string, string[]> = {
+  vllm: ["Qwen/Qwen3-32B-AWQ", "Qwen/Qwen3-235B-A22B", "deepseek-ai/DeepSeek-R1"],
+  lmstudio: ["local-model", "qwen3-30b-a3b", "llama-3.3-70b-instruct"],
+  openrouter: [
+    "deepseek/deepseek-r1",
+    "qwen/qwen3-235b-a22b",
+    "anthropic/claude-sonnet-4.5",
+  ],
+  openai: ["gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini"],
+  anthropic: ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-1"],
+  deepseek: ["deepseek-chat", "deepseek-reasoner"],
+  gemini: ["gemini-2.5-pro", "gemini-2.5-flash"],
+  mistral: ["mistral-large-latest", "ministral-8b-latest"],
+  groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"],
+  together: ["meta-llama/Llama-3.3-70B-Instruct-Turbo", "Qwen/Qwen3-235B-A22B-fp8-tput"],
+  fireworks: [
+    "accounts/fireworks/models/llama-v3p1-70b-instruct",
+    "accounts/fireworks/models/qwen3-235b-a22b",
+  ],
+  xai: ["grok-3", "grok-3-mini", "grok-4"],
+  cohere: ["command-r-plus", "command-r"],
+  perplexity: ["sonar-pro", "sonar-reasoning-pro"],
+  minimax: ["MiniMax-M1", "MiniMax-Text-01"],
+  kimi: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+  qwen: ["qwen-plus", "qwen-max", "qwen-turbo"],
+};
+
+const LOCAL_PROVIDER_URL_LABEL: Record<string, keyof AgentConfig> = {
+  ollama: "ollama_url",
+  vllm: "vllm_url",
+  lmstudio: "lmstudio_url",
+  openai_compatible: "openai_compatible_url",
 };
 
 type TabId = "agent" | "models" | "memory" | "data" | "system" | "email";
@@ -280,6 +373,123 @@ function ModelSelector({
         ))}
       </select>
     </Field>
+  );
+}
+
+function modelOptionsForProvider(
+  provider: string,
+  models: OllamaModel[],
+  registryModels: RegistryModel[],
+) {
+  const base =
+    provider === "ollama"
+      ? models.map((m) => m.name)
+      : registryModels
+          .filter((model) => model.provider === provider)
+          .map((model) => model.name);
+  return Array.from(
+    new Set([
+      ...base,
+      ...(PROVIDER_COMMON_MODELS[provider] ?? []),
+      PROVIDER_MODEL_PLACEHOLDER[provider],
+    ].filter(Boolean)),
+  );
+}
+
+function AgentModelProviderSelector({
+  label,
+  provider,
+  model,
+  disableThinking,
+  fallbackProvider,
+  fallbackModel,
+  models,
+  registryModels,
+  onChange,
+}: {
+  label: string;
+  provider: string | null;
+  model: string | null;
+  disableThinking: boolean;
+  fallbackProvider: string;
+  fallbackModel: string;
+  models: OllamaModel[];
+  registryModels: RegistryModel[];
+  onChange: (next: {
+    provider: string | null;
+    model: string | null;
+    disableThinking: boolean;
+  }) => void;
+}) {
+  const effectiveProvider = provider || fallbackProvider;
+  const options = modelOptionsForProvider(effectiveProvider, models, registryModels);
+
+  return (
+    <div className="rounded-md border border-slate-700 bg-slate-900/40 p-3">
+      <div className="mb-3 text-sm font-medium text-slate-200">{label}</div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Провайдер" hint="Пусто = как у основного агента">
+          <select
+            value={provider ?? ""}
+            onChange={(e) =>
+              onChange({
+                provider: e.target.value || null,
+                model,
+                disableThinking,
+              })
+            }
+            className={selectCls}
+          >
+            <option value="">Как у основного агента ({fallbackProvider})</option>
+            {PROVIDERS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Модель" hint="Пусто = модель основного агента или роль по умолчанию">
+          <select
+            className={selectCls}
+            value={model ?? ""}
+            onChange={(e) =>
+              onChange({
+                provider,
+                model: e.target.value || null,
+                disableThinking,
+              })
+            }
+          >
+            <option value="">Как у основного агента ({fallbackModel})</option>
+            {model && !options.includes(model) && (
+              <option value={model}>{model} (текущее значение)</option>
+            )}
+            {options.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <label className="mt-3 flex items-start gap-3 rounded-md border border-slate-700 bg-slate-950/40 p-3">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={disableThinking}
+          onChange={(e) =>
+            onChange({
+              provider,
+              model,
+              disableThinking: e.target.checked,
+            })
+          }
+        />
+        <span className="text-sm text-slate-200">
+          Отключить размышления для этой роли
+        </span>
+      </label>
+    </div>
   );
 }
 
@@ -905,13 +1115,6 @@ export default function SettingsPage() {
   }
 
   // ── Render ───────────────────────────────────────────────────────────────
-  const agentModelOptions = Array.from(
-    new Set([
-      ...registryModels.map((model) => model.name),
-      ...models.map((model) => model.name),
-    ]),
-  ).filter(Boolean);
-
   return (
     <div className="p-6 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold mb-5">Настройки</h1>
@@ -1064,75 +1267,83 @@ export default function SettingsPage() {
                     </label>
                   </div>
 
-                  <datalist id="agent-department-models">
-                    {agentModelOptions.map((model) => (
-                      <option key={model} value={model} />
-                    ))}
-                  </datalist>
-
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <Field
-                      label="Модель оркестратора"
-                      hint="Для понимания задачи, выбора роли и канала вывода. Лучше указывать ключ из registry; пусто = основная модель агента."
-                    >
-                      <input
-                        className={inputCls}
-                        list="agent-department-models"
-                        value={agentConfig.orchestrator_model ?? ""}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            orchestrator_model: e.target.value.trim() || null,
-                          })
-                        }
-                        placeholder={agentConfig.model}
-                      />
-                    </Field>
-                    <Field
-                      label="Большая модель для builder-задач"
-                      hint="Для создания недостающих tools, skills, скриптов и сложного анализа. Пусто = модель оркестратора или основная модель."
-                    >
-                      <input
-                        className={inputCls}
-                        list="agent-department-models"
-                        value={agentConfig.builder_model ?? ""}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            builder_model: e.target.value.trim() || null,
-                          })
-                        }
-                        placeholder={agentConfig.orchestrator_model || agentConfig.model}
-                      />
-                    </Field>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-4">
                     {(
                       [
-                        ["worker_model", "Модель исполнителей"],
-                        ["auditor_model", "Модель аудитора"],
-                        ["fast_model", "Быстрая модель"],
+                        [
+                          "orchestrator",
+                          "Оркестратор",
+                          "orchestrator_provider",
+                          "orchestrator_model",
+                          "orchestrator_disable_thinking",
+                          agentConfig.provider,
+                          agentConfig.model,
+                        ],
+                        [
+                          "worker",
+                          "Исполнители",
+                          "worker_provider",
+                          "worker_model",
+                          "worker_disable_thinking",
+                          agentConfig.provider,
+                          agentConfig.model,
+                        ],
+                        [
+                          "auditor",
+                          "Аудитор",
+                          "auditor_provider",
+                          "auditor_model",
+                          "auditor_disable_thinking",
+                          agentConfig.provider,
+                          agentConfig.model,
+                        ],
+                        [
+                          "builder",
+                          "Большая builder-модель",
+                          "builder_provider",
+                          "builder_model",
+                          "builder_disable_thinking",
+                          agentConfig.orchestrator_provider || agentConfig.provider,
+                          agentConfig.orchestrator_model || agentConfig.model,
+                        ],
+                        [
+                          "fast",
+                          "Быстрая модель",
+                          "fast_provider",
+                          "fast_model",
+                          "fast_disable_thinking",
+                          agentConfig.provider,
+                          agentConfig.model,
+                        ],
                       ] as const
-                    ).map(([key, label]) => (
-                      <Field
-                        key={key}
+                    ).map(([
+                      ,
+                      label,
+                      providerKey,
+                      modelKey,
+                      thinkingKey,
+                      fallbackProvider,
+                      fallbackModel,
+                    ]) => (
+                      <AgentModelProviderSelector
+                        key={providerKey}
                         label={label}
-                        hint="Пусто = использовать основную модель агента"
-                      >
-                        <input
-                          className={inputCls}
-                          list="agent-department-models"
-                          value={agentConfig[key] ?? ""}
-                          onChange={(e) =>
-                            setAgentConfig({
-                              ...agentConfig,
-                              [key]: e.target.value.trim() || null,
-                            })
-                          }
-                          placeholder={agentConfig.model}
-                        />
-                      </Field>
+                        provider={agentConfig[providerKey]}
+                        model={agentConfig[modelKey]}
+                        disableThinking={agentConfig[thinkingKey]}
+                        fallbackProvider={fallbackProvider}
+                        fallbackModel={fallbackModel}
+                        models={models}
+                        registryModels={registryModels}
+                        onChange={(next) =>
+                          setAgentConfig({
+                            ...agentConfig,
+                            [providerKey]: next.provider,
+                            [modelKey]: next.model,
+                            [thinkingKey]: next.disableThinking,
+                          })
+                        }
+                      />
                     ))}
                   </div>
 
@@ -1223,6 +1434,7 @@ export default function SettingsPage() {
                       >
                         <input
                           className={inputCls}
+                          list="main-agent-model-options"
                           value={agentConfig.model}
                           onChange={(e) =>
                             setAgentConfig({
@@ -1235,6 +1447,15 @@ export default function SettingsPage() {
                             "model-name"
                           }
                         />
+                        <datalist id="main-agent-model-options">
+                          {modelOptionsForProvider(
+                            agentConfig.provider,
+                            models,
+                            registryModels,
+                          ).map((option) => (
+                            <option key={option} value={option} />
+                          ))}
+                        </datalist>
                       </Field>
                     )}
                   </div>
@@ -1281,19 +1502,20 @@ export default function SettingsPage() {
                     </div>
                   )}
 
-                  {/* Ollama URL (only for ollama) */}
-                  {agentConfig.provider === "ollama" && (
+                  {/* Local provider URL */}
+                  {LOCAL_PROVIDER_URL_LABEL[agentConfig.provider] && (
                     <Field
-                      label="Ollama URL"
-                      hint="Адрес локального Ollama-сервера"
+                      label={`${PROVIDERS.find((p) => p.value === agentConfig.provider)?.label ?? "Provider"} URL`}
+                      hint="Адрес локального OpenAI-compatible endpoint"
                     >
                       <input
                         className={inputCls}
-                        value={agentConfig.ollama_url}
+                        value={String(agentConfig[LOCAL_PROVIDER_URL_LABEL[agentConfig.provider]] ?? "")}
                         onChange={(e) =>
                           setAgentConfig({
                             ...agentConfig,
-                            ollama_url: e.target.value,
+                            [LOCAL_PROVIDER_URL_LABEL[agentConfig.provider]]:
+                              e.target.value,
                           })
                         }
                       />

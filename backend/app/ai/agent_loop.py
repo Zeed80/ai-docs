@@ -202,13 +202,19 @@ def _frez_followup_intent_from_prior_user_message(prior_user: str) -> str:
     return "count"
 
 
-def _get_agent_model(config: BuiltinAgentConfig | None = None) -> str:
+def _get_agent_model(
+    config: BuiltinAgentConfig | None = None,
+    *,
+    model_override: str | None = None,
+) -> str:
     """Current agent model: built-in config → ai_settings override → gateway default.
 
     Built-in agent config is used as primary source because provider/model are
     edited together in the Agent settings UI. ``model_agent`` from ``ai_config``
     remains a backward-compatible fallback and is kept in sync via API handlers.
     """
+    if model_override and model_override.strip():
+        return model_override.strip()
     if config and config.department_enabled and config.worker_model:
         return config.worker_model
     if config and config.model:
@@ -222,6 +228,25 @@ def _get_agent_model(config: BuiltinAgentConfig | None = None) -> str:
     except Exception:
         pass
     return gateway_config.reasoning_model
+
+
+def _get_agent_provider(
+    config: BuiltinAgentConfig,
+    *,
+    provider_override: str | None = None,
+) -> str:
+    if provider_override and provider_override.strip():
+        return provider_override.strip()
+    if config.department_enabled and config.worker_provider:
+        return config.worker_provider
+    return config.provider or "ollama"
+
+
+def _thinking_disabled(
+    config: BuiltinAgentConfig,
+    override: bool | None = None,
+) -> bool:
+    return override if override is not None else config.disable_thinking
 
 
 # ── Registry loading ──────────────────────────────────────────────────────────
@@ -370,9 +395,11 @@ async def _call_ollama_streaming(
     system_prompt: str,
     config: BuiltinAgentConfig,
     on_token: Callable[[str], Awaitable[None]],
+    model_override: str | None = None,
+    disable_thinking: bool | None = None,
 ) -> dict:
     """Stream Ollama response; calls on_token for each text chunk."""
-    model = _get_agent_model(config)
+    model = _get_agent_model(config, model_override=model_override)
     ollama_url = config.ollama_url.rstrip("/")
     payload = {
         "model": model,
@@ -381,7 +408,7 @@ async def _call_ollama_streaming(
         "stream": True,
         "options": {"temperature": config.temperature},
     }
-    if config.disable_thinking:
+    if _thinking_disabled(config, disable_thinking):
         payload["think"] = False
 
     full_content = ""
@@ -429,12 +456,55 @@ async def _call_ollama_streaming(
 
 # ── OpenAI-compatible streaming (OpenRouter / DeepSeek) ──────────────────────
 
-def _openrouter_base_url() -> str:
-    return "https://openrouter.ai/api/v1"
-
-
-def _deepseek_base_url() -> str:
-    return "https://api.deepseek.com/v1"
+def _openai_compatible_provider_config(
+    provider: str,
+    config: BuiltinAgentConfig,
+) -> tuple[str, str, dict[str, str]]:
+    mapping: dict[str, tuple[str, str, dict[str, str]]] = {
+        "openrouter": (
+            "https://openrouter.ai/api/v1",
+            "OPENROUTER_API_KEY",
+            {
+                "HTTP-Referer": "https://ai-workspace.local",
+                "X-Title": "AI Manufacturing Workspace",
+            },
+        ),
+        "deepseek": ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", {}),
+        "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY", {}),
+        "gemini": (
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "GEMINI_API_KEY",
+            {},
+        ),
+        "mistral": ("https://api.mistral.ai/v1", "MISTRAL_API_KEY", {}),
+        "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", {}),
+        "together": ("https://api.together.xyz/v1", "TOGETHER_API_KEY", {}),
+        "fireworks": ("https://api.fireworks.ai/inference/v1", "FIREWORKS_API_KEY", {}),
+        "xai": ("https://api.x.ai/v1", "XAI_API_KEY", {}),
+        "cohere": ("https://api.cohere.ai/compatibility/v1", "COHERE_API_KEY", {}),
+        "perplexity": ("https://api.perplexity.ai", "PERPLEXITY_API_KEY", {}),
+        "minimax": ("https://api.minimax.io/v1", "MINIMAX_API_KEY", {}),
+        "kimi": ("https://api.moonshot.ai/v1", "MOONSHOT_API_KEY", {}),
+        "qwen": (
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            "DASHSCOPE_API_KEY",
+            {},
+        ),
+    }
+    local_mapping: dict[str, tuple[str, str, dict[str, str]]] = {
+        "vllm": (config.vllm_url.rstrip("/"), "VLLM_API_KEY", {}),
+        "lmstudio": (config.lmstudio_url.rstrip("/"), "LMSTUDIO_API_KEY", {}),
+        "openai_compatible": (
+            config.openai_compatible_url.rstrip("/"),
+            "OPENAI_COMPATIBLE_API_KEY",
+            {},
+        ),
+    }
+    try:
+        base_url, env_key, extra = {**mapping, **local_mapping}[provider]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported openai-compatible provider: {provider}") from exc
+    return base_url, os.environ.get(env_key, ""), extra
 
 
 async def _call_openai_streaming(
@@ -444,29 +514,20 @@ async def _call_openai_streaming(
     config: BuiltinAgentConfig,
     on_token: Callable[[str], Awaitable[None]],
     provider: str,
+    model_override: str | None = None,
+    disable_thinking: bool | None = None,
 ) -> dict:
     """Stream an OpenAI-compatible SSE endpoint (OpenRouter, DeepSeek).
 
     Returns a normalised message dict identical to the Ollama format so that
     the rest of AgentSession._run() needs no changes.
     """
-    model = _get_agent_model(config)
+    model = _get_agent_model(config, model_override=model_override)
+    base_url, api_key, extra = _openai_compatible_provider_config(provider, config)
 
-    if provider == "openrouter":
-        base_url = _openrouter_base_url()
-        api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        extra: dict[str, str] = {
-            "HTTP-Referer": "https://ai-workspace.local",
-            "X-Title": "AI Manufacturing Workspace",
-        }
-    elif provider == "deepseek":
-        base_url = _deepseek_base_url()
-        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        extra = {}
-    else:
-        raise ValueError(f"Unsupported openai-compatible provider: {provider}")
-
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}", **extra}
+    headers = {"Content-Type": "application/json", **extra}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     payload: dict[str, Any] = {
         "model": model,
@@ -476,7 +537,7 @@ async def _call_openai_streaming(
     }
     if tools:
         payload["tools"] = tools
-    if config.disable_thinking:
+    if _thinking_disabled(config, disable_thinking):
         # OpenAI-compatible providers may honor this to suppress reasoning traces
         # and force concise direct outputs on "thinking" models.
         payload["reasoning"] = {"enabled": False}
@@ -749,6 +810,26 @@ async def _call_anthropic_streaming(
 
 # ── Provider dispatcher ───────────────────────────────────────────────────────
 
+_OPENAI_COMPATIBLE_PROVIDERS = frozenset({
+    "vllm",
+    "lmstudio",
+    "openai_compatible",
+    "openrouter",
+    "deepseek",
+    "openai",
+    "gemini",
+    "mistral",
+    "groq",
+    "together",
+    "fireworks",
+    "xai",
+    "cohere",
+    "perplexity",
+    "minimax",
+    "kimi",
+    "qwen",
+})
+
 async def _call_provider_streaming(
     messages: list[dict],
     tools: list[dict],
@@ -756,20 +837,40 @@ async def _call_provider_streaming(
     config: BuiltinAgentConfig,
     on_token: Callable[[str], Awaitable[None]],
     model_override: str | None = None,
+    provider_override: str | None = None,
+    disable_thinking_override: bool | None = None,
 ) -> dict:
     """Dispatch to the configured LLM provider with optional fallback chain."""
-    providers_to_try = [config.provider or "ollama"] + list(config.fallback_providers or [])
+    primary_provider = _get_agent_provider(config, provider_override=provider_override)
+    providers_to_try = [primary_provider] + [
+        provider
+        for provider in list(config.fallback_providers or [])
+        if provider != primary_provider
+    ]
 
     last_exc: Exception | None = None
     for p in providers_to_try:
         try:
             if p == "ollama":
                 return await _call_ollama_streaming(
-                    messages, tools, system_prompt, config, on_token
+                    messages,
+                    tools,
+                    system_prompt,
+                    config,
+                    on_token,
+                    model_override=model_override,
+                    disable_thinking=disable_thinking_override,
                 )
-            elif p in ("openrouter", "deepseek"):
+            elif p in _OPENAI_COMPATIBLE_PROVIDERS:
                 return await _call_openai_streaming(
-                    messages, tools, system_prompt, config, on_token, provider=p
+                    messages,
+                    tools,
+                    system_prompt,
+                    config,
+                    on_token,
+                    provider=p,
+                    model_override=model_override,
+                    disable_thinking=disable_thinking_override,
                 )
             elif p == "anthropic":
                 return await _call_anthropic_streaming(
@@ -778,7 +879,13 @@ async def _call_provider_streaming(
             else:
                 logger.warning("unknown_provider_falling_back", provider=p)
                 return await _call_ollama_streaming(
-                    messages, tools, system_prompt, config, on_token
+                    messages,
+                    tools,
+                    system_prompt,
+                    config,
+                    on_token,
+                    model_override=model_override,
+                    disable_thinking=disable_thinking_override,
                 )
         except Exception as exc:
             last_exc = exc
@@ -823,7 +930,16 @@ class AgentSession:
         async def _collect(token: str) -> None:
             accumulated.append(token)
 
-        await _call_provider_streaming(messages, [], None, config, _collect)
+        await _call_provider_streaming(
+            messages,
+            [],
+            None,
+            config,
+            _collect,
+            model_override=config.worker_model,
+            provider_override=config.worker_provider,
+            disable_thinking_override=config.worker_disable_thinking,
+        )
         for chunk in accumulated:
             yield chunk
 
@@ -1311,7 +1427,14 @@ class AgentSession:
                     accumulated_text.append(token)
 
                 message = await _call_provider_streaming(
-                    self.messages, self._tools, self._system, self._config, on_token
+                    self.messages,
+                    self._tools,
+                    self._system,
+                    self._config,
+                    on_token,
+                    model_override=self._config.worker_model,
+                    provider_override=self._config.worker_provider,
+                    disable_thinking_override=self._config.worker_disable_thinking,
                 )
                 duration_ms = int((time.time() - t_start) * 1000)
                 tool_calls = message.get("tool_calls") or []

@@ -132,6 +132,7 @@ tools:
         system_prompt,
         runtime_config,
         on_token,
+        **_kwargs,
     ):
         nonlocal call_count
         call_count += 1
@@ -222,6 +223,8 @@ tools:
         runtime_config,
         on_token,
         model_override=None,
+        provider_override=None,
+        disable_thinking_override=None,
     ):
         nonlocal call_count
         call_count += 1
