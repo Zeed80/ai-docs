@@ -200,6 +200,7 @@ skills:
     - workspace.invoice_table
     - workspace.invoice_items_table
     - workspace.invoice_items_grouped_table
+    - workspace.invoice_items_by_supplier_table
     - workspace.verify_block
     # Quarantine
     - quarantine.list

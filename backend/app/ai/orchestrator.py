@@ -7,17 +7,19 @@ The existing AgentSession remains the tool-calling executor.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import httpx
 from pydantic import BaseModel, Field
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession
 from app.ai.router import ai_router
 from app.ai.schemas import AIRequest, AITask, ChatMessage
-from app.domain.workspace import get_workspace_block, list_workspace_blocks
+from app.domain.workspace import get_workspace_block, list_workspace_blocks, upsert_workspace_block
 
 SendFn = Callable[[dict], Awaitable[None]]
 
@@ -91,6 +93,19 @@ class CapabilityGapRequest(BaseModel):
     builder_model: str | None = None
 
 
+class CapabilityBuildDraft(BaseModel):
+    title: str
+    tool_name: str
+    endpoint_path: str
+    method: str = "POST"
+    skill_registry_entry: dict[str, Any] = Field(default_factory=dict)
+    request_schema: dict[str, Any] = Field(default_factory=dict)
+    response_schema: dict[str, Any] = Field(default_factory=dict)
+    implementation_plan: list[str] = Field(default_factory=list)
+    validation_plan: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
 @dataclass
 class _TurnTrace:
     workspace_events: list[dict[str, Any]] = field(default_factory=list)
@@ -112,9 +127,11 @@ class AgentOrchestrator:
         self._outer_send = send
         self._trace = _TurnTrace()
         self._workspace_before: dict[str, str] = {}
+        self._history: list[dict[str, str]] = []
         self._executor = AgentSession(self._send_from_executor)
 
     def hydrate_history(self, messages: list[dict[str, str]]) -> None:
+        self._history = list(messages[-20:])
         self._executor.hydrate_history(messages)
 
     async def on_approval(self, approved: bool) -> None:
@@ -132,9 +149,31 @@ class AgentOrchestrator:
         await self._announce_plan(plan)
         await self._executor.on_user_message(content)
         audit = await self._audit_turn(plan, config)
+        retry_count = 0
+        while (
+            not audit.passed
+            and retry_count < config.max_audit_retries
+            and self._can_retry_with_executor(plan, audit)
+        ):
+            retry_count += 1
+            await self._outer_send({
+                "type": "audit.retry_started",
+                "content": "Аудит: инструмент/вывод не соответствуют задаче, запускаю исправление.",
+                "audit": audit.model_dump(mode="json"),
+            })
+            self._trace = _TurnTrace()
+            self._workspace_before = _workspace_updated_at_snapshot()
+            await self._executor.on_user_message(_build_correction_request(plan, audit))
+            audit = await self._audit_turn(plan, config)
+        if not audit.passed:
+            repaired = await self._try_execute_planned_workspace_tool(plan, audit, config)
+            if repaired:
+                audit = await self._audit_turn(plan, config)
         await self._publish_audit(audit)
         if not audit.passed and self._should_report_capability_gap(plan, audit, config):
             await self._publish_capability_gap(plan, audit, config)
+        self._history.append({"role": "user", "content": content})
+        self._history = self._history[-20:]
         await self._outer_send({"type": "done"})
 
     async def _plan_turn_with_model(
@@ -145,6 +184,7 @@ class AgentOrchestrator:
         prompt = _build_orchestrator_prompt(
             content=content,
             fallback_plan=self._plan_turn(content),
+            history=self._history,
         )
         try:
             response = await ai_router.run(
@@ -215,13 +255,16 @@ class AgentOrchestrator:
                 "workspace.invoice_table",
                 "workspace.invoice_items_table",
                 "workspace.invoice_items_grouped_table",
+                "workspace.invoice_items_by_supplier_table",
             ]
             if any(
                 token in text
                 for token in ("товар", "позици", "номенклатур", "материал", "столб", "колон")
             ):
                 canvas_id = "agent:invoice-items"
-                if "групп" in text or ("поставщик" in text and _is_table_edit_request(text)):
+                if "по поставщик" in text or "поставщикам" in text:
+                    canvas_id = "agent:invoice-items-by-supplier"
+                elif "групп" in text or ("поставщик" in text and _is_table_edit_request(text)):
                     canvas_id = "agent:invoice-items-grouped"
             else:
                 canvas_id = "agent:invoice-list"
@@ -316,6 +359,45 @@ class AgentOrchestrator:
                 issues.append("Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.")
             if _looks_like_chat_table(self._trace.final_text):
                 issues.append("Табличный результат попал в чат вместо Рабочего стола.")
+            expected_canvas = plan.workspace.canvas_id
+            published_canvas_ids = {
+                str(canvas_id)
+                for canvas_id in (_event_canvas_id(event) for event in self._trace.workspace_events)
+                if canvas_id
+            }
+            if (
+                expected_canvas
+                and published_canvas_ids
+                and expected_canvas not in published_canvas_ids
+            ):
+                issues.append(
+                    "Использован неправильный workspace-блок: "
+                    f"ожидался {expected_canvas}, опубликовано {sorted(published_canvas_ids)}."
+                )
+
+        expected_from_canvas = _expected_workspace_skill_for_canvas(plan.workspace.canvas_id)
+        expected_workspace_skills = (
+            {expected_from_canvas.replace(".", "__")}
+            if expected_from_canvas
+            else {
+                skill.replace(".", "__")
+                for skill in plan.worker.recommended_skills
+                if skill.startswith("workspace.")
+            }
+        )
+        used_workspace_skills = {
+            tool for tool in self._trace.tool_calls if tool.startswith("workspace__")
+        }
+        if (
+            expected_workspace_skills
+            and used_workspace_skills
+            and not expected_workspace_skills.intersection(used_workspace_skills)
+        ):
+            issues.append(
+                "Исполнитель выбрал инструмент вне плана: "
+                f"ожидались {sorted(expected_workspace_skills)}, "
+                f"использованы {sorted(used_workspace_skills)}."
+            )
 
         for item in self._trace.tool_results:
             result = item.get("result")
@@ -377,7 +459,107 @@ class AgentOrchestrator:
             return False
         if any("Unknown skill" in issue for issue in audit.issues):
             return True
+        if any("неправильный workspace-блок" in issue for issue in audit.issues):
+            return True
+        if any("инструмент вне плана" in issue for issue in audit.issues):
+            return True
         return plan.workspace.required and not audit.workspace_verified
+
+    def _can_retry_with_executor(self, plan: OrchestratorPlan, audit: AuditReport) -> bool:
+        if not plan.workspace.required:
+            return False
+        if not plan.worker.recommended_skills:
+            return False
+        if any("Unknown skill" in issue for issue in audit.issues):
+            return False
+        return any(
+            marker in issue
+            for issue in audit.issues
+            for marker in (
+                "не подтверждена",
+                "неправильный workspace-блок",
+                "инструмент вне плана",
+            )
+        )
+
+    async def _try_execute_planned_workspace_tool(
+        self,
+        plan: OrchestratorPlan,
+        audit: AuditReport,
+        config: BuiltinAgentConfig,
+    ) -> bool:
+        if not plan.workspace.required:
+            return False
+        if not any(
+            marker in issue
+            for issue in audit.issues
+            for marker in (
+                "не подтверждена",
+                "неправильный workspace-блок",
+                "инструмент вне плана",
+            )
+        ):
+            return False
+        spec = _workspace_tool_spec_for_plan(plan)
+        if not spec:
+            return False
+
+        self._trace = _TurnTrace()
+        self._workspace_before = _workspace_updated_at_snapshot()
+        await self._outer_send({
+            "type": "orchestrator.direct_tool_started",
+            "content": (
+                "Оркестратор: исполнитель выбрал не тот инструмент, "
+                "запускаю правильный workspace tool напрямую."
+            ),
+            "tool": spec["tool"],
+            "args": spec["args"],
+        })
+        await self._record_orchestrator_tool_event({
+            "type": "tool_call",
+            "tool": spec["tool"],
+            "args": spec["args"],
+        })
+        try:
+            async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                resp = await client.post(
+                    f"{config.backend_url.rstrip('/')}{spec['path']}",
+                    json=spec["args"],
+                )
+            if resp.status_code >= 400:
+                await self._record_orchestrator_tool_event({
+                    "type": "tool_result",
+                    "tool": spec["tool"],
+                    "result": {
+                        "error": f"HTTP {resp.status_code}",
+                        "detail": resp.text[:300],
+                    },
+                })
+                return False
+            result = resp.json()
+        except Exception as exc:
+            await self._record_orchestrator_tool_event({
+                "type": "tool_result",
+                "tool": spec["tool"],
+                "result": {"error": str(exc)},
+            })
+            return False
+
+        await self._record_orchestrator_tool_event({
+            "type": "tool_result",
+            "tool": spec["tool"],
+            "result": result,
+        })
+        message = str(result.get("message") or "") if isinstance(result, dict) else ""
+        if message:
+            await self._record_orchestrator_tool_event({
+                "type": "text",
+                "content": message,
+            })
+        return True
+
+    async def _record_orchestrator_tool_event(self, event: dict[str, Any]) -> None:
+        await self._send_from_executor(event)
 
     async def _publish_capability_gap(
         self,
@@ -398,13 +580,73 @@ class AgentOrchestrator:
         await self._outer_send({
             "type": "capability_gap.detected",
             "content": (
-                "Оркестратор: обнаружил недостающую возможность. "
-                "Подготовлю проект инструмента/скилла только после подтверждения."
-            )
-            if config.capability_builder_requires_approval
-            else "Оркестратор: обнаружил недостающую возможность и подготовлю draft.",
+                "Оркестратор: обнаружил недостающую исполнимую возможность. "
+                "Передаю задачу builder-модели и готовлю новый tool/skill draft."
+            ),
             "gap": gap.model_dump(mode="json"),
         })
+        draft = await self._build_capability_draft(gap, plan, config)
+        await self._outer_send({
+            "type": "capability_gap.builder_draft",
+            "content": "Builder: подготовил проект недостающего инструмента и skill-записи.",
+            "draft": draft.model_dump(mode="json"),
+        })
+        upsert_workspace_block(
+            "agent:capability-builder-draft",
+            {
+                "id": "agent:capability-builder-draft",
+                "type": "markdown",
+                "title": "Проект недостающей возможности",
+                "content": _format_capability_draft_markdown(draft),
+                "source": "orchestrator.capability_builder",
+            },
+        )
+        await self._outer_send({
+            "type": "workspace.updated",
+            "canvas_id": "agent:capability-builder-draft",
+        })
+
+    async def _build_capability_draft(
+        self,
+        gap: CapabilityGapRequest,
+        plan: OrchestratorPlan,
+        config: BuiltinAgentConfig,
+    ) -> CapabilityBuildDraft:
+        prompt = (
+            "Нужно спроектировать недостающий backend tool и AiAgent skill.\n"
+            f"Gap: {gap.model_dump(mode='json')}\n"
+            f"Plan: {plan.model_dump(mode='json')}\n"
+            f"Used tools: {self._trace.tool_calls}\n"
+            f"Errors: {self._trace.errors}\n"
+            "Верни CapabilityBuildDraft JSON. Не пиши prose вне JSON."
+        )
+        try:
+            response = await ai_router.run(
+                AIRequest(
+                    task=AITask.CLASSIFICATION,
+                    messages=[
+                        ChatMessage(
+                            role="system",
+                            content=(
+                                "Ты builder-инженер. Проектируешь недостающие "
+                                "FastAPI tools, workspace templates и AiAgent skills."
+                            ),
+                        ),
+                        ChatMessage(role="user", content=prompt),
+                    ],
+                    response_schema=CapabilityBuildDraft,
+                    confidential=True,
+                    allow_cloud=False,
+                    preferred_model=_registry_model_name(
+                        config.builder_model or config.orchestrator_model
+                    ),
+                )
+            )
+            if isinstance(response.data, CapabilityBuildDraft):
+                return response.data
+        except Exception:
+            pass
+        return _fallback_capability_draft(gap, plan)
 
 
 def _norm(text: str) -> str:
@@ -415,6 +657,7 @@ def _build_orchestrator_prompt(
     *,
     content: str,
     fallback_plan: OrchestratorPlan,
+    history: list[dict[str, str]],
 ) -> str:
     blocks = list_workspace_blocks()[:8]
     workspace_summary = [
@@ -433,6 +676,8 @@ def _build_orchestrator_prompt(
         if isinstance(block, dict)
     ]
     return (
+        "Последние сообщения диалога:\n"
+        f"{history[-12:]}\n\n"
         "Запрос пользователя:\n"
         f"{content[:2000]}\n\n"
         "Текущие блоки Рабочего стола:\n"
@@ -452,11 +697,19 @@ def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorP
     if workspace_required and output_type == "text":
         output_type = "table" if _is_table_edit_request(text) else "document"
     canvas_id = plan.workspace.canvas_id
+    recommended_skills = list(plan.worker.recommended_skills)
+    if _is_supplier_grouping_request(text):
+        workspace_required = True
+        output_type = "table"
+        canvas_id = "agent:invoice-items-by-supplier"
+        if "workspace.invoice_items_by_supplier_table" not in recommended_skills:
+            recommended_skills.insert(0, "workspace.invoice_items_by_supplier_table")
     if workspace_required and not canvas_id:
         canvas_id = _fallback_canvas_id(content)
     return plan.model_copy(
         update={
             "goal": plan.goal or content[:500],
+            "worker": plan.worker.model_copy(update={"recommended_skills": recommended_skills}),
             "workspace": plan.workspace.model_copy(
                 update={
                     "channel": "workspace" if workspace_required else plan.workspace.channel,
@@ -492,6 +745,8 @@ def _fallback_canvas_id(content: str) -> str | None:
         if latest_table:
             return latest_table
     if any(token in text for token in ("товар", "позици", "номенклатур", "материал")):
+        if "по поставщик" in text or "поставщикам" in text:
+            return "agent:invoice-items-by-supplier"
         return "agent:invoice-items-grouped" if "групп" in text else "agent:invoice-items"
     if _is_table_edit_request(text) and any(token in text for token in ("поставщик", "счет")):
         return "agent:invoice-items-grouped"
@@ -500,6 +755,155 @@ def _fallback_canvas_id(content: str) -> str | None:
     if any(token in text for token in ("склад", "остат", "тмц")):
         return "agent:warehouse-list"
     return None
+
+
+def _is_supplier_grouping_request(text: str) -> bool:
+    return any(
+        token in text
+        for token in ("по поставщик", "по поставщикам", "по поставщиках", "поставщикам")
+    ) and any(
+        token in text
+        for token in ("товар", "позици", "номенклатур", "материал", "тмц")
+    )
+
+
+def _expected_workspace_skill_for_canvas(canvas_id: str | None) -> str | None:
+    mapping = {
+        "agent:invoice-list": "workspace.invoice_table",
+        "agent:invoice-items": "workspace.invoice_items_table",
+        "agent:invoice-items-grouped": "workspace.invoice_items_grouped_table",
+        "agent:invoice-items-by-supplier": "workspace.invoice_items_by_supplier_table",
+    }
+    return mapping.get(canvas_id or "")
+
+
+def _workspace_tool_spec_for_plan(plan: OrchestratorPlan) -> dict[str, Any] | None:
+    skill = _expected_workspace_skill_for_canvas(plan.workspace.canvas_id)
+    if not skill:
+        return None
+    tool = skill.replace(".", "__")
+    canvas_id = plan.workspace.canvas_id
+    specs: dict[str, dict[str, Any]] = {
+        "workspace.invoice_table": {
+            "tool": tool,
+            "path": "/api/workspace/agent/invoices/table",
+            "args": {
+                "canvas_id": canvas_id,
+                "limit": 5000,
+                "include_delete_actions": True,
+            },
+        },
+        "workspace.invoice_items_table": {
+            "tool": tool,
+            "path": "/api/workspace/agent/invoices/items-table",
+            "args": {
+                "canvas_id": canvas_id,
+                "limit": 10000,
+                "include_invoice_actions": True,
+            },
+        },
+        "workspace.invoice_items_grouped_table": {
+            "tool": tool,
+            "path": "/api/workspace/agent/invoices/items-grouped-table",
+            "args": {
+                "canvas_id": canvas_id,
+                "limit": 5000,
+                "include_supplier": False,
+            },
+        },
+        "workspace.invoice_items_by_supplier_table": {
+            "tool": tool,
+            "path": "/api/workspace/agent/invoices/items-by-supplier-table",
+            "args": {
+                "canvas_id": canvas_id,
+                "limit": 10000,
+            },
+        },
+    }
+    return specs.get(skill)
+
+
+def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str:
+    skill_hint = ", ".join(plan.worker.recommended_skills)
+    return (
+        "Исправь предыдущий результат. Аудит нашел несоответствие:\n"
+        f"{'; '.join(audit.issues)}\n\n"
+        "Требования оркестратора:\n"
+        f"- цель: {plan.goal}\n"
+        f"- канал: {plan.workspace.channel}\n"
+        f"- тип вывода: {plan.workspace.output_type}\n"
+        f"- canvas_id: {plan.workspace.canvas_id}\n"
+        f"- используй один из рекомендованных skills: {skill_hint}\n"
+        "Не отвечай только текстом, если требуется Рабочий стол. "
+        "Опубликуй исправленный rich-вывод и дождись tool result."
+    )
+
+
+def _fallback_capability_draft(
+    gap: CapabilityGapRequest,
+    plan: OrchestratorPlan,
+) -> CapabilityBuildDraft:
+    base_name = (plan.intent or "generated_capability").replace(".", "_")
+    tool_name = f"workspace.{base_name}_tool"
+    return CapabilityBuildDraft(
+        title=f"Draft: {gap.missing_capability}",
+        tool_name=tool_name,
+        endpoint_path=f"/api/workspace/agent/generated/{base_name}",
+        method="POST",
+        skill_registry_entry={
+            "name": tool_name,
+            "category": "workspace" if plan.workspace.required else "agent",
+            "method": "POST",
+            "path": f"/api/workspace/agent/generated/{base_name}",
+            "approval_required": False,
+        },
+        request_schema={
+            "type": "object",
+            "properties": {
+                "canvas_id": {"type": "string", "default": plan.workspace.canvas_id},
+                "limit": {"type": "integer", "default": 5000},
+            },
+        },
+        response_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "canvas_id": {"type": "string"},
+                "message": {"type": "string"},
+            },
+        },
+        implementation_plan=[
+            "Add typed request/response model to the relevant FastAPI router.",
+            "Query SQL/vector/graph data required by the user request.",
+            "Build a stable Workspace block schema and upsert it to the existing Workspace.",
+            "Register the tool in AiAgent registry and gateway exposed skills.",
+            "Add regression tests for data correctness and workspace publication.",
+        ],
+        validation_plan=[
+            "Verify the tool returns a canvas_id and updates the Workspace block updated_at.",
+            "Run ruff, targeted pytest, and strict AiAgent contract check.",
+        ],
+        notes=gap.reason,
+    )
+
+
+def _format_capability_draft_markdown(draft: CapabilityBuildDraft) -> str:
+    return "\n\n".join([
+        f"# {draft.title}",
+        f"Tool: `{draft.tool_name}`",
+        f"Endpoint: `{draft.method} {draft.endpoint_path}`",
+        "## Skill registry entry\n"
+        f"```json\n{json.dumps(draft.skill_registry_entry, ensure_ascii=False, indent=2)}\n```",
+        "## Request schema\n"
+        f"```json\n{json.dumps(draft.request_schema, ensure_ascii=False, indent=2)}\n```",
+        "## Response schema\n"
+        f"```json\n{json.dumps(draft.response_schema, ensure_ascii=False, indent=2)}\n```",
+        "## Implementation plan\n"
+        + "\n".join(f"- {item}" for item in draft.implementation_plan),
+        "## Validation plan\n"
+        + "\n".join(f"- {item}" for item in draft.validation_plan),
+        f"## Notes\n{draft.notes}",
+    ])
 
 
 def _latest_workspace_table_id() -> str | None:

@@ -5975,6 +5975,14 @@
       "approval_required": false
     },
     {
+      "name": "workspace.invoice_items_by_supplier_table",
+      "description": "Skill: workspace.invoice_items_by_supplier_table — Group invoice items by supplier.",
+      "category": "workspace",
+      "method": "POST",
+      "path": "/api/workspace/agent/invoices/items-by-supplier-table",
+      "approval_required": false
+    },
+    {
       "name": "mailbox.create",
       "description": "Skill: mailbox.create — Add a new IMAP/SMTP mailbox configuration.",
       "category": "mailbox",

@@ -26,6 +26,9 @@
 - For a full invoice table, prefer `workspace.invoice_table` over raw `invoice.list`; it is the orchestrator tool that queries SQL and fills the existing Workspace section.
 - For invoice goods/items/lines/materials, use `workspace.invoice_items_table`; do not answer with the invoice header table.
 - For invoice goods grouped by invoice, items in one cell, or line breaks inside the items cell, use `workspace.invoice_items_grouped_table`.
+- For invoice goods grouped by supplier/vendor/provider, use
+  `workspace.invoice_items_by_supplier_table`; do not use invoice grouping for
+  supplier grouping.
 - If the current grouped invoice-goods table needs a supplier column, call
   `workspace.invoice_items_grouped_table` again with `include_supplier=true`
   and the same `canvas_id=agent:invoice-items-grouped`.

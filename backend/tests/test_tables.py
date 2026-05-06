@@ -141,6 +141,35 @@ async def test_export_1c(client: AsyncClient, sample_invoice):
 
 
 @pytest.mark.asyncio
+async def test_workspace_invoice_items_by_supplier_table(client: AsyncClient, sample_invoice):
+    resp = await client.post(
+        "/api/workspace/agent/invoices/items-by-supplier-table",
+        json={"limit": 100},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "published"
+    assert data["shown"] >= 1
+    assert "поставщик" in data["message"].lower()
+
+    block_resp = await client.get("/api/workspace/blocks/agent%3Ainvoice-items-by-supplier")
+    assert block_resp.status_code == 200
+    block = block_resp.json()
+    assert block["source"] == "workspace.invoice_items_by_supplier_table"
+    assert [column["key"] for column in block["columns"]] == [
+        "index",
+        "supplier",
+        "invoice_count",
+        "items",
+        "total_amount",
+    ]
+    row = next(row for row in block["rows"] if row["supplier"] == "ТестПоставщик")
+    assert "Деталь А" in row["items"]
+    assert "счет T-100" in row["items"]
+
+
+@pytest.mark.asyncio
 async def test_inline_edit(client: AsyncClient, sample_invoice):
     resp = await client.post("/api/tables/inline-edit", json={
         "entity_id": str(sample_invoice.id),

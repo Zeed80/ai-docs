@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -46,6 +48,11 @@ class WorkspaceInvoiceItemsGroupedTableRequest(BaseModel):
     canvas_id: str = "agent:invoice-items-grouped"
     limit: int = 5000
     include_supplier: bool = False
+
+
+class WorkspaceInvoiceItemsBySupplierTableRequest(BaseModel):
+    canvas_id: str = "agent:invoice-items-by-supplier"
+    limit: int = 10000
 
 
 class WorkspaceToolResponse(BaseModel):
@@ -283,6 +290,78 @@ async def publish_invoice_items_grouped_table(
     )
 
 
+@router.post("/agent/invoices/items-by-supplier-table", response_model=WorkspaceToolResponse)
+async def publish_invoice_items_by_supplier_table(
+    payload: WorkspaceInvoiceItemsBySupplierTableRequest,
+    db: AsyncSession = Depends(get_db),
+) -> WorkspaceToolResponse:
+    """Skill: workspace.invoice_items_by_supplier_table — Group invoice items by supplier."""
+    await _publish_workspace_status("Готовлю шаблон: товары сгруппированы по поставщикам")
+    await _publish_workspace_status("Загружаю поставщиков, счета и строки товаров из БД")
+
+    result = await db.execute(
+        select(InvoiceLine, Invoice)
+        .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
+        .options(selectinload(Invoice.supplier))
+        .order_by(Invoice.created_at.desc(), InvoiceLine.line_number.asc())
+        .limit(min(max(payload.limit, 1), 10000))
+    )
+    groups: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "supplier": "",
+            "invoice_ids": set(),
+            "items": [],
+            "total": Decimal("0"),
+        }
+    )
+    total_lines = 0
+    for line, invoice in result.all():
+        total_lines += 1
+        supplier_name = invoice.supplier.name if invoice.supplier else "Без поставщика"
+        group = groups[supplier_name]
+        group["supplier"] = supplier_name
+        group["invoice_ids"].add(str(invoice.id))
+        group["items"].append(_format_supplier_grouped_item_line(line, invoice))
+        if line.amount is not None:
+            group["total"] += Decimal(str(line.amount))
+
+    rows = [
+        _invoice_items_by_supplier_workspace_row(group, index)
+        for index, group in enumerate(
+            sorted(groups.values(), key=lambda item: str(item["supplier"]).lower()),
+            start=1,
+        )
+    ]
+
+    await _publish_workspace_status("Публикую таблицу товаров по поставщикам на Рабочий стол")
+    block = {
+        "id": payload.canvas_id,
+        "type": "table",
+        "title": f"Товары, сгруппированные по поставщикам ({len(rows)})",
+        "columns": _invoice_items_by_supplier_columns(),
+        "rows": rows,
+        "source": "workspace.invoice_items_by_supplier_table",
+        "source_agent_role": "invoice_specialist",
+        "audit_status": "pending",
+    }
+    stored = upsert_workspace_block(payload.canvas_id, block)
+    await chat_bus.publish({
+        "type": "workspace.updated",
+        "canvas_id": payload.canvas_id,
+        "block": stored,
+    })
+    return WorkspaceToolResponse(
+        status="published",
+        canvas_id=payload.canvas_id,
+        total=len(rows),
+        shown=len(rows),
+        message=(
+            "Открыл на Рабочем столе таблицу товаров, сгруппированных по поставщикам: "
+            f"{len(rows)} поставщиков, {total_lines} строк товаров."
+        ),
+    )
+
+
 def _invoice_columns(*, include_delete: bool) -> list[dict[str, Any]]:
     columns: list[dict[str, Any]] = [
         {"key": "index", "header": "№", "type": "number", "width": 56},
@@ -313,6 +392,16 @@ def _invoice_items_grouped_columns(*, include_supplier: bool = False) -> list[di
     if include_supplier:
         columns.insert(1, {"key": "supplier", "header": "Поставщик", "type": "text"})
     return columns
+
+
+def _invoice_items_by_supplier_columns() -> list[dict[str, Any]]:
+    return [
+        {"key": "index", "header": "№", "type": "number", "width": 56},
+        {"key": "supplier", "header": "Поставщик", "type": "text"},
+        {"key": "invoice_count", "header": "Счетов", "type": "number", "width": 80},
+        {"key": "items", "header": "Товары по счетам", "type": "text"},
+        {"key": "total_amount", "header": "Сумма товаров", "type": "number"},
+    ]
 
 
 def _invoice_item_columns(*, include_invoice_actions: bool) -> list[dict[str, Any]]:
@@ -412,6 +501,37 @@ def _format_grouped_item_line(line: InvoiceLine) -> str:
     else:
         suffix = ""
     return f"{description}{suffix}".strip()
+
+
+def _format_supplier_grouped_item_line(line: InvoiceLine, invoice: Invoice) -> str:
+    invoice_number = invoice.invoice_number or str(invoice.id)
+    invoice_date = _format_date(invoice.invoice_date)
+    description = (line.description or line.sku or "").strip()
+    quantity = _format_number(line.quantity)
+    unit = (line.unit or "").strip()
+    amount = _format_money(line.amount)
+    parts = [f"счет {invoice_number}"]
+    if invoice_date:
+        parts.append(f"от {invoice_date}")
+    prefix = " ".join(parts)
+    quantity_text = f" — {quantity} {unit}".rstrip() if quantity else ""
+    amount_text = f"; сумма {amount}" if amount else ""
+    return f"{prefix}: {description}{quantity_text}{amount_text}".strip()
+
+
+def _invoice_items_by_supplier_workspace_row(
+    group: dict[str, Any],
+    index: int,
+) -> dict[str, Any]:
+    invoice_ids = group.get("invoice_ids")
+    items = group.get("items")
+    return {
+        "index": index,
+        "supplier": str(group.get("supplier") or ""),
+        "invoice_count": len(invoice_ids) if isinstance(invoice_ids, set) else 0,
+        "items": "\n".join(item for item in items if item) if isinstance(items, list) else "",
+        "total_amount": _format_money(group.get("total")),
+    }
 
 
 def _invoice_item_workspace_row(
