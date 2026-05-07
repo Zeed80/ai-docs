@@ -1081,6 +1081,7 @@ export default function SettingsPage() {
 
   async function handleResetAgentConfig() {
     setAgentSaving(true);
+    setAgentError(null);
     try {
       const r = await fetch(`${API}/api/ai/agent-config/reset`, {
         method: "POST",
@@ -1095,6 +1096,37 @@ export default function SettingsPage() {
       setAgentSaved(true);
       setTimeout(() => setAgentSaved(false), 2000);
     } catch {}
+    setAgentSaving(false);
+  }
+
+  async function handleApplyStableLocalPreset() {
+    setAgentSaving(true);
+    setAgentError(null);
+    try {
+      const response = await fetch(
+        `${API}/api/ai/agent-config/presets/stable-local`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail || `HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      setAgentConfig(data);
+      setAgentConfigBaseline(data);
+      await loadConfig();
+      await loadAgentSkills();
+      await loadAgentControlPlane();
+      await loadAgentConfigProposals();
+      setAgentSaved(true);
+      setTimeout(() => setAgentSaved(false), 2000);
+    } catch (error) {
+      setAgentError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось применить стабильный локальный режим",
+      );
+    }
     setAgentSaving(false);
   }
 
@@ -1765,6 +1797,29 @@ export default function SettingsPage() {
                         Требовать подтверждение перед builder-режимом
                       </span>
                     </label>
+                  </div>
+
+                  <div className="rounded-md border border-emerald-800/50 bg-emerald-950/20 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-emerald-200">
+                          Стабильный локальный режим
+                        </div>
+                        <div className="mt-1 text-xs text-emerald-100/70">
+                          3 модели: малая для оркестратора, основная для
+                          исполнителей и аудитора, большая только для builder и
+                          сложных задач.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={agentSaving}
+                        onClick={handleApplyStableLocalPreset}
+                        className="rounded bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+                      >
+                        Применить режим
+                      </button>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 gap-4">

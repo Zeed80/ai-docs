@@ -289,6 +289,55 @@ def _get_agent_provider(
     return config.provider or "ollama"
 
 
+def _is_builder_turn(messages: list[dict]) -> bool:
+    latest_user = next(
+        (
+            str(m.get("content") or "")
+            for m in reversed(messages)
+            if m.get("role") == "user"
+        ),
+        "",
+    ).lower()
+    if not latest_user:
+        return False
+    builder_markers = (
+        "skill",
+        "скилл",
+        "tool",
+        "инструмент",
+        "capability",
+        "возможност",
+        "plugin",
+        "плагин",
+        "script",
+        "скрипт",
+        "api",
+        "endpoint",
+        "код",
+        "реализуй",
+        "доработай",
+        "создай",
+    )
+    return any(marker in latest_user for marker in builder_markers)
+
+
+def _turn_model_overrides(
+    config: BuiltinAgentConfig,
+    messages: list[dict],
+) -> tuple[str | None, str | None, bool | None]:
+    if _is_builder_turn(messages):
+        return (
+            config.builder_model or config.worker_model,
+            config.builder_provider or config.worker_provider,
+            config.builder_disable_thinking,
+        )
+    return (
+        config.worker_model,
+        config.worker_provider,
+        config.worker_disable_thinking,
+    )
+
+
 def _thinking_disabled(
     config: BuiltinAgentConfig,
     override: bool | None = None,
@@ -1005,7 +1054,7 @@ class AgentSession:
             None,
             config,
             _collect,
-            model_override=config.worker_model,
+            model_override=model,
             provider_override=config.worker_provider,
             disable_thinking_override=config.worker_disable_thinking,
         )
@@ -1564,15 +1613,19 @@ class AgentSession:
                 async def on_token(token: str) -> None:
                     accumulated_text.append(token)
 
+                model_override, provider_override, disable_thinking = _turn_model_overrides(
+                    self._config,
+                    self.messages,
+                )
                 message = await _call_provider_streaming(
                     self.messages,
                     self._tools,
                     self._system,
                     self._config,
                     on_token,
-                    model_override=self._config.worker_model,
-                    provider_override=self._config.worker_provider,
-                    disable_thinking_override=self._config.worker_disable_thinking,
+                    model_override=model_override,
+                    provider_override=provider_override,
+                    disable_thinking_override=disable_thinking,
                 )
                 duration_ms = int((time.time() - t_start) * 1000)
                 tool_calls = message.get("tool_calls") or []

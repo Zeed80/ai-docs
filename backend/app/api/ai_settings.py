@@ -308,6 +308,94 @@ async def patch_agent_config(
     return config
 
 
+def _pick_first_installed(
+    installed: set[str],
+    preferred: list[str],
+    fallback: str | None = None,
+) -> str | None:
+    aliases = installed | {name.removesuffix(":latest") for name in installed}
+    for model in preferred:
+        if model in aliases:
+            return model
+    return fallback
+
+
+async def _installed_ollama_model_names() -> set[str]:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{settings.ollama_url}/api/tags")
+            resp.raise_for_status()
+            return {
+                str(item.get("name") or "").strip()
+                for item in resp.json().get("models", [])
+                if str(item.get("name") or "").strip()
+            }
+    except Exception:
+        return set()
+
+
+@router.post("/agent-config/presets/stable-local", response_model=BuiltinAgentConfig)
+async def apply_stable_local_agent_preset() -> BuiltinAgentConfig:
+    """Apply a 3-model local preset: fast orchestrator, main workers, large builder."""
+    current = get_builtin_agent_config()
+    installed = await _installed_ollama_model_names()
+    orchestrator_model = _pick_first_installed(
+        installed,
+        ["gemma4:e2b", "nemotron-3-nano:latest", "gemma4:e4b", "qwen3.5:9b"],
+        current.orchestrator_model or current.fast_model or current.model,
+    )
+    main_model = _pick_first_installed(
+        installed,
+        ["qwen3.5:9b", "ministral-3:8b", "gemma4:e4b", "gemma4:e2b"],
+        current.worker_model or current.model,
+    )
+    large_model = _pick_first_installed(
+        installed,
+        [
+            "qwen3.6:35b",
+            "fredrezones55/Qwen3.6-35B-A3B-APEX:Compact",
+            "gemma4:31b",
+            "granite4.1:30b",
+        ],
+        current.builder_model or current.model,
+    )
+    config = update_builtin_agent_config(
+        BuiltinAgentConfigUpdate(
+            provider="ollama",
+            model=main_model,
+            orchestrator_provider="ollama",
+            orchestrator_model=orchestrator_model,
+            worker_provider="ollama",
+            worker_model=main_model,
+            auditor_provider="ollama",
+            auditor_model=main_model,
+            builder_provider="ollama",
+            builder_model=large_model,
+            fast_provider="ollama",
+            fast_model=orchestrator_model,
+            compression_model=main_model,
+            fallback_providers=[],
+            disable_thinking=True,
+            orchestrator_disable_thinking=True,
+            worker_disable_thinking=True,
+            auditor_disable_thinking=True,
+            builder_disable_thinking=False,
+            fast_disable_thinking=True,
+            department_enabled=True,
+            audit_enabled=True,
+            context_compression_enabled=True,
+        )
+    )
+    _sync_ai_model_agent(config.model)
+    logger.info(
+        "builtin_agent_stable_local_preset_applied",
+        orchestrator_model=orchestrator_model,
+        main_model=main_model,
+        large_model=large_model,
+    )
+    return config
+
+
 @router.post("/agent-config/reset", response_model=BuiltinAgentConfig)
 async def reset_agent_config() -> BuiltinAgentConfig:
     config = reset_builtin_agent_config()
