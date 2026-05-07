@@ -133,6 +133,8 @@ services:
   # === AI (Local) ===
   ollama:
     image: ollama/ollama:latest
+    profiles:
+      - embedded-ollama
     volumes:
       - ollama_data:/root/.ollama
     # Host 11434 is often already taken by a system Ollama — publish on 11435 instead
