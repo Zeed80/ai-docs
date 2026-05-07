@@ -2,28 +2,28 @@
 http:
   routers:
     frontend:
-      rule: "Host(`localhost`)"
+      rule: "PathPrefix(`/`)"
       service: frontend
       entryPoints:
         - web
       priority: 1
 
     backend-api:
-      rule: "Host(`localhost`) && PathPrefix(`/api`)"
+      rule: "PathPrefix(`/api`)"
       service: backend
       entryPoints:
         - web
       priority: 100
 
     backend-ws:
-      rule: "Host(`localhost`) && PathPrefix(`/ws`)"
+      rule: "PathPrefix(`/ws`)"
       service: backend
       entryPoints:
         - web
       priority: 100
 
     backend-health:
-      rule: "Host(`localhost`) && Path(`/health`)"
+      rule: "Path(`/health`)"
       service: backend
       entryPoints:
         - web

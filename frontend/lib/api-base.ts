@@ -14,15 +14,20 @@ function configuredApiUrl(): string {
   );
 }
 
+function configuredWsUrl(): string {
+  return process.env.NEXT_PUBLIC_WS_URL?.trim() || "";
+}
+
 export function getApiBaseUrl(): string {
   const configured = configuredApiUrl();
 
   if (typeof window === "undefined") return configured || "http://backend:8000";
-  if (!configured) return "";
+  if (!configured || configured === "same-origin") return "";
 
   try {
     const url = new URL(configured);
-    if (isLocalHost(url.hostname) && url.port === "8000") {
+    const currentHost = window.location.hostname;
+    if (isLocalHost(url.hostname) && (!isLocalHost(currentHost) || url.port === "8000")) {
       return "";
     }
     return configured;
@@ -32,13 +37,24 @@ export function getApiBaseUrl(): string {
 }
 
 export function getWebSocketBaseUrl(): string {
+  const configured = configuredWsUrl();
   if (typeof window === "undefined") {
-    return (getApiBaseUrl() || "http://backend:8000").replace(/^https?/, (p) =>
+    return (configured || getApiBaseUrl() || "http://backend:8000").replace(/^https?/, (p) =>
       p === "https" ? "wss" : "ws",
     );
   }
 
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  if (configured && configured !== "same-origin") {
+    try {
+      const url = new URL(configured);
+      if (!isLocalHost(url.hostname) || isLocalHost(window.location.hostname)) {
+        return configured.replace(/^http/, "ws");
+      }
+    } catch {
+      // Fall through to same-origin.
+    }
+  }
   const apiBase = getApiBaseUrl();
   if (!apiBase) return `${proto}//${window.location.host}`;
   const apiUrl = new URL(apiBase);

@@ -346,7 +346,7 @@ export const drawingsApi = {
   },
 
   getSvgUrl(id: string): string {
-    return `${process.env.NEXT_PUBLIC_API_URL || ""}/api/drawings/${id}/svg`;
+    return `${API_BASE()}/api/drawings/${id}/svg`;
   },
 
   // Features
