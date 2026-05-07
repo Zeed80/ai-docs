@@ -172,6 +172,7 @@ def _is_table_edit_request(text: str) -> bool:
             "добавь столб", "добавить столб", "добавь колон", "добавить колон",
             "убери столб", "убрать столб", "убери колон", "убрать колон",
             "перед номер", "после номер", "перестав", "отсортируй",
+            "оставь только", "оставить только", "только от",
         )
     )
 
@@ -179,6 +180,22 @@ def _is_table_edit_request(text: str) -> bool:
 def _wants_supplier_column(text: str) -> bool:
     t = _normalize_ru_yo((text or "").lower())
     return "поставщик" in t or "поставщика" in t
+
+
+def _extract_supplier_filter(text: str) -> str | None:
+    normalized = _normalize_ru_yo((text or "").strip())
+    quoted = re.search(r"[\"«„](.+?)[\"»“]", normalized)
+    if quoted:
+        return quoted.group(1).strip()
+    match = re.search(
+        r"(?:оставь\s+только\s+от|оставить\s+только\s+от|только\s+от)\s+(.+)$",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    supplier = re.sub(r"[.!?]+$", "", match.group(1)).strip()
+    return supplier or None
 
 
 def _mentions_frez_intent(text: str) -> bool:
@@ -879,47 +896,69 @@ async def _call_provider_streaming(
     ]
 
     last_exc: Exception | None = None
+    transient_errors = (
+        httpx.RemoteProtocolError,
+        httpx.ReadError,
+        httpx.ConnectError,
+        httpx.PoolTimeout,
+    )
     for p in providers_to_try:
-        try:
-            if p == "ollama":
-                return await _call_ollama_streaming(
-                    messages,
-                    tools,
-                    system_prompt,
-                    config,
-                    on_token,
-                    model_override=model_override,
-                    disable_thinking=disable_thinking_override,
-                )
-            elif p in _OPENAI_COMPATIBLE_PROVIDERS:
-                return await _call_openai_streaming(
-                    messages,
-                    tools,
-                    system_prompt,
-                    config,
-                    on_token,
+        attempts = 2 if p == "ollama" else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                if p == "ollama":
+                    return await _call_ollama_streaming(
+                        messages,
+                        tools,
+                        system_prompt,
+                        config,
+                        on_token,
+                        model_override=model_override,
+                        disable_thinking=disable_thinking_override,
+                    )
+                elif p in _OPENAI_COMPATIBLE_PROVIDERS:
+                    return await _call_openai_streaming(
+                        messages,
+                        tools,
+                        system_prompt,
+                        config,
+                        on_token,
+                        provider=p,
+                        model_override=model_override,
+                        disable_thinking=disable_thinking_override,
+                    )
+                elif p == "anthropic":
+                    return await _call_anthropic_streaming(
+                        messages, tools, system_prompt, config, on_token
+                    )
+                else:
+                    logger.warning("unknown_provider_falling_back", provider=p)
+                    return await _call_ollama_streaming(
+                        messages,
+                        tools,
+                        system_prompt,
+                        config,
+                        on_token,
+                        model_override=model_override,
+                        disable_thinking=disable_thinking_override,
+                    )
+            except transient_errors as exc:
+                last_exc = exc
+                logger.warning(
+                    "provider_transient_error",
                     provider=p,
-                    model_override=model_override,
-                    disable_thinking=disable_thinking_override,
+                    attempt=attempt,
+                    attempts=attempts,
+                    error=str(exc),
                 )
-            elif p == "anthropic":
-                return await _call_anthropic_streaming(
-                    messages, tools, system_prompt, config, on_token
-                )
-            else:
-                logger.warning("unknown_provider_falling_back", provider=p)
-                return await _call_ollama_streaming(
-                    messages,
-                    tools,
-                    system_prompt,
-                    config,
-                    on_token,
-                    model_override=model_override,
-                    disable_thinking=disable_thinking_override,
-                )
-        except Exception as exc:
-            last_exc = exc
-            logger.warning("provider_call_failed_trying_fallback", provider=p, error=str(exc))
+                if attempt < attempts:
+                    await asyncio.sleep(0.75 * attempt)
+                    continue
+                break
+            except Exception as exc:
+                last_exc = exc
+                break
+        logger.warning("provider_call_failed_trying_fallback", provider=p, error=str(last_exc))
 
     raise last_exc or RuntimeError("All configured providers failed")
 
@@ -1079,6 +1118,9 @@ class AgentSession:
             and _is_invoice_items_grouped_table_request(prior_text)
         ):
             return await self._publish_invoice_items_grouped_table(include_supplier=True)
+        supplier_filter = _extract_supplier_filter(content)
+        if supplier_filter and _is_invoice_items_table_request(prior_text):
+            return await self._publish_invoice_items_table_for_supplier(supplier_filter)
         return False
 
     async def _try_handle_simple_count_query(self, content: str) -> bool:
@@ -1249,6 +1291,31 @@ class AgentSession:
         await self._send({
             "type": "text",
             "content": message or "Открыл на Рабочем столе таблицу товаров по счетам.",
+        })
+        await self._send({"type": "done"})
+        return True
+
+    async def _publish_invoice_items_table_for_supplier(self, supplier_filter: str) -> bool:
+        await self._send({
+            "type": "status",
+            "content": f"Оркестратор: фильтрую таблицу товаров по поставщику {supplier_filter}",
+        })
+        skill_name = "workspace__invoice_items_table"
+        args = {
+            "canvas_id": _agent_canvas_id("invoice-items"),
+            "limit": 10000,
+            "include_invoice_actions": True,
+            "supplier_query": supplier_filter,
+        }
+        await self._send({"type": "tool_call", "tool": skill_name, "args": args})
+        data = await _publish_invoice_items_table_direct(self._config, args)
+        if data is None:
+            return False
+        await self._send({"type": "tool_result", "tool": skill_name, "result": data})
+        message = str(data.get("message") or "") if isinstance(data, dict) else ""
+        await self._send({
+            "type": "text",
+            "content": message or f"Оставил на Рабочем столе товары поставщика {supplier_filter}.",
         })
         await self._send({"type": "done"})
         return True

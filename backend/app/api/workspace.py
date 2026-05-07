@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.chat_bus import chat_bus
-from app.db.models import Invoice, InvoiceLine
+from app.db.models import Invoice, InvoiceLine, Party
 from app.db.session import get_db
 from app.domain.workspace import (
     clear_workspace_blocks,
@@ -42,6 +42,7 @@ class WorkspaceInvoiceItemsTableRequest(BaseModel):
     canvas_id: str = "agent:invoice-items"
     limit: int = 10000
     include_invoice_actions: bool = True
+    supplier_query: str | None = None
 
 
 class WorkspaceInvoiceItemsGroupedTableRequest(BaseModel):
@@ -190,16 +191,30 @@ async def publish_invoice_items_table(
     columns = _invoice_item_columns(include_invoice_actions=payload.include_invoice_actions)
 
     await _publish_workspace_status("Заполняю таблицу строками счетов из БД")
-    total = (
-        await db.execute(select(func.count()).select_from(InvoiceLine))
-    ).scalar_one()
-    result = await db.execute(
+    supplier_filter = (payload.supplier_query or "").strip()
+    count_stmt = select(func.count()).select_from(InvoiceLine)
+    rows_stmt = (
         select(InvoiceLine, Invoice)
         .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
         .options(selectinload(Invoice.supplier))
         .order_by(Invoice.created_at.desc(), InvoiceLine.line_number.asc())
         .limit(min(max(payload.limit, 1), 10000))
     )
+    if supplier_filter:
+        pattern = f"%{supplier_filter}%"
+        count_stmt = (
+            count_stmt
+            .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
+            .join(Party, Invoice.supplier_id == Party.id)
+            .where(Party.name.ilike(pattern))
+        )
+        rows_stmt = rows_stmt.join(Party, Invoice.supplier_id == Party.id).where(
+            Party.name.ilike(pattern)
+        )
+    total = (
+        await db.execute(count_stmt)
+    ).scalar_one()
+    result = await db.execute(rows_stmt)
     rows = [
         _invoice_item_workspace_row(
             line,
@@ -214,10 +229,15 @@ async def publish_invoice_items_table(
     block = {
         "id": payload.canvas_id,
         "type": "table",
-        "title": f"Товары по счетам ({total})",
+        "title": (
+            f"Товары по счетам: {supplier_filter} ({total})"
+            if supplier_filter
+            else f"Товары по счетам ({total})"
+        ),
         "columns": columns,
         "rows": rows,
         "source": "workspace.invoice_items_table",
+        "filters": {"supplier_query": supplier_filter} if supplier_filter else {},
     }
     stored = upsert_workspace_block(payload.canvas_id, block)
     await chat_bus.publish({
@@ -230,7 +250,12 @@ async def publish_invoice_items_table(
         canvas_id=payload.canvas_id,
         total=total,
         shown=len(rows),
-        message=f"Открыл на Рабочем столе таблицу товаров по счетам: {len(rows)} из {total}.",
+        message=(
+            f"Оставил на Рабочем столе товары поставщика {supplier_filter}: "
+            f"{len(rows)} из {total}."
+            if supplier_filter
+            else f"Открыл на Рабочем столе таблицу товаров по счетам: {len(rows)} из {total}."
+        ),
     )
 
 

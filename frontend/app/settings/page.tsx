@@ -189,6 +189,8 @@ interface CapabilityProposal {
   draft: Record<string, unknown>;
   rollback_plan: string[] | null;
   requested_by: string;
+  decided_by?: string | null;
+  decision_comment?: string | null;
   created_at: string;
 }
 
@@ -687,6 +689,7 @@ export default function SettingsPage() {
   const agentSkillToggleRefs = useRef<Array<HTMLInputElement | null>>([]);
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentSaved, setAgentSaved] = useState(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
 
   // Dev purge
   const [purgeConfirm, setPurgeConfirm] = useState("");
@@ -1119,27 +1122,57 @@ export default function SettingsPage() {
     approved: boolean,
   ) {
     setAgentSaving(true);
+    setAgentError(null);
     try {
-      await fetch(`${API}/api/agent/capabilities/${proposalId}/decide`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved, decided_by: "user" }),
-      });
+      const response = await fetch(
+        `${API}/api/agent/capabilities/${proposalId}/decide`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved, decided_by: "user" }),
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail || `HTTP ${response.status}`);
+      }
       await loadAgentControlPlane();
       await loadCapabilityProposals();
-    } catch {}
+      setAgentSaved(true);
+      setTimeout(() => setAgentSaved(false), 2000);
+    } catch (error) {
+      setAgentError(
+        error instanceof Error ? error.message : "Не удалось применить решение",
+      );
+    }
     setAgentSaving(false);
   }
 
   async function sandboxApplyCapabilityProposal(proposalId: string) {
     setAgentSaving(true);
+    setAgentError(null);
     try {
-      await fetch(`${API}/api/agent/capabilities/${proposalId}/sandbox-apply`, {
-        method: "POST",
-      });
+      const response = await fetch(
+        `${API}/api/agent/capabilities/${proposalId}/sandbox-apply`,
+        {
+          method: "POST",
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(
+          typeof payload?.detail === "string"
+            ? payload.detail
+            : payload?.detail?.message || `HTTP ${response.status}`,
+        );
+      }
       await loadAgentControlPlane();
       await loadCapabilityProposals();
-    } catch {}
+      setAgentSaved(true);
+      setTimeout(() => setAgentSaved(false), 2000);
+    } catch (error) {
+      setAgentError(error instanceof Error ? error.message : "Sandbox не выполнен");
+    }
     setAgentSaving(false);
   }
 
@@ -1591,6 +1624,11 @@ export default function SettingsPage() {
                                   <span className="text-slate-500">
                                     {proposal.suggested_artifact}
                                   </span>
+                                  {proposal.decided_by === "auto-policy" && (
+                                    <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-emerald-300">
+                                      auto
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="mt-1 line-clamp-2 text-slate-400">
                                   {proposal.missing_capability}
@@ -1600,11 +1638,21 @@ export default function SettingsPage() {
                                   <span>Tests: {proposal.test_status}</span>
                                   <span>Audit: {proposal.audit_status}</span>
                                 </div>
+                                {proposal.decision_comment && (
+                                  <div className="mt-1 text-emerald-300">
+                                    {proposal.decision_comment}
+                                  </div>
+                                )}
                               </div>
                               <div className="flex flex-wrap gap-2">
                                 <button
                                   type="button"
-                                  disabled={agentSaving}
+                                  disabled={
+                                    agentSaving ||
+                                    ["approved", "rejected", "promoted", "rolled_back"].includes(
+                                      proposal.status,
+                                    )
+                                  }
                                   onClick={() =>
                                     sandboxApplyCapabilityProposal(proposal.id)
                                   }
@@ -1614,7 +1662,12 @@ export default function SettingsPage() {
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={agentSaving}
+                                  disabled={
+                                    agentSaving ||
+                                    ["approved", "rejected", "promoted", "rolled_back"].includes(
+                                      proposal.status,
+                                    )
+                                  }
                                   onClick={() =>
                                     decideCapabilityProposal(proposal.id, true)
                                   }
@@ -1624,7 +1677,12 @@ export default function SettingsPage() {
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={agentSaving}
+                                  disabled={
+                                    agentSaving ||
+                                    ["approved", "rejected", "promoted", "rolled_back"].includes(
+                                      proposal.status,
+                                    )
+                                  }
                                   onClick={() =>
                                     decideCapabilityProposal(proposal.id, false)
                                   }
@@ -2399,6 +2457,12 @@ export default function SettingsPage() {
                   />
                 </Field>
               </SectionCard>
+
+              {agentError && (
+                <div className="rounded-md border border-red-800/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+                  {agentError}
+                </div>
+              )}
 
               <SaveRow
                 saving={agentSaving}

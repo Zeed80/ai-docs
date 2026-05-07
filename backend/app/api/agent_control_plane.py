@@ -24,6 +24,7 @@ from app.ai.agent_config import (
 from app.ai.capability_sandbox import run_capability_sandbox
 from app.ai.gateway_config import gateway_config
 from app.ai.policy_engine import classify_skill_risk, is_protected_setting
+from app.core.chat_bus import chat_bus
 from app.db.models import (
     AgentConfigProposal,
     AgentCron,
@@ -230,6 +231,97 @@ def _unwrap_value(value: dict | None) -> Any:
     return value
 
 
+def _draft_value(draft: dict, *keys: str) -> str:
+    value: Any = draft
+    for key in keys:
+        if not isinstance(value, dict):
+            return ""
+        value = value.get(key)
+    return str(value or "").strip()
+
+
+def _contains_destructive_marker(value: str) -> bool:
+    text = value.lower()
+    markers = (
+        "delete",
+        "remove",
+        "drop",
+        "truncate",
+        "send",
+        "approve",
+        "reject",
+        "decide",
+        "external",
+        "email",
+        "telegram",
+        "export",
+        "payment",
+        "credential",
+        "secret",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _safe_auto_approval_reason(proposal: CapabilityProposal) -> str | None:
+    """Return an auto-approval reason for low-risk local read/workspace drafts."""
+    if proposal.risk_level not in {"low", "medium"}:
+        return None
+    if proposal.suggested_artifact not in {"tool", "skill", "workspace_template"}:
+        return None
+
+    draft = proposal.draft or {}
+    tool_name = _draft_value(draft, "tool_name") or _draft_value(
+        draft, "skill_registry_entry", "name"
+    )
+    endpoint_path = _draft_value(draft, "endpoint_path") or _draft_value(
+        draft, "skill_registry_entry", "path"
+    )
+    method = (
+        _draft_value(draft, "method")
+        or _draft_value(draft, "skill_registry_entry", "method")
+        or "GET"
+    ).upper()
+    approval_required = (
+        isinstance(draft.get("skill_registry_entry"), dict)
+        and draft["skill_registry_entry"].get("approval_required") is True
+    )
+
+    if approval_required:
+        return None
+    if method not in {"GET", "POST"}:
+        return None
+    if _contains_destructive_marker(" ".join([tool_name, endpoint_path])):
+        return None
+
+    local_workspace_tool = tool_name.startswith("workspace.") or endpoint_path.startswith(
+        "/api/workspace/"
+    )
+    local_agent_tool = endpoint_path.startswith("/api/agent/") and proposal.risk_level == "low"
+    if not (local_workspace_tool or local_agent_tool):
+        return None
+
+    return "safe local workspace/data capability; sandbox passed"
+
+
+async def _publish_capability_approval_request(proposal: CapabilityProposal) -> None:
+    await chat_bus.publish({
+        "type": "approval_request",
+        "title": "Требует подтверждения",
+        "tool": "capability.proposal",
+        "args": {
+            "proposal_id": str(proposal.id),
+            "title": proposal.title,
+            "risk_level": proposal.risk_level,
+            "suggested_artifact": proposal.suggested_artifact,
+        },
+        "preview": (
+            f"Требует подтверждения: {proposal.title}. "
+            f"Риск: {proposal.risk_level}. "
+            "Откройте Settings -> Agent -> Capability proposals."
+        ),
+    })
+
+
 def _current_setting_value(setting_path: str) -> Any:
     config = get_builtin_agent_config().model_dump(mode="json")
     value: Any = config
@@ -306,6 +398,8 @@ async def _create_capability_proposal(
     db.add(proposal)
     await db.commit()
     await db.refresh(proposal)
+    if payload.risk_level in {"high", "critical"}:
+        await _publish_capability_approval_request(proposal)
     return proposal
 
 
@@ -657,6 +751,17 @@ async def sandbox_apply_capability(
     proposal.sandbox_status = "ready"
     proposal.test_status = result.test_status
     proposal.audit_status = result.audit_status
+    auto_reason = None
+    config = get_builtin_agent_config()
+    if config.safe_auto_apply_enabled:
+        auto_reason = _safe_auto_approval_reason(proposal)
+    if auto_reason and result.test_status == "passed":
+        proposal.status = "approved"
+        proposal.decided_by = "auto-policy"
+        proposal.decided_at = now
+        proposal.decision_comment = auto_reason
+        if proposal.audit_status == "pending":
+            proposal.audit_status = "passed"
 
     task = AgentTask(
         objective=f"Sandbox validate capability proposal: {proposal.title}",
@@ -670,6 +775,8 @@ async def sandbox_apply_capability(
             "sandbox_dir": result.sandbox_dir,
             "files": result.files,
             "diff_preview": result.diff_preview,
+            "auto_approved": bool(auto_reason and result.test_status == "passed"),
+            "auto_approval_reason": auto_reason,
         },
     )
     db.add(task)
