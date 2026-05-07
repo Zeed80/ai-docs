@@ -18,6 +18,10 @@ function configuredWsUrl(): string {
   return process.env.NEXT_PUBLIC_WS_URL?.trim() || "";
 }
 
+function isBackendDevPort(url: URL): boolean {
+  return url.port === "8000";
+}
+
 export function getApiBaseUrl(): string {
   const configured = configuredApiUrl();
 
@@ -27,7 +31,10 @@ export function getApiBaseUrl(): string {
   try {
     const url = new URL(configured);
     const currentHost = window.location.hostname;
-    if (isLocalHost(url.hostname) && (!isLocalHost(currentHost) || url.port === "8000")) {
+    if (isBackendDevPort(url)) {
+      return "";
+    }
+    if (isLocalHost(url.hostname) && !isLocalHost(currentHost)) {
       return "";
     }
     return configured;
@@ -48,7 +55,7 @@ export function getWebSocketBaseUrl(): string {
   if (configured && configured !== "same-origin") {
     try {
       const url = new URL(configured);
-      if (!isLocalHost(url.hostname) || isLocalHost(window.location.hostname)) {
+      if (!isBackendDevPort(url) && (!isLocalHost(url.hostname) || isLocalHost(window.location.hostname))) {
         return configured.replace(/^http/, "ws");
       }
     } catch {

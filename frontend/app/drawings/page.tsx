@@ -400,7 +400,7 @@ function DrawingCard({
         <div className="h-32 bg-zinc-800 flex items-center justify-center border-b border-white/5 relative overflow-hidden">
           {drawing.thumbnail_path ? (
             <img
-              src={`${process.env.NEXT_PUBLIC_API_URL || ""}/api/drawings/${drawing.id}/thumbnail`}
+              src={`/api/drawings/${drawing.id}/thumbnail`}
               alt={drawing.filename}
               className="w-full h-full object-contain p-2"
             />
