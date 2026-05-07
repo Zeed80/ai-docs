@@ -159,6 +159,54 @@ interface AgentControlPlaneStatus {
   capability_proposals_open: number;
 }
 
+interface AgentRuntimeStatus {
+  ok: boolean;
+  models: {
+    provider: string;
+    orchestrator_model: string | null;
+    worker_model: string | null;
+    auditor_model: string | null;
+    builder_model: string | null;
+    fast_model: string | null;
+    compression_model: string | null;
+    fallback_providers: string[];
+  };
+  counters: {
+    llm_calls_24h: number;
+    tool_calls_24h: number;
+    errors_24h: number;
+    avg_llm_duration_ms_24h: number | null;
+    last_error: string | null;
+    last_error_at: string | null;
+  };
+  memory: {
+    enabled: boolean;
+    episodic_facts_total: number;
+    pinned_facts_total: number;
+    memory_facts_total: number;
+    graph_nodes_total: number;
+    graph_edges_total: number;
+    chunks_total: number;
+    evidence_total: number;
+    embeddings_total: number;
+    embeddings_by_status: Record<string, number>;
+    active_embedding_model: string | null;
+    active_embedding_collection: string | null;
+    qdrant_points: number | null;
+    last_episodic_at: string | null;
+  };
+  recent_actions: Array<{
+    id: string;
+    session_id: string;
+    action_type: string;
+    tool_name: string | null;
+    model_name: string | null;
+    duration_ms: number | null;
+    error: string | null;
+    created_at: string;
+  }>;
+}
+
 interface AgentConfigProposal {
   id: string;
   setting_path: string;
@@ -678,6 +726,9 @@ export default function SettingsPage() {
   const [agentSkills, setAgentSkills] = useState<AgentSkill[]>([]);
   const [agentControlPlane, setAgentControlPlane] =
     useState<AgentControlPlaneStatus | null>(null);
+  const [agentRuntime, setAgentRuntime] = useState<AgentRuntimeStatus | null>(
+    null,
+  );
   const [agentConfigProposals, setAgentConfigProposals] = useState<
     AgentConfigProposal[]
   >([]);
@@ -821,6 +872,15 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadAgentRuntime() {
+    try {
+      const r = await fetch(`${API}/api/agent/runtime/status`);
+      setAgentRuntime(await r.json());
+    } catch {
+      setAgentRuntime(null);
+    }
+  }
+
   async function loadAgentConfigProposals() {
     try {
       const r = await fetch(`${API}/api/agent/config/proposals?status=pending`);
@@ -858,6 +918,7 @@ export default function SettingsPage() {
     loadAgentConfig();
     loadAgentSkills();
     loadAgentControlPlane();
+    loadAgentRuntime();
     loadAgentConfigProposals();
     loadCapabilityProposals();
     loadTgStatus();
@@ -1071,6 +1132,7 @@ export default function SettingsPage() {
       setAgentConfigBaseline(nextConfig);
       await loadAgentSkills();
       await loadAgentControlPlane();
+      await loadAgentRuntime();
       await loadAgentConfigProposals();
       await loadCapabilityProposals();
       setAgentSaved(true);
@@ -1091,6 +1153,7 @@ export default function SettingsPage() {
       setAgentConfigBaseline(data);
       await loadAgentSkills();
       await loadAgentControlPlane();
+      await loadAgentRuntime();
       await loadAgentConfigProposals();
       await loadCapabilityProposals();
       setAgentSaved(true);
@@ -1117,6 +1180,7 @@ export default function SettingsPage() {
       await loadConfig();
       await loadAgentSkills();
       await loadAgentControlPlane();
+      await loadAgentRuntime();
       await loadAgentConfigProposals();
       setAgentSaved(true);
       setTimeout(() => setAgentSaved(false), 2000);
@@ -1144,6 +1208,7 @@ export default function SettingsPage() {
       await loadAgentConfig();
       await loadAgentSkills();
       await loadAgentControlPlane();
+      await loadAgentRuntime();
       await loadAgentConfigProposals();
     } catch {}
     setAgentSaving(false);
@@ -1169,6 +1234,7 @@ export default function SettingsPage() {
         throw new Error(payload?.detail || `HTTP ${response.status}`);
       }
       await loadAgentControlPlane();
+      await loadAgentRuntime();
       await loadCapabilityProposals();
       setAgentSaved(true);
       setTimeout(() => setAgentSaved(false), 2000);
@@ -1199,6 +1265,7 @@ export default function SettingsPage() {
         );
       }
       await loadAgentControlPlane();
+      await loadAgentRuntime();
       await loadCapabilityProposals();
       setAgentSaved(true);
       setTimeout(() => setAgentSaved(false), 2000);
@@ -1566,6 +1633,56 @@ export default function SettingsPage() {
                       )}
                     </div>
                   </div>
+                  {agentRuntime && (
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                      <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
+                        <div className="font-medium text-slate-100">
+                          Agent runtime
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-slate-400">
+                          <div>LLM 24h: {agentRuntime.counters.llm_calls_24h}</div>
+                          <div>Tools 24h: {agentRuntime.counters.tool_calls_24h}</div>
+                          <div>Errors 24h: {agentRuntime.counters.errors_24h}</div>
+                          <div>
+                            Avg:{" "}
+                            {agentRuntime.counters.avg_llm_duration_ms_24h ?? "—"} ms
+                          </div>
+                        </div>
+                        {agentRuntime.counters.last_error && (
+                          <div className="mt-2 line-clamp-2 rounded bg-red-950/40 p-2 text-red-200">
+                            {agentRuntime.counters.last_error}
+                          </div>
+                        )}
+                      </div>
+                      <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
+                        <div className="font-medium text-slate-100">
+                          Model routing
+                        </div>
+                        <div className="mt-2 space-y-1 text-slate-400">
+                          <div>Orchestrator: {agentRuntime.models.orchestrator_model ?? "—"}</div>
+                          <div>Workers: {agentRuntime.models.worker_model ?? "—"}</div>
+                          <div>Builder: {agentRuntime.models.builder_model ?? "—"}</div>
+                          <div>Fallbacks: {agentRuntime.models.fallback_providers.length}</div>
+                        </div>
+                      </div>
+                      <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
+                        <div className="font-medium text-slate-100">
+                          Memory stack
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-slate-400">
+                          <div>Episodic: {agentRuntime.memory.episodic_facts_total}</div>
+                          <div>Pinned: {agentRuntime.memory.pinned_facts_total}</div>
+                          <div>Graph: {agentRuntime.memory.graph_nodes_total}</div>
+                          <div>Chunks: {agentRuntime.memory.chunks_total}</div>
+                          <div>Embeddings: {agentRuntime.memory.embeddings_total}</div>
+                          <div>Qdrant: {agentRuntime.memory.qdrant_points ?? "—"}</div>
+                        </div>
+                        <div className="mt-2 truncate text-slate-500">
+                          {agentRuntime.memory.active_embedding_model ?? "embedding model —"}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {agentConfigProposals.length > 0 && (
                     <div className="rounded-md border border-amber-800/50 bg-amber-950/20 p-3">
                       <div className="text-sm font-medium text-amber-200">

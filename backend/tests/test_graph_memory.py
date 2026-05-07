@@ -5,7 +5,7 @@ import uuid
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.api.memory import _merge_memory_hits, _rank_memory_hit
+from app.api.memory import _merge_memory_hits, _rank_memory_hit, _sort_memory_hits
 from app.db.base import Base
 from app.db.models import (
     Document,
@@ -216,6 +216,30 @@ def test_memory_search_ranks_text_vector_graph_scores_with_weights() -> None:
     )
 
     assert ranked.score == 0.655
+
+
+def test_memory_search_keeps_exact_episodic_fact_visible() -> None:
+    query = "codex-health-20260507-episodic-memory"
+    fact = MemorySearchHit(
+        kind="fact",
+        id=uuid.uuid4(),
+        title=f"{query} user marker",
+        summary=f"User: {query} user marker",
+        score=0.91,
+        source="chat",
+        text_score=1.0,
+    )
+    vector_chunk = MemorySearchHit(
+        kind="chunk",
+        id=uuid.uuid4(),
+        title="Document chunk #0",
+        summary="unrelated document text",
+        score=0.99,
+        source="vector+rerank",
+        vector_score=0.99,
+    )
+
+    assert _sort_memory_hits(query, [vector_chunk, fact])[0] == fact
 
 
 def test_memory_embedding_records_can_track_vector_indexing() -> None:

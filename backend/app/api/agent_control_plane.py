@@ -8,7 +8,7 @@ review risk before they are applied.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,12 +26,18 @@ from app.ai.gateway_config import gateway_config
 from app.ai.policy_engine import classify_skill_risk, is_protected_setting
 from app.core.chat_bus import chat_bus
 from app.db.models import (
+    AgentAction,
     AgentConfigProposal,
     AgentCron,
     AgentPlugin,
     AgentTask,
     AgentTeam,
     CapabilityProposal,
+    DocumentChunk,
+    EvidenceSpan,
+    KnowledgeEdge,
+    KnowledgeNode,
+    MemoryEmbeddingRecord,
     MemoryFact,
 )
 from app.db.session import get_db
@@ -54,6 +60,64 @@ class AgentControlPlaneStatus(BaseModel):
     memory_facts_total: int
     mcp_servers_total: int
     capability_proposals_open: int
+
+
+class AgentRuntimeModels(BaseModel):
+    provider: str
+    orchestrator_model: str | None = None
+    worker_model: str | None = None
+    auditor_model: str | None = None
+    builder_model: str | None = None
+    fast_model: str | None = None
+    compression_model: str | None = None
+    fallback_providers: list[str]
+
+
+class AgentRuntimeCounters(BaseModel):
+    llm_calls_24h: int
+    tool_calls_24h: int
+    errors_24h: int
+    avg_llm_duration_ms_24h: int | None = None
+    last_error: str | None = None
+    last_error_at: datetime | None = None
+
+
+class AgentRuntimeAction(BaseModel):
+    id: uuid.UUID
+    session_id: str
+    action_type: str
+    tool_name: str | None = None
+    model_name: str | None = None
+    duration_ms: int | None = None
+    error: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AgentMemoryRuntimeStatus(BaseModel):
+    enabled: bool
+    episodic_facts_total: int
+    pinned_facts_total: int
+    memory_facts_total: int
+    graph_nodes_total: int
+    graph_edges_total: int
+    chunks_total: int
+    evidence_total: int
+    embeddings_total: int
+    embeddings_by_status: dict[str, int]
+    active_embedding_model: str | None = None
+    active_embedding_collection: str | None = None
+    qdrant_points: int | None = None
+    last_episodic_at: datetime | None = None
+
+
+class AgentRuntimeStatus(BaseModel):
+    ok: bool
+    models: AgentRuntimeModels
+    counters: AgentRuntimeCounters
+    memory: AgentMemoryRuntimeStatus
+    recent_actions: list[AgentRuntimeAction]
 
 
 class ConfigProposalCreate(BaseModel):
@@ -443,6 +507,132 @@ async def control_plane_status(db: AsyncSession = Depends(get_db)) -> AgentContr
         memory_facts_total=int(memory_total or 0),
         mcp_servers_total=len(config.mcp_servers or []),
         capability_proposals_open=int(capability_open or 0),
+    )
+
+
+@router.get("/runtime/status", response_model=AgentRuntimeStatus)
+async def runtime_status(db: AsyncSession = Depends(get_db)) -> AgentRuntimeStatus:
+    """Runtime observability for the built-in agent and memory stack."""
+    config = get_builtin_agent_config()
+    day_ago = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    llm_calls = await db.scalar(
+        select(func.count())
+        .select_from(AgentAction)
+        .where(AgentAction.action_type == "llm_call", AgentAction.created_at >= day_ago)
+    )
+    tool_calls = await db.scalar(
+        select(func.count())
+        .select_from(AgentAction)
+        .where(AgentAction.action_type == "tool_call", AgentAction.created_at >= day_ago)
+    )
+    errors = await db.scalar(
+        select(func.count())
+        .select_from(AgentAction)
+        .where(AgentAction.error.is_not(None), AgentAction.created_at >= day_ago)
+    )
+    avg_duration = await db.scalar(
+        select(func.avg(AgentAction.duration_ms)).where(
+            AgentAction.action_type == "llm_call",
+            AgentAction.duration_ms.is_not(None),
+            AgentAction.created_at >= day_ago,
+        )
+    )
+    last_error_action = (
+        (
+            await db.execute(
+                select(AgentAction)
+                .where(AgentAction.error.is_not(None))
+                .order_by(AgentAction.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    recent_actions = list(
+        (
+            await db.execute(
+                select(AgentAction).order_by(AgentAction.created_at.desc()).limit(12)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    memory_facts = await db.scalar(select(func.count()).select_from(MemoryFact))
+    episodic_facts = await db.scalar(
+        select(func.count()).select_from(MemoryFact).where(MemoryFact.kind == "chat_turn")
+    )
+    pinned_facts = await db.scalar(
+        select(func.count()).select_from(MemoryFact).where(MemoryFact.pinned.is_(True))
+    )
+    last_episodic_at = await db.scalar(
+        select(func.max(MemoryFact.created_at)).where(MemoryFact.kind == "chat_turn")
+    )
+    graph_nodes = await db.scalar(select(func.count()).select_from(KnowledgeNode))
+    graph_edges = await db.scalar(select(func.count()).select_from(KnowledgeEdge))
+    chunks = await db.scalar(select(func.count()).select_from(DocumentChunk))
+    evidence = await db.scalar(select(func.count()).select_from(EvidenceSpan))
+    embedding_rows = (
+        await db.execute(
+            select(MemoryEmbeddingRecord.status, func.count())
+            .group_by(MemoryEmbeddingRecord.status)
+        )
+    ).all()
+    embeddings_by_status = {str(status): int(count) for status, count in embedding_rows}
+    embeddings_total = sum(embeddings_by_status.values())
+    active_embedding_model: str | None = None
+    active_embedding_collection: str | None = None
+    qdrant_points: int | None = None
+    try:
+        from app.ai.embeddings import get_active_embedding_profile
+        from app.vector.qdrant_store import collection_count_for
+
+        profile = get_active_embedding_profile()
+        active_embedding_model = profile.model_key
+        active_embedding_collection = profile.collection_name
+        qdrant_points = collection_count_for(profile.collection_name)
+    except Exception:
+        pass
+
+    return AgentRuntimeStatus(
+        ok=True,
+        models=AgentRuntimeModels(
+            provider=config.provider,
+            orchestrator_model=config.orchestrator_model,
+            worker_model=config.worker_model or config.model,
+            auditor_model=config.auditor_model or config.worker_model or config.model,
+            builder_model=config.builder_model,
+            fast_model=config.fast_model,
+            compression_model=config.compression_model,
+            fallback_providers=list(config.fallback_providers or []),
+        ),
+        counters=AgentRuntimeCounters(
+            llm_calls_24h=int(llm_calls or 0),
+            tool_calls_24h=int(tool_calls or 0),
+            errors_24h=int(errors or 0),
+            avg_llm_duration_ms_24h=int(avg_duration) if avg_duration is not None else None,
+            last_error=last_error_action.error if last_error_action else None,
+            last_error_at=last_error_action.created_at if last_error_action else None,
+        ),
+        memory=AgentMemoryRuntimeStatus(
+            enabled=config.memory_enabled,
+            episodic_facts_total=int(episodic_facts or 0),
+            pinned_facts_total=int(pinned_facts or 0),
+            memory_facts_total=int(memory_facts or 0),
+            graph_nodes_total=int(graph_nodes or 0),
+            graph_edges_total=int(graph_edges or 0),
+            chunks_total=int(chunks or 0),
+            evidence_total=int(evidence or 0),
+            embeddings_total=embeddings_total,
+            embeddings_by_status=embeddings_by_status,
+            active_embedding_model=active_embedding_model,
+            active_embedding_collection=active_embedding_collection,
+            qdrant_points=qdrant_points,
+            last_episodic_at=last_episodic_at,
+        ),
+        recent_actions=recent_actions,
     )
 
 

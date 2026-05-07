@@ -128,11 +128,11 @@ async def search_memory(
     if hits:
         cfg = get_ai_config()
         if cfg.get("reranker_model"):
-            hits = sorted(hits, key=lambda hit: hit.score, reverse=True)
+            hits = _sort_memory_hits(payload.query, hits)
             reranked = await _try_rerank_hits(payload.query, hits[:_RERANK_CANDIDATE_LIMIT])
             hits = reranked + hits[_RERANK_CANDIDATE_LIMIT:]
 
-    hits = sorted(hits, key=lambda hit: hit.score, reverse=True)
+    hits = _sort_memory_hits(payload.query, hits)
     total_available = len(hits)
     page = hits[offset: offset + page_limit]
     next_offset = offset + len(page)
@@ -411,10 +411,11 @@ async def _try_rerank_hits(query: str, hits: list[MemorySearchHit]) -> list[Memo
                 reranked.append(hit)
                 continue
             rerank_score = float(scores[index])
+            final_score = max(float(hit.score or 0.0), rerank_score)
             reranked.append(
                 hit.model_copy(
                     update={
-                        "score": rerank_score,
+                        "score": final_score,
                         "rerank_score": rerank_score,
                         "source": f"{hit.source}+rerank",
                     }
@@ -472,6 +473,24 @@ def _rank_memory_hit(hit: MemorySearchHit) -> MemorySearchHit:
     weight_sum = sum(weight for _, weight in available)
     weighted_score = sum(float(score) * weight for score, weight in available) / weight_sum
     return hit.model_copy(update={"score": round(weighted_score, 6)})
+
+
+def _sort_memory_hits(query: str, hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
+    return sorted(hits, key=lambda hit: _memory_sort_score(query, hit), reverse=True)
+
+
+def _memory_sort_score(query: str, hit: MemorySearchHit) -> float:
+    """Keep exact episodic/pinned facts visible after vector reranking."""
+    score = float(hit.score or 0.0)
+    haystack = " ".join([hit.title or "", hit.summary or ""]).casefold()
+    query_text = " ".join(query.split()).casefold()
+    if hit.kind == "fact":
+        score += 0.04
+        if hit.source == "chat":
+            score += 0.04
+    if query_text and query_text in haystack:
+        score += 0.08
+    return score
 
 
 async def _search_sql_memory(

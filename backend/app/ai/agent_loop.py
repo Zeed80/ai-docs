@@ -1197,6 +1197,7 @@ class AgentSession:
                 "type": "text",
                 "content": f"Всего загружено счетов: {total}.",
             })
+            self._remember_latest_turn(f"Всего загружено счетов: {total}.")
             await self._send({"type": "done"})
             return True
 
@@ -1207,6 +1208,7 @@ class AgentSession:
                 "type": "text",
                 "content": f"Всего загружено счетов: {total}.",
             })
+            self._remember_latest_turn(f"Всего загружено счетов: {total}.")
             await self._send({"type": "done"})
             return True
 
@@ -1222,6 +1224,7 @@ class AgentSession:
                 "type": "text",
                 "content": f"Сейчас в системе документов: {total}.",
             })
+            self._remember_latest_turn(f"Сейчас в системе документов: {total}.")
             await self._send({"type": "done"})
             return True
 
@@ -1283,13 +1286,9 @@ class AgentSession:
         total = int(data.get("total") or 0) if isinstance(data, dict) else 0
         shown = int(data.get("shown") or total) if isinstance(data, dict) else total
         message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        await self._send({
-            "type": "text",
-            "content": (
-                message
-                or f"Открыл на Рабочем столе таблицу со счетами: {shown} из {total}."
-            ),
-        })
+        delivered = message or f"Открыл на Рабочем столе таблицу со счетами: {shown} из {total}."
+        await self._send({"type": "text", "content": delivered})
+        self._remember_latest_turn(delivered)
         await self._send({"type": "done"})
         return True
 
@@ -1337,10 +1336,9 @@ class AgentSession:
                 return False
         await self._send({"type": "tool_result", "tool": skill_name, "result": data})
         message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        await self._send({
-            "type": "text",
-            "content": message or "Открыл на Рабочем столе таблицу товаров по счетам.",
-        })
+        delivered = message or "Открыл на Рабочем столе таблицу товаров по счетам."
+        await self._send({"type": "text", "content": delivered})
+        self._remember_latest_turn(delivered)
         await self._send({"type": "done"})
         return True
 
@@ -1362,10 +1360,9 @@ class AgentSession:
             return False
         await self._send({"type": "tool_result", "tool": skill_name, "result": data})
         message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        await self._send({
-            "type": "text",
-            "content": message or f"Оставил на Рабочем столе товары поставщика {supplier_filter}.",
-        })
+        delivered = message or f"Оставил на Рабочем столе товары поставщика {supplier_filter}."
+        await self._send({"type": "text", "content": delivered})
+        self._remember_latest_turn(delivered)
         await self._send({"type": "done"})
         return True
 
@@ -1406,16 +1403,15 @@ class AgentSession:
                 return False
         await self._send({"type": "tool_result", "tool": skill_name, "result": data})
         message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        await self._send({
-            "type": "text",
-            "content": (
-                "Обновил на Рабочем столе сгруппированную таблицу товаров: "
-                "добавил колонку поставщика перед номером счета."
-                if include_supplier
-                else message
-                or "Открыл на Рабочем столе таблицу товаров, сгруппированных по счетам."
-            ),
-        })
+        delivered = (
+            "Обновил на Рабочем столе сгруппированную таблицу товаров: "
+            "добавил колонку поставщика перед номером счета."
+            if include_supplier
+            else message
+            or "Открыл на Рабочем столе таблицу товаров, сгруппированных по счетам."
+        )
+        await self._send({"type": "text", "content": delivered})
+        self._remember_latest_turn(delivered)
         await self._send({"type": "done"})
         return True
 
@@ -1447,13 +1443,12 @@ class AgentSession:
                 return False
         await self._send({"type": "tool_result", "tool": skill_name, "result": data})
         message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        await self._send({
-            "type": "text",
-            "content": (
-                message
-                or "Открыл на Рабочем столе таблицу товаров, сгруппированных по поставщикам."
-            ),
-        })
+        delivered = (
+            message
+            or "Открыл на Рабочем столе таблицу товаров, сгруппированных по поставщикам."
+        )
+        await self._send({"type": "text", "content": delivered})
+        self._remember_latest_turn(delivered)
         await self._send({"type": "done"})
         return True
 
@@ -1574,6 +1569,25 @@ class AgentSession:
         if self._approval_future and not self._approval_future.done():
             self._approval_future.set_result(approved)
 
+    def _remember_latest_turn(self, delivered_text: str) -> None:
+        if not self._config.memory_enabled or not delivered_text:
+            return
+        latest_user = next(
+            (
+                m.get("content", "")
+                for m in reversed(self.messages)
+                if m.get("role") == "user"
+            ),
+            "",
+        )
+        asyncio.create_task(
+            self._memory_mgr.sync_turn(
+                str(latest_user or ""),
+                delivered_text,
+                session_id=self._session_id,
+            )
+        )
+
     # ── Internal ──────────────────────────────────────────────────────────────
 
     async def _run(self) -> None:
@@ -1635,7 +1649,7 @@ class AgentSession:
                     iteration=iteration,
                     action_type="llm_call",
                     content_text=full_text[:2000] if full_text else None,
-                    model_name=_get_agent_model(self._config),
+                    model_name=model_override or _get_agent_model(self._config),
                     duration_ms=duration_ms,
                 ))
 
@@ -1672,18 +1686,7 @@ class AgentSession:
                     consecutive_empty_responses = 0
                     delivered_text = await self._deliver_final_content(full_text)
                     # Fire-and-forget: index this turn into memory
-                    if self._config.memory_enabled and delivered_text:
-                        latest_user = next(
-                            (
-                                m.get("content", "")
-                                for m in reversed(self.messages)
-                                if m.get("role") == "user"
-                            ),
-                            "",
-                        )
-                        asyncio.create_task(
-                            self._memory_mgr.sync_turn(latest_user, delivered_text)
-                        )
+                    self._remember_latest_turn(delivered_text)
                     break
 
                 self.messages.append(message)
@@ -1696,6 +1699,11 @@ class AgentSession:
 
         except Exception as e:
             logger.error("agent_loop_error", error=str(e))
+            asyncio.create_task(self._log_action(
+                iteration=self._iteration,
+                action_type="error",
+                error=str(e),
+            ))
             try:
                 await self._send({"type": "error", "content": f"Ошибка агента: {e}"})
             except Exception:
@@ -1911,6 +1919,11 @@ class AgentSession:
                 f"действиях.\n{context}"
             ),
         })
+        asyncio.create_task(self._log_action(
+            iteration=self._iteration,
+            action_type="memory_context",
+            content_text=context[:2000],
+        ))
         self._trim_history()
 
 

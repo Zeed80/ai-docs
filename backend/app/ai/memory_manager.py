@@ -130,7 +130,13 @@ class MemoryManager:
             if not cursor or len(hits) >= 1000:
                 return hits
 
-    async def sync_turn(self, user_text: str, assistant_text: str) -> None:
+    async def sync_turn(
+        self,
+        user_text: str,
+        assistant_text: str,
+        *,
+        session_id: str = "",
+    ) -> None:
         """Persist chat turn into long-term memory.
 
         The server stores this as episodic memory. Failures are non-fatal
@@ -145,6 +151,7 @@ class MemoryManager:
                     json={
                         "user_text": user_text,
                         "assistant_text": assistant_text,
+                        "session_id": session_id or None,
                         "scope": "project",
                     },
                 )
