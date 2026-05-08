@@ -3946,6 +3946,11 @@ tools:
   method: POST
   path: /api/workspace/agent/invoices/items-table
   approval_required: false
+  body_params:
+  - name: supplier_query
+    type: string
+    required: false
+    description: Filter rows by supplier name substring (case-insensitive)
 - name: workspace.invoice_items_grouped_table
   description: 'Skill: workspace.invoice_items_grouped_table — Group invoice items
     by invoice.'

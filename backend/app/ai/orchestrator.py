@@ -8,6 +8,7 @@ The existing AgentSession remains the tool-calling executor.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -78,6 +79,15 @@ _ORCHESTRATOR_SYSTEM = """Ты оркестратор отдела ИИ-сотр
 - Если пользователь просит дополнительные данные к уже выведенной таблице,
   это workspace update, а не экспорт и не только текст в чат.
 - Используй роли только из допустимого enum схемы.
+
+Правила фильтрации по поставщику:
+- "товары поставщика X", "по поставщику X", "только X" (где X — конкретное название):
+  используй workspace.invoice_items_table с filters.supplier_query=X,
+  canvas_id=agent:invoice-items.
+- "товары по поставщикам" / "сгруппировать по поставщикам" (без конкретного имени):
+  используй workspace.invoice_items_by_supplier_table,
+  canvas_id=agent:invoice-items-by-supplier.
+- НЕ путай: конкретный поставщик → фильтр на одну строку; все поставщики → группировка.
 """
 
 
@@ -87,6 +97,7 @@ class WorkspaceOutputSpec(BaseModel):
     required: bool = False
     canvas_id: str | None = None
     description: str = ""
+    filters: dict[str, str] = Field(default_factory=dict)
 
 
 class WorkerAssignment(BaseModel):
@@ -307,6 +318,20 @@ class AgentOrchestrator:
             if output_type == "table" and _references_existing_table(text):
                 canvas_id = _latest_workspace_table_id() or canvas_id
 
+        # Detect specific-supplier filter: "товары поставщика Хоффман"
+        workspace_filters: dict[str, str] = {}
+        supplier_name = _extract_supplier_name(text)
+        if supplier_name:
+            workspace_required = True
+            output_type = "table"
+            canvas_id = "agent:invoice-items"
+            workspace_filters = {"supplier_query": supplier_name}
+            role = "invoice_specialist"
+            intent = "invoice_data"
+            # Worker needs to filter by supplier; put supplier_query first so it's visible
+            skills = ["supplier.search", "workspace.invoice_items_table"]
+            content = f"{content.strip()} [фильтр: supplier_query={supplier_name!r}]"
+
         return OrchestratorPlan(
             goal=content.strip()[:500],
             intent=intent,
@@ -324,6 +349,7 @@ class AgentOrchestrator:
                 description="Rich-вывод должен быть опубликован на существующий Рабочий стол."
                 if workspace_required
                 else "Короткий ответ допустим в чате.",
+                filters=workspace_filters,
             ),
             audit_required=True,
         )
@@ -802,7 +828,23 @@ def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorP
         output_type = "table" if _is_table_edit_request(text) else "document"
     canvas_id = plan.workspace.canvas_id
     recommended_skills = list(plan.worker.recommended_skills)
-    if _is_supplier_grouping_request(text):
+    workspace_filters = dict(plan.workspace.filters)
+
+    # Specific-supplier filter takes priority over group-by
+    supplier_name = _extract_supplier_name(text)
+    if supplier_name:
+        workspace_required = True
+        output_type = "table"
+        canvas_id = "agent:invoice-items"
+        workspace_filters["supplier_query"] = supplier_name
+        for skill in ("workspace.invoice_items_table", "supplier.search"):
+            if skill not in recommended_skills:
+                recommended_skills.insert(0, skill)
+        # Remove group-by skill if it crept in
+        recommended_skills = [
+            s for s in recommended_skills if s != "workspace.invoice_items_by_supplier_table"
+        ]
+    elif _is_supplier_grouping_request(text):
         sg = _canvas_map().get("supplier_grouping", {})
         workspace_required = True
         output_type = "table"
@@ -810,6 +852,7 @@ def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorP
         supplier_skill = sg.get("skill", "workspace.invoice_items_by_supplier_table")
         if supplier_skill not in recommended_skills:
             recommended_skills.insert(0, supplier_skill)
+
     if workspace_required and not canvas_id:
         canvas_id = _fallback_canvas_id(content)
     return plan.model_copy(
@@ -822,6 +865,7 @@ def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorP
                     "required": workspace_required,
                     "output_type": output_type,
                     "canvas_id": canvas_id,
+                    "filters": workspace_filters,
                 }
             ),
         }
@@ -885,11 +929,41 @@ def _resolve_canvas_from_route(route: dict[str, Any], text: str) -> str | None:
     return route.get("default_canvas")
 
 
+_SUPPLIER_NAME_STOPWORDS = frozenset({
+    "всех", "всем", "всеми", "всё", "все", "другим", "другие", "другого",
+    "любой", "каждый", "каждого", "одного", "один", "без", "только",
+    "кроме", "нескольких", "нескольким", "поставщикам", "поставщиках",
+})
+
+
+def _extract_supplier_name(text: str) -> str | None:
+    """Extract a specific supplier name from user text.
+
+    Detects patterns: "поставщика ХОФФМАН", "поставщику Иванов",
+    "поставщик 'Ромашка'". Returns None for generic "по поставщикам".
+    """
+    m = re.search(
+        r"поставщик[аиу]?\s+([«»\"']?[а-яёa-z][а-яёa-z0-9«»\"'\-\.]{1,}(?:\s+[а-яёa-z0-9«»\"'\-\.]{2,}){0,3}[«»\"']?)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        name = m.group(1).strip().strip("«»\"'.,;:!?")
+        if name.lower() not in _SUPPLIER_NAME_STOPWORDS and len(name) > 1:
+            return name
+    return None
+
+
 def _is_supplier_grouping_request(text: str) -> bool:
     sg = _canvas_map().get("supplier_grouping", {})
-    return any(kw in text for kw in sg.get("trigger_keywords", [])) and any(
-        kw in text for kw in sg.get("item_keywords", [])
-    )
+    has_trigger = any(kw in text for kw in sg.get("trigger_keywords", []))
+    has_items = any(kw in text for kw in sg.get("item_keywords", []))
+    if not (has_trigger and has_items):
+        return False
+    # A specific supplier name makes this a filter request, not a group-by
+    if _extract_supplier_name(text):
+        return False
+    return True
 
 
 def _expected_workspace_skill_for_canvas(canvas_id: str | None) -> str | None:
@@ -906,6 +980,8 @@ def _workspace_tool_spec_for_plan(plan: OrchestratorPlan) -> dict[str, Any] | No
     tool = skill.replace(".", "__")
     canvas_id = plan.workspace.canvas_id
     args: dict[str, Any] = {**spec_entry.get("default_args", {}), "canvas_id": canvas_id}
+    if plan.workspace.filters:
+        args.update(plan.workspace.filters)
     return {
         "tool": tool,
         "path": spec_entry["path"],
