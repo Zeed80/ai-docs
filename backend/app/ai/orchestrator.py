@@ -146,6 +146,8 @@ class CapabilityBuildDraft(BaseModel):
 class _TurnTrace:
     workspace_events: list[dict[str, Any]] = field(default_factory=list)
     tool_calls: list[str] = field(default_factory=list)
+    # Maps sanitized tool name → kwargs passed by the executor (for filter audit)
+    tool_call_args: dict[str, dict[str, Any]] = field(default_factory=dict)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     text_chunks: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -291,7 +293,17 @@ class AgentOrchestrator:
         elif msg_type in {"canvas", "workspace.updated"}:
             self._trace.workspace_events.append(data)
         elif msg_type == "tool_call":
-            self._trace.tool_calls.append(str(data.get("tool") or ""))
+            tool_name = str(data.get("tool") or "")
+            self._trace.tool_calls.append(tool_name)
+            # Capture args so the auditor can verify filters were applied correctly
+            raw_args = data.get("args") or data.get("input") or {}
+            if isinstance(raw_args, str):
+                try:
+                    import json as _json
+                    raw_args = _json.loads(raw_args)
+                except Exception:
+                    raw_args = {}
+            self._trace.tool_call_args[tool_name] = dict(raw_args)
         elif msg_type == "tool_result":
             self._trace.tool_results.append(data)
             result = data.get("result")
@@ -451,6 +463,55 @@ class AgentOrchestrator:
                 f"использованы {sorted(used_workspace_skills)}."
             )
 
+        # ── Filter compliance check ────────────────────────────────────────────
+        # If the plan requires specific filters (e.g. supplier_query=X), verify
+        # the executor actually passed them to the workspace tool AND that the
+        # workspace response confirms the filter was applied.
+        if plan.workspace.filters:
+            # 1. Check that the tool was called WITH the required filter args
+            workspace_tool_args: dict[str, Any] = {}
+            for tool_name, args in self._trace.tool_call_args.items():
+                if tool_name.startswith("workspace__"):
+                    workspace_tool_args = args
+                    break
+
+            if workspace_tool_args:
+                for fk, fv in plan.workspace.filters.items():
+                    actual = workspace_tool_args.get(fk)
+                    if actual is None:
+                        issues.append(
+                            f"фильтр не применён: исполнитель не передал {fk}={fv!r} "
+                            "в инструмент. Повтори вызов с правильными аргументами."
+                        )
+                    elif str(actual).strip().lower() != str(fv).strip().lower():
+                        issues.append(
+                            f"неверный фильтр: ожидалось {fk}={fv!r}, "
+                            f"передано {fk}={actual!r}. Повтори с правильным значением."
+                        )
+            elif used_workspace_skills:
+                # Tool was called but args weren't captured — warn without hard fail
+                pass
+
+            # 2. Cross-check against the workspace result's reported filters
+            for item in self._trace.tool_results:
+                result = item.get("result")
+                if not isinstance(result, dict) or not result.get("canvas_id"):
+                    continue
+                result_filters: dict[str, Any] = result.get("filters") or {}
+                for fk, fv in plan.workspace.filters.items():
+                    rf = result_filters.get(fk)
+                    if rf is None and fv:
+                        issues.append(
+                            f"данные на Рабочем столе не отфильтрованы по {fk}={fv!r}: "
+                            "endpoint не применил фильтр. Повтори вызов."
+                        )
+                    elif rf is not None and str(rf).strip().lower() != str(fv).strip().lower():
+                        issues.append(
+                            f"Рабочий стол показывает {fk}={rf!r} вместо {fv!r}: "
+                            "показаны данные от другого запроса. Требуется перезапрос."
+                        )
+                break  # check only the first workspace result
+
         for item in self._trace.tool_results:
             result = item.get("result")
             if (
@@ -531,6 +592,10 @@ class AgentOrchestrator:
                 "не подтверждена",
                 "неправильный workspace-блок",
                 "инструмент вне плана",
+                "фильтр не применён",
+                "неверный фильтр",
+                "не отфильтрованы",
+                "показывает",
             )
         )
 
@@ -549,6 +614,10 @@ class AgentOrchestrator:
                 "не подтверждена",
                 "неправильный workspace-блок",
                 "инструмент вне плана",
+                "фильтр не применён",
+                "неверный фильтр",
+                "не отфильтрованы",
+                "показывает",
             )
         ):
             return False
