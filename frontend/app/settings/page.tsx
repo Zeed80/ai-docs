@@ -1812,41 +1812,64 @@ export default function SettingsPage() {
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                     {/* Tasks */}
                     <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-slate-100">
-                          Задачи агента
-                        </span>
-                        <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">
-                          {agentTasks.length}
-                        </span>
-                      </div>
-                      {agentTasks.length === 0 ? (
-                        <div className="mt-2 text-slate-500">
-                          Нет активных задач
-                        </div>
-                      ) : (
-                        <ul className="mt-2 space-y-1">
-                          {agentTasks.slice(0, 5).map((t) => (
-                            <li
-                              key={t.id}
-                              className="flex items-center gap-2 text-slate-300"
-                            >
-                              <span
-                                className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${t.status === "done" ? "bg-green-500" : t.status === "error" ? "bg-red-500" : "bg-yellow-500"}`}
-                              />
-                              <span className="truncate">{t.objective}</span>
-                              <span className="ml-auto flex-shrink-0 text-slate-500">
-                                {t.role}
+                      {(() => {
+                        const activeTasks = agentTasks.filter(
+                          (t) =>
+                            ![
+                              "completed",
+                              "failed",
+                              "stopped",
+                              "done",
+                            ].includes(t.status ?? ""),
+                        );
+                        return (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-slate-100">
+                                Задачи агента
                               </span>
-                            </li>
-                          ))}
-                          {agentTasks.length > 5 && (
-                            <li className="text-slate-500">
-                              …ещё {agentTasks.length - 5}
-                            </li>
-                          )}
-                        </ul>
-                      )}
+                              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">
+                                {activeTasks.length}
+                              </span>
+                            </div>
+                            {activeTasks.length === 0 ? (
+                              <div className="mt-2 text-slate-500">
+                                Нет активных задач
+                              </div>
+                            ) : (
+                              <ul className="mt-2 space-y-1">
+                                {activeTasks.slice(0, 5).map((t) => (
+                                  <li
+                                    key={t.id}
+                                    className="flex items-center gap-2 text-slate-300"
+                                  >
+                                    <span
+                                      className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${
+                                        t.status === "completed"
+                                          ? "bg-green-500"
+                                          : t.status === "failed"
+                                            ? "bg-red-500"
+                                            : "bg-yellow-500"
+                                      }`}
+                                    />
+                                    <span className="truncate">
+                                      {t.objective}
+                                    </span>
+                                    <span className="ml-auto flex-shrink-0 text-slate-500">
+                                      {t.role}
+                                    </span>
+                                  </li>
+                                ))}
+                                {activeTasks.length > 5 && (
+                                  <li className="text-slate-500">
+                                    …ещё {activeTasks.length - 5}
+                                  </li>
+                                )}
+                              </ul>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                     {/* Plugins */}
                     <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
@@ -2029,131 +2052,160 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   )}
-                  {capabilityProposals.length > 0 && (
-                    <div className="rounded-md border border-blue-800/50 bg-blue-950/20 p-3">
-                      <div className="text-sm font-medium text-blue-200">
-                        Capability proposals
-                      </div>
-                      <div className="mt-2 space-y-2">
-                        {capabilityProposals.slice(0, 5).map((proposal) => (
-                          <div
-                            key={proposal.id}
-                            className="rounded border border-blue-900/60 bg-slate-950/40 p-3 text-xs"
-                          >
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="font-medium text-blue-100">
-                                    {proposal.title}
-                                  </span>
-                                  <span className="rounded bg-blue-900/50 px-1.5 py-0.5 text-blue-200">
-                                    {proposal.status}
-                                  </span>
-                                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
-                                    {proposal.risk_level}
-                                  </span>
-                                  <span className="text-slate-500">
-                                    {proposal.suggested_artifact}
-                                  </span>
-                                  {proposal.decided_by === "auto-policy" && (
-                                    <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-emerald-300">
-                                      auto
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="mt-1 line-clamp-2 text-slate-400">
-                                  {proposal.missing_capability}
-                                </div>
-                                <div className="mt-2 flex flex-wrap gap-2 text-slate-500">
-                                  <span>
-                                    Sandbox: {proposal.sandbox_status}
-                                  </span>
-                                  <span>Tests: {proposal.test_status}</span>
-                                  <span>Audit: {proposal.audit_status}</span>
-                                </div>
-                                {proposal.decision_comment && (
-                                  <div className="mt-1 text-emerald-300">
-                                    {proposal.decision_comment}
-                                  </div>
-                                )}
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <button
-                                  type="button"
-                                  disabled={
-                                    agentSaving ||
-                                    [
-                                      "approved",
-                                      "rejected",
-                                      "promoted",
-                                      "rolled_back",
-                                    ].includes(proposal.status)
-                                  }
-                                  onClick={() =>
-                                    sandboxApplyCapabilityProposal(proposal.id)
-                                  }
-                                  className="rounded bg-blue-700 px-2 py-1 text-xs text-white hover:bg-blue-600 disabled:opacity-50"
-                                >
-                                  Sandbox
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={
-                                    agentSaving ||
-                                    [
-                                      "approved",
-                                      "rejected",
-                                      "promoted",
-                                      "rolled_back",
-                                    ].includes(proposal.status)
-                                  }
-                                  onClick={() =>
-                                    decideCapabilityProposal(proposal.id, true)
-                                  }
-                                  className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-50"
-                                >
-                                  Разрешить
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={
-                                    agentSaving ||
-                                    [
-                                      "approved",
-                                      "rejected",
-                                      "promoted",
-                                      "rolled_back",
-                                    ].includes(proposal.status)
-                                  }
-                                  onClick={() =>
-                                    decideCapabilityProposal(proposal.id, false)
-                                  }
-                                  className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
-                                >
-                                  Отклонить
-                                </button>
-                                {proposal.status === "approved" && (
-                                  <button
-                                    type="button"
-                                    disabled={agentSaving}
-                                    onClick={() =>
-                                      promoteCapabilityProposal(proposal.id)
-                                    }
-                                    className="rounded bg-purple-700 px-2 py-1 text-xs text-white hover:bg-purple-600 disabled:opacity-50"
-                                  >
-                                    Продвинуть
-                                  </button>
-                                )}
-                              </div>
+                  {(() => {
+                    const DONE_STATUSES = [
+                      "promoted",
+                      "rejected",
+                      "rolled_back",
+                    ];
+                    const openProposals = capabilityProposals.filter(
+                      (p) => !DONE_STATUSES.includes(p.status),
+                    );
+                    const doneProposals = capabilityProposals.filter((p) =>
+                      DONE_STATUSES.includes(p.status),
+                    );
+                    const statusColor: Record<string, string> = {
+                      draft: "text-slate-400 bg-slate-800",
+                      sandbox_ready: "text-blue-300 bg-blue-900/50",
+                      approved: "text-emerald-300 bg-emerald-950",
+                      promoted: "text-violet-300 bg-violet-950",
+                      rejected: "text-red-400 bg-red-950",
+                    };
+                    return (
+                      <>
+                        {openProposals.length > 0 && (
+                          <div className="rounded-md border border-blue-800/50 bg-blue-950/20 p-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium text-blue-200">
+                                Capability proposals
+                              </span>
+                              <span className="rounded bg-blue-900/50 px-1.5 py-0.5 text-xs text-blue-300">
+                                {openProposals.length} ожидают
+                              </span>
                             </div>
-                            <pre className="mt-3 max-h-32 overflow-auto rounded bg-slate-950/70 p-2 text-slate-400">
-                              {JSON.stringify(proposal.draft, null, 2)}
-                            </pre>
+                            <div className="mt-2 space-y-2">
+                              {openProposals.slice(0, 5).map((proposal) => (
+                                <div
+                                  key={proposal.id}
+                                  className="rounded border border-blue-900/60 bg-slate-950/40 p-3 text-xs"
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <span className="font-medium text-blue-100">
+                                          {proposal.title}
+                                        </span>
+                                        <span
+                                          className={`rounded px-1.5 py-0.5 text-[10px] ${statusColor[proposal.status] ?? "text-slate-400 bg-slate-800"}`}
+                                        >
+                                          {proposal.status}
+                                        </span>
+                                        <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300">
+                                          {proposal.risk_level}
+                                        </span>
+                                        {proposal.decided_by ===
+                                          "auto-policy" && (
+                                          <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                                            auto
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="mt-1 line-clamp-2 text-slate-400">
+                                        {proposal.missing_capability}
+                                      </div>
+                                      {proposal.sandbox_status && (
+                                        <div className="mt-1 flex gap-2 text-slate-500">
+                                          <span>
+                                            Sandbox: {proposal.sandbox_status}
+                                          </span>
+                                          {proposal.test_status && (
+                                            <span>
+                                              Tests: {proposal.test_status}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {!["sandbox_ready", "approved"].includes(
+                                        proposal.status,
+                                      ) && (
+                                        <button
+                                          type="button"
+                                          disabled={agentSaving}
+                                          onClick={() =>
+                                            sandboxApplyCapabilityProposal(
+                                              proposal.id,
+                                            )
+                                          }
+                                          className="rounded bg-blue-700 px-2 py-1 text-xs text-white hover:bg-blue-600 disabled:opacity-50"
+                                        >
+                                          Sandbox
+                                        </button>
+                                      )}
+                                      {proposal.status !== "approved" && (
+                                        <button
+                                          type="button"
+                                          disabled={agentSaving}
+                                          onClick={() =>
+                                            decideCapabilityProposal(
+                                              proposal.id,
+                                              true,
+                                            )
+                                          }
+                                          className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-50"
+                                        >
+                                          Разрешить
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        disabled={agentSaving}
+                                        onClick={() =>
+                                          decideCapabilityProposal(
+                                            proposal.id,
+                                            false,
+                                          )
+                                        }
+                                        className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
+                                      >
+                                        Отклонить
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                        )}
+                        {doneProposals.length > 0 && (
+                          <div className="rounded-md border border-slate-700/50 bg-slate-900/30 p-3 text-xs text-slate-500">
+                            <span className="font-medium">История:</span>{" "}
+                            {doneProposals
+                              .slice(0, 3)
+                              .map((p) => (
+                                <span
+                                  key={p.id}
+                                  className="ml-1 inline-flex items-center gap-1"
+                                >
+                                  <span
+                                    className={`rounded px-1 py-0.5 text-[10px] ${statusColor[p.status] ?? ""}`}
+                                  >
+                                    {p.status}
+                                  </span>
+                                  {p.title}
+                                </span>
+                              ))
+                              .reduce<React.ReactNode[]>(
+                                (acc, el, i) =>
+                                  i === 0 ? [el] : [...acc, " · ", el],
+                                [],
+                              )}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
                       <input

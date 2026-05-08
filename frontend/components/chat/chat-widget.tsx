@@ -44,6 +44,7 @@ export function ChatWidget() {
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [activeToolCall, setActiveToolCall] = useState<string | null>(null);
   const [workerModel, setWorkerModel] = useState<string | null>(null);
+  const [lastTurnTools, setLastTurnTools] = useState<string[]>([]);
   const [ratings, setRatings] = useState<Record<string, 1 | -1>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -146,6 +147,7 @@ export function ChatWidget() {
         );
       }
       streamingIdRef.current = null;
+      if (toolsSnapshot.length > 0) setLastTurnTools(toolsSnapshot);
       currentTurnToolsRef.current = [];
       setIsStreaming(false);
       setCurrentStatus(null);
@@ -232,6 +234,7 @@ export function ChatWidget() {
       return;
     const content = input.trim();
     currentTurnToolsRef.current = [];
+    setLastTurnTools([]);
     setMessages((prev) => [...prev, { id: genId(), role: "user", content }]);
     wsRef.current.send(
       JSON.stringify(
@@ -391,10 +394,11 @@ export function ChatWidget() {
           </div>
         </div>
 
-        {/* Activity bar — visible while agent is working */}
-        {isStreaming && (activeToolCall || currentStatus) && (
+        {/* Activity bar — live during streaming, history after */}
+        {(isStreaming && (activeToolCall || currentStatus)) ||
+        (!isStreaming && lastTurnTools.length > 0) ? (
           <div className="px-4 pb-2 flex items-center gap-2 flex-wrap border-t border-slate-100 pt-1.5">
-            {activeToolCall && (
+            {isStreaming && activeToolCall && (
               <span className="flex items-center gap-1 text-[10px] bg-blue-50 text-blue-600 border border-blue-200 rounded px-1.5 py-0.5 font-mono max-w-[200px] truncate">
                 <svg
                   className="w-2.5 h-2.5 flex-shrink-0 animate-spin"
@@ -412,7 +416,7 @@ export function ChatWidget() {
                 {activeToolCall.replace(/__/g, ".")}
               </span>
             )}
-            {currentStatus && (
+            {isStreaming && currentStatus && (
               <span
                 className="text-[10px] text-slate-500 truncate max-w-[220px]"
                 title={currentStatus}
@@ -420,8 +424,18 @@ export function ChatWidget() {
                 {currentStatus.replace(/^Оркестратор:\s*|^Инструмент:\s*/i, "")}
               </span>
             )}
+            {!isStreaming &&
+              lastTurnTools.map((tool) => (
+                <span
+                  key={tool}
+                  className="text-[10px] bg-slate-100 text-slate-500 border border-slate-200 rounded px-1.5 py-0.5 font-mono truncate max-w-[160px]"
+                  title={tool}
+                >
+                  {tool.replace(/__/g, ".")}
+                </span>
+              ))}
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Degraded banner */}
