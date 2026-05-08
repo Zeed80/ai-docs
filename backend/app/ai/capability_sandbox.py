@@ -259,3 +259,110 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
 def _write_text(path: Path, content: str) -> Path:
     path.write_text(content, encoding="utf-8")
     return path
+
+
+# ── Promotion ─────────────────────────────────────────────────────────────────
+
+_STAGING_ROOT = Path(__file__).resolve().parents[2] / "data" / "agent_staging"
+_AIAGENT_ROOT = Path(
+    __import__("os").environ.get(
+        "AIAGENT_ROOT",
+        str(Path(__file__).parent.parent.parent / "aiagent"),
+    )
+)
+_GATEWAY_PATH = _AIAGENT_ROOT / "config" / "gateway.yml"
+
+
+@dataclass(frozen=True)
+class CapabilityPromoteResult:
+    staging_dir: str
+    files: list[str]
+    skill_name: str | None
+    gateway_updated: bool
+    errors: list[str]
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
+def promote_capability(proposal: CapabilityProposal) -> CapabilityPromoteResult:
+    """Copy sandbox artifacts to staging and register the skill in gateway.yml."""
+    errors: list[str] = []
+    skill_name: str | None = None
+    gateway_updated = False
+
+    # Resolve sandbox dir
+    sandbox_dir = _proposal_dir(proposal)
+    staging_dir = _STAGING_ROOT / str(proposal.id)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy sandbox files → staging
+    copied: list[str] = []
+    if sandbox_dir.exists():
+        for src in sandbox_dir.iterdir():
+            dst = staging_dir / src.name
+            dst.write_bytes(src.read_bytes())
+            copied.append(src.name)
+    else:
+        errors.append(f"Sandbox directory not found: {sandbox_dir}")
+
+    # Extract skill name from draft
+    draft = proposal.draft or {}
+    skill_entry = _skill_entry(draft)
+    if skill_entry:
+        skill_name = skill_entry.get("name") or str(draft.get("tool_name") or "")
+
+    # Register in gateway.yml exposed list
+    if skill_name and not errors:
+        try:
+            gateway_updated = _add_skill_to_gateway(skill_name)
+        except Exception as exc:
+            errors.append(f"Failed to update gateway.yml: {exc}")
+
+    # Write promotion manifest to staging
+    manifest = {
+        "proposal_id": str(proposal.id),
+        "title": proposal.title,
+        "skill_name": skill_name,
+        "gateway_updated": gateway_updated,
+        "sandbox_dir": str(sandbox_dir),
+        "promoted_at": datetime.now(timezone.utc).isoformat(),
+        "errors": errors,
+    }
+    (staging_dir / "promotion_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    copied.append("promotion_manifest.json")
+
+    return CapabilityPromoteResult(
+        staging_dir=str(staging_dir),
+        files=copied,
+        skill_name=skill_name,
+        gateway_updated=gateway_updated,
+        errors=errors,
+    )
+
+
+def _add_skill_to_gateway(skill_name: str) -> bool:
+    """Append skill_name to skills.exposed in gateway.yml if not already present."""
+    if not _GATEWAY_PATH.exists():
+        return False
+
+    raw_text = _GATEWAY_PATH.read_text(encoding="utf-8")
+    data = yaml.safe_load(raw_text) or {}
+    skills_section = data.setdefault("skills", {})
+    exposed: list[str] = skills_section.setdefault("exposed", [])
+
+    if skill_name in exposed:
+        return True
+
+    exposed.append(skill_name)
+    skills_section["exposed"] = exposed
+    data["skills"] = skills_section
+
+    _GATEWAY_PATH.write_text(
+        yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+    return True

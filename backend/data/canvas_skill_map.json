@@ -1,0 +1,135 @@
+{
+  "canvas_to_skill": {
+    "agent:invoice-list": "workspace.invoice_table",
+    "agent:invoice-items": "workspace.invoice_items_table",
+    "agent:invoice-items-grouped": "workspace.invoice_items_grouped_table",
+    "agent:invoice-items-by-supplier": "workspace.invoice_items_by_supplier_table"
+  },
+  "skill_to_spec": {
+    "workspace.invoice_table": {
+      "path": "/api/workspace/agent/invoices/table",
+      "default_args": {
+        "limit": 5000,
+        "include_delete_actions": true
+      }
+    },
+    "workspace.invoice_items_table": {
+      "path": "/api/workspace/agent/invoices/items-table",
+      "default_args": {
+        "limit": 10000,
+        "include_invoice_actions": true
+      }
+    },
+    "workspace.invoice_items_grouped_table": {
+      "path": "/api/workspace/agent/invoices/items-grouped-table",
+      "default_args": {
+        "limit": 5000,
+        "include_supplier": false
+      }
+    },
+    "workspace.invoice_items_by_supplier_table": {
+      "path": "/api/workspace/agent/invoices/items-by-supplier-table",
+      "default_args": {
+        "limit": 10000
+      }
+    }
+  },
+  "intent_routing": [
+    {
+      "id": "invoice",
+      "role": "invoice_specialist",
+      "intent": "invoice_data",
+      "keywords": ["счет", "счёт", "invoice", "товар", "позици", "поставщик", "поставщика"],
+      "skills": [
+        "invoice.list",
+        "invoice.get",
+        "workspace.invoice_table",
+        "workspace.invoice_items_table",
+        "workspace.invoice_items_grouped_table",
+        "workspace.invoice_items_by_supplier_table"
+      ],
+      "canvas_rules": [
+        {
+          "require_any": ["товар", "позици", "номенклатур", "материал", "столб", "колон"],
+          "canvas_id": "agent:invoice-items",
+          "sub_rules": [
+            {
+              "require_any": ["по поставщик", "поставщикам"],
+              "canvas_id": "agent:invoice-items-by-supplier"
+            },
+            {
+              "require_any": ["групп"],
+              "canvas_id": "agent:invoice-items-grouped"
+            }
+          ]
+        }
+      ],
+      "default_canvas": "agent:invoice-list"
+    },
+    {
+      "id": "warehouse",
+      "role": "warehouse_specialist",
+      "intent": "warehouse",
+      "keywords": ["склад", "остат", "тмц", "фрез"],
+      "skills": ["warehouse.list_inventory", "warehouse.get_item", "canvas.publish"],
+      "default_canvas": "agent:warehouse-list"
+    },
+    {
+      "id": "email",
+      "role": "procurement_specialist",
+      "intent": "email",
+      "keywords": ["письм", "почт", "email"],
+      "skills": ["email.search", "email.get_thread", "email.draft", "email.send"]
+    },
+    {
+      "id": "engineering",
+      "role": "engineer",
+      "intent": "engineering",
+      "keywords": ["чертеж", "чертёж", "технолог", "операци"],
+      "skills": ["doc.get", "tech.process_plan_draft_from_document", "canvas.publish"]
+    },
+    {
+      "id": "memory",
+      "role": "memory_researcher",
+      "intent": "memory_search",
+      "keywords": ["памят", "найди", "поиск", "источник"],
+      "skills": ["memory.search", "memory.explain", "doc.search"]
+    }
+  ],
+  "supplier_grouping": {
+    "trigger_keywords": ["по поставщик", "по поставщикам", "по поставщиках", "поставщикам"],
+    "item_keywords": ["товар", "позици", "номенклатур", "материал", "тмц"],
+    "canvas_id": "agent:invoice-items-by-supplier",
+    "skill": "workspace.invoice_items_by_supplier_table"
+  },
+  "fallback_canvas_rules": [
+    {
+      "require_any": ["товар", "позици", "номенклатур", "материал"],
+      "sub_rules": [
+        {
+          "require_any": ["по поставщик", "поставщикам"],
+          "canvas_id": "agent:invoice-items-by-supplier"
+        },
+        {
+          "require_any": ["групп"],
+          "canvas_id": "agent:invoice-items-grouped"
+        }
+      ],
+      "canvas_id": "agent:invoice-items"
+    },
+    {
+      "require_any": ["счет", "счёт", "invoice"],
+      "require_table_edit": true,
+      "require_extra_any": ["поставщик"],
+      "canvas_id": "agent:invoice-items-grouped"
+    },
+    {
+      "require_any": ["счет", "счёт", "invoice"],
+      "canvas_id": "agent:invoice-list"
+    },
+    {
+      "require_any": ["склад", "остат", "тмц"],
+      "canvas_id": "agent:warehouse-list"
+    }
+  ]
+}

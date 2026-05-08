@@ -17,6 +17,12 @@ PROTECTED_SETTINGS = {
     "capability_builder_requires_approval",
     "permission_mode",
     "safe_auto_apply_enabled",
+    # High-impact operational settings — changes affect agent behaviour significantly
+    "disable_thinking",
+    "max_steps",
+    "llm_timeout_seconds",
+    "backend_timeout_seconds",
+    "autonomy_mode",
 }
 
 EXTERNAL_SKILL_PREFIXES = ("email.", "telegram.", "export.", "procurement.")

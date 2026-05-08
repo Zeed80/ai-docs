@@ -303,6 +303,7 @@ class AIRouter:
             prompt,
             system=_EMAIL_SYSTEM,
             format_json=True,
+            confidential=True,
         )
         import json as _json
         try:

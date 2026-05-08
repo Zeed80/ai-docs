@@ -49,17 +49,17 @@ models:
     provider: "ollama"
     provider_model: "gemma4:26b"
     status: "production"
-    modalities: ["text", "vision"]
+    modalities: ["text", "vision", "tool_calling"]
     max_context_tokens: 256000
     supports_structured_output: false
-    supports_tool_calling: false
+    supports_tool_calling: true
     local_only: true
     quality_score: 0.86
     speed_score: 0.55
     notes: "Baseline local reasoning model. Replace through registry when better local models pass evals."
   local_reasoning_vllm_turboquant:
     provider: "vllm"
-    provider_model: "replace-with-local-long-context-model"
+    provider_model: "PLACEHOLDER-set-actual-model-before-enabling"
     status: "candidate"
     modalities: ["text"]
     max_context_tokens: 131072
@@ -68,7 +68,7 @@ models:
     local_only: true
     quality_score: 0.0
     speed_score: 0.0
-    notes: "Optional vLLM long-context profile. TurboQuant KV-cache must be enabled in serving config after benchmark."
+    notes: "Optional vLLM long-context profile. NOT used by any active route. Set provider_model and promote to production after benchmarking. VLM/vision tasks use gemma4_e4b_ollama via invoice_ocr and drawing_analysis routes."
   local_embedding_ollama:
     provider: "ollama"
     provider_model: "nomic-embed-text"
@@ -276,8 +276,8 @@ routes:
     manual_review_fallback: true
   tool_calling:
     required_modalities: ["tool_calling"]
-    local_only: true
-    fallback_chain: ["future_reasoning_cloud", "deepseek_r1_openrouter", "claude_sonnet_anthropic"]
+    local_only: false
+    fallback_chain: ["gemma4_26b_ollama", "claude_sonnet_anthropic", "deepseek_r1_openrouter"]
     manual_review_fallback: true
   speech:
     required_modalities: ["audio"]

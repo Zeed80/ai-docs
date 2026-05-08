@@ -8,20 +8,45 @@ The existing AgentSession remains the tool-calling executor.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+import structlog
 from pydantic import BaseModel, Field
+
+logger = structlog.get_logger()
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession
+from app.ai.orchestrator_memory import TurnFeedback, build_tool_preference_hint, record_turn_feedback
+from app.ai.policy_engine import check_tool_execution
 from app.ai.router import ai_router
 from app.ai.schemas import AIRequest, AITask, ChatMessage
 from app.domain.workspace import get_workspace_block, list_workspace_blocks, upsert_workspace_block
 
 SendFn = Callable[[dict], Awaitable[None]]
+
+_CANVAS_MAP_PATH = Path(__file__).parent.parent.parent / "data" / "canvas_skill_map.json"
+_canvas_map_cache: dict[str, Any] | None = None
+_canvas_map_mtime: float = 0.0
+
+
+def _canvas_map() -> dict[str, Any]:
+    """Load canvas_skill_map.json with mtime-based refresh."""
+    global _canvas_map_cache, _canvas_map_mtime
+    try:
+        mtime = _CANVAS_MAP_PATH.stat().st_mtime
+        if _canvas_map_cache is None or mtime != _canvas_map_mtime:
+            _canvas_map_cache = json.loads(_CANVAS_MAP_PATH.read_text(encoding="utf-8"))
+            _canvas_map_mtime = mtime
+    except Exception:
+        if _canvas_map_cache is None:
+            _canvas_map_cache = {}
+    return _canvas_map_cache
 
 WorkerRole = Literal[
     "data_analyst",
@@ -143,6 +168,7 @@ class AgentOrchestrator:
             await self._executor.on_user_message(content)
             return
 
+        turn_started_at = time.time()
         self._trace = _TurnTrace()
         plan = await self._plan_turn_with_model(content, config)
         self._workspace_before = _workspace_updated_at_snapshot()
@@ -172,6 +198,17 @@ class AgentOrchestrator:
         await self._publish_audit(audit)
         if not audit.passed and self._should_report_capability_gap(plan, audit, config):
             await self._publish_capability_gap(plan, audit, config)
+
+        # Record turn outcome for adaptive planning in future turns
+        _record_feedback_async(
+            content=content,
+            plan=plan,
+            trace=self._trace,
+            audit=audit,
+            retries=retry_count,
+            duration_ms=int((time.time() - turn_started_at) * 1000),
+        )
+
         self._history.append({"role": "user", "content": content})
         self._history = self._history[-20:]
         await self._outer_send({"type": "done"})
@@ -181,10 +218,17 @@ class AgentOrchestrator:
         content: str,
         config: BuiltinAgentConfig,
     ) -> OrchestratorPlan:
+        heuristic_plan = self._plan_turn(content)
+        preference_hint = build_tool_preference_hint(
+            intent_text=content,
+            intent_category=heuristic_plan.worker.role,
+            candidate_skills=list(heuristic_plan.worker.recommended_skills),
+        )
         prompt = _build_orchestrator_prompt(
             content=content,
-            fallback_plan=self._plan_turn(content),
+            fallback_plan=heuristic_plan,
             history=self._history,
+            preference_hint=preference_hint,
         )
         try:
             response = await ai_router.run(
@@ -204,9 +248,13 @@ class AgentOrchestrator:
             )
             if isinstance(response.data, OrchestratorPlan):
                 return _normalize_model_plan(response.data, content)
-        except Exception:
-            pass
-        return self._plan_turn(content)
+        except Exception as exc:
+            logger.warning(
+                "orchestrator_plan_model_failed",
+                model=config.orchestrator_model or config.fast_model,
+                error=str(exc),
+            )
+        return heuristic_plan
 
     async def _send_from_executor(self, data: dict) -> None:
         msg_type = str(data.get("type") or "")
@@ -235,56 +283,20 @@ class AgentOrchestrator:
         text = _norm(content)
         workspace_required = _is_workspace_request(text)
         role: WorkerRole = "data_analyst"
-        skills: list[str] = ["memory.search", "table.query"]
+        skills: list[str] = list(_canvas_map().get("default_skills", ["memory.search", "table.query"]))
         intent = "general"
         output_type: OutputType = "text"
         canvas_id: str | None = None
 
-        if any(
-            token in text
-            for token in (
-                "счет", "счёт", "invoice", "товар", "позици",
-                "поставщик", "поставщика",
-            )
-        ) or _is_table_edit_request(text):
-            role = "invoice_specialist"
-            intent = "invoice_data"
-            skills = [
-                "invoice.list",
-                "invoice.get",
-                "workspace.invoice_table",
-                "workspace.invoice_items_table",
-                "workspace.invoice_items_grouped_table",
-                "workspace.invoice_items_by_supplier_table",
-            ]
-            if any(
-                token in text
-                for token in ("товар", "позици", "номенклатур", "материал", "столб", "колон")
-            ):
-                canvas_id = "agent:invoice-items"
-                if "по поставщик" in text or "поставщикам" in text:
-                    canvas_id = "agent:invoice-items-by-supplier"
-                elif "групп" in text or ("поставщик" in text and _is_table_edit_request(text)):
-                    canvas_id = "agent:invoice-items-grouped"
-            else:
-                canvas_id = "agent:invoice-list"
-        elif any(token in text for token in ("склад", "остат", "тмц", "фрез")):
-            role = "warehouse_specialist"
-            intent = "warehouse"
-            skills = ["warehouse.list_inventory", "warehouse.get_item", "canvas.publish"]
-            canvas_id = "agent:warehouse-list"
-        elif any(token in text for token in ("письм", "почт", "email")):
-            role = "procurement_specialist"
-            intent = "email"
-            skills = ["email.search", "email.get_thread", "email.draft", "email.send"]
-        elif any(token in text for token in ("чертеж", "чертёж", "технолог", "операци")):
-            role = "engineer"
-            intent = "engineering"
-            skills = ["doc.get", "tech.process_plan_draft_from_document", "canvas.publish"]
-        elif any(token in text for token in ("памят", "найди", "поиск", "источник")):
-            role = "memory_researcher"
-            intent = "memory_search"
-            skills = ["memory.search", "memory.explain", "doc.search"]
+        matched_route = _match_intent_route(text)
+        if matched_route or _is_table_edit_request(text):
+            if matched_route:
+                role = matched_route["role"]
+                intent = matched_route["intent"]
+                skills = list(matched_route.get("skills", skills))
+                canvas_id = _resolve_canvas_from_route(matched_route, text)
+        else:
+            canvas_id = None
 
         if workspace_required:
             output_type = (
@@ -504,6 +516,32 @@ class AgentOrchestrator:
         if not spec:
             return False
 
+        tool_name: str = spec["tool"]
+        approval_gates: set[str] = set(config.approval_gates or [])
+        policy = check_tool_execution(
+            skill_name=tool_name,
+            args=spec["args"],
+            config=config,
+            approval_gates=approval_gates,
+        )
+        if not policy.allowed or tool_name in approval_gates:
+            reason = (
+                f"требует подтверждения человеком (approval gate)"
+                if tool_name in approval_gates
+                else policy.reason
+            )
+            await self._outer_send({
+                "type": "orchestrator.direct_tool_blocked",
+                "content": (
+                    f"Оркестратор: инструмент {tool_name!r} заблокирован политикой — {reason}. "
+                    "Требуется явное подтверждение через интерфейс."
+                ),
+                "tool": tool_name,
+                "reason": reason,
+                "risk_level": policy.risk_level,
+            })
+            return False
+
         self._trace = _TurnTrace()
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._outer_send({
@@ -512,12 +550,12 @@ class AgentOrchestrator:
                 "Оркестратор: исполнитель выбрал не тот инструмент, "
                 "запускаю правильный workspace tool напрямую."
             ),
-            "tool": spec["tool"],
+            "tool": tool_name,
             "args": spec["args"],
         })
         await self._record_orchestrator_tool_event({
             "type": "tool_call",
-            "tool": spec["tool"],
+            "tool": tool_name,
             "args": spec["args"],
         })
         try:
@@ -529,7 +567,7 @@ class AgentOrchestrator:
             if resp.status_code >= 400:
                 await self._record_orchestrator_tool_event({
                     "type": "tool_result",
-                    "tool": spec["tool"],
+                    "tool": tool_name,
                     "result": {
                         "error": f"HTTP {resp.status_code}",
                         "detail": resp.text[:300],
@@ -540,14 +578,14 @@ class AgentOrchestrator:
         except Exception as exc:
             await self._record_orchestrator_tool_event({
                 "type": "tool_result",
-                "tool": spec["tool"],
+                "tool": tool_name,
                 "result": {"error": str(exc)},
             })
             return False
 
         await self._record_orchestrator_tool_event({
             "type": "tool_result",
-            "tool": spec["tool"],
+            "tool": tool_name,
             "result": result,
         })
         message = str(result.get("message") or "") if isinstance(result, dict) else ""
@@ -718,6 +756,7 @@ def _build_orchestrator_prompt(
     content: str,
     fallback_plan: OrchestratorPlan,
     history: list[dict[str, str]],
+    preference_hint: str = "",
 ) -> str:
     blocks = list_workspace_blocks()[:8]
     workspace_summary = [
@@ -735,19 +774,24 @@ def _build_orchestrator_prompt(
         for block in blocks
         if isinstance(block, dict)
     ]
-    return (
-        "Последние сообщения диалога:\n"
-        f"{history[-12:]}\n\n"
-        "Запрос пользователя:\n"
-        f"{content[:2000]}\n\n"
-        "Текущие блоки Рабочего стола:\n"
-        f"{workspace_summary}\n\n"
-        "Fallback-план эвристики, который можно исправить:\n"
-        f"{fallback_plan.model_dump(mode='json')}\n\n"
-        "Верни OrchestratorPlan JSON. Для изменения уже показанной таблицы "
-        "укажи channel=workspace, required=true и canvas_id существующего блока, "
-        "если его можно определить."
+    parts = [
+        "Последние сообщения диалога:\n" + str(history[-12:]),
+        "\nЗапрос пользователя:\n" + content[:2000],
+        "\nТекущие блоки Рабочего стола:\n" + str(workspace_summary),
+    ]
+    if preference_hint:
+        parts.append("\n" + preference_hint)
+    parts.append(
+        "\nFallback-план эвристики, который можно исправить:\n"
+        + str(fallback_plan.model_dump(mode="json"))
     )
+    parts.append(
+        "\nВерни OrchestratorPlan JSON. Для изменения уже показанной таблицы "
+        "укажи channel=workspace, required=true и canvas_id существующего блока, "
+        "если его можно определить. "
+        "Если в истории инструментов есть предпочтительные — отдай им приоритет в recommended_skills."
+    )
+    return "\n".join(parts)
 
 
 def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorPlan:
@@ -759,11 +803,13 @@ def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorP
     canvas_id = plan.workspace.canvas_id
     recommended_skills = list(plan.worker.recommended_skills)
     if _is_supplier_grouping_request(text):
+        sg = _canvas_map().get("supplier_grouping", {})
         workspace_required = True
         output_type = "table"
-        canvas_id = "agent:invoice-items-by-supplier"
-        if "workspace.invoice_items_by_supplier_table" not in recommended_skills:
-            recommended_skills.insert(0, "workspace.invoice_items_by_supplier_table")
+        canvas_id = sg.get("canvas_id", "agent:invoice-items-by-supplier")
+        supplier_skill = sg.get("skill", "workspace.invoice_items_by_supplier_table")
+        if supplier_skill not in recommended_skills:
+            recommended_skills.insert(0, supplier_skill)
     if workspace_required and not canvas_id:
         canvas_id = _fallback_canvas_id(content)
     return plan.model_copy(
@@ -804,83 +850,67 @@ def _fallback_canvas_id(content: str) -> str | None:
         latest_table = _latest_workspace_table_id()
         if latest_table:
             return latest_table
-    if any(token in text for token in ("товар", "позици", "номенклатур", "материал")):
-        if "по поставщик" in text or "поставщикам" in text:
-            return "agent:invoice-items-by-supplier"
-        return "agent:invoice-items-grouped" if "групп" in text else "agent:invoice-items"
-    if _is_table_edit_request(text) and any(token in text for token in ("поставщик", "счет")):
-        return "agent:invoice-items-grouped"
-    if any(token in text for token in ("счет", "счёт", "invoice")):
-        return "agent:invoice-list"
-    if any(token in text for token in ("склад", "остат", "тмц")):
-        return "agent:warehouse-list"
+    for rule in _canvas_map().get("fallback_canvas_rules", []):
+        if not any(kw in text for kw in rule.get("require_any", [])):
+            continue
+        if rule.get("require_table_edit") and not _is_table_edit_request(text):
+            continue
+        if rule.get("require_extra_any") and not any(
+            kw in text for kw in rule["require_extra_any"]
+        ):
+            continue
+        for sub in rule.get("sub_rules", []):
+            if any(kw in text for kw in sub.get("require_any", [])):
+                return sub["canvas_id"]
+        return rule["canvas_id"]
     return None
 
 
+def _match_intent_route(text: str) -> dict[str, Any] | None:
+    """Return first matching intent_routing entry from canvas_skill_map.json."""
+    for route in _canvas_map().get("intent_routing", []):
+        if any(kw in text for kw in route.get("keywords", [])):
+            return route
+    return None
+
+
+def _resolve_canvas_from_route(route: dict[str, Any], text: str) -> str | None:
+    """Walk canvas_rules in the route to determine canvas_id for the given text."""
+    for rule in route.get("canvas_rules", []):
+        if any(kw in text for kw in rule.get("require_any", [])):
+            for sub in rule.get("sub_rules", []):
+                if any(kw in text for kw in sub.get("require_any", [])):
+                    return sub["canvas_id"]
+            return rule["canvas_id"]
+    return route.get("default_canvas")
+
+
 def _is_supplier_grouping_request(text: str) -> bool:
-    return any(
-        token in text
-        for token in ("по поставщик", "по поставщикам", "по поставщиках", "поставщикам")
-    ) and any(
-        token in text
-        for token in ("товар", "позици", "номенклатур", "материал", "тмц")
+    sg = _canvas_map().get("supplier_grouping", {})
+    return any(kw in text for kw in sg.get("trigger_keywords", [])) and any(
+        kw in text for kw in sg.get("item_keywords", [])
     )
 
 
 def _expected_workspace_skill_for_canvas(canvas_id: str | None) -> str | None:
-    mapping = {
-        "agent:invoice-list": "workspace.invoice_table",
-        "agent:invoice-items": "workspace.invoice_items_table",
-        "agent:invoice-items-grouped": "workspace.invoice_items_grouped_table",
-        "agent:invoice-items-by-supplier": "workspace.invoice_items_by_supplier_table",
-    }
-    return mapping.get(canvas_id or "")
+    return _canvas_map().get("canvas_to_skill", {}).get(canvas_id or "")
 
 
 def _workspace_tool_spec_for_plan(plan: OrchestratorPlan) -> dict[str, Any] | None:
     skill = _expected_workspace_skill_for_canvas(plan.workspace.canvas_id)
     if not skill:
         return None
+    spec_entry = _canvas_map().get("skill_to_spec", {}).get(skill)
+    if not spec_entry:
+        return None
     tool = skill.replace(".", "__")
     canvas_id = plan.workspace.canvas_id
-    specs: dict[str, dict[str, Any]] = {
-        "workspace.invoice_table": {
-            "tool": tool,
-            "path": "/api/workspace/agent/invoices/table",
-            "args": {
-                "canvas_id": canvas_id,
-                "limit": 5000,
-                "include_delete_actions": True,
-            },
-        },
-        "workspace.invoice_items_table": {
-            "tool": tool,
-            "path": "/api/workspace/agent/invoices/items-table",
-            "args": {
-                "canvas_id": canvas_id,
-                "limit": 10000,
-                "include_invoice_actions": True,
-            },
-        },
-        "workspace.invoice_items_grouped_table": {
-            "tool": tool,
-            "path": "/api/workspace/agent/invoices/items-grouped-table",
-            "args": {
-                "canvas_id": canvas_id,
-                "limit": 5000,
-                "include_supplier": False,
-            },
-        },
-        "workspace.invoice_items_by_supplier_table": {
-            "tool": tool,
-            "path": "/api/workspace/agent/invoices/items-by-supplier-table",
-            "args": {
-                "canvas_id": canvas_id,
-                "limit": 10000,
-            },
-        },
+    args: dict[str, Any] = {**spec_entry.get("default_args", {}), "canvas_id": canvas_id}
+    return {
+        "tool": tool,
+        "path": spec_entry["path"],
+        "args": args,
     }
-    return specs.get(skill)
 
 
 def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str:
@@ -985,6 +1015,43 @@ def _latest_workspace_table_id() -> str | None:
         if block.get("type") == "table" and block.get("id"):
             return str(block["id"])
     return None
+
+
+def _record_feedback_async(
+    *,
+    content: str,
+    plan: "OrchestratorPlan",
+    trace: "_TurnTrace",
+    audit: "AuditReport",
+    retries: int,
+    duration_ms: int,
+) -> None:
+    """Schedule feedback recording as a background task (non-blocking)."""
+    import asyncio
+
+    # Sanitise tool names: trace stores them as "skill__name" format
+    skills_used = [
+        t.replace("__", ".") for t in trace.tool_calls
+        if not t.startswith("_")
+    ]
+
+    feedback = TurnFeedback(
+        intent_text=content[:300],
+        intent_category=plan.worker.role,
+        skills_planned=list(plan.worker.recommended_skills),
+        skills_used=skills_used,
+        audit_passed=audit.passed,
+        retries=retries,
+        duration_ms=duration_ms,
+        errors=list(audit.issues),
+    )
+
+    try:
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, record_turn_feedback, feedback)
+    except Exception:
+        # Best-effort: don't block the main turn
+        pass
 
 
 def _event_canvas_id(event: dict[str, Any]) -> str | None:

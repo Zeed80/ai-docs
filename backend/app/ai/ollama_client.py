@@ -31,13 +31,14 @@ class CircuitState(str, Enum):
 
 @dataclass
 class CircuitBreaker:
-    """Simple circuit breaker for AI backends."""
+    """Simple circuit breaker for AI backends with optional Redis persistence."""
 
     failure_threshold: int = 3
     recovery_timeout: float = 60.0
-    _failures: int = 0
-    _state: CircuitState = CircuitState.CLOSED
-    _last_failure_time: float = 0.0
+    model_name: str = ""
+    _failures: int = field(default=0, init=False)
+    _state: CircuitState = field(default=CircuitState.CLOSED, init=False)
+    _last_failure_time: float = field(default=0.0, init=False)
 
     @property
     def state(self) -> CircuitState:
@@ -48,14 +49,19 @@ class CircuitBreaker:
 
     def record_success(self) -> None:
         self._failures = 0
+        prev = self._state
         self._state = CircuitState.CLOSED
+        if prev != CircuitState.CLOSED and self.model_name:
+            _persist_breaker(self.model_name, self)
 
     def record_failure(self) -> None:
         self._failures += 1
         self._last_failure_time = time.time()
         if self._failures >= self.failure_threshold:
             self._state = CircuitState.OPEN
-            logger.warning("circuit_breaker_open", failures=self._failures)
+            logger.warning("circuit_breaker_open", model=self.model_name, failures=self._failures)
+            if self.model_name:
+                _persist_breaker(self.model_name, self)
 
     @property
     def is_available(self) -> bool:
@@ -71,13 +77,62 @@ class OllamaResponse:
     eval_count: int = 0
 
 
-# Per-model circuit breakers
+# Per-model circuit breakers (in-memory, synced to Redis for persistence across restarts)
 _breakers: dict[str, CircuitBreaker] = {}
+_BREAKER_TTL = 300  # Redis TTL in seconds; auto-clears after 5 min to avoid permanent lockout
+
+
+def _breaker_redis_key(model: str) -> str:
+    return f"circuit_breaker:{model}"
+
+
+def _load_breaker_from_redis(model: str) -> CircuitBreaker | None:
+    """Restore circuit breaker state from Redis if it was OPEN at last shutdown."""
+    try:
+        import redis as _redis
+        from app.config import settings as _s
+        r = _redis.from_url(_s.redis_url, decode_responses=True)
+        raw = r.get(_breaker_redis_key(model))
+        if not raw:
+            return None
+        data = json.loads(raw)
+        breaker = CircuitBreaker()
+        breaker._failures = data.get("failures", 0)
+        breaker._last_failure_time = data.get("last_failure_time", 0.0)
+        state_str = data.get("state", CircuitState.CLOSED.value)
+        breaker._state = CircuitState(state_str)
+        return breaker
+    except Exception:
+        return None
+
+
+def _persist_breaker(model: str, breaker: CircuitBreaker) -> None:
+    """Persist circuit breaker state to Redis so it survives restarts."""
+    try:
+        import redis as _redis
+        from app.config import settings as _s
+        r = _redis.from_url(_s.redis_url, decode_responses=True)
+        r.setex(
+            _breaker_redis_key(model),
+            _BREAKER_TTL,
+            json.dumps({
+                "failures": breaker._failures,
+                "state": breaker._state.value,
+                "last_failure_time": breaker._last_failure_time,
+            }),
+        )
+    except Exception:
+        pass
 
 
 def _get_breaker(model: str) -> CircuitBreaker:
     if model not in _breakers:
-        _breakers[model] = CircuitBreaker()
+        restored = _load_breaker_from_redis(model)
+        if restored is not None:
+            restored.model_name = model
+            _breakers[model] = restored
+        else:
+            _breakers[model] = CircuitBreaker(model_name=model)
     return _breakers[model]
 
 
@@ -304,9 +359,18 @@ async def generate_json(
             return json.loads(cleaned)
 
         except json.JSONDecodeError as e:
-            logger.error("ollama_json_parse_error", model=model, text=raw[:300], error=str(e))
+            logger.warning(
+                "ollama_json_parse_error",
+                model=model,
+                text=raw[:300],
+                error=str(e),
+                attempt=attempt + 1,
+            )
             last_error = ValueError(f"Failed to parse JSON from model output: {e}")
-            break  # Don't retry parse errors — bad prompt, not a transient issue
+            # Retry: model may have truncated output mid-token (transient issue)
+            if attempt < 2:
+                import asyncio as _asyncio
+                await _asyncio.sleep(2 ** attempt)
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             last_error = e
@@ -385,13 +449,15 @@ async def reasoning_generate(
     temperature: float = 0.3,
     max_tokens: int = 4096,
     format_json: bool = False,
+    confidential: bool = False,
 ) -> str:
     """Generate using the reasoning backend (local Ollama or Claude API).
 
     Automatically routes to the configured backend.
+    When confidential=True, always uses local Ollama even if Claude backend is configured.
     """
     model_name = _runtime_reasoning_model()
-    if settings.ai_reasoning_backend == "claude" and settings.anthropic_api_key:
+    if not confidential and settings.ai_reasoning_backend == "claude" and settings.anthropic_api_key:
         return await _claude_generate(
             prompt,
             model=model_name,

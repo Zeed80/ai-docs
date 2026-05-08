@@ -250,6 +250,7 @@ class MemorySearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
     node_types: list[str] | None = None
     document_id: uuid.UUID | None = None
+    scope: str | None = None
     limit: int = Field(50, ge=1, le=500)
     cursor: str | None = None
     intent: str | None = None

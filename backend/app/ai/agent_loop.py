@@ -352,6 +352,14 @@ def _sanitize_name(name: str) -> str:
     return name.replace(".", "__")
 
 
+def _registry_mtime() -> float:
+    """Return mtime of the skill registry file, or 0.0 if missing."""
+    try:
+        return gateway_config.registry_path.stat().st_mtime
+    except Exception:
+        return 0.0
+
+
 def _load_registry(
     expose_filter: set[str] | None = None,
 ) -> tuple[list[dict], dict[str, dict]]:
@@ -458,29 +466,49 @@ async def _execute_skill(
             body_args[k] = v
 
     url = base_url + path
+    max_retries = 3
+    last_error: Exception | None = None
 
-    try:
-        async with httpx.AsyncClient(timeout=float(timeout)) as client:
-            if method == "GET":
-                resp = await client.get(url, params=query_args)
-            elif method == "POST":
-                resp = await client.post(url, json=body_args or None)
-            elif method == "PATCH":
-                resp = await client.patch(url, json=body_args)
-            elif method == "DELETE":
-                resp = await client.delete(url)
-            else:
-                return {"error": f"Unsupported method: {method}"}
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=float(timeout)) as client:
+                if method == "GET":
+                    resp = await client.get(url, params=query_args)
+                elif method == "POST":
+                    resp = await client.post(url, json=body_args or None)
+                elif method == "PATCH":
+                    resp = await client.patch(url, json=body_args)
+                elif method == "DELETE":
+                    resp = await client.delete(url)
+                else:
+                    return {"error": f"Unsupported method: {method}"}
 
             if resp.status_code < 400:
                 try:
                     return resp.json()
                 except Exception:
                     return {"text": resp.text[:2000]}
+            elif resp.status_code in {502, 503, 504} and attempt < max_retries - 1:
+                last_error = Exception(f"HTTP {resp.status_code}")
+                await asyncio.sleep(2 ** attempt)
+                continue
             else:
                 return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
-    except Exception as e:
-        return {"error": str(e)}
+
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            last_error = e
+            logger.warning(
+                "skill_http_retry",
+                skill=skill.get("name"),
+                attempt=attempt + 1,
+                error=str(e),
+            )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            return {"error": str(e)}
+
+    return {"error": f"Skill execution failed after {max_retries} attempts: {last_error}"}
 
 
 # ── Ollama client (streaming) ─────────────────────────────────────────────────
@@ -1034,6 +1062,7 @@ class AgentSession:
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
         self._mcp_initialised = False
+        self._registry_mtime: float = _registry_mtime()
 
     async def _call_for_compression(
         self,
@@ -1089,6 +1118,11 @@ class AgentSession:
                 logger.info("mcp_tools_loaded", count=len(mcp_tools))
         except Exception as exc:
             logger.warning("mcp_init_failed", error=str(exc))
+            await self._send({
+                "type": "system_warning",
+                "code": "mcp_init_failed",
+                "message": f"MCP инструменты не загружены: {exc}. Инструменты MCP недоступны в этой сессии.",
+            })
 
     def _rebuild_runtime_components(self, config: BuiltinAgentConfig) -> None:
         """Rebuild tools/system/dependencies when runtime agent config changes."""
@@ -1115,16 +1149,23 @@ class AgentSession:
         self._mcp_initialised = False
 
     def _refresh_runtime_config(self) -> None:
-        """Reload config so model/skills changes apply without reconnect."""
+        """Reload config and skill registry when either changes, without reconnect."""
         latest_config = get_builtin_agent_config()
-        if latest_config.model_dump(mode="json") == self._config.model_dump(mode="json"):
+        config_changed = (
+            latest_config.model_dump(mode="json") != self._config.model_dump(mode="json")
+        )
+        current_mtime = _registry_mtime()
+        registry_changed = current_mtime != self._registry_mtime
+        if not config_changed and not registry_changed:
             return
         self._rebuild_runtime_components(latest_config)
+        self._registry_mtime = current_mtime
         logger.info(
             "agent_runtime_config_reloaded",
             model=_get_agent_model(self._config),
             provider=self._config.provider,
             exposed_skills=len(self._config.exposed_skills),
+            registry_reloaded=registry_changed,
         )
 
     def hydrate_history(self, messages: list[dict[str, str]]) -> None:
@@ -1777,13 +1818,27 @@ class AgentSession:
         skill = self._skill_map.get(fn_name)
         original_name = skill["name"] if skill else fn_name.replace("__", ".")
 
+        # Re-read approval_gates from latest config at every tool call (not cached from session start).
+        from app.ai.agent_config import get_builtin_agent_config as _get_latest_config
         from app.ai.policy_engine import check_tool_execution
+        current_gates = set((_get_latest_config()).approval_gates)
         policy = check_tool_execution(
             skill_name=original_name,
             args=args,
             config=self._config,
-            approval_gates=self._approval_gates,
+            approval_gates=current_gates,
         )
+        asyncio.create_task(self._log_action(
+            iteration=iteration,
+            action_type="policy_check",
+            tool_name=original_name,
+            tool_result={
+                "allowed": policy.allowed,
+                "risk_level": policy.risk_level,
+                "reason": policy.reason,
+                "required_approval": policy.required_approval,
+            },
+        ))
         if not policy.allowed:
             result = {
                 "status": "blocked",
@@ -1794,7 +1849,7 @@ class AgentSession:
             await self._send({"type": "tool_result", "tool": fn_name, "result": result})
             return fn_name, result
 
-        if original_name in self._approval_gates:
+        if original_name in current_gates:
             asyncio.create_task(self._log_action(
                 iteration=iteration,
                 action_type="approval_request",
@@ -1816,7 +1871,12 @@ class AgentSession:
         if skill:
             result = await _execute_skill(skill, args, self._config)
         else:
-            result = {"error": f"Unknown skill: {fn_name}"}
+            available = sorted(self._skill_map.keys())[:30]
+            result = {
+                "error": f"Unknown skill: {fn_name}",
+                "available_skills": available,
+                "hint": "Проверь имя скилла — используй двойное подчёркивание вместо точки (например invoice__list).",
+            }
 
         asyncio.create_task(self._log_action(
             iteration=iteration,
@@ -1861,23 +1921,48 @@ class AgentSession:
         except Exception:
             pass
 
-        self._approval_future = asyncio.get_event_loop().create_future()
-        await self._send({
-            "type": "approval_request",
-            "tool": skill_name,
-            "args": args,
-            "preview": preview,
-            "db_id": db_id,
-        })
-        try:
-            approved = await asyncio.wait_for(
-                self._approval_future,
-                timeout=float(self._config.approval_timeout_seconds),
-            )
-        except TimeoutError:
-            approved = False
-        finally:
-            self._approval_future = None
+        approved = False
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            self._approval_future = asyncio.get_event_loop().create_future()
+            await self._send({
+                "type": "approval_request",
+                "tool": skill_name,
+                "args": args,
+                "preview": preview,
+                "db_id": db_id,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+            })
+            try:
+                approved = await asyncio.wait_for(
+                    self._approval_future,
+                    timeout=float(self._config.approval_timeout_seconds),
+                )
+                break
+            except TimeoutError:
+                self._approval_future = None
+                if attempt < max_attempts:
+                    await self._send({
+                        "type": "approval_timeout",
+                        "tool": skill_name,
+                        "attempt": attempt,
+                        "message": (
+                            f"Запрос подтверждения для {skill_name!r} не получил ответа. "
+                            f"Повторный запрос ({attempt + 1}/{max_attempts})…"
+                        ),
+                    })
+                else:
+                    await self._send({
+                        "type": "approval_timeout",
+                        "tool": skill_name,
+                        "attempt": attempt,
+                        "message": (
+                            f"Запрос подтверждения для {skill_name!r} истёк {max_attempts} раза. "
+                            "Действие отклонено автоматически."
+                        ),
+                    })
+        self._approval_future = None
 
         if db_id:
             try:

@@ -242,6 +242,46 @@ interface CapabilityProposal {
   created_at: string;
 }
 
+interface AgentTask {
+  id: string;
+  objective: string;
+  description: string | null;
+  role: string;
+  status: string;
+  output: string | null;
+  created_at: string;
+}
+
+interface AgentTeam {
+  id: string;
+  name: string;
+  purpose: string | null;
+  status: string;
+  created_at: string;
+}
+
+interface AgentCron {
+  id: string;
+  schedule: string;
+  prompt: string;
+  description: string | null;
+  enabled: boolean;
+  last_run_at: string | null;
+  run_count: number;
+  created_at: string;
+}
+
+interface AgentPlugin {
+  id: string;
+  plugin_key: string;
+  name: string;
+  version: string;
+  description: string | null;
+  enabled: boolean;
+  risk_level: string;
+  created_at: string;
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const PROVIDERS = [
@@ -310,7 +350,11 @@ const PROVIDER_MODEL_PLACEHOLDER: Record<string, string> = {
 };
 
 const PROVIDER_COMMON_MODELS: Record<string, string[]> = {
-  vllm: ["Qwen/Qwen3-32B-AWQ", "Qwen/Qwen3-235B-A22B", "deepseek-ai/DeepSeek-R1"],
+  vllm: [
+    "Qwen/Qwen3-32B-AWQ",
+    "Qwen/Qwen3-235B-A22B",
+    "deepseek-ai/DeepSeek-R1",
+  ],
   lmstudio: ["local-model", "qwen3-30b-a3b", "llama-3.3-70b-instruct"],
   openrouter: [
     "deepseek/deepseek-r1",
@@ -323,7 +367,10 @@ const PROVIDER_COMMON_MODELS: Record<string, string[]> = {
   gemini: ["gemini-2.5-pro", "gemini-2.5-flash"],
   mistral: ["mistral-large-latest", "ministral-8b-latest"],
   groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"],
-  together: ["meta-llama/Llama-3.3-70B-Instruct-Turbo", "Qwen/Qwen3-235B-A22B-fp8-tput"],
+  together: [
+    "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "Qwen/Qwen3-235B-A22B-fp8-tput",
+  ],
   fireworks: [
     "accounts/fireworks/models/llama-v3p1-70b-instruct",
     "accounts/fireworks/models/qwen3-235b-a22b",
@@ -511,11 +558,13 @@ function modelOptionsForProvider(
           .filter((model) => model.provider === provider)
           .map((model) => model.name);
   return Array.from(
-    new Set([
-      ...base,
-      ...(PROVIDER_COMMON_MODELS[provider] ?? []),
-      PROVIDER_MODEL_PLACEHOLDER[provider],
-    ].filter(Boolean)),
+    new Set(
+      [
+        ...base,
+        ...(PROVIDER_COMMON_MODELS[provider] ?? []),
+        PROVIDER_MODEL_PLACEHOLDER[provider],
+      ].filter(Boolean),
+    ),
   );
 }
 
@@ -545,7 +594,11 @@ function AgentModelProviderSelector({
   }) => void;
 }) {
   const effectiveProvider = provider || fallbackProvider;
-  const options = modelOptionsForProvider(effectiveProvider, models, registryModels);
+  const options = modelOptionsForProvider(
+    effectiveProvider,
+    models,
+    registryModels,
+  );
 
   return (
     <div className="rounded-md border border-slate-700 bg-slate-900/40 p-3">
@@ -563,7 +616,9 @@ function AgentModelProviderSelector({
             }
             className={selectCls}
           >
-            <option value="">Как у основного агента ({fallbackProvider})</option>
+            <option value="">
+              Как у основного агента ({fallbackProvider})
+            </option>
             {PROVIDERS.map((p) => (
               <option key={p.value} value={p.value}>
                 {p.label}
@@ -571,7 +626,10 @@ function AgentModelProviderSelector({
             ))}
           </select>
         </Field>
-        <Field label="Модель" hint="Пусто = модель основного агента или роль по умолчанию">
+        <Field
+          label="Модель"
+          hint="Пусто = модель основного агента или роль по умолчанию"
+        >
           <select
             className={selectCls}
             value={model ?? ""}
@@ -735,6 +793,10 @@ export default function SettingsPage() {
   const [capabilityProposals, setCapabilityProposals] = useState<
     CapabilityProposal[]
   >([]);
+  const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
+  const [agentTeams, setAgentTeams] = useState<AgentTeam[]>([]);
+  const [agentCrons, setAgentCrons] = useState<AgentCron[]>([]);
+  const [agentPlugins, setAgentPlugins] = useState<AgentPlugin[]>([]);
   const [agentSkillFilter, setAgentSkillFilter] = useState("");
   const selectAllSkillsRef = useRef<HTMLInputElement | null>(null);
   const agentSkillToggleRefs = useRef<Array<HTMLInputElement | null>>([]);
@@ -899,6 +961,41 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadAgentWorkRegistry() {
+    try {
+      const [tasksR, teamsR, cronsR, pluginsR] = await Promise.all([
+        fetch(`${API}/api/agent/tasks`),
+        fetch(`${API}/api/agent/teams`),
+        fetch(`${API}/api/agent/cron`),
+        fetch(`${API}/api/agent/plugins`),
+      ]);
+      setAgentTasks(tasksR.ok ? await tasksR.json() : []);
+      setAgentTeams(teamsR.ok ? await teamsR.json() : []);
+      setAgentCrons(cronsR.ok ? await cronsR.json() : []);
+      setAgentPlugins(pluginsR.ok ? await pluginsR.json() : []);
+    } catch {
+      // keep previous state on network error
+    }
+  }
+
+  async function togglePlugin(pluginKey: string, enable: boolean) {
+    const action = enable ? "enable" : "disable";
+    await fetch(`${API}/api/agent/plugins/${pluginKey}/${action}`, {
+      method: "POST",
+    });
+    await loadAgentWorkRegistry();
+  }
+
+  async function toggleCron(cronId: string, enable: boolean) {
+    // Cron enable/disable via PATCH (not yet in API — use as placeholder)
+    await fetch(`${API}/api/agent/cron/${cronId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: enable }),
+    });
+    await loadAgentWorkRegistry();
+  }
+
   async function loadTgStatus() {
     try {
       const r = await fetch(`${API}/api/telegram/status`);
@@ -921,6 +1018,7 @@ export default function SettingsPage() {
     loadAgentRuntime();
     loadAgentConfigProposals();
     loadCapabilityProposals();
+    loadAgentWorkRegistry();
     loadTgStatus();
   }, []);
 
@@ -1270,7 +1368,9 @@ export default function SettingsPage() {
       setAgentSaved(true);
       setTimeout(() => setAgentSaved(false), 2000);
     } catch (error) {
-      setAgentError(error instanceof Error ? error.message : "Sandbox не выполнен");
+      setAgentError(
+        error instanceof Error ? error.message : "Sandbox не выполнен",
+      );
     }
     setAgentSaving(false);
   }
@@ -1568,7 +1668,9 @@ export default function SettingsPage() {
                         }
                       >
                         <option value="draft_approval">Draft + approval</option>
-                        <option value="auto_safe_changes">Auto safe changes</option>
+                        <option value="auto_safe_changes">
+                          Auto safe changes
+                        </option>
                         <option value="max_autonomy">Max autonomy</option>
                       </select>
                     </Field>
@@ -1588,7 +1690,9 @@ export default function SettingsPage() {
                       >
                         <option value="read_only">Read-only</option>
                         <option value="workspace_write">Workspace write</option>
-                        <option value="danger_full_access">Danger full access</option>
+                        <option value="danger_full_access">
+                          Danger full access
+                        </option>
                       </select>
                     </Field>
                     <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
@@ -1640,12 +1744,20 @@ export default function SettingsPage() {
                           Agent runtime
                         </div>
                         <div className="mt-2 grid grid-cols-2 gap-2 text-slate-400">
-                          <div>LLM 24h: {agentRuntime.counters.llm_calls_24h}</div>
-                          <div>Tools 24h: {agentRuntime.counters.tool_calls_24h}</div>
-                          <div>Errors 24h: {agentRuntime.counters.errors_24h}</div>
+                          <div>
+                            LLM 24h: {agentRuntime.counters.llm_calls_24h}
+                          </div>
+                          <div>
+                            Tools 24h: {agentRuntime.counters.tool_calls_24h}
+                          </div>
+                          <div>
+                            Errors 24h: {agentRuntime.counters.errors_24h}
+                          </div>
                           <div>
                             Avg:{" "}
-                            {agentRuntime.counters.avg_llm_duration_ms_24h ?? "—"} ms
+                            {agentRuntime.counters.avg_llm_duration_ms_24h ??
+                              "—"}{" "}
+                            ms
                           </div>
                         </div>
                         {agentRuntime.counters.last_error && (
@@ -1659,10 +1771,20 @@ export default function SettingsPage() {
                           Model routing
                         </div>
                         <div className="mt-2 space-y-1 text-slate-400">
-                          <div>Orchestrator: {agentRuntime.models.orchestrator_model ?? "—"}</div>
-                          <div>Workers: {agentRuntime.models.worker_model ?? "—"}</div>
-                          <div>Builder: {agentRuntime.models.builder_model ?? "—"}</div>
-                          <div>Fallbacks: {agentRuntime.models.fallback_providers.length}</div>
+                          <div>
+                            Orchestrator:{" "}
+                            {agentRuntime.models.orchestrator_model ?? "—"}
+                          </div>
+                          <div>
+                            Workers: {agentRuntime.models.worker_model ?? "—"}
+                          </div>
+                          <div>
+                            Builder: {agentRuntime.models.builder_model ?? "—"}
+                          </div>
+                          <div>
+                            Fallbacks:{" "}
+                            {agentRuntime.models.fallback_providers.length}
+                          </div>
                         </div>
                       </div>
                       <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
@@ -1670,19 +1792,184 @@ export default function SettingsPage() {
                           Memory stack
                         </div>
                         <div className="mt-2 grid grid-cols-2 gap-2 text-slate-400">
-                          <div>Episodic: {agentRuntime.memory.episodic_facts_total}</div>
-                          <div>Pinned: {agentRuntime.memory.pinned_facts_total}</div>
-                          <div>Graph: {agentRuntime.memory.graph_nodes_total}</div>
+                          <div>
+                            Episodic: {agentRuntime.memory.episodic_facts_total}
+                          </div>
+                          <div>
+                            Pinned: {agentRuntime.memory.pinned_facts_total}
+                          </div>
+                          <div>
+                            Graph: {agentRuntime.memory.graph_nodes_total}
+                          </div>
                           <div>Chunks: {agentRuntime.memory.chunks_total}</div>
-                          <div>Embeddings: {agentRuntime.memory.embeddings_total}</div>
-                          <div>Qdrant: {agentRuntime.memory.qdrant_points ?? "—"}</div>
+                          <div>
+                            Embeddings: {agentRuntime.memory.embeddings_total}
+                          </div>
+                          <div>
+                            Qdrant: {agentRuntime.memory.qdrant_points ?? "—"}
+                          </div>
                         </div>
                         <div className="mt-2 truncate text-slate-500">
-                          {agentRuntime.memory.active_embedding_model ?? "embedding model —"}
+                          {agentRuntime.memory.active_embedding_model ??
+                            "embedding model —"}
                         </div>
                       </div>
                     </div>
                   )}
+                  {/* ── Work Registry: Tasks / Teams / Cron / Plugins ── */}
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    {/* Tasks */}
+                    <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-100">
+                          Задачи агента
+                        </span>
+                        <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">
+                          {agentTasks.length}
+                        </span>
+                      </div>
+                      {agentTasks.length === 0 ? (
+                        <div className="mt-2 text-slate-500">
+                          Нет активных задач
+                        </div>
+                      ) : (
+                        <ul className="mt-2 space-y-1">
+                          {agentTasks.slice(0, 5).map((t) => (
+                            <li
+                              key={t.id}
+                              className="flex items-center gap-2 text-slate-300"
+                            >
+                              <span
+                                className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${t.status === "done" ? "bg-green-500" : t.status === "error" ? "bg-red-500" : "bg-yellow-500"}`}
+                              />
+                              <span className="truncate">{t.objective}</span>
+                              <span className="ml-auto flex-shrink-0 text-slate-500">
+                                {t.role}
+                              </span>
+                            </li>
+                          ))}
+                          {agentTasks.length > 5 && (
+                            <li className="text-slate-500">
+                              …ещё {agentTasks.length - 5}
+                            </li>
+                          )}
+                        </ul>
+                      )}
+                    </div>
+                    {/* Plugins */}
+                    <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-100">
+                          Плагины
+                        </span>
+                        <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">
+                          {agentPlugins.filter((p) => p.enabled).length}/
+                          {agentPlugins.length}
+                        </span>
+                      </div>
+                      {agentPlugins.length === 0 ? (
+                        <div className="mt-2 text-slate-500">
+                          Плагины не установлены
+                        </div>
+                      ) : (
+                        <ul className="mt-2 space-y-1.5">
+                          {agentPlugins.map((p) => (
+                            <li key={p.id} className="flex items-center gap-2">
+                              <span
+                                className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${p.enabled ? "bg-green-500" : "bg-slate-600"}`}
+                              />
+                              <span className="truncate text-slate-300">
+                                {p.name}
+                              </span>
+                              <span className="ml-auto flex-shrink-0 text-slate-500">
+                                v{p.version}
+                              </span>
+                              <button
+                                className={`rounded px-1.5 py-0.5 text-[10px] ${p.enabled ? "bg-red-900/40 text-red-300 hover:bg-red-900/60" : "bg-green-900/40 text-green-300 hover:bg-green-900/60"}`}
+                                onClick={() =>
+                                  togglePlugin(p.plugin_key, !p.enabled)
+                                }
+                              >
+                                {p.enabled ? "Откл" : "Вкл"}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    {/* Cron */}
+                    <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-100">
+                          Расписание (Cron)
+                        </span>
+                        <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">
+                          {agentCrons.filter((c) => c.enabled).length}/
+                          {agentCrons.length} активных
+                        </span>
+                      </div>
+                      {agentCrons.length === 0 ? (
+                        <div className="mt-2 text-slate-500">
+                          Задания не настроены
+                        </div>
+                      ) : (
+                        <ul className="mt-2 space-y-1.5">
+                          {agentCrons.map((c) => (
+                            <li key={c.id} className="flex items-center gap-2">
+                              <span
+                                className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${c.enabled ? "bg-green-500" : "bg-slate-600"}`}
+                              />
+                              <span className="truncate text-slate-300">
+                                {c.description || c.prompt.slice(0, 40)}
+                              </span>
+                              <span className="ml-auto flex-shrink-0 font-mono text-slate-500">
+                                {c.schedule}
+                              </span>
+                              <button
+                                className={`rounded px-1.5 py-0.5 text-[10px] ${c.enabled ? "bg-red-900/40 text-red-300 hover:bg-red-900/60" : "bg-green-900/40 text-green-300 hover:bg-green-900/60"}`}
+                                onClick={() => toggleCron(c.id, !c.enabled)}
+                              >
+                                {c.enabled ? "Пауза" : "Запуск"}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    {/* Teams */}
+                    <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-100">
+                          Команды агентов
+                        </span>
+                        <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">
+                          {agentTeams.length}
+                        </span>
+                      </div>
+                      {agentTeams.length === 0 ? (
+                        <div className="mt-2 text-slate-500">
+                          Команды не созданы
+                        </div>
+                      ) : (
+                        <ul className="mt-2 space-y-1">
+                          {agentTeams.map((t) => (
+                            <li
+                              key={t.id}
+                              className="flex items-center gap-2 text-slate-300"
+                            >
+                              <span className="truncate">{t.name}</span>
+                              {t.purpose && (
+                                <span className="ml-auto flex-shrink-0 truncate text-slate-500 max-w-[120px]">
+                                  {t.purpose}
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+
                   {agentConfigProposals.length > 0 && (
                     <div className="rounded-md border border-amber-800/50 bg-amber-950/20 p-3">
                       <div className="text-sm font-medium text-amber-200">
@@ -1726,7 +2013,10 @@ export default function SettingsPage() {
                                   type="button"
                                   disabled={agentSaving}
                                   onClick={() =>
-                                    decideAgentConfigProposal(proposal.id, false)
+                                    decideAgentConfigProposal(
+                                      proposal.id,
+                                      false,
+                                    )
                                   }
                                   className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
                                 >
@@ -1783,7 +2073,9 @@ export default function SettingsPage() {
                                   {proposal.missing_capability}
                                 </div>
                                 <div className="mt-2 flex flex-wrap gap-2 text-slate-500">
-                                  <span>Sandbox: {proposal.sandbox_status}</span>
+                                  <span>
+                                    Sandbox: {proposal.sandbox_status}
+                                  </span>
                                   <span>Tests: {proposal.test_status}</span>
                                   <span>Audit: {proposal.audit_status}</span>
                                 </div>
@@ -1798,9 +2090,12 @@ export default function SettingsPage() {
                                   type="button"
                                   disabled={
                                     agentSaving ||
-                                    ["approved", "rejected", "promoted", "rolled_back"].includes(
-                                      proposal.status,
-                                    )
+                                    [
+                                      "approved",
+                                      "rejected",
+                                      "promoted",
+                                      "rolled_back",
+                                    ].includes(proposal.status)
                                   }
                                   onClick={() =>
                                     sandboxApplyCapabilityProposal(proposal.id)
@@ -1813,9 +2108,12 @@ export default function SettingsPage() {
                                   type="button"
                                   disabled={
                                     agentSaving ||
-                                    ["approved", "rejected", "promoted", "rolled_back"].includes(
-                                      proposal.status,
-                                    )
+                                    [
+                                      "approved",
+                                      "rejected",
+                                      "promoted",
+                                      "rolled_back",
+                                    ].includes(proposal.status)
                                   }
                                   onClick={() =>
                                     decideCapabilityProposal(proposal.id, true)
@@ -1828,9 +2126,12 @@ export default function SettingsPage() {
                                   type="button"
                                   disabled={
                                     agentSaving ||
-                                    ["approved", "rejected", "promoted", "rolled_back"].includes(
-                                      proposal.status,
-                                    )
+                                    [
+                                      "approved",
+                                      "rejected",
+                                      "promoted",
+                                      "rolled_back",
+                                    ].includes(proposal.status)
                                   }
                                   onClick={() =>
                                     decideCapabilityProposal(proposal.id, false)
@@ -1902,11 +2203,14 @@ export default function SettingsPage() {
                       <input
                         type="checkbox"
                         className="mt-0.5"
-                        checked={agentConfig.capability_builder_requires_approval}
+                        checked={
+                          agentConfig.capability_builder_requires_approval
+                        }
                         onChange={(e) =>
                           setAgentConfig({
                             ...agentConfig,
-                            capability_builder_requires_approval: e.target.checked,
+                            capability_builder_requires_approval:
+                              e.target.checked,
                           })
                         }
                       />
@@ -1975,7 +2279,8 @@ export default function SettingsPage() {
                           "builder_provider",
                           "builder_model",
                           "builder_disable_thinking",
-                          agentConfig.orchestrator_provider || agentConfig.provider,
+                          agentConfig.orchestrator_provider ||
+                            agentConfig.provider,
                           agentConfig.orchestrator_model || agentConfig.model,
                         ],
                         [
@@ -1988,35 +2293,37 @@ export default function SettingsPage() {
                           agentConfig.model,
                         ],
                       ] as const
-                    ).map(([
-                      ,
-                      label,
-                      providerKey,
-                      modelKey,
-                      thinkingKey,
-                      fallbackProvider,
-                      fallbackModel,
-                    ]) => (
-                      <AgentModelProviderSelector
-                        key={providerKey}
-                        label={label}
-                        provider={agentConfig[providerKey]}
-                        model={agentConfig[modelKey]}
-                        disableThinking={agentConfig[thinkingKey]}
-                        fallbackProvider={fallbackProvider}
-                        fallbackModel={fallbackModel}
-                        models={models}
-                        registryModels={registryModels}
-                        onChange={(next) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            [providerKey]: next.provider,
-                            [modelKey]: next.model,
-                            [thinkingKey]: next.disableThinking,
-                          })
-                        }
-                      />
-                    ))}
+                    ).map(
+                      ([
+                        ,
+                        label,
+                        providerKey,
+                        modelKey,
+                        thinkingKey,
+                        fallbackProvider,
+                        fallbackModel,
+                      ]) => (
+                        <AgentModelProviderSelector
+                          key={providerKey}
+                          label={label}
+                          provider={agentConfig[providerKey]}
+                          model={agentConfig[modelKey]}
+                          disableThinking={agentConfig[thinkingKey]}
+                          fallbackProvider={fallbackProvider}
+                          fallbackModel={fallbackModel}
+                          models={models}
+                          registryModels={registryModels}
+                          onChange={(next) =>
+                            setAgentConfig({
+                              ...agentConfig,
+                              [providerKey]: next.provider,
+                              [modelKey]: next.model,
+                              [thinkingKey]: next.disableThinking,
+                            })
+                          }
+                        />
+                      ),
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -2182,7 +2489,11 @@ export default function SettingsPage() {
                     >
                       <input
                         className={inputCls}
-                        value={String(agentConfig[LOCAL_PROVIDER_URL_LABEL[agentConfig.provider]] ?? "")}
+                        value={String(
+                          agentConfig[
+                            LOCAL_PROVIDER_URL_LABEL[agentConfig.provider]
+                          ] ?? "",
+                        )}
                         onChange={(e) =>
                           setAgentConfig({
                             ...agentConfig,

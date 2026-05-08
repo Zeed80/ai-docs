@@ -21,7 +21,7 @@ from app.ai.agent_config import (
     get_builtin_agent_config,
     update_builtin_agent_config,
 )
-from app.ai.capability_sandbox import run_capability_sandbox
+from app.ai.capability_sandbox import promote_capability, run_capability_sandbox
 from app.ai.gateway_config import gateway_config
 from app.ai.policy_engine import classify_skill_risk, is_protected_setting
 from app.core.chat_bus import chat_bus
@@ -387,6 +387,14 @@ async def _publish_capability_approval_request(proposal: CapabilityProposal) -> 
 
 
 def _current_setting_value(setting_path: str) -> Any:
+    from app.ai.agent_config import BuiltinAgentConfig
+    top_level = setting_path.split(".")[0]
+    known_fields = set(BuiltinAgentConfig.model_fields.keys())
+    if top_level not in known_fields:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown setting: {setting_path!r}. Valid top-level keys: {sorted(known_fields)}",
+        )
     config = get_builtin_agent_config().model_dump(mode="json")
     value: Any = config
     for part in setting_path.split("."):
@@ -784,6 +792,29 @@ async def list_agent_crons(db: AsyncSession = Depends(get_db)) -> list[AgentCron
     return list(result.scalars().all())
 
 
+class AgentCronPatch(BaseModel):
+    enabled: bool | None = None
+    description: str | None = None
+
+
+@router.patch("/cron/{cron_id}", response_model=AgentCronOut)
+async def patch_agent_cron(
+    cron_id: uuid.UUID,
+    payload: AgentCronPatch,
+    db: AsyncSession = Depends(get_db),
+) -> AgentCron:
+    cron = await db.get(AgentCron, cron_id)
+    if not cron:
+        raise HTTPException(status_code=404, detail="Cron job not found")
+    if payload.enabled is not None:
+        cron.enabled = payload.enabled
+    if payload.description is not None:
+        cron.description = payload.description
+    await db.commit()
+    await db.refresh(cron)
+    return cron
+
+
 @router.post("/plugins", response_model=AgentPluginOut)
 async def install_plugin_draft(
     payload: PluginManifestIn,
@@ -990,6 +1021,54 @@ async def decide_capability_proposal(
     proposal.decided_by = payload.decided_by
     proposal.decided_at = datetime.now(timezone.utc)
     proposal.decision_comment = payload.comment
+    await db.commit()
+    await db.refresh(proposal)
+    return proposal
+
+
+@router.post("/capabilities/{proposal_id}/promote", response_model=CapabilityProposalOut)
+async def promote_capability_proposal(
+    proposal_id: uuid.UUID,
+    decided_by: str = "user",
+    db: AsyncSession = Depends(get_db),
+) -> CapabilityProposal:
+    """Skill: capability.promote — Promote an approved capability to staging and expose in gateway."""
+    proposal = await db.get(CapabilityProposal, proposal_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Capability proposal not found")
+    if proposal.status == "promoted":
+        raise HTTPException(status_code=409, detail="Capability proposal already promoted")
+    if proposal.status not in {"approved"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Capability must be in 'approved' state before promotion (current: {proposal.status})",
+        )
+
+    result = promote_capability(proposal)
+    if not result.ok:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Promotion failed", "errors": result.errors},
+        )
+
+    now = datetime.now(timezone.utc)
+    proposal.status = "promoted"
+    proposal.decided_by = decided_by
+    proposal.decided_at = now
+    metadata = dict(proposal.metadata_ or {})
+    metadata["promotion"] = {
+        "promoted_at": now.isoformat(),
+        "staging_dir": result.staging_dir,
+        "files": result.files,
+        "skill_name": result.skill_name,
+        "gateway_updated": result.gateway_updated,
+    }
+    proposal.metadata_ = metadata
+
+    # Reload gateway config so the new skill is visible immediately
+    from app.ai.gateway_config import gateway_config as _gw
+    _gw.reload()
+
     await db.commit()
     await db.refresh(proposal)
     return proposal

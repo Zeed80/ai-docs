@@ -3,15 +3,17 @@
 import json
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.ai_settings import get_ai_config
 from app.db.models import (
     ChatMessage,
+    ChatMessageAttachment,
     Document,
     DocumentChunk,
     DocumentExtraction,
@@ -205,6 +207,70 @@ async def pin_memory_fact(
     return fact
 
 
+class MemoryPruneRequest(BaseModel):
+    scope: str | None = None
+    kinds: list[str] = Field(default_factory=lambda: ["chat_turn"])
+    older_than_days: int = Field(90, ge=1, le=3650)
+    dry_run: bool = False
+
+
+class MemoryPruneResult(BaseModel):
+    deleted: int
+    dry_run: bool
+    scope: str | None
+    kinds: list[str]
+    cutoff: str
+
+
+@router.post("/prune", response_model=MemoryPruneResult)
+async def prune_memory_facts(
+    payload: MemoryPruneRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MemoryPruneResult:
+    """Skill: memory.prune — Delete old episodic memory facts by scope and kind.
+
+    Only non-pinned facts are removed. Protected kinds (pinned_fact, verified_fact)
+    are never deleted regardless of scope/kinds filter.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=payload.older_than_days)
+    protected_kinds = {"pinned_fact", "verified_fact"}
+    safe_kinds = [k for k in payload.kinds if k not in protected_kinds]
+    if not safe_kinds:
+        raise HTTPException(
+            status_code=400,
+            detail=f"None of the requested kinds are pruneable. Protected: {sorted(protected_kinds)}",
+        )
+
+    stmt = select(func.count()).select_from(MemoryFact).where(
+        MemoryFact.kind.in_(safe_kinds),
+        MemoryFact.pinned.is_(False),
+        MemoryFact.created_at < cutoff,
+    )
+    if payload.scope:
+        stmt = stmt.where(MemoryFact.scope == payload.scope)
+    count_result = await db.execute(stmt)
+    count = count_result.scalar_one()
+
+    if not payload.dry_run and count > 0:
+        del_stmt = delete(MemoryFact).where(
+            MemoryFact.kind.in_(safe_kinds),
+            MemoryFact.pinned.is_(False),
+            MemoryFact.created_at < cutoff,
+        )
+        if payload.scope:
+            del_stmt = del_stmt.where(MemoryFact.scope == payload.scope)
+        await db.execute(del_stmt)
+        await db.commit()
+
+    return MemoryPruneResult(
+        deleted=count,
+        dry_run=payload.dry_run,
+        scope=payload.scope,
+        kinds=safe_kinds,
+        cutoff=cutoff.isoformat(),
+    )
+
+
 def _memory_candidate_limit(payload: MemorySearchRequest) -> int:
     base = _AUTO_CANDIDATE_LIMIT if payload.need_full_coverage else max(payload.limit * 4, 200)
     return max(payload.limit, min(base, _AUTO_CANDIDATE_LIMIT))
@@ -295,6 +361,10 @@ async def _search_memory_facts(
             MemoryFact.kind.ilike(pattern),
         )
     )
+    if payload.scope:
+        query = query.where(
+            or_(MemoryFact.scope == payload.scope, MemoryFact.scope == "global")
+        )
     result = await db.execute(
         query.order_by(MemoryFact.pinned.desc(), MemoryFact.created_at.desc()).limit(payload.limit)
     )
@@ -553,7 +623,7 @@ async def _search_sql_memory(
                 )
             )
     remaining = remaining - len(hits)
-    if remaining > 0 and not payload.document_id:
+    if remaining > 0:
         chat_query = (
             select(ChatMessage)
             .where(
@@ -563,6 +633,15 @@ async def _search_sql_memory(
             .order_by(ChatMessage.created_at.desc())
             .limit(remaining)
         )
+        if payload.document_id:
+            chat_query = chat_query.where(
+                ChatMessage.id.in_(
+                    select(ChatMessageAttachment.message_id).where(
+                        ChatMessageAttachment.document_id == payload.document_id,
+                        ChatMessageAttachment.message_id.is_not(None),
+                    )
+                )
+            )
         chat_result = await db.execute(chat_query)
         for message in chat_result.scalars().all():
             content = message.content or ""

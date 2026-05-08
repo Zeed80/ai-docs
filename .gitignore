@@ -48,6 +48,7 @@ datasets/*.pdf
 datasets/*.json
 !datasets/.gitkeep
 data/
+!backend/data/canvas_skill_map.json
 *.db
 *.sqlite
 *.sqlite3
@@ -92,4 +93,5 @@ coverage.xml
 
 # Alembic
 backend/app/db/versions/*.pyc
-backend/data/
+backend/data/**
+!backend/data/canvas_skill_map.json

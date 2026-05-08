@@ -29,6 +29,7 @@ from app.api import (
     email_templates,
     export,
     graph,
+    health,
     invoices,
     mailbox,
     memory,
@@ -98,6 +99,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await seed_builtin_templates(db)
     except Exception as exc:
         logger.warning("email_templates_seed_failed", error=str(exc))
+
+    try:
+        from app.api.health import ai_health
+        result = await ai_health()
+        for provider, status in result.get("providers", {}).items():
+            if status.get("skipped"):
+                logger.info("ai_provider_skipped_no_key", provider=provider)
+            elif status.get("ok"):
+                logger.info("ai_provider_healthy", provider=provider,
+                            latency_ms=status.get("latency_ms"))
+            else:
+                logger.warning("ai_provider_unreachable", provider=provider,
+                               error=status.get("error"), status=status.get("status"))
+    except Exception as exc:
+        logger.warning("ai_provider_health_check_failed", error=str(exc))
 
     yield
 
@@ -176,6 +192,7 @@ def create_app() -> FastAPI:
     app.include_router(drawings.router, prefix="/api/drawings", tags=["drawings"])
     app.include_router(tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"])
     app.include_router(chat_sessions.router, prefix="/api/chat", tags=["chat"])
+    app.include_router(health.router, tags=["health"])
 
     return app
 

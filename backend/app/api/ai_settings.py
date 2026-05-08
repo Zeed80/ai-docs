@@ -93,9 +93,13 @@ def get_ai_config() -> dict:
 
 
 def save_ai_config(cfg: dict) -> None:
-    # Write to both Redis (shared) and local file (backup)
-    _redis_set_config(cfg)
+    # File-first: ensures durable backup exists before workers read from Redis.
+    # If Redis write fails, the file serves as ground truth on next load.
     _CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+    try:
+        _redis_set_config(cfg)
+    except Exception:
+        pass  # File is the authoritative backup; Redis is best-effort for workers
 
 
 def _sync_ai_model_agent(model_name: str | None) -> None:
