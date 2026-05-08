@@ -240,6 +240,8 @@ skills:
   - ntd.document_index
   - ntd.norm_control_run_payload
   - workspace.invoice_data_tool
+  - workspace.general_tool
+  - workspace.supplier_lookup_tool
   approval_gates:
   - invoice.approve
   - invoice.reject
