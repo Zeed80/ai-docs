@@ -800,6 +800,7 @@ export default function SettingsPage() {
   const [agentSkillFilter, setAgentSkillFilter] = useState("");
   const selectAllSkillsRef = useRef<HTMLInputElement | null>(null);
   const agentSkillToggleRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const loadedTabsRef = useRef<Set<TabId>>(new Set());
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentSaved, setAgentSaved] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
@@ -1006,21 +1007,33 @@ export default function SettingsPage() {
   }
 
   useEffect(() => {
-    loadModels();
-    loadConfig();
-    loadCapabilities();
-    loadEmbeddingProfile();
-    loadEmbeddingStats();
-    loadNtdConfig();
-    loadAgentConfig();
-    loadAgentSkills();
-    loadAgentControlPlane();
-    loadAgentRuntime();
-    loadAgentConfigProposals();
-    loadCapabilityProposals();
-    loadAgentWorkRegistry();
-    loadTgStatus();
-  }, []);
+    function loadTab(tab: TabId) {
+      if (loadedTabsRef.current.has(tab)) return;
+      loadedTabsRef.current.add(tab);
+      if (tab === "agent") {
+        loadAgentConfig();
+        loadAgentSkills();
+        loadAgentControlPlane();
+        loadAgentRuntime();
+        loadAgentConfigProposals();
+        loadCapabilityProposals();
+        loadAgentWorkRegistry();
+      } else if (tab === "models") {
+        loadModels();
+        loadConfig();
+        loadCapabilities();
+      } else if (tab === "memory") {
+        loadEmbeddingProfile();
+        loadEmbeddingStats();
+      } else if (tab === "data") {
+        loadNtdConfig();
+        loadEmbeddingStats();
+      } else if (tab === "email") {
+        loadTgStatus();
+      }
+    }
+    loadTab(activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     pullLogRef.current?.scrollTo(0, pullLogRef.current.scrollHeight);
@@ -1235,7 +1248,13 @@ export default function SettingsPage() {
       await loadCapabilityProposals();
       setAgentSaved(true);
       setTimeout(() => setAgentSaved(false), 2000);
-    } catch {}
+    } catch (error) {
+      setAgentError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось сохранить настройки агента",
+      );
+    }
     setAgentSaving(false);
   }
 
@@ -1370,6 +1389,33 @@ export default function SettingsPage() {
     } catch (error) {
       setAgentError(
         error instanceof Error ? error.message : "Sandbox не выполнен",
+      );
+    }
+    setAgentSaving(false);
+  }
+
+  async function promoteCapabilityProposal(proposalId: string) {
+    setAgentSaving(true);
+    setAgentError(null);
+    try {
+      const response = await fetch(
+        `${API}/api/agent/capabilities/${proposalId}/promote`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail || `HTTP ${response.status}`);
+      }
+      await loadAgentControlPlane();
+      await loadAgentRuntime();
+      await loadCapabilityProposals();
+      setAgentSaved(true);
+      setTimeout(() => setAgentSaved(false), 2000);
+    } catch (error) {
+      setAgentError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось продвинуть capability",
       );
     }
     setAgentSaving(false);
@@ -2140,6 +2186,18 @@ export default function SettingsPage() {
                                 >
                                   Отклонить
                                 </button>
+                                {proposal.status === "approved" && (
+                                  <button
+                                    type="button"
+                                    disabled={agentSaving}
+                                    onClick={() =>
+                                      promoteCapabilityProposal(proposal.id)
+                                    }
+                                    className="rounded bg-purple-700 px-2 py-1 text-xs text-white hover:bg-purple-600 disabled:opacity-50"
+                                  >
+                                    Продвинуть
+                                  </button>
+                                )}
                               </div>
                             </div>
                             <pre className="mt-3 max-h-32 overflow-auto rounded bg-slate-950/70 p-2 text-slate-400">
