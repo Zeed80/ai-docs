@@ -1,14 +1,28 @@
-.PHONY: dev dev-build down test e2e regression agent-regression agent-test agent-ws-smoke turboquant-benchmark turboquant-quality lint migrate seed skills logs ps
+.PHONY: dev dev-build down prod prod-build prod-down test e2e regression agent-regression agent-test agent-ws-smoke turboquant-benchmark turboquant-quality lint migrate seed skills logs ps
 
-# === Development ===
+# Docker Compose file sets
+COMPOSE_DEV  := -f infra/docker-compose.yml -f infra/docker-compose.dev.yml
+COMPOSE_PROD := -f infra/docker-compose.yml --profile prod
+
+# === Development (default — code is hot-reloaded via volume mounts) ===
 dev:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up
+	docker compose $(COMPOSE_DEV) up
 
 dev-build:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up --build
+	docker compose $(COMPOSE_DEV) up --build
 
 down:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml down
+	docker compose $(COMPOSE_DEV) down
+
+# === Production (explicit — builds images, no volume mounts, starts Traefik+Authentik) ===
+prod:
+	docker compose $(COMPOSE_PROD) up
+
+prod-build:
+	docker compose $(COMPOSE_PROD) up --build
+
+prod-down:
+	docker compose $(COMPOSE_PROD) down
 
 # === Backend ===
 migrate:
@@ -70,7 +84,7 @@ aiagent-strict:
 
 # === Docker Ops ===
 logs:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs -f
+	docker compose $(COMPOSE_DEV) logs -f
 
 ps:
-	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml ps
+	docker compose $(COMPOSE_DEV) ps
