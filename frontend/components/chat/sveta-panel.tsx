@@ -19,7 +19,13 @@ import {
   type ChatSession,
 } from "@/lib/api";
 
-type MessageRole = "user" | "assistant" | "tool" | "approval" | "error" | "status";
+type MessageRole =
+  | "user"
+  | "assistant"
+  | "tool"
+  | "approval"
+  | "error"
+  | "status";
 
 interface ChatMessage {
   id: string;
@@ -30,6 +36,7 @@ interface ChatMessage {
   result?: unknown;
   status?: "calling" | "done" | "pending" | "approved" | "rejected";
   preview?: string;
+  toolsUsedInTurn?: string[];
   attachments?: {
     name: string;
     docId: string;
@@ -170,6 +177,10 @@ export function SvetaPanel() {
   const [isSessionsLoading, setIsSessionsLoading] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
+  const [workerModel, setWorkerModel] = useState<string | null>(null);
+  const [activeToolCall, setActiveToolCall] = useState<string | null>(null);
+  const [lastTurnTools, setLastTurnTools] = useState<string[]>([]);
+  const [ratings, setRatings] = useState<Record<string, 1 | -1>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamingIdRef = useRef<string | null>(null);
@@ -181,6 +192,8 @@ export function SvetaPanel() {
   const autoApproveRef = useRef(false);
   const activeHistoryLoadRef = useRef<string | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
+  const currentTurnToolsRef = useRef<string[]>([]);
+  const sessionIdRef = useRef<string>(genId());
 
   const restoreSessionFromStorage = useCallback(() => {
     if (typeof window === "undefined") return null;
@@ -206,7 +219,14 @@ export function SvetaPanel() {
         .map((msg) => {
           const role = msg.role as MessageRole;
           if (
-            !["user", "assistant", "tool", "approval", "error", "status"].includes(role)
+            ![
+              "user",
+              "assistant",
+              "tool",
+              "approval",
+              "error",
+              "status",
+            ].includes(role)
           ) {
             return null;
           }
@@ -361,6 +381,35 @@ export function SvetaPanel() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    fetch("/api/ai/agent-config")
+      .then((r) => r.json())
+      .then((cfg: Record<string, unknown>) => {
+        const m = (cfg.worker_model ?? cfg.model ?? "") as string;
+        if (m) setWorkerModel(m);
+      })
+      .catch(() => {});
+  }, []);
+
+  async function rateMessage(msg: ChatMessage, vote: 1 | -1) {
+    if (ratings[msg.id]) return;
+    setRatings((prev) => ({ ...prev, [msg.id]: vote }));
+    try {
+      await fetch("/api/memory/rate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          message_id: msg.id,
+          rating: vote,
+          tools_used: msg.toolsUsedInTurn ?? [],
+        }),
+      });
+    } catch {
+      // non-critical
+    }
+  }
+
   function handleServerMessage(data: Record<string, unknown>) {
     const type = data.type as string;
     const isTelegram = data.source === "telegram";
@@ -423,9 +472,21 @@ export function SvetaPanel() {
         tgStreamingIdRef.current = null;
         return;
       }
+      const sid = streamingIdRef.current;
+      const toolsSnapshot = [...currentTurnToolsRef.current];
+      if (sid && toolsSnapshot.length > 0) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === sid ? { ...m, toolsUsedInTurn: toolsSnapshot } : m,
+          ),
+        );
+        setLastTurnTools(toolsSnapshot);
+      }
+      currentTurnToolsRef.current = [];
       streamingIdRef.current = null;
       autoApproveRef.current = false;
       setIsStreaming(false);
+      setActiveToolCall(null);
       void reloadSessionListOnly();
       return;
     }
@@ -494,12 +555,20 @@ export function SvetaPanel() {
     // ── Tool call / result (skip Telegram mirror — too noisy) ─────────────────
     if (type === "tool_call") {
       if (isTelegram) return;
+      const toolName = data.tool as string;
+      setActiveToolCall(toolName);
+      if (!currentTurnToolsRef.current.includes(toolName)) {
+        currentTurnToolsRef.current = [
+          ...currentTurnToolsRef.current,
+          toolName,
+        ];
+      }
       setMessages((prev) => [
         ...prev,
         {
           id: genId(),
           role: "tool",
-          tool: data.tool as string,
+          tool: toolName,
           args: data.args as Record<string, unknown>,
           status: "calling",
         },
@@ -727,10 +796,61 @@ export function SvetaPanel() {
     );
     setInput("");
     setAttachedFiles([]);
+    setLastTurnTools([]);
+    currentTurnToolsRef.current = [];
     setIsStreaming(true);
   }
 
-  function handleApproval(msgId: string, approved: boolean) {
+  async function handleApproval(msgId: string, approved: boolean) {
+    const msg = messages.find((m) => m.id === msgId);
+
+    // Capability proposals: decided via REST, then agent continues via WS
+    if (msg?.tool === "capability.proposal") {
+      const args = msg.args as Record<string, string> | undefined;
+      const proposalId = args?.proposal_id;
+      const title = args?.title ?? "новая capability";
+      let restOk = false;
+      if (proposalId) {
+        try {
+          const res = await fetch(
+            `/api/agent/capabilities/${proposalId}/decide`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                approved,
+                decided_by: "user_chat",
+                comment: approved ? "Одобрено в чате" : "Отклонено в чате",
+              }),
+            },
+          );
+          restOk = res.ok;
+        } catch {
+          // non-critical
+        }
+      }
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId
+            ? { ...m, status: approved ? "approved" : "rejected" }
+            : m,
+        ),
+      );
+      if (approved && restOk && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify(
+            buildAgentUserMessage(
+              `Capability "${title}" одобрена и добавлена в систему. Продолжи выполнение исходной задачи, используя новый инструмент.`,
+              currentSessionId,
+              undefined,
+              agentWsModeRef.current,
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     if (!approved) autoApproveRef.current = false;
     wsRef.current.send(
@@ -749,7 +869,7 @@ export function SvetaPanel() {
 
   function handleApproveAll(msgId: string) {
     autoApproveRef.current = true;
-    handleApproval(msgId, true);
+    void handleApproval(msgId, true);
   }
 
   function stopGeneration() {
@@ -860,28 +980,70 @@ export function SvetaPanel() {
       }}
     >
       {/* Header */}
-      <div className="px-4 py-3 border-b border-slate-700 flex min-w-0 items-center gap-2">
-        <span
-          className={`w-2 h-2 rounded-full shrink-0 ${isConnected ? "bg-green-400" : "bg-slate-500"}`}
-        />
-        <span className="min-w-0 truncate font-semibold text-sm text-slate-100">
-          Света
-        </span>
-        {isStreaming && (
-          <span className="shrink-0 text-[10px] text-blue-400 animate-pulse ml-1">
-            думает...
+      <div className="border-b border-slate-700">
+        <div className="px-4 py-2.5 flex min-w-0 items-center gap-2">
+          <span
+            className={`w-2 h-2 rounded-full shrink-0 ${isConnected ? "bg-green-400" : "bg-slate-500"}`}
+          />
+          <span className="font-semibold text-sm text-slate-100 shrink-0">
+            Света
           </span>
-        )}
-        {isUploading && (
-          <span className="shrink-0 text-[10px] text-amber-400 animate-pulse ml-1">
-            загружаю...
-          </span>
-        )}
-        {!isConnected && (
-          <span className="ml-auto shrink-0 text-[10px] text-amber-400">
-            офлайн
-          </span>
-        )}
+          {isStreaming ? (
+            <span className="shrink-0 text-[10px] text-blue-400 animate-pulse">
+              думает...
+            </span>
+          ) : (
+            <span className="shrink-0 text-[10px] text-slate-500">
+              {isConnected ? "онлайн" : "офлайн"}
+            </span>
+          )}
+          {isUploading && (
+            <span className="shrink-0 text-[10px] text-amber-400 animate-pulse">
+              загружаю...
+            </span>
+          )}
+          <div className="ml-auto shrink-0 flex items-center gap-1.5">
+            {workerModel && (
+              <span className="text-[10px] text-slate-300 bg-slate-700 border border-slate-600 rounded px-1.5 py-0.5 font-mono">
+                {workerModel}
+              </span>
+            )}
+          </div>
+        </div>
+        {/* Activity bar */}
+        {(isStreaming && activeToolCall) ||
+        (!isStreaming && lastTurnTools.length > 0) ? (
+          <div className="px-4 pb-2 flex items-center gap-1.5 flex-wrap">
+            {isStreaming && activeToolCall && (
+              <span className="flex items-center gap-1 text-[10px] bg-blue-900/50 text-blue-300 border border-blue-700/50 rounded px-1.5 py-0.5 font-mono max-w-[200px] truncate">
+                <svg
+                  className="w-2.5 h-2.5 shrink-0 animate-spin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
+                </svg>
+                {activeToolCall.replace(/__/g, ".")}
+              </span>
+            )}
+            {!isStreaming &&
+              lastTurnTools.map((tool) => (
+                <span
+                  key={tool}
+                  className="text-[10px] bg-slate-700 text-slate-400 border border-slate-600 rounded px-1.5 py-0.5 font-mono truncate max-w-[160px]"
+                  title={tool}
+                >
+                  {tool.replace(/__/g, ".")}
+                </span>
+              ))}
+          </div>
+        ) : null}
       </div>
       <div className="min-w-0 px-3 py-2 border-b border-slate-700 flex flex-col gap-2">
         <select
@@ -1006,8 +1168,13 @@ export function SvetaPanel() {
           }
           if (msg.role === "assistant") {
             const isTg = msg.source === "telegram";
+            const existingRating = ratings[msg.id];
+            const isLastAssistant =
+              !isStreaming &&
+              [...messages].reverse().find((m) => m.role === "assistant")
+                ?.id === msg.id;
             return (
-              <div key={msg.id} className="flex justify-start">
+              <div key={msg.id} className="flex flex-col items-start gap-0.5">
                 <div
                   className={`max-w-[90%] rounded-lg text-sm text-slate-100 whitespace-pre-wrap overflow-hidden ${isTg ? "bg-slate-600" : "bg-slate-700"}`}
                 >
@@ -1026,6 +1193,26 @@ export function SvetaPanel() {
                   )}
                   <div className="px-3 py-2">{msg.content}</div>
                 </div>
+                {isLastAssistant && (
+                  <div className="flex items-center gap-1 pl-1">
+                    <button
+                      onClick={() => void rateMessage(msg, 1)}
+                      disabled={!!existingRating}
+                      title="Полезно"
+                      className={`text-base leading-none transition-opacity ${existingRating === 1 ? "opacity-100" : existingRating ? "opacity-20 cursor-default" : "opacity-40 hover:opacity-90"}`}
+                    >
+                      👍
+                    </button>
+                    <button
+                      onClick={() => void rateMessage(msg, -1)}
+                      disabled={!!existingRating}
+                      title="Не полезно"
+                      className={`text-base leading-none transition-opacity ${existingRating === -1 ? "opacity-100" : existingRating ? "opacity-20 cursor-default" : "opacity-40 hover:opacity-90"}`}
+                    >
+                      👎
+                    </button>
+                  </div>
+                )}
               </div>
             );
           }
@@ -1054,41 +1241,80 @@ export function SvetaPanel() {
           }
           if (msg.role === "approval") {
             const isPending = msg.status === "pending";
+            const isCapability = msg.tool === "capability.proposal";
+            const args = (msg.args ?? {}) as Record<string, string>;
             return (
               <div
                 key={msg.id}
-                className="border border-amber-600/50 rounded-lg p-3 bg-amber-950/40 text-sm"
+                className={`border rounded-lg p-3 text-sm ${isCapability ? "border-violet-700/50 bg-violet-950/40" : "border-amber-600/50 bg-amber-950/40"}`}
               >
-                <p className="font-medium text-amber-300 mb-1 text-xs">
-                  Нужно разрешение:{" "}
-                  <code className="font-mono">{msg.tool}</code>
+                <p
+                  className={`font-medium mb-1 text-xs ${isCapability ? "text-violet-300" : "text-amber-300"}`}
+                >
+                  {isCapability ? "🧩 Новая capability" : "⚡ Нужно разрешение"}
+                  {!isCapability && (
+                    <>
+                      {": "}
+                      <code className="font-mono">{msg.tool}</code>
+                    </>
+                  )}
                 </p>
-                <pre className="text-[10px] text-slate-400 bg-slate-900/50 rounded p-2 overflow-x-auto mb-2 max-h-20">
-                  {msg.preview}
-                </pre>
-                {isPending ? (
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleApproval(msg.id, true)}
-                        className="flex-1 py-1.5 bg-green-700 hover:bg-green-600 text-white rounded text-xs font-medium transition-colors"
-                      >
-                        Утвердить
-                      </button>
-                      <button
-                        onClick={() => handleApproval(msg.id, false)}
-                        className="flex-1 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs font-medium transition-colors"
-                      >
-                        Отклонить
-                      </button>
-                    </div>
-                    <button
-                      onClick={() => handleApproveAll(msg.id)}
-                      className="w-full py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-medium transition-colors"
-                      title="Утвердить этот и все последующие запросы автоматически"
+                {isCapability && args.title && (
+                  <p className="font-medium text-slate-200 text-xs mb-0.5">
+                    {args.title}
+                  </p>
+                )}
+                {isCapability && args.risk_level && (
+                  <p className="text-[10px] text-slate-400 mb-1">
+                    Риск:{" "}
+                    <span
+                      className={
+                        args.risk_level === "critical"
+                          ? "text-red-400"
+                          : args.risk_level === "high"
+                            ? "text-orange-400"
+                            : args.risk_level === "medium"
+                              ? "text-amber-400"
+                              : "text-green-400"
+                      }
                     >
-                      Утвердить все ⚡
+                      {args.risk_level}
+                    </span>
+                  </p>
+                )}
+                {!isCapability && (
+                  <pre className="text-[10px] text-slate-400 bg-slate-900/50 rounded p-2 overflow-x-auto mb-2 max-h-20">
+                    {msg.preview}
+                  </pre>
+                )}
+                {isCapability && args.reason && (
+                  <p className="text-[10px] text-slate-400 mb-2 line-clamp-2">
+                    {args.reason}
+                  </p>
+                )}
+                {isPending ? (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => void handleApproval(msg.id, true)}
+                      className={`flex-1 py-1.5 rounded text-xs font-medium transition-colors text-white ${isCapability ? "bg-violet-700 hover:bg-violet-600" : "bg-green-700 hover:bg-green-600"}`}
+                    >
+                      {isCapability ? "Добавить" : "Утвердить"}
                     </button>
+                    <button
+                      onClick={() => void handleApproval(msg.id, false)}
+                      className="flex-1 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs font-medium transition-colors"
+                    >
+                      Отклонить
+                    </button>
+                    {!isCapability && (
+                      <button
+                        onClick={() => handleApproveAll(msg.id)}
+                        className="py-1.5 px-2 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-medium transition-colors"
+                        title="Утвердить этот и все последующие запросы"
+                      >
+                        ⚡ Все
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <span
