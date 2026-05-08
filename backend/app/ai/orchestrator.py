@@ -66,28 +66,17 @@ OutputType = Literal["text", "table", "document", "links", "chart", "drawing", "
 
 _ORCHESTRATOR_SYSTEM = """Ты оркестратор отдела ИИ-сотрудников.
 Верни только JSON по заданной схеме. Не отвечай пользователю текстом.
-Твоя задача: понять намерение, выбрать профильного исполнителя, определить,
-нужен ли Рабочий стол, какие skills рекомендовать и какой canvas_id обновлять.
 
-Правила:
-- Простые короткие ответы: channel=chat, required=false.
-- Таблицы, документы, ссылки, файлы, графики, чертежи, полные списки,
-  изменения существующих таблиц и просьбы "добавь/убери/переставь столбец"
-  всегда channel=workspace, required=true.
-- Для follow-up изменения таблицы не подтверждай старый блок: план должен
-  требовать обновления существующего workspace-блока.
-- Если пользователь просит дополнительные данные к уже выведенной таблице,
-  это workspace update, а не экспорт и не только текст в чат.
-- Используй роли только из допустимого enum схемы.
+Задача: понять цель пользователя, выбрать подходящие инструменты и исполнителя.
+Исполнитель самостоятельно решит порядок вызовов и детали — не расписывай шаги.
 
-Правила фильтрации по поставщику:
-- "товары поставщика X", "по поставщику X", "только X" (где X — конкретное название):
-  используй workspace.invoice_items_table с filters.supplier_query=X,
-  canvas_id=agent:invoice-items.
-- "товары по поставщикам" / "сгруппировать по поставщикам" (без конкретного имени):
-  используй workspace.invoice_items_by_supplier_table,
-  canvas_id=agent:invoice-items-by-supplier.
-- НЕ путай: конкретный поставщик → фильтр на одну строку; все поставщики → группировка.
+Ключевые решения:
+- workspace.required=true когда нужна таблица, список, документ, файл, график или
+  изменение уже открытой таблицы. Иначе false (короткий ответ в чат).
+- recommended_skills: укажи 1-3 наиболее подходящих инструмента как отправную
+  точку; исполнитель может вызвать дополнительные сам.
+- Если НИ ОДИН skill не подходит: intent="capability_gap".
+- Роли только из enum схемы.
 """
 
 
@@ -317,46 +306,36 @@ class AgentOrchestrator:
         await self._outer_send(data)
 
     def _plan_turn(self, content: str) -> OrchestratorPlan:
+        """Lightweight heuristic plan — used only as a soft hint for the LLM planner."""
         text = _norm(content)
         workspace_required = _is_workspace_request(text)
-        role: WorkerRole = "data_analyst"
-        skills: list[str] = list(_canvas_map().get("default_skills", ["memory.search", "table.query"]))
-        intent = "general"
-        output_type: OutputType = "text"
+        output_type: OutputType = "table" if workspace_required else "text"
         canvas_id: str | None = None
 
+        # Broad domain detection for role hint only — not binding
+        role: WorkerRole = "data_analyst"
+        intent = "general"
         matched_route = _match_intent_route(text)
-        if matched_route or _is_table_edit_request(text):
-            if matched_route:
-                role = matched_route["role"]
-                intent = matched_route["intent"]
-                skills = list(matched_route.get("skills", skills))
-                canvas_id = _resolve_canvas_from_route(matched_route, text)
-        else:
-            canvas_id = None
+        if matched_route:
+            role = matched_route.get("role", role)
+            intent = matched_route.get("intent", intent)
+            canvas_id = _resolve_canvas_from_route(matched_route, text)
 
-        if workspace_required:
-            output_type = (
-                "table"
-                if any(token in text for token in ("таблиц", "список", "столб", "колон"))
-                else "document"
-            )
-            if output_type == "table" and _references_existing_table(text):
-                canvas_id = _latest_workspace_table_id() or canvas_id
-
-        # Detect specific-supplier filter: "товары поставщика Хоффман"
+        # Supplier-specific filter: carry it to the LLM as a hint in filters
         workspace_filters: dict[str, str] = {}
         supplier_name = _extract_supplier_name(text)
         if supplier_name:
             workspace_required = True
             output_type = "table"
-            canvas_id = "agent:invoice-items"
+            canvas_id = canvas_id or "agent:invoice-items"
             workspace_filters = {"supplier_query": supplier_name}
-            role = "invoice_specialist"
-            intent = "invoice_data"
-            # Worker needs to filter by supplier; put supplier_query first so it's visible
-            skills = ["supplier.search", "workspace.invoice_items_table"]
-            content = f"{content.strip()} [фильтр: supplier_query={supplier_name!r}]"
+
+        # Pass just 1-2 broad skills as a starting hint; LLM picks the exact ones
+        skills: list[str] = []
+        if matched_route:
+            skills = list(matched_route.get("skills", []))[:2]
+        if not skills:
+            skills = ["memory.search"]
 
         return OrchestratorPlan(
             goal=content.strip()[:500],
@@ -372,9 +351,6 @@ class AgentOrchestrator:
                 output_type=output_type,
                 required=workspace_required,
                 canvas_id=canvas_id,
-                description="Rich-вывод должен быть опубликован на существующий Рабочий стол."
-                if workspace_required
-                else "Короткий ответ допустим в чате.",
                 filters=workspace_filters,
             ),
             audit_required=True,
@@ -939,49 +915,44 @@ def _build_orchestrator_prompt(
 
     # Conversation context
     if history:
-        parts.append("## История диалога (последние сообщения)\n" + str(history[-10:]))
+        recent = history[-6:]
+        parts.append("## Контекст диалога\n" + "\n".join(
+            f"{m.get('role','?')}: {str(m.get('content',''))[:200]}" for m in recent
+        ))
 
-    # Available skills from registry (most relevant)
+    # Available skills grouped by domain
     if skill_context:
-        parts.append("## Доступные инструменты (skills)\n" + skill_context)
+        parts.append("## Доступные инструменты\n" + skill_context)
 
-    # Current workspace state
-    parts.append("## Текущий Рабочий стол\n" + str(workspace_summary))
+    # Current workspace state (only non-empty)
+    if workspace_summary:
+        parts.append("## Открытые блоки Рабочего стола\n" + str(workspace_summary))
 
     # Adaptive hints from past outcomes
     if preference_hint:
-        parts.append("## Статистика использования инструментов\n" + preference_hint)
+        parts.append("## Статистика инструментов (успешность)\n" + preference_hint)
 
     # The actual request
-    parts.append("## Запрос пользователя\n" + content[:2000])
+    parts.append("## Запрос\n" + content[:2000])
 
-    # Heuristic hint — presented as a suggestion, not an answer
+    # Heuristic hint as soft suggestion only
     hint_dict = heuristic_hint.model_dump(mode="json")
-    parts.append(
-        "## Предварительный анализ (эвристика — может быть неточным, проверь сам)\n"
-        + str({k: hint_dict[k] for k in ("intent", "worker") if k in hint_dict})
-    )
+    hint_str = str({k: hint_dict[k] for k in ("intent", "worker") if k in hint_dict})
+    parts.append(f"## Эвристическая подсказка (не обязательно точная)\n{hint_str}")
 
     parts.append(
-        "## Задача\n"
-        "Сформируй OrchestratorPlan JSON для выполнения запроса пользователя.\n"
-        "Правила:\n"
-        "- Выбирай skills из списка доступных инструментов выше. Не придумывай несуществующие.\n"
-        "- Если запрос о конкретном поставщике X → skills=[supplier.search, workspace.invoice_items_table], "
-        "filters={supplier_query: X}, canvas_id=agent:invoice-items.\n"
-        "- Если запрос «по всем поставщикам» без конкретного имени → "
-        "skills=[workspace.invoice_items_by_supplier_table], canvas_id=agent:invoice-items-by-supplier.\n"
-        "- Если нужен Рабочий стол (таблица/документ) → workspace.required=true.\n"
-        "- Для изменения уже показанной таблицы → channel=workspace, canvas_id=существующего блока.\n"
-        "- Отдавай приоритет инструментам с высоким процентом успеха из статистики выше.\n"
-        "- Если НИ ОДИН skill не подходит → укажи intent=capability_gap и "
-        "recommended_skills=[] (система создаст новый скилл)."
+        "## Что нужно сделать\n"
+        "Верни OrchestratorPlan JSON.\n"
+        "- goal: одна фраза — что должен сделать исполнитель.\n"
+        "- recommended_skills: 1-3 инструмента как отправная точка (исполнитель может взять дополнительные).\n"
+        "- workspace.required=true если нужна таблица, список, файл, документ или обновление открытого блока.\n"
+        "- Если НИ ОДИН инструмент не подходит: intent=capability_gap, recommended_skills=[]."
     )
     return "\n\n".join(parts)
 
 
 def _build_skill_registry_context(user_text: str) -> str:
-    """Return a compact list of available skills, prioritising relevant ones."""
+    """Return skills grouped by domain, with top relevant ones highlighted."""
     try:
         from app.ai.gateway_config import gateway_config as _gw_cfg
         registry_path = _gw_cfg.registry_path
@@ -1006,19 +977,38 @@ def _build_skill_registry_context(user_text: str) -> str:
                     score += 1
             return score
 
+        # Top-12 most relevant skills shown individually with descriptions
         scored = sorted(skills, key=_relevance, reverse=True)
-        # Always include top 40 most relevant + any generated skills
-        top = scored[:40]
-        generated = [s for s in skills if s.get("category") == "agent_generated"]
-        combined = {s["name"]: s for s in top}
-        for s in generated:
-            combined[s["name"]] = s
+        top12 = scored[:12]
+        top12_names = {s["name"] for s in top12}
 
-        lines = []
-        for s in list(combined.values())[:50]:
-            category = s.get("category", "")
-            tag = f"[{category}] " if category else ""
-            lines.append(f"- {s['name']}: {tag}{(s.get('description') or '')[:80]}")
+        lines = ["### Наиболее релевантные"]
+        for s in top12:
+            lines.append(f"- {s['name']}: {(s.get('description') or '')[:100]}")
+
+        # Remaining skills grouped by category (names only)
+        from collections import defaultdict
+        by_cat: dict[str, list[str]] = defaultdict(list)
+        for s in skills:
+            if s["name"] not in top12_names:
+                cat = s.get("category") or "other"
+                by_cat[cat].append(s["name"])
+
+        # Generated skills always shown fully
+        generated = [s for s in skills if s.get("category") == "agent_generated"
+                     and s["name"] not in top12_names]
+        if generated:
+            lines.append("\n### Созданные агентом")
+            for s in generated:
+                lines.append(f"- {s['name']}: {(s.get('description') or '')[:100]}")
+
+        if by_cat:
+            lines.append("\n### Все остальные (по группам)")
+            for cat, names in sorted(by_cat.items()):
+                if cat == "agent_generated":
+                    continue
+                lines.append(f"**{cat}**: {', '.join(names)}")
+
         return "\n".join(lines)
     except Exception:
         return ""
