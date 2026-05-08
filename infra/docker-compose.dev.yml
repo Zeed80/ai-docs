@@ -45,7 +45,12 @@ services:
     environment:
       NODE_ENV: development
 
-  # Disable GPU requirement for dev (use CPU Ollama)
+  # The embedded Ollama container (profile: embedded-ollama) is NOT started
+  # by default. The stack expects a system Ollama on the host reachable via
+  # OLLAMA_URL=http://host-gateway:11434 (see .env).
+  # To use the embedded container instead: docker compose --profile embedded-ollama up
+  # GPU passthrough for the embedded container is defined in docker-compose.yml;
+  # override it to {} here only when running in CI without GPU hardware.
   ollama:
     deploy:
       resources: {}

@@ -748,6 +748,12 @@ export default function SettingsPage() {
 
   // AI Config (models tab)
   const [models, setModels] = useState<OllamaModel[]>([]);
+  const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
+  const [ollamaError, setOllamaError] = useState<string | null>(null);
+  const [ollamaGpuInfo, setOllamaGpuInfo] = useState<{
+    has_gpu: boolean;
+    running_models: { name: string; size_vram: number }[];
+  } | null>(null);
   const [config, setConfig] = useState<AiConfig | null>(null);
   const [registryModels, setRegistryModels] = useState<RegistryModel[]>([]);
   const [configStatus, setConfigStatus] = useState<AiConfigStatus | null>(null);
@@ -843,8 +849,13 @@ export default function SettingsPage() {
       const r = await fetch(`${API}/api/ai/models`);
       const d = await r.json();
       setModels(d.models ?? []);
+      setOllamaAvailable(d.ollama_available ?? false);
+      setOllamaError(d.ollama_error ?? null);
+      setOllamaGpuInfo(d.gpu_info ?? null);
     } catch {
       setModels([]);
+      setOllamaAvailable(false);
+      setOllamaError("Не удалось подключиться к backend");
     } finally {
       setLoadingModels(false);
     }
@@ -1018,6 +1029,8 @@ export default function SettingsPage() {
         loadAgentConfigProposals();
         loadCapabilityProposals();
         loadAgentWorkRegistry();
+        loadModels();
+        loadCapabilities();
       } else if (tab === "models") {
         loadModels();
         loadConfig();
@@ -2300,6 +2313,44 @@ export default function SettingsPage() {
                       </button>
                     </div>
                   </div>
+
+                  {/* Ollama diagnostics */}
+                  {ollamaAvailable === false && ollamaError && (
+                    <div className="rounded-md border border-red-800/60 bg-red-950/20 p-3 text-xs text-red-300">
+                      <span className="font-medium">Ollama недоступен</span>
+                      {" — "}
+                      {ollamaError}. Списки локальных моделей пусты.
+                    </div>
+                  )}
+                  {ollamaAvailable && ollamaGpuInfo !== null && (
+                    <div
+                      className={`rounded-md border p-3 text-xs ${ollamaGpuInfo.has_gpu ? "border-emerald-800/50 bg-emerald-950/20 text-emerald-300" : "border-amber-800/50 bg-amber-950/20 text-amber-300"}`}
+                    >
+                      {ollamaGpuInfo.has_gpu ? (
+                        <>
+                          GPU активен. Запущено моделей:{" "}
+                          {ollamaGpuInfo.running_models.length}
+                          {ollamaGpuInfo.running_models.length > 0 && (
+                            <span className="ml-2 text-emerald-200">
+                              {ollamaGpuInfo.running_models
+                                .map((m) => m.name)
+                                .join(", ")}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        "GPU не обнаружен в Ollama — модели работают на CPU. Проверьте NVIDIA-драйверы и nvidia-container-toolkit на хосте."
+                      )}
+                    </div>
+                  )}
+                  {ollamaAvailable &&
+                    ollamaGpuInfo === null &&
+                    models.length === 0 && (
+                      <div className="rounded-md border border-amber-800/50 bg-amber-950/20 p-3 text-xs text-amber-300">
+                        Ollama доступен, но модели не загружены. Перейдите на
+                        вкладку «Модели» чтобы скачать модель.
+                      </div>
+                    )}
 
                   <div className="grid grid-cols-1 gap-4">
                     {(

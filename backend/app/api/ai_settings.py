@@ -116,24 +116,56 @@ def _sync_ai_model_agent(model_name: str | None) -> None:
 
 @router.get("/models")
 async def list_models() -> dict:
+    ollama_url = settings.ollama_url
+    error_detail: str | None = None
+    models: list[dict] = []
+    gpu_info: dict | None = None
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{settings.ollama_url}/api/tags")
+            resp = await client.get(f"{ollama_url}/api/tags")
             resp.raise_for_status()
             data = resp.json()
-            models = [
-                {
-                    "name": m["name"],
-                    "size": m.get("size", 0),
-                    "modified_at": m.get("modified_at", ""),
-                    "parameter_size": m.get("details", {}).get("parameter_size", ""),
-                    "family": m.get("details", {}).get("family", ""),
-                }
-                for m in data.get("models", [])
-            ]
-            return {"models": sorted(models, key=lambda x: x["name"])}
+            models = sorted(
+                [
+                    {
+                        "name": m["name"],
+                        "size": m.get("size", 0),
+                        "modified_at": m.get("modified_at", ""),
+                        "parameter_size": m.get("details", {}).get("parameter_size", ""),
+                        "family": m.get("details", {}).get("family", ""),
+                    }
+                    for m in data.get("models", [])
+                ],
+                key=lambda x: x["name"],
+            )
+            # Check GPU visibility via Ollama's /api/ps endpoint (shows running models + GPU)
+            try:
+                ps_resp = await client.get(f"{ollama_url}/api/ps")
+                if ps_resp.status_code == 200:
+                    ps_data = ps_resp.json()
+                    gpu_info = {
+                        "running_models": [
+                            {"name": m.get("name"), "size_vram": m.get("size_vram", 0)}
+                            for m in ps_data.get("models", [])
+                        ],
+                        "has_gpu": any(
+                            m.get("size_vram", 0) > 0
+                            for m in ps_data.get("models", [])
+                        ),
+                    }
+            except Exception:
+                gpu_info = None
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Ollama unavailable: {e}")
+        error_detail = str(e)
+        logger.warning("ollama_unavailable", url=ollama_url, error=error_detail)
+
+    return {
+        "models": models,
+        "ollama_url": ollama_url,
+        "ollama_available": error_detail is None,
+        "ollama_error": error_detail,
+        "gpu_info": gpu_info,
+    }
 
 
 # ── Pull model (streaming progress) ──────────────────────────────────────────

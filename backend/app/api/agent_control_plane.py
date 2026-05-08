@@ -7,6 +7,7 @@ review risk before they are applied.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -600,7 +601,11 @@ async def runtime_status(db: AsyncSession = Depends(get_db)) -> AgentRuntimeStat
         profile = get_active_embedding_profile()
         active_embedding_model = profile.model_key
         active_embedding_collection = profile.collection_name
-        qdrant_points = collection_count_for(profile.collection_name)
+        loop = asyncio.get_event_loop()
+        qdrant_points = await asyncio.wait_for(
+            loop.run_in_executor(None, collection_count_for, profile.collection_name),
+            timeout=3.0,
+        )
     except Exception:
         pass
 
