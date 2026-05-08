@@ -274,43 +274,55 @@ export function ChatWidget() {
     <div className="fixed bottom-6 right-6 w-96 h-[520px] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col z-50">
       {/* Header */}
       <div className="border-b border-slate-200 bg-slate-50 rounded-t-xl">
+        {/* Top row: name + status + model + close */}
         <div className="flex items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <span
               className={`w-2 h-2 rounded-full flex-shrink-0 ${isConnected ? "bg-green-500" : "bg-slate-300"}`}
             />
             <span className="font-semibold text-sm">{t("sveta")}</span>
-            {isStreaming && (
-              <span className="text-[10px] text-blue-500 animate-pulse">
+            {isStreaming ? (
+              <span className="text-[10px] text-blue-500 animate-pulse flex-shrink-0">
                 думает...
+              </span>
+            ) : (
+              <span className="text-[10px] text-slate-400 flex-shrink-0">
+                {isConnected ? "онлайн" : "офлайн"}
               </span>
             )}
           </div>
-          <button
-            onClick={() => setIsOpen(false)}
-            className="text-slate-400 hover:text-slate-600 flex-shrink-0"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {workerModel && (
+              <span className="text-[10px] text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 font-mono">
+                {workerModel}
+              </span>
+            )}
+            <button
+              onClick={() => setIsOpen(false)}
+              className="text-slate-400 hover:text-slate-600"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
-          </button>
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Activity bar — visible while agent is working */}
-        {isStreaming && (
-          <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
+        {isStreaming && (activeToolCall || currentStatus) && (
+          <div className="px-4 pb-2 flex items-center gap-2 flex-wrap border-t border-slate-100 pt-1.5">
             {activeToolCall && (
-              <span className="flex items-center gap-1 text-[10px] bg-blue-50 text-blue-600 border border-blue-200 rounded px-1.5 py-0.5 font-mono max-w-[180px] truncate">
+              <span className="flex items-center gap-1 text-[10px] bg-blue-50 text-blue-600 border border-blue-200 rounded px-1.5 py-0.5 font-mono max-w-[200px] truncate">
                 <svg
                   className="w-2.5 h-2.5 flex-shrink-0 animate-spin"
                   viewBox="0 0 24 24"
@@ -329,15 +341,10 @@ export function ChatWidget() {
             )}
             {currentStatus && (
               <span
-                className="text-[10px] text-slate-500 truncate max-w-[200px]"
+                className="text-[10px] text-slate-500 truncate max-w-[220px]"
                 title={currentStatus}
               >
                 {currentStatus.replace(/^Оркестратор:\s*|^Инструмент:\s*/i, "")}
-              </span>
-            )}
-            {workerModel && (
-              <span className="ml-auto text-[10px] text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 flex-shrink-0">
-                {workerModel}
               </span>
             )}
           </div>
