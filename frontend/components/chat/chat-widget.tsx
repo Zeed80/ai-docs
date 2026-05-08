@@ -39,6 +39,9 @@ export function ChatWidget() {
   const [input, setInput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [currentStatus, setCurrentStatus] = useState<string | null>(null);
+  const [activeToolCall, setActiveToolCall] = useState<string | null>(null);
+  const [workerModel, setWorkerModel] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const agentWsModeRef = useRef<AgentWsMode>("legacy");
@@ -89,6 +92,17 @@ export function ChatWidget() {
   }, [isOpen, isDegraded, connect]);
 
   useEffect(() => {
+    if (!isOpen) return;
+    fetch("/api/ai/agent-config")
+      .then((r) => r.json())
+      .then((cfg: Record<string, unknown>) => {
+        const m = (cfg.worker_model ?? cfg.model ?? "") as string;
+        if (m) setWorkerModel(m);
+      })
+      .catch(() => {});
+  }, [isOpen]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
@@ -114,22 +128,29 @@ export function ChatWidget() {
         setIsStreaming(true);
         setMessages((prev) => [...prev, { id, role: "assistant", content }]);
       }
+    } else if (type === "status") {
+      setCurrentStatus((data.content as string) ?? null);
     } else if (type === "done") {
       streamingIdRef.current = null;
       setIsStreaming(false);
+      setCurrentStatus(null);
+      setActiveToolCall(null);
     } else if (type === "tool_call") {
+      const toolName = data.tool as string;
+      setActiveToolCall(toolName);
       setMessages((prev) => [
         ...prev,
         {
           id: genId(),
           role: "tool",
-          tool: data.tool as string,
+          tool: toolName,
           args: data.args as Record<string, unknown>,
           status: "calling",
         },
       ]);
     } else if (type === "tool_result") {
       const toolName = data.tool as string;
+      setActiveToolCall(null);
       // Update the matching "calling" tool message
       setMessages((prev) => {
         const lastCallIdx = [...prev]
@@ -252,36 +273,75 @@ export function ChatWidget() {
   return (
     <div className="fixed bottom-6 right-6 w-96 h-[520px] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col z-50">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-slate-50 rounded-t-xl">
-        <div className="flex items-center gap-2">
-          <span
-            className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-slate-300"}`}
-          />
-          <span className="font-semibold text-sm">{t("sveta")}</span>
-          {isStreaming && (
-            <span className="text-[10px] text-blue-500 animate-pulse">
-              думает...
-            </span>
-          )}
-        </div>
-        <button
-          onClick={() => setIsOpen(false)}
-          className="text-slate-400 hover:text-slate-600"
-        >
-          <svg
-            className="w-5 h-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M6 18L18 6M6 6l12 12"
+      <div className="border-b border-slate-200 bg-slate-50 rounded-t-xl">
+        <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-2">
+            <span
+              className={`w-2 h-2 rounded-full flex-shrink-0 ${isConnected ? "bg-green-500" : "bg-slate-300"}`}
             />
-          </svg>
-        </button>
+            <span className="font-semibold text-sm">{t("sveta")}</span>
+            {isStreaming && (
+              <span className="text-[10px] text-blue-500 animate-pulse">
+                думает...
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => setIsOpen(false)}
+            className="text-slate-400 hover:text-slate-600 flex-shrink-0"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
+
+        {/* Activity bar — visible while agent is working */}
+        {isStreaming && (
+          <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
+            {activeToolCall && (
+              <span className="flex items-center gap-1 text-[10px] bg-blue-50 text-blue-600 border border-blue-200 rounded px-1.5 py-0.5 font-mono max-w-[180px] truncate">
+                <svg
+                  className="w-2.5 h-2.5 flex-shrink-0 animate-spin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
+                </svg>
+                {activeToolCall.replace(/__/g, ".")}
+              </span>
+            )}
+            {currentStatus && (
+              <span
+                className="text-[10px] text-slate-500 truncate max-w-[200px]"
+                title={currentStatus}
+              >
+                {currentStatus.replace(/^Оркестратор:\s*|^Инструмент:\s*/i, "")}
+              </span>
+            )}
+            {workerModel && (
+              <span className="ml-auto text-[10px] text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 flex-shrink-0">
+                {workerModel}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Degraded banner */}
