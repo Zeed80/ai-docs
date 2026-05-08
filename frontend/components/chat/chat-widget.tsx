@@ -27,6 +27,8 @@ interface ChatMessage {
   status?: "calling" | "done" | "pending" | "approved" | "rejected";
   // approval gate
   preview?: string;
+  // tools used during the turn that produced this assistant message
+  toolsUsedInTurn?: string[];
 }
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -42,11 +44,15 @@ export function ChatWidget() {
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [activeToolCall, setActiveToolCall] = useState<string | null>(null);
   const [workerModel, setWorkerModel] = useState<string | null>(null);
+  const [ratings, setRatings] = useState<Record<string, 1 | -1>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const agentWsModeRef = useRef<AgentWsMode>("legacy");
-  // Buffer accumulates text chunks from the current assistant response
   const streamingIdRef = useRef<string | null>(null);
+  // Tools used in the current streaming turn (reset on each user message)
+  const currentTurnToolsRef = useRef<string[]>([]);
+  // session_id for rating attribution (stable per widget mount)
+  const sessionIdRef = useRef<string>(genId());
 
   // ── WebSocket ──────────────────────────────────────────────────────────
 
@@ -115,14 +121,12 @@ export function ChatWidget() {
       const content = (data.content as string) ?? "";
       const sid = streamingIdRef.current;
       if (sid) {
-        // Append to existing streaming message
         setMessages((prev) =>
           prev.map((m) =>
             m.id === sid ? { ...m, content: (m.content ?? "") + content } : m,
           ),
         );
       } else {
-        // Start new assistant message
         const id = genId();
         streamingIdRef.current = id;
         setIsStreaming(true);
@@ -131,13 +135,30 @@ export function ChatWidget() {
     } else if (type === "status") {
       setCurrentStatus((data.content as string) ?? null);
     } else if (type === "done") {
+      const sid = streamingIdRef.current;
+      const toolsSnapshot = [...currentTurnToolsRef.current];
+      // Attach tool list to the assistant message so rating can reference it
+      if (sid && toolsSnapshot.length > 0) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === sid ? { ...m, toolsUsedInTurn: toolsSnapshot } : m,
+          ),
+        );
+      }
       streamingIdRef.current = null;
+      currentTurnToolsRef.current = [];
       setIsStreaming(false);
       setCurrentStatus(null);
       setActiveToolCall(null);
     } else if (type === "tool_call") {
       const toolName = data.tool as string;
       setActiveToolCall(toolName);
+      if (!currentTurnToolsRef.current.includes(toolName)) {
+        currentTurnToolsRef.current = [
+          ...currentTurnToolsRef.current,
+          toolName,
+        ];
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -210,6 +231,7 @@ export function ChatWidget() {
     )
       return;
     const content = input.trim();
+    currentTurnToolsRef.current = [];
     setMessages((prev) => [...prev, { id: genId(), role: "user", content }]);
     wsRef.current.send(
       JSON.stringify(
@@ -223,6 +245,25 @@ export function ChatWidget() {
     );
     setInput("");
     setIsStreaming(true);
+  }
+
+  async function rateMessage(msg: ChatMessage, vote: 1 | -1) {
+    if (ratings[msg.id]) return;
+    setRatings((prev) => ({ ...prev, [msg.id]: vote }));
+    try {
+      await fetch("/api/memory/rate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          message_id: msg.id,
+          rating: vote,
+          tools_used: msg.toolsUsedInTurn ?? [],
+        }),
+      });
+    } catch {
+      // non-critical — rating failed silently
+    }
   }
 
   function handleApproval(msgId: string, approved: boolean) {
@@ -379,11 +420,48 @@ export function ChatWidget() {
           }
 
           if (msg.role === "assistant") {
+            const existingRating = ratings[msg.id];
+            const isLastAssistant =
+              !isStreaming &&
+              [...messages].reverse().find((m) => m.role === "assistant")
+                ?.id === msg.id;
             return (
-              <div key={msg.id} className="flex justify-start">
+              <div key={msg.id} className="flex flex-col items-start gap-0.5">
                 <div className="max-w-[85%] px-3 py-2 rounded-lg text-sm bg-slate-100 text-slate-800 whitespace-pre-wrap">
                   {msg.content}
                 </div>
+                {isLastAssistant && (
+                  <div className="flex items-center gap-1 pl-1">
+                    <button
+                      onClick={() => void rateMessage(msg, 1)}
+                      disabled={!!existingRating}
+                      title="Полезно"
+                      className={`text-base leading-none transition-colors ${
+                        existingRating === 1
+                          ? "opacity-100"
+                          : existingRating
+                            ? "opacity-20 cursor-default"
+                            : "opacity-40 hover:opacity-90"
+                      }`}
+                    >
+                      👍
+                    </button>
+                    <button
+                      onClick={() => void rateMessage(msg, -1)}
+                      disabled={!!existingRating}
+                      title="Не полезно"
+                      className={`text-base leading-none transition-colors ${
+                        existingRating === -1
+                          ? "opacity-100"
+                          : existingRating
+                            ? "opacity-20 cursor-default"
+                            : "opacity-40 hover:opacity-90"
+                      }`}
+                    >
+                      👎
+                    </button>
+                  </div>
+                )}
               </div>
             );
           }

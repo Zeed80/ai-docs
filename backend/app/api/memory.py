@@ -22,6 +22,7 @@ from app.db.models import (
     KnowledgeNode,
     MemoryFact,
     MemoryEmbeddingRecord,
+    MessageRating,
 )
 from app.db.session import get_db
 from app.domain.graph import (
@@ -1093,3 +1094,75 @@ def _simple_score(query: str, text: str) -> float:
     text_lower = text.lower()
     matched = sum(1 for term in query_terms if term in text_lower)
     return matched / len(query_terms)
+
+
+# ── Message Rating ────────────────────────────────────────────────────────────
+
+
+class MessageRatingRequest(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=120)
+    message_id: str = Field(..., min_length=1, max_length=120)
+    rating: int = Field(..., ge=-1, le=1)  # +1 or -1
+    tools_used: list[str] = Field(default_factory=list)
+    comment: str | None = Field(None, max_length=500)
+
+
+class MessageRatingOut(BaseModel):
+    id: uuid.UUID
+    session_id: str
+    message_id: str
+    rating: int
+    tools_used: list[str]
+
+
+@router.post("/rate", response_model=MessageRatingOut)
+async def rate_message(
+    req: MessageRatingRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MessageRating:
+    from app.ai.orchestrator_memory import record_user_rating
+
+    row = MessageRating(
+        session_id=req.session_id,
+        message_id=req.message_id,
+        rating=req.rating,
+        tools_used=req.tools_used or [],
+        comment=req.comment,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+
+    # Mirror into Redis so orchestrator can use it immediately
+    record_user_rating(
+        tools_used=req.tools_used or [],
+        rating=req.rating,
+        session_id=req.session_id,
+    )
+
+    return row
+
+
+@router.get("/tool-ratings")
+async def get_tool_ratings(db: AsyncSession = Depends(get_db)) -> dict:
+    """Aggregated thumbs up/down per tool — used by admin UI."""
+    from sqlalchemy import case
+    result = await db.execute(
+        select(
+            MessageRating.tools_used,
+            MessageRating.rating,
+        ).where(MessageRating.tools_used.isnot(None))
+    )
+    rows = result.all()
+
+    agg: dict[str, dict[str, int]] = {}
+    for tools_used, rating in rows:
+        for tool in (tools_used or []):
+            if tool not in agg:
+                agg[tool] = {"up": 0, "down": 0}
+            if rating > 0:
+                agg[tool]["up"] += 1
+            elif rating < 0:
+                agg[tool]["down"] += 1
+
+    return agg

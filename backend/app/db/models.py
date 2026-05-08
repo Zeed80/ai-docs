@@ -2147,3 +2147,18 @@ class EmailTemplateDB(UUIDPrimaryKey, TimestampMixin, Base):
     use_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[str | None] = mapped_column(String(100))
+
+
+# ── Message Ratings ─────────────────────────────────────────────────────────
+
+
+class MessageRating(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "message_ratings"
+
+    session_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    message_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    rating: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    # +1 = thumbs up, -1 = thumbs down
+    tools_used: Mapped[list | None] = mapped_column(JSON)
+    # list of skill/tool names used in the rated turn
+    comment: Mapped[str | None] = mapped_column(String(500))

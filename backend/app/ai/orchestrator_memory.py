@@ -23,6 +23,7 @@ logger = structlog.get_logger()
 _TTL_SECONDS = 30 * 24 * 3600  # 30 days
 _SKILL_KEY_PREFIX = "orchestrator:skill:"
 _INTENT_KEY_PREFIX = "orchestrator:intent:"
+_USER_RATING_KEY_PREFIX = "user:skill_rating:"
 _MAX_INTENT_ENTRIES = 30
 
 
@@ -225,9 +226,80 @@ def build_tool_preference_hint(
             if never_failed:
                 lines.append(f"  Глобально надёжные (≥3 успехов, 0 сбоев): {', '.join(never_failed[:5])}")
 
+        # 4. User thumbs up/down ratings
+        if candidate_skills:
+            user_hint = get_user_rating_hint(candidate_skills)
+            if user_hint:
+                lines.append(user_hint)
+
         return "\n".join(lines)
     except Exception as exc:
         logger.warning("orchestrator_preference_hint_failed", error=str(exc))
+        return ""
+
+
+# ── User rating feedback ──────────────────────────────────────────────────────
+
+
+def record_user_rating(tools_used: list[str], rating: int, session_id: str = "") -> None:
+    """Persist a thumbs-up (+1) or thumbs-down (-1) vote for the tools used in a turn."""
+    try:
+        r = _redis()
+        if r is None or not tools_used:
+            return
+        now = time.time()
+        for tool in tools_used:
+            key = _USER_RATING_KEY_PREFIX + tool
+            raw = r.get(key)
+            stats: dict[str, Any] = json.loads(raw) if raw else {"up": 0, "down": 0, "last_at": 0}
+            if rating > 0:
+                stats["up"] = stats.get("up", 0) + 1
+            elif rating < 0:
+                stats["down"] = stats.get("down", 0) + 1
+            stats["last_at"] = now
+            r.setex(key, _TTL_SECONDS, json.dumps(stats))
+        logger.info(
+            "user_rating_recorded",
+            tools=tools_used,
+            rating=rating,
+            session_id=session_id,
+        )
+    except Exception as exc:
+        logger.warning("user_rating_write_failed", error=str(exc))
+
+
+def get_user_rating_hint(candidate_skills: list[str]) -> str:
+    """Return a compact hint about user ratings for the given skills."""
+    try:
+        r = _redis()
+        if r is None or not candidate_skills:
+            return ""
+        loved: list[str] = []
+        disliked: list[str] = []
+        for skill in candidate_skills:
+            raw = r.get(_USER_RATING_KEY_PREFIX + skill)
+            if not raw:
+                continue
+            d = json.loads(raw)
+            up = d.get("up", 0)
+            down = d.get("down", 0)
+            total = up + down
+            if total < 2:
+                continue
+            rate = up / total
+            if rate >= 0.7:
+                loved.append(skill)
+            elif rate <= 0.35:
+                disliked.append(skill)
+        if not loved and not disliked:
+            return ""
+        lines = ["Оценки пользователя:"]
+        if loved:
+            lines.append(f"  Нравится (👍 чаще): {', '.join(loved[:5])}")
+        if disliked:
+            lines.append(f"  Не нравится (👎 чаще): {', '.join(disliked[:3])}")
+        return "\n".join(lines)
+    except Exception:
         return ""
 
 
