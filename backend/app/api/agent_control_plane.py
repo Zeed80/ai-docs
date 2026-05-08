@@ -328,19 +328,23 @@ def _contains_destructive_marker(value: str) -> bool:
 
 
 def _safe_auto_approval_reason(proposal: CapabilityProposal) -> str | None:
-    """Return an auto-approval reason for low-risk local read/workspace drafts."""
-    if proposal.risk_level not in {"low", "medium"}:
+    """Return an auto-approval reason for safe capabilities.
+
+    Auto-approves low/medium risk GET/POST tools that have no destructive markers
+    and no explicit approval_required flag.  Critical risk is always manual.
+    """
+    if proposal.risk_level == "critical":
         return None
-    if proposal.suggested_artifact not in {"tool", "skill", "workspace_template"}:
+    if proposal.suggested_artifact not in {"tool", "skill", "workspace_template", "config"}:
         return None
 
     draft = proposal.draft or {}
     tool_name = _draft_value(draft, "tool_name") or _draft_value(
         draft, "skill_registry_entry", "name"
-    )
+    ) or ""
     endpoint_path = _draft_value(draft, "endpoint_path") or _draft_value(
         draft, "skill_registry_entry", "path"
-    )
+    ) or ""
     method = (
         _draft_value(draft, "method")
         or _draft_value(draft, "skill_registry_entry", "method")
@@ -353,36 +357,35 @@ def _safe_auto_approval_reason(proposal: CapabilityProposal) -> str | None:
 
     if approval_required:
         return None
-    if method not in {"GET", "POST"}:
+    if method not in {"GET", "POST", "PATCH"}:
         return None
-    if _contains_destructive_marker(" ".join([tool_name, endpoint_path])):
-        return None
-
-    local_workspace_tool = tool_name.startswith("workspace.") or endpoint_path.startswith(
-        "/api/workspace/"
-    )
-    local_agent_tool = endpoint_path.startswith("/api/agent/") and proposal.risk_level == "low"
-    if not (local_workspace_tool or local_agent_tool):
+    if _contains_destructive_marker(f"{tool_name} {endpoint_path}"):
         return None
 
-    return "safe local workspace/data capability; sandbox passed"
+    # High risk: require human review unless explicitly safe
+    if proposal.risk_level == "high":
+        safe_high = tool_name.startswith("workspace.") or endpoint_path.startswith("/api/workspace/")
+        if not safe_high:
+            return None
+
+    return "auto-approved: safe read/write capability; sandbox passed"
 
 
 async def _publish_capability_approval_request(proposal: CapabilityProposal) -> None:
     await chat_bus.publish({
         "type": "approval_request",
-        "title": "Требует подтверждения",
         "tool": "capability.proposal",
         "args": {
             "proposal_id": str(proposal.id),
             "title": proposal.title,
             "risk_level": proposal.risk_level,
             "suggested_artifact": proposal.suggested_artifact,
+            "reason": proposal.reason,
         },
         "preview": (
-            f"Требует подтверждения: {proposal.title}. "
-            f"Риск: {proposal.risk_level}. "
-            "Откройте Settings -> Agent -> Capability proposals."
+            f"{proposal.title}\n"
+            f"Риск: {proposal.risk_level} · Тип: {proposal.suggested_artifact}\n"
+            f"{proposal.reason or proposal.missing_capability or ''}"
         ),
     })
 
@@ -471,8 +474,8 @@ async def _create_capability_proposal(
     db.add(proposal)
     await db.commit()
     await db.refresh(proposal)
-    if payload.risk_level in {"high", "critical"}:
-        await _publish_capability_approval_request(proposal)
+    # Always notify chat for proposals that need human review (not auto-approved yet)
+    await _publish_capability_approval_request(proposal)
     return proposal
 
 
@@ -989,10 +992,38 @@ async def sandbox_apply_capability(
         if proposal.audit_status == "pending":
             proposal.audit_status = "passed"
 
+    auto_promoted = False
+    if auto_reason and result.test_status == "passed":
+        # Auto-promote: add skill to gateway immediately
+        promote_result = promote_capability(proposal)
+        if promote_result.ok:
+            proposal.status = "promoted"
+            auto_promoted = True
+            metadata["promotion"] = {
+                "promoted_at": now.isoformat(),
+                "staging_dir": promote_result.staging_dir,
+                "files": promote_result.files,
+                "skill_name": promote_result.skill_name,
+                "gateway_updated": promote_result.gateway_updated,
+                "auto": True,
+            }
+            proposal.metadata_ = metadata
+            # Reload gateway so new skill is visible immediately
+            from app.ai.gateway_config import gateway_config as _gw
+            _gw.reload()
+        else:
+            # Promote failed — stay approved, user promotes manually
+            metadata["promotion_errors"] = promote_result.errors
+            proposal.metadata_ = metadata
+    else:
+        proposal.metadata_ = metadata
+
+    # Record sandbox task as immediately completed (sandbox ran synchronously)
     task = AgentTask(
         objective=f"Sandbox validate capability proposal: {proposal.title}",
         description=proposal.missing_capability,
         role="integration_tester",
+        status="completed",
         metadata_={
             "capability_proposal_id": str(proposal.id),
             "draft": proposal.draft or {},
@@ -1002,10 +1033,16 @@ async def sandbox_apply_capability(
             "files": result.files,
             "diff_preview": result.diff_preview,
             "auto_approved": bool(auto_reason and result.test_status == "passed"),
+            "auto_promoted": auto_promoted,
             "auto_approval_reason": auto_reason,
         },
     )
     db.add(task)
+
+    # Notify chat if still needs human review
+    if proposal.status in {"sandbox_ready", "approved"} and not auto_promoted:
+        await _publish_capability_approval_request(proposal)
+
     await db.commit()
     await db.refresh(proposal)
     return proposal
@@ -1020,12 +1057,39 @@ async def decide_capability_proposal(
     proposal = await db.get(CapabilityProposal, proposal_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="Capability proposal not found")
-    if proposal.status in {"approved", "rejected", "promoted", "rolled_back"}:
+    if proposal.status in {"rejected", "promoted", "rolled_back"}:
         raise HTTPException(status_code=409, detail="Capability proposal already decided")
-    proposal.status = "approved" if payload.approved else "rejected"
+
+    now = datetime.now(timezone.utc)
     proposal.decided_by = payload.decided_by
-    proposal.decided_at = datetime.now(timezone.utc)
+    proposal.decided_at = now
     proposal.decision_comment = payload.comment
+
+    if not payload.approved:
+        proposal.status = "rejected"
+        await db.commit()
+        await db.refresh(proposal)
+        return proposal
+
+    # Approved — auto-promote unless already promoted
+    proposal.status = "approved"
+    if proposal.status != "promoted" and proposal.risk_level != "critical":
+        promote_result = promote_capability(proposal)
+        if promote_result.ok:
+            proposal.status = "promoted"
+            metadata = dict(proposal.metadata_ or {})
+            metadata["promotion"] = {
+                "promoted_at": now.isoformat(),
+                "staging_dir": promote_result.staging_dir,
+                "files": promote_result.files,
+                "skill_name": promote_result.skill_name,
+                "gateway_updated": promote_result.gateway_updated,
+                "auto": False,
+            }
+            proposal.metadata_ = metadata
+            from app.ai.gateway_config import gateway_config as _gw
+            _gw.reload()
+
     await db.commit()
     await db.refresh(proposal)
     return proposal

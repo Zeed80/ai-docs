@@ -266,7 +266,39 @@ export function ChatWidget() {
     }
   }
 
-  function handleApproval(msgId: string, approved: boolean) {
+  async function handleApproval(msgId: string, approved: boolean) {
+    const msg = messages.find((m) => m.id === msgId);
+
+    // Capability proposals are decided via REST, not agent WS approval_future
+    if (msg?.tool === "capability.proposal") {
+      const proposalId = (msg.args as Record<string, string> | undefined)
+        ?.proposal_id;
+      if (proposalId) {
+        try {
+          await fetch(`/api/agent/capabilities/${proposalId}/decide`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              approved,
+              decided_by: "user_chat",
+              comment: approved ? "Одобрено в чате" : "Отклонено в чате",
+            }),
+          });
+        } catch {
+          // non-critical
+        }
+      }
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId
+            ? { ...m, status: approved ? "approved" : "rejected" }
+            : m,
+        ),
+      );
+      return;
+    }
+
+    // Standard tool approval via WebSocket
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(
       JSON.stringify(
@@ -486,28 +518,69 @@ export function ChatWidget() {
 
           if (msg.role === "approval") {
             const isPending = msg.status === "pending";
+            const isCapability = msg.tool === "capability.proposal";
+            const args = (msg.args ?? {}) as Record<string, string>;
+            const riskColor: Record<string, string> = {
+              low: "text-green-600",
+              medium: "text-amber-600",
+              high: "text-orange-600",
+              critical: "text-red-600",
+            };
             return (
               <div
                 key={msg.id}
-                className="border border-amber-200 rounded-lg p-3 bg-amber-50 text-sm"
+                className={`border rounded-lg p-3 text-sm ${
+                  isCapability
+                    ? "border-violet-200 bg-violet-50"
+                    : "border-amber-200 bg-amber-50"
+                }`}
               >
-                <p className="font-medium text-amber-800 mb-1">
-                  Требует подтверждения:{" "}
-                  <code className="text-xs">{msg.tool}</code>
+                <p
+                  className={`font-medium mb-1 ${isCapability ? "text-violet-800" : "text-amber-800"}`}
+                >
+                  {isCapability
+                    ? "🧩 Новая capability"
+                    : "⚡ Требует подтверждения"}
+                  {!isCapability && (
+                    <>
+                      {": "}
+                      <code className="text-xs">{msg.tool}</code>
+                    </>
+                  )}
                 </p>
-                <pre className="text-[11px] text-slate-600 bg-white rounded p-2 overflow-x-auto mb-2 max-h-24">
-                  {msg.preview}
-                </pre>
+                {isCapability && args.title && (
+                  <p className="font-medium text-slate-700 mb-0.5">
+                    {args.title}
+                  </p>
+                )}
+                {isCapability && args.risk_level && (
+                  <p
+                    className={`text-[11px] mb-1 ${riskColor[args.risk_level] ?? "text-slate-500"}`}
+                  >
+                    Риск:{" "}
+                    <span className="font-semibold">{args.risk_level}</span>
+                    {args.suggested_artifact && ` · ${args.suggested_artifact}`}
+                  </p>
+                )}
+                {msg.preview && (
+                  <pre className="text-[11px] text-slate-600 bg-white rounded p-2 overflow-x-auto mb-2 max-h-24 whitespace-pre-wrap">
+                    {isCapability ? args.reason || msg.preview : msg.preview}
+                  </pre>
+                )}
                 {isPending ? (
                   <div className="flex gap-2">
                     <button
-                      onClick={() => handleApproval(msg.id, true)}
-                      className="px-3 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700"
+                      onClick={() => void handleApproval(msg.id, true)}
+                      className={`px-3 py-1 text-white rounded text-xs ${
+                        isCapability
+                          ? "bg-violet-600 hover:bg-violet-700"
+                          : "bg-green-600 hover:bg-green-700"
+                      }`}
                     >
-                      Утвердить
+                      {isCapability ? "Разрешить" : "Утвердить"}
                     </button>
                     <button
-                      onClick={() => handleApproval(msg.id, false)}
+                      onClick={() => void handleApproval(msg.id, false)}
                       className="px-3 py-1 bg-slate-200 text-slate-700 rounded text-xs hover:bg-slate-300"
                     >
                       Отклонить
@@ -521,7 +594,7 @@ export function ChatWidget() {
                         : "bg-red-100 text-red-700"
                     }`}
                   >
-                    {msg.status === "approved" ? "Утверждено" : "Отклонено"}
+                    {msg.status === "approved" ? "Разрешено ✓" : "Отклонено"}
                   </span>
                 )}
               </div>
