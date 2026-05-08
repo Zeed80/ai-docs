@@ -401,13 +401,55 @@ tools:
   path: /api/documents/{document_id}/summarize
   approval_required: false
 - name: invoice.list
-  description: 'Skill: invoice.list — List invoices with filters.'
+  description: 'Skill: invoice.list — List invoices with optional filters. status values:
+    draft (черновик), needs_review (ожидают проверки / на проверке), approved (утверждены),
+    rejected (отклонены), paid (оплачены). Use status=needs_review for "ожидают проверки"
+    queries. Returns total count and items array.'
   category: invoices
   method: GET
   path: /api/invoices
   approval_required: false
+  parameters:
+    properties:
+      status:
+        anyOf:
+        - enum: [draft, needs_review, approved, rejected, paid]
+          type: string
+        - type: 'null'
+        default: null
+        description: Filter by invoice status
+        title: Status
+      search:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        description: Free-text search in invoice number or supplier name
+        title: Search
+      supplier_id:
+        anyOf:
+        - format: uuid
+          type: string
+        - type: 'null'
+        default: null
+        description: Filter by supplier UUID
+        title: Supplier Id
+      limit:
+        default: 50
+        maximum: 200
+        minimum: 1
+        type: integer
+        title: Limit
+      offset:
+        default: 0
+        minimum: 0
+        type: integer
+        title: Offset
+    type: object
 - name: invoice.get
-  description: 'Skill: invoice.get — Get invoice with lines.'
+  description: 'Skill: invoice.get — Get a single invoice with all line items. invoice_id
+    must be a UUID (not invoice_number like УТ-201). To find by number, first use
+    invoice.list with search=<number> to get the UUID.'
   category: invoices
   method: GET
   path: /api/invoices/{invoice_id}
@@ -1877,11 +1919,36 @@ tools:
     title: AnomalyCreateRequest
     type: object
 - name: anomaly.list
-  description: 'Skill: anomaly.list — List anomaly cards.'
+  description: 'Skill: anomaly.list — List anomaly cards with optional filters.
+    status: open (активные), resolved (решены), false_positive (ложные).
+    severity: info, warning, critical. Default returns open anomalies.'
   category: anomalies
   method: GET
   path: /api/anomalies
   approval_required: false
+  parameters:
+    properties:
+      status:
+        anyOf:
+        - enum: [open, resolved, false_positive, escalated]
+          type: string
+        - type: 'null'
+        default: null
+        description: Filter by anomaly status (default=open for "есть ли аномалии")
+        title: Status
+      severity:
+        anyOf:
+        - enum: [info, warning, critical]
+          type: string
+        - type: 'null'
+        default: null
+        title: Severity
+      limit:
+        default: 50
+        maximum: 200
+        type: integer
+        title: Limit
+    type: object
 - name: anomaly.resolve
   description: 'Skill: anomaly.resolve — Resolve an anomaly (approval gate).'
   category: anomalies
@@ -3595,11 +3662,35 @@ tools:
   path: /api/quarantine
   approval_required: false
 - name: warehouse.list_inventory
-  description: 'Skill: warehouse.list_inventory — List inventory items.'
+  description: 'Skill: warehouse.list_inventory — Search and list inventory items.
+    ALWAYS use search= to filter by item name (e.g. search="фреза" for drills,
+    search="болт" for bolts). Without search it returns ALL items (very slow).
+    Returns total count and items with current_quantity.'
   category: warehouse
   method: GET
   path: /api/warehouse/inventory
   approval_required: false
+  parameters:
+    properties:
+      search:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        description: Search by item name (substring match, case-insensitive). REQUIRED when user asks about a specific item type.
+        title: Search
+      limit:
+        default: 50
+        maximum: 200
+        minimum: 1
+        type: integer
+        title: Limit
+      offset:
+        default: 0
+        minimum: 0
+        type: integer
+        title: Offset
+    type: object
 - name: warehouse.create_item
   description: 'Skill: warehouse.create_item — Create inventory position.'
   category: warehouse

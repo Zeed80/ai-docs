@@ -22,6 +22,45 @@ from app.formatting import format_money
 
 logger = structlog.get_logger()
 
+# Max chars for a single tool result stored in the LLM message history.
+# Large lists (invoices, inventory, etc.) can easily hit 100k+ chars which
+# triggers unnecessary context compression. Keep enough for the model to
+# extract counts, statuses and a sample of items.
+_MAX_TOOL_RESULT_CHARS = 8000
+# Number of list items to keep in the sample shown to the LLM.
+_TOOL_RESULT_SAMPLE_ITEMS = 5
+
+
+def _trim_tool_result(content: str) -> str:
+    """Trim large tool result to fit within _MAX_TOOL_RESULT_CHARS.
+
+    For JSON list responses (dict with an 'items', 'results', or 'hits' key),
+    keeps metadata fields (total, page, etc.) and a short item sample so the
+    LLM always sees the true count rather than a truncated JSON blob.
+    """
+    if len(content) <= _MAX_TOOL_RESULT_CHARS:
+        return content
+    try:
+        data = json.loads(content)
+        if isinstance(data, dict):
+            list_key = next((k for k in ("items", "results", "hits") if k in data), None)
+            if list_key is not None:
+                items = data.get(list_key) or []
+                sample = items[:_TOOL_RESULT_SAMPLE_ITEMS]
+                trimmed = {k: v for k, v in data.items() if k != list_key}
+                trimmed[list_key] = sample
+                trimmed["_note"] = (
+                    f"[Showing {len(sample)} of {len(items)} items. "
+                    f"total={data.get('total', len(items))}]"
+                )
+                result = json.dumps(trimmed, ensure_ascii=False)
+                if len(result) <= _MAX_TOOL_RESULT_CHARS:
+                    return result
+    except (json.JSONDecodeError, TypeError, StopIteration):
+        pass
+    return content[:_MAX_TOOL_RESULT_CHARS] + f"\n...[truncated — original {len(content)} chars]"
+
+
 _OPERATIONAL_POLICY = """
 Принципы работы:
 - Данные только из инструментов: никогда не выдумывай числа, суммы, статусы.
@@ -335,6 +374,56 @@ def _thinking_disabled(
 def _sanitize_name(name: str) -> str:
     """Replace dots with __ for OpenAI-compatible function names."""
     return name.replace(".", "__")
+
+
+# Core tools always included regardless of domain
+_CORE_TOOL_PREFIXES = {"memory", "canvas", "workspace", "capability", "search", "dashboard"}
+
+# Keyword → tool category prefixes
+_DOMAIN_KEYWORDS: list[tuple[list[str], set[str]]] = [
+    (["счёт", "счет", "invoice", "документ", "doc", "накладная", "акт"], {"invoice", "doc", "approval", "table", "anomaly"}),
+    (["склад", "товар", "фрез", "деталь", "матери", "запас", "остат", "инвентар"], {"warehouse", "ntd"}),
+    (["поставщик", "supplier", "вендор", "контраг"], {"supplier", "compare", "procurement"}),
+    (["письмо", "email", "почта", "письм", "ящик", "mailbox"], {"email", "mailbox", "supplier"}),
+    (["аномал", "ошибка", "расхожд", "нарушен"], {"anomaly", "invoice", "doc"}),
+    (["закупка", "кп", "запрос", "коммерч"], {"procurement", "compare", "supplier"}),
+    (["платёж", "оплат", "платеж", "задолж", "долг"], {"payment", "calendar", "invoice"}),
+    (["норм", "нормати", "гост", "окпд"], {"norm", "ntd", "collection"}),
+    (["чертёж", "чертеж", "техн", "изделие", "сборк"], {"tech", "ntd", "norm", "bom"}),
+    (["спецификац", "bom", "состав", "комплект"], {"bom", "tech", "warehouse"}),
+    (["граф", "отчёт", "отчет", "дашборд", "сводк"], {"graph", "dashboard", "table"}),
+    (["задача", "расписан", "крон", "плагин"], {"task", "config"}),
+    (["карточка", "коллекция", "collection"], {"collection", "doc"}),
+    (["сравн", "compare", "ценов", "предложен"], {"compare", "supplier", "procurement"}),
+]
+
+
+def _select_tools_for_turn(tools: list[dict], messages: list[dict]) -> list[dict]:
+    """Filter tool list to relevant domain tools to reduce context size."""
+    if len(tools) <= 40:
+        return tools  # small enough, no filtering needed
+
+    # Build text to match against from last 3 user messages
+    recent_text = " ".join(
+        str(m.get("content", "")).lower()
+        for m in messages[-6:]
+        if m.get("role") == "user"
+    )
+
+    selected_prefixes: set[str] = set(_CORE_TOOL_PREFIXES)
+    for keywords, prefixes in _DOMAIN_KEYWORDS:
+        if any(kw in recent_text for kw in keywords):
+            selected_prefixes.update(prefixes)
+
+    if not selected_prefixes - _CORE_TOOL_PREFIXES:
+        # No domain detected — include invoice + doc as default
+        selected_prefixes.update({"invoice", "doc", "approval", "anomaly", "table"})
+
+    filtered = [
+        t for t in tools
+        if t.get("function", {}).get("name", "").split("__")[0] in selected_prefixes
+    ]
+    return filtered if len(filtered) >= 5 else tools
 
 
 def _registry_mtime() -> float:
@@ -1224,16 +1313,6 @@ class AgentSession:
         await self._init_mcp()
         self.messages.append({"role": "user", "content": content})
         self._trim_history()
-        if await self._try_handle_workspace_table_edit_query(content):
-            return
-        if await self._try_handle_invoice_items_table_query(content):
-            return
-        if await self._try_handle_invoice_table_query(content):
-            return
-        if await self._try_handle_simple_count_query(content):
-            return
-        if await self._try_handle_frez_inventory_query(content):
-            return
         await self._run()
 
     async def _try_handle_workspace_table_edit_query(self, content: str) -> bool:
@@ -1723,9 +1802,10 @@ class AgentSession:
                     self._config,
                     self.messages,
                 )
+                turn_tools = _select_tools_for_turn(self._tools, self.messages)
                 message = await _call_provider_streaming(
                     self.messages,
-                    self._tools,
+                    turn_tools,
                     self._system,
                     self._config,
                     on_token,
@@ -1945,7 +2025,7 @@ class AgentSession:
             fn_name, result = await self._execute_single_tool(tc, iteration)
             self.messages.append({
                 "role": "tool",
-                "content": json.dumps(result, ensure_ascii=False),
+                "content": _trim_tool_result(json.dumps(result, ensure_ascii=False)),
             })
             self._trim_history()
 
@@ -1959,7 +2039,7 @@ class AgentSession:
         for _fn_name, result in results:
             self.messages.append({
                 "role": "tool",
-                "content": json.dumps(result, ensure_ascii=False),
+                "content": _trim_tool_result(json.dumps(result, ensure_ascii=False)),
             })
         self._trim_history()
 
@@ -2041,10 +2121,13 @@ class AgentSession:
         )
         if not latest_user:
             return
-        context = await self._memory_mgr.prefetch(latest_user, session_id=self._session_id)
-        if not context:
-            # Fall back to existing HTTP search if MemoryManager returned nothing
-            context = await _load_memory_context(latest_user, self._config)
+        try:
+            context = await asyncio.wait_for(
+                _load_memory_context(latest_user, self._config),
+                timeout=12.0,
+            )
+        except asyncio.TimeoutError:
+            context = ""
         if not context:
             return
         self.messages.append({
@@ -2070,9 +2153,9 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
                 f"{config.backend_url.rstrip('/')}/api/memory/search",
                 json={
                     "query": query,
-                    "limit": 120,
+                    "limit": 20,
                     "retrieval_mode": "auto_hybrid",
-                    "need_full_coverage": True,
+                    "need_full_coverage": False,
                     "include_explain": False,
                 },
             )

@@ -9,6 +9,15 @@ from app.ai.providers.base import AIProvider
 from app.ai.schemas import AIRequest, AIResponse, AIUsage, ProviderKind
 
 
+def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:
+    """Convert a Pydantic model class to an Ollama-compatible JSON schema for structured output."""
+    try:
+        schema = schema_cls.model_json_schema()
+        return {"type": "object", **{k: v for k, v in schema.items() if k != "title"}}
+    except Exception:
+        return None
+
+
 class OllamaProvider(AIProvider):
     kind = ProviderKind.OLLAMA
 
@@ -23,6 +32,45 @@ class OllamaProvider(AIProvider):
             "stream": False,
             "options": {"temperature": 0.2},
         }
+        async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
+            response = await client.post(
+                f"{str(self.config.base_url).rstrip('/')}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+            body = response.json()
+        text = body.get("message", {}).get("content")
+        return AIResponse(
+            task=request.task,
+            provider=self.kind,
+            model=model,
+            text=text,
+            usage=AIUsage(
+                input_tokens=body.get("prompt_eval_count"),
+                output_tokens=body.get("eval_count"),
+                total_tokens=_sum_optional(body.get("prompt_eval_count"), body.get("eval_count")),
+                latency_ms=int((time.perf_counter() - started) * 1000),
+            ),
+            raw=body,
+        )
+
+    async def structured_extract(self, request: AIRequest, model: str) -> AIResponse:
+        """Use Ollama's structured output (format param) when a schema is provided."""
+        if request.response_schema is None:
+            return await self.chat(request, model)
+        started = time.perf_counter()
+        messages = [message.model_dump() for message in request.messages]
+        if not messages:
+            messages = [{"role": "user", "content": request.prompt or request.input_text or ""}]
+        fmt = _pydantic_to_ollama_format(request.response_schema)
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": 0.1},
+        }
+        if fmt:
+            payload["format"] = fmt
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(
                 f"{str(self.config.base_url).rstrip('/')}/api/chat",

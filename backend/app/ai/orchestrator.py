@@ -7,6 +7,7 @@ The existing AgentSession remains the tool-calling executor.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -172,7 +173,8 @@ class AgentOrchestrator:
 
         turn_started_at = time.time()
         self._trace = _TurnTrace()
-        plan = await self._plan_turn_with_model(content, config)
+        # Use heuristic plan immediately — zero wait for GPU resources.
+        plan = self._plan_turn(content)
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
         await self._executor.on_user_message(content)
@@ -236,22 +238,24 @@ class AgentOrchestrator:
             skill_context=skill_context,
         )
         try:
-            response = await ai_router.run(
-                AIRequest(
-                    # ORCHESTRATOR_PLANNING route → gemma4:26b → Claude API fallback.
-                    # Planning is NOT confidential (no document content here).
-                    task=AITask.ORCHESTRATOR_PLANNING,
-                    messages=[
-                        ChatMessage(role="system", content=_ORCHESTRATOR_SYSTEM),
-                        ChatMessage(role="user", content=prompt),
-                    ],
-                    response_schema=OrchestratorPlan,
-                    confidential=False,
-                    allow_cloud=True,
-                    preferred_model=_registry_model_name(
-                        config.orchestrator_model or config.worker_model
-                    ),
-                )
+            _plan_timeout = 5.0  # fast models plan in < 5s; slow ones fall to heuristic
+            response = await asyncio.wait_for(
+                ai_router.run(
+                    AIRequest(
+                        task=AITask.ORCHESTRATOR_PLANNING,
+                        messages=[
+                            ChatMessage(role="system", content=_ORCHESTRATOR_SYSTEM),
+                            ChatMessage(role="user", content=prompt),
+                        ],
+                        response_schema=OrchestratorPlan,
+                        confidential=False,
+                        allow_cloud=True,
+                        preferred_model=_registry_model_name(
+                            config.orchestrator_model or config.worker_model
+                        ),
+                    )
+                ),
+                timeout=_plan_timeout,
             )
             if isinstance(response.data, OrchestratorPlan):
                 plan = _normalize_model_plan(response.data, content)
@@ -264,6 +268,12 @@ class AgentOrchestrator:
                     filters=plan.workspace.filters,
                 )
                 return plan
+        except asyncio.TimeoutError:
+            logger.warning(
+                "orchestrator_plan_model_timeout",
+                timeout=_plan_timeout,
+                model=config.orchestrator_model or config.worker_model,
+            )
         except Exception as exc:
             logger.warning(
                 "orchestrator_plan_model_failed",
@@ -271,6 +281,20 @@ class AgentOrchestrator:
                 error=str(exc),
             )
         return heuristic_plan
+
+    async def _background_refine_plan(
+        self, content: str, config: BuiltinAgentConfig
+    ) -> None:
+        """Run LLM orchestrator plan in background — result logged for future use."""
+        try:
+            plan = await self._plan_turn_with_model(content, config)
+            logger.debug(
+                "orchestrator_background_plan_ready",
+                intent=plan.intent,
+                skills=plan.worker.recommended_skills,
+            )
+        except Exception:
+            pass
 
     async def _send_from_executor(self, data: dict) -> None:
         msg_type = str(data.get("type") or "")
@@ -960,7 +984,7 @@ def _build_skill_registry_context(user_text: str) -> str:
             return ""
         import yaml as _yaml
         data = _yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
-        skills: list[dict] = data.get("skills") or []
+        skills: list[dict] = data.get("tools") or data.get("skills") or []
 
         text_lower = user_text.lower()
 
@@ -1343,7 +1367,7 @@ def _is_workspace_request(text: str) -> bool:
         token in text
         for token in (
             "таблиц", "полный список", "все списком", "выведи список",
-            "покажи список", "ссылк", "документ", "чертеж", "чертёж",
+            "ссылк", "документ", "чертеж", "чертёж",
             "график", "диаграм", "excel", "csv", "скача", "файл",
             "сравн", "отчет", "отчёт", "столбец", "столбц", "колонк",
             "добавь поле", "убери поле", "отсортируй",

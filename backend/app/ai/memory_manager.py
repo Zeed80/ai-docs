@@ -21,8 +21,8 @@ _MEMORY_CONTEXT_TAG_CLOSE = "</memory-context>"
 
 # Max chars for the evidence pack injected into the model context. Retrieval can
 # inspect far more records server-side; this only bounds the final LLM payload.
-_MAX_MEMORY_CHARS = 20000
-_MEMORY_PAGE_SIZE = 120
+_MAX_MEMORY_CHARS = 8000
+_MEMORY_PAGE_SIZE = 20
 
 
 class MemoryManager:
@@ -96,39 +96,23 @@ class MemoryManager:
         *,
         session_id: str = "",
     ) -> list[dict]:
-        cursor: str | None = None
-        hits: list[dict] = []
-        seen: set[tuple[str, str]] = set()
-        while True:
-            body: dict[str, Any] = {
-                "query": query[:500],
-                "limit": _MEMORY_PAGE_SIZE,
-                "retrieval_mode": "auto_hybrid",
-                "need_full_coverage": True,
-                "include_explain": False,
-            }
-            if cursor:
-                body["cursor"] = cursor
-            if session_id:
-                body["session_id"] = session_id
-            resp = await client.post(
-                f"{self._base_url}/api/memory/search",
-                json=body,
-            )
-            if resp.status_code != 200:
-                return hits
-            data = resp.json()
-            for hit in data.get("hits") or []:
-                if not isinstance(hit, dict):
-                    continue
-                key = (str(hit.get("kind") or ""), str(hit.get("id") or ""))
-                if key in seen:
-                    continue
-                seen.add(key)
-                hits.append(hit)
-            cursor = data.get("next_cursor")
-            if not cursor or len(hits) >= 1000:
-                return hits
+        body: dict[str, Any] = {
+            "query": query[:500],
+            "limit": _MEMORY_PAGE_SIZE,
+            "retrieval_mode": "auto_hybrid",
+            "need_full_coverage": False,
+            "include_explain": False,
+        }
+        if session_id:
+            body["session_id"] = session_id
+        resp = await client.post(
+            f"{self._base_url}/api/memory/search",
+            json=body,
+        )
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        return [h for h in (data.get("hits") or []) if isinstance(h, dict)]
 
     async def sync_turn(
         self,

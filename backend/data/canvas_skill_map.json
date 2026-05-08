@@ -39,7 +39,7 @@
       "id": "invoice",
       "role": "invoice_specialist",
       "intent": "invoice_data",
-      "keywords": ["счет", "счёт", "invoice", "товар", "позици", "поставщик", "поставщика"],
+      "keywords": ["счет", "счёт", "invoice", "товар", "позици"],
       "skills": [
         "invoice.list",
         "invoice.get",
@@ -87,6 +87,13 @@
       "intent": "engineering",
       "keywords": ["чертеж", "чертёж", "технолог", "операци"],
       "skills": ["doc.get", "tech.process_plan_draft_from_document", "canvas.publish"]
+    },
+    {
+      "id": "supplier",
+      "role": "procurement_specialist",
+      "intent": "supplier_lookup",
+      "keywords": ["поставщик", "контрагент", "продавец", "поставщика", "поставщиков"],
+      "skills": ["supplier.search", "supplier.get", "supplier.price_history"]
     },
     {
       "id": "memory",

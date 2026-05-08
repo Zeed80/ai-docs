@@ -50,7 +50,7 @@ _VECTOR_WEIGHT = float(os.getenv("MEMORY_VECTOR_WEIGHT", "0.40"))
 _GRAPH_WEIGHT = float(os.getenv("MEMORY_GRAPH_WEIGHT", "0.15"))
 _VECTOR_SCORE_THRESHOLD = float(os.getenv("MEMORY_VECTOR_SCORE_THRESHOLD", "0.3"))
 _AUTO_CANDIDATE_LIMIT = int(os.getenv("MEMORY_AUTO_CANDIDATE_LIMIT", "1000"))
-_RERANK_CANDIDATE_LIMIT = int(os.getenv("MEMORY_RERANK_CANDIDATE_LIMIT", "120"))
+_RERANK_CANDIDATE_LIMIT = int(os.getenv("MEMORY_RERANK_CANDIDATE_LIMIT", "30"))
 
 
 class MemoryChatTurnRequest(BaseModel):
@@ -410,49 +410,57 @@ async def _search_vector_memory(
     except Exception:
         return []
 
-    hits: list[MemorySearchHit] = []
+    # Batch-load DB objects to avoid N+1 queries
+    chunk_ids: list = []
+    evidence_ids: list = []
+    score_by_id: dict = {}
+    doc_filter = str(payload.document_id) if payload.document_id else None
     for vector_hit in vector_hits:
         payload_data = vector_hit.get("payload") or {}
-        if payload.document_id and payload_data.get("document_id") != str(payload.document_id):
+        if doc_filter and payload_data.get("document_id") != doc_filter:
             continue
         content_type = payload_data.get("content_type")
         content_id = _parse_uuid(payload_data.get("content_id"))
         if not content_id:
             continue
-        vector_score = float(vector_hit.get("score") or 0.0)
+        score_by_id[str(content_id)] = float(vector_hit.get("score") or 0.0)
         if content_type == "document_chunk":
-            chunk = await db.get(DocumentChunk, content_id)
-            if not chunk:
-                continue
-            hits.append(
-                MemorySearchHit(
-                    kind="chunk",
-                    id=chunk.id,
-                    title=f"Document chunk #{chunk.chunk_index}",
-                    summary=chunk.text[:500],
-                    score=vector_score,
-                    source="vector",
-                    vector_score=vector_score,
-                    source_document_id=chunk.document_id,
-                )
-            )
+            chunk_ids.append(content_id)
         elif content_type == "evidence_span":
-            evidence = await db.get(EvidenceSpan, content_id)
-            if not evidence:
-                continue
-            hits.append(
-                MemorySearchHit(
-                    kind="evidence",
-                    id=evidence.id,
-                    title=evidence.field_name or "Evidence span",
-                    summary=evidence.text[:500],
-                    score=vector_score,
-                    source="vector",
-                    vector_score=vector_score,
-                    source_document_id=evidence.document_id,
-                    evidence=EvidenceSpanOut.model_validate(evidence),
-                )
-            )
+            evidence_ids.append(content_id)
+
+    hits: list[MemorySearchHit] = []
+    if chunk_ids:
+        rows = (await db.execute(
+            select(DocumentChunk).where(DocumentChunk.id.in_(chunk_ids))
+        )).scalars().all()
+        for chunk in rows:
+            hits.append(MemorySearchHit(
+                kind="chunk",
+                id=chunk.id,
+                title=f"Document chunk #{chunk.chunk_index}",
+                summary=chunk.text[:500],
+                score=score_by_id.get(str(chunk.id), 0.0),
+                source="vector",
+                vector_score=score_by_id.get(str(chunk.id), 0.0),
+                source_document_id=chunk.document_id,
+            ))
+    if evidence_ids:
+        rows_e = (await db.execute(
+            select(EvidenceSpan).where(EvidenceSpan.id.in_(evidence_ids))
+        )).scalars().all()
+        for evidence in rows_e:
+            hits.append(MemorySearchHit(
+                kind="evidence",
+                id=evidence.id,
+                title=evidence.field_name or "Evidence span",
+                summary=evidence.text[:500],
+                score=score_by_id.get(str(evidence.id), 0.0),
+                source="vector",
+                vector_score=score_by_id.get(str(evidence.id), 0.0),
+                source_document_id=evidence.document_id,
+                evidence=EvidenceSpanOut.model_validate(evidence),
+            ))
     return hits
 
 

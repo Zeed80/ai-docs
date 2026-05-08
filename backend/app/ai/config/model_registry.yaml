@@ -214,6 +214,42 @@ models:
     quality_score: 0.89
     speed_score: 0.60
     notes: "Qwen3-235B MoE via OpenRouter. Excellent multilingual + Russian support."
+  qwen3_6_35b_ollama:
+    provider: "ollama"
+    provider_model: "qwen3.6:35b"
+    status: "production"
+    modalities: ["text", "tool_calling"]
+    max_context_tokens: 40000
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: true
+    quality_score: 0.89
+    speed_score: 0.55
+    notes: "Qwen3.6 35B MoE local model. Primary reasoning and orchestrator model."
+  qwen3_5_9b_ollama:
+    provider: "ollama"
+    provider_model: "qwen3.5:9b"
+    status: "production"
+    modalities: ["text", "tool_calling"]
+    max_context_tokens: 40000
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: true
+    quality_score: 0.80
+    speed_score: 0.85
+    notes: "Qwen3.5 9B local model. Fast worker and fallback reasoning model."
+  ministral_3_8b_ollama:
+    provider: "ollama"
+    provider_model: "ministral-3:8b"
+    status: "production"
+    modalities: ["text", "tool_calling"]
+    max_context_tokens: 32000
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: true
+    quality_score: 0.75
+    speed_score: 0.98
+    notes: "Ministral-3 8B — ultra-fast local model. Primary worker and orchestrator model. Excellent tool calling."
   future_reasoning_cloud:
     provider: "cloud_provider"
     provider_model: "replace-with-approved-model"
@@ -247,12 +283,12 @@ routes:
   engineering_reasoning:
     required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["gemma4_26b_ollama", "future_reasoning_cloud"]
+    fallback_chain: ["qwen3_6_35b_ollama", "qwen3_5_9b_ollama", "gemma4_26b_ollama"]
     manual_review_fallback: true
   email_drafting:
     required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["gemma4_26b_ollama", "future_reasoning_cloud"]
+    fallback_chain: ["qwen3_6_35b_ollama", "qwen3_5_9b_ollama", "gemma4_26b_ollama"]
     manual_review_fallback: true
   embedding:
     required_modalities: ["embedding"]
@@ -276,8 +312,8 @@ routes:
     manual_review_fallback: true
   tool_calling:
     required_modalities: ["tool_calling"]
-    local_only: false
-    fallback_chain: ["gemma4_26b_ollama", "claude_sonnet_anthropic", "deepseek_r1_openrouter"]
+    local_only: true
+    fallback_chain: ["qwen3_6_35b_ollama", "qwen3_5_9b_ollama", "gemma4_26b_ollama", "claude_sonnet_anthropic", "deepseek_r1_openrouter"]
     manual_review_fallback: true
   speech:
     required_modalities: ["audio"]
@@ -286,10 +322,10 @@ routes:
     manual_review_fallback: true
   orchestrator_planning:
     required_modalities: ["text"]
-    local_only: false
-    fallback_chain: ["gemma4_26b_ollama", "claude_sonnet_anthropic"]
+    local_only: true
+    fallback_chain: ["qwen3_5_9b_ollama", "qwen3_6_35b_ollama", "gemma4_26b_ollama"]
     manual_review_fallback: false
-    notes: "Orchestrator planning uses best available model: local 26b or Claude API. Planning content is not confidential."
+    notes: "Orchestrator planning. Primary: qwen3.5:9b (fast local). Fallback: qwen3.6:35b (large), gemma4:26b if installed."
   code_generation:
     required_modalities: ["text"]
     local_only: false
