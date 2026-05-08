@@ -464,53 +464,45 @@ class AgentOrchestrator:
             )
 
         # ── Filter compliance check ────────────────────────────────────────────
-        # If the plan requires specific filters (e.g. supplier_query=X), verify
-        # the executor actually passed them to the workspace tool AND that the
-        # workspace response confirms the filter was applied.
-        if plan.workspace.filters:
-            # 1. Check that the tool was called WITH the required filter args
-            workspace_tool_args: dict[str, Any] = {}
-            for tool_name, args in self._trace.tool_call_args.items():
-                if tool_name.startswith("workspace__"):
-                    workspace_tool_args = args
-                    break
-
-            if workspace_tool_args:
-                for fk, fv in plan.workspace.filters.items():
-                    actual = workspace_tool_args.get(fk)
-                    if actual is None:
-                        issues.append(
-                            f"фильтр не применён: исполнитель не передал {fk}={fv!r} "
-                            "в инструмент. Повтори вызов с правильными аргументами."
-                        )
-                    elif str(actual).strip().lower() != str(fv).strip().lower():
-                        issues.append(
-                            f"неверный фильтр: ожидалось {fk}={fv!r}, "
-                            f"передано {fk}={actual!r}. Повтори с правильным значением."
-                        )
-            elif used_workspace_skills:
-                # Tool was called but args weren't captured — warn without hard fail
-                pass
-
-            # 2. Cross-check against the workspace result's reported filters
+        # Only enforce filter compliance when:
+        #   a) the plan specifies required filters (e.g. supplier_query=X), AND
+        #   b) the workspace tool that was actually called targets the SAME canvas_id
+        #      as the plan (so we don't penalise the executor for choosing a
+        #      semantically-equivalent but differently-shaped tool)
+        if plan.workspace.filters and plan.workspace.canvas_id:
+            # Find the first workspace tool result that targets the planned canvas
+            matched_tool_args: dict[str, Any] = {}
             for item in self._trace.tool_results:
                 result = item.get("result")
-                if not isinstance(result, dict) or not result.get("canvas_id"):
+                if not isinstance(result, dict):
                     continue
-                result_filters: dict[str, Any] = result.get("filters") or {}
-                for fk, fv in plan.workspace.filters.items():
-                    rf = result_filters.get(fk)
-                    if rf is None and fv:
-                        issues.append(
-                            f"данные на Рабочем столе не отфильтрованы по {fk}={fv!r}: "
-                            "endpoint не применил фильтр. Повтори вызов."
-                        )
-                    elif rf is not None and str(rf).strip().lower() != str(fv).strip().lower():
-                        issues.append(
-                            f"Рабочий стол показывает {fk}={rf!r} вместо {fv!r}: "
-                            "показаны данные от другого запроса. Требуется перезапрос."
-                        )
-                break  # check only the first workspace result
+                if result.get("canvas_id") == plan.workspace.canvas_id:
+                    matched_tool_args = (
+                        self._trace.tool_call_args.get(item.get("tool", "")) or {}
+                    )
+                    # Check filter presence in the result itself
+                    result_filters: dict[str, Any] = result.get("filters") or {}
+                    for fk, fv in plan.workspace.filters.items():
+                        # Check args that were passed to the tool
+                        actual = matched_tool_args.get(fk)
+                        if actual is None and result_filters.get(fk) is None:
+                            issues.append(
+                                f"фильтр не применён: исполнитель не передал {fk}={fv!r} "
+                                "в инструмент. Повтори вызов с правильными аргументами."
+                            )
+                        elif actual is not None and str(actual).strip().lower() != str(fv).strip().lower():
+                            issues.append(
+                                f"неверный фильтр: ожидалось {fk}={fv!r}, "
+                                f"передано {fk}={actual!r}. Повтори с правильным значением."
+                            )
+                        # Cross-check reported filters in the result
+                        rf = result_filters.get(fk)
+                        if rf is not None and str(rf).strip().lower() != str(fv).strip().lower():
+                            issues.append(
+                                f"Рабочий стол показывает {fk}={rf!r} вместо {fv!r}: "
+                                "показаны данные от другого запроса. Требуется перезапрос."
+                            )
+                    break  # only check the first matching result
 
         for item in self._trace.tool_results:
             result = item.get("result")
@@ -1203,18 +1195,22 @@ def _workspace_tool_spec_for_plan(plan: OrchestratorPlan) -> dict[str, Any] | No
 
 def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str:
     skill_hint = ", ".join(plan.worker.recommended_skills)
-    return (
-        "Исправь предыдущий результат. Аудит нашел несоответствие:\n"
-        f"{'; '.join(audit.issues)}\n\n"
-        "Требования оркестратора:\n"
-        f"- цель: {plan.goal}\n"
-        f"- канал: {plan.workspace.channel}\n"
-        f"- тип вывода: {plan.workspace.output_type}\n"
-        f"- canvas_id: {plan.workspace.canvas_id}\n"
-        f"- используй один из рекомендованных skills: {skill_hint}\n"
-        "Не отвечай только текстом, если требуется Рабочий стол. "
-        "Опубликуй исправленный rich-вывод и дождись tool result."
-    )
+    # Build a precise correction — avoid leaking audit issue text to the LLM
+    # since it may contain misleading fragments (e.g. "другого запроса")
+    lines = [
+        "Предыдущий результат не соответствует задаче. Повтори вызов с исправлениями.",
+        "",
+        "Требования:",
+        f"- цель: {plan.goal}",
+        f"- используй один из skills: {skill_hint}",
+        f"- canvas_id: {plan.workspace.canvas_id or 'auto'}",
+    ]
+    if plan.workspace.filters:
+        filter_str = ", ".join(f"{k}={v!r}" for k, v in plan.workspace.filters.items())
+        lines.append(f"- ОБЯЗАТЕЛЬНЫЕ фильтры: {filter_str}")
+    if plan.workspace.required:
+        lines.append("- Результат должен быть опубликован в Рабочий стол (не только текст в чат).")
+    return "\n".join(lines)
 
 
 def _fallback_capability_draft(

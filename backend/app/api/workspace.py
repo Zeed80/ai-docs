@@ -62,6 +62,7 @@ class WorkspaceToolResponse(BaseModel):
     total: int
     shown: int
     message: str
+    filters: dict[str, Any] = {}
 
 
 class WorkspaceVerifyBlockRequest(BaseModel):
@@ -174,6 +175,7 @@ async def publish_invoice_table(
         total=total,
         shown=len(rows),
         message=f"Открыл на Рабочем столе таблицу со счетами: {len(rows)} из {total}.",
+        filters={},
     )
 
 
@@ -256,6 +258,7 @@ async def publish_invoice_items_table(
             if supplier_filter
             else f"Открыл на Рабочем столе таблицу товаров по счетам: {len(rows)} из {total}."
         ),
+        filters={"supplier_query": supplier_filter} if supplier_filter else {},
     )
 
 
@@ -312,6 +315,7 @@ async def publish_invoice_items_grouped_table(
             "Открыл на Рабочем столе таблицу товаров, сгруппированных по счетам: "
             f"{len(rows)} из {total}."
         ),
+        filters={},
     )
 
 
@@ -384,6 +388,7 @@ async def publish_invoice_items_by_supplier_table(
             "Открыл на Рабочем столе таблицу товаров, сгруппированных по поставщикам: "
             f"{len(rows)} поставщиков, {total_lines} строк товаров."
         ),
+        filters={},
     )
 
 

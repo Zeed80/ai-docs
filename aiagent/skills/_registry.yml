@@ -3940,8 +3940,10 @@ tools:
   path: /api/workspace/agent/invoices/table
   approval_required: false
 - name: workspace.invoice_items_table
-  description: 'Skill: workspace.invoice_items_table — Build and publish invoice line
-    items.'
+  description: 'Skill: workspace.invoice_items_table — Show invoice line items on
+    the Workspace. Use supplier_query=<name> to filter by a specific supplier (pass
+    the supplier name substring, NOT the supplier_id). Without supplier_query shows
+    all items.'
   category: workspace
   method: POST
   path: /api/workspace/agent/invoices/items-table
@@ -3950,7 +3952,9 @@ tools:
   - name: supplier_query
     type: string
     required: false
-    description: Filter rows by supplier name substring (case-insensitive)
+    description: >
+      Supplier name substring filter (case-insensitive). Pass the supplier name
+      (e.g. "Графит-Гарант") — NOT the supplier_id UUID. Leave empty to show all items.
 - name: workspace.invoice_items_grouped_table
   description: 'Skill: workspace.invoice_items_grouped_table — Group invoice items
     by invoice.'

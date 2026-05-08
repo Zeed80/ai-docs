@@ -62,6 +62,12 @@ _OPERATIONAL_POLICY = """
   существующий Рабочий стол, а в чат давай краткое резюме.
 - Чат предназначен только для простых текстовых ответов: число, короткий вывод,
   уточнение, статус выполнения. Не пиши markdown-таблицы в чат.
+- Для показа товаров конкретного поставщика: вызывай `workspace.invoice_items_table`
+  с параметром `supplier_query=<имя поставщика>` (строка с именем, НЕ UUID).
+  Не ищи supplier_id перед этим — `supplier_query` фильтрует по подстроке имени.
+  Пример: supplier_query="Графит-Гарант". Без supplier_query — все товары.
+- Для группировки товаров по всем поставщикам: вызывай `workspace.invoice_items_by_supplier_table`
+  (без параметров). Не путай с supplier_query для фильтрации.
 - Если пользователь просит таблицу, полный список, документ, ссылку, чертёж,
   график, файл, сравнение или большой отчёт — сначала опубликуй блок в
   существующий Рабочий стол через `canvas.publish`/`workspace.*`, затем в чат
@@ -183,19 +189,40 @@ def _wants_supplier_column(text: str) -> bool:
 
 
 def _extract_supplier_filter(text: str) -> str | None:
-    normalized = _normalize_ru_yo((text or "").strip())
-    quoted = re.search(r"[\"«„](.+?)[\"»“]", normalized)
+    normalized = _normalize_ru_yo((text or '').strip())
+    # 1. Quoted supplier name — ASCII double-quote, guillemets, curly quotes
+    # Using character codes to avoid editor mangling of Unicode quote chars
+    _OPEN_Q = ''.join(chr(c) for c in (0x22, 0xAB, 0x201E, 0x201C))   # “ « „ “
+    _CLOSE_Q = ''.join(chr(c) for c in (0x22, 0xBB, 0x201D))           # “ » “
+    quoted = re.search(
+        '[' + re.escape(_OPEN_Q) + '](.+?)[' + re.escape(_CLOSE_Q) + ']',
+        normalized,
+    )
     if quoted:
         return quoted.group(1).strip()
+    # 2. “только от X” / “оставь только от X”
     match = re.search(
-        r"(?:оставь\s+только\s+от|оставить\s+только\s+от|только\s+от)\s+(.+)$",
+        r'(?:оставь\s+только\s+от|оставить\s+только\s+от|только\s+от)\s+(.+)$',
         normalized,
         flags=re.IGNORECASE,
     )
-    if not match:
-        return None
-    supplier = re.sub(r"[.!?]+$", "", match.group(1)).strip()
-    return supplier or None
+    if match:
+        supplier = re.sub(r'[.!?]+$', '', match.group(1)).strip()
+        return supplier or None
+    # 3. “товары поставщика X” / “от поставщика X” / “по поставщику X”
+    match = re.search(
+        r'(?:товары?|позиции|материалы|номенклатур\w+)?\s*'
+        r'(?:поставщика|от\s+поставщика|по\s+поставщику|от)\s+'
+        r'(.{3,60}?)(?:\s*[.!?]|\s*$)',
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        supplier = match.group(1).strip()
+        stop_words = ('все', 'всех', 'всем', 'каждого', 'любого')
+        if supplier and not any(s in supplier.lower() for s in stop_words):
+            return supplier
+    return None
 
 
 def _mentions_frez_intent(text: str) -> bool:
@@ -418,6 +445,7 @@ def _load_registry(
             properties[pp] = {"type": "string", "description": f"ID: {pp}"}
             required.append(pp)
 
+        # Handle OpenAPI-style parameters.properties dict
         if params_schema.get("properties"):
             for k, v in params_schema["properties"].items():
                 if k not in properties:
@@ -427,6 +455,27 @@ def _load_registry(
             for r in params_schema["required"]:
                 if r not in required:
                     required.append(r)
+
+        # Handle registry-style body_params / query_params lists
+        _type_map = {"string": "string", "str": "string", "int": "integer",
+                     "integer": "integer", "float": "number", "number": "number",
+                     "bool": "boolean", "boolean": "boolean", "object": "object",
+                     "array": "array", "list": "array"}
+        for param in (skill.get("body_params") or []) + (skill.get("query_params") or []):
+            if not isinstance(param, dict):
+                continue
+            pname = param.get("name", "")
+            if not pname or pname in properties:
+                continue
+            ptype = _type_map.get(str(param.get("type", "string")).lower(), "string")
+            prop: dict[str, Any] = {"type": ptype}
+            if param.get("description"):
+                prop["description"] = param["description"]
+            if ptype == "array":
+                prop["items"] = {"type": "object"}
+            properties[pname] = prop
+            if param.get("required"):
+                required.append(pname)
 
         fn_name = _sanitize_name(skill["name"])
         tools.append({
@@ -497,7 +546,7 @@ async def _execute_skill(
                 if method == "GET":
                     resp = await client.get(url, params=query_args)
                 elif method == "POST":
-                    resp = await client.post(url, json=body_args or None)
+                    resp = await client.post(url, json=body_args)
                 elif method == "PATCH":
                     resp = await client.patch(url, json=body_args)
                 elif method == "DELETE":
@@ -1375,6 +1424,15 @@ class AgentSession:
             if m.get("role") == "user"
         ]
         prior_user = prior_users[-1] if prior_users else None
+
+        # Fast-path: "покажи товары поставщика X" → filtered table, no LLM needed
+        supplier_filter = _extract_supplier_filter(content)
+        if supplier_filter:
+            t = _normalize_ru_yo(content.lower())
+            if any(m in t for m in ("товар", "позици", "материал", "номенклатур", "продукт",
+                                     "покажи", "выведи", "открой", "посмотр")):
+                return await self._publish_invoice_items_table_for_supplier(supplier_filter)
+
         if _is_invoice_items_by_supplier_table_request(content, prior_user):
             return await self._publish_invoice_items_by_supplier_table()
 
