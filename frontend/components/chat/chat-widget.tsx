@@ -272,21 +272,27 @@ export function ChatWidget() {
   async function handleApproval(msgId: string, approved: boolean) {
     const msg = messages.find((m) => m.id === msgId);
 
-    // Capability proposals are decided via REST, not agent WS approval_future
+    // Capability proposals are decided via REST, then agent is notified via WS
     if (msg?.tool === "capability.proposal") {
-      const proposalId = (msg.args as Record<string, string> | undefined)
-        ?.proposal_id;
+      const args = msg.args as Record<string, string> | undefined;
+      const proposalId = args?.proposal_id;
+      const title = args?.title ?? "новая capability";
+      let restOk = false;
       if (proposalId) {
         try {
-          await fetch(`/api/agent/capabilities/${proposalId}/decide`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              approved,
-              decided_by: "user_chat",
-              comment: approved ? "Одобрено в чате" : "Отклонено в чате",
-            }),
-          });
+          const res = await fetch(
+            `/api/agent/capabilities/${proposalId}/decide`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                approved,
+                decided_by: "user_chat",
+                comment: approved ? "Одобрено в чате" : "Отклонено в чате",
+              }),
+            },
+          );
+          restOk = res.ok;
         } catch {
           // non-critical
         }
@@ -298,6 +304,19 @@ export function ChatWidget() {
             : m,
         ),
       );
+      // After approval, trigger a new agent turn so it continues with the skill
+      if (approved && restOk && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify(
+            buildAgentUserMessage(
+              `Capability "${title}" одобрена и добавлена в систему. Продолжи выполнение исходной задачи, используя новый инструмент.`,
+              undefined,
+              undefined,
+              agentWsModeRef.current,
+            ),
+          ),
+        );
+      }
       return;
     }
 
@@ -369,7 +388,7 @@ export function ChatWidget() {
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             {workerModel && (
-              <span className="text-[10px] text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 font-mono">
+              <span className="text-[10px] text-slate-600 bg-slate-200 rounded px-1.5 py-0.5 font-mono font-medium">
                 {workerModel}
               </span>
             )}

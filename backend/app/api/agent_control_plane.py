@@ -474,8 +474,11 @@ async def _create_capability_proposal(
     db.add(proposal)
     await db.commit()
     await db.refresh(proposal)
-    # Always notify chat for proposals that need human review (not auto-approved yet)
-    await _publish_capability_approval_request(proposal)
+    # Notify chat only for high/critical risk — low risk will be auto-approved
+    # during sandbox_apply and the card will appear then if needed.
+    config = get_builtin_agent_config()
+    if payload.risk_level in {"high", "critical"} or not config.safe_auto_apply_enabled:
+        await _publish_capability_approval_request(proposal)
     return proposal
 
 
@@ -1057,8 +1060,12 @@ async def decide_capability_proposal(
     proposal = await db.get(CapabilityProposal, proposal_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="Capability proposal not found")
-    if proposal.status in {"rejected", "promoted", "rolled_back"}:
-        raise HTTPException(status_code=409, detail="Capability proposal already decided")
+    if proposal.status == "rejected":
+        raise HTTPException(status_code=409, detail="Capability proposal already rejected")
+    # Already promoted (e.g. auto-promoted during sandbox) — return as-is so the
+    # frontend can still send the "continue" WS trigger without blocking on 409.
+    if proposal.status in {"promoted", "rolled_back"}:
+        return proposal
 
     now = datetime.now(timezone.utc)
     proposal.decided_by = payload.decided_by
