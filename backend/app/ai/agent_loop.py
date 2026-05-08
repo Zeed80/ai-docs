@@ -360,6 +360,28 @@ def _registry_mtime() -> float:
         return 0.0
 
 
+# Global weak set of all active AgentSession instances for hot-reload signalling.
+import weakref as _weakref
+_ACTIVE_SESSIONS: "_weakref.WeakSet[AgentSession]" = _weakref.WeakSet()  # type: ignore[assignment]
+
+
+def reload_all_sessions() -> int:
+    """Tell every live AgentSession to reload its skill map from the registry.
+
+    Called by CapabilityBuilder after writing a new generated skill.
+    Returns the number of sessions reloaded.
+    """
+    count = 0
+    for session in list(_ACTIVE_SESSIONS):
+        try:
+            session.reload_skills()
+            count += 1
+        except Exception as exc:
+            logger.warning("session_reload_failed", error=str(exc))
+    logger.info("reload_all_sessions_done", count=count)
+    return count
+
+
 def _load_registry(
     expose_filter: set[str] | None = None,
 ) -> tuple[list[dict], dict[str, dict]]:
@@ -1063,6 +1085,19 @@ class AgentSession:
         self._rebuild_runtime_components(self._config)
         self._mcp_initialised = False
         self._registry_mtime: float = _registry_mtime()
+        _ACTIVE_SESSIONS.add(self)
+
+    def reload_skills(self) -> None:
+        """Hot-reload skill map from registry — used by CapabilityBuilder after new skill creation."""
+        self._tools, self._skill_map = _load_registry(
+            expose_filter=set(self._config.exposed_skills) or None
+        )
+        self._registry_mtime = _registry_mtime()
+        logger.info(
+            "agent_session_skills_reloaded",
+            session_id=self._session_id,
+            skill_count=len(self._skill_map),
+        )
 
     async def _call_for_compression(
         self,

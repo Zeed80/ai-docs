@@ -284,3 +284,15 @@ routes:
     local_only: true
     fallback_chain: ["gemma4_e4b_ollama"]
     manual_review_fallback: true
+  orchestrator_planning:
+    required_modalities: ["text"]
+    local_only: false
+    fallback_chain: ["gemma4_26b_ollama", "claude_sonnet_anthropic"]
+    manual_review_fallback: false
+    notes: "Orchestrator planning uses best available model: local 26b or Claude API. Planning content is not confidential."
+  code_generation:
+    required_modalities: ["text"]
+    local_only: false
+    fallback_chain: ["claude_sonnet_anthropic", "gemma4_26b_ollama"]
+    manual_review_fallback: false
+    notes: "CapabilityBuilder code generation: Claude API preferred, local 26b as fallback."

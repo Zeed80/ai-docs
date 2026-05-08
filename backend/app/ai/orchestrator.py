@@ -229,40 +229,54 @@ class AgentOrchestrator:
         content: str,
         config: BuiltinAgentConfig,
     ) -> OrchestratorPlan:
+        # Build heuristic plan as a lightweight hint (not an anchor).
         heuristic_plan = self._plan_turn(content)
         preference_hint = build_tool_preference_hint(
             intent_text=content,
             intent_category=heuristic_plan.worker.role,
             candidate_skills=list(heuristic_plan.worker.recommended_skills),
         )
+        skill_context = _build_skill_registry_context(content)
         prompt = _build_orchestrator_prompt(
             content=content,
-            fallback_plan=heuristic_plan,
+            heuristic_hint=heuristic_plan,
             history=self._history,
             preference_hint=preference_hint,
+            skill_context=skill_context,
         )
         try:
             response = await ai_router.run(
                 AIRequest(
-                    task=AITask.CLASSIFICATION,
+                    # ORCHESTRATOR_PLANNING route → gemma4:26b → Claude API fallback.
+                    # Planning is NOT confidential (no document content here).
+                    task=AITask.ORCHESTRATOR_PLANNING,
                     messages=[
                         ChatMessage(role="system", content=_ORCHESTRATOR_SYSTEM),
                         ChatMessage(role="user", content=prompt),
                     ],
                     response_schema=OrchestratorPlan,
-                    confidential=True,
-                    allow_cloud=False,
+                    confidential=False,
+                    allow_cloud=True,
                     preferred_model=_registry_model_name(
-                        config.orchestrator_model or config.fast_model
+                        config.orchestrator_model or config.worker_model
                     ),
                 )
             )
             if isinstance(response.data, OrchestratorPlan):
-                return _normalize_model_plan(response.data, content)
+                plan = _normalize_model_plan(response.data, content)
+                logger.info(
+                    "orchestrator_plan_model_ok",
+                    intent=plan.intent,
+                    skills=plan.worker.recommended_skills,
+                    workspace=plan.workspace.required,
+                    canvas=plan.workspace.canvas_id,
+                    filters=plan.workspace.filters,
+                )
+                return plan
         except Exception as exc:
             logger.warning(
                 "orchestrator_plan_model_failed",
-                model=config.orchestrator_model or config.fast_model,
+                model=config.orchestrator_model or config.worker_model,
                 error=str(exc),
             )
         return heuristic_plan
@@ -657,6 +671,10 @@ class AgentOrchestrator:
             "draft": draft.model_dump(mode="json"),
             "proposal_id": proposal_id,
         })
+
+        # Invoke real CapabilityBuilder to write working code immediately
+        if config.allow_capability_builder:
+            await self._invoke_capability_builder(gap, draft, plan, config)
         upsert_workspace_block(
             "agent:capability-builder-draft",
             {
@@ -689,7 +707,8 @@ class AgentOrchestrator:
         try:
             response = await ai_router.run(
                 AIRequest(
-                    task=AITask.CLASSIFICATION,
+                    # CODE_GENERATION → Claude API preferred for code tasks
+                    task=AITask.CODE_GENERATION,
                     messages=[
                         ChatMessage(
                             role="system",
@@ -701,8 +720,8 @@ class AgentOrchestrator:
                         ChatMessage(role="user", content=prompt),
                     ],
                     response_schema=CapabilityBuildDraft,
-                    confidential=True,
-                    allow_cloud=False,
+                    confidential=False,
+                    allow_cloud=True,
                     preferred_model=_registry_model_name(
                         config.builder_model or config.orchestrator_model
                     ),
@@ -710,8 +729,8 @@ class AgentOrchestrator:
             )
             if isinstance(response.data, CapabilityBuildDraft):
                 return response.data
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("capability_draft_model_failed", error=str(exc))
         return _fallback_capability_draft(gap, plan)
 
     async def _persist_capability_proposal(
@@ -772,6 +791,60 @@ class AgentOrchestrator:
         except Exception:
             pass
 
+    async def _invoke_capability_builder(
+        self,
+        gap: CapabilityGapRequest,
+        draft: CapabilityBuildDraft,
+        plan: OrchestratorPlan,
+        config: BuiltinAgentConfig,
+    ) -> None:
+        """Invoke real CapabilityBuilder to write working code and register the skill live."""
+        from app.ai.capability_builder import build_capability
+
+        gap_text = (
+            f"{gap.missing_capability}. "
+            f"Причина: {gap.reason}. "
+            f"Запрошенный артефакт: {gap.suggested_artifact}."
+        )
+        skill_name = str(draft.tool_name or "").replace(".", "_") or None
+        await self._outer_send({
+            "type": "capability_gap.building",
+            "content": "AgentDeveloper: пишу код нового скилла...",
+        })
+        try:
+            result = await build_capability(
+                gap_description=gap_text,
+                skill_name=skill_name,
+                context_skills=list(plan.worker.recommended_skills),
+            )
+            if result.ok:
+                await self._outer_send({
+                    "type": "capability_gap.built",
+                    "content": (
+                        f"AgentDeveloper: скилл **{result.skill_name}** создан и зарегистрирован. "
+                        "Попробую выполнить исходный запрос с новым инструментом."
+                    ),
+                    "skill_name": result.skill_name,
+                    "skill_path": result.skill_path,
+                })
+                logger.info(
+                    "capability_builder_success",
+                    skill=result.skill_name,
+                    path=result.skill_path,
+                )
+            else:
+                await self._outer_send({
+                    "type": "capability_gap.build_failed",
+                    "content": f"AgentDeveloper: не удалось создать скилл: {'; '.join(result.errors)}",
+                    "errors": result.errors,
+                })
+        except Exception as exc:
+            logger.error("capability_builder_invoke_failed", error=str(exc))
+            await self._outer_send({
+                "type": "capability_gap.build_failed",
+                "content": f"AgentDeveloper: ошибка при создании скилла: {exc}",
+            })
+
 
 def _norm(text: str) -> str:
     return (text or "").lower().replace("ё", "е")
@@ -780,9 +853,10 @@ def _norm(text: str) -> str:
 def _build_orchestrator_prompt(
     *,
     content: str,
-    fallback_plan: OrchestratorPlan,
+    heuristic_hint: OrchestratorPlan,
     history: list[dict[str, str]],
     preference_hint: str = "",
+    skill_context: str = "",
 ) -> str:
     blocks = list_workspace_blocks()[:8]
     workspace_summary = [
@@ -800,24 +874,93 @@ def _build_orchestrator_prompt(
         for block in blocks
         if isinstance(block, dict)
     ]
-    parts = [
-        "Последние сообщения диалога:\n" + str(history[-12:]),
-        "\nЗапрос пользователя:\n" + content[:2000],
-        "\nТекущие блоки Рабочего стола:\n" + str(workspace_summary),
-    ]
+    parts: list[str] = []
+
+    # Conversation context
+    if history:
+        parts.append("## История диалога (последние сообщения)\n" + str(history[-10:]))
+
+    # Available skills from registry (most relevant)
+    if skill_context:
+        parts.append("## Доступные инструменты (skills)\n" + skill_context)
+
+    # Current workspace state
+    parts.append("## Текущий Рабочий стол\n" + str(workspace_summary))
+
+    # Adaptive hints from past outcomes
     if preference_hint:
-        parts.append("\n" + preference_hint)
+        parts.append("## Статистика использования инструментов\n" + preference_hint)
+
+    # The actual request
+    parts.append("## Запрос пользователя\n" + content[:2000])
+
+    # Heuristic hint — presented as a suggestion, not an answer
+    hint_dict = heuristic_hint.model_dump(mode="json")
     parts.append(
-        "\nFallback-план эвристики, который можно исправить:\n"
-        + str(fallback_plan.model_dump(mode="json"))
+        "## Предварительный анализ (эвристика — может быть неточным, проверь сам)\n"
+        + str({k: hint_dict[k] for k in ("intent", "worker") if k in hint_dict})
     )
+
     parts.append(
-        "\nВерни OrchestratorPlan JSON. Для изменения уже показанной таблицы "
-        "укажи channel=workspace, required=true и canvas_id существующего блока, "
-        "если его можно определить. "
-        "Если в истории инструментов есть предпочтительные — отдай им приоритет в recommended_skills."
+        "## Задача\n"
+        "Сформируй OrchestratorPlan JSON для выполнения запроса пользователя.\n"
+        "Правила:\n"
+        "- Выбирай skills из списка доступных инструментов выше. Не придумывай несуществующие.\n"
+        "- Если запрос о конкретном поставщике X → skills=[supplier.search, workspace.invoice_items_table], "
+        "filters={supplier_query: X}, canvas_id=agent:invoice-items.\n"
+        "- Если запрос «по всем поставщикам» без конкретного имени → "
+        "skills=[workspace.invoice_items_by_supplier_table], canvas_id=agent:invoice-items-by-supplier.\n"
+        "- Если нужен Рабочий стол (таблица/документ) → workspace.required=true.\n"
+        "- Для изменения уже показанной таблицы → channel=workspace, canvas_id=существующего блока.\n"
+        "- Отдавай приоритет инструментам с высоким процентом успеха из статистики выше.\n"
+        "- Если НИ ОДИН skill не подходит → укажи intent=capability_gap и "
+        "recommended_skills=[] (система создаст новый скилл)."
     )
-    return "\n".join(parts)
+    return "\n\n".join(parts)
+
+
+def _build_skill_registry_context(user_text: str) -> str:
+    """Return a compact list of available skills, prioritising relevant ones."""
+    try:
+        from app.ai.gateway_config import gateway_config as _gw_cfg
+        registry_path = _gw_cfg.registry_path
+        if not registry_path.exists():
+            return ""
+        import yaml as _yaml
+        data = _yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+        skills: list[dict] = data.get("skills") or []
+
+        text_lower = user_text.lower()
+
+        def _relevance(skill: dict) -> int:
+            name = skill.get("name", "").lower()
+            desc = skill.get("description", "").lower()
+            score = 0
+            for word in text_lower.split():
+                if len(word) < 3:
+                    continue
+                if word in name:
+                    score += 3
+                elif word in desc:
+                    score += 1
+            return score
+
+        scored = sorted(skills, key=_relevance, reverse=True)
+        # Always include top 40 most relevant + any generated skills
+        top = scored[:40]
+        generated = [s for s in skills if s.get("category") == "agent_generated"]
+        combined = {s["name"]: s for s in top}
+        for s in generated:
+            combined[s["name"]] = s
+
+        lines = []
+        for s in list(combined.values())[:50]:
+            category = s.get("category", "")
+            tag = f"[{category}] " if category else ""
+            lines.append(f"- {s['name']}: {tag}{(s.get('description') or '')[:80]}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorPlan:
