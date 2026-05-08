@@ -674,73 +674,6 @@ function AgentModelProviderSelector({
   );
 }
 
-function FallbackProvidersInput({
-  value,
-  onChange,
-  currentProvider,
-}: {
-  value: string[];
-  onChange: (v: string[]) => void;
-  currentProvider: string;
-}) {
-  const [draft, setDraft] = useState("");
-  const available = PROVIDERS.map((p) => p.value).filter(
-    (p) => p !== currentProvider && !value.includes(p),
-  );
-
-  function add() {
-    if (draft && !value.includes(draft)) {
-      onChange([...value, draft]);
-      setDraft("");
-    }
-  }
-
-  return (
-    <div>
-      <div className="flex flex-wrap gap-1 mb-2 min-h-6">
-        {value.map((p, i) => (
-          <span
-            key={p}
-            className="flex items-center gap-1 px-2 py-0.5 bg-slate-700 border border-slate-600 rounded text-xs text-slate-200"
-          >
-            {PROVIDERS.find((x) => x.value === p)?.label ?? p}
-            <button
-              onClick={() => onChange(value.filter((_, j) => j !== i))}
-              className="text-slate-400 hover:text-red-400 ml-0.5 leading-none"
-            >
-              ×
-            </button>
-          </span>
-        ))}
-        {value.length === 0 && (
-          <span className="text-xs text-slate-600 italic">нет резервных</span>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <select
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          className="flex-1 rounded-md border border-slate-600 bg-slate-900 px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <option value="">Добавить резервный провайдер…</option>
-          {available.map((p) => (
-            <option key={p} value={p}>
-              {PROVIDERS.find((x) => x.value === p)?.label ?? p}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={add}
-          disabled={!draft}
-          className="px-3 py-1.5 bg-slate-700 text-sm text-slate-200 rounded-md hover:bg-slate-600 disabled:opacity-40"
-        >
-          +
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -2352,6 +2285,154 @@ export default function SettingsPage() {
                       </div>
                     )}
 
+                  {/* Default provider & model — used as fallback when per-role is not configured */}
+                  <div className="rounded-md border border-slate-700 bg-slate-950/30 p-4">
+                    <div className="mb-3 text-sm font-medium text-slate-300">
+                      Провайдер по умолчанию
+                      <span className="ml-2 text-xs font-normal text-slate-500">
+                        — используется когда для роли не задан отдельный
+                        провайдер/модель
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <Field
+                        label="Провайдер"
+                        hint="Ollama (локально) рекомендуется"
+                      >
+                        <select
+                          value={agentConfig.provider}
+                          onChange={(e) =>
+                            setAgentConfig({
+                              ...agentConfig,
+                              provider: e.target.value,
+                            })
+                          }
+                          className={selectCls}
+                        >
+                          {PROVIDERS.map((p) => (
+                            <option key={p.value} value={p.value}>
+                              {p.label}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+
+                      {agentConfig.provider === "ollama" ? (
+                        <ModelSelector
+                          label="Модель по умолчанию"
+                          description="Fallback-модель для диалога и инструментов"
+                          value={agentConfig.model}
+                          models={models}
+                          onChange={(v) =>
+                            setAgentConfig({ ...agentConfig, model: v })
+                          }
+                        />
+                      ) : (
+                        <Field
+                          label="Модель по умолчанию"
+                          hint={`Пример: ${PROVIDER_MODEL_PLACEHOLDER[agentConfig.provider] ?? "model-name"}`}
+                        >
+                          <input
+                            className={inputCls}
+                            list="default-model-options"
+                            value={agentConfig.model}
+                            onChange={(e) =>
+                              setAgentConfig({
+                                ...agentConfig,
+                                model: e.target.value,
+                              })
+                            }
+                            placeholder={
+                              PROVIDER_MODEL_PLACEHOLDER[
+                                agentConfig.provider
+                              ] ?? "model-name"
+                            }
+                          />
+                          <datalist id="default-model-options">
+                            {modelOptionsForProvider(
+                              agentConfig.provider,
+                              models,
+                              registryModels,
+                            ).map((option) => (
+                              <option key={option} value={option} />
+                            ))}
+                          </datalist>
+                        </Field>
+                      )}
+                    </div>
+
+                    {/* Local endpoint URL */}
+                    {LOCAL_PROVIDER_URL_LABEL[agentConfig.provider] && (
+                      <div className="mt-3">
+                        <Field
+                          label={`${PROVIDERS.find((p) => p.value === agentConfig.provider)?.label ?? "Provider"} URL`}
+                          hint="Адрес локального endpoint"
+                        >
+                          <input
+                            className={inputCls}
+                            value={String(
+                              agentConfig[
+                                LOCAL_PROVIDER_URL_LABEL[agentConfig.provider]
+                              ] ?? "",
+                            )}
+                            onChange={(e) =>
+                              setAgentConfig({
+                                ...agentConfig,
+                                [LOCAL_PROVIDER_URL_LABEL[
+                                  agentConfig.provider
+                                ]]: e.target.value,
+                              })
+                            }
+                          />
+                        </Field>
+                      </div>
+                    )}
+
+                    {/* Cloud API key hint */}
+                    {agentConfig.provider !== "ollama" &&
+                      !LOCAL_PROVIDER_URL_LABEL[agentConfig.provider] && (
+                        <div className="mt-3 flex items-start gap-2 rounded-md bg-amber-950/30 border border-amber-800/40 px-3 py-2 text-xs text-amber-300">
+                          <span>🔑</span>
+                          <span>
+                            Установите{" "}
+                            <code className="font-mono bg-amber-900/40 px-1 rounded">
+                              {PROVIDER_ENV[agentConfig.provider] ?? "API_KEY"}
+                            </code>{" "}
+                            в{" "}
+                            <code className="font-mono bg-amber-900/40 px-1 rounded">
+                              .env
+                            </code>
+                          </span>
+                        </div>
+                      )}
+
+                    {/* Anthropic prompt caching */}
+                    {agentConfig.provider === "anthropic" && (
+                      <label className="mt-3 flex items-start gap-3 rounded-md border border-slate-700 bg-slate-900/50 p-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={agentConfig.prompt_cache_enabled}
+                          onChange={(e) =>
+                            setAgentConfig({
+                              ...agentConfig,
+                              prompt_cache_enabled: e.target.checked,
+                            })
+                          }
+                        />
+                        <div>
+                          <span className="text-sm text-slate-200">
+                            Prompt Caching (beta)
+                          </span>
+                          <p className="mt-0.5 text-xs text-slate-400">
+                            Ускоряет повторные запросы, снижает стоимость при
+                            длинных сессиях.
+                          </p>
+                        </div>
+                      </label>
+                    )}
+                  </div>
+
                   <div className="grid grid-cols-1 gap-4">
                     {(
                       [
@@ -2473,190 +2554,6 @@ export default function SettingsPage() {
                       />
                     </Field>
                   </div>
-                </div>
-              </SectionCard>
-
-              {/* LLM Provider */}
-              <SectionCard
-                title="Провайдер LLM"
-                subtitle="Выбор модели и провайдера. При недоступности основного используются резервные."
-              >
-                <div className="space-y-5">
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <Field
-                      label="Провайдер"
-                      hint="Откуда берётся LLM для агента"
-                    >
-                      <select
-                        value={agentConfig.provider}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            provider: e.target.value,
-                          })
-                        }
-                        className={selectCls}
-                      >
-                        {PROVIDERS.map((p) => (
-                          <option key={p.value} value={p.value}>
-                            {p.label}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-
-                    {agentConfig.provider === "ollama" ? (
-                      <ModelSelector
-                        label="Модель агента"
-                        description="Для диалога, планирования и вызова инструментов"
-                        value={agentConfig.model}
-                        models={models}
-                        onChange={(v) =>
-                          setAgentConfig({ ...agentConfig, model: v })
-                        }
-                      />
-                    ) : (
-                      <Field
-                        label="Модель агента"
-                        hint={`Пример: ${PROVIDER_MODEL_PLACEHOLDER[agentConfig.provider] ?? "model-name"}`}
-                      >
-                        <input
-                          className={inputCls}
-                          list="main-agent-model-options"
-                          value={agentConfig.model}
-                          onChange={(e) =>
-                            setAgentConfig({
-                              ...agentConfig,
-                              model: e.target.value,
-                            })
-                          }
-                          placeholder={
-                            PROVIDER_MODEL_PLACEHOLDER[agentConfig.provider] ??
-                            "model-name"
-                          }
-                        />
-                        <datalist id="main-agent-model-options">
-                          {modelOptionsForProvider(
-                            agentConfig.provider,
-                            models,
-                            registryModels,
-                          ).map((option) => (
-                            <option key={option} value={option} />
-                          ))}
-                        </datalist>
-                      </Field>
-                    )}
-                  </div>
-                  <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3 cursor-pointer hover:bg-slate-900/80 transition-colors">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={agentConfig.disable_thinking}
-                      onChange={(e) =>
-                        setAgentConfig({
-                          ...agentConfig,
-                          disable_thinking: e.target.checked,
-                        })
-                      }
-                    />
-                    <div>
-                      <span className="text-sm text-slate-200">
-                        Отключить размышление для thinking-моделей
-                      </span>
-                      <p className="mt-0.5 text-xs text-slate-400">
-                        Агент будет запрашивать прямой ответ без цепочки
-                        рассуждений там, где провайдер это поддерживает
-                        (например, OpenAI-compatible API и Ollama
-                        thinking-модели).
-                      </p>
-                    </div>
-                  </label>
-
-                  {/* API key hint */}
-                  {agentConfig.provider !== "ollama" && (
-                    <div className="flex items-start gap-2 rounded-md bg-amber-950/30 border border-amber-800/40 px-3 py-2 text-xs text-amber-300">
-                      <span>🔑</span>
-                      <span>
-                        Установите переменную окружения{" "}
-                        <code className="font-mono bg-amber-900/40 px-1 rounded">
-                          {PROVIDER_ENV[agentConfig.provider] ?? "API_KEY"}
-                        </code>{" "}
-                        в{" "}
-                        <code className="font-mono bg-amber-900/40 px-1 rounded">
-                          .env
-                        </code>{" "}
-                        или Docker Compose.
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Local provider URL */}
-                  {LOCAL_PROVIDER_URL_LABEL[agentConfig.provider] && (
-                    <Field
-                      label={`${PROVIDERS.find((p) => p.value === agentConfig.provider)?.label ?? "Provider"} URL`}
-                      hint="Адрес локального OpenAI-compatible endpoint"
-                    >
-                      <input
-                        className={inputCls}
-                        value={String(
-                          agentConfig[
-                            LOCAL_PROVIDER_URL_LABEL[agentConfig.provider]
-                          ] ?? "",
-                        )}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            [LOCAL_PROVIDER_URL_LABEL[agentConfig.provider]]:
-                              e.target.value,
-                          })
-                        }
-                      />
-                    </Field>
-                  )}
-
-                  {/* Fallback providers */}
-                  <Field
-                    label="Резервные провайдеры"
-                    hint="При ошибке основного провайдера агент попробует следующий из списка"
-                  >
-                    <FallbackProvidersInput
-                      value={agentConfig.fallback_providers}
-                      onChange={(v) =>
-                        setAgentConfig({
-                          ...agentConfig,
-                          fallback_providers: v,
-                        })
-                      }
-                      currentProvider={agentConfig.provider}
-                    />
-                  </Field>
-
-                  {/* Prompt caching (Anthropic only) */}
-                  {agentConfig.provider === "anthropic" && (
-                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3 cursor-pointer hover:bg-slate-900/80 transition-colors">
-                      <input
-                        type="checkbox"
-                        className="mt-0.5"
-                        checked={agentConfig.prompt_cache_enabled}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            prompt_cache_enabled: e.target.checked,
-                          })
-                        }
-                      />
-                      <div>
-                        <span className="text-sm text-slate-200">
-                          Prompt Caching (beta)
-                        </span>
-                        <p className="mt-0.5 text-xs text-slate-400">
-                          Ускоряет повторные запросы с общим системным промптом.
-                          Снижает стоимость и latency при длинных сессиях.
-                          Требует поддержки провайдером.
-                        </p>
-                      </div>
-                    </label>
-                  )}
                 </div>
               </SectionCard>
 
