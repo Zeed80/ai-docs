@@ -62,6 +62,24 @@ class SupplierSearchResponse(BaseModel):
     total: int
 
 
+class SupplierListItem(BaseModel):
+    id: uuid.UUID
+    name: str
+    inn: str | None = None
+    role: str
+    user_rating: int | None = None
+    trust_score: float | None = None
+    total_invoices: int = 0
+    total_amount: float = 0.0
+
+    model_config = {"from_attributes": True}
+
+
+class SupplierListResponse(BaseModel):
+    items: list[SupplierListItem]
+    total: int
+
+
 # ── Price History ──────────────────────────────────────────────────────────
 
 

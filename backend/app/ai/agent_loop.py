@@ -28,7 +28,7 @@ logger = structlog.get_logger()
 # extract counts, statuses and a sample of items.
 _MAX_TOOL_RESULT_CHARS = 8000
 # Number of list items to keep in the sample shown to the LLM.
-_TOOL_RESULT_SAMPLE_ITEMS = 5
+_TOOL_RESULT_SAMPLE_ITEMS = 10
 
 
 def _trim_tool_result(content: str) -> str:
@@ -37,6 +37,7 @@ def _trim_tool_result(content: str) -> str:
     For JSON list responses (dict with an 'items', 'results', or 'hits' key),
     keeps metadata fields (total, page, etc.) and a short item sample so the
     LLM always sees the true count rather than a truncated JSON blob.
+    Iteratively reduces the sample until the result fits the limit.
     """
     if len(content) <= _MAX_TOOL_RESULT_CHARS:
         return content
@@ -46,16 +47,20 @@ def _trim_tool_result(content: str) -> str:
             list_key = next((k for k in ("items", "results", "hits") if k in data), None)
             if list_key is not None:
                 items = data.get(list_key) or []
-                sample = items[:_TOOL_RESULT_SAMPLE_ITEMS]
-                trimmed = {k: v for k, v in data.items() if k != list_key}
-                trimmed[list_key] = sample
-                trimmed["_note"] = (
-                    f"[Showing {len(sample)} of {len(items)} items. "
-                    f"total={data.get('total', len(items))}]"
-                )
-                result = json.dumps(trimmed, ensure_ascii=False)
-                if len(result) <= _MAX_TOOL_RESULT_CHARS:
-                    return result
+                total = data.get("total", len(items))
+                meta = {k: v for k, v in data.items() if k != list_key}
+                # Iteratively reduce sample until it fits
+                for n in (_TOOL_RESULT_SAMPLE_ITEMS, 5, 3, 1, 0):
+                    sample = items[:n]
+                    candidate = {**meta, list_key: sample}
+                    candidate["_note"] = (
+                        f"[total={total} (полное количество). "
+                        f"Показан sample из {len(sample)} эл. "
+                        f"Один вызов достаточен.]"
+                    )
+                    result = json.dumps(candidate, ensure_ascii=False)
+                    if len(result) <= _MAX_TOOL_RESULT_CHARS:
+                        return result
     except (json.JSONDecodeError, TypeError, StopIteration):
         pass
     return content[:_MAX_TOOL_RESULT_CHARS] + f"\n...[truncated — original {len(content)} chars]"
@@ -71,11 +76,10 @@ _OPERATIONAL_POLICY = """
 - Gates [GATE]: перед утверждением/отклонением счёта, отправкой письма,
   массовым удалением, оплатой, подтверждением прихода — покажи превью и
   дождись явного «да» от пользователя.
-- Рабочий стол для rich-вывода: таблицы, списки, документы, графики, файлы —
-  публикуй через canvas.publish или workspace.* в существующий Рабочий стол,
-  в чат пиши краткое резюме. Не создавай второй Рабочий стол.
-- Полный охват: если просят «все» или «полный список» — листай постранично
-  до исчерпания, не останавливайся на первой странице.
+- Рабочий стол: используй workspace.* ТОЛЬКО если оркестратор явно указал
+  canvas_id. Иначе — пиши краткий ответ в чат.
+- Один вызов достаточен: не повторяй один и тот же инструмент с разными
+  параметрами без явной причины. Получил результат → сформулируй ответ.
 - Capability gap: если нужного инструмента нет — вызови capability.propose
   с описанием и планом реализации.
 - Память автоматическая: используй memory.search с retrieval_mode=auto_hybrid.
@@ -99,7 +103,7 @@ def _is_workspace_output_request(text: str) -> bool:
         marker in t
         for marker in (
             "таблиц", "полный список", "все списком", "выведи список",
-            "покажи список", "ссылк", "документ", "чертеж", "чертёж",
+            "ссылк", "документ", "чертеж", "чертёж",
             "график", "диаграм", "excel", "скача", "файл",
             "столбец", "столбц", "колонк", "добавь поле", "убери поле",
             "отсортируй", "сортировк",
@@ -1308,6 +1312,10 @@ class AgentSession:
         ]
         self._trim_history()
 
+    def inject_orchestrator_hint(self, hint: str) -> None:
+        """Inject an orchestrator plan hint as a system message before the next user turn."""
+        self.messages.append({"role": "system", "content": hint})
+
     async def on_user_message(self, content: str) -> None:
         self._refresh_runtime_config()
         await self._init_mcp()
@@ -2172,7 +2180,7 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
         summary = str(hit.get("summary") or "")[:1200]
         source = str(hit.get("source") or "memory")
         line = f"{index}. [{source}] {title}: {summary}".strip()
-        if used_chars + len(line) > 20000:
+        if used_chars + len(line) > 8000:
             break
         lines.append(line)
         used_chars += len(line)

@@ -93,7 +93,21 @@
       "role": "procurement_specialist",
       "intent": "supplier_lookup",
       "keywords": ["поставщик", "контрагент", "продавец", "поставщика", "поставщиков"],
-      "skills": ["supplier.search", "supplier.get", "supplier.price_history"]
+      "skills": ["supplier.search", "supplier.get", "supplier.trust_score", "supplier.price_history"]
+    },
+    {
+      "id": "payment",
+      "role": "accountant",
+      "intent": "payment",
+      "keywords": ["платеж", "платёж", "оплата", "задолженн", "просрочен", "долг"],
+      "skills": ["payment.overdue", "payment.upcoming", "payment.list_schedule"]
+    },
+    {
+      "id": "anomaly",
+      "role": "data_analyst",
+      "intent": "anomaly",
+      "keywords": ["аномали", "подозрительн"],
+      "skills": ["anomaly.list", "anomaly.check_all", "anomaly.explain"]
     },
     {
       "id": "memory",

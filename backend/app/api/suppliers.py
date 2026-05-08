@@ -26,6 +26,8 @@ from app.domain.suppliers import (
     SupplierAlertsResponse,
     SupplierCreate,
     SupplierFullOut,
+    SupplierListItem,
+    SupplierListResponse,
     SupplierPriceHistoryResponse,
     SupplierProfileOut,
     SupplierSearchRequest,
@@ -254,6 +256,53 @@ async def get_supplier(
     out.recent_invoices_count = inv_count
     out.open_invoices_amount = float(open_amount)
     return out
+
+
+# ── supplier.list ─────────────────────────────────────────────────────────
+
+
+@router.get("", response_model=SupplierListResponse, summary="Skill: supplier.list — List suppliers with trust score and invoice stats.")
+async def list_suppliers_endpoint(
+    role: str | None = Query(None, description="Filter by role: supplier, buyer"),
+    limit: int = Query(50, le=200),
+    offset: int = 0,
+    sort_by: str = Query("name", description="Sort field: name, trust_score, total_invoices, total_amount"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: supplier.list — List suppliers/parties with trust score and invoice aggregates."""
+    query = select(Party).options(selectinload(Party.profile))
+    if role:
+        try:
+            query = query.where(Party.role == PartyRole(role))
+        except ValueError:
+            pass
+    count_q = select(func.count()).select_from(select(Party).where(
+        Party.role == PartyRole(role) if role else True
+    ).subquery())
+    total = (await db.execute(count_q)).scalar() or 0
+    query = query.order_by(Party.name).offset(offset).limit(limit)
+    result = await db.execute(query)
+    parties = result.scalars().all()
+    items = []
+    for p in parties:
+        profile = p.profile
+        items.append(SupplierListItem(
+            id=p.id,
+            name=p.name,
+            inn=p.inn,
+            role=p.role.value if hasattr(p.role, "value") else str(p.role),
+            user_rating=p.user_rating,
+            trust_score=profile.trust_score if profile else None,
+            total_invoices=profile.total_invoices if profile else 0,
+            total_amount=profile.total_amount if profile else 0.0,
+        ))
+    if sort_by == "trust_score":
+        items.sort(key=lambda x: x.trust_score or 0.0, reverse=True)
+    elif sort_by == "total_invoices":
+        items.sort(key=lambda x: x.total_invoices, reverse=True)
+    elif sort_by == "total_amount":
+        items.sort(key=lambda x: x.total_amount, reverse=True)
+    return SupplierListResponse(items=items, total=total)
 
 
 # ── supplier.search ────────────────────────────────────────────────────────

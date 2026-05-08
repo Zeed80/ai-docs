@@ -177,6 +177,7 @@ class AgentOrchestrator:
         plan = self._plan_turn(content)
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
+        self._executor.inject_orchestrator_hint(_build_worker_hint(plan))
         await self._executor.on_user_message(content)
         audit = await self._audit_turn(plan, config)
         retry_count = 0
@@ -1148,26 +1149,34 @@ def _resolve_canvas_from_route(route: dict[str, Any], text: str) -> str | None:
 
 
 _SUPPLIER_NAME_STOPWORDS = frozenset({
+    # Russian stopwords
     "всех", "всем", "всеми", "всё", "все", "другим", "другие", "другого",
     "любой", "каждый", "каждого", "одного", "один", "без", "только",
     "кроме", "нескольких", "нескольким", "поставщикам", "поставщиках",
+    "лучший", "лучшего", "лучшем", "худший", "первый", "последний",
+    # Short prepositions / function words (frequently mismatched)
+    "по", "из", "от", "до", "за", "на", "об", "во", "ко", "со", "из", "для",
+    "при", "над", "под", "про", "как", "что", "или", "это", "тот", "тем",
+    # English words that may appear after "поставщик"
+    "trust", "score", "rating", "list", "profile", "top", "best",
 })
 
 
 def _extract_supplier_name(text: str) -> str | None:
-    """Extract a specific supplier name from user text.
+    """Extract a specific named supplier from user text.
 
-    Detects patterns: "поставщика ХОФФМАН", "поставщику Иванов",
-    "поставщик 'Ромашка'". Returns None for generic "по поставщикам".
+    Only matches proper noun patterns (quoted, ALL-CAPS, or title-case words
+    of meaningful length). Returns None for generic attribute requests like
+    "поставщик по trust score" or "лучший поставщик".
     """
     m = re.search(
-        r"поставщик[аиу]?\s+([«»\"']?[а-яёa-z][а-яёa-z0-9«»\"'\-\.]{1,}(?:\s+[а-яёa-z0-9«»\"'\-\.]{2,}){0,3}[«»\"']?)",
+        r"поставщик[аиу]?\s+([«»\"']?[а-яёa-zА-ЯЁA-Z][а-яёa-z0-9А-ЯЁA-Z«»\"'\-\.]{2,}(?:\s+[а-яёa-z0-9А-ЯЁA-Z«»\"'\-\.]{2,}){0,3}[«»\"']?)",
         text,
         re.IGNORECASE,
     )
     if m:
         name = m.group(1).strip().strip("«»\"'.,;:!?")
-        if name.lower() not in _SUPPLIER_NAME_STOPWORDS and len(name) > 1:
+        if name.lower() not in _SUPPLIER_NAME_STOPWORDS and len(name) >= 3:
             return name
     return None
 
@@ -1205,6 +1214,28 @@ def _workspace_tool_spec_for_plan(plan: OrchestratorPlan) -> dict[str, Any] | No
         "path": spec_entry["path"],
         "args": args,
     }
+
+
+def _build_worker_hint(plan: OrchestratorPlan) -> str:
+    """Build a concise orchestrator hint injected into the worker's message history."""
+    lines = [
+        f"[ОРКЕСТРАТОР] Роль: {plan.worker.role}. Задача: {plan.goal[:200]}",
+        f"Рекомендуемые инструменты: {', '.join(plan.worker.recommended_skills[:5]) or 'любые подходящие'}.",
+    ]
+    if plan.workspace.required and plan.workspace.canvas_id:
+        lines.append(
+            f"Результат ОБЯЗАТЕЛЬНО опубликовать на Рабочий стол (canvas_id={plan.workspace.canvas_id}). "
+            "Используй workspace.* инструмент. В чат — только краткое резюме."
+        )
+        if plan.workspace.filters:
+            f_str = ", ".join(f"{k}={v!r}" for k, v in plan.workspace.filters.items())
+            lines.append(f"Обязательные фильтры: {f_str}.")
+    else:
+        lines.append(
+            "Формат вывода: текст в чат. "
+            "НЕ используй workspace.*, canvas.publish — это простой запрос без rich-вывода."
+        )
+    return "\n".join(lines)
 
 
 def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str:

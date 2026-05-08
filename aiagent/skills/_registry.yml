@@ -1625,6 +1625,32 @@ tools:
     - entity_ids
     title: BatchActionRequest
     type: object
+- name: supplier.list
+  description: 'Skill: supplier.list — List all suppliers with trust score and invoice stats.
+    Use sort_by=trust_score to find best/worst suppliers. Returns total count, trust_score
+    (0-1 scale), total_invoices, total_amount per supplier.'
+  category: suppliers
+  method: GET
+  path: /api/suppliers
+  approval_required: false
+  parameters:
+    properties:
+      role:
+        description: Filter by role (supplier or buyer). Omit for all.
+        title: Role
+        type: string
+      limit:
+        default: 50
+        maximum: 200
+        title: Limit
+        type: integer
+      sort_by:
+        default: name
+        description: "Sort by: name, trust_score, total_invoices, total_amount"
+        title: Sort By
+        type: string
+    title: SupplierListRequest
+    type: object
 - name: supplier.get
   description: 'Skill: supplier.get — Get supplier profile with aggregated stats.'
   category: suppliers
