@@ -1848,6 +1848,37 @@ class AgentSession:
         except Exception:
             pass
 
+    async def _inject_learning_rules(self) -> None:
+        """Load active learning rules from DB (via backend API) and append to system message."""
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                resp = await client.get(
+                    f"{self._config.backend_url.rstrip('/')}/api/technology/learning-rules",
+                    params={"status": "active", "limit": 30},
+                )
+                if resp.status_code != 200:
+                    return
+                data = resp.json()
+                rules: list[dict] = data.get("items") or []
+                if not rules:
+                    return
+                lines: list[str] = []
+                for r in rules:
+                    obs = (r.get("replacement_value") or "").strip()
+                    tool = (r.get("field_name") or "").strip()
+                    if obs:
+                        lines.append(f"- При использовании [{tool}]: {obs}")
+                if not lines:
+                    return
+                block = "## Усвоенные правила (активированные):\n" + "\n".join(lines)
+                for msg in self.messages:
+                    if msg.get("role") == "system":
+                        if block not in str(msg.get("content", "")):
+                            msg["content"] = str(msg.get("content", "")) + f"\n\n{block}"
+                        return
+        except Exception:
+            pass
+
     async def _run(self) -> None:
         try:
             if not self._config.enabled:
@@ -1859,6 +1890,7 @@ class AgentSession:
 
             await self._append_memory_context()
             await self._inject_rating_hint()
+            await self._inject_learning_rules()
 
             consecutive_empty_responses = 0
             for iteration in range(self._config.max_steps):

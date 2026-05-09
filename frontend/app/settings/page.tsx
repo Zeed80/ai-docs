@@ -140,6 +140,7 @@ interface AgentSkill {
   path: string;
   enabled: boolean;
   approval_required: boolean;
+  gate_actions?: string[];
 }
 
 interface AgentControlPlaneStatus {
@@ -464,7 +465,7 @@ function SectionCard({
   action,
   children,
 }: {
-  title: string;
+  title: React.ReactNode;
   subtitle?: string;
   action?: React.ReactNode;
   children?: React.ReactNode;
@@ -721,6 +722,9 @@ export default function SettingsPage() {
   const [agentConfigBaseline, setAgentConfigBaseline] =
     useState<AgentConfig | null>(null);
   const [agentSkills, setAgentSkills] = useState<AgentSkill[]>([]);
+  const [agentSkillsMode, setAgentSkillsMode] = useState<
+    "capabilities" | "registry"
+  >("registry");
   const [agentControlPlane, setAgentControlPlane] =
     useState<AgentControlPlaneStatus | null>(null);
   const [agentRuntime, setAgentRuntime] = useState<AgentRuntimeStatus | null>(
@@ -865,6 +869,9 @@ export default function SettingsPage() {
       const r = await fetch(`${API}/api/ai/agent-skills`);
       const d = await r.json();
       setAgentSkills(d.skills ?? []);
+      setAgentSkillsMode(
+        d.mode === "capabilities" ? "capabilities" : "registry",
+      );
     } catch {
       setAgentSkills([]);
     }
@@ -2877,38 +2884,96 @@ export default function SettingsPage() {
               </SectionCard>
 
               {/* Skills table */}
-              <SectionCard title="Инструменты (Skills)">
+              <SectionCard
+                title={
+                  <span className="flex items-center gap-2">
+                    Инструменты (Skills)
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                        agentSkillsMode === "capabilities"
+                          ? "bg-blue-900/60 text-blue-300"
+                          : "bg-slate-700 text-slate-400"
+                      }`}
+                    >
+                      {agentSkillsMode === "capabilities"
+                        ? "capabilities"
+                        : "registry"}
+                    </span>
+                  </span>
+                }
+              >
                 <div className="space-y-3">
+                  {agentSkillsMode === "capabilities" && (
+                    <p className="text-xs text-slate-400">
+                      Агент работает в режиме{" "}
+                      <span className="text-blue-300">capabilities</span> —
+                      {agentSkills.length} широких инструментов вместо сотен
+                      endpoint-tools. Управление отдельными skills недоступно.
+                    </p>
+                  )}
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex flex-wrap items-center gap-3">
                       <p className="text-xs text-slate-400">
-                        Включено {selectedSkillsCount} из {agentSkills.length} ·
-                        подтверждений {agentConfig.approval_gates.length}
+                        {agentSkillsMode === "capabilities" ? (
+                          <>
+                            {agentSkills.length} capabilities ·{" "}
+                            {
+                              agentSkills.filter((s) => s.approval_required)
+                                .length
+                            }{" "}
+                            с [GATE]
+                          </>
+                        ) : (
+                          <>
+                            Включено {selectedSkillsCount} из{" "}
+                            {agentSkills.length} · подтверждений{" "}
+                            {agentConfig.approval_gates.length}
+                          </>
+                        )}
                       </p>
-                      <label className="inline-flex items-center gap-2 text-xs text-slate-300">
-                        <input
-                          ref={selectAllSkillsRef}
-                          type="checkbox"
-                          checked={allSkillsSelected}
-                          onChange={(e) => toggleAllSkills(e.target.checked)}
-                        />
-                        Выбрать все скиллы
-                      </label>
+                      {agentSkillsMode === "registry" && (
+                        <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+                          <input
+                            ref={selectAllSkillsRef}
+                            type="checkbox"
+                            checked={allSkillsSelected}
+                            onChange={(e) => toggleAllSkills(e.target.checked)}
+                          />
+                          Выбрать все скиллы
+                        </label>
+                      )}
                     </div>
                     <input
                       className="w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 sm:w-64 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       value={agentSkillFilter}
                       onChange={(e) => setAgentSkillFilter(e.target.value)}
-                      placeholder="Поиск tools…"
+                      placeholder="Поиск…"
                     />
                   </div>
                   <div className="max-h-72 overflow-auto rounded-md border border-slate-700">
                     <table className="w-full text-left text-xs">
                       <thead className="sticky top-0 bg-slate-900 text-slate-400">
                         <tr>
-                          <th className="w-20 px-3 py-2 font-medium">Агент</th>
-                          <th className="w-24 px-3 py-2 font-medium">Подтв.</th>
-                          <th className="px-3 py-2 font-medium">Tool</th>
+                          {agentSkillsMode === "registry" && (
+                            <>
+                              <th className="w-20 px-3 py-2 font-medium">
+                                Агент
+                              </th>
+                              <th className="w-24 px-3 py-2 font-medium">
+                                Подтв.
+                              </th>
+                            </>
+                          )}
+                          {agentSkillsMode === "capabilities" && (
+                            <th className="w-20 px-3 py-2 font-medium">
+                              [GATE]
+                            </th>
+                          )}
+                          <th className="px-3 py-2 font-medium">
+                            {agentSkillsMode === "capabilities"
+                              ? "Capability"
+                              : "Tool"}
+                          </th>
                           <th className="hidden px-3 py-2 font-medium md:table-cell">
                             Endpoint
                           </th>
@@ -2916,46 +2981,65 @@ export default function SettingsPage() {
                       </thead>
                       <tbody className="divide-y divide-slate-800">
                         {filteredAgentSkills.map((skill, index) => {
-                          const isExposed = agentConfig.exposed_skills.includes(
-                            skill.name,
-                          );
+                          const isExposed =
+                            agentSkillsMode === "capabilities"
+                              ? skill.enabled
+                              : agentConfig.exposed_skills.includes(skill.name);
                           const needsApproval =
-                            agentConfig.approval_gates.includes(skill.name);
+                            agentSkillsMode === "capabilities"
+                              ? skill.approval_required
+                              : agentConfig.approval_gates.includes(skill.name);
                           return (
                             <tr
-                              key={skill.name}
+                              key={`${skill.name}-${index}`}
                               className="bg-slate-900/40 hover:bg-slate-900/70"
                             >
-                              <td className="px-3 py-2">
-                                <input
-                                  type="checkbox"
-                                  checked={isExposed}
-                                  ref={(el) => {
-                                    agentSkillToggleRefs.current[index] = el;
-                                  }}
-                                  onKeyDown={(event) =>
-                                    handleSkillArrowNavigation(event, index)
-                                  }
-                                  onChange={(e) =>
-                                    updateAgentSkill(
-                                      skill.name,
-                                      e.target.checked,
-                                    )
-                                  }
-                                />
-                              </td>
-                              <td className="px-3 py-2">
-                                <input
-                                  type="checkbox"
-                                  checked={needsApproval}
-                                  onChange={(e) =>
-                                    updateAgentApprovalGate(
-                                      skill.name,
-                                      e.target.checked,
-                                    )
-                                  }
-                                />
-                              </td>
+                              {agentSkillsMode === "registry" && (
+                                <>
+                                  <td className="px-3 py-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={isExposed}
+                                      ref={(el) => {
+                                        agentSkillToggleRefs.current[index] =
+                                          el;
+                                      }}
+                                      onKeyDown={(event) =>
+                                        handleSkillArrowNavigation(event, index)
+                                      }
+                                      onChange={(e) =>
+                                        updateAgentSkill(
+                                          skill.name,
+                                          e.target.checked,
+                                        )
+                                      }
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={needsApproval}
+                                      onChange={(e) =>
+                                        updateAgentApprovalGate(
+                                          skill.name,
+                                          e.target.checked,
+                                        )
+                                      }
+                                    />
+                                  </td>
+                                </>
+                              )}
+                              {agentSkillsMode === "capabilities" && (
+                                <td className="px-3 py-2">
+                                  {needsApproval ? (
+                                    <span className="rounded bg-amber-900/50 px-1.5 py-0.5 text-amber-300">
+                                      GATE
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-600">—</span>
+                                  )}
+                                </td>
+                              )}
                               <td className="px-3 py-2">
                                 <div className="font-mono text-slate-200">
                                   {skill.name}

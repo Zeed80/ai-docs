@@ -443,17 +443,44 @@ async def reset_agent_config() -> BuiltinAgentConfig:
 @router.get("/agent-skills")
 async def list_agent_skills() -> dict:
     config = get_builtin_agent_config()
+    approval_gates = set(config.approval_gates)
+
+    # Capabilities mode: return capabilities, not raw registry endpoints
+    if gateway_config.skills_mode == "capabilities":
+        cap_path = gateway_config.capabilities_path
+        if not cap_path.exists():
+            return {"skills": [], "mode": "capabilities"}
+        data = yaml.safe_load(cap_path.read_text(encoding="utf-8")) or {}
+        skills = []
+        for cap in data.get("capabilities") or []:
+            name = cap.get("name")
+            if not name:
+                continue
+            gate_actions = cap.get("gate_actions") or []
+            skills.append({
+                "name": name,
+                "description": (cap.get("description") or "").strip()[:200],
+                "method": cap.get("method", "POST"),
+                "path": cap.get("path", f"/api/agent/cap/{name}"),
+                "enabled": True,
+                "approval_required": bool(gate_actions),
+                "gate_actions": gate_actions,
+            })
+        return {"skills": skills, "mode": "capabilities"}
+
+    # Legacy registry mode: deduplicate by name
     registry_path = gateway_config.registry_path
     if not registry_path.exists():
-        return {"skills": []}
+        return {"skills": [], "mode": "registry"}
     data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
     exposed = set(config.exposed_skills)
-    approval_gates = set(config.approval_gates)
+    seen: set[str] = set()
     skills = []
     for skill in data.get("skills") or data.get("tools") or []:
         name = skill.get("name")
-        if not name:
+        if not name or name in seen:
             continue
+        seen.add(name)
         skills.append({
             "name": name,
             "description": skill.get("description", ""),
@@ -462,7 +489,7 @@ async def list_agent_skills() -> dict:
             "enabled": name in exposed,
             "approval_required": name in approval_gates,
         })
-    return {"skills": skills}
+    return {"skills": skills, "mode": "registry"}
 
 
 @router.get("/embedding-profile")

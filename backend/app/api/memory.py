@@ -1153,14 +1153,23 @@ async def rate_message(
         try:
             import httpx as _httpx
             from app.ai.gateway_config import gateway_config as _gw
+            tools_label = ", ".join(req.tools_used[:3])
             await _httpx.AsyncClient(timeout=5.0).post(
                 f"{_gw.backend_url}/api/technology/learning-rules",
                 json={
-                    "trigger_tools": req.tools_used,
-                    "observation": req.comment,
-                    "suggested_action": "review",
+                    "rule_type": "agent_feedback",
+                    "entity_type": "agent_behavior",
+                    "field_name": tools_label or "unknown_tool",
+                    "match_old_value": tools_label,
+                    "replacement_value": req.comment,
                     "status": "proposed",
-                    "source": "user_rating",
+                    "suggested_by": "user_rating",
+                    "metadata": {
+                        "trigger_tools": req.tools_used,
+                        "observation": req.comment,
+                        "suggested_action": "review",
+                        "session_id": req.session_id,
+                    },
                 },
             )
         except Exception:
