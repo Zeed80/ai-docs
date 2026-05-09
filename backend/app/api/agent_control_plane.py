@@ -46,6 +46,18 @@ from app.db.session import get_db
 router = APIRouter()
 
 
+def _count_active_skills(config: BuiltinAgentConfig) -> int:
+    """Return count of skills actually visible to the chat agent."""
+    if gateway_config.skills_mode == "capabilities":
+        try:
+            import yaml
+            data = yaml.safe_load(gateway_config.capabilities_path.read_text())
+            return len(data.get("capabilities") or [])
+        except Exception:
+            pass
+    return len(config.exposed_skills)
+
+
 class AgentControlPlaneStatus(BaseModel):
     ok: bool
     autonomy_mode: str
@@ -513,7 +525,7 @@ async def control_plane_status(db: AsyncSession = Depends(get_db)) -> AgentContr
             for name in type(config).model_fields
             if is_protected_setting(name)
         ),
-        skills_total=len(config.exposed_skills),
+        skills_total=_count_active_skills(config),
         approval_gates_total=len(config.approval_gates),
         plugins_total=int(plugin_total or 0),
         plugins_enabled=int(plugin_enabled or 0),
