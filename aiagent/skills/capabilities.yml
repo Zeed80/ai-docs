@@ -123,8 +123,10 @@ capabilities:
     description: >
       Работа с электронной почтой: входящие письма, поиск переписки,
       просмотр треда, создание черновика, отправка письма [GATE],
-      шаблоны, стилизация, подбор шаблона. Используй для всей работы
-      с почтой и деловой перепиской.
+      шаблоны, стилизация, подбор шаблона.
+      Для отправки письма: сначала action=draft (создаёт черновик, возвращает draft_id),
+      затем action=send с draft_id [GATE требует подтверждения].
+      Пример создания черновика: action="draft", body={"to":"email@example.com","subject":"Тема","body":"Текст"}.
     path: /api/agent/cap/email
     method: POST
     gate_actions: [send, delete_template]
@@ -133,25 +135,22 @@ capabilities:
       properties:
         action:
           type: string
-          description: "list | search | get | draft | send | fetch_new | risk_check | list_templates | get_template | render_template | suggest_template | style_match"
+          description: "list | search | get | draft | send | fetch_new | risk_check | list_templates | suggest_template | style_match"
         thread_id:
           type: string
-          description: "ID треда/письма"
+          description: "ID треда/письма (для get)"
         draft_id:
           type: string
-          description: "ID черновика (для send, risk_check)"
-        template_id:
-          type: string
-          description: "ID шаблона"
+          description: "ID черновика (для send, risk_check) — получить из результата action=draft"
         query:
           type: string
-          description: "Поисковый запрос"
+          description: "Поисковый запрос (для search)"
         filters:
           type: object
-          description: "Фильтры: mailbox_id, supplier_id, date_from, unread, limit"
+          description: "Фильтры для list: mailbox_id, supplier_id, date_from, unread, limit"
         body:
           type: object
-          description: "Данные для draft: to, subject, body, supplier_id, invoice_id, template_id"
+          description: "Для draft: {to_addresses: ['email@domain.com'], subject: 'тема', body_html: '<p>Текст</p>', supplier_id?: 'uuid'}"
       required: [action]
 
   - name: procurement

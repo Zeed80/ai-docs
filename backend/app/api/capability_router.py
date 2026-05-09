@@ -46,7 +46,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     "suppliers": {
         "list":             ("GET",   "/api/suppliers",                               []),
         "get":              ("GET",   "/api/suppliers/{supplier_id}",                 ["supplier_id"]),
-        "search":           ("GET",   "/api/suppliers/search",                        []),
+        "search":           ("POST",  "/api/suppliers/search",                        []),
         "price_history":    ("GET",   "/api/suppliers/{supplier_id}/price-history",   ["supplier_id"]),
         "trust_score":      ("GET",   "/api/suppliers/{supplier_id}/trust-score",     ["supplier_id"]),
         "alerts":           ("GET",   "/api/suppliers/{supplier_id}/alerts",          ["supplier_id"]),
@@ -54,21 +54,21 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "check_requisites": ("POST",  "/api/suppliers/{supplier_id}/check-requisites", ["supplier_id"]),
     },
     "warehouse": {
-        "list_inventory":   ("GET",    "/api/warehouse",                               []),
-        "get_item":         ("GET",    "/api/warehouse/{item_id}",                     ["item_id"]),
-        "low_stock":        ("GET",    "/api/warehouse/low-stock",                     []),
-        "create_receipt":   ("POST",   "/api/warehouse/receipts",                      []),
-        "confirm_receipt":  ("POST",   "/api/warehouse/receipts/{receipt_id}/confirm", ["receipt_id"]),
-        "issue_stock":      ("POST",   "/api/warehouse/issue",                         []),
-        "adjust_stock":     ("POST",   "/api/warehouse/{item_id}/adjust",              ["item_id"]),
-        "list_receipts":    ("GET",    "/api/warehouse/receipts",                      []),
-        "get_receipt":      ("GET",    "/api/warehouse/receipts/{receipt_id}",         ["receipt_id"]),
-        "list_movements":   ("GET",    "/api/warehouse/movements",                     []),
-        "create_item":      ("POST",   "/api/warehouse",                               []),
-        "update_item":      ("PATCH",  "/api/warehouse/{item_id}",                     ["item_id"]),
-        "delete_item":      ("DELETE", "/api/warehouse/{item_id}",                     ["item_id"]),
-        "bulk_confirm":     ("POST",   "/api/warehouse/receipts/bulk-confirm",         []),
-        "update_status":    ("PATCH",  "/api/warehouse/receipts/{receipt_id}/status",  ["receipt_id"]),
+        "list_inventory":   ("GET",    "/api/warehouse/inventory",                               []),
+        "get_item":         ("GET",    "/api/warehouse/inventory/{item_id}",                     ["item_id"]),
+        "low_stock":        ("GET",    "/api/warehouse/inventory/low-stock",                     []),
+        "create_receipt":   ("POST",   "/api/warehouse/receipts",                               []),
+        "confirm_receipt":  ("POST",   "/api/warehouse/receipts/{receipt_id}/confirm",          ["receipt_id"]),
+        "issue_stock":      ("POST",   "/api/warehouse/inventory/{item_id}/issue",              ["item_id"]),
+        "adjust_stock":     ("POST",   "/api/warehouse/inventory/{item_id}/adjust",             ["item_id"]),
+        "list_receipts":    ("GET",    "/api/warehouse/receipts",                               []),
+        "get_receipt":      ("GET",    "/api/warehouse/receipts/{receipt_id}",                  ["receipt_id"]),
+        "list_movements":   ("GET",    "/api/warehouse/movements",                              []),
+        "create_item":      ("POST",   "/api/warehouse/inventory",                              []),
+        "update_item":      ("PATCH",  "/api/warehouse/inventory/{item_id}",                    ["item_id"]),
+        "delete_item":      ("DELETE", "/api/warehouse/inventory/{item_id}",                    ["item_id"]),
+        "bulk_confirm":     ("POST",   "/api/warehouse/receipts/bulk-confirm",                  []),
+        "update_status":    ("PATCH",  "/api/warehouse/receipts/{receipt_id}/status",           ["receipt_id"]),
     },
     "email": {
         "list":              ("GET",   "/api/email/threads",                           []),
@@ -86,23 +86,23 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "delete_template":   ("DELETE", "/api/email/templates/{template_id}",          ["template_id"]),
     },
     "procurement": {
-        "list_requests":   ("GET",   "/api/procurement/requests",                     []),
-        "create_request":  ("POST",  "/api/procurement/requests",                     []),
-        "get_request":     ("GET",   "/api/procurement/requests/{request_id}",        ["request_id"]),
-        "update_request":  ("PATCH", "/api/procurement/requests/{request_id}",        ["request_id"]),
-        "send_rfq":        ("POST",  "/api/procurement/requests/{request_id}/rfq",    ["request_id"]),
-        "list_contracts":  ("GET",   "/api/procurement/contracts",                    []),
-        "create_contract": ("POST",  "/api/procurement/contracts",                    []),
-        "get_contract":    ("GET",   "/api/procurement/contracts/{contract_id}",      ["contract_id"]),
-        "update_contract": ("PATCH", "/api/procurement/contracts/{contract_id}",      ["contract_id"]),
+        "list_requests":   ("GET",   "/api/purchase-requests",                        []),
+        "create_request":  ("POST",  "/api/purchase-requests",                        []),
+        "get_request":     ("GET",   "/api/purchase-requests/{request_id}",           ["request_id"]),
+        "update_request":  ("PATCH", "/api/purchase-requests/{request_id}",           ["request_id"]),
+        "send_rfq":        ("POST",  "/api/purchase-requests/{request_id}/send-rfq",  ["request_id"]),
+        "list_contracts":  ("GET",   "/api/compare",                                  []),
+        "create_contract": ("POST",  "/api/compare",                                  []),
+        "get_contract":    ("GET",   "/api/compare/{contract_id}",                    ["contract_id"]),
+        "update_contract": ("PATCH", "/api/compare/{contract_id}",                    ["contract_id"]),
     },
     "payments": {
-        "list_schedule":         ("GET",   "/api/payments",                          []),
-        "overdue":               ("GET",   "/api/payments/overdue",                  []),
-        "upcoming":              ("GET",   "/api/payments/upcoming",                 []),
-        "mark_paid":             ("POST",  "/api/payments/{schedule_id}/mark-paid",  ["schedule_id"]),
-        "create_schedule":       ("POST",  "/api/payments",                          []),
-        "schedule_from_invoice": ("POST",  "/api/payments/from-invoice",             []),
+        "list_schedule":         ("GET",   "/api/payment-schedules",                          []),
+        "overdue":               ("GET",   "/api/payment-schedules/overdue",                  []),
+        "upcoming":              ("GET",   "/api/payment-schedules/upcoming",                 []),
+        "mark_paid":             ("POST",  "/api/payment-schedules/{schedule_id}/mark-paid",  ["schedule_id"]),
+        "create_schedule":       ("POST",  "/api/payment-schedules",                          []),
+        "calendar":              ("GET",   "/api/calendar/upcoming",                          []),
     },
     "anomalies": {
         "list":        ("GET",   "/api/anomalies",                   []),
@@ -124,13 +124,13 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "update_canonical_item": ("PATCH", "/api/normalization/canonical/{item_id}",      ["item_id"]),
     },
     "workspace": {
-        "invoice_table":             ("POST", "/api/workspace/invoice-table",              []),
-        "invoice_items_table":       ("POST", "/api/workspace/invoice-items-table",        []),
-        "invoice_items_grouped":     ("POST", "/api/workspace/invoice-items-grouped",      []),
-        "invoice_items_by_supplier": ("POST", "/api/workspace/invoice-items-by-supplier",  []),
-        "general":                   ("POST", "/api/workspace/agent/generated/general",    []),
-        "supplier_lookup":           ("POST", "/api/workspace/agent/generated/supplier_lookup", []),
-        "verify":                    ("POST", "/api/workspace/verify",                     []),
+        "invoice_table":             ("POST", "/api/workspace/agent/invoices/table",               []),
+        "invoice_items_table":       ("POST", "/api/workspace/agent/invoices/items-table",         []),
+        "invoice_items_grouped":     ("POST", "/api/workspace/agent/invoices/items-grouped-table", []),
+        "invoice_items_by_supplier": ("POST", "/api/workspace/agent/invoices/items-by-supplier-table", []),
+        "general":                   ("POST", "/api/workspace/agent/generated/general",            []),
+        "supplier_lookup":           ("POST", "/api/workspace/agent/generated/supplier_lookup",    []),
+        "verify":                    ("POST", "/api/workspace/agent/verify-block",                 []),
     },
     "search": {
         "hybrid":     ("POST", "/api/search/hybrid",       []),
@@ -245,7 +245,11 @@ async def _proxy(
 
         if resp.status_code < 400:
             try:
-                return resp.json()
+                data = resp.json()
+                # Normalise bare list responses to {"items": [...], "total": N}
+                if isinstance(data, list):
+                    return {"items": data, "total": len(data)}
+                return data
             except Exception:
                 return {"text": resp.text[:2000]}
         return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
