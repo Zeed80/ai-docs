@@ -1,0 +1,424 @@
+version: 2
+mode: capabilities
+
+# Capability registry — 15 broad tools the agent uses to accomplish tasks.
+# Each capability covers a domain; the agent picks action + context.
+# Backend dispatcher at /api/agent/cap/{name} routes to the real endpoint.
+
+capabilities:
+
+  - name: documents
+    description: >
+      Работа с документами: загрузить файл, найти по фильтрам или запросу,
+      просмотреть, классифицировать тип, извлечь структурированные данные,
+      суммаризировать, обновить, удалить, добавить зависимости или ссылки.
+      Используй для любых операций с файлами, актами, накладными, чертежами,
+      спецификациями, НТД, письмами как файлами.
+    path: /api/agent/cap/documents
+    method: POST
+    gate_actions: [delete, bulk_delete]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list | get | search | ingest | classify | extract | summarize | update | delete | bulk_delete | link"
+        document_id:
+          type: string
+          description: "ID документа (для get, classify, extract, summarize, update, delete, link)"
+        query:
+          type: string
+          description: "Текст поиска или фильтрации"
+        filters:
+          type: object
+          description: "Фильтры: status, doc_type, supplier_id, date_from, date_to, limit, offset"
+        body:
+          type: object
+          description: "Дополнительные данные (для update, ingest, link)"
+      required: [action]
+
+  - name: invoices
+    description: >
+      Работа со счетами: найти по поставщику, дате, статусу; получить детали;
+      проверить арифметику; сравнить цены с историей поставщика; утвердить
+      или отклонить [GATE]; экспортировать в Excel или 1С [GATE для 1С].
+      Используй для всех операций с входящими и исходящими счетами.
+    path: /api/agent/cap/invoices
+    method: POST
+    gate_actions: [approve, reject, export_1c, bulk_delete]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list | get | validate | approve | reject | compare_prices | export_excel | export_1c | update | delete | bulk_delete"
+        invoice_id:
+          type: string
+          description: "ID счёта (для get, validate, approve, reject, compare_prices, export, update, delete)"
+        filters:
+          type: object
+          description: "Фильтры для list: supplier_id, status, date_from, date_to, amount_min, amount_max, limit, offset"
+        body:
+          type: object
+          description: "Данные подтверждения (для approve, reject: reason, comment)"
+      required: [action]
+
+  - name: suppliers
+    description: >
+      Всё о поставщиках: список, профиль, trust score, история цен,
+      алерты о рисках, реквизиты, обновление данных, поиск по названию/ИНН.
+      Используй для анализа надёжности, истории взаимоотношений, сравнения.
+    path: /api/agent/cap/suppliers
+    method: POST
+    gate_actions: []
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list | get | search | price_history | trust_score | alerts | update | check_requisites"
+        supplier_id:
+          type: string
+          description: "ID поставщика (для get, price_history, trust_score, alerts, update, check_requisites)"
+        query:
+          type: string
+          description: "Поисковый запрос (для search, list)"
+        filters:
+          type: object
+          description: "Фильтры: name, inn, status, trust_min, limit"
+        body:
+          type: object
+          description: "Данные для update"
+      required: [action]
+
+  - name: warehouse
+    description: >
+      Складские операции: остатки ТМЦ, позиции ниже минимума, приходные
+      ордера, движение товаров, выдача, корректировка, подтверждение прихода
+      [GATE]. Используй для складского учёта и управления запасами.
+    path: /api/agent/cap/warehouse
+    method: POST
+    gate_actions: [confirm_receipt, issue_stock, delete_item, bulk_confirm]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list_inventory | get_item | low_stock | create_receipt | confirm_receipt | issue_stock | adjust_stock | list_receipts | get_receipt | list_movements | create_item | update_item | delete_item"
+        item_id:
+          type: string
+          description: "ID позиции на складе"
+        receipt_id:
+          type: string
+          description: "ID приходного ордера"
+        filters:
+          type: object
+          description: "Фильтры: category, below_min, supplier_id, date_from, date_to, limit"
+        body:
+          type: object
+          description: "Данные для create_receipt, issue_stock, adjust_stock, create_item, update_item"
+      required: [action]
+
+  - name: email
+    description: >
+      Работа с электронной почтой: входящие письма, поиск переписки,
+      просмотр треда, создание черновика, отправка письма [GATE],
+      шаблоны, стилизация, подбор шаблона. Используй для всей работы
+      с почтой и деловой перепиской.
+    path: /api/agent/cap/email
+    method: POST
+    gate_actions: [send, delete_template]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list | search | get | draft | send | fetch_new | risk_check | list_templates | get_template | render_template | suggest_template | style_match"
+        thread_id:
+          type: string
+          description: "ID треда/письма"
+        draft_id:
+          type: string
+          description: "ID черновика (для send, risk_check)"
+        template_id:
+          type: string
+          description: "ID шаблона"
+        query:
+          type: string
+          description: "Поисковый запрос"
+        filters:
+          type: object
+          description: "Фильтры: mailbox_id, supplier_id, date_from, unread, limit"
+        body:
+          type: object
+          description: "Данные для draft: to, subject, body, supplier_id, invoice_id, template_id"
+      required: [action]
+
+  - name: procurement
+    description: >
+      Закупочная деятельность: заявки на закупку, запросы коммерческих
+      предложений (КП) поставщикам [GATE для отправки], контракты,
+      сравнение КП. Используй для управления закупочным процессом.
+    path: /api/agent/cap/procurement
+    method: POST
+    gate_actions: [send_rfq, create_contract]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list_requests | create_request | get_request | update_request | send_rfq | list_contracts | create_contract | get_contract | update_contract"
+        request_id:
+          type: string
+          description: "ID заявки на закупку"
+        contract_id:
+          type: string
+          description: "ID контракта"
+        filters:
+          type: object
+          description: "Фильтры: status, supplier_id, date_from, date_to, limit"
+        body:
+          type: object
+          description: "Данные для create/update"
+      required: [action]
+
+  - name: payments
+    description: >
+      Платёжный учёт: платёжный календарь, просроченные платежи,
+      предстоящие оплаты, отметить как оплачено [GATE], создать
+      график оплат по счёту. Используй для контроля финансовых обязательств.
+    path: /api/agent/cap/payments
+    method: POST
+    gate_actions: [mark_paid]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list_schedule | overdue | upcoming | mark_paid | create_schedule | schedule_from_invoice"
+        schedule_id:
+          type: string
+          description: "ID строки платёжного графика"
+        invoice_id:
+          type: string
+          description: "ID счёта (для schedule_from_invoice)"
+        filters:
+          type: object
+          description: "Фильтры: date_from, date_to, supplier_id, overdue_only, limit"
+        body:
+          type: object
+          description: "Данные для create_schedule, mark_paid"
+      required: [action]
+
+  - name: anomalies
+    description: >
+      Работа с аномалиями: список карточек аномалий, проверить все счета
+      на аномалии, объяснить аномалию, разрешить аномалию [GATE].
+      Используй для контроля качества данных и выявления расхождений.
+    path: /api/agent/cap/anomalies
+    method: POST
+    gate_actions: [resolve]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list | check_all | explain | resolve | create_card"
+        anomaly_id:
+          type: string
+          description: "ID аномалии или карточки"
+        invoice_id:
+          type: string
+          description: "ID счёта для проверки"
+        body:
+          type: object
+          description: "Данные для resolve, create_card"
+      required: [action]
+
+  - name: normalization
+    description: >
+      Нормализация номенклатуры: справочник позиций (CanonicalItem),
+      нормкарточки, правила нормализации, ОКПД2/ГОСТ классификация,
+      предложить и активировать правило [GATE для активации].
+      Используй для стандартизации наименований ТМЦ.
+    path: /api/agent/cap/normalization
+    method: POST
+    gate_actions: [activate_rule, apply_rules]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list_rules | suggest_rule | activate_rule | apply_rules | list_norm_cards | create_norm_card | update_norm_card | list_canonical_items | get_canonical_item | update_canonical_item"
+        rule_id:
+          type: string
+          description: "ID правила нормализации"
+        item_id:
+          type: string
+          description: "ID позиции или нормкарточки"
+        query:
+          type: string
+          description: "Текст для поиска или предложения правила"
+        body:
+          type: object
+          description: "Данные для create/update/activate"
+      required: [action]
+
+  - name: workspace
+    description: >
+      Рабочий стол (Workspace): публикация таблиц, списков, документов,
+      графиков, ссылок в интерактивную рабочую область пользователя.
+      Используй для вывода структурированных данных — таблиц счетов,
+      товаров по поставщикам, произвольных таблиц и блоков.
+    path: /api/agent/cap/workspace
+    method: POST
+    gate_actions: []
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "invoice_table | invoice_items_table | invoice_items_grouped | invoice_items_by_supplier | general | supplier_lookup | verify"
+        canvas_id:
+          type: string
+          description: "ID canvas-блока (генерируется автоматически если не указан)"
+        filters:
+          type: object
+          description: "Фильтры для таблиц: supplier_id, status, date_from, date_to, limit"
+        body:
+          type: object
+          description: "Данные для general: title, columns, rows, block_type"
+      required: [action]
+
+  - name: search
+    description: >
+      Семантический и полнотекстовый поиск по всем данным системы:
+      документам, счетам, памяти агента, поставщикам. Используй когда
+      нужно найти что-то по смыслу запроса, а не по точным фильтрам.
+      Также преобразует естественный язык в SQL-запросы.
+    path: /api/agent/cap/search
+    method: POST
+    gate_actions: []
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "hybrid | nl | nl_to_query | explain"
+        query:
+          type: string
+          description: "Поисковый запрос на естественном языке"
+        filters:
+          type: object
+          description: "Ограничения поиска: entity_type, date_from, date_to, limit, top_k"
+      required: [action, query]
+
+  - name: memory
+    description: >
+      Память агента: поиск по сохранённым фактам и историческим данным,
+      объяснение с доказательствами из документов, перестройка индекса.
+      Используй для нахождения контекста из прошлых взаимодействий.
+    path: /api/agent/cap/memory
+    method: POST
+    gate_actions: []
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "search | explain | reindex | embeddings_stats"
+        query:
+          type: string
+          description: "Запрос для поиска или объяснения"
+        body:
+          type: object
+          description: "Параметры для reindex: document_ids, force"
+      required: [action]
+
+  - name: tech
+    description: >
+      Технологический учёт: производственные процессы, технологические
+      маршруты, нормы времени, ресурсы (станки, инструменты), BOM
+      (спецификация изделия), НТД (нормативно-техническая документация),
+      проверка наличия материалов по BOM. Самообучение через запись
+      поправок и активацию правил [GATE для approve/activate].
+    path: /api/agent/cap/tech
+    method: POST
+    gate_actions: [process_plan_approve, norm_estimate_approve, learning_rule_activate, bom_approve]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: >
+            process_plan_list | process_plan_get | process_plan_create |
+            process_plan_validate | process_plan_approve |
+            operation_add | operation_template_list |
+            norm_estimate_create | norm_estimate_suggest | norm_estimate_approve |
+            resource_list | resource_create |
+            bom_list | bom_get | bom_create | bom_update | bom_approve |
+            bom_stock_check | bom_purchase_request |
+            ntd_list | ntd_get | ntd_run_check | ntd_findings |
+            learning_suggest | learning_rule_list | learning_rule_create |
+            learning_rule_activate | correction_record
+        entity_id:
+          type: string
+          description: "ID сущности (плана, нормы, BOM, ресурса, правила)"
+        filters:
+          type: object
+          description: "Фильтры: status, doc_type, limit"
+        body:
+          type: object
+          description: "Данные для create/update/approve/correction"
+      required: [action]
+
+  - name: analytics
+    description: >
+      Аналитика и отчётность: дашборд сегодняшнего дня, таблицы по
+      произвольным данным, экспорт в Excel, импорт из Excel, сравнение
+      коммерческих предложений, коллекции документов, платёжный календарь.
+    path: /api/agent/cap/analytics
+    method: POST
+    gate_actions: [table_apply_diff, table_import_excel, export_1c]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: >
+            dashboard_today | table_query | table_export_excel | table_export_1c |
+            table_import_excel | table_apply_diff | table_inline_edit |
+            table_list_views | table_create_view |
+            compare_list | compare_create | compare_get | compare_decide | compare_summary |
+            collection_list | collection_create | collection_get | collection_summarize |
+            calendar_events | calendar_upcoming | calendar_create_reminder | calendar_extract_dates
+        entity_id:
+          type: string
+          description: "ID таблицы, сравнения, коллекции, события"
+        filters:
+          type: object
+          description: "Фильтры и параметры запроса"
+        body:
+          type: object
+          description: "Данные для create/update/import"
+      required: [action]
+
+  - name: agent_control
+    description: >
+      Управление агентом: создание задач для AI-отдела, предложение новых
+      capabilities когда текущих не хватает, статус автономии и плагинов,
+      проверка статуса approval-запросов. Используй когда запрос выходит
+      за рамки существующих capabilities или нужна фоновая задача.
+    path: /api/agent/cap/agent_control
+    method: POST
+    gate_actions: []
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "task_create | capability_propose | capability_status | approval_list | approval_status | config_status"
+        body:
+          type: object
+          description: "Данные для task_create: title, description, skills; для capability_propose: name, description, gap"
+      required: [action]

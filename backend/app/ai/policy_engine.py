@@ -26,6 +26,10 @@ PROTECTED_SETTINGS = {
 }
 
 EXTERNAL_SKILL_PREFIXES = ("email.", "telegram.", "export.", "procurement.")
+
+# Markers that indicate a high-risk legacy registry skill (dot-separated names).
+# Capability-mode tools (no dots) have their gate_actions handled by agent_loop
+# directly from capabilities.yml, so these markers only apply to registry tools.
 DESTRUCTIVE_SKILL_MARKERS = (
     ".delete",
     ".bulk_delete",
@@ -53,6 +57,9 @@ def is_protected_setting(setting_path: str) -> bool:
 
 
 def classify_skill_risk(skill_name: str) -> str:
+    # Capability-mode tools have no dot — risk is handled via gate_actions in capabilities.yml.
+    if "." not in skill_name and not skill_name.startswith(EXTERNAL_SKILL_PREFIXES):
+        return "low"
     if any(marker in skill_name for marker in DESTRUCTIVE_SKILL_MARKERS):
         return "high"
     if skill_name.startswith(EXTERNAL_SKILL_PREFIXES):

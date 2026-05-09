@@ -26,18 +26,27 @@ logger = structlog.get_logger()
 # Large lists (invoices, inventory, etc.) can easily hit 100k+ chars which
 # triggers unnecessary context compression. Keep enough for the model to
 # extract counts, statuses and a sample of items.
-_MAX_TOOL_RESULT_CHARS = 8000
+_MAX_TOOL_RESULT_CHARS = 10000
 # Number of list items to keep in the sample shown to the LLM.
-_TOOL_RESULT_SAMPLE_ITEMS = 10
+_TOOL_RESULT_SAMPLE_ITEMS = 15
+# Minimum items to always keep regardless of size.
+_TOOL_RESULT_MIN_ITEMS = 3
+
+# Heavy fields that can be stripped from items to reduce size.
+_HEAVY_ITEM_FIELDS = {
+    "description", "notes", "raw_text", "content", "body",
+    "user_notes", "address", "comment", "history",
+}
 
 
 def _trim_tool_result(content: str) -> str:
     """Trim large tool result to fit within _MAX_TOOL_RESULT_CHARS.
 
-    For JSON list responses (dict with an 'items', 'results', or 'hits' key),
-    keeps metadata fields (total, page, etc.) and a short item sample so the
-    LLM always sees the true count rather than a truncated JSON blob.
-    Iteratively reduces the sample until the result fits the limit.
+    Strategy:
+    1. Try progressively smaller samples (15 → 10 → 5 → min).
+    2. If still over limit, strip heavy text fields from items.
+    3. Never go below _TOOL_RESULT_MIN_ITEMS — model needs data to answer.
+    4. Fallback: hard-truncate the string.
     """
     if len(content) <= _MAX_TOOL_RESULT_CHARS:
         return content
@@ -49,18 +58,35 @@ def _trim_tool_result(content: str) -> str:
                 items = data.get(list_key) or []
                 total = data.get("total", len(items))
                 meta = {k: v for k, v in data.items() if k != list_key}
-                # Iteratively reduce sample until it fits
-                for n in (_TOOL_RESULT_SAMPLE_ITEMS, 5, 3, 1, 0):
-                    sample = items[:n]
+
+                def _build(sample: list, strip_heavy: bool = False) -> str:
+                    if strip_heavy:
+                        sample = [
+                            {k: v for k, v in item.items() if k not in _HEAVY_ITEM_FIELDS}
+                            if isinstance(item, dict) else item
+                            for item in sample
+                        ]
                     candidate = {**meta, list_key: sample}
                     candidate["_note"] = (
-                        f"[total={total} (полное количество). "
-                        f"Показан sample из {len(sample)} эл. "
+                        f"[total={total}. Показано {len(sample)} из {len(items)}. "
                         f"Один вызов достаточен.]"
                     )
-                    result = json.dumps(candidate, ensure_ascii=False)
+                    return json.dumps(candidate, ensure_ascii=False)
+
+                # Try progressively smaller samples (never below min)
+                for n in (_TOOL_RESULT_SAMPLE_ITEMS, 10, 5, _TOOL_RESULT_MIN_ITEMS):
+                    if n > len(items):
+                        continue
+                    result = _build(items[:n])
                     if len(result) <= _MAX_TOOL_RESULT_CHARS:
                         return result
+
+                # Try stripping heavy fields from min-item sample
+                result = _build(items[:_TOOL_RESULT_MIN_ITEMS], strip_heavy=True)
+                if len(result) <= _MAX_TOOL_RESULT_CHARS:
+                    return result
+
+                # If even 3 stripped items are too big, fall through to truncation
     except (json.JSONDecodeError, TypeError, StopIteration):
         pass
     return content[:_MAX_TOOL_RESULT_CHARS] + f"\n...[truncated — original {len(content)} chars]"
@@ -380,60 +406,15 @@ def _sanitize_name(name: str) -> str:
     return name.replace(".", "__")
 
 
-# Core tools always included regardless of domain
-_CORE_TOOL_PREFIXES = {"memory", "canvas", "workspace", "capability", "search", "dashboard"}
-
-# Keyword → tool category prefixes
-_DOMAIN_KEYWORDS: list[tuple[list[str], set[str]]] = [
-    (["счёт", "счет", "invoice", "документ", "doc", "накладная", "акт"], {"invoice", "doc", "approval", "table", "anomaly"}),
-    (["склад", "товар", "фрез", "деталь", "матери", "запас", "остат", "инвентар"], {"warehouse", "ntd"}),
-    (["поставщик", "supplier", "вендор", "контраг"], {"supplier", "compare", "procurement"}),
-    (["письмо", "email", "почта", "письм", "ящик", "mailbox"], {"email", "mailbox", "supplier"}),
-    (["аномал", "ошибка", "расхожд", "нарушен"], {"anomaly", "invoice", "doc"}),
-    (["закупка", "кп", "запрос", "коммерч"], {"procurement", "compare", "supplier"}),
-    (["платёж", "оплат", "платеж", "задолж", "долг"], {"payment", "calendar", "invoice"}),
-    (["норм", "нормати", "гост", "окпд"], {"norm", "ntd", "collection"}),
-    (["чертёж", "чертеж", "техн", "изделие", "сборк"], {"tech", "ntd", "norm", "bom"}),
-    (["спецификац", "bom", "состав", "комплект"], {"bom", "tech", "warehouse"}),
-    (["граф", "отчёт", "отчет", "дашборд", "сводк"], {"graph", "dashboard", "table"}),
-    (["задача", "расписан", "крон", "плагин"], {"task", "config"}),
-    (["карточка", "коллекция", "collection"], {"collection", "doc"}),
-    (["сравн", "compare", "ценов", "предложен"], {"compare", "supplier", "procurement"}),
-]
-
-
-def _select_tools_for_turn(tools: list[dict], messages: list[dict]) -> list[dict]:
-    """Filter tool list to relevant domain tools to reduce context size."""
-    if len(tools) <= 40:
-        return tools  # small enough, no filtering needed
-
-    # Build text to match against from last 3 user messages
-    recent_text = " ".join(
-        str(m.get("content", "")).lower()
-        for m in messages[-6:]
-        if m.get("role") == "user"
-    )
-
-    selected_prefixes: set[str] = set(_CORE_TOOL_PREFIXES)
-    for keywords, prefixes in _DOMAIN_KEYWORDS:
-        if any(kw in recent_text for kw in keywords):
-            selected_prefixes.update(prefixes)
-
-    if not selected_prefixes - _CORE_TOOL_PREFIXES:
-        # No domain detected — include invoice + doc as default
-        selected_prefixes.update({"invoice", "doc", "approval", "anomaly", "table"})
-
-    filtered = [
-        t for t in tools
-        if t.get("function", {}).get("name", "").split("__")[0] in selected_prefixes
-    ]
-    return filtered if len(filtered) >= 5 else tools
+# Gate actions map for capabilities mode: capability_name → set of gate actions.
+# Populated by _load_capabilities() and checked in _execute_single_tool().
+_CAPABILITY_GATE_ACTIONS: dict[str, set[str]] = {}
 
 
 def _registry_mtime() -> float:
-    """Return mtime of the skill registry file, or 0.0 if missing."""
+    """Return mtime of the active skills file (capabilities or registry), or 0.0."""
     try:
-        return gateway_config.registry_path.stat().st_mtime
+        return gateway_config.active_skills_path.stat().st_mtime
     except Exception:
         return 0.0
 
@@ -460,14 +441,81 @@ def reload_all_sessions() -> int:
     return count
 
 
+def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
+    """Load capabilities.yml — broad capability tools for the agent.
+
+    Each capability maps to POST /api/agent/cap/{name}. The agent supplies
+    an `action` field; the backend dispatcher routes to the real endpoint.
+    """
+    global _CAPABILITY_GATE_ACTIONS
+    cap_path = gateway_config.capabilities_path
+    if not cap_path.exists():
+        logger.warning("capabilities_not_found", path=str(cap_path))
+        return [], {}
+
+    data = yaml.safe_load(cap_path.read_text())
+    caps: list[dict] = data.get("capabilities") or []
+
+    tools: list[dict] = []
+    skill_map: dict[str, dict] = {}
+    gate_actions: dict[str, set[str]] = {}
+
+    for cap in caps:
+        name = cap.get("name", "")
+        if not name:
+            continue
+
+        params_schema = cap.get("parameters") or {}
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+
+        if params_schema.get("properties"):
+            for k, v in params_schema["properties"].items():
+                properties[k] = {kk: vv for kk, vv in v.items() if kk not in ("title",)}
+        if params_schema.get("required"):
+            required = list(params_schema["required"])
+
+        fn_name = _sanitize_name(name)
+        description = (cap.get("description") or name).strip()
+
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": fn_name,
+                "description": description[:500],
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                },
+            },
+        })
+        skill_entry = {
+            "name": name,
+            "method": cap.get("method", "POST"),
+            "path": cap.get("path", f"/api/agent/cap/{name}"),
+            "gate_actions": cap.get("gate_actions") or [],
+        }
+        skill_map[fn_name] = skill_entry
+        if cap.get("gate_actions"):
+            gate_actions[name] = set(cap["gate_actions"])
+
+    _CAPABILITY_GATE_ACTIONS = gate_actions
+    logger.info("capabilities_loaded", count=len(tools))
+    return tools, skill_map
+
+
 def _load_registry(
     expose_filter: set[str] | None = None,
 ) -> tuple[list[dict], dict[str, dict]]:
-    """Load skills from YAML registry.
+    """Load skills from YAML registry (legacy mode — used by scenarios and fallback).
+
+    In capabilities mode this is bypassed for the chat agent but still used
+    by the scenario runner which needs direct endpoint access.
 
     Args:
         expose_filter: if given, only skills in this set are included.
-                       Pass None to load ALL skills (used by scenario runner).
+                       Pass None to load ALL skills.
     Returns:
         (openai_tools_list, sanitized_name → skill_dict)
     """
@@ -496,7 +544,6 @@ def _load_registry(
             properties[pp] = {"type": "string", "description": f"ID: {pp}"}
             required.append(pp)
 
-        # Handle OpenAPI-style parameters.properties dict
         if params_schema.get("properties"):
             for k, v in params_schema["properties"].items():
                 if k not in properties:
@@ -507,7 +554,6 @@ def _load_registry(
                 if r not in required:
                     required.append(r)
 
-        # Handle registry-style body_params / query_params lists
         _type_map = {"string": "string", "str": "string", "int": "integer",
                      "integer": "integer", "float": "number", "number": "number",
                      "bool": "boolean", "boolean": "boolean", "object": "object",
@@ -544,6 +590,19 @@ def _load_registry(
         skill_map[fn_name] = skill
 
     return tools, skill_map
+
+
+def _load_agent_skills(
+    expose_filter: set[str] | None = None,
+) -> tuple[list[dict], dict[str, dict]]:
+    """Load skills for the chat agent.
+
+    In capabilities mode: loads capabilities.yml (15 broad tools).
+    In registry mode: loads _registry.yml filtered by expose_filter.
+    """
+    if gateway_config.skills_mode == "capabilities":
+        return _load_capabilities()
+    return _load_registry(expose_filter)
 
 
 def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
@@ -1189,9 +1248,8 @@ class AgentSession:
 
     def reload_skills(self) -> None:
         """Hot-reload skill map from registry — used by CapabilityBuilder after new skill creation."""
-        self._tools, self._skill_map = _load_registry(
-            expose_filter=set(self._config.exposed_skills) or None
-        )
+        exposed = set(self._config.exposed_skills)
+        self._tools, self._skill_map = _load_agent_skills(expose_filter=exposed if exposed else None)
         self._registry_mtime = _registry_mtime()
         logger.info(
             "agent_session_skills_reloaded",
@@ -1263,9 +1321,7 @@ class AgentSession:
         """Rebuild tools/system/dependencies when runtime agent config changes."""
         self._config = config
         exposed = set(self._config.exposed_skills)
-        self._tools, self._skill_map = _load_registry(
-            expose_filter=exposed if exposed else None
-        )
+        self._tools, self._skill_map = _load_agent_skills(expose_filter=exposed if exposed else None)
         self._system = _load_system_prompt(self._config)
         self._approval_gates = set(self._config.approval_gates)
 
@@ -1769,6 +1825,29 @@ class AgentSession:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
+    async def _inject_rating_hint(self) -> None:
+        """Append tool preference hint from rating history to the system message."""
+        try:
+            from app.ai.orchestrator_memory import build_tool_preference_hint
+            last_user = next(
+                (str(m.get("content", "")) for m in reversed(self.messages) if m.get("role") == "user"),
+                "",
+            )
+            if not last_user:
+                return
+            candidate_skills = list(self._skill_map.keys())
+            hint = build_tool_preference_hint(last_user, "general", candidate_skills)
+            if not hint:
+                return
+            # Find and update existing system message or append to first message
+            for msg in self.messages:
+                if msg.get("role") == "system":
+                    if hint not in str(msg.get("content", "")):
+                        msg["content"] = str(msg.get("content", "")) + f"\n\n{hint}"
+                    return
+        except Exception:
+            pass
+
     async def _run(self) -> None:
         try:
             if not self._config.enabled:
@@ -1779,6 +1858,7 @@ class AgentSession:
                 return
 
             await self._append_memory_context()
+            await self._inject_rating_hint()
 
             consecutive_empty_responses = 0
             for iteration in range(self._config.max_steps):
@@ -1810,10 +1890,9 @@ class AgentSession:
                     self._config,
                     self.messages,
                 )
-                turn_tools = _select_tools_for_turn(self._tools, self.messages)
                 message = await _call_provider_streaming(
                     self.messages,
-                    turn_tools,
+                    self._tools,
                     self._system,
                     self._config,
                     on_token,
@@ -1961,6 +2040,15 @@ class AgentSession:
         from app.ai.agent_config import get_builtin_agent_config as _get_latest_config
         from app.ai.policy_engine import check_tool_execution
         current_gates = set((_get_latest_config()).approval_gates)
+
+        # Capabilities mode: check gate_actions declared in capabilities.yml
+        cap_gate_actions = set()
+        if skill:
+            cap_gate_actions = set(skill.get("gate_actions") or [])
+        action_arg = args.get("action", "")
+        if action_arg and action_arg in cap_gate_actions:
+            current_gates.add(original_name)
+
         policy = check_tool_execution(
             skill_name=original_name,
             args=args,

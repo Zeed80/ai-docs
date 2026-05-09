@@ -19,6 +19,8 @@ backend:
   base_url: ${FASTAPI_URL:-http://localhost:8000}
   timeout: 30
 skills:
+  mode: capabilities
+  capabilities: ./skills/capabilities.yml
   registry: ./skills/_registry.yml
   exposed:
   - doc.ingest
@@ -245,35 +247,13 @@ skills:
   approval_gates:
   - invoice.approve
   - invoice.reject
-  - invoice.bulk_delete
-  - invoice.delete
   - email.send
-  - email.templates.delete
   - anomaly.resolve
-  - norm.activate_rule
-  - norm.apply_rules
-  - compare.decide
-  - warehouse.confirm_receipt
-  - warehouse.issue_stock
-  - warehouse.delete_item
+  - table.apply_diff
   - payment.mark_paid
   - procurement.send_rfq
-  - bom.approve
-  - bom.create_purchase_request
-  - tech.process_plan_approve
-  - tech.norm_estimate_approve
-  - tech.learning_rule_activate
-  - table.apply_diff
-  - table.import_excel
-  - doc.bulk_delete
-  - doc.batch_ntd_check
-  - ntd.norm_control_run
-  - ntd.norm_control_run_payload
-  - ntd.finding_decide
-  - ntd.control_settings_update
-  - mailbox.create
-  - mailbox.delete
-  - mailbox.test
+  - warehouse.confirm_receipt
+  - norm.activate_rule
 scenarios:
 - name: email_triage
   path: ./scenarios/email-triage.yml

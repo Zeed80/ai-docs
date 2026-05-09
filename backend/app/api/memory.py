@@ -1148,6 +1148,24 @@ async def rate_message(
         session_id=req.session_id,
     )
 
+    # Negative rating with comment → propose a learning rule for self-improvement
+    if req.rating == -1 and req.comment and req.tools_used:
+        try:
+            import httpx as _httpx
+            from app.ai.gateway_config import gateway_config as _gw
+            await _httpx.AsyncClient(timeout=5.0).post(
+                f"{_gw.backend_url}/api/technology/learning-rules",
+                json={
+                    "trigger_tools": req.tools_used,
+                    "observation": req.comment,
+                    "suggested_action": "review",
+                    "status": "proposed",
+                    "source": "user_rating",
+                },
+            )
+        except Exception:
+            pass
+
     return row
 
 

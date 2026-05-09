@@ -50,6 +50,7 @@ from app.api import (
     workspace_export,
 )
 from app.api import dynamic_skill_runner
+from app.api.capability_router import router as capability_router
 from app.config import settings
 from app.db.session import engine  # lazy proxy
 
@@ -194,6 +195,7 @@ def create_app() -> FastAPI:
     app.include_router(tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"])
     app.include_router(chat_sessions.router, prefix="/api/chat", tags=["chat"])
     app.include_router(dynamic_skill_runner.router, tags=["agent-generated"])
+    app.include_router(capability_router, prefix="/api/agent", tags=["capabilities"])
     app.include_router(health.router, tags=["health"])
 
     return app

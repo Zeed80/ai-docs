@@ -17,6 +17,7 @@ _AIAGENT_ROOT = Path(
 )
 _GATEWAY_PATH = _AIAGENT_ROOT / "config" / "gateway.yml"
 _REGISTRY_PATH = _AIAGENT_ROOT / "skills" / "_registry.yml"
+_CAPABILITIES_PATH = _AIAGENT_ROOT / "skills" / "capabilities.yml"
 _PROMPTS_DIR = _AIAGENT_ROOT / "prompts"
 _SCENARIOS_DIR = _AIAGENT_ROOT / "scenarios"
 
@@ -59,7 +60,26 @@ class GatewayConfig:
         return set(self._raw.get("skills", {}).get("approval_gates", []))
 
     @property
+    def skills_mode(self) -> str:
+        """'capabilities' or 'registry'. Determines which skill file the agent uses."""
+        return self._raw.get("skills", {}).get("mode", "registry")
+
+    @property
+    def capabilities_path(self) -> Path:
+        rel = self._raw.get("skills", {}).get("capabilities")
+        if rel:
+            return _AIAGENT_ROOT / rel.lstrip("./")
+        return _CAPABILITIES_PATH
+
+    @property
     def registry_path(self) -> Path:
+        return _REGISTRY_PATH
+
+    @property
+    def active_skills_path(self) -> Path:
+        """Returns capabilities.yml in capabilities mode, _registry.yml otherwise."""
+        if self.skills_mode == "capabilities" and self.capabilities_path.exists():
+            return self.capabilities_path
         return _REGISTRY_PATH
 
     # ── Models ────────────────────────────────────────────────────────────────
