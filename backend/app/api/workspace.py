@@ -392,6 +392,47 @@ async def publish_invoice_items_by_supplier_table(
     )
 
 
+class WorkspaceGeneralBlockRequest(BaseModel):
+    canvas_id: str = "agent:custom"
+    title: str
+    columns: list[dict[str, Any]]
+    rows: list[dict[str, Any]]
+    block_type: str = "table"
+
+
+@router.post("/agent/generated/general", response_model=WorkspaceToolResponse)
+async def publish_general_block(
+    payload: WorkspaceGeneralBlockRequest,
+) -> WorkspaceToolResponse:
+    """Skill: workspace.general — Publish any custom table or block to the Workspace.
+
+    Agent builds columns and rows from fetched data, then publishes here.
+    Re-publishing with the same canvas_id updates the existing block.
+    """
+    block = {
+        "id": payload.canvas_id,
+        "type": payload.block_type,
+        "title": payload.title,
+        "columns": payload.columns,
+        "rows": payload.rows,
+        "source": "workspace.general",
+    }
+    stored = upsert_workspace_block(payload.canvas_id, block)
+    await chat_bus.publish({
+        "type": "workspace.updated",
+        "canvas_id": payload.canvas_id,
+        "block": stored,
+    })
+    return WorkspaceToolResponse(
+        status="published",
+        canvas_id=payload.canvas_id,
+        total=len(payload.rows),
+        shown=len(payload.rows),
+        message=f"Опубликовал таблицу «{payload.title}»: {len(payload.rows)} строк.",
+        filters={},
+    )
+
+
 def _invoice_columns(*, include_delete: bool) -> list[dict[str, Any]]:
     columns: list[dict[str, Any]] = [
         {"key": "index", "header": "№", "type": "number", "width": 56},

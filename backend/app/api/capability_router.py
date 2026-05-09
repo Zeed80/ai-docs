@@ -131,6 +131,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "general":                   ("POST", "/api/workspace/agent/generated/general",            []),
         "supplier_lookup":           ("POST", "/api/workspace/agent/generated/supplier_lookup",    []),
         "verify":                    ("POST", "/api/workspace/agent/verify-block",                 []),
+        "get_block":                 ("GET",  "/api/workspace/blocks/{canvas_id}",                 ["canvas_id"]),
     },
     "search": {
         "hybrid":     ("POST", "/api/search/hybrid",       []),

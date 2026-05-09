@@ -285,9 +285,27 @@ capabilities:
       - invoice_items_table: детальная таблица (1 строка = 1 товарная позиция из счёта,
         много строк). Используй только для глубокого анализа конкретных товарных строк.
       - invoice_items_by_supplier: группировка по поставщикам.
-      - general: произвольная таблица или блок — передай title, columns, rows в body.
+      - general: произвольная таблица — сам строишь columns и rows и публикуешь.
+        body = {title, columns:[{key,header,type},...], rows:[{key:value,...},...], canvas_id}.
+        Для СОЗДАНИЯ таблицы по запросу пользователя: сначала получи данные (invoices:list,
+        suppliers:list и т.д.), затем сформируй columns и rows из ответа, опубликуй через general.
+        canvas_id по умолчанию "agent:custom" — используй одинаковый для обновления той же таблицы.
+      - get_block: прочитать существующий блок (canvas_id обязателен) — возвращает title,
+        columns, rows. Используй для РЕДАКТИРОВАНИЯ таблицы: get_block → изменить columns/rows →
+        опубликовать через general с тем же canvas_id.
       - supplier_lookup: таблица поставщиков.
       - verify: проверить что блок существует.
+
+      Workflow "создать таблицу по запросу":
+      1. Получи данные нужным capability (invoices:list, suppliers:list и т.д.)
+      2. Сформируй columns=[{key,header,type}] и rows=[{key:val}] из ответа
+      3. Вызови workspace:general с body={title, columns, rows, canvas_id:"agent:custom"}
+
+      Workflow "изменить таблицу" (добавить/удалить колонку, переименовать):
+      1. workspace:get_block с canvas_id текущей таблицы → получи columns и rows
+      2. Измени columns (добавь, удали или переименуй нужную)
+      3. Для новых колонок — дополни rows новыми значениями если нужны данные из другого API
+      4. workspace:general с body={title, columns, rows, canvas_id} — перезапишет тот же блок
     path: /api/agent/cap/workspace
     method: POST
     gate_actions: []
@@ -296,16 +314,16 @@ capabilities:
       properties:
         action:
           type: string
-          description: "invoice_table | invoice_items_grouped | invoice_items_table | invoice_items_by_supplier | general | supplier_lookup | verify"
+          description: "invoice_table | invoice_items_grouped | invoice_items_table | invoice_items_by_supplier | general | get_block | supplier_lookup | verify"
         canvas_id:
           type: string
-          description: "ID canvas-блока (генерируется автоматически если не указан)"
+          description: "ID canvas-блока. Для get_block и general (редактирование) — указывай явно. По умолчанию 'agent:custom'."
         filters:
           type: object
           description: "Фильтры для таблиц: supplier_id, status, date_from, date_to, limit"
         body:
           type: object
-          description: "Данные для general: title, columns, rows, block_type"
+          description: "Данные для general: {title, columns:[{key,header,type}], rows:[{key:val}], canvas_id, block_type}"
       required: [action]
 
   - name: search
