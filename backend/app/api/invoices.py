@@ -40,6 +40,10 @@ async def list_invoices(
     status: InvoiceStatus | None = None,
     supplier_id: uuid.UUID | None = None,
     search: str | None = None,
+    amount_min: float | None = None,
+    amount_max: float | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     offset: int = 0,
     limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
@@ -57,6 +61,22 @@ async def list_invoices(
         query = query.where(Invoice.supplier_id == supplier_id)
     if search:
         query = query.where(Invoice.invoice_number.ilike(f"%{search}%"))
+    if amount_min is not None:
+        query = query.where(Invoice.total_amount >= amount_min)
+    if amount_max is not None:
+        query = query.where(Invoice.total_amount <= amount_max)
+    if date_from:
+        from datetime import datetime
+        try:
+            query = query.where(Invoice.invoice_date >= datetime.fromisoformat(date_from))
+        except ValueError:
+            pass
+    if date_to:
+        from datetime import datetime
+        try:
+            query = query.where(Invoice.invoice_date <= datetime.fromisoformat(date_to))
+        except ValueError:
+            pass
 
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar() or 0

@@ -39,10 +39,13 @@ capabilities:
 
   - name: invoices
     description: >
-      Работа со счетами: найти по поставщику, дате, статусу; получить детали;
+      Работа со счетами: найти по поставщику, дате, статусу, сумме; получить детали;
       проверить арифметику; сравнить цены с историей поставщика; утвердить
       или отклонить [GATE]; экспортировать в Excel или 1С [GATE для 1С].
       Используй для всех операций с входящими и исходящими счетами.
+      Для фильтрации по сумме: filters={"amount_min": 50000} или {"amount_max": 10000}.
+      Для подсчёта счетов по статусу используй action=list с filters={"status": "approved"}.
+      Счёт можно утвердить только если его статус needs_review.
     path: /api/agent/cap/invoices
     method: POST
     gate_actions: [approve, reject, export_1c, bulk_delete]
@@ -94,8 +97,12 @@ capabilities:
   - name: warehouse
     description: >
       Складские операции: остатки ТМЦ, позиции ниже минимума, приходные
-      ордера, движение товаров, выдача, корректировка, подтверждение прихода
-      [GATE]. Используй для складского учёта и управления запасами.
+      ордера, движение товаров, выдача, корректировка.
+      Выдача материалов (issue_stock) [GATE] — требует item_id и quantity.
+      Подтверждение прихода (confirm_receipt) [GATE] — требует receipt_id.
+      Создание приходного ордера (create_receipt) — требует invoice_id из системы счетов.
+      Для поиска позиций используй action=list_inventory, затем item_id из результата.
+      Чтобы выдать материал: сначала list_inventory → получи item_id → issue_stock с body={quantity, reason}.
     path: /api/agent/cap/warehouse
     method: POST
     gate_actions: [confirm_receipt, issue_stock, delete_item, bulk_confirm]
@@ -107,16 +114,16 @@ capabilities:
           description: "list_inventory | get_item | low_stock | create_receipt | confirm_receipt | issue_stock | adjust_stock | list_receipts | get_receipt | list_movements | create_item | update_item | delete_item"
         item_id:
           type: string
-          description: "ID позиции на складе"
+          description: "ID позиции на складе (нужен для get_item, issue_stock, adjust_stock)"
         receipt_id:
           type: string
-          description: "ID приходного ордера"
+          description: "ID приходного ордера (нужен для confirm_receipt)"
         filters:
           type: object
-          description: "Фильтры: category, below_min, supplier_id, date_from, date_to, limit"
+          description: "Фильтры для list_inventory: search (текст в названии), category, below_min, limit (по умолч. 50)"
         body:
           type: object
-          description: "Данные для create_receipt, issue_stock, adjust_stock, create_item, update_item"
+          description: "Для issue_stock: {quantity: N, reason: 'причина'}. Для create_receipt: {invoice_id: 'uuid'}"
       required: [action]
 
   - name: email
@@ -373,9 +380,14 @@ capabilities:
 
   - name: analytics
     description: >
-      Аналитика и отчётность: дашборд сегодняшнего дня, таблицы по
-      произвольным данным, экспорт в Excel, импорт из Excel, сравнение
-      коммерческих предложений, коллекции документов, платёжный календарь.
+      Аналитика и отчётность: дашборд сегодняшнего дня (dashboard_today),
+      таблицы по произвольным данным (table_query), экспорт в Excel,
+      импорт из Excel, сравнение коммерческих предложений, коллекции
+      документов, платёжный календарь.
+      Используй dashboard_today для быстрой сводки — количество счетов,
+      суммы, статусы за сегодня.
+      Для агрегированных финансовых данных предпочитай invoices:list с
+      фильтрами, а не table_query (который работает с кастомными таблицами).
     path: /api/agent/cap/analytics
     method: POST
     gate_actions: [table_apply_diff, table_import_excel, export_1c]
