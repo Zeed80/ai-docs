@@ -416,8 +416,9 @@ def _invoice_items_grouped_columns(*, include_supplier: bool = False) -> list[di
         {"key": "index", "header": "№", "type": "number", "width": 56},
         {"key": "invoice_number", "header": "Номер счета", "type": "text"},
         {"key": "invoice_date", "header": "Дата счета", "type": "date"},
-        {"key": "items", "header": "Товары", "type": "text"},
-        {"key": "total_amount", "header": "Общая сумма счета", "type": "number"},
+        {"key": "items", "header": "Перечень товаров", "type": "text"},
+        {"key": "total_amount", "header": "Общая сумма", "type": "number"},
+        {"key": "notes", "header": "Примечание", "type": "text"},
     ]
     if include_supplier:
         columns.insert(1, {"key": "supplier", "header": "Поставщик", "type": "text"})
@@ -514,6 +515,7 @@ def _invoice_items_grouped_workspace_row(
         "invoice_date": _format_date(invoice.invoice_date),
         "items": "\n".join(line for line in item_lines if line),
         "total_amount": _format_money(invoice.total_amount),
+        "notes": invoice.notes or "",
     }
     if include_supplier:
         row["supplier"] = invoice.supplier.name if invoice.supplier else ""

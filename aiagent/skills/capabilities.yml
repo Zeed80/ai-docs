@@ -274,8 +274,20 @@ capabilities:
     description: >
       Рабочий стол (Workspace): публикация таблиц, списков, документов,
       графиков, ссылок в интерактивную рабочую область пользователя.
-      Используй для вывода структурированных данных — таблиц счетов,
-      товаров по поставщикам, произвольных таблиц и блоков.
+
+      Выбор action по задаче:
+      - invoice_table: список счетов (1 строка = 1 счёт, без детализации товаров).
+        Колонки: №, Номер счета, Дата, Поставщик, Сумма, Валюта, Статус.
+      - invoice_items_grouped: таблица счетов с товарами в одной ячейке через перенос строки
+        (1 строка = 1 счёт, перечень товаров виден прямо в таблице).
+        Колонки: №, Номер счета, Дата счета, Перечень товаров, Общая сумма, Примечание.
+        ИСПОЛЬЗУЙ ЭТОТ action когда просят "таблицу счетов с товарами/позициями/перечнем".
+      - invoice_items_table: детальная таблица (1 строка = 1 товарная позиция из счёта,
+        много строк). Используй только для глубокого анализа конкретных товарных строк.
+      - invoice_items_by_supplier: группировка по поставщикам.
+      - general: произвольная таблица или блок — передай title, columns, rows в body.
+      - supplier_lookup: таблица поставщиков.
+      - verify: проверить что блок существует.
     path: /api/agent/cap/workspace
     method: POST
     gate_actions: []
@@ -284,7 +296,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "invoice_table | invoice_items_table | invoice_items_grouped | invoice_items_by_supplier | general | supplier_lookup | verify"
+          description: "invoice_table | invoice_items_grouped | invoice_items_table | invoice_items_by_supplier | general | supplier_lookup | verify"
         canvas_id:
           type: string
           description: "ID canvas-блока (генерируется автоматически если не указан)"
