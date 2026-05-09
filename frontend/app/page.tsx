@@ -133,6 +133,50 @@ function ApprovalActions({
   );
 }
 
+function AnomalyActions({
+  item,
+  onDone,
+}: {
+  item: FeedItem;
+  onDone: () => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  async function resolve(resolution: "resolved" | "false_positive") {
+    setLoading(true);
+    await fetch(`${API}/api/anomalies/${item.id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolution }),
+    }).catch(() => {});
+    setLoading(false);
+    onDone();
+  }
+  return (
+    <div className="flex gap-2 mt-3">
+      <button
+        onClick={() => resolve("resolved")}
+        disabled={loading}
+        className="px-3 py-1.5 text-xs font-medium bg-green-700 hover:bg-green-600 text-white rounded transition-colors disabled:opacity-50"
+      >
+        Решить
+      </button>
+      <button
+        onClick={() => resolve("false_positive")}
+        disabled={loading}
+        className="px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors disabled:opacity-50"
+      >
+        Ложная
+      </button>
+      <Link
+        href="/anomalies"
+        className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-400 rounded transition-colors inline-block"
+      >
+        Все аномалии →
+      </Link>
+    </div>
+  );
+}
+
 function QuarantineActions({
   item,
   onDone,
@@ -303,14 +347,7 @@ export default function FeedPage() {
                         <QuarantineActions item={item} onDone={load} />
                       )}
                       {item.type === "anomaly" && (
-                        <div className="mt-3">
-                          <Link
-                            href={`/anomalies/${item.id}`}
-                            className="px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors inline-block"
-                          >
-                            Разобраться
-                          </Link>
-                        </div>
+                        <AnomalyActions item={item} onDone={load} />
                       )}
                     </div>
                   </div>

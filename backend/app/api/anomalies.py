@@ -341,6 +341,20 @@ async def list_anomalies(
     return result.scalars().all()
 
 
+@router.get("/{anomaly_id}", response_model=AnomalyCardOut)
+async def get_anomaly(
+    anomaly_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a single anomaly card by ID."""
+    result = await db.execute(select(AnomalyCard).where(AnomalyCard.id == anomaly_id))
+    card = result.scalar_one_or_none()
+    if card is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Anomaly not found")
+    return card
+
+
 # ── anomaly.resolve ────────────────────────────────────────────────────────
 
 
