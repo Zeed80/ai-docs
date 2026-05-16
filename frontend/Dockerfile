@@ -7,6 +7,9 @@ COPY package.json package-lock.json* ./
 RUN npm install --no-audit --no-fund
 
 FROM base AS builder
+# BACKEND_URL is needed at build time: Next.js standalone compiles rewrites() statically
+ARG BACKEND_URL=http://backend:8000
+ENV BACKEND_URL=$BACKEND_URL
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

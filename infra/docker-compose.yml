@@ -223,10 +223,13 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
+      args:
+        BACKEND_URL: http://backend:8000
     ports:
       - "3000:3000"
     environment:
       BACKEND_URL: http://backend:8000
+      INTERNAL_API_URL: http://backend:8000
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
       NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-}
     depends_on:
