@@ -400,6 +400,74 @@ class WorkspaceGeneralBlockRequest(BaseModel):
     block_type: str = "table"
 
 
+class WorkspaceSqlTableRequest(BaseModel):
+    canvas_id: str = "agent:sql-table"
+    task: str
+    limit: int = 200
+
+
+@router.post("/agent/generated/sql-table", response_model=WorkspaceToolResponse)
+async def publish_sql_table(
+    payload: WorkspaceSqlTableRequest,
+) -> WorkspaceToolResponse:
+    """Skill: workspace.sql_table — Build and publish a table using SQL-first pipeline.
+
+    LLM generates validated SQL from task description, result comes from real DB —
+    no hallucination. Use this instead of workspace.general when the agent needs
+    to display real data (invoices, suppliers, anomalies, etc.).
+    """
+    from app.ai.table_sql_pipeline import build_table_from_task
+    from app.ai.ollama_client import reasoning_generate
+
+    async def _generate(prompt: str, system: str) -> str:
+        return await reasoning_generate(prompt, system=system, format_json=False)
+
+    try:
+        block = await build_table_from_task(
+            task=payload.task,
+            limit=payload.limit,
+            generate_fn=_generate,
+        )
+    except Exception as exc:
+        return WorkspaceToolResponse(
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
+            message=f"Не удалось построить таблицу: {exc}",
+        )
+
+    if block.get("status") == "error":
+        return WorkspaceToolResponse(
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
+            message=block.get("message", "Ошибка построения таблицы"),
+        )
+
+    # build_table_from_task returns {"status": "ok", "data": <canvas_block>, "sql": ...}
+    canvas_block = block.get("data", block)
+    canvas_id = payload.canvas_id
+    canvas_block["id"] = canvas_id
+    stored = upsert_workspace_block(canvas_id, canvas_block)
+    await chat_bus.publish({
+        "type": "workspace.updated",
+        "canvas_id": canvas_id,
+        "block": stored,
+    })
+    row_count = len(canvas_block.get("rows", []))
+    title = canvas_block.get("title", "Таблица")
+    return WorkspaceToolResponse(
+        status="published",
+        canvas_id=canvas_id,
+        total=row_count,
+        shown=row_count,
+        message=f"Опубликовал таблицу «{title}»: {row_count} строк. SQL: {block.get('sql', '')[:120]}",
+        filters={},
+    )
+
+
 @router.post("/agent/generated/general", response_model=WorkspaceToolResponse)
 async def publish_general_block(
     payload: WorkspaceGeneralBlockRequest,

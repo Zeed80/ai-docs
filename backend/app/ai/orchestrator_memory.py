@@ -32,9 +32,8 @@ _MAX_INTENT_ENTRIES = 30
 def _redis():
     """Return a Redis client or None if unavailable."""
     try:
-        import redis as _r
-        from app.config import settings
-        return _r.from_url(settings.redis_url, decode_responses=True)
+        from app.utils.redis_client import get_sync_redis
+        return get_sync_redis()
     except Exception:
         return None
 

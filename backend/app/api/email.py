@@ -429,24 +429,15 @@ async def send_email(
     if blocking:
         raise HTTPException(400, f"Blocked by risk: {blocking[0]['message']}")
 
-    # TODO: actual SMTP sending via Celery task
-    # For now, mark as sent
-    draft.executed = True
-    draft.executed_at = datetime.now(timezone.utc)
-    data["status"] = "sent"
-    draft.draft_data = data
-
-    await log_action(
-        db,
-        action="email.send",
-        entity_type="email",
-        entity_id=draft.id,
-        details={"to": data.get("to_addresses"), "subject": data.get("subject")},
-    )
-    await db.commit()
-
-    logger.info("email_sent", draft_id=str(draft_id))
-    return {"status": "sent", "draft_id": str(draft_id)}
+    # Dispatch SMTP sending to Celery (non-blocking)
+    try:
+        from app.tasks.email_sender import send_email_draft
+        task = send_email_draft.delay(str(draft_id))
+        logger.info("email_send_queued", draft_id=str(draft_id), task_id=task.id)
+        return {"status": "queued", "draft_id": str(draft_id), "task_id": task.id}
+    except Exception as exc:
+        logger.error("email_send_dispatch_failed", draft_id=str(draft_id), error=str(exc))
+        raise HTTPException(status_code=500, detail="Failed to queue email sending")
 
 
 # ── email.suggest_template ─────────────────────────────────────────────────

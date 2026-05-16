@@ -1,8 +1,8 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useCallback, useEffect, useState } from "react";
-import { getApiBaseUrl } from "@/lib/api-base";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getApiBaseUrl, getWebSocketBaseUrl } from "@/lib/api-base";
 
 const API = getApiBaseUrl();
 
@@ -76,6 +76,17 @@ export default function InboxPage() {
 
   useEffect(() => {
     fetchDocuments();
+  }, [fetchDocuments]);
+
+  // Real-time: re-fetch when any notification arrives (document_ready, approval, etc.)
+  const wsRef = useRef<WebSocket | null>(null);
+  useEffect(() => {
+    const WS = getWebSocketBaseUrl();
+    const ws = new WebSocket(`${WS}/api/notifications/ws`);
+    wsRef.current = ws;
+    ws.onmessage = () => fetchDocuments();
+    ws.onerror = () => {};
+    return () => ws.close();
   }, [fetchDocuments]);
 
   const filters = ["all", "needs_review", "approved", "rejected"] as const;

@@ -3,9 +3,16 @@
     "agent:invoice-list": "workspace.invoice_table",
     "agent:invoice-items": "workspace.invoice_items_table",
     "agent:invoice-items-grouped": "workspace.invoice_items_grouped_table",
-    "agent:invoice-items-by-supplier": "workspace.invoice_items_by_supplier_table"
+    "agent:invoice-items-by-supplier": "workspace.invoice_items_by_supplier_table",
+    "agent:sql-table": "workspace.sql_table"
   },
   "skill_to_spec": {
+    "workspace.sql_table": {
+      "path": "/api/workspace/agent/generated/sql-table",
+      "default_args": {
+        "limit": 200
+      }
+    },
     "workspace.invoice_table": {
       "path": "/api/workspace/agent/invoices/table",
       "default_args": {
@@ -115,6 +122,14 @@
       "intent": "memory_search",
       "keywords": ["памят", "найди", "поиск", "источник"],
       "skills": ["memory.search", "memory.explain", "doc.search"]
+    },
+    {
+      "id": "general_table",
+      "role": "data_analyst",
+      "intent": "general_data",
+      "keywords": ["таблиц", "покажи", "выведи", "список", "отчёт", "отчет", "статистик"],
+      "skills": ["workspace.sql_table"],
+      "default_canvas": "agent:sql-table"
     }
   ],
   "supplier_grouping": {

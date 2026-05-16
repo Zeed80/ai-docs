@@ -616,6 +616,11 @@ class Approval(UUIDPrimaryKey, TimestampMixin, Base):
 
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Approval chain support
+    chain_order: Mapped[int | None] = mapped_column(Integer)
+    chain_root_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("approvals.id"), nullable=True)
+    requires_all: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
 
 # ── Draft Actions ────────────────────────────────────────────────────────────
 
@@ -656,6 +661,8 @@ class Handover(UUIDPrimaryKey, TimestampMixin, Base):
     from_user: Mapped[str] = mapped_column(String(100), nullable=False)
     to_user: Mapped[str] = mapped_column(String(100), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    # pending | accepted | forwarded | returned
 
 
 class Comment(UUIDPrimaryKey, TimestampMixin, Base):
@@ -2162,3 +2169,147 @@ class MessageRating(UUIDPrimaryKey, TimestampMixin, Base):
     tools_used: Mapped[list | None] = mapped_column(JSON)
     # list of skill/tool names used in the rated turn
     comment: Mapped[str | None] = mapped_column(String(500))
+
+
+# ── Users & API Keys ─────────────────────────────────────────────────────────
+
+
+class User(UUIDPrimaryKey, TimestampMixin, Base):
+    """Persisted user record — synced from JWT claims on each login."""
+
+    __tablename__ = "users"
+
+    sub: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    preferred_username: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    role: Mapped[str] = mapped_column(String(50), nullable=False, default="viewer")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    preferences: Mapped[dict | None] = mapped_column(JSON)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ApiKey(UUIDPrimaryKey, TimestampMixin, Base):
+    """Service-account API keys (SHA-256 of raw key stored, raw key shown once)."""
+
+    __tablename__ = "api_keys"
+
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    user_sub: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    scopes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ── Team Rooms (Chat) ─────────────────────────────────────────────────────────
+
+
+class RoomType(str, enum.Enum):
+    direct = "direct"    # 1-on-1 DM (auto-created on first interaction)
+    group  = "group"     # user-created group channel
+    system = "system"    # system notifications channel (read-only for members)
+
+
+class Room(UUIDPrimaryKey, TimestampMixin, Base):
+    """Team chat room — direct message or group channel."""
+
+    __tablename__ = "rooms"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    type: Mapped[RoomType] = mapped_column(String(20), nullable=False, default=RoomType.group)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    members: Mapped[list["RoomMember"]] = relationship(back_populates="room", cascade="all, delete-orphan")
+    messages: Mapped[list["RoomMessage"]] = relationship(back_populates="room", cascade="all, delete-orphan")
+
+
+class RoomMember(Base):
+    """Membership record — links a user to a room."""
+
+    __tablename__ = "room_members"
+
+    room_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("rooms.id"), nullable=False)
+    user_sub: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="member")  # owner | member
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    room: Mapped["Room"] = relationship(back_populates="members")
+
+    from sqlalchemy import PrimaryKeyConstraint
+    __table_args__ = (PrimaryKeyConstraint("room_id", "user_sub"),)
+
+
+class RoomMessage(UUIDPrimaryKey, Base):
+    """Single message in a room — text, file, action card, or system event."""
+
+    __tablename__ = "room_messages"
+
+    room_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("rooms.id"), nullable=False, index=True)
+    sender_sub: Mapped[str] = mapped_column(String(255), nullable=False)  # user sub or "sveta"
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    content_type: Mapped[str] = mapped_column(String(20), nullable=False, default="text")
+    # text | file | action | system
+    reply_to_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("room_messages.id"), nullable=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+    # For action messages: {entity_type, entity_id, action, approval_id, ...}
+    is_edited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    room: Mapped["Room"] = relationship(back_populates="messages")
+    attachments: Mapped[list["RoomMessageAttachment"]] = relationship(
+        back_populates="message", cascade="all, delete-orphan"
+    )
+
+
+class RoomMessageAttachment(UUIDPrimaryKey, Base):
+    """File attachment on a room message."""
+
+    __tablename__ = "room_message_attachments"
+
+    message_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("room_messages.id"), nullable=False, index=True)
+    file_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("documents.id"), nullable=True)
+    thumbnail_key: Mapped[str | None] = mapped_column(String(1000))
+    ingest_job_id: Mapped[str | None] = mapped_column(String(200))  # Celery task ID after OCR dispatch
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    message: Mapped["RoomMessage"] = relationship(back_populates="attachments")
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+
+class NotificationType(str, enum.Enum):
+    approval_assigned = "approval_assigned"
+    approval_decided  = "approval_decided"
+    mention           = "mention"
+    document_ready    = "document_ready"
+    handover          = "handover"
+    comment_reply     = "comment_reply"
+    anomaly_detected  = "anomaly_detected"
+    system            = "system"
+
+
+class Notification(UUIDPrimaryKey, Base):
+    """In-app notification for a specific user."""
+
+    __tablename__ = "notifications"
+
+    user_sub: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    type: Mapped[NotificationType] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_type: Mapped[str | None] = mapped_column(String(50))
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
+    action_url: Mapped[str | None] = mapped_column(String(500))
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

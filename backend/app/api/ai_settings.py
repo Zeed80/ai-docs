@@ -51,9 +51,8 @@ _DEFAULT_CONFIG = {
 def _redis_get_config() -> dict | None:
     """Read config from Redis (shared between backend and workers)."""
     try:
-        import redis as _redis
-        r = _redis.from_url(settings.redis_url, decode_responses=True)
-        raw = r.get(_REDIS_KEY)
+        from app.utils.redis_client import get_sync_redis
+        raw = get_sync_redis().get(_REDIS_KEY)
         if raw:
             return json.loads(raw)
     except Exception:
@@ -64,9 +63,8 @@ def _redis_get_config() -> dict | None:
 def _redis_set_config(cfg: dict) -> None:
     """Write config to Redis so all workers pick it up immediately."""
     try:
-        import redis as _redis
-        r = _redis.from_url(settings.redis_url, decode_responses=True)
-        r.set(_REDIS_KEY, json.dumps(cfg, ensure_ascii=False))
+        from app.utils.redis_client import get_sync_redis
+        get_sync_redis().set(_REDIS_KEY, json.dumps(cfg, ensure_ascii=False))
     except Exception as e:
         logger.warning("ai_config_redis_write_failed", error=str(e))
 

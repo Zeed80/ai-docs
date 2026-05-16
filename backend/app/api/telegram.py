@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import redis as _redis
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -31,20 +30,18 @@ _KEY_ENABLED = "telegram:config:notifications_enabled"
 
 # ── Redis helpers ─────────────────────────────────────────────────────────────
 
-def _redis_client() -> _redis.Redis:
-    return _redis.from_url(settings.redis_url, decode_responses=True)
-
-
 def _r_get(key: str) -> str:
     try:
-        return _redis_client().get(key) or ""
+        from app.utils.redis_client import get_sync_redis
+        return get_sync_redis().get(key) or ""
     except Exception:
         return ""
 
 
 def _r_set(key: str, value: str) -> None:
     try:
-        _redis_client().set(key, value)
+        from app.utils.redis_client import get_sync_redis
+        get_sync_redis().set(key, value)
     except Exception:
         pass
 

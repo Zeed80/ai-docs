@@ -158,15 +158,8 @@ def _default_config() -> BuiltinAgentConfig:
 
 def _redis_get_agent_config() -> dict | None:
     try:
-        import redis as _redis
-
-        from app.config import settings
-        r = _redis.from_url(
-            settings.redis_url,
-            decode_responses=True,
-            socket_connect_timeout=0.2,
-            socket_timeout=0.2,
-        )
+        from app.utils.redis_client import get_sync_redis
+        r = get_sync_redis()
         raw = r.get(_REDIS_KEY)
         if raw:
             return json.loads(raw)
@@ -177,15 +170,8 @@ def _redis_get_agent_config() -> dict | None:
 
 def _redis_set_agent_config(data: dict) -> None:
     try:
-        import redis as _redis
-
-        from app.config import settings
-        r = _redis.from_url(
-            settings.redis_url,
-            decode_responses=True,
-            socket_connect_timeout=0.2,
-            socket_timeout=0.2,
-        )
+        from app.utils.redis_client import get_sync_redis
+        r = get_sync_redis()
         r.set(_REDIS_KEY, json.dumps(data, ensure_ascii=False))
     except Exception:
         pass

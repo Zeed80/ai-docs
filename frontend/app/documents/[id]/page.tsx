@@ -2,12 +2,26 @@
 
 import { getApiBaseUrl } from "@/lib/api-base";
 import { documents as docsApi } from "@/lib/api-client";
+import { ForwardModal } from "@/components/documents/forward-modal";
+import { ShareToChatModal } from "@/components/documents/share-to-chat-modal";
 import { PdfViewer } from "@/components/review/pdf-viewer";
+import { CommentThread } from "@/components/review/comment-thread";
 import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 const API = getApiBaseUrl();
+
+interface HandoverItem {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  to_user: string;
+  to_user_name?: string;
+  comment?: string;
+  status: string;
+  created_at: string;
+}
 
 interface DocumentDetail {
   id: string;
@@ -53,6 +67,11 @@ export default function DocumentPage() {
   const [saving, setSaving] = useState(false);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const [showForwardModal, setShowForwardModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [pendingHandover, setPendingHandover] = useState<HandoverItem | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!params.id) return;
@@ -64,6 +83,22 @@ export default function DocumentPage() {
       .then(setDoc)
       .catch(() => setDoc(null))
       .finally(() => setLoading(false));
+  }, [params.id]);
+
+  useEffect(() => {
+    if (!params.id) return;
+    fetch(`${API}/api/handovers/outbox`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((items: HandoverItem[]) => {
+        const match = items.find(
+          (h) =>
+            h.entity_id === params.id &&
+            h.entity_type === "document" &&
+            h.status === "pending",
+        );
+        setPendingHandover(match ?? null);
+      })
+      .catch(() => setPendingHandover(null));
   }, [params.id]);
 
   // Keyboard shortcuts
@@ -185,6 +220,18 @@ export default function DocumentPage() {
           >
             {tActions("reject")}
           </button>
+          <button
+            onClick={() => setShowForwardModal(true)}
+            className="px-3 py-1.5 text-sm bg-slate-600 text-slate-100 rounded-md hover:bg-slate-500"
+          >
+            Переслать →
+          </button>
+          <button
+            onClick={() => setShowShareModal(true)}
+            className="px-3 py-1.5 text-sm bg-slate-700 text-slate-200 rounded-md hover:bg-slate-600"
+          >
+            В чат →
+          </button>
         </div>
       </div>
 
@@ -288,8 +335,67 @@ export default function DocumentPage() {
               </ul>
             </div>
           )}
+
+          {/* Handover status */}
+          {pendingHandover && (
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+              <h3 className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">
+                Передача
+              </h3>
+              <p className="text-sm text-slate-300">
+                Передан:{" "}
+                <span className="font-medium">
+                  → {pendingHandover.to_user_name ?? pendingHandover.to_user}
+                </span>
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                {new Date(pendingHandover.created_at).toLocaleString("ru-RU")}
+              </p>
+              {pendingHandover.comment && (
+                <p className="text-xs text-slate-400 mt-1 italic">
+                  {pendingHandover.comment}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Comment thread */}
+          <CommentThread entityType="document" entityId={doc.id} />
         </div>
       </div>
+
+      {/* Forward modal */}
+      {showForwardModal && (
+        <ForwardModal
+          entityType="document"
+          entityId={doc.id}
+          onClose={() => setShowForwardModal(false)}
+          onSuccess={() => {
+            fetch(`${API}/api/handovers/outbox`, { credentials: "include" })
+              .then((r) => (r.ok ? r.json() : []))
+              .then((items: HandoverItem[]) => {
+                const match = items.find(
+                  (h) =>
+                    h.entity_id === doc.id &&
+                    h.entity_type === "document" &&
+                    h.status === "pending",
+                );
+                setPendingHandover(match ?? null);
+              })
+              .catch(() => {});
+          }}
+        />
+      )}
+
+      {/* Share to chat modal */}
+      {showShareModal && (
+        <ShareToChatModal
+          entityType="document"
+          entityId={doc.id}
+          entityTitle={doc.file_name}
+          onClose={() => setShowShareModal(false)}
+        />
+      )}
 
       {/* Reject dialog */}
       {showRejectDialog && (

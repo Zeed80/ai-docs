@@ -1,4 +1,4 @@
-import { getApiBaseUrl as getSharedApiBaseUrl } from "@/lib/api-base";
+import { csrfHeaders } from "@/lib/auth";
 
 export type ManufacturingCase = {
   id: string;
@@ -118,15 +118,31 @@ export type ChatHistoryMessage = {
 /** Browser: same-origin `/api` via Next rewrites. SSR: direct backend or INTERNAL_API_URL. */
 function getApiBaseUrl(): string {
   if (typeof window !== "undefined") {
-    return getSharedApiBaseUrl();
+    // Client: honour explicit config, fall back to same-origin (empty string)
+    return (
+      process.env.NEXT_PUBLIC_API_URL?.trim() ||
+      process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
+      ""
+    );
   }
   return process.env.INTERNAL_API_URL ?? "http://127.0.0.1:8000";
 }
 
+const _MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const isMutation = _MUTATION_METHODS.has(method);
+
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
+    credentials: "include",
     cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      ...(isMutation ? csrfHeaders() : {}),
+      ...init?.headers,
+    },
   });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);

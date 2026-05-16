@@ -58,8 +58,9 @@ export default function CatalogsPage() {
         setSuppliers(data.results ?? []);
         return;
       }
-      const resp = await fetch(url);
-      setSuppliers(resp.ok ? await resp.json() : []);
+      const resp = await fetch(url, { credentials: "include" });
+      const data = resp.ok ? await resp.json() : [];
+      setSuppliers(data.items ?? data ?? []);
     } finally {
       setLoading(false);
     }

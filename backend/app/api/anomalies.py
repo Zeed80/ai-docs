@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func
+from pydantic import BaseModel
+from sqlalchemy import or_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -314,12 +315,19 @@ async def create_anomaly(
 # ── List anomalies ─────────────────────────────────────────────────────────
 
 
+class BulkResolveRequest(BaseModel):
+    ids: list[uuid.UUID]
+    resolution: str = "resolved"
+
+
 @router.get("", response_model=list[AnomalyCardOut])
 async def list_anomalies(
     status: str | None = None,
     entity_id: uuid.UUID | None = None,
     severity: str | None = None,
+    q: str | None = Query(default=None, description="Full-text search on title and description"),
     limit: int = Query(50, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: anomaly.list — List anomaly cards."""
@@ -336,9 +344,37 @@ async def list_anomalies(
             query = query.where(AnomalyCard.severity == AnomalySeverity(severity))
         except ValueError:
             pass
-    query = query.order_by(AnomalyCard.created_at.desc()).limit(limit)
+    if q:
+        pattern = f"%{q}%"
+        query = query.where(
+            or_(AnomalyCard.title.ilike(pattern), AnomalyCard.description.ilike(pattern))
+        )
+    query = query.order_by(AnomalyCard.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
+
+
+@router.post("/bulk-resolve")
+async def bulk_resolve_anomalies(
+    payload: BulkResolveRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Bulk resolve a list of anomaly cards."""
+    if payload.resolution not in ("resolved", "false_positive"):
+        raise HTTPException(status_code=400, detail="resolution must be 'resolved' or 'false_positive'")
+    resolution_status = AnomalyStatus.resolved if payload.resolution == "resolved" else AnomalyStatus.false_positive
+    result = await db.execute(
+        select(AnomalyCard).where(
+            AnomalyCard.id.in_(payload.ids),
+            AnomalyCard.status == AnomalyStatus.open,
+        )
+    )
+    cards = result.scalars().all()
+    for card in cards:
+        card.status = resolution_status
+        card.resolved_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"resolved": len(cards), "ids": [str(c.id) for c in cards]}
 
 
 @router.get("/{anomaly_id}", response_model=AnomalyCardOut)

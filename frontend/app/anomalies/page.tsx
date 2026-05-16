@@ -1,10 +1,11 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
-
-import { useEffect, useState } from "react";
+import { csrfHeaders } from "@/lib/auth";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const API = getApiBaseUrl();
+const PAGE_SIZE = 50;
 
 interface Anomaly {
   id: string;
@@ -46,40 +47,117 @@ export default function AnomaliesPage() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [severityFilter, setSeverityFilter] = useState<string>("");
+  const [query, setQuery] = useState<string>("");
+  const [debouncedQuery, setDebouncedQuery] = useState<string>("");
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchAnomalies = () => {
+  // Debounce search query
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query]);
+
+  // Reset offset when filters change
+  useEffect(() => {
+    setOffset(0);
+    setSelected(new Set());
+  }, [statusFilter, severityFilter, debouncedQuery]);
+
+  const fetchAnomalies = useCallback(() => {
     const params = new URLSearchParams();
     if (statusFilter) params.set("status", statusFilter);
     if (severityFilter) params.set("severity", severityFilter);
+    if (debouncedQuery) params.set("q", debouncedQuery);
+    params.set("limit", String(PAGE_SIZE + 1));
+    params.set("offset", String(offset));
 
-    fetch(`${API}/api/anomalies?${params}`)
+    setLoading(true);
+    fetch(`${API}/api/anomalies?${params}`, { credentials: "include" })
       .then((r) => r.json())
-      .then(setAnomalies)
+      .then((data) => {
+        const items: Anomaly[] = data.items ?? data ?? [];
+        setHasMore(items.length > PAGE_SIZE);
+        setAnomalies(items.slice(0, PAGE_SIZE));
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
-  };
+  }, [statusFilter, severityFilter, debouncedQuery, offset]);
 
   useEffect(() => {
     fetchAnomalies();
-  }, [statusFilter, severityFilter]);
+  }, [fetchAnomalies]);
 
   const handleResolve = async (id: string, resolution: string) => {
     await fetch(`${API}/api/anomalies/${id}/resolve`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...csrfHeaders() },
       body: JSON.stringify({ resolution }),
+      credentials: "include",
     });
     fetchAnomalies();
   };
 
-  if (loading) return <div className="p-6 text-slate-400">Загрузка...</div>;
+  const handleBulkResolve = async (resolution: string) => {
+    if (selected.size === 0) return;
+    setBulkLoading(true);
+    try {
+      await fetch(`${API}/api/anomalies/bulk-resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...csrfHeaders() },
+        body: JSON.stringify({ ids: Array.from(selected), resolution }),
+        credentials: "include",
+      });
+      setSelected(new Set());
+      fetchAnomalies();
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const openIds = anomalies
+      .filter((a) => a.status === "open")
+      .map((a) => a.id);
+    if (openIds.every((id) => selected.has(id))) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(openIds));
+    }
+  };
+
+  const openAnomalies = anomalies.filter((a) => a.status === "open");
+  const allOpen =
+    openAnomalies.length > 0 && openAnomalies.every((a) => selected.has(a.id));
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <h1 className="text-xl font-bold mb-4">Аномалии</h1>
 
-      {/* Filters */}
-      <div className="flex gap-3 mb-4">
+      {/* Filters + Search */}
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Поиск по названию или описанию..."
+          className="bg-slate-800 border border-slate-600 text-slate-200 rounded px-3 py-1 text-sm min-w-[220px] flex-1"
+        />
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -102,61 +180,138 @@ export default function AnomaliesPage() {
         </select>
       </div>
 
-      {anomalies.length === 0 ? (
+      {/* Bulk actions bar */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 mb-4 px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-sm">
+          <span className="text-slate-300">Выбрано: {selected.size}</span>
+          <button
+            onClick={() => handleBulkResolve("resolved")}
+            disabled={bulkLoading}
+            className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+          >
+            Решить все
+          </button>
+          <button
+            onClick={() => handleBulkResolve("false_positive")}
+            disabled={bulkLoading}
+            className="px-3 py-1 bg-slate-600 text-white rounded hover:bg-slate-500 disabled:opacity-50"
+          >
+            Ложные
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="ml-auto text-slate-400 hover:text-slate-200"
+          >
+            Отмена
+          </button>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-slate-400 text-sm">Загрузка...</div>
+      ) : anomalies.length === 0 ? (
         <div className="text-slate-400 text-sm">Аномалий не найдено</div>
       ) : (
-        <div className="space-y-3">
-          {anomalies.map((a) => (
-            <div
-              key={a.id}
-              className={`border rounded-lg p-4 ${SEVERITY_STYLES[a.severity] ?? "bg-slate-800 border-slate-700"}`}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-medium uppercase">
-                      {TYPE_LABELS[a.anomaly_type] ?? a.anomaly_type}
-                    </span>
-                    <span
-                      className={`text-xs px-1.5 py-0.5 rounded ${
-                        a.status === "open"
-                          ? "bg-white/10"
-                          : "bg-green-900/40 text-green-400"
-                      }`}
-                    >
-                      {STATUS_LABELS[a.status] ?? a.status}
-                    </span>
+        <>
+          {/* Select all header */}
+          {openAnomalies.length > 0 && (
+            <div className="flex items-center gap-2 mb-2 px-1">
+              <input
+                type="checkbox"
+                checked={allOpen}
+                onChange={toggleSelectAll}
+                className="rounded"
+              />
+              <span className="text-xs text-slate-400">
+                Выбрать все открытые ({openAnomalies.length})
+              </span>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {anomalies.map((a) => (
+              <div
+                key={a.id}
+                className={`border rounded-lg p-4 ${SEVERITY_STYLES[a.severity] ?? "bg-slate-800 border-slate-700"}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3 flex-1 min-w-0">
+                    {a.status === "open" && (
+                      <input
+                        type="checkbox"
+                        checked={selected.has(a.id)}
+                        onChange={() => toggleSelect(a.id)}
+                        className="mt-1 rounded shrink-0"
+                      />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-medium uppercase">
+                          {TYPE_LABELS[a.anomaly_type] ?? a.anomaly_type}
+                        </span>
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded ${
+                            a.status === "open"
+                              ? "bg-white/10"
+                              : "bg-green-900/40 text-green-400"
+                          }`}
+                        >
+                          {STATUS_LABELS[a.status] ?? a.status}
+                        </span>
+                      </div>
+                      <div className="font-medium text-sm">{a.title}</div>
+                      {a.description && (
+                        <div className="text-xs mt-1 opacity-75">
+                          {a.description}
+                        </div>
+                      )}
+                      <div className="text-xs mt-1 opacity-50">
+                        {new Date(a.created_at).toLocaleString("ru-RU")}
+                      </div>
+                    </div>
                   </div>
-                  <div className="font-medium text-sm">{a.title}</div>
-                  {a.description && (
-                    <div className="text-xs mt-1 opacity-75">
-                      {a.description}
+                  {a.status === "open" && (
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        onClick={() => handleResolve(a.id, "resolved")}
+                        className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+                      >
+                        Решить
+                      </button>
+                      <button
+                        onClick={() => handleResolve(a.id, "false_positive")}
+                        className="px-3 py-1 text-xs bg-slate-600 text-white rounded hover:bg-slate-700"
+                      >
+                        Ложная
+                      </button>
                     </div>
                   )}
-                  <div className="text-xs mt-1 opacity-50">
-                    {new Date(a.created_at).toLocaleString("ru-RU")}
-                  </div>
                 </div>
-                {a.status === "open" && (
-                  <div className="flex gap-2 shrink-0 ml-4">
-                    <button
-                      onClick={() => handleResolve(a.id, "resolved")}
-                      className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
-                    >
-                      Решить
-                    </button>
-                    <button
-                      onClick={() => handleResolve(a.id, "false_positive")}
-                      className="px-3 py-1 text-xs bg-slate-600 text-white rounded hover:bg-slate-700"
-                    >
-                      Ложная
-                    </button>
-                  </div>
-                )}
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between mt-4 text-sm text-slate-400">
+            <button
+              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+              disabled={offset === 0}
+              className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40"
+            >
+              ← Назад
+            </button>
+            <span>
+              {offset + 1}–{offset + anomalies.length}
+            </span>
+            <button
+              onClick={() => setOffset(offset + PAGE_SIZE)}
+              disabled={!hasMore}
+              className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40"
+            >
+              Вперёд →
+            </button>
+          </div>
+        </>
       )}
     </div>
   );

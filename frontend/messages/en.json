@@ -24,7 +24,9 @@
     "ntd": "NTD",
     "boms": "BOMs",
     "drawings": "Drawings",
-    "catalogs": "Catalogs"
+    "catalogs": "Catalogs",
+    "chat": "Chat",
+    "admin": "Administration"
   },
   "inbox": {
     "title": "Inbox",

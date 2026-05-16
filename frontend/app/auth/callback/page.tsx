@@ -2,40 +2,34 @@
 
 export const dynamic = "force-dynamic";
 
-import { getApiBaseUrl } from "@/lib/api-base";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { setToken } from "@/lib/auth";
-
-const API = getApiBaseUrl();
 
 function CallbackHandler() {
-  const router = useRouter();
   const params = useSearchParams();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const code = params.get("code");
     const state = params.get("state");
+    const errorParam = params.get("error");
+
+    if (errorParam) {
+      setError(`Ошибка от провайдера: ${errorParam}`);
+      return;
+    }
 
     if (!code) {
       setError("Отсутствует код авторизации");
       return;
     }
 
-    fetch(
-      `${API}/api/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state ?? "")}`,
-    )
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data) => {
-        setToken(data.access_token);
-        router.replace("/inbox");
-      })
-      .catch((e) => setError(String(e)));
-  }, [params, router]);
+    // Redirect the browser directly to the backend callback endpoint.
+    // Next.js rewrites /api/* → backend, which sets the httpOnly cookie
+    // and redirects to /inbox. The browser follows the chain naturally.
+    const qs = new URLSearchParams({ code, state: state ?? "" });
+    window.location.replace(`/api/auth/callback?${qs}`);
+  }, [params]);
 
   if (error) {
     return (
@@ -58,12 +52,12 @@ function CallbackHandler() {
           </div>
           <h2 className="text-lg font-semibold text-slate-800">Ошибка входа</h2>
           <p className="text-sm text-slate-500 mt-2">{error}</p>
-          <button
-            onClick={() => router.replace("/auth/login")}
-            className="mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+          <a
+            href="/auth/login"
+            className="mt-4 inline-block px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
           >
             Попробовать снова
-          </button>
+          </a>
         </div>
       </div>
     );

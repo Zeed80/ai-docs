@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -6,6 +7,10 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.middleware.csrf import CSRFMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.security import SecurityHeadersMiddleware
 
 from app.api import (
     agent,
@@ -20,6 +25,7 @@ from app.api import (
     canvas,
     chat_sessions,
     collections,
+    comments as comments_api,
     compare,
     dashboard,
     documents,
@@ -49,7 +55,10 @@ from app.api import (
     workspace,
     workspace_export,
 )
+from app.api import admin as admin_api
 from app.api import dynamic_skill_runner
+from app.api import handovers, notifications, rooms
+from app.api import setup as setup_api
 from app.api.capability_router import router as capability_router
 from app.config import settings
 from app.db.session import engine  # lazy proxy
@@ -86,6 +95,14 @@ def _reject_silent_production_schema_create() -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("starting", env=settings.app_env)
 
+    # Start Redis pub/sub subscriber for cross-worker chat events
+    _redis_sub_task: asyncio.Task | None = None
+    try:
+        from app.core.chat_bus import start_redis_subscriber
+        _redis_sub_task = await start_redis_subscriber()
+    except Exception as exc:
+        logger.warning("chat_bus_redis_subscriber_start_failed", error=str(exc))
+
     try:
         from app.api.telegram import bot_manager
         err = await bot_manager.start()
@@ -101,6 +118,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await seed_builtin_templates(db)
     except Exception as exc:
         logger.warning("email_templates_seed_failed", error=str(exc))
+
+    if not settings.auth_enabled:
+        try:
+            from app.auth.jwt import _DEV_USER
+            from app.auth.user_service import upsert_user
+            from app.db.session import _get_session_factory
+            async with _get_session_factory()() as db:
+                await upsert_user(db, _DEV_USER)
+                await db.commit()
+            logger.info("dev_user_seeded", sub=_DEV_USER.sub)
+        except Exception as exc:
+            logger.warning("dev_user_seed_failed", error=str(exc))
 
     try:
         from app.api.health import ai_health
@@ -119,11 +148,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    if _redis_sub_task and not _redis_sub_task.done():
+        _redis_sub_task.cancel()
+        try:
+            await _redis_sub_task
+        except asyncio.CancelledError:
+            pass
+
     try:
         from app.api.telegram import bot_manager
         await bot_manager.stop()
     except Exception:
         pass
+
+    try:
+        from app.utils.redis_client import close_pools
+        await close_pools()
+    except Exception:
+        pass
+
     await engine.dispose()
     logger.info("shutdown")
 
@@ -138,12 +181,18 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Middleware order: CORS → SecurityHeaders → RateLimit → CSRF
+    # (Starlette applies middleware in reverse registration order)
+    app.add_middleware(CSRFMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Request-ID", "X-API-Key"],
+        expose_headers=["X-Request-ID"],
     )
 
     # Routers
@@ -197,6 +246,12 @@ def create_app() -> FastAPI:
     app.include_router(dynamic_skill_runner.router, tags=["agent-generated"])
     app.include_router(capability_router, prefix="/api/agent", tags=["capabilities"])
     app.include_router(health.router, tags=["health"])
+    app.include_router(admin_api.router)
+    app.include_router(rooms.router, prefix="/api/rooms", tags=["rooms"])
+    app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"])
+    app.include_router(handovers.router, prefix="/api/handovers", tags=["handovers"])
+    app.include_router(setup_api.router, prefix="/api/setup", tags=["setup"])
+    app.include_router(comments_api.router, prefix="/api/comments", tags=["comments"])
 
     return app
 

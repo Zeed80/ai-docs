@@ -108,6 +108,8 @@ def _recognized_keys(draft: dict[str, Any]) -> list[str]:
 
 
 def _validate_draft(draft: dict[str, Any]) -> tuple[list[str], list[str]]:
+    import ast
+
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -128,6 +130,33 @@ def _validate_draft(draft: dict[str, Any]) -> tuple[list[str], list[str]]:
     tool_name = str(draft.get("tool_name") or "")
     if tool_name and not re.fullmatch(r"[a-zA-Z0-9_.-]+", tool_name):
         errors.append("tool_name contains unsupported characters.")
+
+    # Validate any embedded Python code
+    code = draft.get("code") or draft.get("implementation_code")
+    if isinstance(code, str) and code.strip():
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as exc:
+            errors.append(f"Python code syntax error at line {exc.lineno}: {exc.msg}")
+            tree = None
+        if tree is not None:
+            fn_names = {
+                node.name
+                for node in ast.walk(tree)
+                if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
+            }
+            if "execute" not in fn_names:
+                errors.append("Generated code must define an 'execute' function (sync or async).")
+            # Check for SKILL_META constant
+            top_assigns = [
+                node.targets[0].id
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ]
+            if "SKILL_META" not in top_assigns:
+                warnings.append("Generated code is missing SKILL_META dict; registry entry may be incomplete.")
 
     if not draft.get("implementation_plan"):
         warnings.append("implementation_plan is missing; sandbox package will be skeletal.")

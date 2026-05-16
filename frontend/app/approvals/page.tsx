@@ -13,9 +13,56 @@ interface ApprovalItem {
   entity_id: string;
   status: string;
   requested_by: string | null;
+  assigned_to: string | null;
   context: Record<string, unknown> | null;
   decision_comment: string | null;
   created_at: string;
+  expires_at: string | null;
+  chain_root_id: string | null;
+  chain_order: number | null;
+}
+
+function SlaBar({
+  createdAt,
+  expiresAt,
+}: {
+  createdAt: string;
+  expiresAt: string;
+}) {
+  const start = new Date(createdAt).getTime();
+  const end = new Date(expiresAt).getTime();
+  const now = Date.now();
+  const total = end - start;
+  const elapsed = Math.max(0, Math.min(now - start, total));
+  const pct = total > 0 ? Math.round((elapsed / total) * 100) : 0;
+  const color =
+    pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-green-500";
+  return (
+    <div className="mt-3">
+      <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+        <span>SLA</span>
+        <span>{pct}% использовано</span>
+      </div>
+      <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${color}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function expiryInfo(
+  expiresAt: string | null,
+): { label: string; cls: string } | null {
+  if (!expiresAt) return null;
+  const diff = new Date(expiresAt).getTime() - Date.now();
+  if (diff < 0) return { label: "Просрочено", cls: "text-red-400" };
+  const h = Math.floor(diff / 3_600_000);
+  const m = Math.floor((diff % 3_600_000) / 60_000);
+  const cls = diff < 7_200_000 ? "text-amber-400" : "text-slate-400";
+  return { label: h > 0 ? `${h}ч ${m}м` : `${m}м`, cls };
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -53,7 +100,7 @@ export default function ApprovalsPage() {
   const selected = approvals.find((a) => a.id === selectedId) ?? null;
 
   const load = useCallback(() => {
-    fetch(`${API}/api/approvals/pending`)
+    fetch(`${API}/api/approvals/pending`, { credentials: "include" })
       .then((r) => r.json())
       .then((data) => {
         const items: ApprovalItem[] = data.items ?? [];
@@ -201,6 +248,12 @@ export default function ApprovalsPage() {
             {approvals.map((a) => {
               const colorClass =
                 ACTION_COLORS[a.action_type] ?? ACTION_COLORS.default;
+              const expiry = expiryInfo(a.expires_at);
+              const showWarning =
+                expiry !== null &&
+                a.expires_at !== null &&
+                new Date(a.expires_at).getTime() - Date.now() < 7_200_000 &&
+                new Date(a.expires_at).getTime() - Date.now() >= 0;
               return (
                 <button
                   key={a.id}
@@ -211,11 +264,18 @@ export default function ApprovalsPage() {
                       : "hover:bg-slate-700/50"
                   }`}
                 >
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${colorClass}`}
-                  >
-                    {ACTION_LABELS[a.action_type] ?? a.action_type}
-                  </span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${colorClass}`}
+                    >
+                      {ACTION_LABELS[a.action_type] ?? a.action_type}
+                    </span>
+                    {showWarning && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-amber-900/40 text-amber-400">
+                        ⏰ истекает через {expiry!.label}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-slate-300 mt-1.5 truncate font-medium">
                     {(a.context?.invoice_number as string)
                       ? `№ ${a.context?.invoice_number}`
@@ -280,6 +340,44 @@ export default function ApprovalsPage() {
                     </strong>
                   </span>
                 </div>
+
+                {/* Chain progress */}
+                {selected.chain_root_id && selected.chain_order != null && (
+                  <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
+                    <span className="px-2 py-0.5 bg-slate-700 rounded font-medium text-slate-300">
+                      Шаг {selected.chain_order + 1} цепочки согласования
+                    </span>
+                  </div>
+                )}
+
+                {/* Expiry + SLA */}
+                {selected.expires_at &&
+                  (() => {
+                    const exp = expiryInfo(selected.expires_at);
+                    const formatted = new Date(
+                      selected.expires_at,
+                    ).toLocaleString("ru-RU", {
+                      day: "2-digit",
+                      month: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    });
+                    return (
+                      <>
+                        <div className="mt-2 text-xs flex gap-2 items-center">
+                          <span className="text-slate-400">Срок истекает:</span>
+                          <strong className={exp?.cls ?? "text-slate-300"}>
+                            {formatted}
+                            {exp && ` — ${exp.label}`}
+                          </strong>
+                        </div>
+                        <SlaBar
+                          createdAt={selected.created_at}
+                          expiresAt={selected.expires_at}
+                        />
+                      </>
+                    );
+                  })()}
 
                 {/* Comment */}
                 <div className="mt-4">

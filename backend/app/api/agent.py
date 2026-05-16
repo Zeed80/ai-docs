@@ -149,8 +149,29 @@ async def chat_ws(ws: WebSocket) -> None:
             msg_type = data.get("type")
 
             if msg_type == "message":
-                content = data.get("content", "").strip()
-                if content:
+                raw_content = data.get("content", "").strip()
+                if raw_content:
+                    from app.ai.input_sanitizer import sanitize_user_input
+                    content, injection_warnings = sanitize_user_input(raw_content)
+                    if injection_warnings:
+                        logger.warning(
+                            "prompt_injection_detected",
+                            warnings=injection_warnings,
+                            content_preview=raw_content[:100],
+                        )
+                        if len(injection_warnings) >= 2:
+                            from app.audit.service import log_action
+                            from app.db.session import _get_session_factory as _sf
+                            async with _sf()() as _audit_db:
+                                await log_action(
+                                    _audit_db,
+                                    action="injection_attempt",
+                                    entity_type="chat",
+                                    user_id=user_key,
+                                    details={"warnings": injection_warnings},
+                                )
+                                await _audit_db.commit()
+                if raw_content:
                     if current_turn and not current_turn.done():
                         await send({
                             "type": "error",

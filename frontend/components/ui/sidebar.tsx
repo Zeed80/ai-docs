@@ -1,13 +1,16 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
+import { NotificationBell } from "@/components/ui/notification-bell";
 
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import clsx from "clsx";
-import { fetchMe, logout, type UserInfo } from "@/lib/auth";
+import { logout } from "@/lib/auth";
+import { useCurrentUser } from "@/lib/auth-context";
+import { useHasRole } from "@/lib/rbac";
 
 const API = getApiBaseUrl();
 
@@ -15,7 +18,7 @@ function useFeedCount() {
   const [count, setCount] = useState(0);
   useEffect(() => {
     function load() {
-      fetch(`${API}/api/dashboard/feed`)
+      fetch(`${API}/api/dashboard/feed`, { credentials: "include" })
         .then((r) => r.json())
         .then((d) => setCount(d.total ?? 0))
         .catch(() => {});
@@ -31,7 +34,7 @@ function useQuarantineCount() {
   const [count, setCount] = useState(0);
   useEffect(() => {
     function load() {
-      fetch(`${API}/api/quarantine/count`)
+      fetch(`${API}/api/quarantine/count`, { credentials: "include" })
         .then((r) => r.json())
         .then((d) => setCount(d.count ?? 0))
         .catch(() => {});
@@ -41,14 +44,6 @@ function useQuarantineCount() {
     return () => clearInterval(t);
   }, []);
   return count;
-}
-
-function useCurrentUser() {
-  const [user, setUser] = useState<UserInfo | null>(null);
-  useEffect(() => {
-    fetchMe().then((u) => setUser(u));
-  }, []);
-  return user;
 }
 
 // ── Nav structure ─────────────────────────────────────────────────────────────
@@ -94,6 +89,7 @@ const NAV_FINANCE = [
 const NAV_SYSTEM = [
   { href: "/quarantine", icon: "shield", key: "quarantine" },
   { href: "/settings", icon: "settings", key: "settings" },
+  { href: "/admin", icon: "admin", key: "admin", adminOnly: true },
 ] as const;
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -232,6 +228,21 @@ function Icon({ name }: { name: string }) {
           strokeLinejoin="round"
           strokeWidth={2}
           d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
+        />
+      </svg>
+    ),
+    admin: (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"
         />
       </svg>
     ),
@@ -376,6 +387,21 @@ function Icon({ name }: { name: string }) {
         />
       </svg>
     ),
+    chat: (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"
+        />
+      </svg>
+    ),
   };
   return <>{map[name] ?? null}</>;
 }
@@ -426,6 +452,7 @@ export function Sidebar() {
   const feedCount = useFeedCount();
   const quarantineCount = useQuarantineCount();
   const user = useCurrentUser();
+  const isAdmin = useHasRole("admin");
 
   async function handleLogout() {
     await logout();
@@ -555,15 +582,28 @@ export function Sidebar() {
           <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
             Система
           </p>
-          {NAV_SYSTEM.map((item) => (
-            <NavItem
-              key={item.key}
-              href={item.href}
-              icon={item.icon}
-              label={t(item.key)}
-              badge={item.key === "quarantine" ? quarantineCount || null : null}
-            />
-          ))}
+          {NAV_SYSTEM.map((item) => {
+            if ("adminOnly" in item && item.adminOnly && !isAdmin) return null;
+            return (
+              <NavItem
+                key={item.key}
+                href={item.href}
+                icon={item.icon}
+                label={t(item.key)}
+                badge={
+                  item.key === "quarantine" ? quarantineCount || null : null
+                }
+              />
+            );
+          })}
+        </div>
+
+        {/* Коммуникации */}
+        <div>
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+            Общение
+          </p>
+          <NavItem href="/chat" icon="chat" label={t("chat")} />
         </div>
       </nav>
 
@@ -579,6 +619,7 @@ export function Sidebar() {
             {user?.name ?? "…"}
           </p>
         </div>
+        <NotificationBell />
         <button
           onClick={handleLogout}
           title="Выйти"

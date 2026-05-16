@@ -32,21 +32,37 @@ celery_app.conf.update(
     },
 )
 
+_imap_cron = crontab(minute=f"*/{settings.imap_poll_interval_minutes}")
+
 celery_app.conf.beat_schedule = {
     "poll-email-procurement": {
         "task": "app.tasks.ingest.poll_imap_mailbox",
-        "schedule": crontab(minute="*/5"),
+        "schedule": _imap_cron,
         "args": ("procurement",),
     },
     "poll-email-accounting": {
         "task": "app.tasks.ingest.poll_imap_mailbox",
-        "schedule": crontab(minute="*/5"),
+        "schedule": _imap_cron,
         "args": ("accounting",),
     },
     "poll-email-general": {
         "task": "app.tasks.ingest.poll_imap_mailbox",
-        "schedule": crontab(minute="*/5"),
+        "schedule": _imap_cron,
         "args": ("general",),
+    },
+    "escalate-expired-approvals": {
+        "task": "approval.escalate_expired",
+        "schedule": float(settings.approval_escalation_interval_seconds),
+    },
+    # Skill self-improvement: evolve failing skills every 2 hours
+    "evolve-failing-skills": {
+        "task": "skill.evolve_failing_skills",
+        "schedule": 7_200.0,
+    },
+    # A/B shadow test evaluation every 30 minutes
+    "evaluate-shadow-tests": {
+        "task": "skill.evaluate_shadow_tests",
+        "schedule": 1_800.0,
     },
 }
 
@@ -55,7 +71,10 @@ celery_app.autodiscover_tasks([
     "app.tasks.ingest",
     "app.tasks.email_triage",
     "app.tasks.embedding",
+    "app.tasks.email_sender",
 ])
 
 # Flat module — not discovered by autodiscover_tasks(related_name="tasks").
 from app.tasks import drawing_analysis as _drawing_analysis  # noqa: F401
+from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
+from app.tasks import skill_evolution as _skill_evolution  # noqa: F401

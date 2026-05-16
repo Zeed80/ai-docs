@@ -54,8 +54,22 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     deepseek_api_key: str = ""
 
-    # CORS — wildcard for development; override via CORS_ORIGINS env var in production
-    cors_origins: str = "*"
+    # CORS — restrict to frontend domain in production via CORS_ORIGINS env var
+    cors_origins: str = "http://localhost:3000"
+    frontend_url: str = "http://localhost:3000"
+
+    # Security
+    csrf_secret: str = "dev-csrf-secret"   # set to secrets.token_hex(32) in production
+    rate_limit_login_per_minute: int = 5
+    rate_limit_api_per_minute: int = 200
+    csp_enabled: bool = False              # enable in production
+
+    # Admin bootstrap — email of the first admin user (auto-promoted on first login if no admin exists)
+    initial_admin_email: str = ""
+    # One-time setup token for bootstrapping admin via API (invalidated after first use)
+    setup_token: str = ""
+    # Minimum number of active admins (prevents demoting the last admin)
+    min_admin_count: int = 1
 
     # Auth (Authentik SSO)
     auth_enabled: bool = False          # set True in production
@@ -76,6 +90,10 @@ class Settings(BaseSettings):
     telegram_allowed_users: str = ""  # comma-separated int user IDs; empty = no whitelist
     telegram_notifications_chat_id: str = ""  # default chat for push notifications
     telegram_notifications_enabled: bool = False
+
+    # Celery beat schedules (intervals in seconds or minutes)
+    imap_poll_interval_minutes: int = 5
+    approval_escalation_interval_seconds: int = 900  # 15 minutes
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 

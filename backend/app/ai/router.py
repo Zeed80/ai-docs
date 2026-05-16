@@ -239,12 +239,30 @@ class AIRouter:
         schema = request.response_schema
         if schema is None:
             return response
-        if isinstance(response.data, schema):
+        if schema and isinstance(response.data, schema):
             return response
+
+        # Try Pydantic validation on data first
         payload: Any = response.data
         if payload is None:
-            payload = json.loads(response.text or "{}")
-        response.data = schema.model_validate(payload)
+            # Fall back to structured_output extractor for weak model text responses
+            from app.ai.structured_output import parse_json_output
+            text = response.text or "{}"
+            payload = parse_json_output(text)
+            if payload is None:
+                try:
+                    payload = json.loads(text)
+                except Exception:
+                    payload = {}
+
+        try:
+            response.data = schema.model_validate(payload)
+        except Exception as exc:
+            logger.warning(
+                "structured_output_validation_failed",
+                schema=schema.__name__ if hasattr(schema, "__name__") else str(schema),
+                error=str(exc),
+            )
         return response
 
     def _filter_tool_calls(

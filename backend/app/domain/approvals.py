@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.db.models import ApprovalActionType, ApprovalStatus
 
@@ -33,6 +33,8 @@ class ApprovalOut(BaseModel):
     expires_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    chain_root_id: uuid.UUID | None = None
+    chain_order: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -53,3 +55,32 @@ class ApprovalListParams(BaseModel):
 class ApprovalListResponse(BaseModel):
     items: list[ApprovalOut]
     total: int
+
+
+# ── Chain schemas ─────────────────────────────────────────────────────────────
+
+class ChainStep(BaseModel):
+    assigned_to: str
+    comment: str | None = None
+
+
+class ApprovalChainCreate(BaseModel):
+    action_type: ApprovalActionType
+    entity_type: str
+    entity_id: uuid.UUID
+    requested_by: str = "sveta"
+    context: dict | None = None
+    expires_at: datetime | None = None
+    steps: list[ChainStep] = Field(..., min_length=2, description="At least 2 approvers")
+
+    @model_validator(mode="after")
+    def check_steps(self) -> "ApprovalChainCreate":
+        if len(self.steps) < 2:
+            raise ValueError("Chain must have at least 2 steps")
+        return self
+
+
+class ApprovalChainOut(BaseModel):
+    chain_root_id: uuid.UUID
+    steps: list[ApprovalOut]
+    total_steps: int

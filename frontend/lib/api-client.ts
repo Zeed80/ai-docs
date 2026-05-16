@@ -4,8 +4,11 @@
  */
 
 import { getApiBaseUrl } from "@/lib/api-base";
+import { csrfHeaders } from "@/lib/auth";
 
 const API_BASE = getApiBaseUrl();
+
+const _MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 class ApiError extends Error {
   constructor(
@@ -18,10 +21,15 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? "GET").toUpperCase();
+  const isMutation = _MUTATION_METHODS.has(method);
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      ...(isMutation ? csrfHeaders() : {}),
       ...options?.headers,
     },
   });
@@ -31,6 +39,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new ApiError(res.status, body);
   }
 
+  if (res.status === 204) return undefined as unknown as T;
   return res.json();
 }
 

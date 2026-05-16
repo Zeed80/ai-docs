@@ -24,6 +24,7 @@ logger = structlog.get_logger()
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession
+from app.ai.model_tier import Tier, inject_chain_of_draft, score_complexity, should_use_cod
 from app.ai.orchestrator_memory import TurnFeedback, build_tool_preference_hint, record_turn_feedback
 from app.ai.policy_engine import check_tool_execution
 from app.ai.router import ai_router
@@ -35,6 +36,13 @@ SendFn = Callable[[dict], Awaitable[None]]
 _CANVAS_MAP_PATH = Path(__file__).parent.parent.parent / "data" / "canvas_skill_map.json"
 _canvas_map_cache: dict[str, Any] | None = None
 _canvas_map_mtime: float = 0.0
+
+
+def invalidate_canvas_map_cache() -> None:
+    """Force reload of canvas_skill_map.json on next access (called on Redis skill_reload event)."""
+    global _canvas_map_cache, _canvas_map_mtime
+    _canvas_map_cache = None
+    _canvas_map_mtime = 0.0
 
 
 def _canvas_map() -> dict[str, Any]:
@@ -173,11 +181,22 @@ class AgentOrchestrator:
 
         turn_started_at = time.time()
         self._trace = _TurnTrace()
+
+        # Score complexity → determines planning timeout and CoD injection
+        context_tokens = sum(len(m.get("content", "")) // 4 for m in self._history)
+        tier = score_complexity(content, context_tokens=context_tokens)
+
         # Use heuristic plan immediately — zero wait for GPU resources.
         plan = self._plan_turn(content)
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
-        self._executor.inject_orchestrator_hint(_build_worker_hint(plan))
+
+        # Inject Chain-of-Draft hint for medium/complex tasks on local models
+        hint = _build_worker_hint(plan)
+        worker_model = config.worker_model or ""
+        if should_use_cod(tier, worker_model):
+            hint = inject_chain_of_draft(hint)
+        self._executor.inject_orchestrator_hint(hint)
         await self._executor.on_user_message(content)
         audit = await self._audit_turn(plan, config)
         retry_count = 0

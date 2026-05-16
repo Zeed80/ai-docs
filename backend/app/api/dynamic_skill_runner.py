@@ -69,13 +69,86 @@ async def run_generated_skill(
             detail=f"Skill module '{skill_name}' has no execute() function",
         )
 
+    # Check cache first (read-only skills only)
+    try:
+        from app.ai.skill_cache import get_cached, set_cached
+        cached = await get_cached(skill_name, args)
+        if cached is not None:
+            logger.debug("generated_skill_cache_hit", skill=skill_name)
+            return cached
+    except Exception:
+        pass  # cache miss is fine
+
+    is_v2 = False
+    try:
+        # Check shadow routing for A/B testing
+        from app.ai.skill_evolver import maybe_route_to_shadow, record_shadow_outcome
+        shadow_name = await maybe_route_to_shadow(skill_name, args)
+        if shadow_name:
+            try:
+                shadow_module = _load_skill_module(shadow_name)
+                if hasattr(shadow_module, "execute"):
+                    result = await shadow_module.execute(args)
+                    await record_shadow_outcome(skill_name, is_v2=True, success=result.get("status") == "ok")
+                    return result
+            except Exception:
+                pass  # shadow failed → fall through to v1
+    except Exception:
+        pass
+
     try:
         result = await module.execute(args)
         logger.info("generated_skill_executed", skill=skill_name)
+
+        # Cache successful read results
+        try:
+            await set_cached(skill_name, args, result)
+        except Exception:
+            pass
+
+        # Record outcome for skill evolver
+        try:
+            from app.ai.skill_evolver import record_shadow_outcome
+            await record_shadow_outcome(skill_name, is_v2=False, success=result.get("status") == "ok")
+        except Exception:
+            pass
+
         return result
+    except NotImplementedError:
+        logger.warning("generated_skill_not_implemented", skill=skill_name)
+        return {"status": "error", "skill": skill_name, "message": "Skill is a stub and not yet implemented"}
     except Exception as exc:
-        logger.error("generated_skill_execution_failed", skill=skill_name, error=str(exc))
-        raise HTTPException(status_code=500, detail=f"Skill execution failed: {exc}")
+        import traceback
+        logger.error(
+            "generated_skill_execution_failed",
+            skill=skill_name,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
+        return {"status": "error", "skill": skill_name, "message": str(exc)}
+
+
+@router.get("/api/agent/skill-evolution/audit", tags=["agent-generated"])
+async def skill_evolution_audit(limit: int = 50) -> dict[str, Any]:
+    """Return recent skill evolution audit log."""
+    from app.ai.skill_evolver import get_evolution_audit
+    entries = await get_evolution_audit(limit=limit)
+    return {"entries": entries, "count": len(entries)}
+
+
+@router.post("/api/agent/skill-evolution/evolve/{skill_name}", tags=["agent-generated"])
+async def trigger_evolution(skill_name: str) -> dict[str, Any]:
+    """Manually trigger evolution for a specific skill."""
+    from app.ai.skill_evolver import evolve_skill
+    deployed = await evolve_skill(skill_name)
+    return {"skill": skill_name, "shadow_deployed": deployed}
+
+
+@router.get("/api/agent/skill-cache/stats", tags=["agent-generated"])
+async def skill_cache_stats() -> dict[str, Any]:
+    """Return skill result cache statistics."""
+    from app.ai.skill_cache import get_cache_stats
+    return await get_cache_stats()
 
 
 @router.get("/api/agent/generated-skills", tags=["agent-generated"])

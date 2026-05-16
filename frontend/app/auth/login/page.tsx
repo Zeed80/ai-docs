@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { loginUrl } from "@/lib/auth";
 
-export default function LoginPage() {
+function LoginRedirect() {
+  const params = useSearchParams();
+
   useEffect(() => {
-    // In dev mode (AUTH_ENABLED=false) the backend /me returns dev user without redirect,
-    // so this page is only reached in production. Auto-redirect to Authentik.
-    window.location.href = loginUrl();
-  }, []);
+    const next = params.get("next") ?? "/inbox";
+    window.location.href = loginUrl(next);
+  }, [params]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -19,5 +21,19 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-slate-50">
+          <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        </div>
+      }
+    >
+      <LoginRedirect />
+    </Suspense>
   );
 }

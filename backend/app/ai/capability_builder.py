@@ -146,6 +146,40 @@ async def build_capability(
         logger.error("capability_builder_llm_failed", gap=gap_description[:200], error=str(exc))
         code = _fallback_stub(skill_name, gap_description, ts)
 
+    # Self-refinement loop: critique → revise up to 3 rounds
+    try:
+        from app.ai.self_refine import refine_code
+
+        async def _gen(prompt: str, system: str | None) -> str:
+            r = await ai_router.run(
+                AIRequest(
+                    task=AITask.CODE_GENERATION,
+                    messages=[
+                        *(
+                            [ChatMessage(role="system", content=system)]
+                            if system else
+                            [ChatMessage(role="system", content=_SYSTEM_PROMPT)]
+                        ),
+                        ChatMessage(role="user", content=prompt),
+                    ],
+                    confidential=False,
+                    allow_cloud=True,
+                )
+            )
+            return _extract_code(str(r.content))
+
+        refine_result = await refine_code(code, gap_description, _gen, max_rounds=2)
+        if refine_result.final_score > 6.0:
+            code = refine_result.final_response
+            logger.info(
+                "capability_builder_refined",
+                skill=skill_name,
+                rounds=refine_result.rounds_used,
+                score=refine_result.final_score,
+            )
+    except Exception as exc:
+        logger.warning("capability_builder_refine_skipped", skill=skill_name, error=str(exc))
+
     errors: list[str] = []
     skill_path: str | None = None
 
@@ -185,6 +219,7 @@ async def build_capability(
     # Signal agent_loop instances to reload their skill maps
     if registry_updated:
         _signal_agent_loop_reload()
+        _publish_skill_reload(skill_name)
 
     return CapabilityBuildResult(
         skill_name=skill_name,
@@ -332,10 +367,21 @@ def _register_skill(skill_name: str, description: str) -> bool:
 
 
 def _hot_reload_module(skill_name: str) -> None:
+    import importlib.util
+    from pathlib import Path
+
     safe = _sanitize_skill_filename(skill_name)
     module_name = f"app.ai.generated_skills.{safe}"
+    module_path = Path(__file__).parent / "generated_skills" / f"{safe}.py"
+
     if module_name in sys.modules:
         importlib.reload(sys.modules[module_name])
+    elif module_path.exists():
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
 
 
 def _signal_agent_loop_reload() -> None:
@@ -345,3 +391,12 @@ def _signal_agent_loop_reload() -> None:
         reload_all_sessions()
     except Exception as exc:
         logger.warning("capability_builder_agent_loop_signal_failed", error=str(exc))
+
+
+def _publish_skill_reload(skill_name: str) -> None:
+    """Publish skill_reload event to Redis so all workers invalidate their canvas map cache."""
+    try:
+        from app.utils.redis_client import get_sync_redis
+        get_sync_redis().publish("sveta:bus:skill_reload", json.dumps({"skill": skill_name}))
+    except Exception as exc:
+        logger.warning("capability_builder_redis_publish_failed", error=str(exc))

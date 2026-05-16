@@ -89,9 +89,8 @@ def _breaker_redis_key(model: str) -> str:
 def _load_breaker_from_redis(model: str) -> CircuitBreaker | None:
     """Restore circuit breaker state from Redis if it was OPEN at last shutdown."""
     try:
-        import redis as _redis
-        from app.config import settings as _s
-        r = _redis.from_url(_s.redis_url, decode_responses=True)
+        from app.utils.redis_client import get_sync_redis
+        r = get_sync_redis()
         raw = r.get(_breaker_redis_key(model))
         if not raw:
             return None
@@ -109,9 +108,8 @@ def _load_breaker_from_redis(model: str) -> CircuitBreaker | None:
 def _persist_breaker(model: str, breaker: CircuitBreaker) -> None:
     """Persist circuit breaker state to Redis so it survives restarts."""
     try:
-        import redis as _redis
-        from app.config import settings as _s
-        r = _redis.from_url(_s.redis_url, decode_responses=True)
+        from app.utils.redis_client import get_sync_redis
+        r = get_sync_redis()
         r.setex(
             _breaker_redis_key(model),
             _BREAKER_TTL,
