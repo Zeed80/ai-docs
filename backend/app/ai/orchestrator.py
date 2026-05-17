@@ -186,8 +186,12 @@ class AgentOrchestrator:
         context_tokens = sum(len(m.get("content", "")) // 4 for m in self._history)
         tier = score_complexity(content, context_tokens=context_tokens)
 
-        # Use heuristic plan immediately — zero wait for GPU resources.
-        plan = self._plan_turn(content)
+        # MEDIUM+ queries get LLM planning (with heuristic fallback on timeout).
+        # Simple queries keep the zero-latency heuristic path.
+        if tier >= Tier.MEDIUM:
+            plan = await self._plan_turn_with_model(content, config)
+        else:
+            plan = self._plan_turn(content)
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
 
@@ -364,6 +368,11 @@ class AgentOrchestrator:
             role = matched_route.get("role", role)
             intent = matched_route.get("intent", intent)
             canvas_id = _resolve_canvas_from_route(matched_route, text)
+            # If the route declares workspace_required or resolves a canvas_id,
+            # mark this as a workspace request so the LLM hint is correct.
+            if matched_route.get("workspace_required") or canvas_id:
+                workspace_required = True
+                output_type = "table"
 
         # Supplier-specific filter: carry it to the LLM as a hint in filters
         workspace_filters: dict[str, str] = {}
@@ -1417,6 +1426,8 @@ def _is_workspace_request(text: str) -> bool:
         token in text
         for token in (
             "таблиц", "полный список", "все списком", "выведи список",
+            "покажи список", "список всех", "список счет", "список счёт",
+            "список поставщик", "список товар",
             "ссылк", "документ", "чертеж", "чертёж",
             "график", "диаграм", "excel", "csv", "скача", "файл",
             "сравн", "отчет", "отчёт", "столбец", "столбц", "колонк",

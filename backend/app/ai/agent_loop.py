@@ -1215,8 +1215,21 @@ async def _call_provider_streaming(
                 break
             except Exception as exc:
                 last_exc = exc
+                logger.warning(
+                    "provider_call_error",
+                    provider=p,
+                    model=model_override or config.worker_model,
+                    url=getattr(config, "ollama_url", None) if p == "ollama" else None,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
                 break
-        logger.warning("provider_call_failed_trying_fallback", provider=p, error=str(last_exc))
+        logger.warning(
+            "provider_call_failed_trying_fallback",
+            provider=p,
+            model=model_override or config.worker_model,
+            error=str(last_exc),
+        )
 
     raise last_exc or RuntimeError("All configured providers failed")
 
@@ -1989,7 +2002,13 @@ class AgentSession:
                     await self._execute_tools_sequential(tool_calls, iteration)
 
         except Exception as e:
-            logger.error("agent_loop_error", error=str(e))
+            logger.error(
+                "agent_loop_error",
+                error_type=type(e).__name__,
+                error=str(e),
+                model=self._config.worker_model if self._config else None,
+                provider=_get_agent_provider(self._config) if self._config else None,
+            )
             asyncio.create_task(self._log_action(
                 iteration=self._iteration,
                 action_type="error",

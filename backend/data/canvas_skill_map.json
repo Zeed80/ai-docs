@@ -44,6 +44,7 @@
   "intent_routing": [
     {
       "id": "invoice",
+      "workspace_required": true,
       "role": "invoice_specialist",
       "intent": "invoice_data",
       "keywords": ["счет", "счёт", "invoice", "товар", "позици"],
@@ -75,6 +76,7 @@
     },
     {
       "id": "warehouse",
+      "workspace_required": true,
       "role": "warehouse_specialist",
       "intent": "warehouse",
       "keywords": ["склад", "остат", "тмц", "фрез"],
@@ -125,6 +127,7 @@
     },
     {
       "id": "general_table",
+      "workspace_required": true,
       "role": "data_analyst",
       "intent": "general_data",
       "keywords": ["таблиц", "покажи", "выведи", "список", "отчёт", "отчет", "статистик"],

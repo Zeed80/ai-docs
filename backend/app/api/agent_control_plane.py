@@ -1160,3 +1160,85 @@ async def promote_capability_proposal(
     await db.commit()
     await db.refresh(proposal)
     return proposal
+
+
+# ── Diagnostics ───────────────────────────────────────────────────────────────
+
+
+@router.get("/diagnostics")
+async def get_agent_diagnostics() -> dict:
+    """System health snapshot: LLM, Redis, workspace blocks, recent errors."""
+    import httpx
+
+    config = get_builtin_agent_config()
+    result: dict = {
+        "model": config.worker_model or config.model,
+        "provider": config.provider,
+        "ollama_url": config.ollama_url,
+        "llm": {"status": "unknown"},
+        "redis": {"status": "unknown"},
+        "workspace": {"status": "unknown", "block_count": 0},
+        "recent_errors": [],
+    }
+
+    # --- LLM health ---
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{config.ollama_url.rstrip('/')}/api/tags")
+        if resp.status_code == 200:
+            models = [m.get("name") for m in resp.json().get("models", [])]
+            result["llm"] = {
+                "status": "ok",
+                "available_models": models,
+                "worker_model_present": config.worker_model in models,
+            }
+        else:
+            result["llm"] = {"status": "error", "http_status": resp.status_code}
+    except Exception as exc:
+        result["llm"] = {"status": "error", "error": str(exc)}
+
+    # --- Redis health ---
+    try:
+        from app.utils.redis_client import get_sync_redis
+        r = get_sync_redis()
+        r.ping()
+        result["redis"] = {"status": "ok"}
+    except Exception as exc:
+        result["redis"] = {"status": "error", "error": str(exc)}
+
+    # --- Workspace blocks ---
+    try:
+        from app.domain.workspace import list_workspace_blocks
+        blocks = list_workspace_blocks()
+        result["workspace"] = {
+            "status": "ok",
+            "block_count": len(blocks),
+            "latest_block_id": blocks[0].get("id") if blocks else None,
+            "latest_updated_at": blocks[0].get("updated_at") if blocks else None,
+        }
+    except Exception as exc:
+        result["workspace"] = {"status": "error", "error": str(exc)}
+
+    # --- Recent agent errors (from DB action log) ---
+    try:
+        from app.db.session import _get_session_factory
+        factory = _get_session_factory()
+        async with factory() as db:
+            rows = (await db.execute(
+                select(AgentAction)
+                .where(AgentAction.action_type == "error")
+                .order_by(AgentAction.created_at.desc())
+                .limit(5)
+            )).scalars().all()
+            result["recent_errors"] = [
+                {
+                    "created_at": str(row.created_at),
+                    "error": row.error,
+                    "iteration": row.iteration,
+                }
+                for row in rows
+            ]
+    except Exception:
+        pass
+
+    return result

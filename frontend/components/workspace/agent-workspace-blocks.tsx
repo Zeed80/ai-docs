@@ -16,7 +16,13 @@ interface WorkspaceResponse {
   total: number;
 }
 
-function BlockView({ block, onDeleted }: { block: CanvasBlock; onDeleted: () => void }) {
+function BlockView({
+  block,
+  onDeleted,
+}: {
+  block: CanvasBlock;
+  onDeleted: () => void;
+}) {
   async function deleteBlock() {
     await fetch(`${API}/api/workspace/blocks/${encodeURIComponent(block.id)}`, {
       method: "DELETE",
@@ -70,14 +76,18 @@ function BlockView({ block, onDeleted }: { block: CanvasBlock; onDeleted: () => 
   );
 }
 
-export function AgentWorkspaceBlocks({ className = "" }: { className?: string }) {
+export function AgentWorkspaceBlocks({
+  className = "",
+}: {
+  className?: string;
+}) {
   const [blocks, setBlocks] = useState<CanvasBlock[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    const res = await fetch(`${API}/api/workspace/blocks`, { cache: "no-store" }).catch(
-      () => null,
-    );
+    const res = await fetch(`${API}/api/workspace/blocks`, {
+      cache: "no-store",
+    }).catch(() => null);
     if (!res?.ok) {
       setLoading(false);
       return;
@@ -88,7 +98,9 @@ export function AgentWorkspaceBlocks({ className = "" }: { className?: string })
   }, []);
 
   async function clearBlocks() {
-    await fetch(`${API}/api/workspace/blocks`, { method: "DELETE" }).catch(() => {});
+    await fetch(`${API}/api/workspace/blocks`, { method: "DELETE" }).catch(
+      () => {},
+    );
     await load();
   }
 
@@ -96,12 +108,19 @@ export function AgentWorkspaceBlocks({ className = "" }: { className?: string })
     load();
     const onUpdate = () => load();
     window.addEventListener("workspace-blocks-updated", onUpdate);
-    return () => window.removeEventListener("workspace-blocks-updated", onUpdate);
+    // Fallback poll every 15 s in case the WS event was lost
+    const timer = setInterval(load, 15_000);
+    return () => {
+      window.removeEventListener("workspace-blocks-updated", onUpdate);
+      clearInterval(timer);
+    };
   }, [load]);
 
   if (loading) {
     return (
-      <div className={`rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-500 ${className}`}>
+      <div
+        className={`rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-500 ${className}`}
+      >
         Загружаю рабочий стол...
       </div>
     );
