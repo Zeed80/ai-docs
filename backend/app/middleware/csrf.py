@@ -46,6 +46,14 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if request.headers.get("X-API-Key"):
             return await call_next(request)
 
+        # Internal agent calls from loopback bypass CSRF (agent ↔ backend on same host)
+        if request.headers.get("X-Internal-Agent") == "1":
+            return await call_next(request)
+
+        # Dev mode: auth is disabled, skip CSRF entirely
+        if not settings.auth_enabled:
+            return await call_next(request)
+
         csrf_cookie = request.cookies.get("csrf_token", "")
         csrf_header = request.headers.get("X-CSRF-Token", "")
 
