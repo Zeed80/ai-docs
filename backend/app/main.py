@@ -286,3 +286,100 @@ async def get_task_status(task_id: str) -> dict:
     if result.ready():
         response["result"] = result.result
     return response
+
+
+@app.get("/api/metrics")
+async def get_metrics() -> dict:
+    """System metrics: queue depth, document counts, approval wait times, workspace."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func, select
+    from app.db.session import _get_session_factory
+    from app.db.models import Document, Invoice, Approval, AnomalyCard, DocumentStatus, InvoiceStatus, ApprovalStatus, AnomalyStatus
+
+    metrics: dict = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "documents": {},
+        "invoices": {},
+        "approvals": {},
+        "anomalies": {},
+        "workspace": {},
+        "queue": {},
+    }
+
+    try:
+        async with _get_session_factory()() as db:
+            # Documents
+            doc_total = await db.scalar(select(func.count()).select_from(Document))
+            doc_processing = await db.scalar(
+                select(func.count()).select_from(Document).where(
+                    Document.status.in_([DocumentStatus.extracting, DocumentStatus.classifying])
+                )
+            )
+            doc_needs_review = await db.scalar(
+                select(func.count()).select_from(Document).where(
+                    Document.status == DocumentStatus.needs_review
+                )
+            )
+            metrics["documents"] = {
+                "total": doc_total or 0,
+                "processing": doc_processing or 0,
+                "needs_review": doc_needs_review or 0,
+            }
+
+            # Invoices
+            inv_needs_review = await db.scalar(
+                select(func.count()).select_from(Invoice).where(
+                    Invoice.status == InvoiceStatus.needs_review
+                )
+            )
+            metrics["invoices"] = {"needs_review": inv_needs_review or 0}
+
+            # Approvals — pending + avg wait time
+            now = datetime.now(timezone.utc)
+            pending_approvals = await db.scalar(
+                select(func.count()).select_from(Approval).where(
+                    Approval.status == ApprovalStatus.pending
+                )
+            )
+            overdue_approvals = await db.scalar(
+                select(func.count()).select_from(Approval).where(
+                    Approval.status == ApprovalStatus.pending,
+                    Approval.expires_at != None,  # noqa: E711
+                    Approval.expires_at < now,
+                )
+            )
+            metrics["approvals"] = {
+                "pending": pending_approvals or 0,
+                "overdue": overdue_approvals or 0,
+            }
+
+            # Open anomalies
+            open_anomalies = await db.scalar(
+                select(func.count()).select_from(AnomalyCard).where(
+                    AnomalyCard.status == AnomalyStatus.open
+                )
+            )
+            metrics["anomalies"] = {"open": open_anomalies or 0}
+    except Exception as e:
+        metrics["db_error"] = str(e)
+
+    # Workspace blocks (Redis)
+    try:
+        from app.utils.redis_client import get_async_redis
+        redis = get_async_redis()
+        blocks = await redis.hgetall("workspace:blocks")
+        metrics["workspace"]["block_count"] = len(blocks)
+    except Exception:
+        metrics["workspace"]["block_count"] = -1
+
+    # Celery queue depth
+    try:
+        from app.utils.redis_client import get_async_redis
+        redis = get_async_redis()
+        metrics["queue"]["ingest"] = await redis.llen("ingest") or 0
+        metrics["queue"]["extraction"] = await redis.llen("extraction") or 0
+        metrics["queue"]["celery"] = await redis.llen("celery") or 0
+    except Exception:
+        pass
+
+    return metrics
