@@ -1268,9 +1268,10 @@ def process_approved_document(self, document_id: str) -> dict:
         _finish_job(job, "done")
         db.commit()
 
-        # Dispatch embedding task after commit so the doc state is final
+        # Dispatch embedding and anomaly tasks after commit
         from app.tasks.embedding import embed_document
         embed_document.delay(document_id)
+        check_invoice_anomalies.delay(str(invoice.id))
 
         logger.info(
             "post_approve_done",
@@ -1523,3 +1524,78 @@ def _parse_date(value: str | None) -> datetime | None:
         return datetime(d.year, d.month, d.day, tzinfo=UTC)
     except (ValueError, TypeError):
         return None
+
+
+@celery_app.task(name="app.tasks.extraction.check_invoice_anomalies", bind=True, max_retries=1)
+def check_invoice_anomalies(self, invoice_id: str) -> dict:
+    """Run all anomaly detectors on a newly approved invoice (fire-and-forget)."""
+    logger.info("anomaly_check_start", invoice_id=invoice_id)
+    try:
+        result = _run_async(_run_anomaly_check(invoice_id))
+        logger.info(
+            "anomaly_check_done",
+            invoice_id=invoice_id,
+            found=result.get("found", 0),
+        )
+        return result
+    except Exception as e:
+        logger.warning("anomaly_check_failed", invoice_id=invoice_id, error=str(e))
+        return {"error": str(e)}
+
+
+async def _run_anomaly_check(invoice_id: str) -> dict:
+    """Async inner: reuse detector logic from anomalies API."""
+    from sqlalchemy.orm import selectinload as _selectinload
+    from app.db.models import AnomalyCard, Invoice
+    from app.db.session import _get_session_factory
+
+    factory = _get_session_factory()
+    async with factory() as db:
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy import select as _select
+
+        result = await db.execute(
+            _select(Invoice)
+            .where(Invoice.id == uuid.UUID(invoice_id))
+            .options(
+                _selectinload(Invoice.lines),
+                _selectinload(Invoice.supplier),
+            )
+        )
+        invoice = result.scalar_one_or_none()
+        if not invoice:
+            return {"error": "invoice_not_found"}
+
+        from app.api.anomalies import (
+            _detect_duplicate,
+            _detect_new_supplier,
+            _detect_price_spike,
+            _detect_requisite_change,
+            _detect_unknown_items,
+        )
+
+        anomalies: list[AnomalyCard] = []
+        for detector in (
+            _detect_duplicate,
+            _detect_new_supplier,
+            _detect_requisite_change,
+            _detect_price_spike,
+            _detect_unknown_items,
+        ):
+            try:
+                card = await detector(db, invoice)
+                if card:
+                    anomalies.append(card)
+            except Exception as exc:
+                logger.warning(
+                    "anomaly_detector_failed",
+                    detector=detector.__name__,
+                    error=str(exc),
+                )
+
+        for a in anomalies:
+            db.add(a)
+        if anomalies:
+            await db.commit()
+
+        return {"found": len(anomalies), "invoice_id": invoice_id}

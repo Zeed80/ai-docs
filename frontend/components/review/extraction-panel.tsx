@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { ExtractionField } from "@/lib/api-client";
+import { normalization, type ExtractionField } from "@/lib/api-client";
 
 interface ExtractionPanelProps {
   fields: ExtractionField[];
@@ -127,6 +127,8 @@ function FieldRow({
 }: FieldRowProps) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
+  const [ruleMade, setRuleMade] = useState(false);
+  const [ruleLoading, setRuleLoading] = useState(false);
   const isLow = field.confidence != null && field.confidence < 0.6;
 
   function startEdit() {
@@ -141,6 +143,24 @@ function FieldRow({
   function submit() {
     if (editValue.trim()) onCorrect(editValue.trim());
     setEditing(false);
+  }
+
+  async function makeRule() {
+    if (!field.field_value || !field.corrected_value) return;
+    setRuleLoading(true);
+    try {
+      await normalization.createRule({
+        field_name: field.field_name,
+        pattern: field.field_value,
+        replacement: field.corrected_value,
+        description: `Ручное исправление: ${fieldLabel(field.field_name)}`,
+      });
+      setRuleMade(true);
+    } catch {
+      // silent
+    } finally {
+      setRuleLoading(false);
+    }
   }
 
   return (
@@ -219,6 +239,26 @@ function FieldRow({
           {field.confidence_reason}
         </span>
       )}
+
+      {field.human_corrected &&
+        field.field_value &&
+        field.corrected_value &&
+        (ruleMade ? (
+          <span className="text-[10px] text-green-400 mt-0.5 block">
+            ✓ Правило создано
+          </span>
+        ) : (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              makeRule();
+            }}
+            disabled={ruleLoading}
+            className="text-[10px] text-purple-400 hover:text-purple-300 mt-0.5 block disabled:opacity-50"
+          >
+            {ruleLoading ? "…" : "→ Сделать правилом"}
+          </button>
+        ))}
     </div>
   );
 }
