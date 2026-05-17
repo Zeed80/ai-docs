@@ -56,6 +56,7 @@ const NAV_DOCS = [
   { href: "/inbox", icon: "inbox", key: "inbox" },
   { href: "/documents", icon: "file-text", key: "documents" },
   { href: "/invoices", icon: "receipt", key: "invoices" },
+  { href: "/handovers", icon: "arrow-right-circle", key: "handovers" },
   { href: "/email", icon: "mail", key: "email" },
 ] as const;
 
@@ -463,6 +464,21 @@ function Icon({ name }: { name: string }) {
           strokeLinejoin="round"
           strokeWidth={2}
           d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+        />
+      </svg>
+    ),
+    "arrow-right-circle": (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M13 9l3 3m0 0l-3 3m3-3H8m13 0a9 9 0 11-18 0 9 9 0 0118 0z"
         />
       </svg>
     ),
