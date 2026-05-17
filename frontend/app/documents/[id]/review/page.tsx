@@ -50,6 +50,17 @@ export default function ReviewPage() {
   const [ntdFindings, setNtdFindings] = useState<NTDFinding[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [streak, setStreak] = useState<ReviewQueue>(getQueue());
+  const [priceCheck, setPriceCheck] = useState<{
+    supplier_name: string | null;
+    previous_invoice_count: number;
+    comparisons: {
+      description: string | null;
+      current_price: number | null;
+      previous_price: number | null;
+      price_change_pct: number | null;
+      previous_invoice: string | null;
+    }[];
+  } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function showToast(msg: string, duration = 2000) {
@@ -88,6 +99,15 @@ export default function ReviewPage() {
     try {
       const data = await docsApi.getInvoice(documentId);
       setInvoiceDetail(data);
+      // Price-check requires the invoice ID, not document ID
+      if (data.id) {
+        fetch(`${getApiBaseUrl()}/api/invoices/${data.id}/price-check`, {
+          credentials: "include",
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => setPriceCheck(d))
+          .catch(() => {});
+      }
     } catch {
       setInvoiceDetail(null);
     }
@@ -675,6 +695,87 @@ export default function ReviewPage() {
               </div>
             </div>
           )}
+
+          {/* Price comparison (Assisted Review context) */}
+          {priceCheck &&
+            priceCheck.previous_invoice_count > 0 &&
+            priceCheck.comparisons.some((c) => c.previous_price != null) && (
+              <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex-shrink-0">
+                <div className="px-3 py-2 border-b border-slate-700 bg-slate-800">
+                  <h3 className="text-sm font-semibold text-slate-100">
+                    Сравнение цен
+                    <span className="ml-2 text-[10px] text-slate-400 font-normal">
+                      vs {priceCheck.previous_invoice_count} предыдущих счетов
+                      {priceCheck.supplier_name &&
+                        ` · ${priceCheck.supplier_name}`}
+                    </span>
+                  </h3>
+                </div>
+                <div className="max-h-40 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-800/50 text-slate-500">
+                      <tr>
+                        <th className="text-left px-3 py-1.5">Позиция</th>
+                        <th className="text-right px-3 py-1.5">Текущая</th>
+                        <th className="text-right px-3 py-1.5">Прошлая</th>
+                        <th className="text-right px-3 py-1.5">Δ%</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {priceCheck.comparisons
+                        .filter((c) => c.previous_price != null)
+                        .map((c, i) => {
+                          const isSpike =
+                            c.price_change_pct != null &&
+                            c.price_change_pct > 20;
+                          const isGood =
+                            c.price_change_pct != null &&
+                            c.price_change_pct < -5;
+                          return (
+                            <tr
+                              key={i}
+                              className={
+                                isSpike
+                                  ? "bg-red-950/20"
+                                  : isGood
+                                    ? "bg-green-950/20"
+                                    : ""
+                              }
+                            >
+                              <td className="px-3 py-1.5 text-slate-300 truncate max-w-[160px]">
+                                {c.description ?? "—"}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-slate-200 font-mono">
+                                {c.current_price?.toLocaleString("ru-RU", {
+                                  minimumFractionDigits: 2,
+                                }) ?? "—"}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-slate-500 font-mono">
+                                {c.previous_price?.toLocaleString("ru-RU", {
+                                  minimumFractionDigits: 2,
+                                }) ?? "—"}
+                              </td>
+                              <td
+                                className={`px-3 py-1.5 text-right font-semibold ${
+                                  isSpike
+                                    ? "text-red-400"
+                                    : isGood
+                                      ? "text-green-400"
+                                      : "text-slate-400"
+                                }`}
+                              >
+                                {c.price_change_pct != null
+                                  ? `${c.price_change_pct > 0 ? "+" : ""}${c.price_change_pct}%`
+                                  : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
         </div>
       </div>
 
