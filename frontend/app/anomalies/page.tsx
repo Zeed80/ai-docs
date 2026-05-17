@@ -145,6 +145,33 @@ export default function AnomaliesPage() {
   const allOpen =
     openAnomalies.length > 0 && openAnomalies.every((a) => selected.has(a.id));
 
+  const [explain, setExplain] = useState<{
+    id: string;
+    loading: boolean;
+    data: { explanation: string; suggested_actions: string[] } | null;
+  } | null>(null);
+
+  const handleExplain = async (id: string) => {
+    if (explain?.id === id) {
+      setExplain(null);
+      return;
+    }
+    setExplain({ id, loading: true, data: null });
+    try {
+      const res = await fetch(`${API}/api/anomalies/${id}/explain`, {
+        credentials: "include",
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setExplain({ id, loading: false, data: d });
+      } else {
+        setExplain(null);
+      }
+    } catch {
+      setExplain(null);
+    }
+  };
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <h1 className="text-xl font-bold mb-4">Аномалии</h1>
@@ -270,23 +297,58 @@ export default function AnomaliesPage() {
                       </div>
                     </div>
                   </div>
-                  {a.status === "open" && (
-                    <div className="flex gap-2 shrink-0">
-                      <button
-                        onClick={() => handleResolve(a.id, "resolved")}
-                        className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
-                      >
-                        Решить
-                      </button>
-                      <button
-                        onClick={() => handleResolve(a.id, "false_positive")}
-                        className="px-3 py-1 text-xs bg-slate-600 text-white rounded hover:bg-slate-700"
-                      >
-                        Ложная
-                      </button>
-                    </div>
-                  )}
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      onClick={() => handleExplain(a.id)}
+                      className={`px-3 py-1 text-xs rounded ${
+                        explain?.id === a.id
+                          ? "bg-blue-700 text-white"
+                          : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                      }`}
+                    >
+                      {explain?.id === a.id && explain.loading
+                        ? "..."
+                        : "Объяснить"}
+                    </button>
+                    {a.status === "open" && (
+                      <>
+                        <button
+                          onClick={() => handleResolve(a.id, "resolved")}
+                          className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+                        >
+                          Решить
+                        </button>
+                        <button
+                          onClick={() => handleResolve(a.id, "false_positive")}
+                          className="px-3 py-1 text-xs bg-slate-600 text-white rounded hover:bg-slate-700"
+                        >
+                          Ложная
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
+
+                {/* Explain panel */}
+                {explain?.id === a.id && explain.data && (
+                  <div className="mt-3 pt-3 border-t border-white/10 space-y-2">
+                    <p className="text-xs leading-relaxed opacity-90">
+                      {explain.data.explanation}
+                    </p>
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider opacity-60 mb-1">
+                        Рекомендуемые действия
+                      </p>
+                      <ol className="list-decimal list-inside space-y-1">
+                        {explain.data.suggested_actions.map((action, i) => (
+                          <li key={i} className="text-xs opacity-80">
+                            {action}
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

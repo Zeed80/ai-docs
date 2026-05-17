@@ -1,7 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 
 const API = getApiBaseUrl();
 
@@ -264,6 +264,12 @@ export default function CanonicalItemsPage() {
   );
 }
 
+interface PricePoint {
+  recorded_at: string;
+  price: number;
+  currency: string;
+}
+
 function CanonicalTable({
   items,
   onToggle,
@@ -273,6 +279,34 @@ function CanonicalTable({
   onToggle: (item: CanonicalItem) => void;
   onDelete: (id: string) => void;
 }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [priceHistory, setPriceHistory] = useState<
+    Record<string, PricePoint[]>
+  >({});
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+
+  const toggleHistory = useCallback(
+    async (id: string) => {
+      if (expandedId === id) {
+        setExpandedId(null);
+        return;
+      }
+      setExpandedId(id);
+      if (priceHistory[id]) return;
+      setLoadingId(id);
+      try {
+        const res = await fetch(`${API}/api/canonical/${id}/price-history`);
+        if (res.ok) {
+          const data: PricePoint[] = await res.json();
+          setPriceHistory((prev) => ({ ...prev, [id]: data }));
+        }
+      } finally {
+        setLoadingId(null);
+      }
+    },
+    [expandedId, priceHistory],
+  );
+
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
       <table className="w-full text-sm">
@@ -283,57 +317,124 @@ function CanonicalTable({
             <th className="text-left px-3 py-2">Ед.</th>
             <th className="text-left px-3 py-2">ОКПД2</th>
             <th className="text-left px-3 py-2">ГОСТ</th>
-            <th className="w-20 px-3 py-2" />
+            <th className="w-28 px-3 py-2" />
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-700/60">
           {items.map((item) => (
-            <tr key={item.id} className="group hover:bg-slate-700/20">
-              <td className="px-4 py-2.5">
-                <div className="text-slate-200 font-medium">{item.name}</div>
-                {item.aliases && item.aliases.length > 0 && (
-                  <div className="text-xs text-slate-500 mt-0.5">
-                    {item.aliases.slice(0, 3).join(", ")}
+            <>
+              <tr key={item.id} className="group hover:bg-slate-700/20">
+                <td className="px-4 py-2.5">
+                  <div className="text-slate-200 font-medium">{item.name}</div>
+                  {item.aliases && item.aliases.length > 0 && (
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      {item.aliases.slice(0, 3).join(", ")}
+                    </div>
+                  )}
+                </td>
+                <td className="px-3 py-2.5 text-slate-400 text-xs">
+                  {item.category ?? "—"}
+                </td>
+                <td className="px-3 py-2.5 text-slate-400 text-xs">
+                  {item.unit ?? "—"}
+                </td>
+                <td className="px-3 py-2.5 font-mono text-xs text-slate-400">
+                  {item.okpd2_code ?? "—"}
+                </td>
+                <td className="px-3 py-2.5 text-xs text-slate-400">
+                  {item.gost ?? "—"}
+                </td>
+                <td className="px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => toggleHistory(item.id)}
+                      className={`text-xs px-1.5 py-0.5 rounded ${
+                        expandedId === item.id
+                          ? "text-blue-400"
+                          : "text-slate-500 hover:text-blue-400"
+                      }`}
+                      title="История цен"
+                    >
+                      {loadingId === item.id ? "..." : "₽"}
+                    </button>
+                    <button
+                      onClick={() => onToggle(item)}
+                      className={`text-xs px-1.5 py-0.5 rounded ${
+                        item.is_confirmed
+                          ? "text-slate-500 hover:text-amber-400"
+                          : "text-amber-400 hover:text-green-400"
+                      }`}
+                      title={
+                        item.is_confirmed
+                          ? "Снять подтверждение"
+                          : "Подтвердить"
+                      }
+                    >
+                      {item.is_confirmed ? "✓" : "?"}
+                    </button>
+                    <button
+                      onClick={() => onDelete(item.id)}
+                      className="text-xs text-slate-600 hover:text-red-400"
+                      title="Удалить"
+                    >
+                      ×
+                    </button>
                   </div>
-                )}
-              </td>
-              <td className="px-3 py-2.5 text-slate-400 text-xs">
-                {item.category ?? "—"}
-              </td>
-              <td className="px-3 py-2.5 text-slate-400 text-xs">
-                {item.unit ?? "—"}
-              </td>
-              <td className="px-3 py-2.5 font-mono text-xs text-slate-400">
-                {item.okpd2_code ?? "—"}
-              </td>
-              <td className="px-3 py-2.5 text-xs text-slate-400">
-                {item.gost ?? "—"}
-              </td>
-              <td className="px-3 py-2.5">
-                <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={() => onToggle(item)}
-                    className={`text-xs px-1.5 py-0.5 rounded ${
-                      item.is_confirmed
-                        ? "text-slate-500 hover:text-amber-400"
-                        : "text-amber-400 hover:text-green-400"
-                    }`}
-                    title={
-                      item.is_confirmed ? "Снять подтверждение" : "Подтвердить"
-                    }
+                </td>
+              </tr>
+              {expandedId === item.id && (
+                <tr key={`${item.id}-history`}>
+                  <td
+                    colSpan={6}
+                    className="px-4 py-3 bg-slate-900/50 border-t border-slate-700/40"
                   >
-                    {item.is_confirmed ? "✓" : "?"}
-                  </button>
-                  <button
-                    onClick={() => onDelete(item.id)}
-                    className="text-xs text-slate-600 hover:text-red-400"
-                    title="Удалить"
-                  >
-                    ×
-                  </button>
-                </div>
-              </td>
-            </tr>
+                    {!priceHistory[item.id] ? (
+                      <span className="text-xs text-slate-500">
+                        Загрузка...
+                      </span>
+                    ) : priceHistory[item.id].length === 0 ? (
+                      <span className="text-xs text-slate-500">
+                        История цен отсутствует
+                      </span>
+                    ) : (
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-2">
+                          История цен
+                        </p>
+                        <table className="text-xs w-full max-w-md">
+                          <thead>
+                            <tr className="text-slate-500">
+                              <th className="text-left pb-1">Дата</th>
+                              <th className="text-right pb-1">Цена</th>
+                              <th className="text-left pb-1 pl-2">Валюта</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-700/40">
+                            {priceHistory[item.id].map((p, i) => (
+                              <tr key={i}>
+                                <td className="py-1 text-slate-400">
+                                  {new Date(p.recorded_at).toLocaleDateString(
+                                    "ru-RU",
+                                  )}
+                                </td>
+                                <td className="py-1 text-right text-slate-200 font-mono">
+                                  {p.price.toLocaleString("ru-RU", {
+                                    minimumFractionDigits: 2,
+                                  })}
+                                </td>
+                                <td className="py-1 pl-2 text-slate-500">
+                                  {p.currency}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )}
+            </>
           ))}
         </tbody>
       </table>

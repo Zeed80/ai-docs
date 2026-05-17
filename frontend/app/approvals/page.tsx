@@ -96,6 +96,8 @@ export default function ApprovalsPage() {
     null,
   );
   const [loading, setLoading] = useState(false);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   const selected = approvals.find((a) => a.id === selectedId) ?? null;
 
@@ -106,6 +108,10 @@ export default function ApprovalsPage() {
         const items: ApprovalItem[] = data.items ?? [];
         setApprovals(items);
         if (items.length > 0 && !selectedId) setSelectedId(items[0].id);
+        setCheckedIds((prev) => {
+          const ids = new Set(items.map((i) => i.id));
+          return new Set([...prev].filter((id) => ids.has(id)));
+        });
       })
       .catch(() => {});
   }, [selectedId]);
@@ -150,6 +156,60 @@ export default function ApprovalsPage() {
     },
     [comment],
   );
+
+  const bulkDecide = useCallback(
+    async (approved: boolean) => {
+      if (checkedIds.size === 0) return;
+      setBulkLoading(true);
+      try {
+        const res = await fetch(`${API}/api/approvals/bulk-decide`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            approval_ids: [...checkedIds],
+            status: approved ? "approved" : "rejected",
+            comment: comment || null,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const { processed, failed } = await res.json();
+        setApprovals((prev) => {
+          const next = prev.filter((a) => !checkedIds.has(a.id));
+          setSelectedId(next[0]?.id ?? null);
+          return next;
+        });
+        setCheckedIds(new Set());
+        setComment("");
+        showToast(
+          `Обработано: ${processed}${failed ? `, ошибки: ${failed}` : ""}`,
+          failed === 0,
+        );
+      } catch (e) {
+        showToast(`Ошибка: ${String(e).slice(0, 60)}`, false);
+      } finally {
+        setBulkLoading(false);
+      }
+    },
+    [checkedIds, comment],
+  );
+
+  function toggleCheck(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (checkedIds.size === approvals.length) {
+      setCheckedIds(new Set());
+    } else {
+      setCheckedIds(new Set(approvals.map((a) => a.id)));
+    }
+  }
 
   // Keyboard: j/k navigate, y approve, n reject
   useEffect(() => {
@@ -244,7 +304,47 @@ export default function ApprovalsPage() {
       ) : (
         <div className="flex-1 flex overflow-hidden">
           {/* Left: list */}
-          <div className="w-72 border-r border-slate-700 overflow-y-auto shrink-0">
+          <div className="w-72 border-r border-slate-700 overflow-y-auto shrink-0 flex flex-col">
+            {/* Bulk toolbar */}
+            <div className="px-3 py-2 border-b border-slate-700/50 flex items-center gap-2 shrink-0">
+              <input
+                type="checkbox"
+                checked={
+                  checkedIds.size === approvals.length && approvals.length > 0
+                }
+                ref={(el) => {
+                  if (el)
+                    el.indeterminate =
+                      checkedIds.size > 0 && checkedIds.size < approvals.length;
+                }}
+                onChange={toggleAll}
+                className="accent-blue-500"
+              />
+              {checkedIds.size > 0 ? (
+                <>
+                  <span className="text-xs text-slate-400 flex-1">
+                    {checkedIds.size} выбрано
+                  </span>
+                  <button
+                    onClick={() => bulkDecide(true)}
+                    disabled={bulkLoading}
+                    className="text-[10px] px-2 py-1 bg-green-700 text-white rounded hover:bg-green-600 disabled:opacity-50"
+                  >
+                    Утвердить всё
+                  </button>
+                  <button
+                    onClick={() => bulkDecide(false)}
+                    disabled={bulkLoading}
+                    className="text-[10px] px-2 py-1 bg-red-700 text-white rounded hover:bg-red-600 disabled:opacity-50"
+                  >
+                    Отклонить всё
+                  </button>
+                </>
+              ) : (
+                <span className="text-xs text-slate-500">Выбрать все</span>
+              )}
+            </div>
+
             {approvals.map((a) => {
               const colorClass =
                 ACTION_COLORS[a.action_type] ?? ACTION_COLORS.default;
@@ -255,49 +355,58 @@ export default function ApprovalsPage() {
                 new Date(a.expires_at).getTime() - Date.now() < 7_200_000 &&
                 new Date(a.expires_at).getTime() - Date.now() >= 0;
               return (
-                <button
+                <div
                   key={a.id}
                   onClick={() => setSelectedId(a.id)}
-                  className={`w-full text-left px-4 py-3 border-b border-slate-700/50 transition-colors ${
+                  className={`flex items-start gap-2 px-3 py-3 border-b border-slate-700/50 transition-colors cursor-pointer ${
                     a.id === selectedId
                       ? "bg-blue-900/30 border-l-2 border-l-blue-500"
                       : "hover:bg-slate-700/50"
                   }`}
                 >
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${colorClass}`}
-                    >
-                      {ACTION_LABELS[a.action_type] ?? a.action_type}
-                    </span>
-                    {showWarning && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-amber-900/40 text-amber-400">
-                        ⏰ истекает через {expiry!.label}
+                  <input
+                    type="checkbox"
+                    checked={checkedIds.has(a.id)}
+                    onClick={(e) => toggleCheck(a.id, e)}
+                    onChange={() => {}}
+                    className="mt-1 accent-blue-500 shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${colorClass}`}
+                      >
+                        {ACTION_LABELS[a.action_type] ?? a.action_type}
                       </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-slate-300 mt-1.5 truncate font-medium">
-                    {(a.context?.invoice_number as string)
-                      ? `№ ${a.context?.invoice_number}`
-                      : ((a.context?.subject as string) ??
-                        a.entity_id.slice(0, 8))}
-                  </p>
-                  {a.context?.total_amount != null && (
-                    <p className="text-xs text-slate-500">
-                      {formatAmount(a.context.total_amount)}{" "}
-                      {(a.context.currency as string) ?? "RUB"}
+                      {showWarning && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-amber-900/40 text-amber-400">
+                          ⏰ {expiry!.label}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-300 mt-1.5 truncate font-medium">
+                      {(a.context?.invoice_number as string)
+                        ? `№ ${a.context?.invoice_number}`
+                        : ((a.context?.subject as string) ??
+                          a.entity_id.slice(0, 8))}
                     </p>
-                  )}
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    {a.requested_by ?? "sveta"} ·{" "}
-                    {new Date(a.created_at).toLocaleString("ru-RU", {
-                      month: "short",
-                      day: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </p>
-                </button>
+                    {a.context?.total_amount != null && (
+                      <p className="text-xs text-slate-500">
+                        {formatAmount(a.context.total_amount)}{" "}
+                        {(a.context.currency as string) ?? "RUB"}
+                      </p>
+                    )}
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      {a.requested_by ?? "sveta"} ·{" "}
+                      {new Date(a.created_at).toLocaleString("ru-RU", {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  </div>
+                </div>
               );
             })}
           </div>

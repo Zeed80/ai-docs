@@ -289,3 +289,59 @@ async def mark_sent(
     await db.commit()
     await db.refresh(reminder)
     return reminder
+
+
+# ── calendar.export_ical ─────────────────────────────────────────────────
+
+
+@router.get("/export.ics")
+async def export_ical(
+    days: int = Query(30, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export upcoming calendar events as iCalendar (.ics) file."""
+    from fastapi.responses import Response
+
+    cutoff = datetime.now(timezone.utc) + timedelta(days=days)
+    result = await db.execute(
+        select(CalendarEvent)
+        .where(CalendarEvent.event_date <= cutoff)
+        .order_by(CalendarEvent.event_date.asc())
+        .limit(500)
+    )
+    events = result.scalars().all()
+
+    def fmt_dt(dt: datetime) -> str:
+        return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//AI Workspace//Calendar Export//RU",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+    ]
+    for e in events:
+        uid = f"{e.id}@ai-workspace"
+        dtstart = fmt_dt(e.event_date)
+        dtend = fmt_dt(e.event_date + timedelta(hours=1))
+        dtstamp = fmt_dt(datetime.now(timezone.utc))
+        summary = e.title.replace("\\", "\\\\").replace(",", "\\,").replace("\n", "\\n")
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{dtstamp}",
+            f"DTSTART:{dtstart}",
+            f"DTEND:{dtend}",
+            f"SUMMARY:{summary}",
+            f"DESCRIPTION:{e.event_type}",
+            "END:VEVENT",
+        ]
+    lines.append("END:VCALENDAR")
+
+    ical_content = "\r\n".join(lines) + "\r\n"
+    return Response(
+        content=ical_content,
+        media_type="text/calendar",
+        headers={"Content-Disposition": 'attachment; filename="calendar.ics"'},
+    )

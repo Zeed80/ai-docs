@@ -10,7 +10,7 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.db.models import CanonicalItem, InvoiceLine
+from app.db.models import CanonicalItem, InvoiceLine, PriceHistoryEntry
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -75,6 +75,14 @@ class SuggestMappingResponse(BaseModel):
 class ConfirmMappingRequest(BaseModel):
     invoice_line_id: uuid.UUID
     canonical_item_id: uuid.UUID
+
+
+class PriceHistoryPoint(BaseModel):
+    recorded_at: datetime
+    price: float
+    currency: str
+    supplier_id: uuid.UUID | None = None
+    invoice_id: uuid.UUID | None = None
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -163,6 +171,34 @@ async def delete_canonical_item(item_id: uuid.UUID, db: AsyncSession = Depends(g
         raise HTTPException(status_code=404, detail="Not found")
     await db.delete(item)
     await db.commit()
+
+
+@router.get("/{item_id}/price-history", response_model=list[PriceHistoryPoint])
+async def get_price_history(
+    item_id: uuid.UUID,
+    limit: int = Query(50, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get price history for a canonical item."""
+    result = await db.execute(select(CanonicalItem).where(CanonicalItem.id == item_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Not found")
+    rows = await db.execute(
+        select(PriceHistoryEntry)
+        .where(PriceHistoryEntry.canonical_item_id == item_id)
+        .order_by(PriceHistoryEntry.recorded_at.desc())
+        .limit(limit)
+    )
+    return [
+        PriceHistoryPoint(
+            recorded_at=row.recorded_at,
+            price=row.price,
+            currency=row.currency,
+            supplier_id=row.supplier_id,
+            invoice_id=row.invoice_id,
+        )
+        for row in rows.scalars().all()
+    ]
 
 
 @router.post("/suggest", response_model=SuggestMappingResponse)
