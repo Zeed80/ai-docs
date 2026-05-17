@@ -10,19 +10,121 @@ const API_BASE = getApiBaseUrl();
 type Mode = "nav" | "search" | "nl";
 
 interface NavItem {
+  id: string;
   label: string;
   href: string;
   shortcut?: string;
+  group?: string;
+}
+
+interface ActionItem {
+  id: string;
+  label: string;
+  description?: string;
+  group?: string;
+  icon?: string;
+  action: () => void;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: "Входящие", href: "/inbox", shortcut: "g i" },
-  { label: "Документы", href: "/documents", shortcut: "g d" },
-  { label: "Счета", href: "/invoices", shortcut: "g v" },
-  { label: "Согласования", href: "/approvals", shortcut: "g a" },
-  { label: "Настройки", href: "/settings" },
-  { label: "Правила нормализации", href: "/settings/normalization" },
+  {
+    id: "inbox",
+    label: "Входящие",
+    href: "/inbox",
+    shortcut: "g i",
+    group: "Навигация",
+  },
+  {
+    id: "documents",
+    label: "Документы",
+    href: "/documents",
+    shortcut: "g d",
+    group: "Навигация",
+  },
+  {
+    id: "invoices",
+    label: "Счета",
+    href: "/invoices",
+    shortcut: "g v",
+    group: "Навигация",
+  },
+  {
+    id: "approvals",
+    label: "Согласования",
+    href: "/approvals",
+    shortcut: "g a",
+    group: "Навигация",
+  },
+  {
+    id: "anomalies",
+    label: "Аномалии",
+    href: "/anomalies",
+    group: "Навигация",
+  },
+  {
+    id: "suppliers",
+    label: "Поставщики",
+    href: "/catalogs/suppliers",
+    group: "Навигация",
+  },
+  {
+    id: "procurement",
+    label: "Закупки / КП",
+    href: "/procurement",
+    group: "Навигация",
+  },
+  { id: "calendar", label: "Календарь", href: "/calendar", group: "Навигация" },
+  {
+    id: "chat",
+    label: "Рабочий стол (Света)",
+    href: "/chat",
+    group: "Навигация",
+  },
+  { id: "cases", label: "Дела", href: "/cases", group: "Навигация" },
+  { id: "settings", label: "Настройки", href: "/settings", group: "Настройки" },
+  {
+    id: "norm-rules",
+    label: "Правила нормализации",
+    href: "/settings/normalization",
+    group: "Настройки",
+  },
+  { id: "admin", label: "Администратор", href: "/admin", group: "Настройки" },
 ];
+
+const HISTORY_KEY = "cmd_palette_history";
+const HISTORY_MAX = 8;
+
+function loadHistory(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+function pushHistory(itemId: string) {
+  try {
+    const prev = loadHistory().filter((id) => id !== itemId);
+    localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify([itemId, ...prev].slice(0, HISTORY_MAX)),
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function fuzzyMatch(label: string, query: string): boolean {
+  const lq = query.toLowerCase();
+  const ll = label.toLowerCase();
+  if (ll.includes(lq)) return true;
+  // character subsequence match
+  let qi = 0;
+  for (let li = 0; li < ll.length && qi < lq.length; li++) {
+    if (ll[li] === lq[qi]) qi++;
+  }
+  return qi === lq.length;
+}
 
 interface SearchResult {
   id: string;
@@ -51,8 +153,8 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [nlResult, setNLResult] = useState<NLResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState<string[]>([]);
 
-  // Focus input on open
   useEffect(() => {
     if (open) {
       setQuery("");
@@ -60,11 +162,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       setMode("nav");
       setSearchResults([]);
       setNLResult(null);
+      setHistory(loadHistory());
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [open]);
 
-  // Detect mode from input
   useEffect(() => {
     if (query.startsWith("/")) {
       setMode("nl");
@@ -76,7 +178,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     setSelected(0);
   }, [query]);
 
-  // Debounced hybrid search (vector + text fallback)
+  // Debounced hybrid search
   useEffect(() => {
     if (mode === "search" && query.length >= 2) {
       const timer = setTimeout(async () => {
@@ -89,7 +191,6 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           });
           if (res.ok) {
             const data = await res.json();
-            // hybrid returns {results: [...]} or plain array
             const items = Array.isArray(data) ? data : (data.results ?? []);
             setSearchResults(items);
           }
@@ -98,15 +199,12 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         } finally {
           setLoading(false);
         }
-      }, 400);
+      }, 350);
       return () => clearTimeout(timer);
     }
-    if (mode === "nav") {
-      setSearchResults([]);
-    }
+    if (mode === "nav") setSearchResults([]);
   }, [query, mode]);
 
-  // NL query on Enter
   const runNLQuery = useCallback(async () => {
     const nlQuery = query.startsWith("/") ? query.slice(1).trim() : query;
     if (!nlQuery) return;
@@ -128,13 +226,17 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
   }, [query]);
 
-  // Filtered nav items
-  const filteredNav = NAV_ITEMS.filter(
-    (item) =>
-      query === "" || item.label.toLowerCase().includes(query.toLowerCase()),
-  );
+  // Nav items: history-first when query="", fuzzy-filtered otherwise
+  const filteredNav: NavItem[] =
+    query === ""
+      ? [
+          ...(history
+            .map((id) => NAV_ITEMS.find((n) => n.id === id))
+            .filter(Boolean) as NavItem[]),
+          ...NAV_ITEMS.filter((n) => !history.includes(n.id)),
+        ]
+      : NAV_ITEMS.filter((n) => fuzzyMatch(n.label, query));
 
-  // Current items for navigation
   const currentItems =
     mode === "nav"
       ? filteredNav
@@ -142,13 +244,17 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         ? searchResults
         : (nlResult?.results ?? []);
 
+  function navigateTo(item: NavItem) {
+    pushHistory(item.id);
+    setHistory(loadHistory());
+    router.push(item.href);
+    onClose();
+  }
+
   function handleSelect(index: number) {
     if (mode === "nav") {
       const item = filteredNav[index];
-      if (item) {
-        router.push(item.href);
-        onClose();
-      }
+      if (item) navigateTo(item);
     } else {
       const item = currentItems[index] as SearchResult;
       if (item?.id) {
@@ -181,7 +287,6 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         break;
       case "Tab":
         e.preventDefault();
-        // Cycle modes
         setMode((m) =>
           m === "nav" ? "search" : m === "search" ? "nl" : "nav",
         );
@@ -190,6 +295,9 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   }
 
   if (!open) return null;
+
+  const showHistory = mode === "nav" && query === "" && history.length > 0;
+  const recentIds = new Set(history);
 
   return (
     <div
@@ -202,7 +310,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       >
         {/* Input */}
         <div className="flex items-center border-b border-slate-200 px-4">
-          <span className="text-slate-400 text-sm mr-2">
+          <span className="text-slate-400 text-sm mr-2 select-none">
             {mode === "nl" ? "/" : mode === "search" ? ">" : "#"}
           </span>
           <input
@@ -215,7 +323,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 ? "Спросите на естественном языке..."
                 : mode === "search"
                   ? "Поиск документов..."
-                  : "Перейти к..."
+                  : "Перейти к... (/ для AI-запроса)"
             }
             className="flex-1 py-3 text-sm outline-none bg-transparent"
           />
@@ -229,7 +337,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           {(["nav", "search", "nl"] as Mode[]).map((m) => (
             <button
               key={m}
-              onClick={() => setMode(m)}
+              onClick={() => {
+                setMode(m);
+                inputRef.current?.focus();
+              }}
               className={`px-2 py-0.5 text-xs rounded ${
                 mode === m
                   ? "bg-slate-200 text-slate-800"
@@ -245,7 +356,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           ))}
           <span className="flex-1" />
           <span className="text-[10px] text-slate-400 self-center">
-            Tab — сменить режим
+            Tab — режим
           </span>
         </div>
 
@@ -257,26 +368,64 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         )}
 
         {/* Results */}
-        <div className="max-h-64 overflow-auto">
-          {mode === "nav" &&
-            filteredNav.map((item, i) => (
-              <button
-                key={item.href}
-                onClick={() => handleSelect(i)}
-                className={`w-full flex items-center justify-between px-4 py-2 text-sm ${
-                  i === selected
-                    ? "bg-blue-50 text-blue-700"
-                    : "text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                <span>{item.label}</span>
-                {item.shortcut && (
-                  <kbd className="text-[10px] px-1.5 py-0.5 bg-slate-100 rounded border text-slate-400">
-                    {item.shortcut}
-                  </kbd>
-                )}
-              </button>
-            ))}
+        <div className="max-h-72 overflow-auto">
+          {mode === "nav" && (
+            <>
+              {showHistory && (
+                <div className="px-4 pt-2 pb-0.5">
+                  <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+                    Недавние
+                  </span>
+                </div>
+              )}
+              {filteredNav.map((item, i) => {
+                const isRecent = recentIds.has(item.id) && query === "";
+                const showGroupLabel =
+                  !isRecent &&
+                  i > 0 &&
+                  filteredNav[i - 1].group !== item.group &&
+                  !recentIds.has(filteredNav[i - 1].id);
+                const isFirstNonRecent =
+                  !isRecent &&
+                  (i === 0 || recentIds.has(filteredNav[i - 1].id));
+
+                return (
+                  <div key={item.id}>
+                    {(showGroupLabel || isFirstNonRecent) &&
+                      !isRecent &&
+                      history.length > 0 &&
+                      query === "" && (
+                        <div className="px-4 pt-2 pb-0.5">
+                          <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+                            Все разделы
+                          </span>
+                        </div>
+                      )}
+                    <button
+                      onClick={() => navigateTo(item)}
+                      className={`w-full flex items-center justify-between px-4 py-2 text-sm ${
+                        i === selected
+                          ? "bg-blue-50 text-blue-700"
+                          : "text-slate-700 hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {isRecent && (
+                          <span className="text-slate-300 text-xs">↩</span>
+                        )}
+                        <span>{item.label}</span>
+                      </div>
+                      {item.shortcut && (
+                        <kbd className="text-[10px] px-1.5 py-0.5 bg-slate-100 rounded border text-slate-400">
+                          {item.shortcut}
+                        </kbd>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </>
+          )}
 
           {(mode === "search" || (mode === "nl" && nlResult)) &&
             (currentItems as SearchResult[]).map((item, i) => (
