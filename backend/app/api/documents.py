@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -1678,3 +1679,43 @@ async def summarize_document(
         action_required=summary_data.get("action_required"),
         urgency=summary_data.get("urgency", "low"),
     )
+
+
+# ── POST /api/documents/{id}/snooze ──────────────────────────────────────────
+
+
+class SnoozeRequest(BaseModel):
+    until: datetime
+    reason: str | None = None
+
+
+@router.post("/{document_id}/snooze", status_code=204)
+async def snooze_document(
+    document_id: uuid.UUID,
+    payload: SnoozeRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Snooze a document — hide from inbox until the given datetime."""
+    from app.db.models import Snooze
+
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(404, "Document not found")
+
+    snooze = Snooze(
+        entity_type="document",
+        entity_id=document_id,
+        user_id="system",
+        until=payload.until,
+        reason=payload.reason,
+    )
+    db.add(snooze)
+    await log_action(
+        db,
+        action="doc.snooze",
+        entity_type="document",
+        entity_id=document_id,
+        details={"until": payload.until.isoformat(), "reason": payload.reason},
+    )
+    await db.commit()

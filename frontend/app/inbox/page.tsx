@@ -251,6 +251,28 @@ export default function InboxPage() {
                   → Проверить
                 </span>
               )}
+
+              {/* Snooze button */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const until = new Date(
+                    Date.now() + 24 * 60 * 60 * 1000,
+                  ).toISOString();
+                  fetch(`${API}/api/documents/${doc.id}/snooze`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      until,
+                      reason: "Отложено из Inbox",
+                    }),
+                  }).then(() => fetchDocuments());
+                }}
+                title="Отложить на 24 часа"
+                className="text-slate-600 hover:text-slate-400 shrink-0 text-xs px-1 rounded hover:bg-slate-700 transition-colors"
+              >
+                💤
+              </button>
             </div>
           ))}
         </div>
