@@ -183,6 +183,53 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+function Sparkline({
+  points,
+  trend,
+}: {
+  points: { date: string; price: number }[];
+  trend: string | null;
+}) {
+  if (points.length < 2)
+    return <span className="text-slate-600 text-xs">—</span>;
+  const W = 64,
+    H = 24,
+    pad = 2;
+  const vals = points.map((p) => p.price);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = max - min || 1;
+  const xs = points.map(
+    (_, i) => pad + (i / (points.length - 1)) * (W - pad * 2),
+  );
+  const ys = vals.map((v) => pad + (1 - (v - min) / range) * (H - pad * 2));
+  const d = xs
+    .map((x, i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${ys[i].toFixed(1)}`)
+    .join(" ");
+  const color =
+    trend === "up" ? "#f87171" : trend === "down" ? "#4ade80" : "#94a3b8";
+  return (
+    <svg width={W} height={H} className="inline-block">
+      <polyline
+        points={xs
+          .map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`)
+          .join(" ")}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle
+        cx={xs[xs.length - 1].toFixed(1)}
+        cy={ys[ys.length - 1].toFixed(1)}
+        r="2"
+        fill={color}
+      />
+    </svg>
+  );
+}
+
 // ── Catalog Tab ───────────────────────────────────────────────────────────────
 
 function CatalogTab({
@@ -1214,8 +1261,8 @@ export default function SupplierProfilePage() {
                       <th className="text-left px-3 py-1.5">Позиция</th>
                       <th className="text-right px-3 py-1.5">Текущая</th>
                       <th className="text-right px-3 py-1.5">Средняя</th>
+                      <th className="text-center px-3 py-1.5">График</th>
                       <th className="text-center px-3 py-1.5">Тренд</th>
-                      <th className="text-right px-3 py-1.5">Точек</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-700">
@@ -1231,6 +1278,9 @@ export default function SupplierProfilePage() {
                           {item.avg_price?.toLocaleString("ru-RU") ?? "—"}
                         </td>
                         <td className="px-3 py-2 text-center">
+                          <Sparkline points={item.points} trend={item.trend} />
+                        </td>
+                        <td className="px-3 py-2 text-center">
                           {item.trend === "up" && (
                             <span className="text-red-400 text-xs">▲ Рост</span>
                           )}
@@ -1244,9 +1294,6 @@ export default function SupplierProfilePage() {
                               ▶ Стабильно
                             </span>
                           )}
-                        </td>
-                        <td className="px-3 py-2 text-right text-slate-500">
-                          {item.points.length}
                         </td>
                       </tr>
                     ))}
