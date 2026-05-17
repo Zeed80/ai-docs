@@ -211,8 +211,6 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
     environment:
       BACKEND_URL: http://backend:8000
       INTERNAL_API_URL: http://backend:8000

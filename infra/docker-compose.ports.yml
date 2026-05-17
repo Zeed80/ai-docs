@@ -23,3 +23,7 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+
+  frontend:
+    ports:
+      - "3000:3000"
