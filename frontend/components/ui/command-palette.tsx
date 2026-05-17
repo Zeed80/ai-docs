@@ -80,6 +80,19 @@ const NAV_ITEMS: NavItem[] = [
     href: "/chat",
     group: "Навигация",
   },
+  {
+    id: "search",
+    label: "Поиск",
+    href: "/search",
+    shortcut: "g s",
+    group: "Навигация",
+  },
+  {
+    id: "compare",
+    label: "Сравнение КП",
+    href: "/compare",
+    group: "Навигация",
+  },
   { id: "cases", label: "Дела", href: "/cases", group: "Навигация" },
   {
     id: "canonical",

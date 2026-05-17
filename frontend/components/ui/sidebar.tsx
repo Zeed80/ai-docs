@@ -62,6 +62,8 @@ const NAV_DOCS = [
 const NAV_REF = [
   { href: "/boms", icon: "list", key: "boms" },
   { href: "/anomalies", icon: "alert-triangle", key: "anomalies" },
+  { href: "/canonical", icon: "tag", key: "canonical" },
+  { href: "/search", icon: "search", key: "search" },
   { href: "/settings/ntd", icon: "file-text", key: "ntd" },
   { href: "/settings/norm-cards", icon: "sliders", key: "normalization" },
 ] as const;
@@ -78,6 +80,8 @@ const NAV_WAREHOUSE = [
 const NAV_PROCUREMENT = [
   { href: "/procurement", icon: "shopping-cart", key: "procurement" },
   { href: "/suppliers", icon: "users", key: "suppliers" },
+  { href: "/compare", icon: "scale", key: "compare" },
+  { href: "/cases", icon: "folder", key: "cases" },
 ] as const;
 
 const NAV_FINANCE = [
@@ -399,6 +403,66 @@ function Icon({ name }: { name: string }) {
           strokeLinejoin="round"
           strokeWidth={2}
           d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"
+        />
+      </svg>
+    ),
+    scale: (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M3 6l9-3 9 3M3 6v6l9 3 9-3V6M12 9v12"
+        />
+      </svg>
+    ),
+    folder: (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
+        />
+      </svg>
+    ),
+    tag: (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
+        />
+      </svg>
+    ),
+    search: (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
         />
       </svg>
     ),

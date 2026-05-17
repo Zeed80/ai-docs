@@ -26,7 +26,10 @@
     "drawings": "Drawings",
     "catalogs": "Catalogs",
     "chat": "Chat",
-    "admin": "Administration"
+    "admin": "Administration",
+    "compare": "Compare Offers",
+    "cases": "Cases",
+    "canonical": "Item Registry"
   },
   "inbox": {
     "title": "Inbox",
