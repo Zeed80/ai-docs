@@ -15,12 +15,30 @@ interface DocumentItem {
   created_at: string;
 }
 
+interface AnomalyItem {
+  id: string;
+  title: string;
+  anomaly_type: string;
+  severity: string;
+  entity_id: string;
+  created_at: string;
+}
+
+const ANOMALY_TYPE_LABELS: Record<string, string> = {
+  duplicate: "Дубликат",
+  new_supplier: "Новый поставщик",
+  requisite_change: "Смена реквизитов",
+  price_spike: "Скачок цены",
+  unknown_item: "Неизвестная позиция",
+};
+
 export default function InboxPage() {
   const t = useTranslations("inbox");
   const tDoc = useTranslations("document");
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [filter, setFilter] = useState("all");
+  const [criticalAnomalies, setCriticalAnomalies] = useState<AnomalyItem[]>([]);
 
   const fetchDocuments = useCallback(() => {
     const params = new URLSearchParams({ limit: "50" });
@@ -78,6 +96,16 @@ export default function InboxPage() {
     fetchDocuments();
   }, [fetchDocuments]);
 
+  // Load critical open anomalies
+  useEffect(() => {
+    fetch(`${API}/api/anomalies?status=open&severity=critical&limit=5`, {
+      credentials: "include",
+    })
+      .then((r) => r.json())
+      .then((d) => setCriticalAnomalies(d.items ?? d ?? []))
+      .catch(() => {});
+  }, []);
+
   // Real-time: re-fetch when any notification arrives (document_ready, approval, etc.)
   const wsRef = useRef<WebSocket | null>(null);
   useEffect(() => {
@@ -120,6 +148,38 @@ export default function InboxPage() {
           </button>
         </div>
       </div>
+
+      {/* Critical anomalies */}
+      {criticalAnomalies.length > 0 && (
+        <div className="mb-4">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-red-400 mb-2">
+            ⚠ Критические аномалии ({criticalAnomalies.length})
+          </h2>
+          <div className="space-y-1.5">
+            {criticalAnomalies.map((a) => (
+              <a
+                key={a.id}
+                href={`/anomalies`}
+                className="flex items-center gap-3 px-4 py-2.5 bg-red-950/30 border border-red-700/40 rounded-lg hover:bg-red-950/50 transition-colors"
+              >
+                <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-red-300 truncate">
+                    {a.title}
+                  </p>
+                  <p className="text-xs text-red-500">
+                    {ANOMALY_TYPE_LABELS[a.anomaly_type] ?? a.anomaly_type} ·{" "}
+                    {new Date(a.created_at).toLocaleString("ru-RU")}
+                  </p>
+                </div>
+                <span className="text-xs text-red-400 shrink-0">
+                  Требует решения →
+                </span>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Document list */}
       {documents.length === 0 ? (
