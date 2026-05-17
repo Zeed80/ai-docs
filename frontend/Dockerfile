@@ -7,6 +7,9 @@ COPY package.json package-lock.json* ./
 RUN npm install --no-audit --no-fund
 
 FROM base AS builder
+# BACKEND_URL is needed at build time only for the /ws/* and /health rewrites.
+# The /api/* proxy (Route Handler) reads BACKEND_URL at runtime, not here.
+ENV BACKEND_URL=http://backend:8000
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

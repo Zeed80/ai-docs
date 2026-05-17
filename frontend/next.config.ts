@@ -25,6 +25,16 @@ const nextConfig: NextConfig = {
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },
+  // /api/* is handled by the Route Handler (runtime BACKEND_URL).
+  // /ws/* uses a rewrite because Route Handlers don't support WebSocket upgrades;
+  // the destination is baked at build time from BACKEND_URL env (see Dockerfile).
+  async rewrites() {
+    const backend = process.env.BACKEND_URL ?? "http://localhost:8000";
+    return [
+      { source: "/ws/:path*", destination: `${backend}/ws/:path*` },
+      { source: "/health", destination: `${backend}/health` },
+    ];
+  },
 };
 
 export default withNextIntl(nextConfig);
