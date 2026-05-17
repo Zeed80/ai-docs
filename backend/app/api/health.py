@@ -17,6 +17,7 @@ from fastapi import APIRouter
 
 from app.ai.router import ai_router
 from app.ai.schemas import ProviderKind
+from app.config import settings
 
 logger = structlog.get_logger()
 
@@ -40,17 +41,19 @@ async def _check_ollama(base_url: str) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
-async def _check_openai_compatible(base_url: str, api_key: str | None) -> dict[str, Any]:
+async def _check_openai_compatible(
+    base_url: str, api_key: str | None, *, require_key: bool = True
+) -> dict[str, Any]:
     """Hit /models to verify an OpenAI-compatible endpoint."""
-    if not api_key:
+    if require_key and not api_key:
         return {"ok": False, "skipped": True, "reason": "no_api_key"}
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         start = time.perf_counter()
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(
-                f"{base_url.rstrip('/')}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
+            resp = await client.get(f"{base_url.rstrip('/')}/models", headers=headers)
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         return {"ok": resp.status_code < 400, "status": resp.status_code, "latency_ms": elapsed_ms}
     except Exception as exc:
@@ -86,11 +89,15 @@ async def ai_health() -> dict[str, Any]:
 
         try:
             if kind == ProviderKind.OLLAMA:
-                result = await _check_ollama(base_url)
+                # Use the runtime env URL, not the registry default (localhost vs host-gateway)
+                effective_url = settings.ollama_url or base_url
+                result = await _check_ollama(effective_url)
             elif kind == ProviderKind.ANTHROPIC:
                 result = await _check_anthropic(api_key)
             else:
-                result = await _check_openai_compatible(base_url, api_key)
+                # Local providers (no api_key_env) don't require a key — just probe the URL
+                require_key = bool(api_key_env)
+                result = await _check_openai_compatible(base_url, api_key, require_key=require_key)
         except Exception as exc:
             result = {"ok": False, "error": str(exc)}
 

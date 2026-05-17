@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import clsx from "clsx";
 import { useHasRole } from "@/lib/rbac";
+import { useCurrentUser } from "@/lib/auth-context";
 
 const ADMIN_TABS = [
   { href: "/admin", label: "Обзор", exact: true },
@@ -48,15 +49,19 @@ export default function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const user = useCurrentUser();
   const isAdmin = useHasRole("admin");
   const router = useRouter();
 
   useEffect(() => {
-    if (isAdmin === false) {
+    // user===undefined means still loading — don't redirect prematurely
+    if (user !== undefined && isAdmin === false) {
       router.replace("/");
     }
-  }, [isAdmin, router]);
+  }, [user, isAdmin, router]);
 
+  // Show nothing while user data is loading to prevent flicker/premature redirect
+  if (user === undefined) return null;
   if (isAdmin === false) return null;
 
   return (
