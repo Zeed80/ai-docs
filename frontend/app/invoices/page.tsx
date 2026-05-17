@@ -135,6 +135,9 @@ export default function InvoicesPage() {
   const [activeView, setActiveView] = useState<string | null>(null);
   const [showViewDialog, setShowViewDialog] = useState(false);
   const [viewName, setViewName] = useState("");
+  const [nlQuery, setNlQuery] = useState("");
+  const [nlInterpretation, setNlInterpretation] = useState<string | null>(null);
+  const [nlLoading, setNlLoading] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState<{ mode: DeleteMode } | null>(
     null,
   );
@@ -201,6 +204,43 @@ export default function InvoicesPage() {
       setSearch(val);
       setOffset(0);
     }, 300);
+  };
+
+  const runNlFilter = async () => {
+    if (!nlQuery.trim()) return;
+    setNlLoading(true);
+    try {
+      const res = await fetch(`${API}/api/search/nl`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: nlQuery, limit: 1 }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNlInterpretation(data.interpretation ?? nlQuery);
+        if (data.status) {
+          setStatusFilter(data.status);
+          setOffset(0);
+        }
+        if (data.search_text) {
+          setSearch(data.search_text);
+          setOffset(0);
+        }
+        setActiveView(null);
+      }
+    } catch {
+      setNlInterpretation(null);
+    } finally {
+      setNlLoading(false);
+    }
+  };
+
+  const clearNlFilter = () => {
+    setNlQuery("");
+    setNlInterpretation(null);
+    setSearch("");
+    setStatusFilter("");
+    setOffset(0);
   };
 
   const selectedIds = useMemo(
@@ -492,16 +532,32 @@ export default function InvoicesPage() {
 
       {/* Saved views */}
       {views.length > 0 && (
-        <div className="flex gap-1.5 mb-3 flex-wrap">
+        <div className="flex gap-1.5 mb-3 flex-wrap items-center">
           <span className="text-xs text-slate-400 self-center mr-1">Виды:</span>
           {views.map((v) => (
-            <button
+            <div
               key={v.id}
-              onClick={() => applyView(v)}
-              className={`px-2.5 py-0.5 text-xs rounded-full border ${activeView === v.id ? "bg-blue-900/40 border-blue-600 text-blue-400" : "bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"}`}
+              className={`flex items-center gap-0.5 rounded-full border text-xs ${activeView === v.id ? "bg-blue-900/40 border-blue-600 text-blue-400" : "bg-slate-700 border-slate-600 text-slate-300"}`}
             >
-              {v.name}
-            </button>
+              <button
+                onClick={() => applyView(v)}
+                className="px-2.5 py-0.5 hover:opacity-80"
+              >
+                {v.name}
+              </button>
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  await tables.deleteView(v.id);
+                  setViews((prev) => prev.filter((x) => x.id !== v.id));
+                  if (activeView === v.id) setActiveView(null);
+                }}
+                className="pr-2 text-slate-500 hover:text-red-400"
+                title="Удалить вид"
+              >
+                ×
+              </button>
+            </div>
           ))}
         </div>
       )}
@@ -539,6 +595,36 @@ export default function InvoicesPage() {
         >
           + Вид
         </button>
+      </div>
+
+      {/* NL filter */}
+      <div className="flex items-center gap-2 mb-3">
+        <input
+          type="text"
+          value={nlQuery}
+          onChange={(e) => setNlQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && runNlFilter()}
+          placeholder="AI-фильтр: «счета от Иванова за апрель»..."
+          className="flex-1 px-3 py-1.5 text-sm bg-slate-800/60 border border-slate-700 text-slate-300 placeholder-slate-600 rounded outline-none focus:border-purple-500"
+        />
+        <button
+          onClick={runNlFilter}
+          disabled={nlLoading || !nlQuery.trim()}
+          className="px-3 py-1.5 text-xs bg-purple-700 text-white rounded hover:bg-purple-600 disabled:opacity-40"
+        >
+          {nlLoading ? "…" : "AI"}
+        </button>
+        {nlInterpretation && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-purple-900/30 border border-purple-700/50 rounded text-xs text-purple-300">
+            <span>{nlInterpretation}</span>
+            <button
+              onClick={clearNlFilter}
+              className="text-purple-400 hover:text-white ml-1"
+            >
+              ×
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Bulk action bar — shown when rows are selected */}
