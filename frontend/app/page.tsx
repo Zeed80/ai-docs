@@ -217,6 +217,107 @@ function QuarantineActions({
   );
 }
 
+interface SystemMetrics {
+  documents: { total: number; processing: number; needs_review: number };
+  invoices: { needs_review: number };
+  approvals: { pending: number; overdue: number };
+  anomalies: { open: number };
+  workspace: { block_count: number };
+}
+
+function SystemHealthBar() {
+  const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
+
+  useEffect(() => {
+    function load() {
+      fetch(`${API}/api/metrics`)
+        .then((r) => r.json())
+        .then(setMetrics)
+        .catch(() => {});
+    }
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  if (!metrics) return null;
+
+  const stats = [
+    {
+      label: "Документов",
+      value: metrics.documents.total,
+      sub:
+        metrics.documents.needs_review > 0
+          ? `${metrics.documents.needs_review} на проверке`
+          : null,
+      color:
+        metrics.documents.needs_review > 0
+          ? "text-amber-400"
+          : "text-slate-400",
+      href: "/documents",
+    },
+    {
+      label: "Счетов к проверке",
+      value: metrics.invoices.needs_review,
+      sub: null,
+      color:
+        metrics.invoices.needs_review > 0 ? "text-amber-400" : "text-green-400",
+      href: "/invoices",
+    },
+    {
+      label: "Согласований",
+      value: metrics.approvals.pending,
+      sub:
+        metrics.approvals.overdue > 0
+          ? `${metrics.approvals.overdue} просрочено`
+          : null,
+      color:
+        metrics.approvals.overdue > 0
+          ? "text-red-400"
+          : metrics.approvals.pending > 0
+            ? "text-amber-400"
+            : "text-green-400",
+      href: "/approvals",
+    },
+    {
+      label: "Аномалий",
+      value: metrics.anomalies.open,
+      sub: null,
+      color: metrics.anomalies.open > 0 ? "text-red-400" : "text-green-400",
+      href: "/anomalies",
+    },
+    {
+      label: "Блоков на столе",
+      value: metrics.workspace.block_count,
+      sub: null,
+      color: "text-slate-400",
+      href: "/",
+    },
+  ];
+
+  return (
+    <div className="px-6 py-2 border-b border-slate-700/30 flex gap-4 overflow-x-auto">
+      {stats.map((s) => (
+        <a
+          key={s.label}
+          href={s.href}
+          className="flex items-baseline gap-1.5 shrink-0 group"
+        >
+          <span
+            className={`text-base font-bold ${s.color} group-hover:opacity-80`}
+          >
+            {s.value}
+          </span>
+          <span className="text-[10px] text-slate-500 group-hover:text-slate-400">
+            {s.label}
+          </span>
+          {s.sub && <span className="text-[10px] text-red-400">· {s.sub}</span>}
+        </a>
+      ))}
+    </div>
+  );
+}
+
 export default function FeedPage() {
   const [items, setItems] = useState<FeedItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -255,6 +356,9 @@ export default function FeedPage() {
           </span>
         )}
       </div>
+
+      {/* System health bar */}
+      <SystemHealthBar />
 
       {/* Feed */}
       <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
