@@ -64,6 +64,16 @@ celery_app.conf.beat_schedule = {
         "task": "skill.evaluate_shadow_tests",
         "schedule": 1_800.0,
     },
+    # Proactive: check approaching invoice due dates every 6 hours
+    "proactive-due-dates": {
+        "task": "proactive.check_due_dates",
+        "schedule": 21_600.0,
+    },
+    # Proactive: alert on stale critical anomalies every hour
+    "proactive-critical-anomalies": {
+        "task": "proactive.alert_critical_anomalies",
+        "schedule": 3_600.0,
+    },
 }
 
 celery_app.autodiscover_tasks([
@@ -78,3 +88,4 @@ celery_app.autodiscover_tasks([
 from app.tasks import drawing_analysis as _drawing_analysis  # noqa: F401
 from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
 from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
+from app.tasks import proactive as _proactive  # noqa: F401

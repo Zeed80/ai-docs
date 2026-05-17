@@ -98,6 +98,10 @@ export default function ApprovalsPage() {
   const [loading, setLoading] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
+  const [showDelegate, setShowDelegate] = useState(false);
+  const [delegateTo, setDelegateTo] = useState("");
+  const [delegateReason, setDelegateReason] = useState("");
+  const [delegateLoading, setDelegateLoading] = useState(false);
 
   const selected = approvals.find((a) => a.id === selectedId) ?? null;
 
@@ -202,6 +206,38 @@ export default function ApprovalsPage() {
       return next;
     });
   }
+
+  const handleDelegate = useCallback(
+    async (approvalId: string) => {
+      if (!delegateTo.trim()) return;
+      setDelegateLoading(true);
+      try {
+        const res = await fetch(`${API}/api/approvals/${approvalId}/delegate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            delegate_to: delegateTo.trim(),
+            reason: delegateReason || null,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        setApprovals((prev) => {
+          const next = prev.filter((a) => a.id !== approvalId);
+          setSelectedId(next[0]?.id ?? null);
+          return next;
+        });
+        setShowDelegate(false);
+        setDelegateTo("");
+        setDelegateReason("");
+        showToast("Делегировано", true);
+      } catch (e) {
+        showToast(`Ошибка: ${String(e).slice(0, 60)}`, false);
+      } finally {
+        setDelegateLoading(false);
+      }
+    },
+    [delegateTo, delegateReason],
+  );
 
   function toggleAll() {
     if (checkedIds.size === approvals.length) {
@@ -521,7 +557,52 @@ export default function ApprovalsPage() {
                     </kbd>
                     Отклонить
                   </button>
+                  <button
+                    onClick={() => setShowDelegate((v) => !v)}
+                    className="px-3 py-2.5 bg-slate-700 text-slate-300 rounded-lg text-sm hover:bg-slate-600"
+                    title="Делегировать"
+                  >
+                    →
+                  </button>
                 </div>
+
+                {/* Delegation form */}
+                {showDelegate && (
+                  <div className="mt-3 p-3 bg-slate-700/50 rounded-lg border border-slate-600 space-y-2">
+                    <p className="text-xs font-semibold text-slate-300">
+                      Делегировать
+                    </p>
+                    <input
+                      type="text"
+                      value={delegateTo}
+                      onChange={(e) => setDelegateTo(e.target.value)}
+                      placeholder="user@example.com или логин"
+                      className="w-full text-sm bg-slate-800 border border-slate-600 text-slate-200 placeholder-slate-500 rounded px-2 py-1.5 outline-none focus:border-blue-500"
+                    />
+                    <input
+                      type="text"
+                      value={delegateReason}
+                      onChange={(e) => setDelegateReason(e.target.value)}
+                      placeholder="Причина (необязательно)"
+                      className="w-full text-sm bg-slate-800 border border-slate-600 text-slate-200 placeholder-slate-500 rounded px-2 py-1.5 outline-none focus:border-blue-500"
+                    />
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        onClick={() => setShowDelegate(false)}
+                        className="text-xs px-2 py-1 text-slate-400"
+                      >
+                        Отмена
+                      </button>
+                      <button
+                        onClick={() => handleDelegate(selected.id)}
+                        disabled={delegateLoading || !delegateTo.trim()}
+                        className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        {delegateLoading ? "..." : "Делегировать"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
