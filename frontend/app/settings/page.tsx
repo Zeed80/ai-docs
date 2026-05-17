@@ -677,8 +677,49 @@ function AgentModelProviderSelector({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
+interface ApprovalPolicy {
+  enabled: boolean;
+  trust_threshold: number;
+  max_amount: number | null;
+}
+
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<TabId>("agent");
+
+  // Approval policy
+  const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>({
+    enabled: false,
+    trust_threshold: 0.85,
+    max_amount: null,
+  });
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [policySaved, setPolicySaved] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/api/approvals/policy`)
+      .then((r) => r.json())
+      .then((d) => setApprovalPolicy(d))
+      .catch(() => {});
+  }, []);
+
+  async function saveApprovalPolicy() {
+    setPolicyLoading(true);
+    setPolicySaved(false);
+    try {
+      const res = await fetch(`${API}/api/approvals/policy`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(approvalPolicy),
+      });
+      if (res.ok) {
+        setApprovalPolicy(await res.json());
+        setPolicySaved(true);
+        setTimeout(() => setPolicySaved(false), 2000);
+      }
+    } finally {
+      setPolicyLoading(false);
+    }
+  }
 
   // AI Config (models tab)
   const [models, setModels] = useState<OllamaModel[]>([]);
@@ -3103,6 +3144,87 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* ── Trust Score Auto-approval ──────────────────────────────────── */}
+      {activeTab === "agent" && (
+        <SectionCard title="Автоутверждение по Trust Score">
+          <p className="text-xs text-slate-400 mb-4">
+            Счета от поставщиков с высоким Trust Score утверждаются
+            автоматически без участия человека.
+          </p>
+          <div className="space-y-4">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={approvalPolicy.enabled}
+                onChange={(e) =>
+                  setApprovalPolicy((p) => ({
+                    ...p,
+                    enabled: e.target.checked,
+                  }))
+                }
+                className="w-4 h-4 accent-blue-500"
+              />
+              <span className="text-sm text-slate-200">
+                Включить автоутверждение
+              </span>
+            </label>
+            <div className="flex items-center gap-4">
+              <label className="text-xs text-slate-400 w-40 shrink-0">
+                Минимальный Trust Score
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={approvalPolicy.trust_threshold}
+                onChange={(e) =>
+                  setApprovalPolicy((p) => ({
+                    ...p,
+                    trust_threshold: Number(e.target.value),
+                  }))
+                }
+                disabled={!approvalPolicy.enabled}
+                className="flex-1 accent-blue-500 disabled:opacity-40"
+              />
+              <span className="text-sm font-mono text-slate-200 w-10 text-right">
+                {(approvalPolicy.trust_threshold * 100).toFixed(0)}%
+              </span>
+            </div>
+            <div className="flex items-center gap-4">
+              <label className="text-xs text-slate-400 w-40 shrink-0">
+                Макс. сумма счёта (₽)
+              </label>
+              <input
+                type="number"
+                value={approvalPolicy.max_amount ?? ""}
+                onChange={(e) =>
+                  setApprovalPolicy((p) => ({
+                    ...p,
+                    max_amount: e.target.value ? Number(e.target.value) : null,
+                  }))
+                }
+                disabled={!approvalPolicy.enabled}
+                placeholder="Без ограничения"
+                className="w-40 px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-500 rounded outline-none focus:border-blue-400 disabled:opacity-40"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={saveApprovalPolicy}
+                disabled={policyLoading}
+                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+              >
+                {policyLoading ? "Сохраняю…" : "Сохранить"}
+              </button>
+              {policySaved && (
+                <span className="text-xs text-green-400">Сохранено ✓</span>
+              )}
+            </div>
+          </div>
+        </SectionCard>
       )}
 
       {/* ── TAB: Модели ──────────────────────────────────────────────────── */}

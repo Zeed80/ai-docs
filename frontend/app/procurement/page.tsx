@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 const API = getApiBaseUrl();
 
@@ -236,11 +237,28 @@ function CreateModal({ onClose, onCreated }: CreateModalProps) {
   );
 }
 
+interface CompareSession {
+  id: string;
+  name: string;
+  status: string;
+  invoice_ids: string[];
+  created_at: string;
+}
+
 export default function ProcurementPage() {
+  const router = useRouter();
   const [requests, setRequests] = useState<PurchaseRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [showCreate, setShowCreate] = useState(false);
+  const [compareSessions, setCompareSessions] = useState<CompareSession[]>([]);
+
+  useEffect(() => {
+    fetch(`${API}/api/compare`)
+      .then((r) => r.json())
+      .then((data) => setCompareSessions(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, []);
 
   async function loadRequests() {
     setLoading(true);
@@ -376,6 +394,43 @@ export default function ProcurementPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Compare КП section */}
+      {compareSessions.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
+            Сравнение КП
+          </h2>
+          <div className="grid gap-2">
+            {compareSessions.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => router.push(`/procurement/compare/${s.id}`)}
+                className="w-full text-left flex items-center gap-4 bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 hover:border-slate-600 transition-colors"
+              >
+                <span className="text-sm text-slate-200 flex-1">{s.name}</span>
+                <span className="text-xs text-slate-500">
+                  {s.invoice_ids.length} КП
+                </span>
+                <span
+                  className={`text-xs px-2 py-0.5 rounded-full ${
+                    s.status === "decided"
+                      ? "bg-green-900/40 text-green-400"
+                      : s.status === "aligned"
+                        ? "bg-blue-900/40 text-blue-400"
+                        : "bg-slate-700 text-slate-400"
+                  }`}
+                >
+                  {s.status}
+                </span>
+                <span className="text-xs text-slate-600">
+                  {new Date(s.created_at).toLocaleDateString("ru-RU")}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

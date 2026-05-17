@@ -27,6 +27,59 @@ from app.auth.models import UserInfo, UserRole
 router = APIRouter()
 logger = structlog.get_logger()
 
+_POLICY_KEY = "approval_policy"
+_POLICY_DEFAULT = {"enabled": False, "trust_threshold": 0.85, "max_amount": None}
+
+
+class ApprovalPolicyIn(BaseModel):
+    enabled: bool
+    trust_threshold: float = 0.85
+    max_amount: float | None = None
+
+
+class ApprovalPolicyOut(BaseModel):
+    enabled: bool
+    trust_threshold: float
+    max_amount: float | None = None
+
+
+async def _read_policy() -> ApprovalPolicyOut:
+    import json
+    try:
+        from app.utils.redis_client import get_async_redis
+        redis = await get_async_redis()
+        raw = await redis.get(_POLICY_KEY)
+        if raw:
+            data = json.loads(raw)
+            return ApprovalPolicyOut(**{**_POLICY_DEFAULT, **data})
+    except Exception:
+        pass
+    return ApprovalPolicyOut(**_POLICY_DEFAULT)
+
+
+@router.get("/policy", response_model=ApprovalPolicyOut)
+async def get_approval_policy():
+    """Get trust-score auto-approval policy."""
+    return await _read_policy()
+
+
+@router.patch("/policy", response_model=ApprovalPolicyOut)
+async def update_approval_policy(payload: ApprovalPolicyIn):
+    """Update trust-score auto-approval policy."""
+    import json
+    policy = ApprovalPolicyOut(
+        enabled=payload.enabled,
+        trust_threshold=payload.trust_threshold,
+        max_amount=payload.max_amount,
+    )
+    try:
+        from app.utils.redis_client import get_async_redis
+        redis = await get_async_redis()
+        await redis.set(_POLICY_KEY, json.dumps(policy.model_dump()))
+    except Exception:
+        pass
+    return policy
+
 
 class ApprovalDelegation(BaseModel):
     delegate_to: str
