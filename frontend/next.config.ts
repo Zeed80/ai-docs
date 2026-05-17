@@ -25,14 +25,6 @@ const nextConfig: NextConfig = {
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },
-  async rewrites() {
-    const backend = process.env.BACKEND_URL ?? "http://localhost:8000";
-    return [
-      { source: "/api/:path*", destination: `${backend}/api/:path*` },
-      { source: "/ws/:path*", destination: `${backend}/ws/:path*` },
-      { source: "/health", destination: `${backend}/health` },
-    ];
-  },
 };
 
 export default withNextIntl(nextConfig);

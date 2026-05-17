@@ -5,11 +5,13 @@ api:
 entryPoints:
   web:
     address: ":80"
-    http:
-      redirections:
-        entryPoint:
-          to: websecure
-          scheme: https
+    # Uncomment the block below to redirect all HTTP to HTTPS once you have a valid domain/cert.
+    # Without a domain (IP-only access), leave this commented out so HTTP works directly.
+    # http:
+    #   redirections:
+    #     entryPoint:
+    #       to: websecure
+    #       scheme: https
   websecure:
     address: ":443"
 
@@ -23,8 +25,9 @@ certificatesResolvers:
     acme:
       email: "${TRAEFIK_ACME_EMAIL}"
       storage: /etc/traefik/acme/acme.json
-      httpChallenge:
-        entryPoint: web
+      # tlsChallenge issues certificates on-demand for any domain that connects via HTTPS,
+      # without requiring a Host() matcher in routing rules.
+      tlsChallenge: {}
 
 log:
   level: INFO

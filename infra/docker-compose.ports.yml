@@ -1,0 +1,25 @@
+# Dev override: exposes internal service ports for direct access (DB clients, API tools).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.ports.yml up
+# Do NOT use in production.
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  qdrant:
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+
+  backend:
+    ports:
+      - "8000:8000"
+
+  minio:
+    ports:
+      - "9000:9000"
+      - "9001:9001"

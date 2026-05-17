@@ -1,50 +1,49 @@
-# Traefik dynamic routing configuration for production.
-# Replace example.com with the public application domain before mounting this file.
+# Traefik dynamic routing for production.
+# Routes by PathPrefix only — works with any IP, hostname, or domain without reconfiguration.
+# TLS (Let's Encrypt) is handled automatically via TLS-ALPN-01 challenge for any domain
+# pointing to this server. For plain HTTP (no domain, LAN/IP access), the web entryPoint
+# serves traffic directly; comment out the http→https redirect in traefik.prod.yml first.
 http:
   routers:
     frontend:
-      rule: "Host(`example.com`)"
+      rule: "PathPrefix(`/`)"
       service: frontend
       entryPoints:
+        - web
         - websecure
       tls:
         certResolver: letsencrypt
       priority: 1
 
     backend-api:
-      rule: "Host(`example.com`) && PathPrefix(`/api`)"
+      rule: "PathPrefix(`/api`)"
       service: backend
       entryPoints:
+        - web
         - websecure
       tls:
         certResolver: letsencrypt
       priority: 100
 
     backend-ws:
-      rule: "Host(`example.com`) && PathPrefix(`/ws`)"
+      rule: "PathPrefix(`/ws`)"
       service: backend
       entryPoints:
+        - web
         - websecure
       tls:
         certResolver: letsencrypt
       priority: 100
 
     backend-health:
-      rule: "Host(`example.com`) && Path(`/health`)"
+      rule: "Path(`/health`)"
       service: backend
       entryPoints:
+        - web
         - websecure
       tls:
         certResolver: letsencrypt
       priority: 100
-
-    minio-console:
-      rule: "Host(`minio.example.com`)"
-      service: minio-console
-      entryPoints:
-        - websecure
-      tls:
-        certResolver: letsencrypt
 
   services:
     frontend:
@@ -56,11 +55,6 @@ http:
       loadBalancer:
         servers:
           - url: "http://backend:8000"
-
-    minio-console:
-      loadBalancer:
-        servers:
-          - url: "http://minio:9001"
 
   middlewares:
     security-headers:
