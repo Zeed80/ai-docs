@@ -22,6 +22,7 @@ from app.api import (
     auth,
     boms,
     calendar,
+    canonical,
     canvas,
     chat_sessions,
     collections,
@@ -204,6 +205,7 @@ def create_app() -> FastAPI:
     app.include_router(normalization.router, prefix="/api/normalization", tags=["normalization"])
     app.include_router(tables.router, prefix="/api/tables", tags=["tables"])
     app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"])
+    app.include_router(canonical.router, prefix="/api/canonical", tags=["canonical"])
     app.include_router(collections.router, prefix="/api/collections", tags=["collections"])
     app.include_router(anomalies.router, prefix="/api/anomalies", tags=["anomalies"])
     app.include_router(compare.router, prefix="/api/compare", tags=["compare"])

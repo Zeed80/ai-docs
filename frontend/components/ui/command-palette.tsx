@@ -81,6 +81,18 @@ const NAV_ITEMS: NavItem[] = [
     group: "Навигация",
   },
   { id: "cases", label: "Дела", href: "/cases", group: "Навигация" },
+  {
+    id: "canonical",
+    label: "Canonical Items",
+    href: "/canonical",
+    group: "Навигация",
+  },
+  {
+    id: "collections",
+    label: "Подборки",
+    href: "/collections",
+    group: "Навигация",
+  },
   { id: "settings", label: "Настройки", href: "/settings", group: "Настройки" },
   {
     id: "norm-rules",
