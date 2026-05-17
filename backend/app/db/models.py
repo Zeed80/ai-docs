@@ -738,6 +738,26 @@ class SavedQuery(UUIDPrimaryKey, TimestampMixin, Base):
     alert_cron: Mapped[str | None] = mapped_column(String(50))
 
 
+class AutoApprovalRule(UUIDPrimaryKey, TimestampMixin, Base):
+    """Defines conditions under which an invoice/document is auto-approved."""
+    __tablename__ = "auto_approval_rules"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Conditions (all must match for auto-approval)
+    supplier_id: Mapped[str | None] = mapped_column(String(100))  # restrict to supplier
+    doc_type: Mapped[str | None] = mapped_column(String(50))
+    max_amount: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str | None] = mapped_column(String(10))
+    min_trust_score: Mapped[float | None] = mapped_column(Float)  # 0.0–1.0
+    # Outcome
+    approval_role: Mapped[str] = mapped_column(String(100), default="auto")
+    created_by: Mapped[str | None] = mapped_column(String(100))
+    # Statistics
+    apply_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 # ── Canonical Items & Price History ────────────────────────────────────────
 
 
@@ -1039,6 +1059,7 @@ class ChatSession(UUIDPrimaryKey, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(500), default="Новый чат", nullable=False)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    share_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
 
     messages: Mapped[list["ChatMessage"]] = relationship(
         back_populates="session",

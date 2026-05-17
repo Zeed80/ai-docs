@@ -48,13 +48,13 @@ capabilities:
       Счёт можно утвердить только если его статус needs_review.
     path: /api/agent/cap/invoices
     method: POST
-    gate_actions: [approve, reject, export_1c, bulk_delete]
+    gate_actions: [approve, reject, export_1c, bulk_delete, bulk_approve, bulk_reject]
     parameters:
       type: object
       properties:
         action:
           type: string
-          description: "list | get | validate | approve | reject | compare_prices | export_excel | export_1c | update | delete | bulk_delete"
+          description: "list | get | validate | approve | reject | compare_prices | export_excel | export_1c | update | delete | bulk_delete | bulk_approve | bulk_reject"
         invoice_id:
           type: string
           description: "ID счёта (для get, validate, approve, reject, compare_prices, export, update, delete)"
@@ -63,7 +63,7 @@ capabilities:
           description: "Фильтры для list: supplier_id, status, date_from, date_to, amount_min, amount_max, limit, offset"
         body:
           type: object
-          description: "Данные подтверждения (для approve, reject: reason, comment)"
+          description: "Данные подтверждения (для approve, reject: reason, comment; для bulk_approve/bulk_reject: ids)"
       required: [action]
 
   - name: suppliers
@@ -342,14 +342,20 @@ capabilities:
       properties:
         action:
           type: string
-          description: "hybrid | nl | nl_to_query | explain"
+          description: "hybrid | nl | nl_to_query | explain | similar | saved_queries"
         query:
           type: string
           description: "Поисковый запрос на естественном языке"
+        entity_type:
+          type: string
+          description: "Тип сущности для similar-поиска: invoice, document, supplier"
+        entity_id:
+          type: string
+          description: "UUID сущности для similar-поиска"
         filters:
           type: object
           description: "Ограничения поиска: entity_type, date_from, date_to, limit, top_k"
-      required: [action, query]
+      required: [action]
 
   - name: memory
     description: >
@@ -432,9 +438,12 @@ capabilities:
             dashboard_today | table_query | table_export_excel | table_export_1c |
             table_import_excel | table_apply_diff | table_inline_edit |
             table_list_views | table_create_view |
-            compare_list | compare_create | compare_get | compare_decide | compare_summary |
-            collection_list | collection_create | collection_get | collection_summarize |
-            calendar_events | calendar_upcoming | calendar_create_reminder | calendar_extract_dates
+            compare_list | compare_create | compare_get | compare_align | compare_decide | compare_summary |
+            collection_list | collection_create | collection_get | collection_summarize | collection_search |
+            collection_add_item | collection_suggest | collection_timeline | collection_close |
+            calendar_events | calendar_upcoming | calendar_create_reminder | calendar_extract_dates |
+            calendar_generate_followup |
+            auto_approval_list | auto_approval_create | auto_approval_check
         entity_id:
           type: string
           description: "ID таблицы, сравнения, коллекции, события"

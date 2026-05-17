@@ -62,6 +62,11 @@ export default function CollectionDetailPage() {
   const [addNote, setAddNote] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<
+    { entity_type: string; entity_id: string; title: string; reason: string }[]
+  >([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [itemSearch, setItemSearch] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,6 +88,32 @@ export default function CollectionDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  async function loadSuggestions() {
+    setLoadingSuggestions(true);
+    try {
+      const res = await fetch(`${API}/api/collections/${id}/suggest`);
+      if (res.ok) {
+        const data = await res.json();
+        setSuggestions(data.suggestions ?? []);
+      }
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  }
+
+  async function addSuggestion(s: { entity_type: string; entity_id: string }) {
+    await fetch(`${API}/api/collections/${id}/items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        entity_type: s.entity_type,
+        entity_id: s.entity_id,
+      }),
+    });
+    setSuggestions((prev) => prev.filter((x) => x.entity_id !== s.entity_id));
+    await load();
+  }
 
   async function addItem() {
     if (!addId.trim()) return;
@@ -309,7 +340,54 @@ export default function CollectionDetailPage() {
               {addError && (
                 <p className="text-xs text-red-400 mt-2">{addError}</p>
               )}
+              <div className="mt-2 pt-2 border-t border-slate-700/60">
+                <button
+                  onClick={loadSuggestions}
+                  disabled={loadingSuggestions}
+                  className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                >
+                  {loadingSuggestions
+                    ? "Подбираю..."
+                    : "Подобрать автоматически ↗"}
+                </button>
+                {suggestions.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {suggestions.map((s) => (
+                      <div
+                        key={s.entity_id}
+                        className="flex items-center gap-2 text-xs bg-slate-700/50 rounded px-2 py-1.5"
+                      >
+                        <span className="text-[10px] px-1.5 py-0.5 bg-slate-600 text-slate-300 rounded-full shrink-0">
+                          {ENTITY_TYPE_LABELS[s.entity_type] ?? s.entity_type}
+                        </span>
+                        <span className="flex-1 text-slate-300 truncate">
+                          {s.title}
+                        </span>
+                        <span className="text-slate-500 italic truncate max-w-[120px]">
+                          {s.reason}
+                        </span>
+                        <button
+                          onClick={() => addSuggestion(s)}
+                          className="shrink-0 px-2 py-0.5 text-[10px] bg-blue-600 text-white rounded hover:bg-blue-700"
+                        >
+                          + Добавить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
+          )}
+
+          {coll.items.length > 3 && (
+            <input
+              type="text"
+              value={itemSearch}
+              onChange={(e) => setItemSearch(e.target.value)}
+              placeholder="Поиск по элементам..."
+              className="w-full px-3 py-1.5 text-sm bg-slate-800 border border-slate-700 text-slate-200 placeholder-slate-500 rounded outline-none focus:border-blue-400 mb-2"
+            />
           )}
 
           {coll.items.length === 0 ? (
@@ -318,36 +396,50 @@ export default function CollectionDetailPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              {coll.items.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center gap-3 bg-slate-800 border border-slate-700 rounded-lg px-4 py-3"
-                >
-                  <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded-full shrink-0">
-                    {ENTITY_TYPE_LABELS[item.entity_type] ?? item.entity_type}
-                  </span>
-                  <span className="font-mono text-xs text-slate-400 flex-1 truncate">
-                    {item.entity_id}
-                  </span>
-                  {item.note && (
-                    <span className="text-xs text-slate-500 truncate max-w-xs">
-                      {item.note}
+              {coll.items
+                .filter(
+                  (item) =>
+                    !itemSearch ||
+                    item.entity_id
+                      .toLowerCase()
+                      .includes(itemSearch.toLowerCase()) ||
+                    (item.note ?? "")
+                      .toLowerCase()
+                      .includes(itemSearch.toLowerCase()) ||
+                    item.entity_type
+                      .toLowerCase()
+                      .includes(itemSearch.toLowerCase()),
+                )
+                .map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center gap-3 bg-slate-800 border border-slate-700 rounded-lg px-4 py-3"
+                  >
+                    <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded-full shrink-0">
+                      {ENTITY_TYPE_LABELS[item.entity_type] ?? item.entity_type}
                     </span>
-                  )}
-                  <span className="text-xs text-slate-600 shrink-0">
-                    {new Date(item.created_at).toLocaleDateString("ru-RU")}
-                  </span>
-                  {!coll.is_closed && (
-                    <button
-                      onClick={() => removeItem(item.id)}
-                      className="text-slate-600 hover:text-red-400 text-sm ml-1"
-                      title="Удалить"
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              ))}
+                    <span className="font-mono text-xs text-slate-400 flex-1 truncate">
+                      {item.entity_id}
+                    </span>
+                    {item.note && (
+                      <span className="text-xs text-slate-500 truncate max-w-xs">
+                        {item.note}
+                      </span>
+                    )}
+                    <span className="text-xs text-slate-600 shrink-0">
+                      {new Date(item.created_at).toLocaleDateString("ru-RU")}
+                    </span>
+                    {!coll.is_closed && (
+                      <button
+                        onClick={() => removeItem(item.id)}
+                        className="text-slate-600 hover:text-red-400 text-sm ml-1"
+                        title="Удалить"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ))}
             </div>
           )}
         </div>

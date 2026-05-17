@@ -2,6 +2,7 @@
 
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState, useCallback } from "react";
+import { Sparkline } from "@/components/ui/sparkline";
 
 const API = getApiBaseUrl();
 
@@ -18,12 +19,27 @@ interface CanonicalItem {
   created_at: string;
 }
 
+interface SuggestMatch {
+  canonical_item_id: string;
+  canonical_item_name: string;
+  score: number;
+  match_reason: string;
+}
+
+interface SuggestResponse {
+  suggestions: SuggestMatch[];
+  query_text: string;
+}
+
 export default function CanonicalItemsPage() {
   const [items, setItems] = useState<CanonicalItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [confirmedOnly, setConfirmedOnly] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [suggestText, setSuggestText] = useState("");
+  const [suggestions, setSuggestions] = useState<SuggestResponse | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
 
   const [form, setForm] = useState({
     name: "",
@@ -87,6 +103,21 @@ export default function CanonicalItemsPage() {
     }
   }
 
+  async function suggest() {
+    if (!suggestText.trim()) return;
+    setSuggesting(true);
+    try {
+      const res = await fetch(`${API}/api/canonical/suggest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: suggestText.trim(), limit: 5 }),
+      });
+      if (res.ok) setSuggestions(await res.json());
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
   async function toggleConfirm(item: CanonicalItem) {
     const res = await fetch(`${API}/api/canonical/${item.id}`, {
       method: "PATCH",
@@ -122,6 +153,58 @@ export default function CanonicalItemsPage() {
         >
           + Добавить
         </button>
+      </div>
+
+      {/* Suggest mapping widget */}
+      <div className="mb-4 bg-slate-800/60 border border-slate-700 rounded-lg p-3">
+        <p className="text-xs text-slate-400 mb-2 font-medium">
+          Подбор канонической позиции
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={suggestText}
+            onChange={(e) => setSuggestText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && suggest()}
+            placeholder="Введите описание позиции из счёта, напр. «Болт М8×30 ГОСТ 7798»..."
+            className="flex-1 px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-500 rounded outline-none focus:border-blue-400"
+          />
+          <button
+            onClick={suggest}
+            disabled={suggesting || !suggestText.trim()}
+            className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 shrink-0"
+          >
+            {suggesting ? "Подбираю..." : "Подобрать"}
+          </button>
+        </div>
+        {suggestions && (
+          <div className="mt-2">
+            {suggestions.suggestions.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                Совпадений не найдено — создайте новую позицию
+              </p>
+            ) : (
+              <div className="space-y-1 mt-1">
+                {suggestions.suggestions.map((s) => (
+                  <div
+                    key={s.canonical_item_id}
+                    className="flex items-center gap-2 text-xs"
+                  >
+                    <span className="w-10 text-right font-mono text-slate-400">
+                      {Math.round(s.score * 100)}%
+                    </span>
+                    <span className="text-slate-200 font-medium">
+                      {s.canonical_item_name}
+                    </span>
+                    <span className="text-slate-500 italic">
+                      {s.match_reason}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Filters */}
@@ -398,9 +481,16 @@ function CanonicalTable({
                       </span>
                     ) : (
                       <div>
-                        <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-2">
-                          История цен
-                        </p>
+                        <div className="flex items-center gap-3 mb-2">
+                          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                            История цен
+                          </p>
+                          <Sparkline
+                            data={priceHistory[item.id].map((p) => p.price)}
+                            width={100}
+                            height={22}
+                          />
+                        </div>
                         <table className="text-xs w-full max-w-md">
                           <thead>
                             <tr className="text-slate-500">

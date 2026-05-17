@@ -302,6 +302,7 @@ def extract_invoice(self, document_id: str) -> dict:
     """
     logger.info("extract_start", document_id=document_id)
     import time
+    _t0 = time.monotonic()
 
     with _get_sync_session() as db:
         doc = db.get(Document, uuid.UUID(document_id))
@@ -1281,6 +1282,11 @@ def process_approved_document(self, document_id: str) -> dict:
             lines=len(extracted.get("lines", [])),
         )
 
+        try:
+            from app.core.metrics import extraction_duration_seconds
+            extraction_duration_seconds.observe(time.monotonic() - _t0)
+        except Exception:
+            pass
         return {
             "document_id": document_id,
             "invoice_id": str(invoice.id),

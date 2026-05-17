@@ -32,6 +32,8 @@ dependencies = [
     "pdfplumber>=0.11",
     "Pillow>=11.0",
     "filetype>=1.2",
+    "sentry-sdk[fastapi]>=2.0,<3",
+    "prometheus-client>=0.21,<1",
 ]
 
 [project.optional-dependencies]

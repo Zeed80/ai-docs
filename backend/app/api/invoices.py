@@ -5,6 +5,7 @@ import uuid
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -321,6 +322,11 @@ async def approve_invoice(
     await db.commit()
     await db.refresh(invoice)
     logger.info("invoice_approved", invoice_id=str(invoice_id))
+    try:
+        from app.core.metrics import invoices_approved_total
+        invoices_approved_total.inc()
+    except Exception:
+        pass
     return invoice
 
 
@@ -368,6 +374,11 @@ async def reject_invoice(
     )
     await db.commit()
     await db.refresh(invoice)
+    try:
+        from app.core.metrics import invoices_rejected_total
+        invoices_rejected_total.inc()
+    except Exception:
+        pass
     return invoice
 
 
@@ -544,6 +555,73 @@ async def bulk_delete_invoices(
     await db.commit()
     logger.info("invoices_bulk_deleted", count=len(ids))
     return {"deleted": len(ids)}
+
+
+# ── invoice.bulk_approve / bulk_reject ───────────────────────────────────────
+
+class BulkStatusRequest(BaseModel):
+    ids: list[uuid.UUID]
+    comment: str = ""
+
+
+@router.post("/bulk-approve", status_code=200)
+async def bulk_approve_invoices(
+    payload: BulkStatusRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Approve multiple invoices at once (approval gate — bulk)."""
+    if not payload.ids:
+        return {"approved": 0, "skipped": 0}
+    result = await db.execute(
+        select(Invoice).where(
+            Invoice.id.in_(payload.ids),
+            Invoice.status.in_([InvoiceStatus.needs_review, InvoiceStatus.draft]),
+        )
+    )
+    invoices = result.scalars().all()
+    for inv in invoices:
+        inv.status = InvoiceStatus.approved
+    await log_action(
+        db,
+        action="invoice.bulk_approve",
+        entity_type="invoice",
+        entity_id=None,
+        details={"ids": [str(i) for i in payload.ids], "comment": payload.comment},
+    )
+    await db.commit()
+    skipped = len(payload.ids) - len(invoices)
+    logger.info("invoices_bulk_approved", approved=len(invoices), skipped=skipped)
+    return {"approved": len(invoices), "skipped": skipped}
+
+
+@router.post("/bulk-reject", status_code=200)
+async def bulk_reject_invoices(
+    payload: BulkStatusRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reject multiple invoices at once (approval gate — bulk)."""
+    if not payload.ids:
+        return {"rejected": 0, "skipped": 0}
+    result = await db.execute(
+        select(Invoice).where(
+            Invoice.id.in_(payload.ids),
+            Invoice.status.in_([InvoiceStatus.needs_review, InvoiceStatus.draft]),
+        )
+    )
+    invoices = result.scalars().all()
+    for inv in invoices:
+        inv.status = InvoiceStatus.rejected
+    await log_action(
+        db,
+        action="invoice.bulk_reject",
+        entity_type="invoice",
+        entity_id=None,
+        details={"ids": [str(i) for i in payload.ids], "reason": payload.comment},
+    )
+    await db.commit()
+    skipped = len(payload.ids) - len(invoices)
+    logger.info("invoices_bulk_rejected", rejected=len(invoices), skipped=skipped)
+    return {"rejected": len(invoices), "skipped": skipped}
 
 
 @router.post("/{invoice_id}/receive", status_code=201)

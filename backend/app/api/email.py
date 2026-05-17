@@ -433,6 +433,12 @@ async def send_email(
     try:
         from app.tasks.email_sender import send_email_draft
         task = send_email_draft.delay(str(draft_id))
+        # Mark as executed so the endpoint is idempotent
+        draft.executed = True
+        from sqlalchemy.orm.attributes import flag_modified
+        draft.draft_data = {**(data), "status": "queued", "task_id": task.id}
+        flag_modified(draft, "draft_data")
+        await db.commit()
         logger.info("email_send_queued", draft_id=str(draft_id), task_id=task.id)
         return {"status": "queued", "draft_id": str(draft_id), "task_id": task.id}
     except Exception as exc:

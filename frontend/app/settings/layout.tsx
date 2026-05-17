@@ -11,6 +11,7 @@ const TABS = [
   { href: "/settings/norm-cards", label: "Карты норм" },
   { href: "/settings/ntd", label: "НТД" },
   { href: "/settings/notifications", label: "Уведомления" },
+  { href: "/settings/auto-approval", label: "Авто-утверждение" },
 ] as const;
 
 function TabNav() {

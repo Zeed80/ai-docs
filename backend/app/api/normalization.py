@@ -554,3 +554,59 @@ async def get_canonical_item_norm_cards(
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     items = (await db.execute(q.order_by(NormCard.created_at.desc()))).scalars().all()
     return NormCardListResponse(items=items, total=total, offset=0, limit=total or 1)
+
+
+# ── GET /api/normalization/stats ─────────────────────────────────────────────
+
+
+@router.get("/stats")
+async def normalization_stats(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return aggregated normalization metrics for the training widget."""
+    total_rules = (await db.scalar(
+        select(func.count()).select_from(NormalizationRule)
+    )) or 0
+    active_rules = (await db.scalar(
+        select(func.count()).select_from(NormalizationRule).where(
+            NormalizationRule.status == NormRuleStatus.active
+        )
+    )) or 0
+    proposed_rules = (await db.scalar(
+        select(func.count()).select_from(NormalizationRule).where(
+            NormalizationRule.status == NormRuleStatus.proposed
+        )
+    )) or 0
+    total_applications = (await db.scalar(
+        select(func.sum(NormalizationRule.apply_count)).select_from(NormalizationRule)
+    )) or 0
+    total_source_corrections = (await db.scalar(
+        select(func.sum(NormalizationRule.source_corrections)).select_from(NormalizationRule)
+    )) or 0
+
+    # Top 5 most-applied rules
+    top_result = await db.execute(
+        select(NormalizationRule)
+        .where(NormalizationRule.apply_count > 0)
+        .order_by(NormalizationRule.apply_count.desc())
+        .limit(5)
+    )
+    top_rules = top_result.scalars().all()
+
+    return {
+        "total_rules": total_rules,
+        "active_rules": active_rules,
+        "proposed_rules": proposed_rules,
+        "total_applications": int(total_applications),
+        "total_source_corrections": int(total_source_corrections),
+        "top_rules": [
+            {
+                "id": str(r.id),
+                "field_name": r.field_name,
+                "pattern": r.pattern[:40],
+                "replacement": r.replacement[:40],
+                "apply_count": r.apply_count,
+            }
+            for r in top_rules
+        ],
+    }

@@ -610,7 +610,7 @@ async def ingest_document(
             from app.tasks.extraction import process_document
             task = process_document.delay(str(doc.id))
             if processing_job:
-                processing_job.celery_task_id = task.id
+                processing_job.celery_task_id = str(task.id) if task else None
                 await db.commit()
             pipeline_queued = True
             logger.info("extraction_queued", doc_id=str(doc.id))
@@ -937,7 +937,7 @@ async def batch_process_documents(
             memory_seed_done=True,
         )
         task = process_document.delay(str(document_id), payload.force)
-        job.celery_task_id = task.id
+        job.celery_task_id = str(task.id) if task else None
         await db.commit()
         results.append(
             DocumentBatchActionResult(
@@ -971,7 +971,7 @@ async def batch_classify_documents(
             memory_seed_done=True,
         )
         task = classify_task.delay(str(document_id), payload.force)
-        job.celery_task_id = task.id
+        job.celery_task_id = str(task.id) if task else None
         await db.commit()
         results.append(
             DocumentBatchActionResult(
@@ -1401,7 +1401,7 @@ async def classify_document(
         memory_seed_done=True,
     )
     task = classify_task.delay(str(document_id), force)
-    job.celery_task_id = task.id
+    job.celery_task_id = str(task.id) if task else None
 
     await log_action(
         db,
@@ -1452,7 +1452,7 @@ async def extract_document(
         memory_seed_done=True,
     )
     task = process_document.delay(str(document_id), force)
-    job.celery_task_id = task.id
+    job.celery_task_id = str(task.id) if task else None
 
     await log_action(
         db,

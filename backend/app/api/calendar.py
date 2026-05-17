@@ -269,6 +269,48 @@ async def list_reminders(
 # ── calendar.mark_sent ───────────────────────────────────────────────────
 
 
+@router.post("/reminders/{reminder_id}/generate-followup")
+async def generate_followup_draft(
+    reminder_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: calendar.generate_followup — Create a follow-up draft email for an invoice reminder."""
+    result = await db.execute(select(Reminder).where(Reminder.id == reminder_id))
+    reminder = result.scalar_one_or_none()
+    if not reminder:
+        raise HTTPException(404, "Reminder not found")
+
+    draft_subject = f"Напоминание об оплате: {reminder.message}"
+    draft_body = (
+        f"Уважаемые коллеги,\n\n"
+        f"Напоминаем о необходимости оплаты.\n"
+        f"{reminder.message}\n\n"
+        f"Просим подтвердить получение данного сообщения и статус оплаты.\n\n"
+        f"С уважением,\nСистема документооборота"
+    )
+
+    from app.db.models import DraftEmail
+    draft = DraftEmail(
+        subject=draft_subject,
+        body_text=draft_body,
+        to_addresses=[],
+        related_entity_type=reminder.entity_type if reminder.entity_type else None,
+        related_entity_id=reminder.entity_id if reminder.entity_id else None,
+        status="draft",
+        generated_by="system",
+    )
+    db.add(draft)
+    await db.commit()
+    await db.refresh(draft)
+
+    logger.info(
+        "followup_draft_created",
+        reminder_id=str(reminder_id),
+        draft_id=str(draft.id),
+    )
+    return {"draft_id": str(draft.id), "subject": draft_subject, "status": "draft"}
+
+
 @router.post("/reminders/{reminder_id}/mark-sent", response_model=ReminderOut)
 async def mark_sent(
     reminder_id: uuid.UUID,

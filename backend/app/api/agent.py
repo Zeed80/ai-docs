@@ -237,6 +237,16 @@ async def chat_ws(ws: WebSocket) -> None:
                                 document_ids=attachment_doc_ids,
                             )
                             await db.commit()
+                            # Smart Ingest (Scenario 8): trigger classify → extract pipeline
+                            if attachment_doc_ids:
+                                try:
+                                    from app.tasks.extraction import classify_document
+                                    for doc_id in attachment_doc_ids:
+                                        classify_document.apply_async(
+                                            args=[str(doc_id)], countdown=1
+                                        )
+                                except Exception:
+                                    pass
                             session_id = chat_session.id
                             if session_id not in agent_sessions:
                                 _, history, _ = await list_chat_messages(
@@ -274,8 +284,10 @@ async def chat_ws(ws: WebSocket) -> None:
                     await send({"type": "session", "session_id": str(active_session_id)})
                     turn_in_progress = True
                     assistant_buffer = []
+                    raw_rm = data.get("reasoning_mode", "normal")
+                    rm = raw_rm if raw_rm in ("normal", "strict") else "normal"
                     current_turn = asyncio.create_task(
-                        active_agent_session.on_user_message(content)
+                        active_agent_session.on_user_message(content, reasoning_mode=rm)
                     )
 
             elif msg_type == "stop":

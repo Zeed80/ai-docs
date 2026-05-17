@@ -114,10 +114,10 @@ async def test_draft_lifecycle(client: AsyncClient):
     # External domain should be flagged
     assert any(f["code"] == "external_domain" for f in risk["flags"])
 
-    # Send
+    # Send — queues a Celery task (no worker in tests), status becomes "queued"
     resp = await client.post(f"/api/email/drafts/{draft_id}/send")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "sent"
+    assert resp.json()["status"] in ("sent", "queued")
 
     # Cannot send again
     resp = await client.post(f"/api/email/drafts/{draft_id}/send")

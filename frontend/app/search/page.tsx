@@ -2,7 +2,7 @@
 
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 const API = getApiBaseUrl();
 
@@ -39,7 +39,16 @@ const STATUS_STYLES: Record<string, string> = {
   processing: "bg-blue-900/40 text-blue-400",
 };
 
-export default function SearchPage() {
+interface SavedQuery {
+  id: string;
+  nl_text: string;
+  structured_query: Record<string, unknown>;
+  result_count: number | null;
+  is_alert: boolean;
+  created_at: string;
+}
+
+function SearchPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [query, setQuery] = useState(searchParams.get("q") ?? "");
@@ -48,7 +57,44 @@ export default function SearchPage() {
   const [mode, setMode] = useState<"text" | "nl" | "similar">("text");
   const [parsedFilter, setParsedFilter] = useState<NLFilter | null>(null);
   const [total, setTotal] = useState<number | null>(null);
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
+  const [showSaved, setShowSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  async function loadSavedQueries() {
+    const res = await fetch(`${API}/api/search/saved-queries`);
+    if (res.ok) setSavedQueries(await res.json());
+  }
+
+  async function saveQuery() {
+    if (!query.trim()) return;
+    setSaving(true);
+    try {
+      await fetch(`${API}/api/search/saved-queries`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nl_text: query,
+          structured_query: parsedFilter ?? { text: query, mode },
+          result_count: total,
+        }),
+      });
+      await loadSavedQueries();
+      setShowSaved(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteSavedQuery(id: string) {
+    await fetch(`${API}/api/search/saved-queries/${id}`, { method: "DELETE" });
+    setSavedQueries((prev) => prev.filter((q) => q.id !== id));
+  }
+
+  useEffect(() => {
+    loadSavedQueries();
+  }, []);
 
   const search = useCallback(
     async (q: string) => {
@@ -163,7 +209,62 @@ export default function SearchPage() {
         >
           Найти
         </button>
+        <button
+          onClick={() => setShowSaved((v) => !v)}
+          title="Сохранённые запросы"
+          className={`px-3 py-2 text-sm rounded-lg border transition-colors shrink-0 ${showSaved ? "bg-slate-600 border-slate-500 text-slate-100" : "bg-slate-800 border-slate-600 text-slate-400 hover:text-slate-200"}`}
+        >
+          ★
+        </button>
+        <button
+          onClick={saveQuery}
+          disabled={saving || !query.trim()}
+          title="Сохранить запрос"
+          className="px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-300 rounded-lg hover:bg-slate-600 disabled:opacity-50 shrink-0"
+        >
+          {saving ? "..." : "Сохранить"}
+        </button>
       </div>
+
+      {/* Saved queries panel */}
+      {showSaved && (
+        <div className="mb-4 bg-slate-800 border border-slate-700 rounded-lg p-3">
+          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+            Сохранённые запросы ({savedQueries.length})
+          </h3>
+          {savedQueries.length === 0 ? (
+            <p className="text-xs text-slate-500">Нет сохранённых запросов</p>
+          ) : (
+            <div className="space-y-1">
+              {savedQueries.map((sq) => (
+                <div key={sq.id} className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setQuery(sq.nl_text);
+                      search(sq.nl_text);
+                      setShowSaved(false);
+                    }}
+                    className="flex-1 text-left text-sm text-slate-300 hover:text-slate-100 truncate"
+                  >
+                    {sq.nl_text}
+                    {sq.result_count != null && (
+                      <span className="ml-2 text-xs text-slate-500">
+                        ({sq.result_count})
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => deleteSavedQuery(sq.id)}
+                    className="text-slate-600 hover:text-red-400 text-xs shrink-0"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Mode tabs */}
       <div className="flex gap-1 mb-5">
@@ -305,5 +406,13 @@ export default function SearchPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-slate-400">Загрузка...</div>}>
+      <SearchPageInner />
+    </Suspense>
   );
 }

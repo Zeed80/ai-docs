@@ -15,6 +15,10 @@ from app.db.models import (
     Approval,
     ApprovalActionType,
     ApprovalStatus,
+    AnomalyCard,
+    AnomalyStatus,
+    AnomalyType,
+    CanonicalItem,
     Document,
     DocumentStatus,
     DocumentType,
@@ -25,6 +29,7 @@ from app.db.models import (
     InvoiceStatus,
     Party,
     PartyRole,
+    PriceHistoryEntry,
     SupplierProfile,
 )
 
@@ -334,6 +339,65 @@ def seed():
         )
         db.add(approval)
 
+        # ── Canonical Items ───────────────────────────────────────────────
+        canonical_data = [
+            {"name": "Болт М8×30 ГОСТ 7798", "category": "Крепёж", "unit": "шт", "okpd2_code": "25.94.11", "gost": "ГОСТ 7798-70", "is_confirmed": True, "aliases": ["Болт М8", "Bolt M8x30"]},
+            {"name": "Гайка М8 ГОСТ 5915", "category": "Крепёж", "unit": "шт", "okpd2_code": "25.94.12", "gost": "ГОСТ 5915-70", "is_confirmed": True, "aliases": ["Гайка М8"]},
+            {"name": "Подшипник 6205 ГОСТ 8338", "category": "Подшипники", "unit": "шт", "okpd2_code": "28.15.20", "gost": "ГОСТ 8338-75", "is_confirmed": True, "aliases": ["6205", "Подшипник шариковый 6205"]},
+            {"name": "Масло И-20А ГОСТ 20799", "category": "Смазочные материалы", "unit": "л", "okpd2_code": "19.20.29", "gost": "ГОСТ 20799-88", "is_confirmed": False, "aliases": ["И-20А", "Масло индустриальное"]},
+            {"name": "Электрод МР-3 Ø3мм", "category": "Сварочные материалы", "unit": "кг", "okpd2_code": "25.99.29", "is_confirmed": True, "aliases": ["МР-3", "Электрод сварочный МР-3"]},
+        ]
+        canonical_items = []
+        for cd in canonical_data:
+            ci = CanonicalItem(**cd)
+            db.add(ci)
+            canonical_items.append(ci)
+        db.flush()
+
+        # ── Price History for canonical items ─────────────────────────────
+        ph_entries = [
+            PriceHistoryEntry(canonical_item_id=canonical_items[0].id, price=12.50, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=90), source="invoice"),
+            PriceHistoryEntry(canonical_item_id=canonical_items[0].id, price=13.80, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=30), source="invoice"),
+            PriceHistoryEntry(canonical_item_id=canonical_items[0].id, price=14.20, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=5), source="invoice"),
+            PriceHistoryEntry(canonical_item_id=canonical_items[2].id, price=480.00, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=60), source="invoice"),
+            PriceHistoryEntry(canonical_item_id=canonical_items[2].id, price=520.00, currency="RUB", recorded_at=datetime.now(timezone.utc) - timedelta(days=10), source="invoice"),
+        ]
+        for ph in ph_entries:
+            db.add(ph)
+
+        # ── Anomalies ─────────────────────────────────────────────────────
+        anomalies = [
+            AnomalyCard(
+                anomaly_type=AnomalyType.price_spike,
+                severity="warning",
+                status=AnomalyStatus.open,
+                entity_type="invoice",
+                entity_id=str(inv1.id),
+                title="Скачок цены: Болт М8×30 выше нормы на 38%",
+                description="Цена позиции 14.20 руб превышает среднюю историческую (10.30 руб) на 37.9%.",
+            ),
+            AnomalyCard(
+                anomaly_type=AnomalyType.new_supplier,
+                severity="info",
+                status=AnomalyStatus.open,
+                entity_type="party",
+                entity_id=str(suppliers[0].id),
+                title="Новый поставщик: ООО «ТехноПром»",
+                description="Первый счёт от данного поставщика. Рекомендуется проверить реквизиты.",
+            ),
+            AnomalyCard(
+                anomaly_type=AnomalyType.duplicate,
+                severity="critical",
+                status=AnomalyStatus.open,
+                entity_type="invoice",
+                entity_id=str(inv1.id),
+                title="Возможный дубликат: счёт №123 уже существует",
+                description="Найден счёт с совпадающим номером, поставщиком и суммой.",
+            ),
+        ]
+        for a in anomalies:
+            db.add(a)
+
         db.commit()
         print("Seed data created successfully!")
         print(f"  Suppliers: {len(suppliers)}")
@@ -341,6 +405,8 @@ def seed():
         print(f"  Invoices: 1 ({len(lines)} lines)")
         print(f"  Email threads: 2")
         print(f"  Pending approvals: 1")
+        print(f"  Canonical items: {len(canonical_items)}")
+        print(f"  Anomalies: {len(anomalies)}")
 
 
 if __name__ == "__main__":

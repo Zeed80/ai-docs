@@ -70,6 +70,7 @@ export default function CompareDetailPage() {
   const [reasoning, setReasoning] = useState("");
   const [showDecideForm, setShowDecideForm] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [creatingDraft, setCreatingDraft] = useState(false);
 
   async function loadSession() {
     const res = await fetch(`${API}/api/compare/${id}`);
@@ -121,6 +122,40 @@ export default function CompareDetailPage() {
       }
     } finally {
       setDeciding(false);
+    }
+  }
+
+  async function createDecisionDraft() {
+    if (!session?.decision) return;
+    setCreatingDraft(true);
+    try {
+      const chosenSupplier =
+        suppliers[session.decision.chosen_supplier_id]?.name ??
+        session.decision.chosen_supplier_id;
+      const res = await fetch(`${API}/api/drafts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: `Решение по сравнению КП: ${session.name}`,
+          body_text:
+            `Уважаемые коллеги,\n\n` +
+            `По результатам сравнения коммерческих предложений «${session.name}» ` +
+            `выбран поставщик: ${chosenSupplier}.\n\n` +
+            (session.decision.reasoning
+              ? `Обоснование: ${session.decision.reasoning}\n\n`
+              : "") +
+            `С уважением,\nСистема документооборота`,
+          to_addresses: [],
+          related_entity_type: "compare_session",
+          related_entity_id: session.id,
+        }),
+      });
+      if (res.ok) {
+        const draft = await res.json();
+        router.push(`/email?draft=${draft.id}`);
+      }
+    } finally {
+      setCreatingDraft(false);
     }
   }
 
@@ -182,17 +217,26 @@ export default function CompareDetailPage() {
 
       {/* Decision decided */}
       {session.status === "decided" && session.decision && (
-        <div className="mb-4 px-4 py-3 bg-green-950/30 border border-green-700/40 rounded-lg">
-          <p className="text-sm font-medium text-green-300">
-            ✓ Выбрано:{" "}
-            {suppliers[session.decision.chosen_supplier_id]?.name ??
-              session.decision.chosen_supplier_id}
-          </p>
-          {session.decision.reasoning && (
-            <p className="text-xs text-green-500 mt-0.5">
-              {session.decision.reasoning}
+        <div className="mb-4 px-4 py-3 bg-green-950/30 border border-green-700/40 rounded-lg flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-green-300">
+              ✓ Выбрано:{" "}
+              {suppliers[session.decision.chosen_supplier_id]?.name ??
+                session.decision.chosen_supplier_id}
             </p>
-          )}
+            {session.decision.reasoning && (
+              <p className="text-xs text-green-500 mt-0.5">
+                {session.decision.reasoning}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={createDecisionDraft}
+            disabled={creatingDraft}
+            className="shrink-0 px-3 py-1.5 text-xs bg-slate-700 text-slate-300 rounded hover:bg-slate-600 disabled:opacity-50"
+          >
+            {creatingDraft ? "Создаю..." : "✉ Уведомить"}
+          </button>
         </div>
       )}
 

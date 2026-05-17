@@ -291,6 +291,28 @@ export default function InvoicesPage() {
     }
   };
 
+  // ── Bulk approve / reject ─────────────────────────────────────────────────
+
+  const [bulkAction, setBulkAction] = useState<
+    "approving" | "rejecting" | null
+  >(null);
+
+  const performBulkStatus = async (action: "approve" | "reject") => {
+    if (!selectedIds.length) return;
+    setBulkAction(action === "approve" ? "approving" : "rejecting");
+    try {
+      await fetch(`${API}/api/invoices/bulk-${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selectedIds }),
+      });
+      setRowSelection({});
+      await fetchData();
+    } finally {
+      setBulkAction(null);
+    }
+  };
+
   // ── Table columns ──────────────────────────────────────────────────────────
 
   const checkboxCol: ColumnDef<TableRow> = {
@@ -642,6 +664,20 @@ export default function InvoicesPage() {
             Сбросить
           </button>
           <div className="flex-1" />
+          <button
+            onClick={() => void performBulkStatus("approve")}
+            disabled={!!bulkAction}
+            className="px-3 py-1 text-xs bg-green-800 hover:bg-green-700 disabled:opacity-50 text-white rounded"
+          >
+            {bulkAction === "approving" ? "…" : "✓ Утвердить"}
+          </button>
+          <button
+            onClick={() => void performBulkStatus("reject")}
+            disabled={!!bulkAction}
+            className="px-3 py-1 text-xs bg-amber-800 hover:bg-amber-700 disabled:opacity-50 text-white rounded"
+          >
+            {bulkAction === "rejecting" ? "…" : "✕ Отклонить"}
+          </button>
           <button
             onClick={() => setDeleteDialog({ mode: "selected" })}
             className="px-3 py-1 text-xs bg-red-800 hover:bg-red-700 text-white rounded flex items-center gap-1.5"

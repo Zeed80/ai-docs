@@ -1,6 +1,7 @@
 """Test fixtures for backend API tests."""
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -12,6 +13,10 @@ from app.db.base import Base
 
 # SQLite for tests — no asyncpg needed
 TEST_DB_URL = "sqlite+aiosqlite:///./test.db"
+
+# Disable rate limiting in tests (must happen before app.config is imported)
+os.environ["RATE_LIMIT_API_PER_MINUTE"] = "0"
+os.environ["RATE_LIMIT_LOGIN_PER_MINUTE"] = "0"
 
 
 @pytest.fixture(scope="session")
@@ -48,18 +53,26 @@ async def test_engine():
 
 @pytest_asyncio.fixture
 async def db_session(test_engine) -> AsyncIterator[AsyncSession]:
-    session_factory = async_sessionmaker(
-        test_engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with session_factory() as session:
-        yield session
-        await session.rollback()
+    # Each test gets its own connection + transaction rolled back at teardown
+    async with test_engine.connect() as conn:
+        await conn.begin()
+        session = AsyncSession(bind=conn, expire_on_commit=False)
+        try:
+            yield session
+        finally:
+            await session.close()
+            await conn.rollback()
 
 
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
+    from app.config import settings
     from app.db.session import get_db
     from app.main import app
+
+    # Ensure rate limiting is off regardless of when settings was created
+    settings.rate_limit_api_per_minute = 0
+    settings.rate_limit_login_per_minute = 0
 
     async def override_get_db():
         yield db_session

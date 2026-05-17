@@ -74,6 +74,21 @@ celery_app.conf.beat_schedule = {
         "task": "proactive.alert_critical_anomalies",
         "schedule": 3_600.0,
     },
+    # Dispatch due reminders every 5 minutes
+    "dispatch-due-reminders": {
+        "task": "proactive.dispatch_due_reminders",
+        "schedule": 300.0,
+    },
+    # Check saved-query alerts every hour
+    "check-saved-query-alerts": {
+        "task": "search.check_saved_query_alerts",
+        "schedule": 3_600.0,
+    },
+    # Auto-cluster canonical items every 4 hours
+    "canonical-auto-cluster": {
+        "task": "canonical.auto_cluster",
+        "schedule": 14_400.0,
+    },
 }
 
 celery_app.autodiscover_tasks([
@@ -89,3 +104,5 @@ from app.tasks import drawing_analysis as _drawing_analysis  # noqa: F401
 from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
 from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
 from app.tasks import proactive as _proactive  # noqa: F401
+from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
+from app.tasks import canonical_cluster as _canonical_cluster  # noqa: F401

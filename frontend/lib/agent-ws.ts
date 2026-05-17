@@ -97,6 +97,7 @@ export function buildAgentUserMessage(
     size_bytes?: number;
   }>,
   mode: AgentWsMode = getAgentWsMode(),
+  reasoningMode?: "normal" | "strict",
 ): Record<string, unknown> {
   if (mode === "aiagent") {
     return {
@@ -106,6 +107,7 @@ export function buildAgentUserMessage(
         session_id: sessionId ?? undefined,
         attachments:
           attachments && attachments.length > 0 ? attachments : undefined,
+        reasoning_mode: reasoningMode ?? "normal",
       },
     };
   }
@@ -115,6 +117,7 @@ export function buildAgentUserMessage(
     session_id: sessionId ?? undefined,
     attachments:
       attachments && attachments.length > 0 ? attachments : undefined,
+    reasoning_mode: reasoningMode ?? "normal",
   };
 }
 

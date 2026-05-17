@@ -173,7 +173,9 @@ class AgentOrchestrator:
     async def on_approval(self, approved: bool) -> None:
         await self._executor.on_approval(approved)
 
-    async def on_user_message(self, content: str) -> None:
+    async def on_user_message(
+        self, content: str, reasoning_mode: str = "normal"
+    ) -> None:
         config = get_builtin_agent_config()
         if not config.department_enabled:
             await self._executor.on_user_message(content)
@@ -186,9 +188,8 @@ class AgentOrchestrator:
         context_tokens = sum(len(m.get("content", "")) // 4 for m in self._history)
         tier = score_complexity(content, context_tokens=context_tokens)
 
-        # MEDIUM+ queries get LLM planning (with heuristic fallback on timeout).
-        # Simple queries keep the zero-latency heuristic path.
-        if tier >= Tier.MEDIUM:
+        # strict reasoning_mode forces LLM planning regardless of tier
+        if reasoning_mode == "strict" or tier >= Tier.MEDIUM:
             plan = await self._plan_turn_with_model(content, config)
         else:
             plan = self._plan_turn(content)
@@ -198,7 +199,7 @@ class AgentOrchestrator:
         # Inject Chain-of-Draft hint for medium/complex tasks on local models
         hint = _build_worker_hint(plan)
         worker_model = config.worker_model or ""
-        if should_use_cod(tier, worker_model):
+        if reasoning_mode == "strict" or should_use_cod(tier, worker_model):
             hint = inject_chain_of_draft(hint)
         self._executor.inject_orchestrator_hint(hint)
         await self._executor.on_user_message(content)
@@ -237,9 +238,34 @@ class AgentOrchestrator:
             duration_ms=int((time.time() - turn_started_at) * 1000),
         )
 
+        # Structured agent trace log — every turn execution logged with full detail
+        duration_ms = int((time.time() - turn_started_at) * 1000)
+        logger.info(
+            "agent_turn_complete",
+            intent=plan.intent,
+            reasoning_mode=reasoning_mode,
+            tools_called=self._trace.tool_calls,
+            tool_count=len(self._trace.tool_calls),
+            errors=self._trace.errors,
+            workspace_required=plan.workspace.required,
+            audit_passed=audit.passed,
+            retries=retry_count,
+            duration_ms=duration_ms,
+        )
+        try:
+            from app.core.metrics import agent_turns_total, agent_turn_duration_seconds, agent_tool_calls_total
+            outcome = "success" if audit.passed else "audit_failed"
+            agent_turns_total.labels(outcome=outcome).inc()
+            agent_turn_duration_seconds.observe(duration_ms / 1000)
+            for tool in self._trace.tool_calls:
+                agent_tool_calls_total.labels(tool=tool).inc()
+        except Exception:
+            pass
+
         self._history.append({"role": "user", "content": content})
         self._history = self._history[-20:]
-        await self._outer_send({"type": "done"})
+        chips = self._derive_action_chips(plan, content)
+        await self._outer_send({"type": "done", "action_chips": chips})
 
     async def _plan_turn_with_model(
         self,
@@ -352,6 +378,31 @@ class AgentOrchestrator:
         elif msg_type == "error":
             self._trace.errors.append(str(data.get("content") or ""))
         await self._outer_send(data)
+
+    def _derive_action_chips(
+        self, plan: OrchestratorPlan, content: str
+    ) -> list[dict]:
+        """Return contextual action chips based on the completed turn's plan."""
+        chips: list[dict] = []
+        intent = plan.intent
+        text = _norm(content)
+
+        if intent in ("invoice_list", "invoice_detail") or "счёт" in text:
+            chips.append({"label": "Открыть счета", "action": "navigate", "target": "/invoices"})
+            chips.append({"label": "Экспорт в Excel", "action": "cap", "cap": "invoices", "act": "export_excel"})
+        if intent in ("supplier_profile", "supplier_search") or "поставщик" in text:
+            chips.append({"label": "Профиль поставщика", "action": "navigate", "target": "/suppliers"})
+        if intent == "anomaly_check" or "аномали" in text:
+            chips.append({"label": "Открыть аномалии", "action": "navigate", "target": "/anomalies"})
+        if intent in ("draft_email", "email_triage") or "письм" in text:
+            chips.append({"label": "Черновики", "action": "navigate", "target": "/drafts"})
+        if intent == "compare" or "сравни" in text:
+            chips.append({"label": "Сравнение КП", "action": "navigate", "target": "/compare"})
+        if intent == "calendar" or "напомни" in text or "срок" in text:
+            chips.append({"label": "Календарь", "action": "navigate", "target": "/calendar"})
+        if plan.workspace.required:
+            chips.append({"label": "Рабочий стол", "action": "navigate", "target": "/"})
+        return chips[:4]
 
     def _plan_turn(self, content: str) -> OrchestratorPlan:
         """Lightweight heuristic plan — used only as a soft hint for the LLM planner."""

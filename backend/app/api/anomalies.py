@@ -99,6 +99,12 @@ async def check_all_anomalies(
         invoice_id=str(invoice.id),
         found=len(anomalies),
     )
+    try:
+        from app.core.metrics import anomalies_detected_total
+        for a in anomalies:
+            anomalies_detected_total.labels(anomaly_type=a.anomaly_type.value).inc()
+    except Exception:
+        pass
 
     return AnomalyCheckResponse(
         entity_id=invoice.id,

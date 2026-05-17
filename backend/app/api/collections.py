@@ -11,10 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
+from pydantic import BaseModel
+
 from app.db.models import (
+    AnomalyCard,
+    AnomalyStatus,
     AuditTimelineEvent,
     Collection,
     CollectionItem,
+    Document,
+    DocumentStatus,
+    Invoice,
+    InvoiceStatus,
 )
 from app.domain.collections import (
     CollectionAddItem,
@@ -308,4 +316,152 @@ async def collection_timeline(
         collection_id=collection_id,
         events=events,
         total=len(events),
+    )
+
+
+# ── collection.auto_suggest ────────────────────────────────────────────────
+
+
+class SuggestItem(BaseModel):
+    entity_type: str
+    entity_id: str
+    title: str
+    reason: str
+
+
+class SuggestResponse(BaseModel):
+    suggestions: list[SuggestItem]
+
+
+@router.get("/{collection_id}/suggest", response_model=SuggestResponse)
+async def suggest_items(
+    collection_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Suggest items to add to a collection based on open anomalies and pending documents."""
+    coll_result = await db.execute(
+        select(Collection).where(Collection.id == collection_id)
+    )
+    coll = coll_result.scalar_one_or_none()
+    if not coll:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    # Already-added entity IDs to avoid duplicates
+    existing_ids = {str(item.entity_id) for item in coll.items}
+
+    suggestions: list[SuggestItem] = []
+
+    # Open critical anomalies → suggest their invoice/document
+    anoms = await db.execute(
+        select(AnomalyCard)
+        .where(AnomalyCard.status == AnomalyStatus.open)
+        .order_by(AnomalyCard.created_at.desc())
+        .limit(10)
+    )
+    for a in anoms.scalars().all():
+        if str(a.entity_id) not in existing_ids:
+            suggestions.append(SuggestItem(
+                entity_type=a.entity_type,
+                entity_id=str(a.entity_id),
+                title=a.title,
+                reason=f"Открытая аномалия: {a.anomaly_type}",
+            ))
+            existing_ids.add(str(a.entity_id))
+
+    # Pending invoices not yet in collection
+    pending_inv = await db.execute(
+        select(Invoice)
+        .where(Invoice.status == InvoiceStatus.pending_review)
+        .order_by(Invoice.created_at.desc())
+        .limit(5)
+    )
+    for inv in pending_inv.scalars().all():
+        if str(inv.id) not in existing_ids:
+            suggestions.append(SuggestItem(
+                entity_type="invoice",
+                entity_id=str(inv.id),
+                title=f"Счёт {inv.invoice_number or inv.id}",
+                reason="Ожидает проверки",
+            ))
+            existing_ids.add(str(inv.id))
+
+    # Needs-review documents
+    docs = await db.execute(
+        select(Document)
+        .where(Document.status == DocumentStatus.needs_review)
+        .order_by(Document.created_at.desc())
+        .limit(5)
+    )
+    for doc in docs.scalars().all():
+        if str(doc.id) not in existing_ids:
+            suggestions.append(SuggestItem(
+                entity_type="document",
+                entity_id=str(doc.id),
+                title=doc.file_name,
+                reason="Требует проверки",
+            ))
+
+    return SuggestResponse(suggestions=suggestions[:10])
+
+
+# ── collection.search ──────────────────────────────────────────────────────
+
+
+class CollectionSearchItem(BaseModel):
+    item_id: str
+    entity_type: str
+    entity_id: str
+    note: str | None
+    added_by: str
+    created_at: str
+
+
+class CollectionSearchResponse(BaseModel):
+    results: list[CollectionSearchItem]
+    total: int
+
+
+@router.get("/{collection_id}/search", response_model=CollectionSearchResponse)
+async def search_collection_items(
+    collection_id: uuid.UUID,
+    q: str = "",
+    entity_type: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: collection.search — Search within a collection's items."""
+    result = await db.execute(
+        select(Collection)
+        .where(Collection.id == collection_id)
+        .options(selectinload(Collection.items))
+    )
+    coll = result.scalar_one_or_none()
+    if not coll:
+        raise HTTPException(404, "Collection not found")
+
+    items = coll.items
+    if entity_type:
+        items = [i for i in items if i.entity_type == entity_type]
+
+    q_lower = q.lower().strip()
+    if q_lower:
+        items = [
+            i for i in items
+            if q_lower in (i.entity_id or "").lower()
+            or q_lower in (i.note or "").lower()
+            or q_lower in i.entity_type.lower()
+        ]
+
+    return CollectionSearchResponse(
+        results=[
+            CollectionSearchItem(
+                item_id=str(i.id),
+                entity_type=i.entity_type,
+                entity_id=i.entity_id,
+                note=i.note,
+                added_by=i.added_by,
+                created_at=i.created_at.isoformat(),
+            )
+            for i in items
+        ],
+        total=len(items),
     )

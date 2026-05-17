@@ -29,6 +29,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         else:
             return await call_next(request)
 
+        # limit=0 means disabled (useful in test/dev environments)
+        if limit == 0:
+            return await call_next(request)
+
         client_ip = (
             request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
             or (request.client.host if request.client else "unknown")

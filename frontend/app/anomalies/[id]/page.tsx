@@ -45,6 +45,11 @@ export default function AnomalyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [resolving, setResolving] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [explainData, setExplainData] = useState<{
+    explanation: string;
+    suggested_actions: string[];
+  } | null>(null);
+  const [explaining, setExplaining] = useState(false);
 
   useEffect(() => {
     fetch(`${API}/api/anomalies/${id}`)
@@ -71,6 +76,24 @@ export default function AnomalyDetailPage() {
     }).catch(() => {});
     setResolving(false);
     router.push("/anomalies");
+  };
+
+  const explain = async () => {
+    setExplaining(true);
+    try {
+      const r = await fetch(`${API}/api/anomalies/${id}/explain`);
+      if (r.ok) {
+        const d = (await r.json()) as {
+          explanation: string;
+          suggested_actions: string[];
+        };
+        setExplainData(d);
+      }
+    } catch {
+      // non-critical
+    } finally {
+      setExplaining(false);
+    }
   };
 
   if (loading) return <div className="p-6 text-slate-400">Загрузка...</div>;
@@ -143,22 +166,49 @@ export default function AnomalyDetailPage() {
           </div>
         )}
 
-        {anomaly.status === "open" && (
-          <div className="flex gap-3 mt-4">
-            <button
-              onClick={() => resolve("resolved")}
-              disabled={resolving}
-              className="px-4 py-2 text-sm font-medium bg-green-700 hover:bg-green-600 text-white rounded transition-colors disabled:opacity-50"
-            >
-              Решить
-            </button>
-            <button
-              onClick={() => resolve("false_positive")}
-              disabled={resolving}
-              className="px-4 py-2 text-sm font-medium bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors disabled:opacity-50"
-            >
-              Ложная
-            </button>
+        <div className="flex gap-3 mt-4 flex-wrap">
+          {anomaly.status === "open" && (
+            <>
+              <button
+                onClick={() => resolve("resolved")}
+                disabled={resolving}
+                className="px-4 py-2 text-sm font-medium bg-green-700 hover:bg-green-600 text-white rounded transition-colors disabled:opacity-50"
+              >
+                Решить
+              </button>
+              <button
+                onClick={() => resolve("false_positive")}
+                disabled={resolving}
+                className="px-4 py-2 text-sm font-medium bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors disabled:opacity-50"
+              >
+                Ложная
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => void explain()}
+            disabled={explaining}
+            className="px-4 py-2 text-sm font-medium bg-blue-800 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50"
+          >
+            {explaining ? "Анализирую…" : "🤖 Объяснить"}
+          </button>
+        </div>
+
+        {explainData && (
+          <div className="mt-4 p-3 bg-slate-900/60 border border-slate-600 rounded text-sm text-slate-200 space-y-2">
+            <p className="whitespace-pre-wrap">{explainData.explanation}</p>
+            {explainData.suggested_actions.length > 0 && (
+              <div>
+                <div className="text-xs text-slate-400 font-medium mb-1">
+                  Рекомендуемые действия:
+                </div>
+                <ul className="list-disc list-inside space-y-0.5 text-slate-300">
+                  {explainData.suggested_actions.map((a, i) => (
+                    <li key={i}>{a}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
 

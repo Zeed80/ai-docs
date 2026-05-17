@@ -1,7 +1,10 @@
 """Search API — skills: doc.search, search.nl_to_query, search.hybrid, search.similar"""
 
+import uuid
+from datetime import datetime
+
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +16,7 @@ from app.db.models import (
     DocumentStatus,
     DocumentType,
     ExtractionField,
+    SavedQuery,
 )
 from app.db.session import get_db
 from app.db.text_search import text_search_condition, text_search_rank
@@ -291,4 +295,164 @@ async def hybrid_search(
         + (f", тип: {payload.doc_type}" if payload.doc_type else "")
         + (f", статус: {payload.status}" if payload.status else "")
         + suffix,
+    )
+
+
+# ── SavedQuery CRUD ────────────────────────────────────────────────────────────
+
+class SavedQueryCreate(BaseModel):
+    nl_text: str
+    structured_query: dict
+    result_count: int | None = None
+    is_alert: bool = False
+    alert_cron: str | None = None
+
+
+class SavedQueryOut(BaseModel):
+    id: uuid.UUID
+    user_id: str
+    nl_text: str
+    structured_query: dict
+    result_count: int | None
+    is_alert: bool
+    alert_cron: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/saved-queries", response_model=list[SavedQueryOut])
+async def list_saved_queries(
+    limit: int = Query(50, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """List saved search queries for the current user."""
+    result = await db.execute(
+        select(SavedQuery).order_by(SavedQuery.created_at.desc()).limit(limit)
+    )
+    return result.scalars().all()
+
+
+@router.post("/saved-queries", response_model=SavedQueryOut, status_code=201)
+async def create_saved_query(
+    payload: SavedQueryCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save a search query for reuse or alert."""
+    sq = SavedQuery(
+        user_id="system",
+        nl_text=payload.nl_text,
+        structured_query=payload.structured_query,
+        result_count=payload.result_count,
+        is_alert=payload.is_alert,
+        alert_cron=payload.alert_cron,
+    )
+    db.add(sq)
+    await db.commit()
+    await db.refresh(sq)
+    return sq
+
+
+@router.delete("/saved-queries/{query_id}", status_code=204)
+async def delete_saved_query(
+    query_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a saved query."""
+    result = await db.execute(select(SavedQuery).where(SavedQuery.id == query_id))
+    sq = result.scalar_one_or_none()
+    if not sq:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.delete(sq)
+    await db.commit()
+
+
+# ── search.similar ────────────────────────────────────────────────────────
+
+
+class SimilarResult(BaseModel):
+    id: str
+    entity_type: str
+    title: str
+    score: float
+
+
+class SimilarResponse(BaseModel):
+    results: list[SimilarResult]
+    source_id: str
+    source_type: str
+
+
+@router.get("/similar/{entity_type}/{entity_id}", response_model=SimilarResponse)
+async def find_similar(
+    entity_type: str,
+    entity_id: uuid.UUID,
+    limit: int = Query(5, le=20),
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: search.similar — Find entities similar to the given entity using vector search."""
+    results: list[SimilarResult] = []
+
+    try:
+        from app.vector.qdrant_store import search_similar, collection_count_for
+
+        collection_name = f"{entity_type}s"
+        if collection_count_for(collection_name) == 0:
+            raise ValueError("collection empty")
+
+        hits = search_similar(
+            collection=collection_name,
+            entity_id=str(entity_id),
+            limit=limit + 1,
+        )
+
+        for hit in hits:
+            hit_id = hit.payload.get("entity_id", "") if hit.payload else ""
+            if hit_id == str(entity_id):
+                continue
+            title = hit.payload.get("title") or hit.payload.get("file_name") or hit_id[:8]
+            results.append(SimilarResult(
+                id=hit_id,
+                entity_type=entity_type,
+                title=title,
+                score=round(hit.score, 3),
+            ))
+
+    except Exception:
+        # Fallback: return recently created entities of the same type
+        if entity_type == "invoice":
+            from app.db.models import Invoice
+            rows = await db.execute(
+                select(Invoice)
+                .where(Invoice.id != entity_id)
+                .order_by(Invoice.created_at.desc())
+                .limit(limit)
+            )
+            for inv in rows.scalars().all():
+                results.append(SimilarResult(
+                    id=str(inv.id),
+                    entity_type="invoice",
+                    title=inv.invoice_number or str(inv.id)[:8],
+                    score=0.5,
+                ))
+        elif entity_type == "document":
+            from app.db.models import Document
+            rows = await db.execute(
+                select(Document)
+                .where(Document.id != entity_id)
+                .order_by(Document.created_at.desc())
+                .limit(limit)
+            )
+            for doc in rows.scalars().all():
+                results.append(SimilarResult(
+                    id=str(doc.id),
+                    entity_type="document",
+                    title=doc.file_name,
+                    score=0.5,
+                ))
+
+    return SimilarResponse(
+        results=results[:limit],
+        source_id=str(entity_id),
+        source_type=entity_type,
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import UTC, datetime
 
@@ -15,7 +16,7 @@ from app.chat.store import (
     list_chat_sessions,
 )
 from app.chat.user_key import get_user_key
-from app.db.models import ChatMessage, ChatMessageAttachment
+from app.db.models import ChatMessage, ChatMessageAttachment, ChatSession
 from app.db.session import get_db
 
 router = APIRouter()
@@ -192,3 +193,72 @@ async def soft_delete_session(
         raise HTTPException(status_code=404, detail="Chat session not found")
     session.deleted_at = datetime.now(UTC)
     await db.commit()
+
+
+class ShareTokenResponse(BaseModel):
+    token: str
+    session_id: uuid.UUID
+    title: str
+
+
+@router.post("/sessions/{session_id}/share", response_model=ShareTokenResponse)
+async def share_session(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user_key: str = Depends(get_user_key),
+) -> ShareTokenResponse:
+    """Generate a share token for a chat session."""
+    session = await get_chat_session(
+        db, session_id=session_id, user_key=user_key, include_deleted=False
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    if not session.share_token:
+        session.share_token = secrets.token_urlsafe(32)
+        await db.commit()
+        await db.refresh(session)
+    return ShareTokenResponse(
+        token=session.share_token,
+        session_id=session.id,
+        title=session.title,
+    )
+
+
+class SharedSessionRead(BaseModel):
+    session_id: uuid.UUID
+    title: str
+    messages: list[ChatMessageRead]
+
+
+@router.get("/share/{token}", response_model=SharedSessionRead)
+async def get_shared_session(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> SharedSessionRead:
+    """Public endpoint — returns messages for a shared session by token."""
+    result = await db.execute(
+        select(ChatSession).where(
+            ChatSession.share_token == token,
+            ChatSession.deleted_at.is_(None),
+        )
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Shared session not found")
+    _, msgs, _ = await list_chat_messages(db, session_id=session.id, user_key=session.user_key)
+    return SharedSessionRead(
+        session_id=session.id,
+        title=session.title,
+        messages=[
+            ChatMessageRead(
+                id=m.id,
+                session_id=m.session_id,
+                role=m.role,
+                content=m.content,
+                created_at=m.created_at,
+                attachments=[],
+            )
+            for m in msgs
+            if m.role in ("user", "assistant")
+        ],
+    )

@@ -6,59 +6,51 @@ import { useEffect, useState } from "react";
 
 const API = getApiBaseUrl();
 
+interface CollectionItem {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  note: string | null;
+  added_by: string;
+  created_at: string;
+}
+
 interface Collection {
   id: string;
   name: string;
   description: string | null;
-  collection_type: string;
-  status: string;
+  is_closed: boolean;
+  closed_at: string | null;
+  closure_summary: string | null;
+  items: CollectionItem[];
   created_at: string;
-  updated_at: string;
 }
-
-const STATUS_STYLES: Record<string, string> = {
-  open: "bg-blue-900/40 text-blue-300 border-blue-700/40",
-  closed: "bg-slate-700/50 text-slate-400 border-slate-600/40",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  open: "Открыто",
-  closed: "Закрыто",
-};
-
-const TYPE_LABELS: Record<string, string> = {
-  invoice: "Счёт",
-  supplier: "Поставщик",
-  procurement: "Закупка",
-  project: "Проект",
-  general: "Общее",
-};
 
 export default function CasesPage() {
   const router = useRouter();
-  const [items, setItems] = useState<Collection[]>([]);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showClosed, setShowClosed] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [formName, setFormName] = useState("");
   const [formDesc, setFormDesc] = useState("");
   const [creating, setCreating] = useState(false);
-  const [statusFilter, setStatusFilter] = useState("open");
 
-  async function load() {
+  async function load(includeClosed: boolean) {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ limit: "100" });
-      if (statusFilter) params.set("status", statusFilter);
-      const res = await fetch(`${API}/api/collections?${params}`);
-      if (res.ok) setItems(await res.json());
+      const res = await fetch(
+        `${API}/api/collections?include_closed=${includeClosed}`,
+      );
+      if (res.ok) setCollections(await res.json());
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    load();
-  }, [statusFilter]);
+    load(showClosed);
+  }, [showClosed]);
 
   async function create() {
     if (!formName.trim()) return;
@@ -70,7 +62,6 @@ export default function CasesPage() {
         body: JSON.stringify({
           name: formName.trim(),
           description: formDesc || null,
-          collection_type: "general",
         }),
       });
       if (res.ok) {
@@ -102,19 +93,19 @@ export default function CasesPage() {
         </button>
       </div>
 
-      {/* Status filter */}
+      {/* Filter */}
       <div className="flex gap-2 mb-4">
-        {["open", "closed", ""].map((s) => (
+        {([false, true] as const).map((closed) => (
           <button
-            key={s}
-            onClick={() => setStatusFilter(s)}
+            key={String(closed)}
+            onClick={() => setShowClosed(closed)}
             className={`px-3 py-1 text-xs rounded ${
-              statusFilter === s
+              showClosed === closed
                 ? "bg-slate-600 text-slate-100"
                 : "bg-slate-800 text-slate-400 hover:text-slate-200"
             }`}
           >
-            {s === "" ? "Все" : (STATUS_LABELS[s] ?? s)}
+            {closed ? "Включая закрытые" : "Активные"}
           </button>
         ))}
       </div>
@@ -128,6 +119,7 @@ export default function CasesPage() {
             type="text"
             value={formName}
             onChange={(e) => setFormName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && create()}
             placeholder="Название *"
             className="w-full px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-500 rounded outline-none focus:border-blue-400"
           />
@@ -160,7 +152,7 @@ export default function CasesPage() {
         <div className="py-12 text-center text-slate-500 text-sm">
           Загрузка...
         </div>
-      ) : items.length === 0 ? (
+      ) : collections.length === 0 ? (
         <div className="py-16 text-center">
           <div className="text-4xl text-slate-700 mb-3">📂</div>
           <p className="text-slate-400 text-sm">Нет активных дел.</p>
@@ -170,42 +162,41 @@ export default function CasesPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {items.map((item) => (
+          {collections.map((coll) => (
             <button
-              key={item.id}
-              onClick={() => router.push(`/collections/${item.id}`)}
-              className={`w-full text-left flex items-start gap-4 p-4 border rounded-lg transition-colors ${
-                STATUS_STYLES[item.status] ??
-                "bg-slate-800 border-slate-700 hover:bg-slate-700"
-              } hover:brightness-110`}
+              key={coll.id}
+              onClick={() => router.push(`/collections/${coll.id}`)}
+              className="w-full text-left flex items-start gap-4 p-4 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700/60 transition-colors"
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-sm font-medium text-slate-200 truncate">
-                    {item.name}
+                    {coll.name}
                   </span>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded shrink-0">
-                    {TYPE_LABELS[item.collection_type] ?? item.collection_type}
-                  </span>
+                  {coll.is_closed && (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 text-slate-500 rounded-full shrink-0">
+                      закрыто
+                    </span>
+                  )}
                 </div>
-                {item.description && (
+                {coll.description && (
                   <p className="text-xs text-slate-400 truncate">
-                    {item.description}
+                    {coll.description}
                   </p>
                 )}
                 <p className="text-[10px] text-slate-500 mt-1">
-                  Обновлено{" "}
-                  {new Date(item.updated_at).toLocaleDateString("ru-RU")}
+                  {coll.items.length} элементов · создано{" "}
+                  {new Date(coll.created_at).toLocaleDateString("ru-RU")}
                 </p>
               </div>
               <span
                 className={`text-[10px] px-2 py-0.5 rounded-full shrink-0 mt-0.5 ${
-                  item.status === "open"
-                    ? "bg-blue-900/40 text-blue-300"
-                    : "bg-slate-700 text-slate-500"
+                  coll.is_closed
+                    ? "bg-slate-700 text-slate-500"
+                    : "bg-blue-900/40 text-blue-300"
                 }`}
               >
-                {STATUS_LABELS[item.status] ?? item.status}
+                {coll.is_closed ? "Закрыто" : "Активно"}
               </span>
             </button>
           ))}

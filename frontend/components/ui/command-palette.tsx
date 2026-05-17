@@ -156,6 +156,7 @@ interface SearchResult {
   file_name: string;
   status: string;
   doc_type: string | null;
+  entity_type?: string;
 }
 
 interface NLResult {
@@ -500,6 +501,47 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             </div>
           )}
         </div>
+
+        {/* NL action chips — shown when there are NL results */}
+        {mode === "nl" && nlResult && nlResult.total > 0 && (
+          <div className="px-4 py-2 border-t border-slate-100 flex flex-wrap gap-1.5">
+            <button
+              onClick={() => {
+                router.push(`/invoices`);
+                onClose();
+              }}
+              className="px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 border border-slate-200 transition-colors"
+            >
+              📋 Открыть список
+            </button>
+            <button
+              onClick={async () => {
+                const ids = (currentItems as SearchResult[])
+                  .filter((r) => r.entity_type === "invoice")
+                  .map((r) => r.id);
+                if (!ids.length) return;
+                await fetch(`${API_BASE}/api/invoices/bulk-approve`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ ids }),
+                });
+                onClose();
+              }}
+              className="px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-green-50 hover:text-green-700 text-slate-600 border border-slate-200 transition-colors"
+            >
+              ✓ Утвердить все
+            </button>
+            <button
+              onClick={() => {
+                router.push("/collections");
+                onClose();
+              }}
+              className="px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-purple-50 hover:text-purple-700 text-slate-600 border border-slate-200 transition-colors"
+            >
+              📁 В коллекцию
+            </button>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="px-4 py-2 border-t border-slate-100 flex gap-3 text-[10px] text-slate-400">

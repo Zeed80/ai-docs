@@ -8,6 +8,24 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# Sentry — optional; gracefully skipped when DSN is not set
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            environment=os.environ.get("ENVIRONMENT", "production"),
+            traces_sample_rate=0.1,
+            integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+            send_default_pii=False,
+        )
+    except ImportError:
+        pass
+
 from app.middleware.csrf import CSRFMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
@@ -20,6 +38,7 @@ from app.api import (
     anomalies,
     approvals,
     auth,
+    auto_approval,
     boms,
     calendar,
     canonical,
@@ -201,6 +220,7 @@ def create_app() -> FastAPI:
     app.include_router(invoices.router, prefix="/api/invoices", tags=["invoices"])
     app.include_router(email.router, prefix="/api/email", tags=["email"])
     app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"])
+    app.include_router(auto_approval.router, prefix="/api/auto-approval-rules", tags=["auto-approval"])
     app.include_router(search.router, prefix="/api/search", tags=["search"])
     app.include_router(normalization.router, prefix="/api/normalization", tags=["normalization"])
     app.include_router(tables.router, prefix="/api/tables", tags=["tables"])
@@ -259,6 +279,18 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint():
+    """Prometheus metrics endpoint."""
+    try:
+        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+        from fastapi.responses import Response as _Response
+        return _Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    except ImportError:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("# prometheus_client not installed\n")
 
 
 @app.get("/health")

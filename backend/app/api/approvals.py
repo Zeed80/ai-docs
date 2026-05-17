@@ -154,10 +154,14 @@ async def list_pending_approvals(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: approval.list_pending — List pending approvals (excludes dormant chain steps)."""
-    # Exclude chain steps that are not yet active (assigned_to is None means dormant)
+    # Exclude dormant chain steps only (chain step with no assigned_to = not yet active)
+    from sqlalchemy import or_ as sql_or
     query = select(Approval).where(
         Approval.status == ApprovalStatus.pending,
-        Approval.assigned_to.isnot(None),
+        sql_or(
+            Approval.assigned_to.isnot(None),
+            Approval.chain_root_id.is_(None),
+        ),
     )
     if action_type:
         query = query.where(Approval.action_type == action_type)
@@ -311,6 +315,15 @@ async def decide_approval(
     await db.commit()
     await db.refresh(approval)
     logger.info("approval_decided", approval_id=str(approval_id), status=payload.status.value)
+
+    # Record approval wait time metric
+    try:
+        from app.core.metrics import approval_wait_seconds
+        if approval.created_at and approval.decided_at:
+            wait = (approval.decided_at - approval.created_at).total_seconds()
+            approval_wait_seconds.observe(wait)
+    except Exception:
+        pass
 
     # Execute the underlying action after approval
     await _execute_approved_action(approval, db)

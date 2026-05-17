@@ -27,6 +27,14 @@ type MessageRole =
   | "error"
   | "status";
 
+interface ActionChip {
+  label: string;
+  action: "navigate" | "cap";
+  target?: string;
+  cap?: string;
+  act?: string;
+}
+
 interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -37,6 +45,7 @@ interface ChatMessage {
   status?: "calling" | "done" | "pending" | "approved" | "rejected";
   preview?: string;
   toolsUsedInTurn?: string[];
+  actionChips?: ActionChip[];
   attachments?: {
     name: string;
     docId: string;
@@ -194,6 +203,9 @@ export function SvetaPanel() {
   const currentSessionIdRef = useRef<string | null>(null);
   const currentTurnToolsRef = useRef<string[]>([]);
   const sessionIdRef = useRef<string>(genId());
+  const [reasoningMode, setReasoningMode] = useState<"normal" | "strict">(
+    "normal",
+  );
 
   const restoreSessionFromStorage = useCallback(() => {
     if (typeof window === "undefined") return null;
@@ -410,6 +422,24 @@ export function SvetaPanel() {
     }
   }
 
+  async function pinMessage(msg: ChatMessage) {
+    if (!msg.content) return;
+    try {
+      await fetch("/api/memory/pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: msg.content.slice(0, 120),
+          summary: msg.content.slice(0, 2000),
+          scope: "project",
+          kind: "pinned_fact",
+        }),
+      });
+    } catch {
+      // non-critical
+    }
+  }
+
   function handleServerMessage(data: Record<string, unknown>) {
     const type = data.type as string;
     const isTelegram = data.source === "telegram";
@@ -474,13 +504,23 @@ export function SvetaPanel() {
       }
       const sid = streamingIdRef.current;
       const toolsSnapshot = [...currentTurnToolsRef.current];
-      if (sid && toolsSnapshot.length > 0) {
+      const chips = Array.isArray(data.action_chips)
+        ? (data.action_chips as ActionChip[])
+        : [];
+      if (sid) {
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === sid ? { ...m, toolsUsedInTurn: toolsSnapshot } : m,
-          ),
+          prev.map((m) => {
+            if (m.id !== sid) return m;
+            return {
+              ...m,
+              ...(toolsSnapshot.length > 0
+                ? { toolsUsedInTurn: toolsSnapshot }
+                : {}),
+              ...(chips.length > 0 ? { actionChips: chips } : {}),
+            };
+          }),
         );
-        setLastTurnTools(toolsSnapshot);
+        if (toolsSnapshot.length > 0) setLastTurnTools(toolsSnapshot);
       }
       currentTurnToolsRef.current = [];
       streamingIdRef.current = null;
@@ -791,6 +831,7 @@ export function SvetaPanel() {
             size_bytes: item.sizeBytes,
           })),
           agentWsModeRef.current,
+          reasoningMode,
         ),
       ),
     );
@@ -844,6 +885,7 @@ export function SvetaPanel() {
               currentSessionId,
               undefined,
               agentWsModeRef.current,
+              reasoningMode,
             ),
           ),
         );
@@ -915,6 +957,22 @@ export function SvetaPanel() {
     streamingIdRef.current = null;
     tgStreamingIdRef.current = null;
     await hydrateMessages(sessionId);
+  }
+
+  async function handleShareCurrentChat() {
+    if (!currentSessionId) return;
+    try {
+      const res = await fetch(`/api/chat/sessions/${currentSessionId}/share`, {
+        method: "POST",
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { token: string };
+      const link = `${window.location.origin}/chat/share/${data.token}`;
+      await navigator.clipboard.writeText(link);
+      alert(`Ссылка скопирована:\n${link}`);
+    } catch {
+      // non-critical
+    }
   }
 
   async function handleDeleteCurrentChat() {
@@ -1069,6 +1127,14 @@ export function SvetaPanel() {
             + Чат
           </button>
           <button
+            onClick={() => void handleShareCurrentChat()}
+            className="w-full min-w-0 overflow-hidden truncate whitespace-nowrap px-2 py-1 text-xs rounded bg-slate-700 border border-slate-600 text-slate-300 hover:bg-slate-600 disabled:opacity-50"
+            disabled={!currentSessionId || isStreaming}
+            title="Поделиться чатом"
+          >
+            Поделиться
+          </button>
+          <button
             onClick={() => void handleDeleteCurrentChat()}
             className="w-full min-w-0 overflow-hidden truncate whitespace-nowrap px-2 py-1 text-xs rounded bg-red-900/50 border border-red-700/50 text-red-200 hover:bg-red-800/60 disabled:opacity-50"
             disabled={!currentSessionId || isStreaming}
@@ -1193,6 +1259,23 @@ export function SvetaPanel() {
                   )}
                   <div className="px-3 py-2">{msg.content}</div>
                 </div>
+                {msg.actionChips && msg.actionChips.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pl-1 pt-1">
+                    {msg.actionChips.map((chip, ci) => (
+                      <button
+                        key={ci}
+                        onClick={() => {
+                          if (chip.action === "navigate" && chip.target) {
+                            router.push(chip.target);
+                          }
+                        }}
+                        className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-slate-700 border border-slate-600 text-slate-300 hover:border-blue-500 hover:text-blue-300 transition-colors"
+                      >
+                        {chip.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {isLastAssistant && (
                   <div className="flex items-center gap-1 pl-1">
                     <button
@@ -1210,6 +1293,13 @@ export function SvetaPanel() {
                       className={`text-base leading-none transition-opacity ${existingRating === -1 ? "opacity-100" : existingRating ? "opacity-20 cursor-default" : "opacity-40 hover:opacity-90"}`}
                     >
                       👎
+                    </button>
+                    <button
+                      onClick={() => void pinMessage(msg)}
+                      title="Закрепить в памяти"
+                      className="text-base leading-none opacity-30 hover:opacity-90 transition-opacity"
+                    >
+                      📌
                     </button>
                   </div>
                 )}
@@ -1393,6 +1483,25 @@ export function SvetaPanel() {
             </svg>
           </button>
 
+          <button
+            type="button"
+            onClick={() =>
+              setReasoningMode((m) => (m === "normal" ? "strict" : "normal"))
+            }
+            title={
+              reasoningMode === "strict"
+                ? "Режим: строгий (развёрнутые рассуждения)"
+                : "Режим: обычный"
+            }
+            className={`shrink-0 px-2 py-2 rounded-lg border text-xs font-medium transition-colors ${
+              reasoningMode === "strict"
+                ? "bg-violet-700 border-violet-500 text-violet-100 hover:bg-violet-600"
+                : "bg-slate-700 border-slate-600 text-slate-400 hover:text-slate-200 hover:border-slate-500"
+            }`}
+          >
+            {reasoningMode === "strict" ? "🧠" : "💬"}
+          </button>
+
           <input
             ref={inputRef}
             type="text"
@@ -1409,7 +1518,9 @@ export function SvetaPanel() {
                 ? "Света офлайн"
                 : isUploading
                   ? "Загружаю файлы…"
-                  : "Спросите Свету…"
+                  : reasoningMode === "strict"
+                    ? "Спросите Свету (строгий режим)…"
+                    : "Спросите Свету…"
             }
             disabled={isDegraded || isStreaming}
             className="flex-1 px-3 py-2 text-sm bg-slate-700 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"

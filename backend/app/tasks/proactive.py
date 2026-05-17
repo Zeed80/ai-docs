@@ -27,6 +27,12 @@ def alert_critical_anomalies() -> dict:
     return asyncio.get_event_loop().run_until_complete(_alert_critical_anomalies())
 
 
+@celery_app.task(name="proactive.dispatch_due_reminders")
+def dispatch_due_reminders() -> dict:
+    """Send notifications for reminders whose remind_at time has passed."""
+    return asyncio.get_event_loop().run_until_complete(_dispatch_due_reminders())
+
+
 async def _check_due_dates() -> dict:
     from sqlalchemy import select, and_
 
@@ -128,3 +134,49 @@ async def _alert_critical_anomalies() -> dict:
 
     logger.info("proactive_anomaly_alerts_sent", alerted=alerted)
     return {"alerted": alerted}
+
+
+async def _dispatch_due_reminders() -> dict:
+    from sqlalchemy import select, and_
+
+    from app.db.models import Reminder
+    from app.db.session import _get_session_factory
+    from app.core.chat_bus import chat_bus
+
+    now = datetime.now(timezone.utc)
+    dispatched = 0
+
+    async with _get_session_factory()() as db:
+        result = await db.execute(
+            select(Reminder).where(
+                and_(
+                    Reminder.is_sent == False,  # noqa: E712
+                    Reminder.remind_at <= now,
+                )
+            ).limit(50)
+        )
+        reminders = result.scalars().all()
+
+        for reminder in reminders:
+            try:
+                await chat_bus.publish({
+                    "type": "notification",
+                    "level": "info",
+                    "title": "Напоминание",
+                    "message": reminder.message,
+                    "entity_type": reminder.entity_type,
+                    "entity_id": str(reminder.entity_id),
+                })
+                reminder.is_sent = True
+                dispatched += 1
+            except Exception as exc:
+                logger.warning(
+                    "reminder_dispatch_failed",
+                    reminder_id=str(reminder.id),
+                    error=str(exc),
+                )
+
+        await db.commit()
+
+    logger.info("reminders_dispatched", count=dispatched)
+    return {"dispatched": dispatched}

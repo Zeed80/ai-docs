@@ -43,11 +43,30 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
   invoice_date: "bg-slate-400",
 };
 
+const MONTH_NAMES = [
+  "Январь",
+  "Февраль",
+  "Март",
+  "Апрель",
+  "Май",
+  "Июнь",
+  "Июль",
+  "Август",
+  "Сентябрь",
+  "Октябрь",
+  "Ноябрь",
+  "Декабрь",
+];
+const DAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+
 export default function CalendarPage() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [loading, setLoading] = useState(true);
-  const [days, setDays] = useState(14);
+  const [days, setDays] = useState(30);
+  const [view, setView] = useState<"list" | "month">("month");
+  const today = new Date();
+  const [monthOffset, setMonthOffset] = useState(0);
 
   const [showReminderForm, setShowReminderForm] = useState(false);
   const [reminderMsg, setReminderMsg] = useState("");
@@ -71,6 +90,17 @@ export default function CalendarPage() {
       method: "POST",
     });
     setReminders((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const handleGenerateFollowup = async (id: string) => {
+    const res = await fetch(
+      `${API}/api/calendar/reminders/${id}/generate-followup`,
+      { method: "POST" },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      window.open(`/email/drafts/${data.draft_id}`, "_blank");
+    }
   };
 
   const handleCreateReminder = async () => {
@@ -101,12 +131,33 @@ export default function CalendarPage() {
 
   if (loading) return <div className="p-6 text-slate-400">Загрузка...</div>;
 
-  // Group events by date
+  // Group events by ISO date string (YYYY-MM-DD)
   const grouped: Record<string, CalendarEvent[]> = {};
   for (const e of events) {
     const dateKey = new Date(e.event_date).toLocaleDateString("ru-RU");
     if (!grouped[dateKey]) grouped[dateKey] = [];
     grouped[dateKey].push(e);
+  }
+
+  // Build month grid cells
+  const displayMonth = new Date(
+    today.getFullYear(),
+    today.getMonth() + monthOffset,
+    1,
+  );
+  const firstDow = (displayMonth.getDay() + 6) % 7; // Mon=0
+  const daysInMonth = new Date(
+    displayMonth.getFullYear(),
+    displayMonth.getMonth() + 1,
+    0,
+  ).getDate();
+  // iso date → events map
+  const byIso: Record<string, CalendarEvent[]> = {};
+  for (const e of events) {
+    const d = new Date(e.event_date);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    if (!byIso[iso]) byIso[iso] = [];
+    byIso[iso].push(e);
   }
 
   return (
@@ -137,6 +188,17 @@ export default function CalendarPage() {
             <option value={30}>30 дней</option>
             <option value={60}>60 дней</option>
           </select>
+          <div className="flex gap-1">
+            {(["month", "list"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${view === v ? "bg-slate-600 text-slate-100" : "bg-slate-800 text-slate-400 hover:text-slate-200"}`}
+              >
+                {v === "month" ? "Месяц" : "Список"}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -198,65 +260,164 @@ export default function CalendarPage() {
                     {new Date(r.remind_at).toLocaleString("ru-RU")}
                   </div>
                 </div>
-                <button
-                  onClick={() => handleMarkSent(r.id)}
-                  className="px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700"
-                >
-                  Выполнено
-                </button>
+                <div className="flex gap-1.5">
+                  {r.entity_type === "invoice" && (
+                    <button
+                      onClick={() => handleGenerateFollowup(r.id)}
+                      className="px-2 py-1 text-xs bg-slate-700 text-slate-300 rounded hover:bg-slate-600"
+                      title="Создать черновик follow-up письма"
+                    >
+                      Follow-up ↗
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleMarkSent(r.id)}
+                    className="px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700"
+                  >
+                    Выполнено
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Events by date */}
-      {Object.keys(grouped).length === 0 ? (
-        <div className="text-slate-400 text-sm">
-          Нет событий на ближайшие {days} дней
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {Object.entries(grouped).map(([date, dateEvents]) => (
-            <div key={date}>
-              <h3 className="text-sm font-bold text-slate-400 mb-2">{date}</h3>
-              <div className="space-y-1.5">
-                {dateEvents.map((e) => (
+      {/* Month grid view */}
+      {view === "month" && (
+        <div className="mb-6">
+          <div className="flex items-center gap-3 mb-3">
+            <button
+              onClick={() => setMonthOffset((o) => o - 1)}
+              className="px-2 py-1 text-sm bg-slate-700 text-slate-300 rounded hover:bg-slate-600"
+            >
+              ←
+            </button>
+            <span className="text-sm font-semibold text-slate-200 w-36 text-center">
+              {MONTH_NAMES[displayMonth.getMonth()]}{" "}
+              {displayMonth.getFullYear()}
+            </span>
+            <button
+              onClick={() => setMonthOffset((o) => o + 1)}
+              className="px-2 py-1 text-sm bg-slate-700 text-slate-300 rounded hover:bg-slate-600"
+            >
+              →
+            </button>
+            {monthOffset !== 0 && (
+              <button
+                onClick={() => setMonthOffset(0)}
+                className="text-xs text-slate-500 hover:text-slate-300"
+              >
+                Сегодня
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-7 gap-px bg-slate-700 rounded-lg overflow-hidden border border-slate-700">
+            {DAY_NAMES.map((d) => (
+              <div
+                key={d}
+                className="bg-slate-800 text-center text-[10px] font-semibold text-slate-500 py-1"
+              >
+                {d}
+              </div>
+            ))}
+            {Array.from({ length: firstDow }).map((_, i) => (
+              <div
+                key={`empty-${i}`}
+                className="bg-slate-900/50 min-h-[60px]"
+              />
+            ))}
+            {Array.from({ length: daysInMonth }).map((_, i) => {
+              const day = i + 1;
+              const iso = `${displayMonth.getFullYear()}-${String(displayMonth.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+              const dayEvents = byIso[iso] ?? [];
+              const isToday =
+                today.getFullYear() === displayMonth.getFullYear() &&
+                today.getMonth() === displayMonth.getMonth() &&
+                today.getDate() === day;
+              return (
+                <div
+                  key={day}
+                  className={`bg-slate-900 min-h-[60px] p-1 ${isToday ? "ring-1 ring-inset ring-blue-500" : ""}`}
+                >
                   <div
-                    key={e.id}
-                    className="flex items-center gap-3 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5"
+                    className={`text-[11px] font-medium mb-0.5 w-5 h-5 flex items-center justify-center rounded-full ${isToday ? "bg-blue-600 text-white" : "text-slate-400"}`}
                   >
-                    <span
-                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                        EVENT_TYPE_COLORS[e.event_type] ?? "bg-slate-400"
-                      }`}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">
+                    {day}
+                  </div>
+                  <div className="space-y-0.5">
+                    {dayEvents.slice(0, 3).map((e) => (
+                      <div
+                        key={e.id}
+                        title={e.title}
+                        className={`text-[9px] px-1 rounded truncate ${EVENT_TYPE_COLORS[e.event_type]?.replace("bg-", "bg-") ?? "bg-slate-500"} text-white`}
+                      >
                         {e.title}
                       </div>
-                      <div className="text-xs text-slate-500">
-                        {EVENT_TYPE_LABELS[e.event_type] ?? e.event_type}
-                        {e.source !== "manual" && (
-                          <span className="ml-2 text-slate-400">
-                            ({e.source})
-                          </span>
-                        )}
+                    ))}
+                    {dayEvents.length > 3 && (
+                      <div className="text-[9px] text-slate-500">
+                        +{dayEvents.length - 3}
                       </div>
-                    </div>
-                    <div className="text-xs text-slate-400 shrink-0">
-                      {new Date(e.event_date).toLocaleTimeString("ru-RU", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </div>
+                    )}
                   </div>
-                ))}
-              </div>
-            </div>
-          ))}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
+
+      {/* Events by date (list view) */}
+      {view === "list" &&
+        (Object.keys(grouped).length === 0 ? (
+          <div className="text-slate-400 text-sm">
+            Нет событий на ближайшие {days} дней
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {Object.entries(grouped).map(([date, dateEvents]) => (
+              <div key={date}>
+                <h3 className="text-sm font-bold text-slate-400 mb-2">
+                  {date}
+                </h3>
+                <div className="space-y-1.5">
+                  {dateEvents.map((e) => (
+                    <div
+                      key={e.id}
+                      className="flex items-center gap-3 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5"
+                    >
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                          EVENT_TYPE_COLORS[e.event_type] ?? "bg-slate-400"
+                        }`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">
+                          {e.title}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {EVENT_TYPE_LABELS[e.event_type] ?? e.event_type}
+                          {e.source !== "manual" && (
+                            <span className="ml-2 text-slate-400">
+                              ({e.source})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-xs text-slate-400 shrink-0">
+                        {new Date(e.event_date).toLocaleTimeString("ru-RU", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
     </div>
   );
 }

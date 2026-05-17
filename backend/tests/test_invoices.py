@@ -302,3 +302,40 @@ async def test_price_check_no_supplier(client: AsyncClient, db_session: AsyncSes
     data = resp.json()
     assert data["previous_invoice_count"] == 0
     assert data["comparisons"] == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_approve(client: AsyncClient, db_session: AsyncSession):
+    """invoice.bulk_approve — approve multiple invoices at once."""
+    _, inv_id1 = await _create_invoice(db_session)
+    _, inv_id2 = await _create_invoice(db_session)
+
+    resp = await client.post(
+        "/api/invoices/bulk-approve",
+        json={"ids": [str(inv_id1), str(inv_id2)], "comment": "batch approve"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["approved"] == 2
+    assert data["skipped"] == 0
+
+    # Verify status changed
+    r1 = await client.get(f"/api/invoices/{inv_id1}")
+    assert r1.json()["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_bulk_reject(client: AsyncClient, db_session: AsyncSession):
+    """invoice.bulk_reject — reject multiple invoices at once."""
+    _, inv_id = await _create_invoice(db_session)
+
+    resp = await client.post(
+        "/api/invoices/bulk-reject",
+        json={"ids": [str(inv_id)], "comment": "test reject"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["rejected"] == 1
+
+    r = await client.get(f"/api/invoices/{inv_id}")
+    assert r.json()["status"] == "rejected"

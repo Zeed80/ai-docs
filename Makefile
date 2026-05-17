@@ -1,4 +1,4 @@
-.PHONY: dev dev-build down prod prod-build prod-down test e2e regression agent-regression agent-test agent-ws-smoke turboquant-benchmark turboquant-quality lint migrate seed skills logs ps
+.PHONY: dev dev-build down prod prod-build prod-down test e2e regression agent-regression agent-test agent-ws-smoke turboquant-benchmark turboquant-quality lint migrate seed skills logs ps monitoring monitoring-down
 
 # Docker Compose file sets
 COMPOSE_DEV  := -f infra/docker-compose.yml -f infra/docker-compose.dev.yml
@@ -81,6 +81,13 @@ aiagent-contract:
 aiagent-strict:
 	python3 scripts/generate_aiagent_strict_gateway.py
 	python3 scripts/generate_aiagent_official_sample.py
+
+# === Monitoring ===
+monitoring:
+	cd infra && docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d prometheus grafana
+
+monitoring-down:
+	cd infra && docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down prometheus grafana
 
 # === Docker Ops ===
 logs:

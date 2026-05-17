@@ -6,6 +6,23 @@ import {
   type NormRule,
   type NormRuleListResponse,
 } from "@/lib/api-client";
+import { getApiBaseUrl } from "@/lib/api-base";
+
+const API = getApiBaseUrl();
+
+interface NormStats {
+  total_rules: number;
+  active_rules: number;
+  proposed_rules: number;
+  total_applications: number;
+  total_source_corrections: number;
+  top_rules: {
+    field_name: string;
+    pattern: string;
+    replacement: string;
+    apply_count: number;
+  }[];
+}
 
 const statusBadge: Record<string, string> = {
   proposed: "bg-amber-100 text-amber-700",
@@ -23,6 +40,7 @@ const statusLabel: Record<string, string> = {
 
 export default function NormalizationSettingsPage() {
   const [data, setData] = useState<NormRuleListResponse | null>(null);
+  const [stats, setStats] = useState<NormStats | null>(null);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
@@ -43,6 +61,13 @@ export default function NormalizationSettingsPage() {
     setTimeout(() => setToast(null), 3000);
   }
 
+  async function fetchStats() {
+    try {
+      const r = await fetch(`${API}/api/normalization/stats`);
+      if (r.ok) setStats(await r.json());
+    } catch {}
+  }
+
   async function fetchRules() {
     setLoading(true);
     try {
@@ -58,6 +83,7 @@ export default function NormalizationSettingsPage() {
   }
 
   useEffect(() => {
+    fetchStats();
     fetchRules();
   }, [filter]);
 
@@ -234,6 +260,73 @@ export default function NormalizationSettingsPage() {
               Создать
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Stats widget */}
+      {stats && (
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
+            Статистика нормализации
+          </h2>
+          <div className="grid grid-cols-5 gap-3 mb-4">
+            {[
+              { label: "Всего правил", value: stats.total_rules },
+              {
+                label: "Активных",
+                value: stats.active_rules,
+                accent: "text-green-600",
+              },
+              {
+                label: "Предложенных",
+                value: stats.proposed_rules,
+                accent: "text-amber-600",
+              },
+              { label: "Применений", value: stats.total_applications },
+              { label: "Исправлений", value: stats.total_source_corrections },
+            ].map(({ label, value, accent }) => (
+              <div
+                key={label}
+                className="bg-white border border-slate-200 rounded-md p-3 text-center"
+              >
+                <p
+                  className={`text-2xl font-bold ${accent ?? "text-slate-800"}`}
+                >
+                  {value}
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+              </div>
+            ))}
+          </div>
+          {stats.top_rules.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-slate-500 mb-1.5">
+                Топ правил по применениям
+              </p>
+              <div className="space-y-1">
+                {stats.top_rules.map((r, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-5 text-center text-slate-400 font-mono">
+                      {i + 1}
+                    </span>
+                    <span className="text-slate-500 w-28 truncate">
+                      {r.field_name}
+                    </span>
+                    <span className="font-mono text-red-400 line-through truncate max-w-[120px]">
+                      {r.pattern}
+                    </span>
+                    <span className="text-slate-400">→</span>
+                    <span className="font-mono text-green-600 truncate max-w-[120px]">
+                      {r.replacement}
+                    </span>
+                    <span className="ml-auto text-slate-400">
+                      {r.apply_count}×
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
