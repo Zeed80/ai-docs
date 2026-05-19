@@ -138,7 +138,7 @@ export default function ReviewPage() {
   // Auto-focus first low-confidence field
   useEffect(() => {
     if (!doc) return;
-    const ext = doc.extractions[0];
+    const ext = doc.extractions?.[0];
     if (!ext) return;
     const lowField = ext.fields.find(
       (f) => f.confidence != null && f.confidence < 0.6,
@@ -150,7 +150,7 @@ export default function ReviewPage() {
 
   // Build bbox map
   const bboxes: Record<string, BBox> = {};
-  const ext = doc?.extractions[0];
+  const ext = doc?.extractions?.[0];
   if (ext) {
     for (const f of ext.fields) {
       if (f.field_name && f.bbox_page != null) {
@@ -479,7 +479,7 @@ export default function ReviewPage() {
     ntd_requirements_not_configured: "Нет активных требований НТД",
   };
   const ntdDisabledReason = ntdAvailability
-    ? ntdAvailability.reasons
+    ? (ntdAvailability.reasons ?? [])
         .map((reason) => reasonText[reason] ?? reason)
         .join("; ") || null
     : doc.status === "suspicious"
@@ -675,7 +675,7 @@ export default function ReviewPage() {
                   )}
                 </h3>
                 <span className="text-xs text-slate-400">
-                  {invoiceDetail.lines.length} поз.
+                  {invoiceDetail.lines?.length ?? 0} поз.
                   {invoiceDetail.total_amount != null && (
                     <span className="ml-2 text-slate-300 font-medium">
                       {invoiceDetail.total_amount.toLocaleString("ru-RU", {

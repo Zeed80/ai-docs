@@ -131,7 +131,7 @@ export default function DocumentPage() {
     );
   }
 
-  const latestExtraction = doc.extractions[0] ?? null;
+  const latestExtraction = doc.extractions?.[0] ?? null;
   const isDecided = doc.status === "approved" || doc.status === "rejected";
 
   async function handleApprove() {
@@ -322,11 +322,11 @@ export default function DocumentPage() {
           )}
 
           {/* Links */}
-          {doc.links.length > 0 && (
+          {(doc.links?.length ?? 0) > 0 && (
             <div className="bg-white border border-slate-200 rounded-lg p-4">
               <h3 className="text-sm font-semibold mb-3">Links</h3>
               <ul className="space-y-1 text-sm">
-                {doc.links.map((l) => (
+                {(doc.links ?? []).map((l) => (
                   <li key={l.id} className="text-slate-600">
                     {l.link_type}: {l.linked_entity_type}{" "}
                     {l.linked_entity_id.slice(0, 8)}...

@@ -82,6 +82,7 @@ from app.api import setup as setup_api
 from app.api.capability_router import router as capability_router
 from app.config import settings
 from app.db.session import engine  # lazy proxy
+import app.core.metrics  # noqa: F401 — registers Prometheus metrics at startup
 
 structlog.configure(
     processors=[

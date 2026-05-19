@@ -28,7 +28,7 @@ function confidenceDot(c: number | null): string {
 }
 
 export function LineItemsTable({ lines, currency }: LineItemsTableProps) {
-  if (lines.length === 0) {
+  if (!lines?.length) {
     return (
       <div className="text-sm text-slate-500 text-center py-4">
         Позиции не извлечены

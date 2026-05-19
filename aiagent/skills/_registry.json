@@ -1326,7 +1326,7 @@
     },
     {
       "name": "approval.list_pending",
-      "description": "Skill: approval.list_pending — List pending approvals.",
+      "description": "Skill: approval.list_pending — List pending approvals (excludes dormant chain steps).",
       "category": "approvals",
       "method": "GET",
       "path": "/api/approvals/pending",
@@ -1449,6 +1449,14 @@
         "title": "HybridSearchRequest",
         "type": "object"
       }
+    },
+    {
+      "name": "search.similar",
+      "description": "Skill: search.similar — Find entities similar to the given entity using vector search.",
+      "category": "search",
+      "method": "GET",
+      "path": "/api/search/similar/{entity_type}/{entity_id}",
+      "approval_required": false
     },
     {
       "name": "norm.list_rules",
@@ -2439,6 +2447,14 @@
       "approval_required": false
     },
     {
+      "name": "supplier.list",
+      "description": "Skill: supplier.list — List suppliers/parties with trust score and invoice aggregates.",
+      "category": "suppliers",
+      "method": "GET",
+      "path": "/api/suppliers",
+      "approval_required": false
+    },
+    {
       "name": "supplier.search",
       "description": "Skill: supplier.search — Search suppliers by name, INN, or address.",
       "category": "suppliers",
@@ -2791,6 +2807,14 @@
       "category": "collections",
       "method": "GET",
       "path": "/api/collections/{collection_id}/timeline",
+      "approval_required": false
+    },
+    {
+      "name": "collection.search",
+      "description": "Skill: collection.search — Search within a collection's items.",
+      "category": "collections",
+      "method": "GET",
+      "path": "/api/collections/{collection_id}/search",
       "approval_required": false
     },
     {
@@ -3202,6 +3226,14 @@
       "category": "calendar",
       "method": "GET",
       "path": "/api/calendar/reminders",
+      "approval_required": false
+    },
+    {
+      "name": "calendar.generate_followup",
+      "description": "Skill: calendar.generate_followup — Create a follow-up draft email for an invoice reminder.",
+      "category": "calendar",
+      "method": "POST",
+      "path": "/api/calendar/reminders/{reminder_id}/generate-followup",
       "approval_required": false
     },
     {
@@ -3912,6 +3944,18 @@
             "default": null,
             "title": "Document Id"
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          },
           "limit": {
             "default": 50,
             "maximum": 500,
@@ -3986,6 +4030,51 @@
           "query"
         ],
         "title": "MemorySearchRequest",
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory.prune",
+      "description": "Skill: memory.prune — Delete old episodic memory facts by scope and kind.",
+      "category": "memory",
+      "method": "POST",
+      "path": "/api/memory/prune",
+      "approval_required": false,
+      "parameters": {
+        "properties": {
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Kinds",
+            "type": "array"
+          },
+          "older_than_days": {
+            "default": 90,
+            "maximum": 3650,
+            "minimum": 1,
+            "title": "Older Than Days",
+            "type": "integer"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "title": "MemoryPruneRequest",
         "type": "object"
       }
     },
@@ -5980,6 +6069,22 @@
       "category": "workspace",
       "method": "POST",
       "path": "/api/workspace/agent/invoices/items-by-supplier-table",
+      "approval_required": false
+    },
+    {
+      "name": "workspace.sql_table",
+      "description": "Skill: workspace.sql_table — Build and publish a table using SQL-first pipeline.",
+      "category": "workspace",
+      "method": "POST",
+      "path": "/api/workspace/agent/generated/sql-table",
+      "approval_required": false
+    },
+    {
+      "name": "workspace.general",
+      "description": "Skill: workspace.general — Publish any custom table or block to the Workspace.",
+      "category": "workspace",
+      "method": "POST",
+      "path": "/api/workspace/agent/generated/general",
       "approval_required": false
     },
     {
