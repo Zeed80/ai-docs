@@ -38,7 +38,8 @@ export function CommentThread({ entityType, entityId }: Props) {
         { credentials: "include" },
       );
       if (!res.ok) return;
-      setComments(await res.json());
+      const data = await res.json();
+      setComments(Array.isArray(data) ? data : []);
     } finally {
       setLoading(false);
     }
