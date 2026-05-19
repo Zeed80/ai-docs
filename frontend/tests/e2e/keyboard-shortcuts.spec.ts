@@ -120,6 +120,8 @@ async function mockApi(page: Page) {
       return route.fulfill({ json: [] });
     if (url.pathname.endsWith("/price-check"))
       return route.fulfill({ json: { comparisons: [] } });
+    if (url.pathname.startsWith("/api/search/similar/"))
+      return route.fulfill({ json: { results: [] } });
 
     // Shared stubs
     if (url.pathname === "/api/auth/me")

@@ -72,6 +72,14 @@ export default function DocumentPage() {
   const [pendingHandover, setPendingHandover] = useState<HandoverItem | null>(
     null,
   );
+  const [similarDocs, setSimilarDocs] = useState<
+    Array<{
+      id: string;
+      score: number;
+      entity_type: string;
+      snippet?: string | null;
+    }>
+  >([]);
 
   useEffect(() => {
     if (!params.id) return;
@@ -99,6 +107,16 @@ export default function DocumentPage() {
         setPendingHandover(match ?? null);
       })
       .catch(() => setPendingHandover(null));
+  }, [params.id]);
+
+  useEffect(() => {
+    if (!params.id) return;
+    fetch(`${API}/api/search/similar/document/${params.id}?limit=3`, {
+      credentials: "include",
+    })
+      .then((r) => (r.ok ? r.json() : { results: [] }))
+      .then((data) => setSimilarDocs(data.results ?? []))
+      .catch(() => {});
   }, [params.id]);
 
   // Keyboard shortcuts
@@ -330,6 +348,32 @@ export default function DocumentPage() {
                   <li key={l.id} className="text-slate-600">
                     {l.link_type}: {l.linked_entity_type}{" "}
                     {l.linked_entity_id.slice(0, 8)}...
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Similar documents */}
+          {similarDocs.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-lg p-4">
+              <h3 className="text-sm font-semibold mb-3">Похожие документы</h3>
+              <ul className="space-y-2">
+                {similarDocs.map((s) => (
+                  <li key={s.id}>
+                    <button
+                      onClick={() => router.push(`/documents/${s.id}`)}
+                      className="w-full text-left group"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-blue-600 group-hover:underline truncate">
+                          {s.snippet ?? s.id.slice(0, 12) + "…"}
+                        </span>
+                        <span className="shrink-0 text-xs text-slate-400">
+                          {(s.score * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    </button>
                   </li>
                 ))}
               </ul>
