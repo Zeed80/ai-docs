@@ -118,12 +118,11 @@ export type ChatHistoryMessage = {
 /** Browser: same-origin `/api` via Next rewrites. SSR: direct backend or INTERNAL_API_URL. */
 function getApiBaseUrl(): string {
   if (typeof window !== "undefined") {
-    // Client: honour explicit config, fall back to same-origin (empty string)
-    return (
+    const val =
       process.env.NEXT_PUBLIC_API_URL?.trim() ||
       process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
-      ""
-    );
+      "";
+    return !val || val === "same-origin" ? "" : val;
   }
   return process.env.INTERNAL_API_URL ?? "http://127.0.0.1:8000";
 }

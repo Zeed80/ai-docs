@@ -18,7 +18,9 @@ from app.db.models import (
     AnomalyCard,
     AnomalyStatus,
     AnomalyType,
+    CalendarEvent,
     CanonicalItem,
+    CompareSession,
     Document,
     DocumentStatus,
     DocumentType,
@@ -30,6 +32,7 @@ from app.db.models import (
     Party,
     PartyRole,
     PriceHistoryEntry,
+    Reminder,
     SupplierProfile,
 )
 
@@ -398,6 +401,69 @@ def seed():
         for a in anomalies:
             db.add(a)
 
+        # ── Calendar Events (Scenario 5: Proactive Follow-up) ─────────────
+        now = datetime.now(timezone.utc)
+        calendar_events = [
+            CalendarEvent(
+                title="Срок оплаты счёта №123 (ООО «ТехноПром»)",
+                event_date=now + timedelta(days=3),
+                event_type="due_date",
+                entity_type="invoice",
+                entity_id=inv1.id,
+                source="extraction",
+            ),
+            CalendarEvent(
+                title="Планируемая поставка: Болт М8×30 (50 шт.)",
+                event_date=now + timedelta(days=7),
+                event_type="delivery",
+                entity_type="invoice",
+                entity_id=inv1.id,
+                source="extraction",
+            ),
+            CalendarEvent(
+                title="Повторная проверка поставщика ООО «МашДеталь»",
+                event_date=now + timedelta(days=14),
+                event_type="meeting",
+                entity_type="party",
+                entity_id=suppliers[1].id,
+                source="manual",
+            ),
+        ]
+        for ev in calendar_events:
+            db.add(ev)
+        db.flush()
+
+        # Reminder for the nearest deadline (Scenario 5 trigger)
+        reminder = Reminder(
+            calendar_event_id=calendar_events[0].id,
+            entity_type="invoice",
+            entity_id=inv1.id,
+            remind_at=now + timedelta(days=2),
+            message=f"Срок оплаты счёта приближается (через 3 дня). Требуется утверждение.",
+            is_sent=False,
+        )
+        db.add(reminder)
+
+        # ── Compare Session (Scenario 4: Compare КП) ──────────────────────
+        compare_session = CompareSession(
+            name="Сравнение КП: Болт М8×30 — заказ №2024-100",
+            status="aligned",
+            invoice_ids=[str(inv1.id)],
+            alignment={
+                "columns": ["Наименование", "Кол-во", "Цена", "Сумма", "Срок"],
+                "rows": [
+                    {
+                        "item": "Болт М8×30",
+                        "qty": 100,
+                        "supplier_a": {"price": 14.20, "total": 1420.0, "lead_days": 7},
+                        "supplier_b": {"price": 13.50, "total": 1350.0, "lead_days": 14},
+                    }
+                ],
+                "recommendation": "supplier_b дешевле на 5%, но срок поставки +7 дней",
+            },
+        )
+        db.add(compare_session)
+
         db.commit()
         print("Seed data created successfully!")
         print(f"  Suppliers: {len(suppliers)}")
@@ -407,6 +473,8 @@ def seed():
         print(f"  Pending approvals: 1")
         print(f"  Canonical items: {len(canonical_items)}")
         print(f"  Anomalies: {len(anomalies)}")
+        print(f"  Calendar events: {len(calendar_events)}")
+        print(f"  Compare sessions: 1")
 
 
 if __name__ == "__main__":

@@ -6,11 +6,11 @@
 
 function _apiBase(): string {
   if (typeof window !== "undefined") {
-    return (
+    const val =
       process.env.NEXT_PUBLIC_API_URL?.trim() ||
       process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
-      ""
-    );
+      "";
+    return !val || val === "same-origin" ? "" : val;
   }
   return process.env.INTERNAL_API_URL ?? "http://127.0.0.1:8000";
 }
