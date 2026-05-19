@@ -19,3 +19,18 @@ repos:
       - id: check-json
       - id: check-merge-conflict
       - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: frontend-eslint
+        name: ESLint (frontend)
+        language: system
+        entry: bash -c 'cd frontend && npm run lint'
+        files: \.(ts|tsx)$
+        pass_filenames: false
+      - id: frontend-typecheck
+        name: TypeScript type check (frontend)
+        language: system
+        entry: bash -c 'cd frontend && npm run typecheck'
+        files: \.(ts|tsx)$
+        pass_filenames: false

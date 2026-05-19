@@ -113,8 +113,13 @@ const summary = {
   recommendation: "Рекомендуем ИП Стальторг — самая низкая цена: 7 900 ₽",
 };
 
+type MockSession =
+  | typeof draftSession
+  | typeof alignedSession
+  | typeof decidedSession;
+
 async function mockApi(page: Page) {
-  let session = { ...draftSession };
+  let session: MockSession = { ...draftSession };
 
   await page.route("**/api/**", async (route: Route) => {
     const request = route.request();

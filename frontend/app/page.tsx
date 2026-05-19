@@ -232,7 +232,17 @@ function SystemHealthBar() {
     function load() {
       fetch(`${API}/api/metrics`)
         .then((r) => r.json())
-        .then(setMetrics)
+        .then((data) => {
+          if (
+            data &&
+            data.documents &&
+            data.invoices &&
+            data.approvals &&
+            data.anomalies
+          ) {
+            setMetrics(data as SystemMetrics);
+          }
+        })
         .catch(() => {});
     }
     load();
@@ -346,7 +356,7 @@ export default function FeedPage() {
           <h1 className="text-base font-semibold text-slate-100">
             Требует решения
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-400 mt-0.5">
             Света обрабатывает документы и поднимает важное сюда
           </p>
         </div>
@@ -390,10 +400,10 @@ export default function FeedPage() {
               </svg>
             </div>
             <p className="font-medium text-slate-300">Всё в порядке</p>
-            <p className="text-sm text-slate-500 mt-1">
+            <p className="text-sm text-slate-400 mt-1">
               Нет элементов, требующих вашего решения
             </p>
-            <p className="text-xs text-slate-600 mt-3">
+            <p className="text-xs text-slate-400 mt-3">
               Спросите Свету о чём-нибудь →
             </p>
           </div>

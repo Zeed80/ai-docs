@@ -1051,7 +1051,7 @@ export function SvetaPanel() {
               думает...
             </span>
           ) : (
-            <span className="shrink-0 text-[10px] text-slate-500">
+            <span className="shrink-0 text-[10px] text-slate-400">
               {isConnected ? "онлайн" : "офлайн"}
             </span>
           )}
@@ -1109,6 +1109,7 @@ export function SvetaPanel() {
           onChange={(e) => void handleSelectChat(e.target.value)}
           className="block w-full max-w-full min-w-0 appearance-none truncate bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100"
           disabled={isSessionsLoading || isStreaming}
+          aria-label="Выбор сохраненного чата"
           title="Выбор сохраненного чата"
         >
           {sessions.map((session) => (
@@ -1157,18 +1158,18 @@ export function SvetaPanel() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-3 space-y-2">
         {isHistoryLoading && (
-          <div className="text-center text-slate-500 text-xs mt-10">
+          <div className="text-center text-slate-400 text-xs mt-10">
             Загружаю историю чата...
           </div>
         )}
         {!isHistoryLoading && messages.length === 0 && (
-          <div className="text-center text-slate-500 text-xs mt-10 space-y-1">
+          <div className="text-center text-slate-400 text-xs mt-10 space-y-1">
             <p className="text-2xl">👋</p>
-            <p className="font-medium text-slate-400">Привет! Я Света.</p>
+            <p className="font-medium text-slate-300">Привет! Я Света.</p>
             <p>Спросите меня о счётах, аномалиях или поручите задачу.</p>
             <p>Можно прикрепить файл — перетащите или нажмите скрепку.</p>
-            <p className="mt-3 text-slate-600">
-              <kbd className="px-1 py-0.5 bg-slate-700 rounded text-slate-500">
+            <p className="mt-3 text-slate-400">
+              <kbd className="px-1 py-0.5 bg-slate-700 rounded text-slate-200">
                 Ctrl+K
               </kbd>{" "}
               — фокус
@@ -1465,6 +1466,7 @@ export function SvetaPanel() {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={isDegraded || isStreaming}
+            aria-label="Прикрепить файл"
             title="Прикрепить файл"
             className="px-2 py-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
@@ -1487,6 +1489,11 @@ export function SvetaPanel() {
             type="button"
             onClick={() =>
               setReasoningMode((m) => (m === "normal" ? "strict" : "normal"))
+            }
+            aria-label={
+              reasoningMode === "strict"
+                ? "Режим: строгий (развёрнутые рассуждения)"
+                : "Режим: обычный"
             }
             title={
               reasoningMode === "strict"
@@ -1522,6 +1529,7 @@ export function SvetaPanel() {
                     ? "Спросите Свету (строгий режим)…"
                     : "Спросите Свету…"
             }
+            aria-label="Сообщение Свете"
             disabled={isDegraded || isStreaming}
             className="flex-1 px-3 py-2 text-sm bg-slate-700 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
           />
@@ -1529,6 +1537,7 @@ export function SvetaPanel() {
             <button
               type="button"
               onClick={stopGeneration}
+              aria-label="Остановить генерацию"
               title="Остановить генерацию"
               className="px-3 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-500 border border-slate-500 transition-colors shrink-0"
             >
@@ -1545,6 +1554,7 @@ export function SvetaPanel() {
           <button
             onClick={sendMessage}
             disabled={!canSend}
+            aria-label="Отправить"
             className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0"
           >
             <svg
@@ -1552,6 +1562,7 @@ export function SvetaPanel() {
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
+              aria-hidden="true"
             >
               <path
                 strokeLinecap="round"

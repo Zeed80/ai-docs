@@ -62,8 +62,10 @@ const resolvedAnomaly = {
   resolved_at: "2026-05-17T12:30:00Z",
 };
 
+type MockAnomaly = typeof openAnomaly | typeof resolvedAnomaly;
+
 async function mockApi(page: Page) {
-  let anomaly = { ...openAnomaly };
+  let anomaly: MockAnomaly = { ...openAnomaly };
 
   await page.route("**/api/**", async (route: Route) => {
     const request = route.request();

@@ -274,7 +274,7 @@ function pipelineProgress(pipeline: PipelineStatus | null | undefined) {
 
 function isPipelineActive(item: WorkspaceItem) {
   return (
-    ["queued", "running"].includes(item.pipeline.processing_status ?? "") ||
+    ["queued", "running"].includes(item.pipeline?.processing_status ?? "") ||
     ["ingested", "classifying", "extracting"].includes(item.document.status)
   );
 }
@@ -716,9 +716,9 @@ export default function DocumentsPage() {
             <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
               <span>Всего: {workspace?.total ?? 0}</span>
               <span>
-                На проверку: {workspace?.status_counts.needs_review ?? 0}
+                На проверку: {workspace?.status_counts?.needs_review ?? 0}
               </span>
-              <span>Карантин: {workspace?.status_counts.suspicious ?? 0}</span>
+              <span>Карантин: {workspace?.status_counts?.suspicious ?? 0}</span>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1494,16 +1494,16 @@ function QueuePanel({
               <span className="text-xs text-slate-500">
                 {statusLabel(item.document.status)}
               </span>
-              {item.pipeline.processing_error && (
+              {item.pipeline?.processing_error && (
                 <span className="mt-1 block truncate text-xs text-red-300">
                   {item.pipeline.processing_error}
                 </span>
               )}
             </span>
-            <PipelineSteps steps={pipelineSteps(item.pipeline)} compact />
+            <PipelineSteps steps={pipelineSteps(item.pipeline ?? {})} compact />
             <ProgressBar
-              value={pipelineProgress(item.pipeline)}
-              failed={Boolean(item.pipeline.processing_error)}
+              value={pipelineProgress(item.pipeline ?? {})}
+              failed={Boolean(item.pipeline?.processing_error)}
             />
           </button>
         ))}
@@ -1594,9 +1594,10 @@ function DocumentTable({
                 {docTypeLabel(item.document.doc_type)}
               </td>
               <td className="px-3 py-3">{statusLabel(item.document.status)}</td>
-              <td className="px-3 py-3">{item.pipeline.memory_chunks}</td>
+              <td className="px-3 py-3">{item.pipeline?.memory_chunks ?? 0}</td>
               <td className="px-3 py-3">
-                {item.pipeline.graph_nodes}/{item.pipeline.graph_edges}
+                {item.pipeline?.graph_nodes ?? 0}/
+                {item.pipeline?.graph_edges ?? 0}
               </td>
               <td className="px-3 py-3 text-slate-400">
                 {new Date(item.document.created_at).toLocaleDateString("ru-RU")}

@@ -246,7 +246,14 @@ export default function CompareDetailPage() {
           <h3 className="text-sm font-semibold text-slate-200">
             Принять решение
           </h3>
+          <label
+            htmlFor="decide-supplier-select"
+            className="block text-xs text-slate-400 mb-1"
+          >
+            Поставщик
+          </label>
           <select
+            id="decide-supplier-select"
             value={chosenId}
             onChange={(e) => setChosenId(e.target.value)}
             className="w-full px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded outline-none focus:border-blue-400"
@@ -263,7 +270,14 @@ export default function CompareDetailPage() {
               </option>
             ))}
           </select>
+          <label
+            htmlFor="decide-reasoning"
+            className="block text-xs text-slate-400 mb-1"
+          >
+            Обоснование
+          </label>
           <textarea
+            id="decide-reasoning"
             value={reasoning}
             onChange={(e) => setReasoning(e.target.value)}
             placeholder="Обоснование (необязательно)"

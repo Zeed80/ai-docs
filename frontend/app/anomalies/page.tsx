@@ -183,11 +183,13 @@ export default function AnomaliesPage() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Поиск по названию или описанию..."
+          aria-label="Поиск аномалий"
           className="bg-slate-800 border border-slate-600 text-slate-200 rounded px-3 py-1 text-sm min-w-[220px] flex-1"
         />
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
+          aria-label="Фильтр по статусу"
           className="bg-slate-800 border border-slate-600 text-slate-200 rounded px-2 py-1 text-sm"
         >
           <option value="">Все статусы</option>
@@ -198,6 +200,7 @@ export default function AnomaliesPage() {
         <select
           value={severityFilter}
           onChange={(e) => setSeverityFilter(e.target.value)}
+          aria-label="Фильтр по уровню"
           className="bg-slate-800 border border-slate-600 text-slate-200 rounded px-2 py-1 text-sm"
         >
           <option value="">Все уровни</option>
@@ -243,15 +246,17 @@ export default function AnomaliesPage() {
           {/* Select all header */}
           {openAnomalies.length > 0 && (
             <div className="flex items-center gap-2 mb-2 px-1">
-              <input
-                type="checkbox"
-                checked={allOpen}
-                onChange={toggleSelectAll}
-                className="rounded"
-              />
-              <span className="text-xs text-slate-400">
-                Выбрать все открытые ({openAnomalies.length})
-              </span>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allOpen}
+                  onChange={toggleSelectAll}
+                  className="rounded"
+                />
+                <span className="text-xs text-slate-400">
+                  Выбрать все открытые ({openAnomalies.length})
+                </span>
+              </label>
             </div>
           )}
 
@@ -268,6 +273,7 @@ export default function AnomaliesPage() {
                         type="checkbox"
                         checked={selected.has(a.id)}
                         onChange={() => toggleSelect(a.id)}
+                        aria-label={`Выбрать: ${a.title}`}
                         className="mt-1 rounded shrink-0"
                       />
                     )}
@@ -292,7 +298,7 @@ export default function AnomaliesPage() {
                           {a.description}
                         </div>
                       )}
-                      <div className="text-xs mt-1 opacity-50">
+                      <div className="text-xs mt-1">
                         {new Date(a.created_at).toLocaleString("ru-RU")}
                       </div>
                     </div>
@@ -314,7 +320,7 @@ export default function AnomaliesPage() {
                       <>
                         <button
                           onClick={() => handleResolve(a.id, "resolved")}
-                          className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+                          className="px-3 py-1 text-xs bg-green-800 text-white rounded hover:bg-green-700"
                         >
                           Решить
                         </button>

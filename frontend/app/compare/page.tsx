@@ -132,7 +132,7 @@ export default function ComparePage() {
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-xl font-bold text-slate-100">Сравнение КП</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-400 mt-0.5">
             Сравнение коммерческих предложений по позициям
           </p>
         </div>
@@ -225,14 +225,14 @@ export default function ComparePage() {
       )}
 
       {loading ? (
-        <div className="py-12 text-center text-slate-500 text-sm">
+        <div className="py-12 text-center text-slate-400 text-sm">
           Загрузка...
         </div>
       ) : sessions.length === 0 ? (
         <div className="py-16 text-center">
           <div className="text-5xl text-slate-700 mb-3">⚖</div>
           <p className="text-slate-400 text-sm">Нет сравнений.</p>
-          <p className="text-slate-600 text-xs mt-1">
+          <p className="text-slate-400 text-xs mt-1">
             Создайте сравнение для двух и более коммерческих предложений.
           </p>
         </div>

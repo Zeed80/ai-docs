@@ -546,7 +546,7 @@ export function Sidebar() {
         <h1 className="text-sm font-bold text-slate-100 tracking-tight">
           AI Docs
         </h1>
-        <p className="text-[10px] text-slate-500 mt-0.5">
+        <p className="text-[10px] text-slate-400 mt-0.5">
           Света · рабочее место
         </p>
       </div>
@@ -569,7 +569,7 @@ export function Sidebar() {
 
         {/* Документооборот */}
         <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
             Документы
           </p>
           {NAV_DOCS.map((item) => (
@@ -584,7 +584,7 @@ export function Sidebar() {
 
         {/* Производство */}
         <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
             Производство
           </p>
           {NAV_ENGINEERING.map((item) => (
@@ -599,7 +599,7 @@ export function Sidebar() {
 
         {/* Склад */}
         <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
             Склад
           </p>
           {NAV_WAREHOUSE.map((item) => (
@@ -614,7 +614,7 @@ export function Sidebar() {
 
         {/* Закупки */}
         <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
             Закупки
           </p>
           {NAV_PROCUREMENT.map((item) => (
@@ -629,7 +629,7 @@ export function Sidebar() {
 
         {/* Финансы */}
         <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
             Финансы
           </p>
           {NAV_FINANCE.map((item) => (
@@ -644,7 +644,7 @@ export function Sidebar() {
 
         {/* Данные */}
         <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
             Данные
           </p>
           {NAV_REF.map((item) => (
@@ -659,7 +659,7 @@ export function Sidebar() {
 
         {/* Система */}
         <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
             Система
           </p>
           {NAV_SYSTEM.map((item) => {
@@ -680,7 +680,7 @@ export function Sidebar() {
 
         {/* Коммуникации */}
         <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
             Общение
           </p>
           <NavItem href="/chat" icon="chat" label={t("chat")} />
