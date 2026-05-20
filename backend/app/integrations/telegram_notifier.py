@@ -100,6 +100,55 @@ class TelegramNotifier:
         """Send a plain (escaped) text notification."""
         await self._send(_escape(text))
 
+    async def notify_stale_approval(
+        self,
+        action_type: str,
+        entity_label: str,
+        hours_pending: int,
+        approval_id: str,
+    ) -> None:
+        """Alert about a pending approval that has not been resolved."""
+        text = (
+            f"⏳ *Ожидает подтверждения {hours_pending}ч*\n"
+            f"Действие: `{_escape(action_type)}`\n"
+            f"Объект: {_escape(entity_label)}\n"
+            f"ID: `{_escape(approval_id[:16])}`"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data=f"appr:approve:{approval_id}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"appr:reject:{approval_id}"),
+            ]
+        ])
+        await self._send(text, reply_markup=keyboard)
+
+    async def notify_due_date(
+        self,
+        invoice_number: str,
+        due_date_str: str,
+        doc_id: str,
+    ) -> None:
+        """Alert about an approaching invoice due date."""
+        text = (
+            f"💳 *Приближается срок оплаты*\n"
+            f"Счёт: `{_escape(invoice_number)}`\n"
+            f"Срок: {_escape(due_date_str)}"
+        )
+        await self._send(text)
+
+    async def notify_critical_anomaly(
+        self,
+        title: str,
+        anomaly_id: str,
+    ) -> None:
+        """Alert about a critical unresolved anomaly."""
+        text = (
+            f"🔴 *Критическая аномалия не решена*\n"
+            f"{_escape(title)}\n"
+            f"ID: `{_escape(anomaly_id[:16])}`"
+        )
+        await self._send(text)
+
     async def _send(self, text: str, **kwargs: Any) -> None:
         try:
             await self._bot.send_message(

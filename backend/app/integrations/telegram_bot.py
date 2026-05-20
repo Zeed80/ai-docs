@@ -78,6 +78,12 @@ class SvetaTelegramBot:
                 TelegramMessageHandler(filters.VOICE, self._handle_voice)
             )
             app.add_handler(
+                TelegramMessageHandler(filters.Document.ALL, self._handle_document)
+            )
+            app.add_handler(
+                TelegramMessageHandler(filters.PHOTO, self._handle_photo)
+            )
+            app.add_handler(
                 TelegramMessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text)
             )
 
@@ -199,6 +205,79 @@ class SvetaTelegramBot:
             )
             resp.raise_for_status()
             return resp.json().get("response", "")
+
+    async def _handle_document(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        user = update.effective_user
+        if not self._is_allowed(user.id):
+            await update.message.reply_text("Доступ запрещён.")
+            return
+
+        doc = update.message.document
+        file = await context.bot.get_file(doc.file_id)
+        filename = doc.file_name or f"document_{doc.file_id}"
+        await self._ingest_file(update, file, filename, doc.mime_type or "application/octet-stream")
+
+    async def _handle_photo(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        user = update.effective_user
+        if not self._is_allowed(user.id):
+            await update.message.reply_text("Доступ запрещён.")
+            return
+
+        # Use the highest-resolution photo
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        filename = f"photo_{photo.file_id}.jpg"
+        await self._ingest_file(update, file, filename, "image/jpeg")
+
+    async def _ingest_file(
+        self, update: Update, tg_file: Any, filename: str, mime_type: str
+    ) -> None:
+        """Download a Telegram file and POST it to the ingest pipeline."""
+        import tempfile
+        import os
+
+        await update.message.reply_text(f"📥 Получен файл: {filename}\nОбрабатываю…")
+        try:
+            with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1] or ".bin", delete=False) as tmp:
+                await tg_file.download_to_drive(tmp.name)
+                tmp_path = tmp.name
+
+            try:
+                import httpx
+                from app.config import settings
+
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    with open(tmp_path, "rb") as f:
+                        resp = await client.post(
+                            f"http://localhost:{settings.app_port or 8000}/api/documents/ingest",
+                            files={"file": (filename, f, mime_type)},
+                            headers={"X-Internal-Task": "telegram"},
+                        )
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                doc_id = data.get("document_id") or data.get("id", "")
+                await update.message.reply_text(
+                    f"✅ Файл принят в обработку.\n"
+                    f"ID: `{_escape(str(doc_id)[:16])}`\n"
+                    f"Статус будет обновлён автоматически.",
+                    parse_mode=ParseMode.MARKDOWN_V2 if ParseMode else None,
+                )
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        except Exception as exc:
+            logger.warning("telegram file ingest failed: %s", exc)
+            await update.message.reply_text(
+                f"⚠️ Не удалось обработать файл: {exc}"
+            )
 
     async def _handle_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE

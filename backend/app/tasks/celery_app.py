@@ -88,6 +88,11 @@ celery_app.conf.beat_schedule = {
         "task": "proactive.dispatch_due_reminders",
         "schedule": 300.0,
     },
+    # Proactive: alert on stale (>24h) pending approvals every 2 hours
+    "proactive-stale-approvals": {
+        "task": "proactive.check_stale_approvals",
+        "schedule": 7_200.0,
+    },
     # Check saved-query alerts every hour
     "check-saved-query-alerts": {
         "task": "search.check_saved_query_alerts",
