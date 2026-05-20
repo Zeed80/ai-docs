@@ -359,6 +359,61 @@ async def get_drawing_svg(
         raise HTTPException(status_code=500, detail=f"Ошибка загрузки SVG: {exc}")
 
 
+@router.get(
+    "/{drawing_id}/thumbnail",
+    summary="Get drawing thumbnail (PNG, max 400px). Generated from SVG on first request.",
+    response_class=__import__("fastapi").responses.Response,
+)
+async def get_drawing_thumbnail(
+    drawing_id: uuid.UUID,
+    size: int = Query(default=400, ge=64, le=800, description="Max dimension in pixels"),
+    db: AsyncSession = Depends(get_db),
+) -> __import__("fastapi").responses.Response:
+    from fastapi.responses import Response
+
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Чертёж не найден")
+
+    # 1. Serve from MinIO thumbnail_path if available
+    if drawing.thumbnail_path:
+        try:
+            data = await _load_from_minio(drawing.thumbnail_path)
+            return Response(content=data, media_type="image/png")
+        except Exception:
+            pass  # fall through to on-the-fly generation
+
+    # 2. Generate on-the-fly from SVG
+    if not drawing.svg_path:
+        raise HTTPException(status_code=404, detail="Превью недоступно — SVG не сгенерирован")
+
+    try:
+        svg_bytes = await _load_from_minio(drawing.svg_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка загрузки SVG: {exc}")
+
+    try:
+        import cairosvg  # type: ignore[import]
+        png_bytes = cairosvg.svg2png(bytestring=svg_bytes, output_width=size, output_height=size)
+    except ImportError:
+        # cairosvg not installed — return SVG with image/svg+xml as fallback
+        return Response(content=svg_bytes, media_type="image/svg+xml")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка рендеринга превью: {exc}")
+
+    # 3. Cache the thumbnail in MinIO for future requests
+    thumb_path = drawing.svg_path.replace("/svg/", "/thumb/").replace(".svg", f"_{size}.png")
+    try:
+        await _upload_to_minio(thumb_path, png_bytes, "image/png")
+        drawing.thumbnail_path = thumb_path
+        db.add(drawing)
+        await db.commit()
+    except Exception:
+        pass  # caching failure is non-fatal
+
+    return Response(content=png_bytes, media_type="image/png")
+
+
 # ── Features CRUD ─────────────────────────────────────────────────────────────
 
 

@@ -328,6 +328,37 @@ export default function DrawingsPage() {
   );
 }
 
+function DrawingThumb({
+  drawingId,
+  format,
+  icon,
+}: {
+  drawingId: string;
+  format: string;
+  icon: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className="flex flex-col items-center gap-1 text-white/20">
+        <span className="text-4xl">{icon}</span>
+        <span className="text-xs uppercase font-mono">
+          {format.toUpperCase()}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <img
+      src={`/api/drawings/${drawingId}/thumbnail`}
+      alt={format}
+      className="w-full h-full object-contain p-2"
+      onError={() => setFailed(true)}
+      loading="lazy"
+    />
+  );
+}
+
 function DrawingCard({
   drawing,
   selected,
@@ -398,11 +429,11 @@ function DrawingCard({
       <Link href={`/drawings/${drawing.id}`} className="flex flex-col flex-1">
         {/* Thumbnail or placeholder */}
         <div className="h-32 bg-zinc-800 flex items-center justify-center border-b border-white/5 relative overflow-hidden">
-          {drawing.thumbnail_path ? (
-            <img
-              src={`/api/drawings/${drawing.id}/thumbnail`}
-              alt={drawing.filename}
-              className="w-full h-full object-contain p-2"
+          {drawing.thumbnail_path || drawing.svg_path ? (
+            <DrawingThumb
+              drawingId={drawing.id}
+              format={drawing.format}
+              icon={icon}
             />
           ) : (
             <div className="flex flex-col items-center gap-1 text-white/20">

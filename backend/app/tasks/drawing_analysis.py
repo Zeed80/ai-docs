@@ -138,7 +138,11 @@ async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
             drawing_text = f"Изображение чертежа: {drawing.filename}"
 
         elif fmt in ("step", "stp", "iges"):
-            drawing_text = f"3D файл: {drawing.filename} Формат: {fmt.upper()}"
+            # Generate an info-SVG with metadata extracted from the STEP/IGES text
+            step_svg, drawing_text = _parse_step_to_info_svg(file_bytes, drawing.filename)
+            if step_svg:
+                svg_content = step_svg
+                image_bytes_for_vlm = await _svg_to_png_bytes(svg_content)
         else:
             drawing_text = f"Файл: {drawing.filename} Формат: {fmt}"
 
@@ -1021,6 +1025,89 @@ def _extract_text_from_svg(svg_content: str) -> str:
     import re
     texts = re.findall(r"<text[^>]*>(.*?)</text>", svg_content, re.DOTALL)
     return " ".join(t.strip() for t in texts if t.strip())[:4000]
+
+
+def _parse_step_to_info_svg(file_bytes: bytes, filename: str) -> tuple[str | None, str]:
+    """Parse a STEP/IGES file and return (info_svg, extracted_text).
+
+    Generates an SVG info card with product names and entity statistics.
+    Falls back to (None, plain_text) if the file is not parseable.
+    """
+    from collections import Counter
+    import html
+
+    text = file_bytes.decode("utf-8", errors="replace")
+
+    # Extract PRODUCT names (STEP ISO 10303-21)
+    products = list(dict.fromkeys(re.findall(r"PRODUCT\s*\(\s*'([^']{1,80})'", text)))[:8]
+    # Extract PART_NAME from IGES header
+    if not products:
+        products = list(dict.fromkeys(re.findall(r"PART_NAME\s*=\s*'([^']{1,80})'", text)))[:4]
+    if not products:
+        products = [filename]
+
+    # Count entity types (STEP: lines starting with #N = ENTITY_TYPE)
+    entity_matches = re.findall(r"^#\d+\s*=\s*([A-Z_]{3,})\s*\(", text[:500_000], re.MULTILINE)
+    entity_counts = Counter(entity_matches).most_common(6)
+
+    # Build extracted_text for AI
+    extracted_text = (
+        f"3D файл: {filename}\n"
+        f"Изделия: {', '.join(products[:4])}\n"
+        + (
+            "Типы сущностей: "
+            + ", ".join(f"{k}({v})" for k, v in entity_counts)
+            if entity_counts
+            else ""
+        )
+    )
+
+    # ── SVG info card ──────────────────────────────────────────────────────
+    W, H = 800, 500
+    rows_svg = ""
+    y = 310
+    for etype, count in entity_counts:
+        bar_w = min(int(count / max(1, entity_counts[0][1]) * 340), 340)
+        rows_svg += (
+            f'<text x="60" y="{y}" fill="#94a3b8" font-size="13">'
+            f'{html.escape(etype)}</text>'
+            f'<rect x="270" y="{y - 12}" width="{bar_w}" height="12" fill="#3b82f6" opacity="0.7" rx="2"/>'
+            f'<text x="{270 + bar_w + 6}" y="{y}" fill="#cbd5e1" font-size="12">{count}</text>'
+        )
+        y += 28
+
+    product_lines = ""
+    for i, p in enumerate(products[:4]):
+        product_lines += (
+            f'<text x="60" y="{200 + i * 26}" fill="#e2e8f0" font-size="15" '
+            f'font-weight="{"600" if i == 0 else "400"}">'
+            f'{html.escape(p[:55])}</text>'
+        )
+
+    fmt_label = "STEP ISO 10303" if filename.lower().endswith((".step", ".stp")) else "IGES"
+    svg = f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}">
+  <rect width="{W}" height="{H}" fill="#0f172a" rx="8"/>
+  <!-- 3D cube icon -->
+  <g transform="translate(40,40)">
+    <polygon points="40,10 70,28 70,64 40,82 10,64 10,28" fill="none" stroke="#3b82f6" stroke-width="2"/>
+    <polygon points="40,10 70,28 40,46 10,28" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1"/>
+    <polygon points="10,28 40,46 40,82 10,64" fill="#162d47" stroke="#3b82f6" stroke-width="1"/>
+    <polygon points="70,28 40,46 40,82 70,64" fill="#1a3357" stroke="#3b82f6" stroke-width="1"/>
+  </g>
+  <text x="140" y="65" fill="#3b82f6" font-size="13" font-family="monospace">{html.escape(fmt_label)}</text>
+  <text x="140" y="88" fill="#64748b" font-size="12" font-family="monospace">{html.escape(filename[:50])}</text>
+  <line x1="40" y1="148" x2="{W - 40}" y2="148" stroke="#1e293b" stroke-width="1"/>
+  <text x="60" y="175" fill="#94a3b8" font-size="12" font-weight="600" letter-spacing="1">ИЗДЕЛИЯ</text>
+  {product_lines}
+  <line x1="40" y1="290" x2="{W - 40}" y2="290" stroke="#1e293b" stroke-width="1"/>
+  <text x="60" y="305" fill="#94a3b8" font-size="12" font-weight="600" letter-spacing="1">ТИПЫ СУЩНОСТЕЙ</text>
+  {rows_svg}
+  <text x="{W//2}" y="{H - 20}" fill="#334155" font-size="11" text-anchor="middle">
+    Превью сформировано автоматически · для полного просмотра используйте CAD-приложение
+  </text>
+</svg>"""
+    return svg, extracted_text
 
 
 # ── Catalog File Parsing ──────────────────────────────────────────────────────
