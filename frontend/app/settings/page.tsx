@@ -2984,12 +2984,20 @@ export default function SettingsPage() {
                         </label>
                       )}
                     </div>
-                    <input
-                      className="w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 sm:w-64 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={agentSkillFilter}
-                      onChange={(e) => setAgentSkillFilter(e.target.value)}
-                      placeholder="Поиск…"
-                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 sm:w-48 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={agentSkillFilter}
+                        onChange={(e) => setAgentSkillFilter(e.target.value)}
+                        placeholder="Поиск…"
+                      />
+                      <a
+                        href="/settings/skills"
+                        className="shrink-0 text-xs text-blue-400 hover:text-blue-300 hover:underline whitespace-nowrap"
+                      >
+                        Маркетплейс →
+                      </a>
+                    </div>
                   </div>
                   <div className="max-h-72 overflow-auto rounded-md border border-slate-700">
                     <table className="w-full text-left text-xs">

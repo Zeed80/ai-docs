@@ -297,6 +297,32 @@ export default function InvoicesPage() {
     "approving" | "rejecting" | null
   >(null);
 
+  const [similarFor, setSimilarFor] = useState<{
+    id: string;
+    label: string;
+  } | null>(null);
+  const [similarResults, setSimilarResults] = useState<
+    Array<{ id: string; score: number; snippet?: string | null }>
+  >([]);
+  const [similarLoading, setSimilarLoading] = useState(false);
+
+  const openSimilar = async (invoiceId: string, label: string) => {
+    setSimilarFor({ id: invoiceId, label });
+    setSimilarResults([]);
+    setSimilarLoading(true);
+    try {
+      const r = await fetch(
+        `${API}/api/search/similar/invoice/${invoiceId}?limit=5`,
+      );
+      const d = r.ok ? await r.json() : { results: [] };
+      setSimilarResults(d.results ?? []);
+    } catch {
+      setSimilarResults([]);
+    } finally {
+      setSimilarLoading(false);
+    }
+  };
+
   const performBulkStatus = async (action: "approve" | "reject") => {
     if (!selectedIds.length) return;
     setBulkAction(action === "approve" ? "approving" : "rejecting");
@@ -342,36 +368,63 @@ export default function InvoicesPage() {
     size: 40,
   };
 
-  const deleteCol: ColumnDef<TableRow> = {
-    id: "__delete",
+  const actionsCol: ColumnDef<TableRow> = {
+    id: "__actions",
     header: "",
     cell: ({ row }) => (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setRowSelection({ [row.index]: true });
-          setDeleteDialog({ mode: "selected" });
-        }}
-        className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-red-400 transition-all"
-        title="Удалить"
-      >
-        <svg
-          className="w-3.5 h-3.5"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            const label =
+              (row.original.data.invoice_number as string) ??
+              row.original.id.slice(0, 8);
+            void openSimilar(row.original.id, label);
+          }}
+          className="p-1 text-slate-500 hover:text-purple-400 transition-colors"
+          title="Похожие счета"
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-          />
-        </svg>
-      </button>
+          <svg
+            className="w-3.5 h-3.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+            />
+          </svg>
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setRowSelection({ [row.index]: true });
+            setDeleteDialog({ mode: "selected" });
+          }}
+          className="p-1 text-slate-500 hover:text-red-400 transition-colors"
+          title="Удалить"
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+            />
+          </svg>
+        </button>
+      </div>
     ),
     enableSorting: false,
-    size: 36,
+    size: 64,
   };
 
   const tableColumns = useMemo<ColumnDef<TableRow>[]>(
@@ -422,7 +475,7 @@ export default function InvoicesPage() {
         },
         enableSorting: col.sortable,
       })),
-      deleteCol,
+      actionsCol,
       // eslint-disable-next-line react-hooks/exhaustive-deps
     ],
     [columns],
@@ -871,6 +924,72 @@ export default function InvoicesPage() {
               />
             </svg>
             Удаление...
+          </div>
+        </div>
+      )}
+
+      {/* Similar invoices drawer */}
+      {similarFor && (
+        <div className="fixed inset-0 z-40" onClick={() => setSimilarFor(null)}>
+          <div
+            className="absolute right-0 top-0 h-full w-80 bg-slate-900 border-l border-slate-700 shadow-2xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+              <div>
+                <div className="text-xs text-slate-400 uppercase tracking-wide">
+                  Похожие счета
+                </div>
+                <div className="text-sm font-medium text-slate-200 mt-0.5 truncate max-w-[200px]">
+                  {similarFor.label}
+                </div>
+              </div>
+              <button
+                onClick={() => setSimilarFor(null)}
+                className="text-slate-500 hover:text-slate-200 text-lg leading-none"
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              {similarLoading ? (
+                <div className="text-slate-500 text-sm text-center py-8">
+                  Поиск...
+                </div>
+              ) : similarResults.length === 0 ? (
+                <div className="text-slate-500 text-sm text-center py-8">
+                  Похожих счетов не найдено
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {similarResults.map((s) => (
+                    <li key={s.id}>
+                      <button
+                        onClick={() => {
+                          setSimilarFor(null);
+                          router.push(`/invoices?highlight=${s.id}`);
+                        }}
+                        className="w-full text-left p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors group"
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="text-xs text-slate-400 font-mono">
+                            {s.id.slice(0, 12)}…
+                          </span>
+                          <span className="text-xs text-purple-400 font-medium">
+                            {(s.score * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        {s.snippet && (
+                          <p className="text-sm text-slate-300 group-hover:text-white line-clamp-2">
+                            {s.snippet}
+                          </p>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
+import { formatCurrency } from "@/lib/format";
 
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -678,11 +679,10 @@ export default function ReviewPage() {
                   {invoiceDetail.lines?.length ?? 0} поз.
                   {invoiceDetail.total_amount != null && (
                     <span className="ml-2 text-slate-300 font-medium">
-                      {invoiceDetail.total_amount.toLocaleString("ru-RU", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}{" "}
-                      {invoiceDetail.currency ?? "₽"}
+                      {formatCurrency(
+                        invoiceDetail.total_amount,
+                        invoiceDetail.currency ?? "RUB",
+                      )}
                     </span>
                   )}
                 </span>
@@ -746,14 +746,16 @@ export default function ReviewPage() {
                                 {c.description ?? "—"}
                               </td>
                               <td className="px-3 py-1.5 text-right text-slate-200 font-mono">
-                                {c.current_price?.toLocaleString("ru-RU", {
-                                  minimumFractionDigits: 2,
-                                }) ?? "—"}
+                                {formatCurrency(
+                                  c.current_price,
+                                  invoiceDetail?.currency ?? "RUB",
+                                )}
                               </td>
                               <td className="px-3 py-1.5 text-right text-slate-500 font-mono">
-                                {c.previous_price?.toLocaleString("ru-RU", {
-                                  minimumFractionDigits: 2,
-                                }) ?? "—"}
+                                {formatCurrency(
+                                  c.previous_price,
+                                  invoiceDetail?.currency ?? "RUB",
+                                )}
                               </td>
                               <td
                                 className={`px-3 py-1.5 text-right font-semibold ${

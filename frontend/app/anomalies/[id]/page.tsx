@@ -5,6 +5,13 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 
+interface SimilarResult {
+  id: string;
+  score: number;
+  entity_type: string;
+  snippet?: string | null;
+}
+
 const API = getApiBaseUrl();
 
 interface Anomaly {
@@ -50,6 +57,7 @@ export default function AnomalyDetailPage() {
     suggested_actions: string[];
   } | null>(null);
   const [explaining, setExplaining] = useState(false);
+  const [similarAnomalies, setSimilarAnomalies] = useState<SimilarResult[]>([]);
 
   useEffect(() => {
     fetch(`${API}/api/anomalies/${id}`)
@@ -65,6 +73,15 @@ export default function AnomalyDetailPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
+  }, [id]);
+
+  useEffect(() => {
+    fetch(`${API}/api/search/similar/anomaly/${id}?limit=4`, {
+      credentials: "include",
+    })
+      .then((r) => (r.ok ? r.json() : { results: [] }))
+      .then((d) => setSimilarAnomalies(d.results ?? []))
+      .catch(() => {});
   }, [id]);
 
   const resolve = async (resolution: "resolved" | "false_positive") => {
@@ -218,6 +235,31 @@ export default function AnomalyDetailPage() {
           </div>
         )}
       </div>
+
+      {similarAnomalies.length > 0 && (
+        <div className="mt-4 bg-slate-900 border border-slate-700 rounded-lg p-4">
+          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">
+            Похожие аномалии
+          </h3>
+          <ul className="space-y-2">
+            {similarAnomalies.map((s) => (
+              <li key={s.id}>
+                <Link
+                  href={`/anomalies/${s.id}`}
+                  className="flex items-center justify-between gap-2 group"
+                >
+                  <span className="text-sm text-blue-400 group-hover:underline truncate">
+                    {s.snippet ?? s.id.slice(0, 16) + "…"}
+                  </span>
+                  <span className="shrink-0 text-xs text-slate-500 font-mono">
+                    {(s.score * 100).toFixed(0)}%
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
