@@ -293,3 +293,34 @@ async def cancel_draft_email(
     await db.commit()
     await db.refresh(draft)
     return draft
+
+
+# ── Risk check ─────────────────────────────────────────────────────────────
+
+
+class RiskCheckResponse(BaseModel):
+    draft_id: uuid.UUID
+    risk_flags: list[dict]
+    risk_score: float
+
+
+@router.post("/{draft_id}/risk-check", response_model=RiskCheckResponse)
+async def run_draft_risk_check(
+    draft_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Run risk analysis on a draft email and persist the flags."""
+    draft = await db.get(DraftEmail, draft_id)
+    if not draft:
+        raise HTTPException(404, "Draft email not found")
+
+    flags = await _run_risk_check(db, draft)
+    draft.risk_flags = flags
+    await db.commit()
+
+    risk_score = min(1.0, len(flags) / 5.0) if flags else 0.0
+    return RiskCheckResponse(
+        draft_id=draft_id,
+        risk_flags=flags,
+        risk_score=risk_score,
+    )
