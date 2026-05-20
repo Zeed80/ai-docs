@@ -191,8 +191,10 @@ async def update_bom(
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(bom, k, v)
     await db.commit()
-    await db.refresh(bom)
-    return bom
+    result2 = await db.execute(
+        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
+    )
+    return result2.scalar_one()
 
 
 # ── BOM Lines ─────────────────────────────────────────────────────────────────
@@ -266,8 +268,10 @@ async def approve_bom(
                              event_type="approved", actor=approved_by,
                              summary=f"Спецификация {bom.product_name} v{bom.version} утверждена")
     await db.commit()
-    await db.refresh(bom)
-    return bom
+    result2 = await db.execute(
+        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
+    )
+    return result2.scalar_one()
 
 
 # ── Stock Check ───────────────────────────────────────────────────────────────
