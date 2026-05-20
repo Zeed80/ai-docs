@@ -83,6 +83,30 @@ if _PROMETHEUS_AVAILABLE:
         "aiworkspace_ws_connections_active",
         "Active WebSocket connections",
     )
+
+    # Infrastructure gauges
+    celery_queue_depth = Gauge(
+        "aiworkspace_celery_queue_depth",
+        "Number of pending Celery tasks",
+        ["queue"],
+    )
+    ollama_vram_used_bytes = Gauge(
+        "aiworkspace_ollama_vram_used_bytes",
+        "VRAM used by Ollama models in bytes",
+        ["model"],
+    )
+    ollama_model_loaded = Gauge(
+        "aiworkspace_ollama_model_loaded",
+        "Whether an Ollama model is currently loaded (1=yes, 0=no)",
+        ["model"],
+    )
+
+    # Agent step counter
+    agent_steps_total = Counter(
+        "aiworkspace_agent_steps_total",
+        "Total agent reasoning steps executed",
+        ["scenario"],
+    )
 else:
     # Stubs when prometheus_client not available
     class _Noop:
@@ -109,3 +133,7 @@ else:
     anomalies_detected_total = _noop
     approval_wait_seconds = _noop
     ws_connections_active = _noop
+    celery_queue_depth = _noop
+    ollama_vram_used_bytes = _noop
+    ollama_model_loaded = _noop
+    agent_steps_total = _noop

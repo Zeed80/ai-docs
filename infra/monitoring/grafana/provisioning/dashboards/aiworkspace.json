@@ -100,6 +100,78 @@
           "legendFormat": "p90"
         }
       ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "HTTP Request Rate",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (path) (rate(aiworkspace_http_requests_total[1m]))",
+          "legendFormat": "{{path}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "HTTP Request Duration p95 (ms)",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(aiworkspace_http_request_duration_seconds_bucket[5m])) * 1000",
+          "legendFormat": "{{path}} p95"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Celery Queue Depth",
+      "gridPos": { "x": 0, "y": 28, "w": 4, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(aiworkspace_celery_queue_depth)",
+          "legendFormat": "Pending tasks"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Ollama VRAM Used (GB)",
+      "gridPos": { "x": 4, "y": 28, "w": 10, "h": 4 },
+      "targets": [
+        {
+          "expr": "aiworkspace_ollama_vram_used_bytes / 1e9",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Agent Steps (total)",
+      "gridPos": { "x": 14, "y": 28, "w": 4, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(aiworkspace_agent_steps_total)",
+          "legendFormat": "Steps"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Active WebSocket Connections",
+      "gridPos": { "x": 18, "y": 28, "w": 4, "h": 4 },
+      "targets": [
+        {
+          "expr": "aiworkspace_ws_connections_active",
+          "legendFormat": "WS connections"
+        }
+      ]
     }
   ]
 }

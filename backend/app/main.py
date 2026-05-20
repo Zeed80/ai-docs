@@ -29,6 +29,7 @@ if _SENTRY_DSN:
 from app.middleware.csrf import CSRFMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
+from app.middleware.prometheus import PrometheusMiddleware
 
 from app.api import (
     agent,
@@ -202,8 +203,9 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Middleware order: CORS → SecurityHeaders → RateLimit → CSRF
+    # Middleware order: CORS → SecurityHeaders → RateLimit → CSRF → Prometheus
     # (Starlette applies middleware in reverse registration order)
+    app.add_middleware(PrometheusMiddleware)
     app.add_middleware(CSRFMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
