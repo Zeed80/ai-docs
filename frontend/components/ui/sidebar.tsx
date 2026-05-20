@@ -71,6 +71,7 @@ const NAV_REF = [
 
 const NAV_ENGINEERING = [
   { href: "/drawings", icon: "drafting-compass", key: "drawings" },
+  { href: "/technology", icon: "cpu", key: "technology" },
   { href: "/catalogs", icon: "tool-catalog", key: "catalogs" },
 ] as const;
 

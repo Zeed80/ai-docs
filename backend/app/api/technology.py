@@ -343,6 +343,205 @@ async def get_process_plan(
     return plan
 
 
+@router.get(
+    "/process-plans/{plan_id}/export",
+    summary="Export process plan (TechCard) to Excel or HTML.",
+    response_class=__import__("fastapi").responses.StreamingResponse,
+)
+async def export_process_plan(
+    plan_id: uuid.UUID,
+    format: str = Query(default="excel", pattern="^(excel|html)$"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export a ProcessPlan as an Excel workbook (TechCard) or printable HTML (RouteCard)."""
+    from fastapi.responses import StreamingResponse
+    import io
+
+    plan = await _load_process_plan_detail(db, plan_id)
+    if not plan:
+        raise HTTPException(404, "Process plan not found")
+
+    if format == "excel":
+        content = _build_techcard_excel(plan)
+        filename = f"techcard_{plan.product_code or str(plan_id)[:8]}.xlsx"
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    else:
+        html = _build_routecard_html(plan)
+        filename = f"routecard_{plan.product_code or str(plan_id)[:8]}.html"
+        return StreamingResponse(
+            io.BytesIO(html.encode("utf-8")),
+            media_type="text/html; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
+def _build_techcard_excel(plan: ProcessPlanDetail) -> bytes:
+    """Generate a ГОСТ-style TechCard Excel workbook."""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Техкарта"
+
+    thin = Side(style="thin")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_fill = PatternFill("solid", fgColor="1E3A5F")
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    bold = Font(bold=True, size=10)
+    normal = Font(size=10)
+
+    def _cell(row, col, value, font=None, fill=None, wrap=False, align="left"):
+        c = ws.cell(row=row, column=col, value=value)
+        c.border = border
+        c.font = font or normal
+        c.alignment = Alignment(
+            horizontal=align, vertical="center", wrap_text=wrap
+        )
+        if fill:
+            c.fill = fill
+        return c
+
+    # Title block
+    ws.merge_cells("A1:H1")
+    c = ws.cell(row=1, column=1, value="ТЕХНОЛОГИЧЕСКАЯ КАРТА")
+    c.font = Font(bold=True, size=14)
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 24
+
+    meta = [
+        ("Изделие:", plan.product_name),
+        ("Код:", plan.product_code or "—"),
+        ("Версия:", plan.version),
+        ("Материал:", plan.material or "—"),
+        ("Заготовка:", plan.blank_type or "—"),
+        ("Статус:", plan.status),
+        ("Стандарт:", plan.standard_system),
+    ]
+    for i, (label, val) in enumerate(meta, start=2):
+        ws.cell(row=i, column=1, value=label).font = bold
+        ws.merge_cells(f"B{i}:H{i}")
+        ws.cell(row=i, column=2, value=val).font = normal
+
+    if plan.route_summary:
+        row = len(meta) + 2
+        ws.cell(row=row, column=1, value="Маршрут:").font = bold
+        ws.merge_cells(f"B{row}:H{row}")
+        c = ws.cell(row=row, column=2, value=plan.route_summary)
+        c.font = normal
+        c.alignment = Alignment(wrap_text=True)
+
+    # Operations header
+    op_start = len(meta) + 4
+    headers = ["№", "Код", "Наименование операции", "Тип", "t пз (мин)", "t оп (мин)", "t труд (мин)", "Требования"]
+    ws.row_dimensions[op_start].height = 18
+    for col, h in enumerate(headers, 1):
+        _cell(op_start, col, h, font=header_font, fill=header_fill, align="center")
+
+    col_widths = [5, 8, 40, 15, 10, 10, 12, 40]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = w
+
+    for i, op in enumerate(getattr(plan, "operations", []), start=1):
+        row = op_start + i
+        _cell(row, 1, op.sequence_no, align="center")
+        _cell(row, 2, op.operation_code or "")
+        _cell(row, 3, op.name, wrap=True)
+        _cell(row, 4, op.operation_type or "")
+        _cell(row, 5, round(op.setup_minutes or 0, 2), align="center")
+        _cell(row, 6, round(op.machine_minutes or 0, 2), align="center")
+        _cell(row, 7, round(op.labor_minutes or 0, 2), align="center")
+        ctrl = " | ".join(filter(None, [op.control_requirements, op.safety_requirements]))
+        _cell(row, 8, ctrl, wrap=True)
+        ws.row_dimensions[row].height = max(18, min(60, len(op.name or "") // 3))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _build_routecard_html(plan: ProcessPlanDetail) -> str:
+    """Generate a printable HTML RouteCard (маршрутная карта)."""
+    import html as _html
+
+    def e(v):
+        return _html.escape(str(v or "—"))
+
+    ops_rows = ""
+    total_setup = total_machine = total_labor = 0.0
+    for op in getattr(plan, "operations", []):
+        setup = op.setup_minutes or 0
+        machine = op.machine_minutes or 0
+        labor = op.labor_minutes or 0
+        total_setup += setup
+        total_machine += machine
+        total_labor += labor
+        ops_rows += f"""
+        <tr>
+          <td class="center">{e(op.sequence_no)}</td>
+          <td>{e(op.operation_code)}</td>
+          <td>{e(op.name)}</td>
+          <td>{e(op.operation_type)}</td>
+          <td>{e(op.setup_description)}</td>
+          <td class="center">{setup:.1f}</td>
+          <td class="center">{machine:.1f}</td>
+          <td class="center">{labor:.1f}</td>
+        </tr>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="UTF-8">
+<title>Маршрутная карта — {e(plan.product_name)}</title>
+<style>
+  body {{ font-family: Arial, sans-serif; font-size: 10pt; margin: 20px; color: #111; }}
+  h1 {{ font-size: 14pt; text-align: center; margin-bottom: 4px; }}
+  .meta {{ border-collapse: collapse; margin-bottom: 16px; width: 100%; }}
+  .meta td {{ padding: 3px 8px; border: 1px solid #ccc; }}
+  .meta .label {{ font-weight: bold; width: 120px; background: #f0f4f8; }}
+  table.ops {{ border-collapse: collapse; width: 100%; margin-top: 12px; }}
+  table.ops th {{ background: #1e3a5f; color: white; padding: 5px; text-align: center; border: 1px solid #999; font-size: 9pt; }}
+  table.ops td {{ border: 1px solid #ccc; padding: 4px 6px; font-size: 9pt; vertical-align: top; }}
+  table.ops .center {{ text-align: center; }}
+  table.ops tr:nth-child(even) {{ background: #f8fafc; }}
+  .totals td {{ font-weight: bold; background: #e8f0fe; }}
+  @media print {{ body {{ margin: 10mm; }} }}
+</style>
+</head><body>
+<h1>МАРШРУТНАЯ КАРТА</h1>
+<table class="meta">
+  <tr><td class="label">Изделие</td><td>{e(plan.product_name)}</td>
+      <td class="label">Код</td><td>{e(plan.product_code)}</td></tr>
+  <tr><td class="label">Версия</td><td>{e(plan.version)}</td>
+      <td class="label">Статус</td><td>{e(plan.status)}</td></tr>
+  <tr><td class="label">Материал</td><td>{e(plan.material)}</td>
+      <td class="label">Заготовка</td><td>{e(plan.blank_type)}</td></tr>
+  <tr><td class="label">Стандарт</td><td>{e(plan.standard_system)}</td>
+      <td class="label">Требования</td><td>{e(plan.quality_requirements)}</td></tr>
+</table>
+<table class="ops">
+  <thead>
+    <tr>
+      <th>№</th><th>Код</th><th>Наименование операции</th><th>Тип</th>
+      <th>Описание перехода</th><th>t пз</th><th>t оп</th><th>t труд</th>
+    </tr>
+  </thead>
+  <tbody>
+    {ops_rows}
+    <tr class="totals">
+      <td colspan="5" style="text-align:right">ИТОГО (мин):</td>
+      <td class="center">{total_setup:.1f}</td>
+      <td class="center">{total_machine:.1f}</td>
+      <td class="center">{total_labor:.1f}</td>
+    </tr>
+  </tbody>
+</table>
+</body></html>"""
+
+
 @router.post("/process-plans/{plan_id}/approve", response_model=ProcessPlanOut)
 async def approve_process_plan(
     plan_id: uuid.UUID,
