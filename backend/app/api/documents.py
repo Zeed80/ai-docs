@@ -383,6 +383,17 @@ async def ingest_document(
     file_hash = hashlib.sha256(content).hexdigest()
     file_size = len(content)
 
+    # ClamAV antivirus scan (skipped gracefully if clamd not available)
+    from app.security.clamav import scan_bytes
+    scan = scan_bytes(content)
+    if not scan.is_clean:
+        raise HTTPException(
+            status_code=422,
+            detail=f"File rejected by antivirus scanner: {scan.threat}",
+        )
+    if not scan.skipped:
+        logger.info("clamav_scan_clean", file_hash=file_hash)
+
     # SHA-256 dedup check
     existing = await db.execute(select(Document).where(Document.file_hash == file_hash))
     duplicate = existing.scalar_one_or_none()
