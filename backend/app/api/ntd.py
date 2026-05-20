@@ -55,6 +55,38 @@ from app.domain.ntd_parser import detect_normative_metadata, parse_normative_tex
 router = APIRouter()
 
 
+def _doc_out(doc: NormativeDocument) -> NormativeDocumentOut:
+    """Build NormativeDocumentOut from ORM object, avoiding MetaData alias conflict."""
+    return NormativeDocumentOut.model_validate({
+        "id": doc.id, "code": doc.code, "title": doc.title,
+        "document_type": doc.document_type, "status": doc.status,
+        "current_version_id": doc.current_version_id, "scope": doc.scope,
+        "source_document_id": doc.source_document_id,
+        "metadata": doc.metadata_, "created_at": doc.created_at,
+    })
+
+
+def _clause_out(clause: NormativeClause) -> NormativeClauseOut:
+    return NormativeClauseOut.model_validate({
+        "id": clause.id, "normative_document_id": clause.normative_document_id,
+        "version_id": clause.version_id, "clause_number": clause.clause_number,
+        "title": clause.title, "text": clause.text,
+        "parent_clause_id": clause.parent_clause_id,
+        "metadata": clause.metadata_, "created_at": clause.created_at,
+    })
+
+
+def _requirement_out(req: NormativeRequirement) -> NormativeRequirementOut:
+    return NormativeRequirementOut.model_validate({
+        "id": req.id, "normative_document_id": req.normative_document_id,
+        "clause_id": req.clause_id, "requirement_code": req.requirement_code,
+        "requirement_type": req.requirement_type, "applies_to": req.applies_to,
+        "text": req.text, "required_keywords": req.required_keywords,
+        "severity": req.severity, "is_active": req.is_active,
+        "metadata": req.metadata_, "created_at": req.created_at,
+    })
+
+
 @router.get("/settings/ntd-control", response_model=NTDControlSettingsOut)
 async def get_ntd_control_settings(db: AsyncSession = Depends(get_db)):
     """Skill: ntd.control_settings_get — Read NTD norm-control mode."""
@@ -103,7 +135,7 @@ async def list_normative_documents(
     if status_filter:
         query = query.where(NormativeDocument.status == status_filter)
     result = await db.execute(query)
-    return result.scalars().all()
+    return [_doc_out(d) for d in result.scalars().all()]
 
 
 @router.post(
@@ -145,7 +177,7 @@ async def create_normative_document(
     )
     await db.commit()
     await db.refresh(doc)
-    return doc
+    return _doc_out(doc)
 
 
 @router.post(
@@ -211,7 +243,7 @@ async def create_normative_document_from_source(
     await db.commit()
     await db.refresh(normative_document)
     return NTDDocumentCreateFromSourceResponse(
-        normative_document=NormativeDocumentOut.model_validate(normative_document),
+        normative_document=_doc_out(normative_document),
         index_result=index_result,
     )
 
@@ -361,7 +393,7 @@ async def create_normative_clause(
     db.add(clause)
     await db.commit()
     await db.refresh(clause)
-    return clause
+    return _clause_out(clause)
 
 
 @router.post(
@@ -392,7 +424,7 @@ async def create_normative_requirement(
     db.add(requirement)
     await db.commit()
     await db.refresh(requirement)
-    return requirement
+    return _requirement_out(requirement)
 
 
 @router.get("/ntd/requirements/search", response_model=NTDRequirementSearchResponse)
