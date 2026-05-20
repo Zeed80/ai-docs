@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from app.db.models import DocumentStatus, DocumentType
 
@@ -15,7 +15,7 @@ class DocumentBase(BaseModel):
     doc_type: DocumentType | None = None
     status: DocumentStatus = DocumentStatus.ingested
     source_channel: str | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
 
 
 # ── Ingest (doc.ingest) ─────────────────────────────────────────────────────
@@ -244,7 +244,7 @@ class DocumentUpdate(BaseModel):
     status: DocumentStatus | None = None
     source_channel: str | None = None
     manual_doc_type_override: bool | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(None, validation_alias=AliasChoices("metadata_", "metadata"), serialization_alias="metadata")
 
 
 class DocumentBatchRequest(BaseModel):
