@@ -1,7 +1,7 @@
 """Auto-Approval Rules API — configure conditions for automatic document/invoice approval."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -166,7 +166,7 @@ async def check_invoice(
 
         # Matched — increment counter
         rule.apply_count += 1
-        rule.last_applied_at = datetime.utcnow()
+        rule.last_applied_at = datetime.now(timezone.utc)
         await db.commit()
         return CheckResult(
             matched=True,
