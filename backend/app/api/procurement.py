@@ -248,7 +248,7 @@ async def send_rfq(
         draft = DraftEmail(
             related_entity_type="purchase_request",
             related_entity_id=req.id,
-            to_addresses=[supplier.email] if supplier.email else [],
+            to_addresses=[supplier.contact_email] if supplier.contact_email else [],
             subject=subject,
             body_text=body,
             status="draft",
