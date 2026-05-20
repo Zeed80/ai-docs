@@ -1,5 +1,7 @@
 """Celery application configuration."""
 
+import os
+
 from celery import Celery
 from celery.schedules import crontab
 
@@ -17,6 +19,13 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    # Short broker timeouts so dev/tests don't hang when Redis is unavailable
+    broker_connection_timeout=2.0,
+    broker_connection_retry=False,
+    broker_transport_options={"socket_timeout": 2, "socket_connect_timeout": 2},
+    # When CELERY_TASK_ALWAYS_EAGER=true (tests), run tasks in-process without broker
+    task_always_eager=os.getenv("CELERY_TASK_ALWAYS_EAGER", "false").lower() == "true",
+    task_eager_propagates=False,  # swallow task errors in eager mode
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,

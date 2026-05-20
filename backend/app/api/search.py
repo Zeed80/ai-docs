@@ -78,20 +78,28 @@ async def search_documents(
         ExtractionField.field_value,
     ]
     rank = text_search_rank(db, columns, q)
+    # PostgreSQL requires ORDER BY expressions to appear in SELECT list when using DISTINCT.
+    # Workaround: fetch with ORDER BY (may have duplicate document rows from joins),
+    # then deduplicate in Python preserving rank order.
     query = (
         select(Document)
         .outerjoin(DocumentChunk, DocumentChunk.document_id == Document.id)
         .outerjoin(DocumentExtraction, DocumentExtraction.document_id == Document.id)
         .outerjoin(ExtractionField, ExtractionField.extraction_id == DocumentExtraction.id)
         .where(text_search_condition(db, columns, q))
-        .distinct()
     )
     if rank is not None:
         query = query.order_by(desc(rank), Document.created_at.desc())
     else:
         query = query.order_by(Document.created_at.desc())
-    result = await db.execute(query.limit(limit))
-    return result.scalars().all()
+    result = await db.execute(query.limit(limit * 5))
+    seen: dict = {}
+    for doc in result.scalars().all():
+        if doc.id not in seen:
+            seen[doc.id] = doc
+        if len(seen) == limit:
+            break
+    return list(seen.values())
 
 
 # ── search.nl_to_query ──────────────────────────────────────────────────────

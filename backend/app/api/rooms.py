@@ -296,7 +296,7 @@ async def list_rooms(
         RoomOut(
             id=room.id,
             name=room.name,
-            type=str(room.type),
+            type=room.type.value if hasattr(room.type, "value") else str(room.type),
             description=room.description,
             created_by=room.created_by,
             is_archived=room.is_archived,
@@ -328,7 +328,7 @@ async def create_room(
     await db.commit()
     await db.refresh(room)
     return RoomOut(
-        id=room.id, name=room.name, type=str(room.type),
+        id=room.id, name=room.name, type=room.type.value if hasattr(room.type, "value") else str(room.type),
         description=room.description, created_by=room.created_by,
         is_archived=room.is_archived, unread_count=0, member_count=1,
     )
@@ -359,7 +359,7 @@ async def get_or_create_dm(
         if target_sub in subs and len(subs) == 2:
             unread = await _unread_count(db, room.id, user.sub)
             return RoomOut(
-                id=room.id, name=room.name, type=str(room.type),
+                id=room.id, name=room.name, type=room.type.value if hasattr(room.type, "value") else str(room.type),
                 description=room.description, created_by=room.created_by,
                 is_archived=room.is_archived, unread_count=unread,
                 member_count=2,
@@ -374,7 +374,7 @@ async def get_or_create_dm(
     await db.commit()
     await db.refresh(room)
     return RoomOut(
-        id=room.id, name=room.name, type=str(room.type),
+        id=room.id, name=room.name, type=room.type.value if hasattr(room.type, "value") else str(room.type),
         description=room.description, created_by=room.created_by,
         is_archived=room.is_archived, unread_count=0, member_count=2,
     )
@@ -399,7 +399,7 @@ async def get_room(
     return RoomOut(
         id=room.id,
         name=room.name,
-        type=str(room.type),
+        type=room.type.value if hasattr(room.type, "value") else str(room.type),
         description=room.description,
         created_by=room.created_by,
         is_archived=room.is_archived,
