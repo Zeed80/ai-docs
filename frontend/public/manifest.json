@@ -1,0 +1,46 @@
+{
+  "name": "AI Документооборот",
+  "short_name": "AI Docs",
+  "description": "AI-powered document workflow workspace",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "lang": "ru",
+  "shortcuts": [
+    {
+      "name": "Входящие",
+      "short_name": "Inbox",
+      "url": "/inbox",
+      "description": "Входящие документы на обработку"
+    },
+    {
+      "name": "Загрузить",
+      "short_name": "Upload",
+      "url": "/inbox?upload=1",
+      "description": "Загрузить новый документ"
+    },
+    {
+      "name": "Поиск",
+      "short_name": "Search",
+      "url": "/search",
+      "description": "Поиск по документам"
+    }
+  ]
+}
