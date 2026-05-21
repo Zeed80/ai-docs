@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import clsx from "clsx";
 import type {
   Drawing,
@@ -219,6 +220,17 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
             )}
             Анализ
           </button>
+
+          {/* Create TP from drawing */}
+          {drawing.status === "analyzed" && (
+            <Link
+              href={`/technology/new?drawing_id=${drawingId}`}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-emerald-700/80 hover:bg-emerald-600 text-white font-medium transition-colors"
+              title="Создать технологический процесс из этого чертежа"
+            >
+              ⚙ Создать ТП
+            </Link>
+          )}
         </div>
       </div>
 

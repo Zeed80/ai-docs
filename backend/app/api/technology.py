@@ -9,10 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import log_action
+from fastapi.responses import StreamingResponse
+
 from app.db.models import (
     BOM,
+    BlankSpec,
     Document,
+    Drawing,
     EntityMention,
+    GostFormData,
     KnowledgeEdge,
     KnowledgeNode,
     ManufacturingCheckResult,
@@ -21,6 +26,8 @@ from app.db.models import (
     ManufacturingOperationTemplate,
     ManufacturingProcessPlan,
     ManufacturingResource,
+    NormControlCheck,
+    SurfaceMachiningSpec,
     TechnologyCorrection,
     TechnologyLearningRule,
 )
@@ -1325,6 +1332,339 @@ async def _link_operation_graph(
             reason=f"Operation uses {resource.resource_type}",
             source_document_id=plan.document_id,
         )
+
+
+# ── Epic 7: Agent-driven TP endpoints ────────────────────────────────────────
+
+
+@router.post("/process-plans/generate-from-drawing")
+async def generate_tp_from_drawing(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.generate_tp_from_drawing — Full agent-driven TP generation from drawing.
+    Queues a Celery pipeline: surface analysis → blank → operations → equipment → norms → normcontrol.
+    """
+    drawing_id = uuid.UUID(payload["drawing_id"])
+    batch_size = int(payload.get("batch_size", 1))
+    tp_type = payload.get("tp_type", "единичный")
+    created_by = payload.get("created_by", "sveta")
+
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(404, detail="Drawing not found")
+
+    title_block = drawing.title_block or {}
+
+    plan_id_str = payload.get("plan_id")
+    if plan_id_str:
+        plan_id = uuid.UUID(plan_id_str)
+        plan = await db.get(ManufacturingProcessPlan, plan_id)
+        if not plan:
+            raise HTTPException(404, detail="ProcessPlan not found")
+    else:
+        plan = ManufacturingProcessPlan(
+            product_name=title_block.get("title") or drawing.drawing_number or "Без названия",
+            product_code=drawing.drawing_number,
+            material=title_block.get("material"),
+            drawing_id=drawing_id,
+            tp_type=tp_type,
+            created_by=created_by,
+            status="draft",
+        )
+        db.add(plan)
+        await db.flush()
+        plan_id = plan.id
+
+    from app.tasks.tp_generation import generate_tp_from_drawing as celery_task
+    task = celery_task.apply_async(
+        kwargs={
+            "plan_id": str(plan_id),
+            "drawing_id": str(drawing_id),
+            "batch_size": batch_size,
+            "auto_normcontrol": payload.get("auto_normcontrol", True),
+            "created_by": created_by,
+        }
+    )
+
+    await db.commit()
+    await log_action(db, action="tech.generate_tp_from_drawing", entity_type="process_plan",
+                     entity_id=plan_id, actor=created_by, details={"drawing_id": str(drawing_id)})
+
+    return {"plan_id": str(plan_id), "task_id": task.id, "status": "queued"}
+
+
+@router.post("/process-plans/{plan_id}/analyze-surfaces")
+async def analyze_surfaces(
+    plan_id: uuid.UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.analyze_surfaces — Extract surface machining specs from drawing features."""
+    plan = await db.get(ManufacturingProcessPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, detail="ProcessPlan not found")
+
+    drawing_id = uuid.UUID(payload["drawing_id"])
+    drawing = await db.get(Drawing, drawing_id, options=[selectinload(Drawing.features)])
+    if not drawing:
+        raise HTTPException(404, detail="Drawing not found")
+
+    from app.ai.tp_generator import (
+        extract_tp_features_from_drawing,
+        recommend_blank,
+        save_surface_specs,
+    )
+
+    surface_dicts = extract_tp_features_from_drawing(drawing, plan_id, db)
+    surface_rows = save_surface_specs(surface_dicts, db)
+
+    material = plan.material or (drawing.title_block or {}).get("material", "Сталь 45")
+    blank_data = recommend_blank(material, {}, None)
+
+    await db.commit()
+
+    return {
+        "surfaces": [
+            {
+                "id": str(s.id),
+                "surface_type": s.surface_type,
+                "machining_method": s.machining_method,
+                "machining_stage": s.machining_stage,
+                "nominal_mm": s.nominal_mm,
+                "roughness_ra": s.roughness_ra,
+                "fit_system": s.fit_system,
+                "confidence": s.confidence,
+            }
+            for s in surface_rows
+        ],
+        "blank_recommendation": blank_data,
+    }
+
+
+@router.post("/process-plans/{plan_id}/select-equipment")
+async def select_equipment_for_op(
+    plan_id: uuid.UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.select_equipment_for_op — Select optimal machine for operation."""
+    plan = await db.get(ManufacturingProcessPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, detail="ProcessPlan not found")
+
+    from app.ai.tp_generator import select_equipment
+
+    operation_type = payload.get("operation_type", "turning")
+    workpiece_d_mm = payload.get("workpiece_d_mm")
+    tolerance_grade = payload.get("tolerance_grade")
+
+    candidates = select_equipment(operation_type, workpiece_d_mm, tolerance_grade, db, limit=5)
+
+    return {
+        "candidates": [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "code": r.code,
+                "model": r.model,
+                "resource_type": r.resource_type,
+                "capabilities": r.capabilities,
+            }
+            for r in candidates
+        ]
+    }
+
+
+@router.post("/process-plans/{plan_id}/calculate-cutting-params")
+async def calculate_cutting_params(
+    plan_id: uuid.UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.calculate_cutting_params — Calculate Vc, fz, ap, To for an operation."""
+    plan = await db.get(ManufacturingProcessPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, detail="ProcessPlan not found")
+
+    from app.ai.tp_generator import calculate_cutting_parameters, calculate_time_norms
+
+    operation_type = payload.get("operation_type", "turning")
+    material = payload.get("material_grade") or plan.material or "Сталь 45"
+    nominal_mm = payload.get("nominal_mm")
+    roughness_ra = payload.get("roughness_ra")
+    batch_size = int(payload.get("batch_size", 1))
+
+    cp = calculate_cutting_parameters(operation_type, material, nominal_mm, roughness_ra)
+    norms = calculate_time_norms(operation_type, cp["to_min"], batch_size)
+
+    if payload.get("operation_id"):
+        op = await db.get(ManufacturingOperation, uuid.UUID(payload["operation_id"]))
+        if op and op.process_plan_id == plan_id:
+            op.cutting_parameters = cp
+            op.to_minutes = cp["to_min"]
+            for field, val in norms.items():
+                if hasattr(op, field):
+                    setattr(op, field, val)
+            await db.commit()
+
+    return {"cutting_parameters": cp, "time_norms": norms}
+
+
+@router.post("/process-plans/{plan_id}/normcontrol")
+async def run_normcontrol(
+    plan_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.normcontrol_check — Run ГОСТ ЕСТД normcontrol on process plan."""
+    plan = await db.get(ManufacturingProcessPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, detail="ProcessPlan not found")
+
+    from app.ai.normcontrol_agent import run_normcontrol as _run
+
+    result = _run(plan_id, db.sync_session if hasattr(db, "sync_session") else db)
+
+    return result
+
+
+@router.post("/process-plans/{plan_id}/normcontrol/{check_id}/resolve")
+async def resolve_normcontrol_check(
+    plan_id: uuid.UUID,
+    check_id: uuid.UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.normcontrol_resolve — Resolve or waive a normcontrol finding."""
+    check = await db.get(NormControlCheck, check_id)
+    if not check or check.process_plan_id != plan_id:
+        raise HTTPException(404, detail="Check not found")
+
+    resolution = payload.get("resolution", "fixed")
+    if resolution not in ("fixed", "waived"):
+        raise HTTPException(422, detail="resolution must be 'fixed' or 'waived'")
+
+    check.status = "resolved" if resolution == "fixed" else "waived"
+    check.resolved_by = payload.get("resolved_by", "user")
+    check.resolved_at = datetime.now(UTC)
+
+    await db.commit()
+    return {"ok": True, "check_id": str(check_id), "status": check.status}
+
+
+@router.post("/process-plans/{plan_id}/blank-spec")
+async def set_blank_spec(
+    plan_id: uuid.UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.blank_spec_set — Set or update blank/stock specification."""
+    plan = await db.get(ManufacturingProcessPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, detail="ProcessPlan not found")
+
+    result = await db.execute(
+        select(BlankSpec).where(BlankSpec.process_plan_id == plan_id)
+    )
+    spec = result.scalar_one_or_none()
+    if spec:
+        for k, v in payload.items():
+            if hasattr(spec, k):
+                setattr(spec, k, v)
+    else:
+        spec = BlankSpec(process_plan_id=plan_id, **{k: v for k, v in payload.items() if k != "process_plan_id"})
+        db.add(spec)
+
+    plan.blank_type = spec.blank_type
+    await db.commit()
+    await db.refresh(spec)
+
+    return {
+        "id": str(spec.id),
+        "blank_type": spec.blank_type,
+        "material_grade": spec.material_grade,
+        "standard_gost": spec.standard_gost,
+        "dimensions": spec.dimensions,
+        "mass_blank_kg": spec.mass_blank_kg,
+        "mass_part_kg": spec.mass_part_kg,
+        "utilization_factor": spec.utilization_factor,
+        "confidence": spec.confidence,
+        "reasoning": spec.reasoning,
+    }
+
+
+@router.get("/process-plans/{plan_id}/surface-specs")
+async def list_surface_specs(
+    plan_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.surface_specs_list — List surface machining specifications for process plan."""
+    plan = await db.get(ManufacturingProcessPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, detail="ProcessPlan not found")
+
+    result = await db.execute(
+        select(SurfaceMachiningSpec)
+        .where(SurfaceMachiningSpec.process_plan_id == plan_id)
+        .order_by(SurfaceMachiningSpec.created_at)
+    )
+    specs = result.scalars().all()
+
+    return {
+        "items": [
+            {
+                "id": str(s.id),
+                "surface_type": s.surface_type,
+                "machining_method": s.machining_method,
+                "machining_stage": s.machining_stage,
+                "nominal_mm": s.nominal_mm,
+                "upper_tol": s.upper_tol,
+                "lower_tol": s.lower_tol,
+                "roughness_ra": s.roughness_ra,
+                "fit_system": s.fit_system,
+                "operation_id": str(s.operation_id) if s.operation_id else None,
+                "drawing_feature_id": str(s.drawing_feature_id) if s.drawing_feature_id else None,
+                "assigned_machine_id": str(s.assigned_machine_id) if s.assigned_machine_id else None,
+                "confidence": s.confidence,
+            }
+            for s in specs
+        ],
+        "total": len(specs),
+    }
+
+
+@router.post("/process-plans/{plan_id}/export-gost")
+async def export_gost_forms(
+    plan_id: uuid.UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: tech.export_gost_forms — Export ГОСТ ЕСТД forms МК (ГОСТ 3.1118) + ОК (ГОСТ 3.1404)."""
+    plan = await db.get(
+        ManufacturingProcessPlan,
+        plan_id,
+        options=[selectinload(ManufacturingProcessPlan.operations)],
+    )
+    if not plan:
+        raise HTTPException(404, detail="ProcessPlan not found")
+
+    forms = payload.get("forms", ["МК", "ОК"])
+    fmt = payload.get("format", "xlsx")
+
+    if fmt != "xlsx":
+        raise HTTPException(422, detail="Only xlsx format is supported currently")
+
+    from app.services.gost_forms import GostFormRenderer
+
+    renderer = GostFormRenderer()
+    wb_bytes = renderer.render_full_package_xlsx(plan, list(plan.operations), forms=forms)
+
+    filename = f"TP_{plan.product_code or plan_id}_{plan.version}.xlsx"
+    return StreamingResponse(
+        iter([wb_bytes]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 async def _get_or_create_process_plan_node(

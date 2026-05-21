@@ -1,0 +1,243 @@
+# Scenario 9: Tech Process from Drawing (Технологический процесс из чертежа)
+# Trigger: drawing_analyzed event | user says "создай техпроцесс для чертежа X"
+# Full chain: drawing.get → (drawing.analyze if needed) → tech.process_plan_create →
+#   tech.generate_tp_from_drawing → APPROVAL GATE → tech.normcontrol_check → report
+
+name: tp-from-drawing
+description: "Полный агентный цикл создания технологического процесса по чертежу детали/сборки"
+version: "1.0"
+
+trigger:
+  type: composite
+  sources:
+    - type: event
+      event: drawing_analyzed
+    - type: user_intent
+      intents:
+        - "create_tech_process"
+        - "draft_tp"
+        - "generate_process_plan"
+      patterns:
+        - "создай техпроцесс"
+        - "разработай технологический процесс"
+        - "сделай тп"
+        - "создай тп"
+        - "техпроцесс для чертежа"
+        - "технологический процесс для детали"
+        - "маршрутная карта"
+        - "операционная карта"
+
+timeout: 300
+retry_attempts: 1
+
+parameters:
+  drawing_id:
+    type: uuid
+    required: true
+    description: "UUID чертежа (Drawing) для генерации ТП"
+  batch_size:
+    type: integer
+    required: false
+    default: 1
+    description: "Размер партии для расчёта Тшт-к"
+  tp_type:
+    type: string
+    required: false
+    default: "единичный"
+    description: "Тип ТП: единичный | типовой | групповой"
+  auto_normcontrol:
+    type: boolean
+    required: false
+    default: true
+    description: "Автоматически запустить нормоконтроль после генерации"
+
+worker_role: technologist
+
+approval_gates:
+  - id: tech.process_plan_from_drawing
+    label: "Утверждение чернового ТП"
+    description: "Технолог проверяет сгенерированный ТП перед нормоконтролем"
+    risk_level: medium
+    requires_human: true
+    can_bulk_approve: false
+    timeout_hours: 72
+
+steps:
+  # ── Step 1: Load drawing ──────────────────────────────────────────────────
+  - id: load_drawing
+    skill: drawing.get
+    input:
+      drawing_id: "{{ parameters.drawing_id }}"
+    output:
+      drawing: "$.drawing"
+    on_error: abort
+    on_not_found:
+      message: "Чертёж {{ parameters.drawing_id }} не найден. Проверьте ID или загрузите чертёж заново."
+      action: abort
+
+  # ── Step 2: Ensure drawing is analyzed ───────────────────────────────────
+  - id: check_drawing_analyzed
+    type: conditional
+    condition: "{{ steps.load_drawing.drawing.status != 'analyzed' }}"
+    if_true:
+      - id: trigger_drawing_analysis
+        skill: drawing.analyze
+        input:
+          drawing_id: "{{ parameters.drawing_id }}"
+        wait_for_completion: true
+        timeout: 120
+        on_error: continue  # proceed even if analysis partial
+
+  # ── Step 3: Create draft process plan ────────────────────────────────────
+  - id: create_plan
+    skill: tech.process_plan_create
+    input:
+      product_name: "{{ steps.load_drawing.drawing.title_block.title | default: steps.load_drawing.drawing.drawing_number | default: 'Изделие' }}"
+      product_code: "{{ steps.load_drawing.drawing.drawing_number }}"
+      material: "{{ steps.load_drawing.drawing.title_block.material }}"
+      drawing_id: "{{ parameters.drawing_id }}"
+      tp_type: "{{ parameters.tp_type }}"
+      created_by: "sveta"
+    output:
+      plan: "$.plan"
+    on_error: abort
+
+  # ── Step 4: Full generation pipeline ─────────────────────────────────────
+  - id: generate_tp
+    skill: tech.generate_tp_from_drawing
+    input:
+      drawing_id: "{{ parameters.drawing_id }}"
+      plan_id: "{{ steps.create_plan.plan.id }}"
+      batch_size: "{{ parameters.batch_size }}"
+      auto_normcontrol: false
+      created_by: "sveta"
+    wait_for_task: true
+    task_timeout: 240
+    output:
+      generation_result: "$"
+    on_error: abort
+
+  # ── Step 5: Get full plan for review ─────────────────────────────────────
+  - id: get_plan_detail
+    skill: tech.process_plan_get
+    input:
+      plan_id: "{{ steps.create_plan.plan.id }}"
+    output:
+      process_plan: "$.process_plan"
+
+  # ── APPROVAL GATE ─────────────────────────────────────────────────────────
+  - id: tp_draft_approval
+    type: approval
+    gate_id: tech.process_plan_from_drawing
+    channel: chat
+    message: |
+      **Агент Света** подготовила черновой технологический процесс:
+
+      **Изделие:** {{ steps.load_drawing.drawing.title_block.title | default: steps.load_drawing.drawing.drawing_number }}
+      **Обозначение:** {{ steps.create_plan.plan.product_code }}
+      **Материал:** {{ steps.get_plan_detail.process_plan.material | default: "не указан" }}
+      **Заготовка:** {{ steps.generation_result.blank_spec.blank_type }} {{ steps.generation_result.blank_spec.material_grade }}  (КИМ={{ steps.generation_result.blank_spec.utilization_factor }})
+      **Операций:** {{ steps.generation_result.operations_count }}
+      **Суммарное Тшт-к:** {{ steps.generation_result.total_norm_minutes }} мин
+
+      **Маршрут:** {{ steps.get_plan_detail.process_plan.route_summary }}
+
+      Пожалуйста, проверьте черновик ТП в редакторе и подтвердите отправку на нормоконтроль.
+    actions:
+      - label: "Открыть редактор ТП"
+        url: "/technology/{{ steps.create_plan.plan.id }}/review"
+    on_approved:
+      proceed_to: run_normcontrol
+    on_rejected:
+      proceed_to: tp_rejected
+    on_timeout:
+      action: notify
+      message: "Ожидание подтверждения ТП истекло. Черновик сохранён."
+
+  # ── Step 6: Normcontrol ───────────────────────────────────────────────────
+  - id: run_normcontrol
+    skill: tech.normcontrol_check
+    input:
+      plan_id: "{{ steps.create_plan.plan.id }}"
+    output:
+      normcontrol: "$"
+
+  # ── Step 7: Report results ────────────────────────────────────────────────
+  - id: report_normcontrol_passed
+    type: message
+    condition: "{{ steps.run_normcontrol.normcontrol.status == 'passed' }}"
+    channel: chat
+    content: |
+      ✅ **Нормоконтроль пройден** — замечаний нет.
+
+      Технологический процесс **{{ steps.load_drawing.drawing.title_block.title | default: steps.create_plan.plan.product_code }}** готов к утверждению.
+
+      Суммарное время: **{{ steps.generation_result.total_norm_minutes }} мин** (Тшт-к по всем операциям).
+    actions:
+      - label: "Утвердить ТП"
+        skill: tech.process_plan_approve
+        input:
+          plan_id: "{{ steps.create_plan.plan.id }}"
+          approved_by: "{{ trigger.user_id | default: 'pending' }}"
+        requires_approval: true
+      - label: "Экспорт МК + ОК"
+        skill: tech.export_gost_forms
+        input:
+          plan_id: "{{ steps.create_plan.plan.id }}"
+          forms: ["МК", "ОК"]
+          format: "xlsx"
+
+  - id: report_normcontrol_failed
+    type: message
+    condition: "{{ steps.run_normcontrol.normcontrol.status == 'failed' }}"
+    channel: chat
+    content: |
+      ⚠️ **Нормоконтроль выявил замечания** по ТП «{{ steps.load_drawing.drawing.title_block.title | default: steps.create_plan.plan.product_code }}»:
+
+      {% for check in steps.run_normcontrol.normcontrol.checks %}
+      {% if check.severity == 'error' %}
+      🔴 **[{{ check.gost_code }} {{ check.clause }}]** {{ check.message }}
+         → *{{ check.recommendation }}*
+      {% endif %}
+      {% endfor %}
+
+      {% for check in steps.run_normcontrol.normcontrol.checks %}
+      {% if check.severity == 'warning' %}
+      🟡 **[{{ check.gost_code }}]** {{ check.message }}
+      {% endif %}
+      {% endfor %}
+
+      Исправьте замечания в [редакторе ТП](/technology/{{ steps.create_plan.plan.id }}/review) и запустите нормоконтроль повторно.
+    actions:
+      - label: "Открыть редактор"
+        url: "/technology/{{ steps.create_plan.plan.id }}/review"
+      - label: "Повторить нормоконтроль"
+        skill: tech.normcontrol_check
+        input:
+          plan_id: "{{ steps.create_plan.plan.id }}"
+
+  - id: tp_rejected
+    type: message
+    channel: chat
+    content: |
+      ℹ️ ТП «{{ steps.load_drawing.drawing.title_block.title | default: steps.create_plan.plan.product_code }}» отправлен на доработку.
+      Черновик сохранён: [открыть](/technology/{{ steps.create_plan.plan.id }}/review).
+
+output:
+  success:
+    message: "ТП создан и проверен нормоконтролем."
+    entity_type: "process_plan"
+    entity_id: "{{ steps.create_plan.plan.id }}"
+  failure:
+    message: "Ошибка при создании ТП. Обратитесь к администратору."
+
+# ── Universal agent-first pattern notes ──────────────────────────────────────
+# This scenario demonstrates the 8-step pattern applicable to all project functions:
+# [1] INGEST    → drawing.get
+# [2] EXTRACT   → drawing.analyze + tech.analyze_surfaces
+# [3] DRAFT     → tech.process_plan_create + tech.generate_tp_from_drawing
+# [4] ENRICH    → equipment matching + cutting params (inside generate task)
+# [5] VALIDATE  → tech.normcontrol_check
+# [6] APPROVAL  → gate: tech.process_plan_from_drawing
+# [7] FINALIZE  → tech.process_plan_approve + tech.export_gost_forms
+# [8] LEARN     → tech.correction_record → tech.correction_suggest_rules → tech.learning_rule_activate

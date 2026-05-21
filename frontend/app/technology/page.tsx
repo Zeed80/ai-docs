@@ -10,10 +10,13 @@ interface ProcessPlan {
   product_code: string | null;
   version: string;
   status: string;
+  tp_type: string | null;
   standard_system: string;
   material: string | null;
   blank_type: string | null;
   route_summary: string | null;
+  normcontrol_status: string | null;
+  total_norm_minutes: number | null;
   created_by: string;
   created_at: string;
   approved_at: string | null;
@@ -31,6 +34,22 @@ const STATUS_COLORS: Record<string, string> = {
   approved: "text-emerald-400",
   obsolete: "text-zinc-500",
 };
+
+const NC_STATUS: Record<string, { label: string; cls: string }> = {
+  passed: { label: "✓", cls: "text-emerald-400" },
+  failed: { label: "✗", cls: "text-red-400" },
+  checking: { label: "…", cls: "text-blue-400" },
+  not_checked: { label: "—", cls: "text-white/20" },
+};
+
+function NcBadge({ status }: { status: string | null }) {
+  const s = NC_STATUS[status ?? "not_checked"] ?? NC_STATUS["not_checked"];
+  return (
+    <span className={clsx("text-xs font-mono font-medium", s.cls)}>
+      {s.label}
+    </span>
+  );
+}
 
 export default function TechnologyPage() {
   const [plans, setPlans] = useState<ProcessPlan[]>([]);
@@ -74,18 +93,20 @@ export default function TechnologyPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">
-            Технологические карты
+            Технологические процессы
           </h1>
           <p className="text-white/40 text-sm mt-1">
-            {total > 0 ? `${total} техкарт` : "Нет техкарт"}
+            {total > 0 ? `${total} ТП` : "Нет технологических процессов"}
           </p>
         </div>
-        <Link
-          href="/technology/new"
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors"
-        >
-          + Новая техкарта
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            href="/technology/new"
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            + Создать из чертежа
+          </Link>
+        </div>
       </div>
 
       {/* Filters */}
@@ -136,16 +157,19 @@ export default function TechnologyPage() {
                   Код
                 </th>
                 <th className="text-left px-4 py-3 text-white/40 font-medium">
-                  Версия
+                  Тип ТП
                 </th>
                 <th className="text-left px-4 py-3 text-white/40 font-medium">
                   Материал
                 </th>
                 <th className="text-left px-4 py-3 text-white/40 font-medium">
+                  НК
+                </th>
+                <th className="text-left px-4 py-3 text-white/40 font-medium">
                   Статус
                 </th>
                 <th className="text-left px-4 py-3 text-white/40 font-medium">
-                  Создана
+                  Создан
                 </th>
                 <th className="text-right px-4 py-3 text-white/40 font-medium">
                   Действия
@@ -174,9 +198,14 @@ export default function TechnologyPage() {
                   <td className="px-4 py-3 font-mono text-white/60 text-xs">
                     {plan.product_code || "—"}
                   </td>
-                  <td className="px-4 py-3 text-white/50">{plan.version}</td>
+                  <td className="px-4 py-3 text-white/50 text-xs">
+                    {plan.tp_type || "единичный"}
+                  </td>
                   <td className="px-4 py-3 text-white/50 text-xs">
                     {plan.material || "—"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <NcBadge status={plan.normcontrol_status} />
                   </td>
                   <td className="px-4 py-3">
                     <span
@@ -193,21 +222,19 @@ export default function TechnologyPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
+                      <Link
+                        href={`/technology/${plan.id}/review`}
+                        className="text-xs text-white/30 hover:text-blue-400 transition-colors"
+                        title="Открыть редактор ТП"
+                      >
+                        Ред.
+                      </Link>
                       <a
                         href={`/api/technology/process-plans/${plan.id}/export?format=excel`}
                         className="text-xs text-white/30 hover:text-emerald-400 transition-colors"
                         title="Скачать Excel"
                       >
                         XLS
-                      </a>
-                      <a
-                        href={`/api/technology/process-plans/${plan.id}/export?format=html`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs text-white/30 hover:text-blue-400 transition-colors"
-                        title="Маршрутная карта (HTML)"
-                      >
-                        МК
                       </a>
                       <Link
                         href={`/technology/${plan.id}`}

@@ -65,6 +65,7 @@ WorkerRole = Literal[
     "procurement_specialist",
     "accountant",
     "engineer",
+    "technologist",
     "memory_researcher",
     "document_builder",
     "script_builder",
@@ -86,6 +87,13 @@ _ORCHESTRATOR_SYSTEM = """Ты оркестратор отдела ИИ-сотр
   точку; исполнитель может вызвать дополнительные сам.
 - Если НИ ОДИН skill не подходит: intent="capability_gap".
 - Роли только из enum схемы.
+
+Технологическая предметная область (роль "technologist"):
+  Ключевые слова: техпроцесс, технологический процесс, тп, маршрутная карта, операционная карта,
+  нормоконтроль, нормирование, режимы резания, заготовка, токарная, фрезерная, шлифовальная,
+  ГОСТ 3.1118, ГОСТ 3.1404, ЕСТД, техкарта.
+  Основные skills: tech.generate_tp_from_drawing, tech.normcontrol_check, tech.process_plan_list,
+  tech.process_plan_get, tech.export_gost_forms.
 """
 
 

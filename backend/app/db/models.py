@@ -1477,6 +1477,18 @@ class ManufacturingProcessPlan(UUIDPrimaryKey, TimestampMixin, Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
+    tp_type: Mapped[str] = mapped_column(String(50), default="единичный", nullable=False, index=True)
+    drawing_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("drawings.id"), nullable=True, index=True
+    )
+    blank_spec_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
+    normcontrol_status: Mapped[str] = mapped_column(
+        String(30), default="not_checked", nullable=False, index=True
+    )
+    normcontrol_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    normcontrol_checked_by: Mapped[str | None] = mapped_column(String(100))
+    total_norm_minutes: Mapped[float | None] = mapped_column(Float)
+
     operations: Mapped[list["ManufacturingOperation"]] = relationship(
         back_populates="process_plan",
         cascade="all, delete-orphan",
@@ -1485,6 +1497,17 @@ class ManufacturingProcessPlan(UUIDPrimaryKey, TimestampMixin, Base):
     norm_estimates: Mapped[list["ManufacturingNormEstimate"]] = relationship(
         back_populates="process_plan",
         cascade="all, delete-orphan",
+    )
+    surface_specs: Mapped[list["SurfaceMachiningSpec"]] = relationship(
+        back_populates="process_plan",
+        cascade="all, delete-orphan",
+    )
+    normcontrol_checks: Mapped[list["NormControlCheck"]] = relationship(
+        back_populates="process_plan",
+        cascade="all, delete-orphan",
+    )
+    drawing: Mapped["Drawing | None"] = relationship(
+        "Drawing", foreign_keys=[drawing_id], viewonly=True
     )
 
 
@@ -1515,6 +1538,18 @@ class ManufacturingOperation(UUIDPrimaryKey, TimestampMixin, Base):
     setup_minutes: Mapped[float | None] = mapped_column(Float)
     machine_minutes: Mapped[float | None] = mapped_column(Float)
     labor_minutes: Mapped[float | None] = mapped_column(Float)
+    gost_operation_code: Mapped[str | None] = mapped_column(String(10))
+    department_code: Mapped[str | None] = mapped_column(String(20))
+    workplace_code: Mapped[str | None] = mapped_column(String(20))
+    tooling_list: Mapped[list | None] = mapped_column(JSON)
+    measuring_tools: Mapped[list | None] = mapped_column(JSON)
+    to_minutes: Mapped[float | None] = mapped_column(Float)
+    tv_minutes: Mapped[float | None] = mapped_column(Float)
+    tob_minutes: Mapped[float | None] = mapped_column(Float)
+    totd_minutes: Mapped[float | None] = mapped_column(Float)
+    tsht_minutes: Mapped[float | None] = mapped_column(Float)
+    tsht_k_minutes: Mapped[float | None] = mapped_column(Float)
+    tpz_minutes: Mapped[float | None] = mapped_column(Float)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
     process_plan: Mapped["ManufacturingProcessPlan"] = relationship(back_populates="operations")
@@ -1631,6 +1666,166 @@ class TechnologyLearningRule(UUIDPrimaryKey, TimestampMixin, Base):
     activated_by: Mapped[str | None] = mapped_column(String(100))
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+
+# ── Tech Process Extensions (Epic 7) ─────────────────────────────────────────
+
+
+class DrawingTPLink(UUIDPrimaryKey, TimestampMixin, Base):
+    """Bridge between a Drawing and a ManufacturingProcessPlan derived from it."""
+
+    __tablename__ = "drawing_tp_links"
+
+    drawing_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawings.id"), nullable=False, index=True
+    )
+    process_plan_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("manufacturing_process_plans.id"), nullable=False, index=True
+    )
+    link_type: Mapped[str] = mapped_column(String(50), default="derived_from", nullable=False)
+    surface_mapping: Mapped[dict | None] = mapped_column(JSON)
+    created_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
+
+    drawing: Mapped["Drawing"] = relationship("Drawing", foreign_keys=[drawing_id])
+    process_plan: Mapped["ManufacturingProcessPlan"] = relationship(
+        "ManufacturingProcessPlan", foreign_keys=[process_plan_id]
+    )
+
+
+class SurfaceMachiningSpec(UUIDPrimaryKey, TimestampMixin, Base):
+    """Per-surface machining method assignment for a process plan."""
+
+    __tablename__ = "surface_machining_specs"
+
+    process_plan_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("manufacturing_process_plans.id"), nullable=False, index=True
+    )
+    operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("manufacturing_operations.id"), nullable=True, index=True
+    )
+    drawing_feature_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("drawing_features.id"), nullable=True, index=True
+    )
+    surface_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    # external_cylindrical | hole | flat | thread | groove | cone | sphere | other
+    nominal_mm: Mapped[float | None] = mapped_column(Float)
+    upper_tol: Mapped[float | None] = mapped_column(Float)
+    lower_tol: Mapped[float | None] = mapped_column(Float)
+    roughness_ra: Mapped[float | None] = mapped_column(Float)
+    fit_system: Mapped[str | None] = mapped_column(String(20))
+    machining_method: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    # turning | milling | grinding | boring | drilling | reaming | honing | broaching
+    machining_stage: Mapped[str] = mapped_column(String(30), nullable=False, default="finish")
+    # rough | semi-finish | finish
+    assigned_machine_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("manufacturing_resources.id"), nullable=True, index=True
+    )
+    assigned_tool_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("manufacturing_resources.id"), nullable=True, index=True
+    )
+    allowance_mm: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    process_plan: Mapped["ManufacturingProcessPlan"] = relationship(
+        back_populates="surface_specs"
+    )
+    operation: Mapped["ManufacturingOperation | None"] = relationship(
+        "ManufacturingOperation", foreign_keys=[operation_id]
+    )
+    drawing_feature: Mapped["DrawingFeature | None"] = relationship(
+        "DrawingFeature", foreign_keys=[drawing_feature_id]
+    )
+
+
+class BlankSpec(UUIDPrimaryKey, TimestampMixin, Base):
+    """Blank/stock recommendation for a process plan."""
+
+    __tablename__ = "blank_specs"
+
+    process_plan_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("manufacturing_process_plans.id"), nullable=False, unique=True, index=True
+    )
+    blank_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    # прокат | поковка | штамповка | литье | сварная конструкция
+    material_grade: Mapped[str] = mapped_column(String(200), nullable=False)
+    standard_gost: Mapped[str | None] = mapped_column(String(100))
+    dimensions: Mapped[dict | None] = mapped_column(JSON)
+    # {d_mm, l_mm} or {a_mm, b_mm, h_mm}
+    mass_blank_kg: Mapped[float | None] = mapped_column(Float)
+    mass_part_kg: Mapped[float | None] = mapped_column(Float)
+    utilization_factor: Mapped[float | None] = mapped_column(Float)
+    # КИМ = mass_part / mass_blank
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    reasoning: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
+
+    process_plan: Mapped["ManufacturingProcessPlan"] = relationship(
+        "ManufacturingProcessPlan", foreign_keys=[process_plan_id]
+    )
+
+
+class GostFormData(UUIDPrimaryKey, TimestampMixin, Base):
+    """Rendered ГОСТ ЕСТД form data (МК, ОК, КЭ) for a process plan."""
+
+    __tablename__ = "gost_form_data"
+
+    process_plan_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("manufacturing_process_plans.id"), nullable=False, index=True
+    )
+    operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("manufacturing_operations.id"), nullable=True, index=True
+    )
+    form_type: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    # МК | ОК | КЭ | ВО | ВМ
+    gost_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    form_variant: Mapped[str] = mapped_column(String(20), nullable=False, default="form1")
+    rendered_data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(100))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    process_plan: Mapped["ManufacturingProcessPlan"] = relationship(
+        "ManufacturingProcessPlan", foreign_keys=[process_plan_id]
+    )
+
+
+class NormControlCheck(UUIDPrimaryKey, TimestampMixin, Base):
+    """ГОСТ ЕСТД normcontrol finding for a process plan."""
+
+    __tablename__ = "normcontrol_checks"
+
+    process_plan_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("manufacturing_process_plans.id"), nullable=False, index=True
+    )
+    operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("manufacturing_operations.id"), nullable=True, index=True
+    )
+    form_type: Mapped[str | None] = mapped_column(String(10))
+    gost_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    # ГОСТ 3.1102 | ГОСТ 3.1118 | ГОСТ 3.1404 | ГОСТ 3.1107 | ГОСТ 3.1127
+    clause: Mapped[str | None] = mapped_column(String(50))
+    check_code: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    # ESTD_MK_001, ESTD_NC_002, …
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    # error | warning | info
+    status: Mapped[str] = mapped_column(String(20), default="open", nullable=False, index=True)
+    # open | resolved | waived
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    recommendation: Mapped[str | None] = mapped_column(Text)
+    auto_fixable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    evidence: Mapped[dict | None] = mapped_column(JSON)
+    created_by: Mapped[str] = mapped_column(String(100), default="normcontrol_agent", nullable=False)
+    resolved_by: Mapped[str | None] = mapped_column(String(100))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    process_plan: Mapped["ManufacturingProcessPlan"] = relationship(
+        back_populates="normcontrol_checks"
+    )
+    operation: Mapped["ManufacturingOperation | None"] = relationship(
+        "ManufacturingOperation", foreign_keys=[operation_id]
+    )
 
 
 # ── NTD / Norm Control ───────────────────────────────────────────────────────
