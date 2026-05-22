@@ -141,3 +141,5 @@ output:
     Требуется ручной выбор: {{steps.build_approval_list.manual_required.length}} элементов.
     {{/if}}
   failure_message: "Ошибка при подборе инструментов."
+
+timeout: 120

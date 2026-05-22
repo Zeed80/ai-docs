@@ -203,6 +203,87 @@ curl http://localhost/api/documents?status=ingested
 
 ---
 
+## Scenario 9: ТП из чертежа (Tech Process from Drawing)
+
+**Trigger**: Пользователь нажимает «Создать ТП» на странице чертежа, или вызывает `POST /api/scenarios/tp_from_drawing/run`  
+**Goal**: Построить маршрутный + операционный технологический процесс по ГОСТ ЕСТД
+
+**Flow**:
+1. `drawing.get` — загрузить чертёж и его `DrawingFeature` из БД
+2. Если `status != analyzed` — запустить `drawing.analyze` и ждать завершения
+3. `tech.process_plan_create` — создать черновой план с заголовком из чертежа
+4. `tech.generate_tp_from_drawing` — Celery pipeline (9 шагов): surface analysis → blank selection → operation drafting → equipment matching → cutting params → time norms → normcontrol
+5. `tech.process_plan_get` — получить заполненный план для показа
+6. **Approval gate** `tech.process_plan_from_drawing` — показать материал, заготовку, КИМ, маршрут; ждать решения
+7. `tech.normcontrol_check` — проверить план по ГОСТ 3.1102/3.1118/3.1404/3.1107/3.1127
+8. Если passed → action chips [Утвердить ТП] [Экспорт МК+ОК]; если failed → список замечаний
+
+**What can fail**:
+- Чертёж не проанализирован → шаг 2 запускает анализ автоматически
+- `tech.generate_tp_from_drawing` — Celery offline → task pending; `docker logs celery-worker-1 | grep tp_generation`
+- Нормоконтроль выдаёт ошибки → план не утверждается, нужно исправить замечания
+- Approval gate отклонён → сценарий завершается без утверждения
+
+**Debug**:
+```bash
+# Просмотреть трейсы сценария
+curl http://localhost/api/scenarios/traces?scenario_name=tp_from_drawing
+
+# Список планов ТП
+curl http://localhost/api/technology/process-plans
+
+# Нормоконтроль конкретного плана
+curl -X POST http://localhost/api/technology/process-plans/<UUID>/normcontrol
+```
+
+---
+
+## Scenario 10: Складской приход (Warehouse Receipt)
+
+**Trigger**: Событие `invoice.approved` — когда счёт утверждается  
+**Goal**: Автоматически создать черновой приходный ордер из строк счёта
+
+**Flow**:
+1. `invoice.get` — загрузить данные счёта
+2. `warehouse.list_receipts` — проверить, нет ли уже ордера для этого счёта (дедупликация)
+3. `invoice.receive` (condition: нет существующих ордеров) — создать черновой ордер из строк счёта
+
+**What can fail**:
+- Счёт уже имеет приходный ордер → шаг 3 пропускается (condition false)
+- `invoice.receive` возвращает ошибку → `on_error: continue`, ордер не создаётся
+
+**Debug**:
+```bash
+# Список приходных ордеров по счёту
+curl "http://localhost/api/warehouse/receipts?invoice_id=<UUID>"
+
+# Трейс исполнения сценария
+curl http://localhost/api/scenarios/traces?scenario_name=warehouse_receipt
+```
+
+---
+
+## Scenario 11: Proactive Low Stock Alert
+
+**Trigger**: Cron `0 9 * * *` — ежедневно в 09:00  
+**Goal**: Найти складские позиции ниже минимума и уведомить закупщика
+
+**Flow**:
+1. `warehouse.low_stock` — получить список позиций ниже минимального запаса
+2. `bom.list` (approved) — загрузить утверждённые спецификации для контекста
+3. Уведомление в дашборд: «Обнаружено N позиций ниже минимума»
+
+**Debug**:
+```bash
+# Принудительный запуск
+curl -X POST http://localhost/api/scenarios/low_stock_alert/run -d '{}'
+
+# Трейс
+curl http://localhost/api/scenarios/traces?scenario_name=low_stock_alert
+```
+
+---
+
 ## Common Debugging Commands
 
 ```bash

@@ -178,6 +178,98 @@ def generate_registry() -> dict:
     }
 
 
+def generate_markdown(registry: dict) -> str:
+    """Generate docs/skills-api-reference.md from registry."""
+    tools: list[dict] = registry.get("tools", [])
+    total = len(tools)
+
+    # Group by category
+    by_cat: dict[str, list[dict]] = {}
+    for t in tools:
+        cat = t.get("category", "other")
+        by_cat.setdefault(cat, []).append(t)
+
+    cat_labels = {
+        "anomalies": "Anomalies",
+        "approvals": "Approvals",
+        "boms": "BOMs",
+        "calendar": "Calendar",
+        "canvas": "Canvas",
+        "collections": "Collections",
+        "compare": "Compare (КП)",
+        "dashboard": "Dashboard",
+        "documents": "Documents",
+        "email": "Email",
+        "email_templates": "Email Templates",
+        "graph": "Graph",
+        "invoices": "Invoices",
+        "mailbox": "Mailboxes",
+        "memory": "Memory",
+        "normalization": "Normalization",
+        "ntd": "NTD / Technology",
+        "payments": "Payments",
+        "procurement": "Procurement",
+        "quarantine": "Quarantine",
+        "search": "Search & NL",
+        "suppliers": "Suppliers",
+        "tables": "Tables & Export",
+        "technology": "Technology Cards",
+        "warehouse": "Warehouse",
+        "workspace": "Workspace",
+    }
+
+    lines: list[str] = [
+        "# AiAgent Skills API Reference",
+        "",
+        f"*Auto-generated from FastAPI Pydantic schemas. Version 2. Total: {total} skills.*",
+        "",
+        "> **Usage**: agent calls `POST /api/agent/cap/{capability}` with `{\"action\": \"...\"}`. See [ADR 001](adrs/001-capability-routing.md).",
+        "",
+        "## Table of Contents",
+        "",
+    ]
+
+    for cat_key in sorted(by_cat):
+        label = cat_labels.get(cat_key, cat_key.title())
+        count = len(by_cat[cat_key])
+        anchor = label.lower().replace(" ", "-").replace("(", "").replace(")", "").replace("/", "").replace("&", "").strip("-")
+        lines.append(f"- [{label} ({count})](#{anchor})")
+
+    for cat_key in sorted(by_cat):
+        label = cat_labels.get(cat_key, cat_key.title())
+        lines += ["", f"## {label}", ""]
+        for skill in sorted(by_cat[cat_key], key=lambda s: s["name"]):
+            gate = " ⛔ **approval gate**" if skill.get("approval_required") else ""
+            lines.append(f"### `{skill['name']}`{gate}")
+            lines.append("")
+            desc = skill.get("description", "").split("Skill:")[0].strip()
+            if not desc:
+                desc = skill.get("name", "")
+            lines.append(desc)
+            lines.append("")
+            lines.append(f"**`{skill['method']} {skill['path']}`**")
+            lines.append("")
+
+            params = skill.get("parameters", {})
+            props = params.get("properties", {}) if params else {}
+            required_fields = set(params.get("required", []) if params else [])
+            if props:
+                lines += [
+                    "**Parameters:**",
+                    "",
+                    "| Field | Type | Required | Description |",
+                    "|-------|------|----------|-------------|",
+                ]
+                for field, schema in sorted(props.items()):
+                    ftype = schema.get("type", schema.get("anyOf", [{}])[0].get("type", "any") if schema.get("anyOf") else "any")
+                    req = "✓" if field in required_fields else ""
+                    fdesc = schema.get("description", schema.get("title", "").replace("_", " ").title())
+                    lines.append(f"| `{field}` | `{ftype}` | {req} | {fdesc} |")
+                lines.append("")
+
+    return "\n".join(lines) + "\n"
+
+
 def main():
     registry = generate_registry()
 
@@ -200,6 +292,14 @@ def main():
         json.dump(registry, f, indent=2, ensure_ascii=False)
 
     print(f"JSON copy → {json_path}")
+
+    # Generate Markdown reference
+    md_path = (
+        Path(__file__).parent.parent.parent.parent / "docs" / "skills-api-reference.md"
+    )
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(generate_markdown(registry), encoding="utf-8")
+    print(f"Markdown reference → {md_path}")
 
 
 if __name__ == "__main__":

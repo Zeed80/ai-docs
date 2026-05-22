@@ -1,6 +1,6 @@
 # AiAgent Skills API Reference
 
-*Auto-generated from FastAPI Pydantic schemas. Version 1. Total: 220 skills.*
+*Auto-generated from FastAPI Pydantic schemas. Version 2. Total: 229 skills.*
 
 > **Usage**: agent calls `POST /api/agent/cap/{capability}` with `{"action": "..."}`. See [ADR 001](adrs/001-capability-routing.md).
 
@@ -29,7 +29,7 @@
 - [Search & NL (5)](#search--nl)
 - [Suppliers (9)](#suppliers)
 - [Tables & Export (10)](#tables--export)
-- [Technology Cards (19)](#technology-cards)
+- [Technology Cards (28)](#technology-cards)
 - [Warehouse (15)](#warehouse)
 - [Workspace (7)](#workspace)
 
@@ -37,7 +37,7 @@
 
 ### `anomaly.check_all`
 
-Run all anomaly detectors on an invoice.
+anomaly.check_all
 
 **`POST /api/anomalies/check`**
 
@@ -45,12 +45,12 @@ Run all anomaly detectors on an invoice.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `invoice_id` | `string` |  | Invoice Id |
 | `document_id` | `string` |  | Document Id |
+| `invoice_id` | `string` |  | Invoice Id |
 
 ### `anomaly.create_card`
 
-Manually create an anomaly card.
+anomaly.create_card
 
 **`POST /api/anomalies`**
 
@@ -59,22 +59,28 @@ Manually create an anomaly card.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `anomaly_type` | `string` | ✓ | Anomaly Type |
-| `severity` | `string` |  | Severity |
-| `entity_type` | `string` | ✓ | Entity Type |
-| `entity_id` | `string` | ✓ | Entity Id |
-| `title` | `string` | ✓ | Title |
 | `description` | `string` |  | Description |
 | `details` | `object` |  | Details |
+| `entity_id` | `string` | ✓ | Entity Id |
+| `entity_type` | `string` | ✓ | Entity Type |
+| `severity` | `string` |  | Severity |
+| `title` | `string` | ✓ | Title |
+
+### `anomaly.explain`
+
+anomaly.explain
+
+**`GET /api/anomalies/{anomaly_id}/explain`**
 
 ### `anomaly.list`
 
-List anomaly cards.
+anomaly.list
 
 **`GET /api/anomalies`**
 
 ### `anomaly.resolve` ⛔ **approval gate**
 
-Resolve an anomaly (approval gate).
+anomaly.resolve
 
 **`POST /api/anomalies/{anomaly_id}/resolve`**
 
@@ -82,20 +88,21 @@ Resolve an anomaly (approval gate).
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `resolution` | `string` | ✓ | Resolution |
 | `comment` | `string` |  | Comment |
+| `resolution` | `string` | ✓ | Resolution |
 
-### `anomaly.explain`
-
-Get human-readable explanation of an anomaly.
-
-**`GET /api/anomalies/{anomaly_id}/explain`**
 
 ## Approvals
 
+### `approval.list_pending`
+
+approval.list_pending
+
+**`GET /api/approvals/pending`**
+
 ### `approval.request`
 
-Request human approval. Blocks agent.
+approval.request
 
 **`POST /api/approvals`**
 
@@ -103,75 +110,71 @@ Request human approval. Blocks agent.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `action_type` | `?` | ✓ |  |
-| `entity_type` | `string` | ✓ | Entity Type |
-| `entity_id` | `string` | ✓ | Entity Id |
-| `requested_by` | `string` |  | Requested By |
+| `action_type` | `any` | ✓ |  |
 | `assigned_to` | `string` |  | Assigned To |
 | `context` | `object` |  | Context |
+| `entity_id` | `string` | ✓ | Entity Id |
+| `entity_type` | `string` | ✓ | Entity Type |
 | `expires_at` | `string` |  | Expires At |
-
-### `approval.list_pending`
-
-List pending approvals (excludes dormant chain steps).
-
-**`GET /api/approvals/pending`**
+| `requested_by` | `string` |  | Requested By |
 
 ### `approval.status`
 
-Check approval status.
+approval.status
 
 **`GET /api/approvals/{approval_id}`**
 
+
 ## BOMs
-
-### `bom.list`
-
-List BOMs (bill of materials).
-
-**`GET /api/boms`**
-
-### `bom.create`
-
-Create a new BOM.
-
-**`POST /api/boms`**
-
-### `bom.get`
-
-Get BOM with all lines.
-
-**`GET /api/boms/{bom_id}`**
-
-### `bom.update`
-
-Update BOM metadata.
-
-**`PATCH /api/boms/{bom_id}`**
 
 ### `bom.approve` ⛔ **approval gate**
 
-Approve BOM (approval gate).
+bom.approve
 
 **`POST /api/boms/{bom_id}/approve`**
 
-### `bom.stock_check`
+### `bom.create`
 
-Check inventory availability for BOM production.
+bom.create
 
-**`GET /api/boms/{bom_id}/stock-check`**
+**`POST /api/boms`**
 
 ### `bom.create_purchase_request` ⛔ **approval gate**
 
-Create purchase request from BOM shortage (approval gate).
+bom.create_purchase_request
 
 **`POST /api/boms/{bom_id}/create-purchase-request`**
+
+### `bom.get`
+
+bom.get
+
+**`GET /api/boms/{bom_id}`**
+
+### `bom.list`
+
+bom.list
+
+**`GET /api/boms`**
+
+### `bom.stock_check`
+
+bom.stock_check
+
+**`GET /api/boms/{bom_id}/stock-check`**
+
+### `bom.update`
+
+bom.update
+
+**`PATCH /api/boms/{bom_id}`**
+
 
 ## Calendar
 
 ### `calendar.create_event`
 
-Create a calendar event.
+calendar.create_event
 
 **`POST /api/calendar/events`**
 
@@ -179,22 +182,32 @@ Create a calendar event.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `title` | `string` | ✓ | Title |
+| `entity_id` | `string` |  | Entity Id |
+| `entity_type` | `string` |  | Entity Type |
 | `event_date` | `string` | ✓ | Event Date |
 | `event_type` | `string` | ✓ | Event Type |
-| `entity_type` | `string` |  | Entity Type |
-| `entity_id` | `string` |  | Entity Id |
 | `source` | `string` |  | Source |
+| `title` | `string` | ✓ | Title |
 
-### `calendar.list_events`
+### `calendar.create_reminder`
 
-List calendar events with filters.
+calendar.create_reminder
 
-**`GET /api/calendar/events`**
+**`POST /api/calendar/reminders`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `calendar_event_id` | `string` |  | Calendar Event Id |
+| `entity_id` | `string` | ✓ | Entity Id |
+| `entity_type` | `string` | ✓ | Entity Type |
+| `message` | `string` | ✓ | Message |
+| `remind_at` | `string` | ✓ | Remind At |
 
 ### `calendar.extract_dates`
 
-Extract dates from invoice and create events.
+calendar.extract_dates
 
 **`POST /api/calendar/extract-dates`**
 
@@ -204,84 +217,51 @@ Extract dates from invoice and create events.
 |-------|------|----------|-------------|
 | `invoice_id` | `string` | ✓ | Invoice Id |
 
-### `calendar.upcoming`
-
-Get upcoming events and pending reminders.
-
-**`GET /api/calendar/upcoming`**
-
-### `calendar.create_reminder`
-
-Create a reminder.
-
-**`POST /api/calendar/reminders`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `entity_type` | `string` | ✓ | Entity Type |
-| `entity_id` | `string` | ✓ | Entity Id |
-| `remind_at` | `string` | ✓ | Remind At |
-| `message` | `string` | ✓ | Message |
-| `calendar_event_id` | `string` |  | Calendar Event Id |
-
-### `calendar.list_reminders`
-
-List reminders.
-
-**`GET /api/calendar/reminders`**
-
 ### `calendar.generate_followup`
 
-Create a follow-up draft email for an invoice reminder.
+calendar.generate_followup
 
 **`POST /api/calendar/reminders/{reminder_id}/generate-followup`**
 
+### `calendar.list_events`
+
+calendar.list_events
+
+**`GET /api/calendar/events`**
+
+### `calendar.list_reminders`
+
+calendar.list_reminders
+
+**`GET /api/calendar/reminders`**
+
 ### `calendar.mark_sent`
 
-Mark a reminder as sent.
+calendar.mark_sent
 
 **`POST /api/calendar/reminders/{reminder_id}/mark-sent`**
+
+### `calendar.upcoming`
+
+calendar.upcoming
+
+**`GET /api/calendar/upcoming`**
+
 
 ## Canvas
 
 ### `canvas.publish`
 
-Publish a rich content block to the existing Workspace.
+canvas.publish
 
 **`POST /api/canvas/publish`**
 
+
 ## Collections
-
-### `collection.create`
-
-Create a new collection.
-
-**`POST /api/collections`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | `string` | ✓ | Name |
-| `description` | `string` |  | Description |
-
-### `collection.list`
-
-List collections.
-
-**`GET /api/collections`**
-
-### `collection.get`
-
-Get collection with items.
-
-**`GET /api/collections/{collection_id}`**
 
 ### `collection.add`
 
-Add item to collection.
+collection.add
 
 **`POST /api/collections/{collection_id}/items`**
 
@@ -289,33 +269,65 @@ Add item to collection.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `entity_type` | `string` | ✓ | Entity Type |
 | `entity_id` | `string` | ✓ | Entity Id |
+| `entity_type` | `string` | ✓ | Entity Type |
 | `note` | `string` |  | Note |
+
+### `collection.create`
+
+collection.create
+
+**`POST /api/collections`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `description` | `string` |  | Description |
+| `name` | `string` | ✓ | Name |
+
+### `collection.get`
+
+collection.get
+
+**`GET /api/collections/{collection_id}`**
+
+### `collection.list`
+
+collection.list
+
+**`GET /api/collections`**
+
+### `collection.search`
+
+collection.search
+
+**`GET /api/collections/{collection_id}/search`**
 
 ### `collection.summarize`
 
-Summarize collection contents.
+collection.summarize
 
 **`POST /api/collections/{collection_id}/summarize`**
 
 ### `collection.timeline`
 
-Get timeline of events for items in collection.
+collection.timeline
 
 **`GET /api/collections/{collection_id}/timeline`**
 
-### `collection.search`
-
-Search within a collection's items.
-
-**`GET /api/collections/{collection_id}/search`**
 
 ## Compare (КП)
 
+### `compare.align`
+
+compare.align
+
+**`POST /api/compare/{session_id}/align`**
+
 ### `compare.create`
 
-Create a comparison session for commercial offers.
+compare.create
 
 **`POST /api/compare`**
 
@@ -323,30 +335,12 @@ Create a comparison session for commercial offers.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | `string` | ✓ | Name |
 | `invoice_ids` | `array` | ✓ | Invoice Ids |
-
-### `compare.list`
-
-List comparison sessions.
-
-**`GET /api/compare`**
-
-### `compare.get`
-
-Get a comparison session.
-
-**`GET /api/compare/{session_id}`**
-
-### `compare.align`
-
-Align line items across invoices for comparison.
-
-**`POST /api/compare/{session_id}/align`**
+| `name` | `string` | ✓ | Name |
 
 ### `compare.decide` ⛔ **approval gate**
 
-Choose a supplier (approval gate).
+compare.decide
 
 **`POST /api/compare/{session_id}/decide`**
 
@@ -357,76 +351,39 @@ Choose a supplier (approval gate).
 | `chosen_supplier_id` | `string` | ✓ | Chosen Supplier Id |
 | `reasoning` | `string` |  | Reasoning |
 
+### `compare.get`
+
+compare.get
+
+**`GET /api/compare/{session_id}`**
+
+### `compare.list`
+
+compare.list
+
+**`GET /api/compare`**
+
 ### `compare.summary`
 
-Get comparison summary with recommendation.
+compare.summary
 
 **`GET /api/compare/{session_id}/summary`**
+
 
 ## Dashboard
 
 ### `dashboard.today`
 
-Read counters and recent activity for today.
+dashboard.today
 
 **`GET /api/dashboard/today`**
 
+
 ## Documents
-
-### `doc.ingest`
-
-Accept file, store, create Document record.
-
-**`POST /api/documents/ingest`**
-
-### `doc.list`
-
-List documents with filters.
-
-**`GET /api/documents`**
-
-### `doc.workspace`
-
-List documents with compact pipeline summaries.
-
-**`GET /api/documents/workspace`**
-
-### `doc.get`
-
-Get document with extractions and links.
-
-**`GET /api/documents/{document_id}`**
-
-### `doc.bulk_delete` ⛔ **approval gate**
-
-Hard-delete selected documents and derived records.
-
-**`DELETE /api/documents/bulk-delete`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `document_ids` | `array` | ✓ | Document Ids |
-| `delete_files` | `boolean` |  | Delete Files |
-
-### `doc.batch_process`
-
-Trigger full processing for selected documents.
-
-**`POST /api/documents/batch/process`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `document_ids` | `array` | ✓ | Document Ids |
-| `force` | `boolean` |  | Force |
-| `build_scope` | `string` |  | Build Scope |
 
 ### `doc.batch_classify`
 
-Trigger classification for selected documents.
+doc.batch_classify
 
 **`POST /api/documents/batch/classify`**
 
@@ -434,13 +391,13 @@ Trigger classification for selected documents.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `build_scope` | `string` |  | Build Scope |
 | `document_ids` | `array` | ✓ | Document Ids |
 | `force` | `boolean` |  | Force |
-| `build_scope` | `string` |  | Build Scope |
 
 ### `doc.batch_embeddings_reindex`
 
-Queue embedding rebuild for selected documents.
+doc.batch_embeddings_reindex
 
 **`POST /api/documents/batch/embeddings-reindex`**
 
@@ -448,13 +405,13 @@ Queue embedding rebuild for selected documents.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `build_scope` | `string` |  | Build Scope |
 | `document_ids` | `array` | ✓ | Document Ids |
 | `force` | `boolean` |  | Force |
-| `build_scope` | `string` |  | Build Scope |
 
 ### `doc.batch_memory_rebuild`
 
-Rebuild graph memory for selected documents.
+doc.batch_memory_rebuild
 
 **`POST /api/documents/batch/memory-rebuild`**
 
@@ -462,13 +419,13 @@ Rebuild graph memory for selected documents.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `build_scope` | `string` |  | Build Scope |
 | `document_ids` | `array` | ✓ | Document Ids |
 | `force` | `boolean` |  | Force |
-| `build_scope` | `string` |  | Build Scope |
 
 ### `doc.batch_ntd_check` ⛔ **approval gate**
 
-Run manual NTD checks for selected documents.
+doc.batch_ntd_check
 
 **`POST /api/documents/batch/ntd-check`**
 
@@ -476,100 +433,46 @@ Run manual NTD checks for selected documents.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `build_scope` | `string` |  | Build Scope |
 | `document_ids` | `array` | ✓ | Document Ids |
 | `force` | `boolean` |  | Force |
+
+### `doc.batch_process`
+
+doc.batch_process
+
+**`POST /api/documents/batch/process`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
 | `build_scope` | `string` |  | Build Scope |
+| `document_ids` | `array` | ✓ | Document Ids |
+| `force` | `boolean` |  | Force |
 
-### `doc.management`
+### `doc.bulk_delete` ⛔ **approval gate**
 
-Read document pipeline, memory, graph and NTD status.
+doc.bulk_delete
 
-**`GET /api/documents/{document_id}/management`**
-
-### `doc.update`
-
-Update document fields.
-
-**`PATCH /api/documents/{document_id}`**
+**`DELETE /api/documents/bulk-delete`**
 
 **Parameters:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `file_name` | `string` |  | File Name |
-| `doc_type` | `?` |  |  |
-| `status` | `?` |  |  |
-| `source_channel` | `string` |  | Source Channel |
-| `manual_doc_type_override` | `boolean` |  | Manual Doc Type Override |
-| `metadata` | `object` |  | Metadata |
-
-### `doc.link`
-
-Link document to an entity.
-
-**`POST /api/documents/{document_id}/links`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `linked_entity_type` | `string` | ✓ | Linked Entity Type |
-| `linked_entity_id` | `string` | ✓ | Linked Entity Id |
-| `link_type` | `string` |  | Link Type |
-
-### `doc.link_update`
-
-Edit an explicit document dependency link.
-
-**`PATCH /api/documents/{document_id}/links/{link_id}`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `linked_entity_type` | `string` |  | Linked Entity Type |
-| `linked_entity_id` | `string` |  | Linked Entity Id |
-| `link_type` | `string` |  | Link Type |
-
-### `doc.link_delete`
-
-Remove an explicit document dependency link.
-
-**`DELETE /api/documents/{document_id}/links/{link_id}`**
-
-### `doc.dependencies`
-
-Search explicit links and graph dependencies for a document.
-
-**`GET /api/documents/{document_id}/dependencies`**
+| `delete_files` | `boolean` |  | Delete Files |
+| `document_ids` | `array` | ✓ | Document Ids |
 
 ### `doc.classify`
 
-Trigger document classification via AI.
+doc.classify
 
 **`POST /api/documents/{document_id}/classify`**
 
-### `doc.extract`
-
-Trigger full extraction pipeline (classify → extract → validate).
-
-**`POST /api/documents/{document_id}/extract`**
-
-### `doc.memory_rebuild`
-
-Rebuild graph memory for one document.
-
-**`POST /api/documents/{document_id}/memory/rebuild`**
-
-### `doc.delete`
-
-Hard-delete a document and all derived records.
-
-**`DELETE /api/documents/{document_id}`**
-
 ### `doc.correct_field`
 
-Human correction of an extracted field.
+doc.correct_field
 
 **`POST /api/documents/{document_id}/correct-field`**
 
@@ -577,20 +480,145 @@ Human correction of an extracted field.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `field_name` | `string` | ✓ | Field Name |
 | `corrected_value` | `string` | ✓ | Corrected Value |
+| `field_name` | `string` | ✓ | Field Name |
+
+### `doc.delete`
+
+doc.delete
+
+**`DELETE /api/documents/{document_id}`**
+
+### `doc.dependencies`
+
+doc.dependencies
+
+**`GET /api/documents/{document_id}/dependencies`**
+
+### `doc.extract`
+
+doc.extract
+
+**`POST /api/documents/{document_id}/extract`**
+
+### `doc.get`
+
+doc.get
+
+**`GET /api/documents/{document_id}`**
+
+### `doc.ingest`
+
+doc.ingest
+
+**`POST /api/documents/ingest`**
+
+### `doc.link`
+
+doc.link
+
+**`POST /api/documents/{document_id}/links`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `link_type` | `string` |  | Link Type |
+| `linked_entity_id` | `string` | ✓ | Linked Entity Id |
+| `linked_entity_type` | `string` | ✓ | Linked Entity Type |
+
+### `doc.link_delete`
+
+doc.link_delete
+
+**`DELETE /api/documents/{document_id}/links/{link_id}`**
+
+### `doc.link_update`
+
+doc.link_update
+
+**`PATCH /api/documents/{document_id}/links/{link_id}`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `link_type` | `string` |  | Link Type |
+| `linked_entity_id` | `string` |  | Linked Entity Id |
+| `linked_entity_type` | `string` |  | Linked Entity Type |
+
+### `doc.list`
+
+doc.list
+
+**`GET /api/documents`**
+
+### `doc.management`
+
+doc.management
+
+**`GET /api/documents/{document_id}/management`**
+
+### `doc.memory_rebuild`
+
+doc.memory_rebuild
+
+**`POST /api/documents/{document_id}/memory/rebuild`**
 
 ### `doc.summarize`
 
-Generate AI summary of a document.
+doc.summarize
 
 **`POST /api/documents/{document_id}/summarize`**
 
+### `doc.update`
+
+doc.update
+
+**`PATCH /api/documents/{document_id}`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `doc_type` | `any` |  |  |
+| `file_name` | `string` |  | File Name |
+| `manual_doc_type_override` | `boolean` |  | Manual Doc Type Override |
+| `metadata_` | `object` |  | Metadata |
+| `source_channel` | `string` |  | Source Channel |
+| `status` | `any` |  |  |
+
+### `doc.workspace`
+
+doc.workspace
+
+**`GET /api/documents/workspace`**
+
+
 ## Email
+
+### `email.draft`
+
+email.draft
+
+**`POST /api/email/drafts`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `body_html` | `string` | ✓ | Body Html |
+| `body_text` | `string` |  | Body Text |
+| `cc_addresses` | `array` |  | Cc Addresses |
+| `context` | `object` |  | Context |
+| `subject` | `string` | ✓ | Subject |
+| `supplier_id` | `string` |  | Supplier Id |
+| `thread_id` | `string` |  | Thread Id |
+| `to_addresses` | `array` | ✓ | To Addresses |
 
 ### `email.fetch_new`
 
-Check for new emails via IMAP.
+email.fetch_new
 
 **`POST /api/email/fetch`**
 
@@ -600,9 +628,39 @@ Check for new emails via IMAP.
 |-------|------|----------|-------------|
 | `mailbox` | `string` |  | Mailbox |
 
+### `email.get_thread`
+
+email.get_thread
+
+**`GET /api/email/threads/{thread_id}`**
+
+### `email.list_drafts`
+
+email.list_drafts
+
+**`GET /api/email/drafts`**
+
+### `email.list_threads`
+
+email.list_threads
+
+**`GET /api/email/threads`**
+
+### `email.read`
+
+email.read
+
+**`GET /api/email/{email_id}`**
+
+### `email.risk_check`
+
+email.risk_check
+
+**`POST /api/email/drafts/{draft_id}/risk-check`**
+
 ### `email.search`
 
-Search emails by query, supplier, or address.
+email.search
 
 **`POST /api/email/search`**
 
@@ -610,52 +668,21 @@ Search emails by query, supplier, or address.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `email_address` | `string` |  | Email Address |
+| `limit` | `integer` |  | Limit |
+| `mailbox` | `string` |  | Mailbox |
 | `query` | `string` |  | Query |
 | `supplier_id` | `string` |  | Supplier Id |
-| `email_address` | `string` |  | Email Address |
-| `mailbox` | `string` |  | Mailbox |
-| `limit` | `integer` |  | Limit |
 
-### `email.list_threads`
+### `email.send` ⛔ **approval gate**
 
-List email threads.
+email.send
 
-**`GET /api/email/threads`**
-
-### `email.get_thread`
-
-Get thread with all messages.
-
-**`GET /api/email/threads/{thread_id}`**
-
-### `email.draft`
-
-Create email draft.
-
-**`POST /api/email/drafts`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `to_addresses` | `array` | ✓ | To Addresses |
-| `cc_addresses` | `array` |  | Cc Addresses |
-| `subject` | `string` | ✓ | Subject |
-| `body_html` | `string` | ✓ | Body Html |
-| `body_text` | `string` |  | Body Text |
-| `thread_id` | `string` |  | Thread Id |
-| `supplier_id` | `string` |  | Supplier Id |
-| `context` | `object` |  | Context |
-
-### `email.list_drafts`
-
-List email drafts.
-
-**`GET /api/email/drafts`**
+**`POST /api/email/drafts/{draft_id}/send`**
 
 ### `email.style_match`
 
-Analyze communication style with a counterparty.
+email.style_match
 
 **`POST /api/email/style-analyze`**
 
@@ -663,25 +690,13 @@ Analyze communication style with a counterparty.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `supplier_id` | `string` |  | Supplier Id |
 | `email_address` | `string` |  | Email Address |
 | `sample_count` | `integer` |  | Sample Count |
-
-### `email.risk_check`
-
-Check email draft for risks before sending.
-
-**`POST /api/email/drafts/{draft_id}/risk-check`**
-
-### `email.send` ⛔ **approval gate**
-
-Send email draft via SMTP (approval gate).
-
-**`POST /api/email/drafts/{draft_id}/send`**
+| `supplier_id` | `string` |  | Supplier Id |
 
 ### `email.suggest_template`
 
-Suggest email template by context.
+email.suggest_template
 
 **`POST /api/email/suggest-template`**
 
@@ -690,123 +705,61 @@ Suggest email template by context.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `context_type` | `string` | ✓ | Context Type |
-| `supplier_id` | `string` |  | Supplier Id |
 | `invoice_id` | `string` |  | Invoice Id |
 | `language` | `string` |  | Language |
+| `supplier_id` | `string` |  | Supplier Id |
 
-### `email.read`
-
-Read email message with attachments.
-
-**`GET /api/email/{email_id}`**
 
 ## Email Templates
 
-### `email.templates.list`
-
-List email templates with optional filters.
-
-**`GET /api/email-templates/`**
-
 ### `email.templates.create`
 
-Create a new email template.
+email.templates.create
 
 **`POST /api/email-templates/`**
 
-### `email.templates.get`
-
-Get a template by ID.
-
-**`GET /api/email-templates/{template_id}`**
-
-### `email.templates.update`
-
-Update a custom template.
-
-**`PATCH /api/email-templates/{template_id}`**
-
 ### `email.templates.delete` ⛔ **approval gate**
 
-Delete a custom template.
+email.templates.delete
 
 **`DELETE /api/email-templates/{template_id}`**
 
 ### `email.templates.from_message`
 
-Create a template from an existing email.
+email.templates.from_message
 
 **`POST /api/email-templates/from-message`**
 
+### `email.templates.get`
+
+email.templates.get
+
+**`GET /api/email-templates/{template_id}`**
+
+### `email.templates.list`
+
+email.templates.list
+
+**`GET /api/email-templates/`**
+
 ### `email.templates.render`
 
-Render a template with variable substitution.
+email.templates.render
 
 **`POST /api/email-templates/{template_id}/render`**
 
+### `email.templates.update`
+
+email.templates.update
+
+**`PATCH /api/email-templates/{template_id}`**
+
+
 ## Graph
-
-### `graph.node_create`
-
-Create a graph memory node.
-
-**`POST /api/graph/nodes`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `node_type` | `string` | ✓ | Node Type |
-| `title` | `string` | ✓ | Title |
-| `canonical_key` | `string` |  | Canonical Key |
-| `entity_type` | `string` |  | Entity Type |
-| `entity_id` | `string` |  | Entity Id |
-| `summary` | `string` |  | Summary |
-| `aliases` | `array` |  | Aliases |
-| `confidence` | `number` |  | Confidence |
-| *…+1 more* | | | |
-
-### `graph.node_get`
-
-Get a graph memory node.
-
-**`GET /api/graph/nodes/{node_id}`**
-
-### `graph.edge_create`
-
-Link two graph memory nodes.
-
-**`POST /api/graph/edges`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `source_node_id` | `string` | ✓ | Source Node Id |
-| `target_node_id` | `string` | ✓ | Target Node Id |
-| `edge_type` | `string` | ✓ | Edge Type |
-| `confidence` | `number` |  | Confidence |
-| `reason` | `string` |  | Reason |
-| `source_document_id` | `string` |  | Source Document Id |
-| `source_document_version_id` | `string` |  | Source Document Version Id |
-| `evidence_span_id` | `string` |  | Evidence Span Id |
-| *…+1 more* | | | |
-
-### `graph.neighborhood`
-
-Get connected graph memory around a node.
-
-**`GET /api/graph/nodes/{node_id}/neighborhood`**
-
-### `graph.path`
-
-Find a short relationship path between two nodes.
-
-**`GET /api/graph/path`**
 
 ### `graph.chunk_create`
 
-Create a memory chunk for a document.
+graph.chunk_create
 
 **`POST /api/graph/chunks`**
 
@@ -814,19 +767,39 @@ Create a memory chunk for a document.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `bbox_data` | `object` |  | Bbox Data |
+| `chunk_index` | `integer` | ✓ | Chunk Index |
 | `document_id` | `string` | ✓ | Document Id |
 | `document_version_id` | `string` |  | Document Version Id |
-| `chunk_index` | `integer` | ✓ | Chunk Index |
+| `embedding_id` | `string` |  | Embedding Id |
+| `metadata_` | `object` |  | Metadata |
+| `page_number` | `integer` |  | Page Number |
 | `text` | `string` | ✓ | Text |
 | `token_count` | `integer` |  | Token Count |
-| `page_number` | `integer` |  | Page Number |
-| `bbox_data` | `object` |  | Bbox Data |
-| `embedding_id` | `string` |  | Embedding Id |
-| *…+1 more* | | | |
+
+### `graph.edge_create`
+
+graph.edge_create
+
+**`POST /api/graph/edges`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `confidence` | `number` |  | Confidence |
+| `edge_type` | `string` | ✓ | Edge Type |
+| `evidence_span_id` | `string` |  | Evidence Span Id |
+| `metadata_` | `object` |  | Metadata |
+| `reason` | `string` |  | Reason |
+| `source_document_id` | `string` |  | Source Document Id |
+| `source_document_version_id` | `string` |  | Source Document Version Id |
+| `source_node_id` | `string` | ✓ | Source Node Id |
+| `target_node_id` | `string` | ✓ | Target Node Id |
 
 ### `graph.evidence_create`
 
-Create source evidence span.
+graph.evidence_create
 
 **`POST /api/graph/evidence`**
 
@@ -834,19 +807,19 @@ Create source evidence span.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `bbox_data` | `object` |  | Bbox Data |
+| `chunk_id` | `string` |  | Chunk Id |
+| `confidence` | `number` |  | Confidence |
 | `document_id` | `string` | ✓ | Document Id |
 | `document_version_id` | `string` |  | Document Version Id |
-| `chunk_id` | `string` |  | Chunk Id |
 | `field_name` | `string` |  | Field Name |
-| `text` | `string` | ✓ | Text |
+| `metadata_` | `object` |  | Metadata |
 | `page_number` | `integer` |  | Page Number |
-| `bbox_data` | `object` |  | Bbox Data |
-| `confidence` | `number` |  | Confidence |
-| *…+1 more* | | | |
+| `text` | `string` | ✓ | Text |
 
 ### `graph.mention_create`
 
-Create a document entity mention.
+graph.mention_create
 
 **`POST /api/graph/mentions`**
 
@@ -854,25 +827,60 @@ Create a document entity mention.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `chunk_id` | `string` |  | Chunk Id |
+| `confidence` | `number` |  | Confidence |
 | `document_id` | `string` | ✓ | Document Id |
 | `document_version_id` | `string` |  | Document Version Id |
-| `chunk_id` | `string` |  | Chunk Id |
-| `node_id` | `string` |  | Node Id |
-| `mention_text` | `string` | ✓ | Mention Text |
-| `entity_type` | `string` | ✓ | Entity Type |
-| `start_offset` | `integer` |  | Start Offset |
 | `end_offset` | `integer` |  | End Offset |
-| *…+4 more* | | | |
+| `entity_type` | `string` | ✓ | Entity Type |
+| `evidence_span_id` | `string` |  | Evidence Span Id |
+| `extraction_method` | `string` |  | Extraction Method |
+| `mention_text` | `string` | ✓ | Mention Text |
+| `metadata_` | `object` |  | Metadata |
+| `node_id` | `string` |  | Node Id |
+| `start_offset` | `integer` |  | Start Offset |
 
-### `graph.review_list`
+### `graph.neighborhood`
 
-List graph memory links that need review.
+graph.neighborhood
 
-**`GET /api/graph/review`**
+**`GET /api/graph/nodes/{node_id}/neighborhood`**
+
+### `graph.node_create`
+
+graph.node_create
+
+**`POST /api/graph/nodes`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `aliases` | `array` |  | Aliases |
+| `canonical_key` | `string` |  | Canonical Key |
+| `confidence` | `number` |  | Confidence |
+| `entity_id` | `string` |  | Entity Id |
+| `entity_type` | `string` |  | Entity Type |
+| `metadata_` | `object` |  | Metadata |
+| `node_type` | `string` | ✓ | Node Type |
+| `summary` | `string` |  | Summary |
+| `title` | `string` | ✓ | Title |
+
+### `graph.node_get`
+
+graph.node_get
+
+**`GET /api/graph/nodes/{node_id}`**
+
+### `graph.path`
+
+graph.path
+
+**`GET /api/graph/path`**
 
 ### `graph.review_decide`
 
-Approve or reject a graph memory suggestion.
+graph.review_decide
 
 **`POST /api/graph/review/{item_id}/decide`**
 
@@ -881,58 +889,21 @@ Approve or reject a graph memory suggestion.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `action` | `string` | ✓ | Action |
-| `decided_by` | `string` |  | Decided By |
 | `comment` | `string` |  | Comment |
+| `decided_by` | `string` |  | Decided By |
+
+### `graph.review_list`
+
+graph.review_list
+
+**`GET /api/graph/review`**
+
 
 ## Invoices
 
-### `invoice.list`
-
-List invoices with filters.
-
-**`GET /api/invoices`**
-
-### `invoice.get`
-
-Get invoice with lines.
-
-**`GET /api/invoices/{invoice_id}`**
-
-### `invoice.extract`
-
-Re-run extraction on invoice's document.
-
-**`POST /api/invoices/{invoice_id}/re-extract`**
-
-### `invoice.validate`
-
-Run arithmetic and format validation on invoice.
-
-**`POST /api/invoices/{invoice_id}/validate`**
-
-### `invoice.update`
-
-Update invoice fields after human review.
-
-**`PATCH /api/invoices/{invoice_id}`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `invoice_number` | `string` |  | Invoice Number |
-| `invoice_date` | `string` |  | Invoice Date |
-| `due_date` | `string` |  | Due Date |
-| `validity_date` | `string` |  | Validity Date |
-| `currency` | `string` |  | Currency |
-| `subtotal` | `number` |  | Subtotal |
-| `tax_amount` | `number` |  | Tax Amount |
-| `total_amount` | `number` |  | Total Amount |
-| *…+2 more* | | | |
-
 ### `invoice.approve` ⛔ **approval gate**
 
-Approve invoice (approval gate).
+invoice.approve
 
 **`POST /api/invoices/{invoice_id}/approve`**
 
@@ -942,9 +913,60 @@ Approve invoice (approval gate).
 |-------|------|----------|-------------|
 | `comment` | `string` |  | Comment |
 
+### `invoice.bulk_delete` ⛔ **approval gate**
+
+invoice.bulk_delete
+
+**`DELETE /api/invoices`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `delete_all` | `boolean` |  | Delete All |
+| `ids` | `array` |  | Ids |
+| `status` | `any` |  |  |
+| `supplier_id` | `string` |  | Supplier Id |
+
+### `invoice.compare_prices`
+
+invoice.compare_prices
+
+**`GET /api/invoices/{invoice_id}/price-check`**
+
+### `invoice.delete` ⛔ **approval gate**
+
+invoice.delete
+
+**`DELETE /api/invoices/{invoice_id}`**
+
+### `invoice.extract`
+
+invoice.extract
+
+**`POST /api/invoices/{invoice_id}/re-extract`**
+
+### `invoice.get`
+
+invoice.get
+
+**`GET /api/invoices/{invoice_id}`**
+
+### `invoice.list`
+
+invoice.list
+
+**`GET /api/invoices`**
+
+### `invoice.receive`
+
+invoice.receive
+
+**`POST /api/invoices/{invoice_id}/receive`**
+
 ### `invoice.reject` ⛔ **approval gate**
 
-Reject invoice (approval gate).
+invoice.reject
 
 **`POST /api/invoices/{invoice_id}/reject`**
 
@@ -954,177 +976,78 @@ Reject invoice (approval gate).
 |-------|------|----------|-------------|
 | `reason` | `string` | ✓ | Reason |
 
-### `invoice.compare_prices`
+### `invoice.update`
 
-Compare line prices with previous invoices from same supplier.
+invoice.update
 
-**`GET /api/invoices/{invoice_id}/price-check`**
-
-### `invoice.delete` ⛔ **approval gate**
-
-Delete a single invoice and its lines.
-
-**`DELETE /api/invoices/{invoice_id}`**
-
-### `invoice.bulk_delete` ⛔ **approval gate**
-
-Bulk delete invoices by ids list, filter, or all.
-
-**`DELETE /api/invoices`**
+**`PATCH /api/invoices/{invoice_id}`**
 
 **Parameters:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `ids` | `array` |  | Ids |
-| `status` | `?` |  |  |
-| `supplier_id` | `string` |  | Supplier Id |
-| `delete_all` | `boolean` |  | Delete All |
+| `currency` | `string` |  | Currency |
+| `due_date` | `string` |  | Due Date |
+| `invoice_date` | `string` |  | Invoice Date |
+| `invoice_number` | `string` |  | Invoice Number |
+| `notes` | `string` |  | Notes |
+| `payment_id` | `string` |  | Payment Id |
+| `subtotal` | `number` |  | Subtotal |
+| `tax_amount` | `number` |  | Tax Amount |
+| `total_amount` | `number` |  | Total Amount |
+| `validity_date` | `string` |  | Validity Date |
 
-### `invoice.receive`
+### `invoice.validate`
 
-Create warehouse receipt from this invoice's lines.
+invoice.validate
 
-**`POST /api/invoices/{invoice_id}/receive`**
+**`POST /api/invoices/{invoice_id}/validate`**
+
 
 ## Mailboxes
 
 ### `mailbox.create` ⛔ **approval gate**
 
-Add a new IMAP/SMTP mailbox configuration.
+mailbox.create
 
 **`POST /api/mailbox/configs`**
 
-### `mailbox.list`
-
-List all configured mailboxes.
-
-**`GET /api/mailbox/configs`**
-
-### `mailbox.get`
-
-Get a mailbox configuration by ID.
-
-**`GET /api/mailbox/configs/{mailbox_id}`**
-
-### `mailbox.update`
-
-Update mailbox settings.
-
-**`PATCH /api/mailbox/configs/{mailbox_id}`**
-
 ### `mailbox.delete` ⛔ **approval gate**
 
-Remove a mailbox configuration.
+mailbox.delete
 
 **`DELETE /api/mailbox/configs/{mailbox_id}`**
 
+### `mailbox.get`
+
+mailbox.get
+
+**`GET /api/mailbox/configs/{mailbox_id}`**
+
+### `mailbox.list`
+
+mailbox.list
+
+**`GET /api/mailbox/configs`**
+
 ### `mailbox.test` ⛔ **approval gate**
 
-Test IMAP and SMTP connectivity.
+mailbox.test
 
 **`POST /api/mailbox/configs/{mailbox_id}/test`**
 
+### `mailbox.update`
+
+mailbox.update
+
+**`PATCH /api/mailbox/configs/{mailbox_id}`**
+
+
 ## Memory
-
-### `memory.search`
-
-Search graph nodes, chunks, and evidence spans.
-
-**`POST /api/memory/search`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `query` | `string` | ✓ | Query |
-| `node_types` | `array` |  | Node Types |
-| `document_id` | `string` |  | Document Id |
-| `scope` | `string` |  | Scope |
-| `limit` | `integer` |  | Limit |
-| `cursor` | `string` |  | Cursor |
-| `intent` | `string` |  | Intent |
-| `entity_hints` | `array` |  | Entity Hints |
-| *…+3 more* | | | |
-
-### `memory.prune`
-
-Delete old episodic memory facts by scope and kind.
-
-**`POST /api/memory/prune`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `scope` | `string` |  | Scope |
-| `kinds` | `array` |  | Kinds |
-| `older_than_days` | `integer` |  | Older Than Days |
-| `dry_run` | `boolean` |  | Dry Run |
-
-### `memory.explain`
-
-Search memory and return evidence with graph context.
-
-**`POST /api/memory/explain`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `query` | `string` | ✓ | Query |
-| `document_id` | `string` |  | Document Id |
-| `node_types` | `array` |  | Node Types |
-| `limit` | `integer` |  | Limit |
-| `neighborhood_depth` | `integer` |  | Neighborhood Depth |
-| `retrieval_mode` | `string` |  | Retrieval Mode |
-| `include_explain` | `boolean` |  | Include Explain |
-
-### `memory.embeddings_rebuild`
-
-Prepare chunk/evidence embeddings for Qdrant.
-
-**`POST /api/memory/embeddings/rebuild`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `document_id` | `string` |  | Document Id |
-| `content_types` | `array` |  | Content Types |
-| `collection_name` | `string` |  | Collection Name |
-| `embedding_model` | `string` |  | Embedding Model |
-| `vector_size` | `integer` |  | Vector Size |
-| `limit` | `integer` |  | Limit |
-| `mark_stale_existing` | `boolean` |  | Mark Stale Existing |
-
-### `memory.embeddings_stats`
-
-Show active embedding profile and record statuses.
-
-**`GET /api/memory/embeddings/stats`**
-
-### `memory.embeddings_rebuild_active`
-
-Rebuild records for active profile.
-
-**`POST /api/memory/embeddings/rebuild-active`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `document_id` | `string` |  | Document Id |
-| `content_types` | `array` |  | Content Types |
-| `collection_name` | `string` |  | Collection Name |
-| `embedding_model` | `string` |  | Embedding Model |
-| `vector_size` | `integer` |  | Vector Size |
-| `limit` | `integer` |  | Limit |
-| `mark_stale_existing` | `boolean` |  | Mark Stale Existing |
 
 ### `memory.embeddings_index_active`
 
-Index queued/stale memory records into Qdrant.
+memory.embeddings_index_active
 
 **`POST /api/memory/embeddings/index-active`**
 
@@ -1133,12 +1056,87 @@ Index queued/stale memory records into Qdrant.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `document_id` | `string` |  | Document Id |
-| `statuses` | `array` |  | Statuses |
 | `limit` | `integer` |  | Limit |
+| `statuses` | `array` |  | Statuses |
+
+### `memory.embeddings_rebuild`
+
+memory.embeddings_rebuild
+
+**`POST /api/memory/embeddings/rebuild`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `collection_name` | `string` |  | Collection Name |
+| `content_types` | `array` |  | Content Types |
+| `document_id` | `string` |  | Document Id |
+| `embedding_model` | `string` |  | Embedding Model |
+| `limit` | `integer` |  | Limit |
+| `mark_stale_existing` | `boolean` |  | Mark Stale Existing |
+| `vector_size` | `integer` |  | Vector Size |
+
+### `memory.embeddings_rebuild_active`
+
+memory.embeddings_rebuild_active
+
+**`POST /api/memory/embeddings/rebuild-active`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `collection_name` | `string` |  | Collection Name |
+| `content_types` | `array` |  | Content Types |
+| `document_id` | `string` |  | Document Id |
+| `embedding_model` | `string` |  | Embedding Model |
+| `limit` | `integer` |  | Limit |
+| `mark_stale_existing` | `boolean` |  | Mark Stale Existing |
+| `vector_size` | `integer` |  | Vector Size |
+
+### `memory.embeddings_stats`
+
+memory.embeddings_stats
+
+**`GET /api/memory/embeddings/stats`**
+
+### `memory.explain`
+
+memory.explain
+
+**`POST /api/memory/explain`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `document_id` | `string` |  | Document Id |
+| `include_explain` | `boolean` |  | Include Explain |
+| `limit` | `integer` |  | Limit |
+| `neighborhood_depth` | `integer` |  | Neighborhood Depth |
+| `node_types` | `array` |  | Node Types |
+| `query` | `string` | ✓ | Query |
+| `retrieval_mode` | `string` |  | Retrieval Mode |
+
+### `memory.prune`
+
+memory.prune
+
+**`POST /api/memory/prune`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `dry_run` | `boolean` |  | Dry Run |
+| `kinds` | `array` |  | Kinds |
+| `older_than_days` | `integer` |  | Older Than Days |
+| `scope` | `string` |  | Scope |
 
 ### `memory.reindex`
 
-Rebuild graph memory for existing documents.
+memory.reindex
 
 **`POST /api/memory/reindex`**
 
@@ -1147,34 +1145,37 @@ Rebuild graph memory for existing documents.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `document_ids` | `array` |  | Document Ids |
-| `rebuild` | `boolean` |  | Rebuild |
 | `limit` | `integer` |  | Limit |
+| `rebuild` | `boolean` |  | Rebuild |
 
-## Normalization
+### `memory.search`
 
-### `norm.list_rules`
+memory.search
 
-List normalization rules.
-
-**`GET /api/normalization/rules`**
-
-### `norm.suggest_rule`
-
-Detect repeated human corrections and propose rules.
-
-**`POST /api/normalization/suggest`**
+**`POST /api/memory/search`**
 
 **Parameters:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `cursor` | `string` |  | Cursor |
 | `document_id` | `string` |  | Document Id |
-| `field_name` | `string` |  | Field Name |
-| `min_corrections` | `integer` |  | Minimum repeated corrections to suggest a rule |
+| `entity_hints` | `array` |  | Entity Hints |
+| `include_explain` | `boolean` |  | Include Explain |
+| `intent` | `string` |  | Intent |
+| `limit` | `integer` |  | Limit |
+| `need_full_coverage` | `boolean` |  | Need Full Coverage |
+| `node_types` | `array` |  | Node Types |
+| `query` | `string` | ✓ | Query |
+| `retrieval_mode` | `string` |  | Retrieval Mode |
+| `scope` | `string` |  | Scope |
+
+
+## Normalization
 
 ### `norm.activate_rule` ⛔ **approval gate**
 
-Activate a proposed rule (approval gate).
+norm.activate_rule
 
 **`POST /api/normalization/rules/{rule_id}/activate`**
 
@@ -1186,7 +1187,7 @@ Activate a proposed rule (approval gate).
 
 ### `norm.apply_rules` ⛔ **approval gate**
 
-Apply active normalization rules to a document's extraction.
+norm.apply_rules
 
 **`POST /api/normalization/apply`**
 
@@ -1196,15 +1197,9 @@ Apply active normalization rules to a document's extraction.
 |-------|------|----------|-------------|
 | `document_id` | `string` | ✓ | Document Id |
 
-### `norm.list_norm_cards`
-
-List norm cards.
-
-**`GET /api/normalization/norm-cards`**
-
 ### `norm.create_norm_card`
 
-Create a norm card for a canonical item.
+norm.create_norm_card
 
 **`POST /api/normalization/norm-cards`**
 
@@ -1212,50 +1207,63 @@ Create a norm card for a canonical item.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `approved_by` | `string` |  | Approved By |
 | `canonical_item_id` | `string` | ✓ | Canonical Item Id |
-| `norm_qty` | `number` | ✓ | Norm Qty |
-| `unit` | `string` | ✓ | Unit |
-| `product_code` | `string` |  | Product Code |
 | `loss_factor` | `number` |  | Loss Factor |
+| `norm_qty` | `number` | ✓ | Norm Qty |
+| `notes` | `string` |  | Notes |
+| `product_code` | `string` |  | Product Code |
+| `unit` | `string` | ✓ | Unit |
 | `valid_from` | `string` |  | Valid From |
 | `valid_to` | `string` |  | Valid To |
-| `approved_by` | `string` |  | Approved By |
-| *…+1 more* | | | |
 
-### `norm.update_norm_card`
+### `norm.get_canonical_item`
 
-Update norm card values.
+norm.get_canonical_item
 
-**`PATCH /api/normalization/norm-cards/{card_id}`**
+**`GET /api/normalization/canonical-items/{item_id}`**
+
+### `norm.get_item_norm_cards`
+
+norm.get_item_norm_cards
+
+**`GET /api/normalization/canonical-items/{item_id}/norm-cards`**
+
+### `norm.list_canonical_items`
+
+norm.list_canonical_items
+
+**`GET /api/normalization/canonical-items`**
+
+### `norm.list_norm_cards`
+
+norm.list_norm_cards
+
+**`GET /api/normalization/norm-cards`**
+
+### `norm.list_rules`
+
+norm.list_rules
+
+**`GET /api/normalization/rules`**
+
+### `norm.suggest_rule`
+
+norm.suggest_rule
+
+**`POST /api/normalization/suggest`**
 
 **Parameters:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `norm_qty` | `number` |  | Norm Qty |
-| `unit` | `string` |  | Unit |
-| `product_code` | `string` |  | Product Code |
-| `loss_factor` | `number` |  | Loss Factor |
-| `valid_from` | `string` |  | Valid From |
-| `valid_to` | `string` |  | Valid To |
-| `approved_by` | `string` |  | Approved By |
-| `notes` | `string` |  | Notes |
-
-### `norm.list_canonical_items`
-
-List canonical items.
-
-**`GET /api/normalization/canonical-items`**
-
-### `norm.get_canonical_item`
-
-Get canonical item with classification fields.
-
-**`GET /api/normalization/canonical-items/{item_id}`**
+| `document_id` | `string` |  | Document Id |
+| `field_name` | `string` |  | Field Name |
+| `min_corrections` | `integer` |  | Minimum repeated corrections to suggest a rule |
 
 ### `norm.update_canonical_item`
 
-Update OKPD2, GOST, hazard class.
+norm.update_canonical_item
 
 **`PATCH /api/normalization/canonical-items/{item_id}`**
 
@@ -1263,247 +1271,239 @@ Update OKPD2, GOST, hazard class.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `okpd2_code` | `string` |  | Okpd2 Code |
 | `gost` | `string` |  | Gost |
 | `hazard_class` | `string` |  | Hazard Class |
+| `okpd2_code` | `string` |  | Okpd2 Code |
 
-### `norm.get_item_norm_cards`
+### `norm.update_norm_card`
 
-Get all norm cards for a canonical item.
+norm.update_norm_card
 
-**`GET /api/normalization/canonical-items/{item_id}/norm-cards`**
+**`PATCH /api/normalization/norm-cards/{card_id}`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `approved_by` | `string` |  | Approved By |
+| `loss_factor` | `number` |  | Loss Factor |
+| `norm_qty` | `number` |  | Norm Qty |
+| `notes` | `string` |  | Notes |
+| `product_code` | `string` |  | Product Code |
+| `unit` | `string` |  | Unit |
+| `valid_from` | `string` |  | Valid From |
+| `valid_to` | `string` |  | Valid To |
+
 
 ## NTD / Technology
 
+### `ntd.check_availability`
+
+ntd.check_availability
+
+**`GET /api/documents/{document_id}/ntd-check/availability`**
+
+### `ntd.check_get`
+
+ntd.check_get
+
+**`GET /api/ntd/checks/{check_id}`**
+
+### `ntd.check_list`
+
+ntd.check_list
+
+**`GET /api/documents/{document_id}/ntd-checks`**
+
+### `ntd.clause_create`
+
+ntd.clause_create
+
+**`POST /api/ntd/clauses`**
+
 ### `ntd.control_settings_get`
 
-Read NTD norm-control mode.
+ntd.control_settings_get
 
 **`GET /api/settings/ntd-control`**
 
 ### `ntd.control_settings_update` ⛔ **approval gate**
 
-Set manual or automatic NTD norm-control mode.
+ntd.control_settings_update
 
 **`PATCH /api/settings/ntd-control`**
 
-### `ntd.document_list`
-
-List normative documents.
-
-**`GET /api/ntd/documents`**
-
 ### `ntd.document_create`
 
-Create a normative document record.
+ntd.document_create
 
 **`POST /api/ntd/documents`**
 
 ### `ntd.document_create_from_source`
 
-Create and optionally index NTD from an uploaded document.
+ntd.document_create_from_source
 
 **`POST /api/ntd/documents/from-source`**
 
 ### `ntd.document_index`
 
-Parse source document text into NTD clauses and requirements.
+ntd.document_index
 
 **`POST /api/ntd/documents/{normative_document_id}/index`**
 
-### `ntd.clause_create`
+### `ntd.document_list`
 
-Create a normative document clause.
+ntd.document_list
 
-**`POST /api/ntd/clauses`**
+**`GET /api/ntd/documents`**
+
+### `ntd.finding_decide` ⛔ **approval gate**
+
+ntd.finding_decide
+
+**`POST /api/ntd/checks/{check_id}/findings/{finding_id}/decide`**
+
+### `ntd.norm_control_run` ⛔ **approval gate**
+
+ntd.norm_control_run
+
+**`POST /api/documents/{document_id}/ntd-check`**
+
+### `ntd.norm_control_run_payload` ⛔ **approval gate**
+
+ntd.norm_control_run_payload
+
+**`POST /api/ntd/checks/run`**
 
 ### `ntd.requirement_create`
 
-Create a normative requirement.
+ntd.requirement_create
 
 **`POST /api/ntd/requirements`**
 
 ### `ntd.requirement_search`
 
-Search SQL-first NTD requirements.
+ntd.requirement_search
 
 **`GET /api/ntd/requirements/search`**
 
-### `ntd.norm_control_run` ⛔ **approval gate**
-
-Check one document against applicable NTD.
-
-**`POST /api/documents/{document_id}/ntd-check`**
-
-### `ntd.check_availability`
-
-Explain whether NTD check can run for a document.
-
-**`GET /api/documents/{document_id}/ntd-check/availability`**
-
-### `ntd.norm_control_run_payload` ⛔ **approval gate**
-
-Check a document against applicable NTD.
-
-**`POST /api/ntd/checks/run`**
-
-### `ntd.check_list`
-
-List NTD checks for a document.
-
-**`GET /api/documents/{document_id}/ntd-checks`**
-
-### `ntd.check_get`
-
-Get NTD check details and findings.
-
-**`GET /api/ntd/checks/{check_id}`**
-
-### `ntd.finding_decide` ⛔ **approval gate**
-
-Record a human decision for an NTD finding.
-
-**`POST /api/ntd/checks/{check_id}/findings/{finding_id}/decide`**
 
 ## Payments
 
-### `payment.list_schedule`
-
-List payment schedules with filters.
-
-**`GET /api/payment-schedules`**
-
 ### `payment.create_schedule`
 
-Create payment schedule entry.
+payment.create_schedule
 
 **`POST /api/payment-schedules`**
 
-### `payment.overdue`
+### `payment.list_schedule`
 
-List overdue payments.
+payment.list_schedule
 
-**`GET /api/payment-schedules/overdue`**
-
-### `payment.upcoming`
-
-List upcoming payments within N days.
-
-**`GET /api/payment-schedules/upcoming`**
+**`GET /api/payment-schedules`**
 
 ### `payment.mark_paid` ⛔ **approval gate**
 
-Mark payment as paid (approval gate).
+payment.mark_paid
 
 **`POST /api/payment-schedules/{schedule_id}/mark-paid`**
 
+### `payment.overdue`
+
+payment.overdue
+
+**`GET /api/payment-schedules/overdue`**
+
 ### `payment.schedule_from_invoice`
 
-Create payment schedule from invoice due date and total.
+payment.schedule_from_invoice
 
 **`POST /api/invoices/{invoice_id}/schedule-payment`**
 
+### `payment.upcoming`
+
+payment.upcoming
+
+**`GET /api/payment-schedules/upcoming`**
+
+
 ## Procurement
-
-### `procurement.list_requests`
-
-List purchase requests.
-
-**`GET /api/purchase-requests`**
-
-### `procurement.create_request`
-
-Create a purchase request.
-
-**`POST /api/purchase-requests`**
-
-### `procurement.get_request`
-
-Get purchase request details.
-
-**`GET /api/purchase-requests/{req_id}`**
-
-### `procurement.update_request`
-
-Update purchase request.
-
-**`PATCH /api/purchase-requests/{req_id}`**
-
-### `procurement.send_rfq` ⛔ **approval gate**
-
-Generate RFQ draft emails to suppliers (approval gate).
-
-**`POST /api/purchase-requests/{req_id}/send-rfq`**
-
-### `procurement.list_contracts`
-
-List supplier contracts.
-
-**`GET /api/supplier-contracts`**
 
 ### `procurement.create_contract`
 
-Create supplier contract.
+procurement.create_contract
 
 **`POST /api/supplier-contracts`**
 
+### `procurement.create_request`
+
+procurement.create_request
+
+**`POST /api/purchase-requests`**
+
 ### `procurement.get_contract`
 
-Get contract details.
+procurement.get_contract
 
 **`GET /api/supplier-contracts/{contract_id}`**
 
+### `procurement.get_request`
+
+procurement.get_request
+
+**`GET /api/purchase-requests/{req_id}`**
+
+### `procurement.list_contracts`
+
+procurement.list_contracts
+
+**`GET /api/supplier-contracts`**
+
+### `procurement.list_requests`
+
+procurement.list_requests
+
+**`GET /api/purchase-requests`**
+
+### `procurement.send_rfq` ⛔ **approval gate**
+
+procurement.send_rfq
+
+**`POST /api/purchase-requests/{req_id}/send-rfq`**
+
 ### `procurement.update_contract`
 
-Update contract details.
+procurement.update_contract
 
 **`PATCH /api/supplier-contracts/{contract_id}`**
+
+### `procurement.update_request`
+
+procurement.update_request
+
+**`PATCH /api/purchase-requests/{req_id}`**
+
 
 ## Quarantine
 
 ### `quarantine.list`
 
-List files waiting for quarantine review.
+quarantine.list
 
 **`GET /api/quarantine`**
+
 
 ## Search & NL
 
 ### `doc.search`
 
-Hybrid search: Postgres FTS + ILIKE fallback.
+doc.search
 
 **`POST /api/search/documents`**
 
-### `search.nl_to_query`
-
-Convert natural language to structured query.
-
-**`POST /api/search/nl`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `query` | `string` | ✓ | Query |
-| `limit` | `integer` |  | Limit |
-
-### `search.nl`
-
-Skill: search.nl_to_query — Convert natural language to structured query.
-
-**`POST /api/search/nl`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `query` | `string` | ✓ | Query |
-| `limit` | `integer` |  | Limit |
-
 ### `search.hybrid`
 
-Vector similarity search via Qdrant + SQL filter fallback.
+search.hybrid
 
 **`POST /api/search/hybrid`**
 
@@ -1511,34 +1511,85 @@ Vector similarity search via Qdrant + SQL filter fallback.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `query` | `string` | ✓ | Query |
 | `doc_type` | `string` |  | Doc Type |
-| `status` | `string` |  | Status |
 | `limit` | `integer` |  | Limit |
+| `query` | `string` | ✓ | Query |
+| `status` | `string` |  | Status |
+
+### `search.nl`
+
+search.nl
+
+**`POST /api/search/nl`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `limit` | `integer` |  | Limit |
+| `query` | `string` | ✓ | Query |
+
+### `search.nl_to_query`
+
+search.nl_to_query
+
+**`POST /api/search/nl`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `limit` | `integer` |  | Limit |
+| `query` | `string` | ✓ | Query |
 
 ### `search.similar`
 
-Find entities similar to the given entity using vector search.
+search.similar
 
 **`GET /api/search/similar/{entity_type}/{entity_id}`**
 
+
 ## Suppliers
+
+### `supplier.alerts`
+
+supplier.alerts
+
+**`GET /api/suppliers/{supplier_id}/alerts`**
+
+### `supplier.check_requisites`
+
+supplier.check_requisites
+
+**`POST /api/suppliers/{supplier_id}/check-requisites`**
 
 ### `supplier.get`
 
-Get supplier profile with aggregated stats.
+supplier.get
 
 **`GET /api/suppliers/{supplier_id}`**
 
 ### `supplier.list`
 
-List suppliers/parties with trust score and invoice aggregates.
+supplier.list
 
 **`GET /api/suppliers`**
 
+### `supplier.list`
+
+supplier.list
+
+**`GET /api/suppliers`**
+
+### `supplier.price_history`
+
+supplier.price_history
+
+**`GET /api/suppliers/{supplier_id}/price-history`**
+
 ### `supplier.search`
 
-Search suppliers by name, INN, or address.
+supplier.search
 
 **`POST /api/suppliers/search`**
 
@@ -1546,36 +1597,18 @@ Search suppliers by name, INN, or address.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `query` | `string` | ✓ | Query |
 | `limit` | `integer` |  | Limit |
-
-### `supplier.price_history`
-
-Get price history for all items from this supplier.
-
-**`GET /api/suppliers/{supplier_id}/price-history`**
-
-### `supplier.check_requisites`
-
-Validate supplier requisites.
-
-**`POST /api/suppliers/{supplier_id}/check-requisites`**
+| `query` | `string` | ✓ | Query |
 
 ### `supplier.trust_score`
 
-Calculate supplier trust score.
+supplier.trust_score
 
 **`GET /api/suppliers/{supplier_id}/trust-score`**
 
-### `supplier.alerts`
-
-Get alerts for a supplier.
-
-**`GET /api/suppliers/{supplier_id}/alerts`**
-
 ### `supplier.update`
 
-Update supplier details.
+supplier.update
 
 **`PATCH /api/suppliers/{supplier_id}`**
 
@@ -1583,109 +1616,27 @@ Update supplier details.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | `string` |  | Name |
-| `inn` | `string` |  | Inn |
-| `kpp` | `string` |  | Kpp |
-| `ogrn` | `string` |  | Ogrn |
 | `address` | `string` |  | Address |
+| `bank_account` | `string` |  | Bank Account |
+| `bank_bik` | `string` |  | Bank Bik |
+| `bank_name` | `string` |  | Bank Name |
 | `contact_email` | `string` |  | Contact Email |
 | `contact_phone` | `string` |  | Contact Phone |
-| `bank_name` | `string` |  | Bank Name |
-| *…+6 more* | | | |
+| `corr_account` | `string` |  | Corr Account |
+| `inn` | `string` |  | Inn |
+| `kpp` | `string` |  | Kpp |
+| `name` | `string` |  | Name |
+| `notes` | `string` |  | Notes |
+| `ogrn` | `string` |  | Ogrn |
+| `user_notes` | `string` |  | User Notes |
+| `user_rating` | `integer` |  | User Rating |
 
-### `supplier.list`
-
-List all suppliers/parties.
-
-**`GET /api/suppliers`**
 
 ## Tables & Export
 
-### `table.query`
-
-Query table with filters, sort, pagination.
-
-**`POST /api/tables/query`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `table` | `string` |  | Table |
-| `columns` | `array` |  | Columns |
-| `filters` | `array` |  | Filters |
-| `sort` | `array` |  | Sort |
-| `search` | `string` |  | Search |
-| `offset` | `integer` |  | Offset |
-| `limit` | `integer` |  | Limit |
-
-### `table.export_excel`
-
-Export table to Excel/CSV.
-
-**`POST /api/tables/export`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `table` | `string` |  | Table |
-| `filters` | `array` |  | Filters |
-| `columns` | `array` |  | Columns |
-| `format` | `string` |  | Format |
-
-### `table.export_1c`
-
-Export invoices to 1С CommerceML XML format.
-
-**`POST /api/tables/export-1c`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `invoice_ids` | `array` |  | Invoice Ids |
-| `filters` | `array` |  | Filters |
-| `format` | `string` |  | Format |
-
-### `table.list_views`
-
-List saved table views.
-
-**`GET /api/tables/views`**
-
-### `table.create_view`
-
-Create a saved table view.
-
-**`POST /api/tables/views`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | `string` | ✓ | Name |
-| `table` | `string` |  | Table |
-| `columns` | `array` |  | Columns |
-| `filters` | `array` |  | Filters |
-| `sort` | `array` |  | Sort |
-| `is_shared` | `boolean` |  | Is Shared |
-
-### `table.delete_view`
-
-Delete a saved view.
-
-**`DELETE /api/tables/views/{view_id}`**
-
-### `table.import_excel` ⛔ **approval gate**
-
-Upload Excel, build diff for review.
-
-**`POST /api/tables/import`**
-
 ### `table.apply_diff` ⛔ **approval gate**
 
-Apply import diff rows to the database.
+table.apply_diff
 
 **`POST /api/tables/apply-diff`**
 
@@ -1695,23 +1646,9 @@ Apply import diff rows to the database.
 |-------|------|----------|-------------|
 | `rows` | `array` | ✓ | Rows |
 
-### `table.inline_edit`
-
-Edit a single cell value.
-
-**`POST /api/tables/inline-edit`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `entity_id` | `string` | ✓ | Entity Id |
-| `field` | `string` | ✓ | Field |
-| `value` | `string` | ✓ | Value |
-
 ### `table.batch_action`
 
-Apply action to multiple invoices.
+table.batch_action
 
 **`POST /api/tables/batch`**
 
@@ -1723,197 +1660,126 @@ Apply action to multiple invoices.
 | `entity_ids` | `array` | ✓ | Entity Ids |
 | `reason` | `string` |  | Reason |
 
+### `table.create_view`
+
+table.create_view
+
+**`POST /api/tables/views`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `columns` | `array` |  | Columns |
+| `filters` | `array` |  | Filters |
+| `is_shared` | `boolean` |  | Is Shared |
+| `name` | `string` | ✓ | Name |
+| `sort` | `array` |  | Sort |
+| `table` | `string` |  | Table |
+
+### `table.delete_view`
+
+table.delete_view
+
+**`DELETE /api/tables/views/{view_id}`**
+
+### `table.export_1c`
+
+table.export_1c
+
+**`POST /api/tables/export-1c`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `filters` | `array` |  | Filters |
+| `format` | `string` |  | Format |
+| `invoice_ids` | `array` |  | Invoice Ids |
+
+### `table.export_excel`
+
+table.export_excel
+
+**`POST /api/tables/export`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `columns` | `array` |  | Columns |
+| `filters` | `array` |  | Filters |
+| `format` | `string` |  | Format |
+| `table` | `string` |  | Table |
+
+### `table.import_excel` ⛔ **approval gate**
+
+table.import_excel
+
+**`POST /api/tables/import`**
+
+### `table.inline_edit`
+
+table.inline_edit
+
+**`POST /api/tables/inline-edit`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `entity_id` | `string` | ✓ | Entity Id |
+| `field` | `string` | ✓ | Field |
+| `value` | `string` | ✓ | Value |
+
+### `table.list_views`
+
+table.list_views
+
+**`GET /api/tables/views`**
+
+### `table.query`
+
+table.query
+
+**`POST /api/tables/query`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `columns` | `array` |  | Columns |
+| `filters` | `array` |  | Filters |
+| `limit` | `integer` |  | Limit |
+| `offset` | `integer` |  | Offset |
+| `search` | `string` |  | Search |
+| `sort` | `array` |  | Sort |
+| `table` | `string` |  | Table |
+
+
 ## Technology Cards
 
-### `tech.resource_list`
+### `tech.analyze_surfaces`
 
-List machines, tools, fixtures, and equipment.
+tech.analyze_surfaces
 
-**`GET /api/technology/resources`**
+**`POST /api/technology/process-plans/{plan_id}/analyze-surfaces`**
 
-### `tech.resource_create`
+### `tech.blank_spec_set`
 
-Create a manufacturing resource.
+tech.blank_spec_set
 
-**`POST /api/technology/resources`**
+**`POST /api/technology/process-plans/{plan_id}/blank-spec`**
 
-**Parameters:**
+### `tech.calculate_cutting_params`
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `resource_type` | `string` | ✓ | Resource Type |
-| `name` | `string` | ✓ | Name |
-| `code` | `string` |  | Code |
-| `model` | `string` |  | Model |
-| `standard` | `string` |  | Standard |
-| `capabilities` | `object` |  | Capabilities |
-| `location` | `string` |  | Location |
-| `status` | `string` |  | Status |
-| *…+2 more* | | | |
+tech.calculate_cutting_params
 
-### `tech.operation_template_list`
-
-List technology operation templates.
-
-**`GET /api/technology/operation-templates`**
-
-### `tech.operation_template_create`
-
-Create an operation template.
-
-**`POST /api/technology/operation-templates`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `operation_type` | `string` | ✓ | Operation Type |
-| `name` | `string` | ✓ | Name |
-| `standard_system` | `string` |  | Standard System |
-| `default_operation_code` | `string` |  | Default Operation Code |
-| `required_resource_types` | `array` |  | Required Resource Types |
-| `default_transition_text` | `string` |  | Default Transition Text |
-| `default_control_requirements` | `string` |  | Default Control Requirements |
-| `default_safety_requirements` | `string` |  | Default Safety Requirements |
-| *…+3 more* | | | |
-
-### `tech.process_plan_list`
-
-List manufacturing process plans.
-
-**`GET /api/technology/process-plans`**
-
-### `tech.process_plan_create`
-
-Create a manufacturing process plan.
-
-**`POST /api/technology/process-plans`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `document_id` | `string` |  | Document Id |
-| `bom_id` | `string` |  | Bom Id |
-| `product_name` | `string` | ✓ | Product Name |
-| `product_code` | `string` |  | Product Code |
-| `version` | `string` |  | Version |
-| `status` | `string` |  | Status |
-| `standard_system` | `string` |  | Standard System |
-| `route_summary` | `string` |  | Route Summary |
-| *…+5 more* | | | |
-
-### `tech.process_plan_draft_from_document`
-
-Draft process plan from memory.
-
-**`POST /api/technology/process-plans/draft-from-document`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `document_id` | `string` | ✓ | Document Id |
-| `product_name` | `string` |  | Product Name |
-| `product_code` | `string` |  | Product Code |
-| `created_by` | `string` |  | Created By |
-| `rebuild_existing` | `boolean` |  | Rebuild Existing |
-
-### `tech.process_plan_get`
-
-Get process plan with operations and norms.
-
-**`GET /api/technology/process-plans/{plan_id}`**
-
-### `tech.process_plan_approve` ⛔ **approval gate**
-
-Approve process plan after review.
-
-**`POST /api/technology/process-plans/{plan_id}/approve`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `approved_by` | `string` | ✓ | Approved By |
-| `comment` | `string` |  | Comment |
-
-### `tech.process_plan_validate`
-
-Validate manufacturability and completeness.
-
-**`POST /api/technology/process-plans/{plan_id}/validate`**
-
-### `tech.norm_estimate_suggest`
-
-Suggest operation time and cutting parameters.
-
-**`POST /api/technology/process-plans/{plan_id}/estimate-norms`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `batch_size` | `number` |  | Batch Size |
-| `overwrite_existing` | `boolean` |  | Overwrite Existing |
-| `created_by` | `string` |  | Created By |
-
-### `tech.operation_add`
-
-Add a process operation and graph links.
-
-**`POST /api/technology/process-plans/{plan_id}/operations`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `sequence_no` | `integer` | ✓ | Sequence No |
-| `operation_code` | `string` |  | Operation Code |
-| `name` | `string` | ✓ | Name |
-| `operation_type` | `string` |  | Operation Type |
-| `machine_resource_id` | `string` |  | Machine Resource Id |
-| `tool_resource_id` | `string` |  | Tool Resource Id |
-| `fixture_resource_id` | `string` |  | Fixture Resource Id |
-| `setup_description` | `string` |  | Setup Description |
-| *…+8 more* | | | |
-
-### `tech.norm_estimate_create`
-
-Create labor and machine time estimate.
-
-**`POST /api/technology/process-plans/{plan_id}/norm-estimates`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `operation_id` | `string` |  | Operation Id |
-| `setup_minutes` | `number` |  | Setup Minutes |
-| `machine_minutes` | `number` |  | Machine Minutes |
-| `labor_minutes` | `number` |  | Labor Minutes |
-| `batch_size` | `number` |  | Batch Size |
-| `confidence` | `number` |  | Confidence |
-| `method` | `string` |  | Method |
-| `assumptions` | `array` |  | Assumptions |
-| *…+2 more* | | | |
-
-### `tech.norm_estimate_approve` ⛔ **approval gate**
-
-Approve labor and machine time estimate.
-
-**`POST /api/technology/norm-estimates/{estimate_id}/approve`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `approved_by` | `string` | ✓ | Approved By |
-| `comment` | `string` |  | Comment |
+**`POST /api/technology/process-plans/{plan_id}/calculate-cutting-params`**
 
 ### `tech.correction_record`
 
-Record a human correction for learning.
+tech.correction_record
 
 **`POST /api/technology/corrections`**
 
@@ -1921,51 +1787,34 @@ Record a human correction for learning.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `entity_type` | `string` | ✓ | Entity Type |
-| `entity_id` | `string` | ✓ | Entity Id |
-| `field_name` | `string` | ✓ | Field Name |
-| `old_value` | `string` |  | Old Value |
-| `new_value` | `string` |  | New Value |
-| `correction_type` | `string` |  | Correction Type |
 | `corrected_by` | `string` | ✓ | Corrected By |
-| `reason` | `string` |  | Reason |
-| *…+4 more* | | | |
-
-### `tech.learning_suggest`
-
-Suggest rules from repeated corrections.
-
-**`GET /api/technology/learning-suggestions`**
-
-### `tech.learning_rule_list`
-
-List proposed and active learning rules.
-
-**`GET /api/technology/learning-rules`**
-
-### `tech.learning_rule_create`
-
-Save a proposed learning rule.
-
-**`POST /api/technology/learning-rules`**
-
-**Parameters:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `rule_type` | `string` |  | Rule Type |
+| `correction_type` | `string` |  | Correction Type |
+| `entity_id` | `string` | ✓ | Entity Id |
 | `entity_type` | `string` | ✓ | Entity Type |
 | `field_name` | `string` | ✓ | Field Name |
-| `match_old_value` | `string` |  | Match Old Value |
-| `replacement_value` | `string` |  | Replacement Value |
-| `confidence` | `number` |  | Confidence |
-| `occurrences` | `integer` |  | Occurrences |
-| `status` | `string` |  | Status |
-| *…+2 more* | | | |
+| `metadata_` | `object` |  | Metadata |
+| `new_value` | `string` |  | New Value |
+| `old_value` | `string` |  | Old Value |
+| `operation_id` | `string` |  | Operation Id |
+| `process_plan_id` | `string` |  | Process Plan Id |
+| `reason` | `string` |  | Reason |
+| `source_document_id` | `string` |  | Source Document Id |
+
+### `tech.export_gost_forms`
+
+tech.export_gost_forms
+
+**`POST /api/technology/process-plans/{plan_id}/export-gost`**
+
+### `tech.generate_tp_from_drawing`
+
+tech.generate_tp_from_drawing
+
+**`POST /api/technology/process-plans/generate-from-drawing`**
 
 ### `tech.learning_rule_activate` ⛔ **approval gate**
 
-Activate a proposed learning rule.
+tech.learning_rule_activate
 
 **`POST /api/technology/learning-rules/{rule_id}/activate`**
 
@@ -1976,142 +1825,399 @@ Activate a proposed learning rule.
 | `activated_by` | `string` | ✓ | Activated By |
 | `comment` | `string` |  | Comment |
 
+### `tech.learning_rule_create`
+
+tech.learning_rule_create
+
+**`POST /api/technology/learning-rules`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `confidence` | `number` |  | Confidence |
+| `entity_type` | `string` | ✓ | Entity Type |
+| `field_name` | `string` | ✓ | Field Name |
+| `match_old_value` | `string` |  | Match Old Value |
+| `metadata_` | `object` |  | Metadata |
+| `occurrences` | `integer` |  | Occurrences |
+| `replacement_value` | `string` |  | Replacement Value |
+| `rule_type` | `string` |  | Rule Type |
+| `status` | `string` |  | Status |
+| `suggested_by` | `string` |  | Suggested By |
+
+### `tech.learning_rule_list`
+
+tech.learning_rule_list
+
+**`GET /api/technology/learning-rules`**
+
+### `tech.learning_suggest`
+
+tech.learning_suggest
+
+**`GET /api/technology/learning-suggestions`**
+
+### `tech.norm_estimate_approve` ⛔ **approval gate**
+
+tech.norm_estimate_approve
+
+**`POST /api/technology/norm-estimates/{estimate_id}/approve`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `approved_by` | `string` | ✓ | Approved By |
+| `comment` | `string` |  | Comment |
+
+### `tech.norm_estimate_create`
+
+tech.norm_estimate_create
+
+**`POST /api/technology/process-plans/{plan_id}/norm-estimates`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `assumptions` | `array` |  | Assumptions |
+| `batch_size` | `number` |  | Batch Size |
+| `confidence` | `number` |  | Confidence |
+| `created_by` | `string` |  | Created By |
+| `labor_minutes` | `number` |  | Labor Minutes |
+| `machine_minutes` | `number` |  | Machine Minutes |
+| `metadata_` | `object` |  | Metadata |
+| `method` | `string` |  | Method |
+| `operation_id` | `string` |  | Operation Id |
+| `setup_minutes` | `number` |  | Setup Minutes |
+
+### `tech.norm_estimate_suggest`
+
+tech.norm_estimate_suggest
+
+**`POST /api/technology/process-plans/{plan_id}/estimate-norms`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `batch_size` | `number` |  | Batch Size |
+| `created_by` | `string` |  | Created By |
+| `overwrite_existing` | `boolean` |  | Overwrite Existing |
+
+### `tech.normcontrol_check`
+
+tech.normcontrol_check
+
+**`POST /api/technology/process-plans/{plan_id}/normcontrol`**
+
+### `tech.normcontrol_resolve`
+
+tech.normcontrol_resolve
+
+**`POST /api/technology/process-plans/{plan_id}/normcontrol/{check_id}/resolve`**
+
+### `tech.operation_add`
+
+tech.operation_add
+
+**`POST /api/technology/process-plans/{plan_id}/operations`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `control_requirements` | `string` |  | Control Requirements |
+| `cutting_parameters` | `object` |  | Cutting Parameters |
+| `fixture_resource_id` | `string` |  | Fixture Resource Id |
+| `labor_minutes` | `number` |  | Labor Minutes |
+| `machine_minutes` | `number` |  | Machine Minutes |
+| `machine_resource_id` | `string` |  | Machine Resource Id |
+| `metadata_` | `object` |  | Metadata |
+| `name` | `string` | ✓ | Name |
+| `operation_code` | `string` |  | Operation Code |
+| `operation_type` | `string` |  | Operation Type |
+| `safety_requirements` | `string` |  | Safety Requirements |
+| `sequence_no` | `integer` | ✓ | Sequence No |
+| `setup_description` | `string` |  | Setup Description |
+| `setup_minutes` | `number` |  | Setup Minutes |
+| `tool_resource_id` | `string` |  | Tool Resource Id |
+| `transition_text` | `string` |  | Transition Text |
+
+### `tech.operation_template_create`
+
+tech.operation_template_create
+
+**`POST /api/technology/operation-templates`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `default_control_requirements` | `string` |  | Default Control Requirements |
+| `default_operation_code` | `string` |  | Default Operation Code |
+| `default_safety_requirements` | `string` |  | Default Safety Requirements |
+| `default_transition_text` | `string` |  | Default Transition Text |
+| `is_active` | `boolean` |  | Is Active |
+| `metadata_` | `object` |  | Metadata |
+| `name` | `string` | ✓ | Name |
+| `operation_type` | `string` | ✓ | Operation Type |
+| `parameters_schema` | `object` |  | Parameters Schema |
+| `required_resource_types` | `array` |  | Required Resource Types |
+| `standard_system` | `string` |  | Standard System |
+
+### `tech.operation_template_list`
+
+tech.operation_template_list
+
+**`GET /api/technology/operation-templates`**
+
+### `tech.process_plan_approve` ⛔ **approval gate**
+
+tech.process_plan_approve
+
+**`POST /api/technology/process-plans/{plan_id}/approve`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `approved_by` | `string` | ✓ | Approved By |
+| `comment` | `string` |  | Comment |
+
+### `tech.process_plan_create`
+
+tech.process_plan_create
+
+**`POST /api/technology/process-plans`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `blank_type` | `string` |  | Blank Type |
+| `bom_id` | `string` |  | Bom Id |
+| `created_by` | `string` |  | Created By |
+| `document_id` | `string` |  | Document Id |
+| `material` | `string` |  | Material |
+| `metadata_` | `object` |  | Metadata |
+| `product_code` | `string` |  | Product Code |
+| `product_name` | `string` | ✓ | Product Name |
+| `quality_requirements` | `string` |  | Quality Requirements |
+| `route_summary` | `string` |  | Route Summary |
+| `standard_system` | `string` |  | Standard System |
+| `status` | `string` |  | Status |
+| `version` | `string` |  | Version |
+
+### `tech.process_plan_draft_from_document`
+
+tech.process_plan_draft_from_document
+
+**`POST /api/technology/process-plans/draft-from-document`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `created_by` | `string` |  | Created By |
+| `document_id` | `string` | ✓ | Document Id |
+| `product_code` | `string` |  | Product Code |
+| `product_name` | `string` |  | Product Name |
+| `rebuild_existing` | `boolean` |  | Rebuild Existing |
+
+### `tech.process_plan_get`
+
+tech.process_plan_get
+
+**`GET /api/technology/process-plans/{plan_id}`**
+
+### `tech.process_plan_list`
+
+tech.process_plan_list
+
+**`GET /api/technology/process-plans`**
+
+### `tech.process_plan_validate`
+
+tech.process_plan_validate
+
+**`POST /api/technology/process-plans/{plan_id}/validate`**
+
+### `tech.resource_create`
+
+tech.resource_create
+
+**`POST /api/technology/resources`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `capabilities` | `object` |  | Capabilities |
+| `code` | `string` |  | Code |
+| `location` | `string` |  | Location |
+| `metadata_` | `object` |  | Metadata |
+| `model` | `string` |  | Model |
+| `name` | `string` | ✓ | Name |
+| `notes` | `string` |  | Notes |
+| `resource_type` | `string` | ✓ | Resource Type |
+| `standard` | `string` |  | Standard |
+| `status` | `string` |  | Status |
+
+### `tech.resource_list`
+
+tech.resource_list
+
+**`GET /api/technology/resources`**
+
+### `tech.select_equipment_for_op`
+
+tech.select_equipment_for_op
+
+**`POST /api/technology/process-plans/{plan_id}/select-equipment`**
+
+### `tech.surface_specs_list`
+
+tech.surface_specs_list
+
+**`GET /api/technology/process-plans/{plan_id}/surface-specs`**
+
+
 ## Warehouse
-
-### `warehouse.list_inventory`
-
-List inventory items.
-
-**`GET /api/warehouse/inventory`**
-
-### `warehouse.create_item`
-
-Create inventory position.
-
-**`POST /api/warehouse/inventory`**
-
-### `warehouse.low_stock`
-
-Items below minimum quantity.
-
-**`GET /api/warehouse/inventory/low-stock`**
-
-### `warehouse.get_item`
-
-Get item card with recent movements.
-
-**`GET /api/warehouse/inventory/{item_id}`**
-
-### `warehouse.update_item`
-
-Update inventory item fields.
-
-**`PATCH /api/warehouse/inventory/{item_id}`**
-
-### `warehouse.delete_item` ⛔ **approval gate**
-
-Delete inventory item with all movements (approval gate).
-
-**`DELETE /api/warehouse/inventory/{item_id}`**
-
-### `warehouse.issue_stock` ⛔ **approval gate**
-
-Issue stock from warehouse (approval gate).
-
-**`POST /api/warehouse/inventory/{item_id}/issue`**
 
 ### `warehouse.adjust_stock`
 
-Adjust inventory quantity (±).
+warehouse.adjust_stock
 
 **`POST /api/warehouse/inventory/{item_id}/adjust`**
 
+### `warehouse.bulk_confirm`
+
+warehouse.bulk_confirm
+
+**`POST /api/warehouse/receipts/bulk-confirm`**
+
+### `warehouse.confirm_receipt` ⛔ **approval gate**
+
+warehouse.confirm_receipt
+
+**`POST /api/warehouse/receipts/{receipt_id}/confirm`**
+
+### `warehouse.create_item`
+
+warehouse.create_item
+
+**`POST /api/warehouse/inventory`**
+
+### `warehouse.create_receipt`
+
+warehouse.create_receipt
+
+**`POST /api/warehouse/receipts`**
+
+### `warehouse.delete_item` ⛔ **approval gate**
+
+warehouse.delete_item
+
+**`DELETE /api/warehouse/inventory/{item_id}`**
+
+### `warehouse.get_item`
+
+warehouse.get_item
+
+**`GET /api/warehouse/inventory/{item_id}`**
+
+### `warehouse.get_receipt`
+
+warehouse.get_receipt
+
+**`GET /api/warehouse/receipts/{receipt_id}`**
+
+### `warehouse.issue_stock` ⛔ **approval gate**
+
+warehouse.issue_stock
+
+**`POST /api/warehouse/inventory/{item_id}/issue`**
+
+### `warehouse.list_inventory`
+
+warehouse.list_inventory
+
+**`GET /api/warehouse/inventory`**
+
 ### `warehouse.list_movements`
 
-List all stock movements with filters.
+warehouse.list_movements
 
 **`GET /api/warehouse/movements`**
 
 ### `warehouse.list_receipts`
 
-List warehouse receipts.
+warehouse.list_receipts
 
 **`GET /api/warehouse/receipts`**
 
-### `warehouse.bulk_confirm`
+### `warehouse.low_stock`
 
-Bulk accept pending/draft receipts.
+warehouse.low_stock
 
-**`POST /api/warehouse/receipts/bulk-confirm`**
+**`GET /api/warehouse/inventory/low-stock`**
 
-### `warehouse.create_receipt`
+### `warehouse.update_item`
 
-Create receipt from invoice lines.
+warehouse.update_item
 
-**`POST /api/warehouse/receipts`**
-
-### `warehouse.get_receipt`
-
-Get receipt with lines.
-
-**`GET /api/warehouse/receipts/{receipt_id}`**
-
-### `warehouse.confirm_receipt` ⛔ **approval gate**
-
-Confirm receipt, update stock (approval gate).
-
-**`POST /api/warehouse/receipts/{receipt_id}/confirm`**
+**`PATCH /api/warehouse/inventory/{item_id}`**
 
 ### `warehouse.update_status`
 
-Transition receipt status.
+warehouse.update_status
 
 **`PATCH /api/warehouse/receipts/{receipt_id}/status`**
 
+
 ## Workspace
-
-### `workspace.verify_block`
-
-Verify that a block exists on the Workspace.
-
-**`POST /api/workspace/agent/verify-block`**
-
-### `workspace.invoice_table`
-
-Build and publish the full invoice table.
-
-**`POST /api/workspace/agent/invoices/table`**
-
-### `workspace.invoice_items_table`
-
-Build and publish invoice line items.
-
-**`POST /api/workspace/agent/invoices/items-table`**
-
-### `workspace.invoice_items_grouped_table`
-
-Group invoice items by invoice.
-
-**`POST /api/workspace/agent/invoices/items-grouped-table`**
-
-### `workspace.invoice_items_by_supplier_table`
-
-Group invoice items by supplier.
-
-**`POST /api/workspace/agent/invoices/items-by-supplier-table`**
-
-### `workspace.sql_table`
-
-Build and publish a table using SQL-first pipeline.
-
-**`POST /api/workspace/agent/generated/sql-table`**
 
 ### `workspace.general`
 
-Publish any custom table or block to the Workspace.
+workspace.general
 
 **`POST /api/workspace/agent/generated/general`**
 
----
+### `workspace.invoice_items_by_supplier_table`
 
-*Generated by `make skills`. Do not edit manually.*
+workspace.invoice_items_by_supplier_table
+
+**`POST /api/workspace/agent/invoices/items-by-supplier-table`**
+
+### `workspace.invoice_items_grouped_table`
+
+workspace.invoice_items_grouped_table
+
+**`POST /api/workspace/agent/invoices/items-grouped-table`**
+
+### `workspace.invoice_items_table`
+
+workspace.invoice_items_table
+
+**`POST /api/workspace/agent/invoices/items-table`**
+
+### `workspace.invoice_table`
+
+workspace.invoice_table
+
+**`POST /api/workspace/agent/invoices/table`**
+
+### `workspace.sql_table`
+
+workspace.sql_table
+
+**`POST /api/workspace/agent/generated/sql-table`**
+
+### `workspace.verify_block`
+
+workspace.verify_block
+
+**`POST /api/workspace/agent/verify-block`**
+

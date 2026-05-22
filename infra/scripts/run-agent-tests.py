@@ -200,6 +200,46 @@ class AgentTestRunner:
         else:
             self.assert_ok("cap/memory search", status, data)
 
+    def test_technology(self) -> None:
+        print("\n[Technology capability]")
+        status, data = self.get("/api/technology/process-plans")
+        self.assert_ok("GET /api/technology/process-plans", status, data)
+
+        status, data = self.get("/api/technology/resources")
+        self.assert_ok("GET /api/technology/resources", status, data)
+
+    def test_scenarios_api(self) -> None:
+        print("\n[Scenarios API]")
+        # List scenarios
+        status, data = self.get("/api/scenarios")
+        self.assert_ok("GET /api/scenarios", status, data)
+
+        # List traces (always returns list, even if empty)
+        status, data = self.get("/api/scenarios/traces?limit=10")
+        self.assert_ok("GET /api/scenarios/traces", status, data)
+        if status == 200:
+            if not isinstance(data, list):
+                self.failed += 1
+                self.errors.append("GET /api/scenarios/traces: expected list")
+                print("  FAIL /api/scenarios/traces: expected list")
+            else:
+                print(f"  INFO /api/scenarios/traces: {len(data)} trace(s)")
+
+        # Run non-existent scenario → 404
+        status, data = self.request_raw(
+            "POST", f"{self.base_url}/api/scenarios/nonexistent-xyz/run", {}
+        )
+        if status == 404:
+            self.passed += 1
+            print("  PASS POST /api/scenarios/nonexistent/run → 404")
+        else:
+            self.failed += 1
+            self.errors.append(f"POST /api/scenarios/nonexistent/run: expected 404, got {status}")
+            print(f"  FAIL POST /api/scenarios/nonexistent/run: expected 404, got {status}")
+
+    def request_raw(self, method: str, url: str, body: dict) -> tuple[int, Any]:
+        return request(method, url, body)
+
     def run_all(self) -> int:
         print(f"Running agent integration tests against {self.base_url}")
         print("=" * 60)
@@ -218,6 +258,8 @@ class AgentTestRunner:
         self.test_documents()
         self.test_approval_gate_invoice()
         self.test_memory()
+        self.test_technology()
+        self.test_scenarios_api()
 
         elapsed = time.monotonic() - start
         total = self.passed + self.failed

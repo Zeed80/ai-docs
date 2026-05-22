@@ -397,7 +397,7 @@
             "default": null,
             "title": "Manual Doc Type Override"
           },
-          "metadata": {
+          "metadata_": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -4506,7 +4506,7 @@
             "default": null,
             "title": "Notes"
           },
-          "metadata": {
+          "metadata_": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -4643,7 +4643,7 @@
             "title": "Is Active",
             "type": "boolean"
           },
-          "metadata": {
+          "metadata_": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -4794,7 +4794,7 @@
             "title": "Created By",
             "type": "string"
           },
-          "metadata": {
+          "metadata_": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -5136,7 +5136,7 @@
             "default": null,
             "title": "Labor Minutes"
           },
-          "metadata": {
+          "metadata_": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -5264,7 +5264,7 @@
             "title": "Created By",
             "type": "string"
           },
-          "metadata": {
+          "metadata_": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -5429,7 +5429,7 @@
             "default": null,
             "title": "Operation Id"
           },
-          "metadata": {
+          "metadata_": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -5542,7 +5542,7 @@
             "title": "Suggested By",
             "type": "string"
           },
-          "metadata": {
+          "metadata_": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -5598,6 +5598,78 @@
         "title": "LearningRuleActivateRequest",
         "type": "object"
       }
+    },
+    {
+      "name": "tech.generate_tp_from_drawing",
+      "description": "Skill: tech.generate_tp_from_drawing — Full agent-driven TP generation from drawing.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/generate-from-drawing",
+      "approval_required": false
+    },
+    {
+      "name": "tech.analyze_surfaces",
+      "description": "Skill: tech.analyze_surfaces — Extract surface machining specs from drawing features.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/analyze-surfaces",
+      "approval_required": false
+    },
+    {
+      "name": "tech.select_equipment_for_op",
+      "description": "Skill: tech.select_equipment_for_op — Select optimal machine for operation.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/select-equipment",
+      "approval_required": false
+    },
+    {
+      "name": "tech.calculate_cutting_params",
+      "description": "Skill: tech.calculate_cutting_params — Calculate Vc, fz, ap, To for an operation.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/calculate-cutting-params",
+      "approval_required": false
+    },
+    {
+      "name": "tech.normcontrol_check",
+      "description": "Skill: tech.normcontrol_check — Run ГОСТ ЕСТД normcontrol on process plan.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/normcontrol",
+      "approval_required": false
+    },
+    {
+      "name": "tech.normcontrol_resolve",
+      "description": "Skill: tech.normcontrol_resolve — Resolve or waive a normcontrol finding.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/normcontrol/{check_id}/resolve",
+      "approval_required": false
+    },
+    {
+      "name": "tech.blank_spec_set",
+      "description": "Skill: tech.blank_spec_set — Set or update blank/stock specification.",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/blank-spec",
+      "approval_required": false
+    },
+    {
+      "name": "tech.surface_specs_list",
+      "description": "Skill: tech.surface_specs_list — List surface machining specifications for process plan.",
+      "category": "technology",
+      "method": "GET",
+      "path": "/api/technology/process-plans/{plan_id}/surface-specs",
+      "approval_required": false
+    },
+    {
+      "name": "tech.export_gost_forms",
+      "description": "Skill: tech.export_gost_forms — Export ГОСТ ЕСТД forms МК (ГОСТ 3.1118) + ОК (ГОСТ 3.1404).",
+      "category": "technology",
+      "method": "POST",
+      "path": "/api/technology/process-plans/{plan_id}/export-gost",
+      "approval_required": false
     },
     {
       "name": "quarantine.list",
