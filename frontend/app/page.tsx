@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AgentWorkspaceBlocks } from "@/components/workspace/agent-workspace-blocks";
 
 const API = getApiBaseUrl();
@@ -328,6 +329,73 @@ function SystemHealthBar() {
   );
 }
 
+function CreateCaseForm() {
+  const router = useRouter();
+  const [title, setTitle] = useState("");
+  const [customer, setCustomer] = useState("");
+  const [taskDesc, setTaskDesc] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  async function create() {
+    if (!title.trim()) return;
+    setCreating(true);
+    try {
+      const res = await fetch(`${API}/api/cases`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title.trim(),
+          customer: customer || null,
+          task_description: taskDesc || null,
+        }),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        router.push(`/cases/${created.id}`);
+      }
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div className="mb-5 bg-slate-800/80 border border-slate-700/60 rounded-lg p-4 space-y-2 max-w-2xl">
+      <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+        Новый кейс
+      </h3>
+      <input
+        type="text"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && create()}
+        placeholder="Название кейса: Вал Ø25 / счет Hoffmann"
+        className="w-full px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-500 rounded outline-none focus:border-blue-400"
+      />
+      <input
+        type="text"
+        value={customer}
+        onChange={(e) => setCustomer(e.target.value)}
+        placeholder="Заказчик"
+        className="w-full px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-500 rounded outline-none focus:border-blue-400"
+      />
+      <input
+        type="text"
+        value={taskDesc}
+        onChange={(e) => setTaskDesc(e.target.value)}
+        placeholder="Что нужно сделать технологу?"
+        className="w-full px-3 py-1.5 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-500 rounded outline-none focus:border-blue-400"
+      />
+      <button
+        onClick={create}
+        disabled={creating || !title.trim()}
+        className="px-4 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+      >
+        {creating ? "Создаю..." : "Создать кейс"}
+      </button>
+    </div>
+  );
+}
+
 export default function FeedPage() {
   const [items, setItems] = useState<FeedItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -372,6 +440,7 @@ export default function FeedPage() {
 
       {/* Feed */}
       <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+        <CreateCaseForm />
         <AgentWorkspaceBlocks className="mb-4 min-h-[calc(100vh-8.5rem)]" />
         {loading ? (
           <div className="space-y-3">

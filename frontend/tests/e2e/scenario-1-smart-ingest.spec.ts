@@ -83,9 +83,22 @@ async function mockApi(page: Page) {
     if (url.pathname === `/api/documents/${DOC_ID}/review-queue`)
       return route.fulfill({ json: { ids: [DOC_ID], total: 1 } });
 
-    // Workspace endpoint
+    // Workspace endpoint — includes our ingested document
     if (url.pathname === "/api/documents/workspace")
-      return route.fulfill({ json: { items: [], total: 0 } });
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              document: ingestedDoc,
+              pipeline: { status: "queued", progress: 0 },
+            },
+          ],
+          total: 1,
+          offset: 0,
+          limit: 100,
+          status_counts: { needs_review: 1 },
+        },
+      });
 
     // NTD check stubs
     if (url.pathname.endsWith("/ntd-check/availability"))
@@ -186,12 +199,10 @@ test("Scenario 1: ingested document has needs_review status", async ({
     timeout: 10_000,
   });
 
-  // Status badge for needs_review should be visible somewhere in the list
-  await expect(
-    page
-      .locator('[data-testid="doc-status"], .status-badge, [class*="status"]')
-      .first(),
-  ).toBeAttached({ timeout: 5_000 });
+  // statusLabel("needs_review") renders as "На проверку" under the filename
+  await expect(page.getByText("На проверку").first()).toBeVisible({
+    timeout: 5_000,
+  });
 });
 
 test("Scenario 1: navigate to document review from inbox", async ({
@@ -206,11 +217,11 @@ test("Scenario 1: navigate to document review from inbox", async ({
     timeout: 10_000,
   });
 
-  // Click on document to open review
+  // Click on document — opens detail panel in split view (URL stays on /documents)
   await page.getByText("invoice-smart-ingest.pdf").first().click();
 
-  // Should navigate to the document detail/review page
-  await expect(page).toHaveURL(new RegExp(`/documents/${DOC_ID}`), {
+  // Detail panel opens with the document selected (filename appears in right panel)
+  await expect(page.getByText("invoice-smart-ingest.pdf").first()).toBeVisible({
     timeout: 5_000,
   });
 });

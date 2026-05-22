@@ -15,6 +15,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -70,6 +71,7 @@ class ApprovalActionType(str, enum.Enum):
     invoice_reject = "invoice.reject"
     invoice_bulk_delete = "invoice.bulk_delete"
     email_send = "email.send"
+    email_send_request_approval = "email.send.request_approval"
     anomaly_resolve = "anomaly.resolve"
     table_apply_diff = "table.apply_diff"
     norm_activate_rule = "norm.activate_rule"
@@ -82,6 +84,7 @@ class ApprovalActionType(str, enum.Enum):
     tech_process_plan_approve = "tech.process_plan_approve"
     tech_norm_estimate_approve = "tech.norm_estimate_approve"
     tech_learning_rule_activate = "tech.learning_rule_activate"
+    tech_process_plan_from_drawing = "tech.process_plan_from_drawing"
     agent_tool_call = "agent.tool_call"
 
 
@@ -2529,6 +2532,48 @@ class Notification(UUIDPrimaryKey, Base):
     action_url: Mapped[str | None] = mapped_column(String(500))
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
+# ── Work Cases (Cockpit) ──────────────────────────────────────────────────────
+
+
+class WorkCase(UUIDPrimaryKey, TimestampMixin, Base):
+    """A work unit grouping documents, approvals, and audit for a technologist/accountant."""
+
+    __tablename__ = "work_cases"
+
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    customer: Mapped[str | None] = mapped_column(String(300))
+    task_description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="open", index=True)
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False, default="system")
+
+    documents: Mapped[list["CaseDocument"]] = relationship(
+        back_populates="case", cascade="all, delete-orphan"
+    )
+
+
+class CaseDocument(UUIDPrimaryKey, Base):
+    """Join table: WorkCase ↔ Document."""
+
+    __tablename__ = "case_documents"
+    __table_args__ = (
+        UniqueConstraint("case_id", "document_id", name="uq_case_document"),
+    )
+
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_cases.id"), nullable=False, index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("documents.id"), nullable=False, index=True
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    added_by: Mapped[str | None] = mapped_column(String(100))
+
+    case: Mapped["WorkCase"] = relationship(back_populates="documents")
+    document: Mapped["Document"] = relationship()
 
 
 # ── Agent Scenario Trace ───────────────────────────────────────────────────────

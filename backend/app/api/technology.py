@@ -11,6 +11,27 @@ from sqlalchemy.orm import selectinload
 from app.audit.service import log_action
 from fastapi.responses import StreamingResponse
 
+try:
+    from app.ai.tp_generator import (
+        extract_tp_features_from_drawing,
+        save_surface_specs,
+        recommend_blank,
+        select_equipment,
+        calculate_cutting_parameters,
+        calculate_time_norms,
+    )
+    from app.ai.normcontrol_agent import run_normcontrol as _run_normcontrol_check
+    from app.tasks.tp_generation import generate_tp_from_drawing as celery_tp_task
+except ImportError:
+    extract_tp_features_from_drawing = None  # type: ignore[assignment]
+    save_surface_specs = None  # type: ignore[assignment]
+    recommend_blank = None  # type: ignore[assignment]
+    select_equipment = None  # type: ignore[assignment]
+    calculate_cutting_parameters = None  # type: ignore[assignment]
+    calculate_time_norms = None  # type: ignore[assignment]
+    _run_normcontrol_check = None  # type: ignore[assignment]
+    celery_tp_task = None  # type: ignore[assignment]
+
 from app.db.models import (
     BOM,
     BlankSpec,
@@ -561,6 +582,8 @@ async def approve_process_plan(
         raise HTTPException(404, "Process plan not found")
     if plan.status == "approved":
         return plan
+    if getattr(plan, "normcontrol_status", None) == "failed":
+        raise HTTPException(422, detail="Normcontrol has open errors — resolve them before approving")
 
     plan.status = "approved"
     plan.approved_by = payload.approved_by
@@ -1345,7 +1368,13 @@ async def generate_tp_from_drawing(
     """Skill: tech.generate_tp_from_drawing — Full agent-driven TP generation from drawing.
     Queues a Celery pipeline: surface analysis → blank → operations → equipment → norms → normcontrol.
     """
-    drawing_id = uuid.UUID(payload["drawing_id"])
+    drawing_id_str = payload.get("drawing_id")
+    if not drawing_id_str:
+        raise HTTPException(422, detail="drawing_id is required")
+    try:
+        drawing_id = uuid.UUID(drawing_id_str)
+    except (ValueError, AttributeError):
+        raise HTTPException(422, detail="drawing_id must be a valid UUID")
     batch_size = int(payload.get("batch_size", 1))
     tp_type = payload.get("tp_type", "единичный")
     created_by = payload.get("created_by", "sveta")
@@ -1376,8 +1405,7 @@ async def generate_tp_from_drawing(
         await db.flush()
         plan_id = plan.id
 
-    from app.tasks.tp_generation import generate_tp_from_drawing as celery_task
-    task = celery_task.apply_async(
+    task = celery_tp_task.apply_async(
         kwargs={
             "plan_id": str(plan_id),
             "drawing_id": str(drawing_id),
@@ -1389,7 +1417,7 @@ async def generate_tp_from_drawing(
 
     await db.commit()
     await log_action(db, action="tech.generate_tp_from_drawing", entity_type="process_plan",
-                     entity_id=plan_id, actor=created_by, details={"drawing_id": str(drawing_id)})
+                     entity_id=plan_id, user_id=created_by, details={"drawing_id": str(drawing_id)})
 
     return {"plan_id": str(plan_id), "task_id": task.id, "status": "queued"}
 
@@ -1409,12 +1437,6 @@ async def analyze_surfaces(
     drawing = await db.get(Drawing, drawing_id, options=[selectinload(Drawing.features)])
     if not drawing:
         raise HTTPException(404, detail="Drawing not found")
-
-    from app.ai.tp_generator import (
-        extract_tp_features_from_drawing,
-        recommend_blank,
-        save_surface_specs,
-    )
 
     surface_dicts = extract_tp_features_from_drawing(drawing, plan_id, db)
     surface_rows = save_surface_specs(surface_dicts, db)
@@ -1453,8 +1475,6 @@ async def select_equipment_for_op(
     if not plan:
         raise HTTPException(404, detail="ProcessPlan not found")
 
-    from app.ai.tp_generator import select_equipment
-
     operation_type = payload.get("operation_type", "turning")
     workpiece_d_mm = payload.get("workpiece_d_mm")
     tolerance_grade = payload.get("tolerance_grade")
@@ -1486,8 +1506,6 @@ async def calculate_cutting_params(
     plan = await db.get(ManufacturingProcessPlan, plan_id)
     if not plan:
         raise HTTPException(404, detail="ProcessPlan not found")
-
-    from app.ai.tp_generator import calculate_cutting_parameters, calculate_time_norms
 
     operation_type = payload.get("operation_type", "turning")
     material = payload.get("material_grade") or plan.material or "Сталь 45"
@@ -1521,9 +1539,7 @@ async def run_normcontrol(
     if not plan:
         raise HTTPException(404, detail="ProcessPlan not found")
 
-    from app.ai.normcontrol_agent import run_normcontrol as _run
-
-    result = _run(plan_id, db.sync_session if hasattr(db, "sync_session") else db)
+    result = await db.run_sync(lambda sync_db: _run_normcontrol_check(plan_id, sync_db))
 
     return result
 

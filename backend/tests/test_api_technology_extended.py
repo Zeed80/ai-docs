@@ -33,14 +33,14 @@ async def analyzed_drawing(db_session: AsyncSession):
     await db_session.flush()
 
     for i, ftype in enumerate(
-        [DrawingFeatureType.hole, DrawingFeatureType.external_cylindrical]
+        [DrawingFeatureType.hole, DrawingFeatureType.surface]
     ):
         feat = DrawingFeature(
             drawing_id=d.id,
             feature_type=ftype,
             name=f"Элемент {i+1}",
             confidence=0.9,
-            properties={"nominal_mm": 30.0 + i * 10, "roughness_ra": 1.6},
+            ai_raw={"nominal_mm": 30.0 + i * 10, "roughness_ra": 1.6},
         )
         db_session.add(feat)
 
@@ -77,7 +77,7 @@ async def plan_with_operations(db_session: AsyncSession, process_plan):
             name=name,
             operation_type=op_type,
             operation_code=f"{4110 + i * 10}",
-            machine_resource_id=str(uuid.uuid4()),
+            machine_resource_id=None,
             transition_text=f"1. Выполнить {name.lower()}.",
             control_requirements="Проверить размер",
             cutting_parameters={"vc_m_min": 100} if op_type != "quality_control" else None,
@@ -96,10 +96,9 @@ async def test_generate_tp_from_drawing_creates_plan(
     client: AsyncClient, analyzed_drawing: Drawing
 ):
     """POST generate-from-drawing → returns plan_id and task_id."""
-    with patch(
-        "app.api.technology.generate_tp_from_drawing",
-        return_value=MagicMock(id="mock-task-id"),
-    ):
+    mock_celery = MagicMock()
+    mock_celery.apply_async.return_value = MagicMock(id="mock-task-id")
+    with patch("app.api.technology.celery_tp_task", mock_celery):
         resp = await client.post(
             "/api/technology/process-plans/generate-from-drawing",
             json={
@@ -134,7 +133,6 @@ async def test_analyze_surfaces_returns_specs(
     with (
         patch(
             "app.api.technology.extract_tp_features_from_drawing",
-            new_callable=AsyncMock,
             return_value=[
                 {
                     "process_plan_id": str(plan_with_operations.id),
@@ -149,8 +147,9 @@ async def test_analyze_surfaces_returns_specs(
         ),
         patch(
             "app.api.technology.save_surface_specs",
-            new_callable=AsyncMock,
-            return_value=[MagicMock(id=uuid.uuid4())],
+            return_value=[MagicMock(id=uuid.uuid4(), surface_type="hole", machining_method="boring",
+                                    machining_stage="finish", nominal_mm=30.0, roughness_ra=1.6,
+                                    fit_system=None, confidence=0.9)],
         ),
         patch(
             "app.api.technology.recommend_blank",

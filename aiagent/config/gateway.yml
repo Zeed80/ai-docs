@@ -280,6 +280,10 @@ scenarios:
   trigger:
     type: schedule
     cron: 30 2 * * *
+- name: draft_email
+  path: ./scenarios/draft-email.yml
+  trigger:
+    type: manual
 prompts:
   base: ./prompts/base.md
   roles:

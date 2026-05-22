@@ -72,6 +72,7 @@ from app.api import (
     technology,
     telegram,
     tool_catalog,
+    cases,
     warehouse,
     workspace,
     workspace_export,
@@ -116,6 +117,18 @@ def _reject_silent_production_schema_create() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("starting", env=settings.app_env)
+
+    # Auto-create schema for dev/e2e environments (SQLite or fresh PG without migrations)
+    if os.getenv("AUTO_CREATE_SCHEMA", "false").lower() in {"1", "true", "yes", "on"}:
+        try:
+            import app.db.models  # noqa: F401 — ensure all models are registered
+            from app.db.base import Base
+            from app.db.session import _get_engine
+            async with _get_engine().begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("auto_schema_created")
+        except Exception as exc:
+            logger.warning("auto_schema_create_failed", error=str(exc))
 
     # Start Redis pub/sub subscriber for cross-worker chat events
     _redis_sub_task: asyncio.Task | None = None
@@ -267,6 +280,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(drawings.router, prefix="/api/drawings", tags=["drawings"])
     app.include_router(tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"])
+    app.include_router(cases.router, tags=["cases"])
     app.include_router(chat_sessions.router, prefix="/api/chat", tags=["chat"])
     app.include_router(dynamic_skill_runner.router, tags=["agent-generated"])
     app.include_router(capability_router, prefix="/api/agent", tags=["capabilities"])

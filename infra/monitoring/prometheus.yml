@@ -8,22 +8,6 @@ scrape_configs:
       - targets: ["backend:8000"]
     metrics_path: /metrics
 
-  - job_name: "aiworkspace-celery"
-    static_configs:
-      - targets: ["backend:8000"]
-    metrics_path: /metrics
-    params:
-      collect[]:
-        - celery
-
-  - job_name: "postgres"
-    static_configs:
-      - targets: ["postgres:9187"]
-
-  - job_name: "redis"
-    static_configs:
-      - targets: ["redis:9121"]
-
   - job_name: "prometheus"
     static_configs:
       - targets: ["localhost:9090"]

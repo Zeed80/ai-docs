@@ -1,4 +1,21 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import {
+  expect,
+  test,
+  type BrowserContext,
+  type Page,
+  type Route,
+} from "@playwright/test";
+
+async function setAuthCookie(context: BrowserContext) {
+  await context.addCookies([
+    {
+      name: "access_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+    },
+  ]);
+}
 
 const agentConfig = {
   enabled: true,
@@ -44,7 +61,11 @@ const agentConfig = {
   permission_mode: "workspace_write",
   safe_auto_apply_enabled: true,
   max_history_messages: 40,
-  exposed_skills: ["config.propose", "capability.propose", "capability.sandbox_apply"],
+  exposed_skills: [
+    "config.propose",
+    "capability.propose",
+    "capability.sandbox_apply",
+  ],
   approval_gates: [],
   system_prompt: null,
   context_compression_enabled: true,
@@ -58,7 +79,11 @@ const controlPlane = {
   autonomy_mode: "max_autonomy",
   permission_mode: "workspace_write",
   safe_auto_apply_enabled: true,
-  protected_settings: ["safe_auto_apply_enabled", "permission_mode", "system_prompt"],
+  protected_settings: [
+    "safe_auto_apply_enabled",
+    "permission_mode",
+    "system_prompt",
+  ],
   skills_total: 3,
   approval_gates_total: 0,
   plugins_total: 0,
@@ -139,21 +164,31 @@ async function mockSettingsApi(page: Page, calls: string[]) {
     if (url.pathname === "/api/agent/control-plane/status") {
       return route.fulfill({ json: controlPlane });
     }
-    if (url.pathname === "/api/agent/config/proposals" && request.method() === "GET") {
-      return route.fulfill({ json: configProposalOpen ? [configProposal] : [] });
+    if (
+      url.pathname === "/api/agent/config/proposals" &&
+      request.method() === "GET"
+    ) {
+      return route.fulfill({
+        json: configProposalOpen ? [configProposal] : [],
+      });
     }
     if (
-      url.pathname === `/api/agent/config/proposals/${configProposal.id}/decide` &&
+      url.pathname ===
+        `/api/agent/config/proposals/${configProposal.id}/decide` &&
       request.method() === "POST"
     ) {
       configProposalOpen = false;
       return route.fulfill({ json: { ...configProposal, status: "approved" } });
     }
-    if (url.pathname === "/api/agent/capabilities" && request.method() === "GET") {
+    if (
+      url.pathname === "/api/agent/capabilities" &&
+      request.method() === "GET"
+    ) {
       return route.fulfill({ json: [capability] });
     }
     if (
-      url.pathname === `/api/agent/capabilities/${capabilityProposal.id}/sandbox-apply` &&
+      url.pathname ===
+        `/api/agent/capabilities/${capabilityProposal.id}/sandbox-apply` &&
       request.method() === "POST"
     ) {
       capability = {
@@ -165,29 +200,97 @@ async function mockSettingsApi(page: Page, calls: string[]) {
       return route.fulfill({ json: capability });
     }
     if (
-      url.pathname === `/api/agent/capabilities/${capabilityProposal.id}/decide` &&
+      url.pathname ===
+        `/api/agent/capabilities/${capabilityProposal.id}/decide` &&
       request.method() === "POST"
     ) {
       capability = { ...capability, status: "approved" };
       return route.fulfill({ json: capability });
     }
 
+    if (url.pathname === "/api/approvals/policy") {
+      return route.fulfill({
+        json: { enabled: false, trust_threshold: 0.85, max_amount: null },
+      });
+    }
+    if (url.pathname === "/api/agent/runtime/status") {
+      return route.fulfill({
+        json: {
+          status: "idle",
+          uptime_seconds: 0,
+          counters: {
+            llm_calls_24h: 0,
+            tool_calls_24h: 0,
+            errors_24h: 0,
+            avg_llm_duration_ms_24h: null,
+            last_error: null,
+          },
+          models: {
+            orchestrator_model: null,
+            worker_model: null,
+            builder_model: null,
+            fallback_providers: [],
+          },
+          memory: {
+            episodic_facts_total: 0,
+            pinned_facts_total: 0,
+            graph_nodes_total: 0,
+            chunks_total: 0,
+            embeddings_total: 0,
+            qdrant_points: null,
+            active_embedding_model: null,
+          },
+        },
+      });
+    }
+    if (url.pathname === "/api/agent/tasks") return route.fulfill({ json: [] });
+    if (url.pathname === "/api/agent/teams") return route.fulfill({ json: [] });
+    if (url.pathname === "/api/agent/cron") return route.fulfill({ json: [] });
+    if (url.pathname === "/api/agent/plugins")
+      return route.fulfill({ json: [] });
     if (url.pathname === "/api/ai/config") return route.fulfill({ json: {} });
     if (url.pathname === "/api/ai/config/status") {
-      return route.fulfill({ json: { ok: true, ollama_available: false, installed_models: [], warnings: [] } });
+      return route.fulfill({
+        json: {
+          ok: true,
+          ollama_available: false,
+          installed_models: [],
+          warnings: [],
+        },
+      });
     }
-    if (url.pathname === "/api/ai/models") return route.fulfill({ json: { models: [] } });
+    if (url.pathname === "/api/ai/models")
+      return route.fulfill({ json: { models: [] } });
     if (url.pathname === "/api/ai/models/capabilities") {
       return route.fulfill({ json: { models: [] } });
     }
     if (url.pathname === "/api/ai/embedding-profile") {
-      return route.fulfill({ json: { model_key: "none", provider_model: "none", collection_name: "none", dimension: 0, distance_metric: "cosine", normalize: true } });
+      return route.fulfill({
+        json: {
+          model_key: "none",
+          provider_model: "none",
+          collection_name: "none",
+          dimension: 0,
+          distance_metric: "cosine",
+          normalize: true,
+        },
+      });
     }
     if (url.pathname === "/api/memory/embeddings/stats") {
-      return route.fulfill({ json: { active_model: "none", active_collection: "none", dimension: 0, counts_by_status: {}, total: 0 } });
+      return route.fulfill({
+        json: {
+          active_model: "none",
+          active_collection: "none",
+          dimension: 0,
+          counts_by_status: {},
+          total: 0,
+        },
+      });
     }
     if (url.pathname === "/api/settings/ntd-control") {
-      return route.fulfill({ json: { mode: "manual", updated_by: null, updated_at: null } });
+      return route.fulfill({
+        json: { mode: "manual", updated_by: null, updated_at: null },
+      });
     }
     if (url.pathname === "/api/telegram/status") {
       return route.fulfill({
@@ -243,33 +346,49 @@ async function mockSettingsApi(page: Page, calls: string[]) {
   });
 }
 
-test("settings control plane approves protected config proposal", async ({ page }) => {
+test("settings control plane approves protected config proposal", async ({
+  page,
+  context,
+}) => {
   const calls: string[] = [];
+  await setAuthCookie(context);
   await mockSettingsApi(page, calls);
 
   await page.goto("/settings");
 
-  const panel = page.getByText("Ожидают подтверждения защищенные настройки").locator("..");
+  const panel = page
+    .getByText("Ожидают подтверждения защищенные настройки")
+    .locator("..");
   await expect(panel.getByText("safe_auto_apply_enabled")).toBeVisible();
   await panel.getByRole("button", { name: "Разрешить" }).click();
 
   await expect(panel.getByText("safe_auto_apply_enabled")).toBeHidden();
-  expect(calls).toContain(`POST /api/agent/config/proposals/${configProposal.id}/decide`);
+  expect(calls).toContain(
+    `POST /api/agent/config/proposals/${configProposal.id}/decide`,
+  );
 });
 
-test("settings control plane runs sandbox and approves capability proposal", async ({ page }) => {
+test("settings control plane runs sandbox and approves capability proposal", async ({
+  page,
+  context,
+}) => {
   const calls: string[] = [];
+  await setAuthCookie(context);
   await mockSettingsApi(page, calls);
 
   await page.goto("/settings");
 
-  const panel = page.getByText("Capability proposals").locator("..");
+  const panel = page.getByText("Capability proposals").locator("../..");
   await expect(panel.getByText("E2E capability proposal")).toBeVisible();
   await panel.getByRole("button", { name: "Sandbox" }).click();
   await expect(panel.getByText("Sandbox: ready")).toBeVisible();
 
   await panel.getByRole("button", { name: "Разрешить" }).click();
   await expect(panel.getByText("approved")).toBeVisible();
-  expect(calls).toContain(`POST /api/agent/capabilities/${capabilityProposal.id}/sandbox-apply`);
-  expect(calls).toContain(`POST /api/agent/capabilities/${capabilityProposal.id}/decide`);
+  expect(calls).toContain(
+    `POST /api/agent/capabilities/${capabilityProposal.id}/sandbox-apply`,
+  );
+  expect(calls).toContain(
+    `POST /api/agent/capabilities/${capabilityProposal.id}/decide`,
+  );
 });
