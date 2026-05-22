@@ -1,0 +1,117 @@
+# Authentik blueprint — AI Workspace initial setup
+# Automatically applied on first worker start (blueprints.goauthentik.io/instantiate: "true")
+#
+# Creates: groups, OAuth2/OIDC provider, application.
+# After applying, copy OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET from
+# Authentik Admin → Providers → ai-workspace-provider into .env.
+
+version: 1
+metadata:
+  name: ai-workspace
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+
+entries:
+  # ── Groups ────────────────────────────────────────────────────────────────────
+
+  - model: authentik_core.group
+    state: present
+    identifiers:
+      name: admins
+    attrs:
+      name: admins
+      is_superuser: true
+
+  - model: authentik_core.group
+    state: present
+    identifiers:
+      name: managers
+    attrs:
+      name: managers
+
+  - model: authentik_core.group
+    state: present
+    identifiers:
+      name: accountants
+    attrs:
+      name: accountants
+
+  - model: authentik_core.group
+    state: present
+    identifiers:
+      name: buyers
+    attrs:
+      name: buyers
+
+  - model: authentik_core.group
+    state: present
+    identifiers:
+      name: engineers
+    attrs:
+      name: engineers
+
+  - model: authentik_core.group
+    state: present
+    identifiers:
+      name: technologists
+    attrs:
+      name: technologists
+
+  # ── Property mapping — expose groups claim ────────────────────────────────────
+
+  - model: authentik_providers_oauth2.scopemapping
+    state: present
+    identifiers:
+      name: ai-workspace-groups
+    attrs:
+      name: ai-workspace-groups
+      scope_name: groups
+      description: "Expose user groups as a JWT claim"
+      expression: |
+        return [g.name for g in request.user.ak_groups.all()]
+
+  # ── OAuth2 / OIDC Provider ────────────────────────────────────────────────────
+
+  - model: authentik_providers_oauth2.oauth2provider
+    state: present
+    identifiers:
+      name: ai-workspace-provider
+    attrs:
+      name: ai-workspace-provider
+      authorization_flow: !Find
+        - authentik_flows.flow
+        - [slug, default-provider-authorization-implicit-consent]
+      client_id: !Env [OAUTH_CLIENT_ID, "ai-workspace"]
+      client_secret: !Env [OAUTH_CLIENT_SECRET, ""]
+      redirect_uris: !Env
+        - OAUTH_REDIRECT_URIS
+        - "http://localhost:8000/api/auth/callback\nhttp://localhost:3000/api/auth/callback"
+      access_code_validity: "minutes=1"
+      access_token_validity: "hours=1"
+      refresh_token_validity: "days=30"
+      include_claims_in_id_token: true
+      sub_mode: hashed_user_id
+      signing_key: !Find
+        - authentik_crypto.certificatekeypair
+        - [name, "authentik Self-signed Certificate"]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, ai-workspace-groups]]
+
+  # ── Application ────────────────────────────────────────────────────────────────
+
+  - model: authentik_core.application
+    state: present
+    identifiers:
+      slug: ai-workspace
+    attrs:
+      name: AI Workspace
+      slug: ai-workspace
+      provider: !Find
+        - authentik_providers_oauth2.oauth2provider
+        - [name, ai-workspace-provider]
+      meta_description: AI Document Processing Workspace
+      meta_publisher: AI Workspace
+      policy_engine_mode: any

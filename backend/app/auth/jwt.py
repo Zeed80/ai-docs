@@ -170,6 +170,7 @@ def _groups_to_roles(groups: list[str]) -> list[UserRole]:
         "accountants": UserRole.accountant,
         "buyers": UserRole.buyer,
         "engineers": UserRole.engineer,
+        "technologists": UserRole.technologist,
     }
     roles = []
     for g in groups:

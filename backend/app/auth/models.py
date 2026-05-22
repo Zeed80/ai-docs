@@ -8,11 +8,12 @@ from pydantic import BaseModel
 
 class UserRole(str, Enum):
     admin = "admin"
-    manager = "manager"       # approves invoices, sees everything
-    accountant = "accountant"  # works with invoices and documents
-    buyer = "buyer"            # works with suppliers and orders
-    engineer = "engineer"      # works with drawings and specs
-    viewer = "viewer"          # read-only
+    manager = "manager"           # approves invoices, sees everything
+    accountant = "accountant"     # works with invoices and documents
+    buyer = "buyer"               # works with suppliers and orders
+    engineer = "engineer"         # works with drawings and specs
+    technologist = "technologist" # develops manufacturing process plans
+    viewer = "viewer"             # read-only
 
 
 class UserInfo(BaseModel):
@@ -43,6 +44,13 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
     },
     UserRole.engineer: {
         "document.read", "document.extract", "collection.read",
+        "drawing.read", "drawing.analyze",
+    },
+    UserRole.technologist: {
+        "document.read", "drawing.read", "drawing.analyze",
+        "technology.read", "technology.create", "technology.edit",
+        "technology.normcontrol", "technology.export",
+        "collection.read",
     },
     UserRole.viewer: {
         "document.read", "invoice.read", "supplier.read",

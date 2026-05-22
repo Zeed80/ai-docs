@@ -31,7 +31,24 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
     "email.read",
     "email.send",
   ],
-  engineer: ["document.read", "document.extract", "collection.read"],
+  engineer: [
+    "document.read",
+    "document.extract",
+    "collection.read",
+    "drawing.read",
+    "drawing.analyze",
+  ],
+  technologist: [
+    "document.read",
+    "drawing.read",
+    "drawing.analyze",
+    "technology.read",
+    "technology.create",
+    "technology.edit",
+    "technology.normcontrol",
+    "technology.export",
+    "collection.read",
+  ],
   viewer: ["document.read", "invoice.read", "supplier.read"],
 };
 

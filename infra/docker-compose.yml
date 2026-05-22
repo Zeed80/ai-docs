@@ -39,6 +39,13 @@ x-authentik-env: &authentik-env
   AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:-please-change-me-in-production}
   AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
   AUTHENTIK_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+  # Bootstrap admin account — used only on first start
+  AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-admin@company.com}
+  AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-changeme_in_production}
+  # Expose env vars to blueprints for OAuth client credentials
+  OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-ai-workspace}
+  OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
+  OAUTH_REDIRECT_URIS: ${OAUTH_REDIRECT_URIS:-http://localhost:8000/api/auth/callback}
 
 services:
   # === Database ===
@@ -267,6 +274,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - authentik_media:/media
       - authentik_templates:/templates
+      - ./authentik/blueprints:/blueprints/custom
     depends_on:
       authentik-db:
         condition: service_healthy
