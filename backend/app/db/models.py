@@ -2529,3 +2529,24 @@ class Notification(UUIDPrimaryKey, Base):
     action_url: Mapped[str | None] = mapped_column(String(500))
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
+# ── Agent Scenario Trace ───────────────────────────────────────────────────────
+
+
+class ScenarioTrace(UUIDPrimaryKey, Base):
+    """Records each scenario execution for observability and debugging."""
+
+    __tablename__ = "scenario_traces"
+
+    scenario_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="running", index=True)
+    trigger: Mapped[dict | None] = mapped_column(JSON)
+    steps_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    steps_done: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    step_traces: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    triggered_by: Mapped[str] = mapped_column(String(100), default="system", nullable=False)

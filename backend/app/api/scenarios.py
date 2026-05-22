@@ -1,10 +1,15 @@
 """Scenarios API — list and trigger AiAgent workflow scenarios."""
 
-from fastapi import APIRouter, HTTPException
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.gateway_config import gateway_config
 from app.ai.scenario_runner import scenario_runner
+from app.db.session import get_db
 
 router = APIRouter()
 
@@ -36,6 +41,38 @@ async def run_scenario(name: str, body: ScenarioRunRequest) -> ScenarioRunRespon
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scenario failed: {e}")
+
+
+@router.get("/traces")
+async def list_traces(
+    scenario_name: str | None = Query(default=None),
+    limit: int = Query(default=50, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """List recent scenario execution traces (newest first)."""
+    from app.db.models import ScenarioTrace
+
+    stmt = select(ScenarioTrace).order_by(ScenarioTrace.started_at.desc()).limit(limit)
+    if scenario_name:
+        stmt = stmt.where(ScenarioTrace.scenario_name == scenario_name)
+    result = await db.execute(stmt)
+    traces = result.scalars().all()
+    return [
+        {
+            "id": str(t.id),
+            "scenario_name": t.scenario_name,
+            "status": t.status,
+            "steps_total": t.steps_total,
+            "steps_done": t.steps_done,
+            "duration_ms": t.duration_ms,
+            "error": t.error,
+            "started_at": t.started_at.isoformat(),
+            "finished_at": t.finished_at.isoformat() if t.finished_at else None,
+            "triggered_by": t.triggered_by,
+            "step_traces": t.step_traces,
+        }
+        for t in traces
+    ]
 
 
 @router.post("/agent/reload-config", status_code=200)

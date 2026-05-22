@@ -12,6 +12,8 @@ Usage:
 from __future__ import annotations
 
 import re
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -19,6 +21,32 @@ import structlog
 from app.ai.gateway_config import gateway_config
 
 logger = structlog.get_logger()
+
+
+async def _persist_trace(trace_data: dict) -> None:
+    """Write scenario trace to DB — fire-and-forget, never raises."""
+    try:
+        from app.db.session import _get_session_factory
+        from app.db.models import ScenarioTrace
+
+        async with _get_session_factory()() as db:
+            trace = ScenarioTrace(
+                scenario_name=trace_data["scenario_name"],
+                status=trace_data["status"],
+                trigger=trace_data.get("trigger"),
+                steps_total=trace_data["steps_total"],
+                steps_done=trace_data["steps_done"],
+                step_traces=trace_data.get("step_traces", []),
+                error=trace_data.get("error"),
+                duration_ms=trace_data.get("duration_ms"),
+                started_at=trace_data["started_at"],
+                finished_at=trace_data.get("finished_at"),
+                triggered_by=trace_data.get("triggered_by", "system"),
+            )
+            db.add(trace)
+            await db.commit()
+    except Exception as exc:
+        logger.warning("scenario_trace_persist_failed", error=str(exc))
 
 
 # ── Template engine ───────────────────────────────────────────────────────────
@@ -153,12 +181,14 @@ class ScenarioRunner:
         self,
         scenario_name: str,
         trigger: dict | None = None,
+        triggered_by: str = "system",
     ) -> dict:
         """Run a named scenario and return the final context dict.
 
         Args:
             scenario_name: name as registered in gateway.yml (e.g. 'email_triage')
             trigger: initial event data passed as {{ trigger.* }} in templates
+            triggered_by: user sub or "system" (stored in trace)
         Returns:
             dict with all step results keyed by step id
         """
@@ -169,6 +199,11 @@ class ScenarioRunner:
         ctx = _Context(trigger)
         steps: list[dict] = scenario.get("steps", [])
         timeout: int = scenario.get("timeout", 300)
+        step_traces: list[dict] = []
+        started_at = datetime.now(timezone.utc)
+        t0 = time.monotonic()
+        status = "ok"
+        error_msg: str | None = None
 
         logger.info(
             "scenario_start",
@@ -180,9 +215,13 @@ class ScenarioRunner:
         import asyncio
         try:
             async with asyncio.timeout(timeout):
-                for step in steps:
-                    step_id = step.get("id", f"step_{steps.index(step)}")
+                for idx, step in enumerate(steps):
+                    step_id = step.get("id", f"step_{idx}")
                     on_error = step.get("on_error", "continue")
+                    step_t0 = time.monotonic()
+                    step_status = "ok"
+                    step_error: str | None = None
+                    result: Any = None
                     try:
                         result = await _run_step(step, ctx)
                         ctx.set(step_id, result)
@@ -192,6 +231,8 @@ class ScenarioRunner:
                             step=step_id,
                         )
                     except Exception as exc:
+                        step_status = "error"
+                        step_error = str(exc)
                         logger.error(
                             "scenario_step_abort",
                             scenario=scenario_name,
@@ -199,12 +240,47 @@ class ScenarioRunner:
                             error=str(exc),
                         )
                         if on_error == "abort":
+                            status = "error"
+                            error_msg = f"Step {step_id}: {exc}"
                             raise
+                    finally:
+                        step_traces.append({
+                            "step_id": step_id,
+                            "skill": step.get("skill", ""),
+                            "status": step_status,
+                            "duration_ms": int((time.monotonic() - step_t0) * 1000),
+                            "error": step_error,
+                            "result_keys": list(result.keys()) if isinstance(result, dict) else None,
+                        })
         except TimeoutError:
+            status = "timeout"
+            error_msg = f"Scenario timed out after {timeout}s"
             logger.error("scenario_timeout", name=scenario_name, timeout=timeout)
             ctx.set("_timeout", True)
+        except Exception as exc:
+            if status != "error":
+                status = "error"
+                error_msg = str(exc)
 
-        logger.info("scenario_done", name=scenario_name)
+        finished_at = datetime.now(timezone.utc)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        logger.info("scenario_done", name=scenario_name, status=status, duration_ms=duration_ms)
+
+        import asyncio as _asyncio
+        _asyncio.create_task(_persist_trace({
+            "scenario_name": scenario_name,
+            "status": status,
+            "trigger": trigger,
+            "steps_total": len(steps),
+            "steps_done": len(step_traces),
+            "step_traces": step_traces,
+            "error": error_msg,
+            "duration_ms": duration_ms,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "triggered_by": triggered_by,
+        }))
+
         return dict(ctx._data)
 
     def list_scenarios(self) -> list[dict]:
