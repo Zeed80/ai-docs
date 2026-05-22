@@ -7,7 +7,7 @@ from datetime import timedelta
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
-from backend.app.domain.models import (
+from app.domain.models import (
     AgentAction,
     ApprovalGate,
     AuditEvent,
@@ -32,7 +32,7 @@ from backend.app.domain.models import (
     TaskJobStatus,
     now_utc,
 )
-from backend.app.domain.schemas import (
+from app.domain.schemas import (
     CaseCreate,
     CaseUpdate,
     DraftEmailCreate,

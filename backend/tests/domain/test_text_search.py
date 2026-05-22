@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.sql import column
 
-from backend.app.db.text_search import ilike_condition, postgres_fts_condition
+from app.db.text_search import ilike_condition, postgres_fts_condition
 
 
 def test_ilike_condition_compiles_for_sqlite_fallback() -> None:

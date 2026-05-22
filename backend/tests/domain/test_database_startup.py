@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.app.main import create_app
+from app.main import create_app
 
 
 def test_production_startup_rejects_silent_create_all(monkeypatch: pytest.MonkeyPatch) -> None:

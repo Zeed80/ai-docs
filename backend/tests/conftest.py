@@ -29,24 +29,29 @@ os.environ.setdefault("CELERY_TASK_ALWAYS_EAGER", "true")
 
 # ── DB URL resolution ──────────────────────────────────────────────────────────
 
-_STACK_URL = (
-    "postgresql+asyncpg://aiworkspace:changeme@localhost:5432/aiworkspace_test"
-)
-
 def _resolve_db_url() -> tuple[str, str]:
     """Return (async_url, display_label) for the test database."""
     # 1. Explicit env var
     if url := os.environ.get("TEST_DATABASE_URL"):
         return url.replace("postgresql://", "postgresql+asyncpg://", 1), "env:TEST_DATABASE_URL"
 
-    # 2. Running stack — quick sync check
+    # 2. Running stack — try POSTGRES_HOST env (container) then localhost (host)
+    pg_host = os.environ.get("POSTGRES_HOST", "localhost")
+    pg_port = int(os.environ.get("POSTGRES_PORT", "5432"))
+    pg_user = os.environ.get("POSTGRES_USER", "aiworkspace")
+    pg_pass = os.environ.get("POSTGRES_PASSWORD", "changeme")
+    pg_db = os.environ.get("POSTGRES_DB", "aiworkspace")
+    test_db = pg_db + "_test"
+
     import socket
-    try:
-        s = socket.create_connection(("localhost", 5432), timeout=1)
-        s.close()
-        return _STACK_URL, "stack:localhost:5432/aiworkspace_test"
-    except OSError:
-        pass
+    for host in ([pg_host] if pg_host != "localhost" else ["localhost"]):
+        try:
+            s = socket.create_connection((host, pg_port), timeout=1)
+            s.close()
+            url = f"postgresql+asyncpg://{pg_user}:{pg_pass}@{host}:{pg_port}/{test_db}"
+            return url, f"stack:{host}:{pg_port}/{test_db}"
+        except OSError:
+            pass
 
     # 3. testcontainers fallback
     return "__testcontainers__", "testcontainers:postgres:16-alpine"

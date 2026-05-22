@@ -4,8 +4,8 @@ from pathlib import Path
 
 import yaml
 
-from backend.app.ai.router import AIRouter
-from backend.app.ai.schemas import AIRequest, ChatMessage, EvalCase, EvalResult
+from app.ai.router import AIRouter
+from app.ai.schemas import AIRequest, ChatMessage, EvalCase, EvalResult
 
 
 class ModelEvalHarness:

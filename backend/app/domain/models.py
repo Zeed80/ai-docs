@@ -5,9 +5,11 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from backend.app.db.base import Base
+
+class Base(DeclarativeBase):
+    pass
 
 
 def new_uuid() -> str:

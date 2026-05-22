@@ -5,15 +5,15 @@ import base64
 from io import BytesIO
 from pathlib import Path
 
-from backend.app.ai import AIRouter
-from backend.app.ai.schemas import AIRequest, AITask, ChatMessage
-from backend.app.domain.models import Document, ProcessingJobStatus
-from backend.app.domain.schemas import (
+from app.ai import AIRouter
+from app.ai.schemas import AIRequest, AITask, ChatMessage
+from app.domain.models import Document, ProcessingJobStatus
+from app.domain.schemas import (
     DocumentArtifactRead,
     DocumentExtractionResult,
     StructuredDocumentExtraction,
 )
-from backend.app.domain.storage import LocalFileStorage
+from app.domain.storage import LocalFileStorage
 
 
 TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xml"}

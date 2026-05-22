@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from backend.app.ai.providers.base import AIProvider
-from backend.app.ai.router import AIConfidentialityPolicyError, AIRouter
-from backend.app.ai.schemas import (
+from app.ai.providers.base import AIProvider
+from app.ai.router import AIConfidentialityPolicyError, AIRouter
+from app.ai.schemas import (
     AIRequest,
     AIResponse,
     AITask,
@@ -13,7 +13,7 @@ from backend.app.ai.schemas import (
     ProviderKind,
     ProposedToolCall,
 )
-from backend.app.ai.model_registry import ModelRegistry
+from app.ai.model_registry import ModelRegistry
 
 
 class InvoiceMiniSchema(BaseModel):

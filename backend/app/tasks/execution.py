@@ -4,10 +4,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.app.ai import AIRouter
-from backend.app.domain.models import ProcessingJobStatus, TaskJob
-from backend.app.domain.schemas import DocumentArtifactRead
-from backend.app.domain.services import (
+from app.ai import AIRouter
+from app.domain.models import ProcessingJobStatus, TaskJob
+from app.domain.schemas import DocumentArtifactRead
+from app.domain.services import (
     complete_processing_job,
     complete_task_job,
     create_document_artifacts,
@@ -16,8 +16,8 @@ from backend.app.domain.services import (
     get_document,
     start_task_job,
 )
-from backend.app.domain.storage import LocalFileStorage
-from backend.app.tasks.document_processing import process_document
+from app.domain.storage import LocalFileStorage
+from app.tasks.document_processing import process_document
 
 
 async def run_task_job(

@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from backend.app.ai.model_registry import ModelRegistry
-from backend.app.ai.schemas import AITask, ModelStatus, ProviderKind
+from app.ai.model_registry import ModelRegistry
+from app.ai.schemas import AITask, ModelStatus, ProviderKind
 
 
-REGISTRY_PATH = Path("backend/app/ai/config/model_registry.yaml")
+REGISTRY_PATH = Path(__file__).parent.parent.parent / "app" / "ai" / "config" / "model_registry.yaml"
 
 
 def test_registry_loads_baseline_models() -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.app.auth import has_permission, permissions_for_roles
+from app.auth import has_permission, permissions_for_roles
 
 
 def test_rbac_role_permissions() -> None:

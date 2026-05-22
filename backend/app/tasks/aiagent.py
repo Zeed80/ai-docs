@@ -6,15 +6,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.app.domain.models import AgentAction, ApprovalGate, Document, Invoice
-from backend.app.domain.services import (
+from app.domain.models import AgentAction, ApprovalGate, Document, Invoice
+from app.domain.services import (
     add_agent_scenario_completed_audit,
     add_agent_scenario_started_audit,
     create_approval_gate,
     create_task_job,
     record_agent_action,
 )
-from backend.app.domain.schemas import AgentScenarioRunRequest
+from app.domain.schemas import AgentScenarioRunRequest
 
 
 AIAGENT_ROOT = Path("aiagent")

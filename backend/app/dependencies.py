@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from backend.app.ai import AIRouter, ModelRegistry
-from backend.app.config import get_settings
-from backend.app.domain.storage import LocalFileStorage
+from app.ai import AIRouter, ModelRegistry
+from app.config import get_settings
+from app.domain.storage import LocalFileStorage
 
 
 @lru_cache

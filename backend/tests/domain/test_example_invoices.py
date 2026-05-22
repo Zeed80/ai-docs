@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.domain.models import Document, ProcessingJobStatus
-from backend.app.tasks.document_processing import extract_text
+from app.domain.models import Document, ProcessingJobStatus
+from app.tasks.document_processing import extract_text
 
 
 def test_example_invoice_pdf_text_layer_smoke() -> None:

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.domain.models import Document, ProcessingJobStatus
-from backend.app.tasks.document_processing import extract_text
+from app.domain.models import Document, ProcessingJobStatus
+from app.tasks.document_processing import extract_text
 
 
 def test_extract_text_supported_plain_formats(tmp_path: Path) -> None:

@@ -11,6 +11,8 @@ x-backend-env: &backend-env
   MINIO_BUCKET: ${MINIO_BUCKET:-documents}
   QDRANT_URL: http://qdrant:6333
   OLLAMA_URL: ${OLLAMA_URL:-http://host-gateway:11434}
+  OLLAMA_MODEL_REASONING: ${OLLAMA_MODEL_REASONING:-qwen3.5:9b}
+  OLLAMA_MODEL_OCR: ${OLLAMA_MODEL_OCR:-gemma4:e4b}
   APP_ENV: ${APP_ENV:-development}
   APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-secret-key}
   APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
