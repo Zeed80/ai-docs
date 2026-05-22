@@ -19,6 +19,7 @@ from typing import Any
 import structlog
 
 from app.ai.gateway_config import gateway_config
+from app.core import metrics
 
 logger = structlog.get_logger()
 
@@ -265,6 +266,10 @@ class ScenarioRunner:
         finished_at = datetime.now(timezone.utc)
         duration_ms = int((time.monotonic() - t0) * 1000)
         logger.info("scenario_done", name=scenario_name, status=status, duration_ms=duration_ms)
+        metrics.scenario_runs_total.labels(scenario=scenario_name).inc()
+        metrics.scenario_duration_seconds.labels(scenario=scenario_name).observe(duration_ms / 1000)
+        if status in ("error", "timeout"):
+            metrics.scenario_errors_total.labels(scenario=scenario_name, reason=status).inc()
 
         import asyncio as _asyncio
         _asyncio.create_task(_persist_trace({

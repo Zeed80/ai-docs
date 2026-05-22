@@ -20,7 +20,7 @@ services:
     ports:
       - "9090:9090"
     networks:
-      - aiworkspace
+      - app
 
   grafana:
     image: grafana/grafana:11.1.0
@@ -38,12 +38,12 @@ services:
     depends_on:
       - prometheus
     networks:
-      - aiworkspace
+      - app
 
 volumes:
   prometheus_data:
   grafana_data:
 
 networks:
-  aiworkspace:
+  app:
     external: true

@@ -2,14 +2,19 @@
   "title": "AI Workspace — Overview",
   "uid": "aiworkspace-overview",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Agent Turns (total)",
-      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
         {
           "expr": "sum(aiworkspace_agent_turns_total)",
@@ -21,7 +26,12 @@
       "id": 2,
       "type": "stat",
       "title": "Invoices Approved",
-      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
         {
           "expr": "sum(aiworkspace_invoices_approved_total)",
@@ -33,7 +43,12 @@
       "id": 3,
       "type": "stat",
       "title": "Anomalies Detected",
-      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
         {
           "expr": "sum(aiworkspace_anomalies_detected_total)",
@@ -45,7 +60,12 @@
       "id": 4,
       "type": "timeseries",
       "title": "Agent Turn Duration (p50/p95)",
-      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.5, rate(aiworkspace_agent_turn_duration_seconds_bucket[5m]))",
@@ -61,7 +81,12 @@
       "id": 5,
       "type": "timeseries",
       "title": "Extraction Duration (p50/p95)",
-      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.5, rate(aiworkspace_extraction_duration_seconds_bucket[5m]))",
@@ -77,7 +102,12 @@
       "id": 6,
       "type": "timeseries",
       "title": "Tool Calls per Minute",
-      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "sum by (tool) (rate(aiworkspace_agent_tool_calls_total[1m]))",
@@ -89,7 +119,12 @@
       "id": 7,
       "type": "timeseries",
       "title": "Approval Wait Time (p50/p90)",
-      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.5, rate(aiworkspace_approval_wait_seconds_bucket[1h]))",
@@ -105,7 +140,12 @@
       "id": 8,
       "type": "timeseries",
       "title": "HTTP Request Rate",
-      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "sum by (path) (rate(aiworkspace_http_requests_total[1m]))",
@@ -117,7 +157,12 @@
       "id": 9,
       "type": "timeseries",
       "title": "HTTP Request Duration p95 (ms)",
-      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.95, rate(aiworkspace_http_request_duration_seconds_bucket[5m])) * 1000",
@@ -129,7 +174,12 @@
       "id": 10,
       "type": "stat",
       "title": "Celery Queue Depth",
-      "gridPos": { "x": 0, "y": 28, "w": 4, "h": 4 },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
         {
           "expr": "sum(aiworkspace_celery_queue_depth)",
@@ -141,7 +191,12 @@
       "id": 11,
       "type": "timeseries",
       "title": "Ollama VRAM Used (GB)",
-      "gridPos": { "x": 4, "y": 28, "w": 10, "h": 4 },
+      "gridPos": {
+        "x": 4,
+        "y": 28,
+        "w": 10,
+        "h": 4
+      },
       "targets": [
         {
           "expr": "aiworkspace_ollama_vram_used_bytes / 1e9",
@@ -153,7 +208,12 @@
       "id": 12,
       "type": "stat",
       "title": "Agent Steps (total)",
-      "gridPos": { "x": 14, "y": 28, "w": 4, "h": 4 },
+      "gridPos": {
+        "x": 14,
+        "y": 28,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
         {
           "expr": "sum(aiworkspace_agent_steps_total)",
@@ -165,11 +225,253 @@
       "id": 13,
       "type": "stat",
       "title": "Active WebSocket Connections",
-      "gridPos": { "x": 18, "y": 28, "w": 4, "h": 4 },
+      "gridPos": {
+        "x": 18,
+        "y": 28,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
         {
           "expr": "aiworkspace_ws_connections_active",
           "legendFormat": "WS connections"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "GPU / AI Performance",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Ollama GPU VRAM Used (GB)",
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decgbytes",
+          "min": 0,
+          "max": 24
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "aiworkspace_ollama_vram_used_bytes / 1073741824",
+          "legendFormat": "VRAM used"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "LLM Tokens per Second",
+      "gridPos": {
+        "x": 8,
+        "y": 33,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "rate(aiworkspace_llm_tokens_total[1m])",
+          "legendFormat": "tok/s"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "LLM Request Duration (p50/p95)",
+      "gridPos": {
+        "x": 16,
+        "y": 33,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(aiworkspace_llm_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(aiworkspace_llm_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "Технологические Процессы",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "ТП Создано (всего)",
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "sum(aiworkspace_tp_created_total)",
+          "legendFormat": "ТП"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "stat",
+      "title": "Нормоконтроль Passed",
+      "gridPos": {
+        "x": 4,
+        "y": 42,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "sum(aiworkspace_normcontrol_passed_total)",
+          "legendFormat": "Passed"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "stat",
+      "title": "ГОСТ Формы Экспортировано",
+      "gridPos": {
+        "x": 8,
+        "y": 42,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "sum(aiworkspace_gost_forms_exported_total)",
+          "legendFormat": "Формы"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "TP Generation Duration (p50/p95)",
+      "gridPos": {
+        "x": 12,
+        "y": 42,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(aiworkspace_tp_generation_duration_seconds_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(aiworkspace_tp_generation_duration_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "row",
+      "title": "Agent Scenario Traces",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 24,
+      "type": "stat",
+      "title": "Сценариев Выполнено",
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "sum(aiworkspace_scenario_runs_total)",
+          "legendFormat": "Runs"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "stat",
+      "title": "Сценариев Упало",
+      "gridPos": {
+        "x": 4,
+        "y": 51,
+        "w": 4,
+        "h": 4
+      },
+      "options": {
+        "colorMode": "value",
+        "thresholds": {
+          "steps": [
+            {
+              "color": "green",
+              "value": 0
+            },
+            {
+              "color": "red",
+              "value": 1
+            }
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(aiworkspace_scenario_errors_total)",
+          "legendFormat": "Errors"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Scenario Duration by Type (p95)",
+      "gridPos": {
+        "x": 8,
+        "y": 51,
+        "w": 16,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (scenario, le) (rate(aiworkspace_scenario_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{scenario}} p95"
         }
       ]
     }

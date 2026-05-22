@@ -107,6 +107,62 @@ if _PROMETHEUS_AVAILABLE:
         "Total agent reasoning steps executed",
         ["scenario"],
     )
+
+    # LLM / model inference
+    llm_tokens_total = Counter(
+        "aiworkspace_llm_tokens_total",
+        "Total LLM tokens generated",
+        ["model", "task"],
+    )
+    llm_request_duration_seconds = Histogram(
+        "aiworkspace_llm_request_duration_seconds",
+        "LLM inference request duration in seconds",
+        ["model", "task"],
+        buckets=[0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0],
+    )
+
+    # Технологические процессы (ТП)
+    tp_created_total = Counter(
+        "aiworkspace_tp_created_total",
+        "Total manufacturing process plans created",
+        ["tp_type"],
+    )
+    normcontrol_passed_total = Counter(
+        "aiworkspace_normcontrol_passed_total",
+        "Normcontrol checks passed",
+    )
+    normcontrol_failed_total = Counter(
+        "aiworkspace_normcontrol_failed_total",
+        "Normcontrol checks failed",
+    )
+    gost_forms_exported_total = Counter(
+        "aiworkspace_gost_forms_exported_total",
+        "GOST forms exported",
+        ["form_type", "format"],
+    )
+    tp_generation_duration_seconds = Histogram(
+        "aiworkspace_tp_generation_duration_seconds",
+        "TP generation pipeline duration in seconds",
+        buckets=[5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
+    )
+
+    # Scenario traces
+    scenario_runs_total = Counter(
+        "aiworkspace_scenario_runs_total",
+        "Total scenario executions",
+        ["scenario"],
+    )
+    scenario_errors_total = Counter(
+        "aiworkspace_scenario_errors_total",
+        "Scenario execution errors",
+        ["scenario", "reason"],
+    )
+    scenario_duration_seconds = Histogram(
+        "aiworkspace_scenario_duration_seconds",
+        "Scenario execution duration in seconds",
+        ["scenario"],
+        buckets=[1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0],
+    )
 else:
     # Stubs when prometheus_client not available
     class _Noop:
@@ -137,3 +193,13 @@ else:
     ollama_vram_used_bytes = _noop
     ollama_model_loaded = _noop
     agent_steps_total = _noop
+    llm_tokens_total = _noop
+    llm_request_duration_seconds = _noop
+    tp_created_total = _noop
+    normcontrol_passed_total = _noop
+    normcontrol_failed_total = _noop
+    gost_forms_exported_total = _noop
+    tp_generation_duration_seconds = _noop
+    scenario_runs_total = _noop
+    scenario_errors_total = _noop
+    scenario_duration_seconds = _noop
