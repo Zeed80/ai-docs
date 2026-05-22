@@ -231,66 +231,77 @@ def create_app() -> FastAPI:
         expose_headers=["X-Request-ID"],
     )
 
-    # Routers
-    app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
-    app.include_router(invoices.router, prefix="/api/invoices", tags=["invoices"])
-    app.include_router(email.router, prefix="/api/email", tags=["email"])
-    app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"])
-    app.include_router(auto_approval.router, prefix="/api/auto-approval-rules", tags=["auto-approval"])
-    app.include_router(search.router, prefix="/api/search", tags=["search"])
-    app.include_router(normalization.router, prefix="/api/normalization", tags=["normalization"])
-    app.include_router(tables.router, prefix="/api/tables", tags=["tables"])
-    app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"])
-    app.include_router(canonical.router, prefix="/api/canonical", tags=["canonical"])
-    app.include_router(collections.router, prefix="/api/collections", tags=["collections"])
-    app.include_router(anomalies.router, prefix="/api/anomalies", tags=["anomalies"])
-    app.include_router(compare.router, prefix="/api/compare", tags=["compare"])
-    app.include_router(calendar.router, prefix="/api/calendar", tags=["calendar"])
+    # Auth dependency applied to every protected router.
+    # In dev mode (AUTH_ENABLED=false) it's a no-op that returns _DEV_USER.
+    from fastapi import Depends as _Depends
+    from app.auth.jwt import get_current_user as _get_current_user
+    _auth = [_Depends(_get_current_user)]
+
+    # ── Public routers (no auth required) ─────────────────────────────────────
+    app.include_router(health.router, tags=["health"])
+    app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+    # agent.router contains WebSocket endpoints — WS handler validates token internally
     app.include_router(agent.router, tags=["agent"])
+
+    # ── Protected routers ──────────────────────────────────────────────────────
+    app.include_router(documents.router, prefix="/api/documents", tags=["documents"], dependencies=_auth)
+    app.include_router(invoices.router, prefix="/api/invoices", tags=["invoices"], dependencies=_auth)
+    app.include_router(email.router, prefix="/api/email", tags=["email"], dependencies=_auth)
+    app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"], dependencies=_auth)
+    app.include_router(auto_approval.router, prefix="/api/auto-approval-rules", tags=["auto-approval"], dependencies=_auth)
+    app.include_router(search.router, prefix="/api/search", tags=["search"], dependencies=_auth)
+    app.include_router(normalization.router, prefix="/api/normalization", tags=["normalization"], dependencies=_auth)
+    app.include_router(tables.router, prefix="/api/tables", tags=["tables"], dependencies=_auth)
+    app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"], dependencies=_auth)
+    app.include_router(canonical.router, prefix="/api/canonical", tags=["canonical"], dependencies=_auth)
+    app.include_router(collections.router, prefix="/api/collections", tags=["collections"], dependencies=_auth)
+    app.include_router(anomalies.router, prefix="/api/anomalies", tags=["anomalies"], dependencies=_auth)
+    app.include_router(compare.router, prefix="/api/compare", tags=["compare"], dependencies=_auth)
+    app.include_router(calendar.router, prefix="/api/calendar", tags=["calendar"], dependencies=_auth)
     app.include_router(
         agent_control_plane.router,
         prefix="/api/agent",
         tags=["agent-control-plane"],
+        dependencies=_auth,
     )
-    app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-    app.include_router(ai_settings.router, prefix="/api/ai", tags=["ai"])
-    app.include_router(agent_actions.router, prefix="/api/agent-actions", tags=["agent"])
-    app.include_router(export.router, prefix="/api", tags=["export"])
-    app.include_router(draft_email.router, prefix="/api/draft-emails", tags=["email"])
-    app.include_router(quarantine.router, prefix="/api/quarantine", tags=["quarantine"])
-    app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
-    app.include_router(warehouse.router, prefix="/api/warehouse", tags=["warehouse"])
-    app.include_router(procurement.router, prefix="/api", tags=["procurement"])
-    app.include_router(payments.router, prefix="/api", tags=["payments"])
-    app.include_router(boms.router, prefix="/api", tags=["boms"])
-    app.include_router(scenarios.router, prefix="/api/scenarios", tags=["agent"])
-    app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
-    app.include_router(memory.router, prefix="/api/memory", tags=["memory"])
-    app.include_router(technology.router, prefix="/api/technology", tags=["technology"])
-    app.include_router(ntd.router, prefix="/api", tags=["ntd"])
-    app.include_router(telegram.router, prefix="/api/telegram", tags=["telegram"])
-    app.include_router(canvas.router, prefix="/api/canvas", tags=["canvas"])
-    app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
-    app.include_router(workspace_export.router, prefix="/api/workspace", tags=["workspace"])
-    app.include_router(mailbox.router, prefix="/api/mailbox", tags=["mailbox"])
+    app.include_router(ai_settings.router, prefix="/api/ai", tags=["ai"], dependencies=_auth)
+    app.include_router(agent_actions.router, prefix="/api/agent-actions", tags=["agent"], dependencies=_auth)
+    app.include_router(export.router, prefix="/api", tags=["export"], dependencies=_auth)
+    app.include_router(draft_email.router, prefix="/api/draft-emails", tags=["email"], dependencies=_auth)
+    app.include_router(quarantine.router, prefix="/api/quarantine", tags=["quarantine"], dependencies=_auth)
+    app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"], dependencies=_auth)
+    app.include_router(warehouse.router, prefix="/api/warehouse", tags=["warehouse"], dependencies=_auth)
+    app.include_router(procurement.router, prefix="/api", tags=["procurement"], dependencies=_auth)
+    app.include_router(payments.router, prefix="/api", tags=["payments"], dependencies=_auth)
+    app.include_router(boms.router, prefix="/api", tags=["boms"], dependencies=_auth)
+    app.include_router(scenarios.router, prefix="/api/scenarios", tags=["agent"], dependencies=_auth)
+    app.include_router(graph.router, prefix="/api/graph", tags=["graph"], dependencies=_auth)
+    app.include_router(memory.router, prefix="/api/memory", tags=["memory"], dependencies=_auth)
+    app.include_router(technology.router, prefix="/api/technology", tags=["technology"], dependencies=_auth)
+    app.include_router(ntd.router, prefix="/api", tags=["ntd"], dependencies=_auth)
+    app.include_router(telegram.router, prefix="/api/telegram", tags=["telegram"], dependencies=_auth)
+    app.include_router(canvas.router, prefix="/api/canvas", tags=["canvas"], dependencies=_auth)
+    app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
+    app.include_router(workspace_export.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
+    app.include_router(mailbox.router, prefix="/api/mailbox", tags=["mailbox"], dependencies=_auth)
     app.include_router(
         email_templates.router,
         prefix="/api/email-templates",
         tags=["email-templates"],
+        dependencies=_auth,
     )
-    app.include_router(drawings.router, prefix="/api/drawings", tags=["drawings"])
-    app.include_router(tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"])
-    app.include_router(cases.router, tags=["cases"])
-    app.include_router(chat_sessions.router, prefix="/api/chat", tags=["chat"])
-    app.include_router(dynamic_skill_runner.router, tags=["agent-generated"])
-    app.include_router(capability_router, prefix="/api/agent", tags=["capabilities"])
-    app.include_router(health.router, tags=["health"])
-    app.include_router(admin_api.router)
-    app.include_router(rooms.router, prefix="/api/rooms", tags=["rooms"])
-    app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"])
-    app.include_router(handovers.router, prefix="/api/handovers", tags=["handovers"])
-    app.include_router(setup_api.router, prefix="/api/setup", tags=["setup"])
-    app.include_router(comments_api.router, prefix="/api/comments", tags=["comments"])
+    app.include_router(drawings.router, prefix="/api/drawings", tags=["drawings"], dependencies=_auth)
+    app.include_router(tool_catalog.router, prefix="/api/tool-catalog", tags=["tool-catalog"], dependencies=_auth)
+    app.include_router(cases.router, tags=["cases"], dependencies=_auth)
+    app.include_router(chat_sessions.router, prefix="/api/chat", tags=["chat"], dependencies=_auth)
+    app.include_router(dynamic_skill_runner.router, tags=["agent-generated"], dependencies=_auth)
+    app.include_router(capability_router, prefix="/api/agent", tags=["capabilities"], dependencies=_auth)
+    app.include_router(admin_api.router, dependencies=_auth)
+    app.include_router(rooms.router, prefix="/api/rooms", tags=["rooms"], dependencies=_auth)
+    app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"], dependencies=_auth)
+    app.include_router(handovers.router, prefix="/api/handovers", tags=["handovers"], dependencies=_auth)
+    app.include_router(setup_api.router, prefix="/api/setup", tags=["setup"], dependencies=_auth)
+    app.include_router(comments_api.router, prefix="/api/comments", tags=["comments"], dependencies=_auth)
 
     return app
 

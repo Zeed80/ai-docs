@@ -1,6 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
+import { apiFetch } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -36,7 +37,7 @@ export default function CasesPage() {
       const url = status
         ? `${API}/api/cases?status=${status}`
         : `${API}/api/cases`;
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       if (res.ok) {
         const data = await res.json();
         setCases(data.items ?? []);

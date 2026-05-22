@@ -82,3 +82,34 @@ export async function logout(): Promise<void> {
     // ignore errors — redirect to login regardless
   }
 }
+
+/**
+ * Fetch wrapper that always includes the auth cookie and CSRF header.
+ * On 401 responses it redirects to /auth/login (browser-only).
+ */
+export async function apiFetch(
+  url: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+
+  const res = await fetch(url, {
+    credentials: "include",
+    ...init,
+    headers: {
+      ...(isMutation ? csrfHeaders() : {}),
+      ...init?.headers,
+    },
+  });
+
+  if (
+    res.status === 401 &&
+    typeof window !== "undefined" &&
+    !window.location.pathname.startsWith("/auth/")
+  ) {
+    window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname)}`;
+  }
+
+  return res;
+}

@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import log_action
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo
 from app.db.models import (
     Approval,
     ApprovalStatus,
@@ -30,7 +32,6 @@ class CaseCreate(BaseModel):
     title: str
     customer: str | None = None
     task_description: str | None = None
-    created_by: str = "system"
 
 
 class CaseOut(BaseModel):
@@ -55,7 +56,6 @@ class CaseDetailOut(CaseOut):
 
 class AddDocumentRequest(BaseModel):
     document_id: uuid.UUID
-    added_by: str = "system"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -116,29 +116,33 @@ async def _build_approval_gates(db: AsyncSession, case_id: uuid.UUID) -> list[di
 
 
 @router.post("", status_code=201)
-async def create_case(body: CaseCreate, db: AsyncSession = Depends(get_db)) -> CaseOut:
+async def create_case(
+    body: CaseCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
+) -> CaseOut:
     """Create a new work case."""
+    actor = current_user.sub
     case = WorkCase(
         title=body.title,
         customer=body.customer,
         task_description=body.task_description,
-        created_by=body.created_by,
+        created_by=actor,
         status="open",
     )
     db.add(case)
     await db.flush()
 
-    # Record creation in timeline
     db.add(AuditTimelineEvent(
         entity_type="case",
         entity_id=case.id,
         event_type="case_created",
-        actor=body.created_by,
+        actor=actor,
         summary=f"Кейс создан: {body.title}",
         details={"customer": body.customer},
     ))
     await log_action(db, action="case.create", entity_type="case", entity_id=case.id,
-                     user_id=body.created_by, details={"title": body.title})
+                     user_id=actor, details={"title": body.title})
     await db.commit()
     await db.refresh(case)
 
@@ -198,6 +202,7 @@ async def add_document(
     case_id: uuid.UUID,
     body: AddDocumentRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ) -> dict:
     """Add a document to a case."""
     case = await db.get(WorkCase, case_id)
@@ -208,7 +213,6 @@ async def add_document(
     if not doc:
         raise HTTPException(404, detail="Document not found")
 
-    # Check for duplicate
     existing = await db.execute(
         select(CaseDocument).where(
             CaseDocument.case_id == case_id,
@@ -218,17 +222,17 @@ async def add_document(
     if existing.scalar_one_or_none():
         raise HTTPException(409, detail="Document already in case")
 
-    cd = CaseDocument(case_id=case_id, document_id=body.document_id, added_by=body.added_by)
+    actor = current_user.sub
+    cd = CaseDocument(case_id=case_id, document_id=body.document_id, added_by=actor)
     db.add(cd)
 
-    # Record in timeline — use doc status for event type
     doc_status = doc.status.value if hasattr(doc.status, "value") else str(doc.status)
     event_type = f"document_{doc_status}" if doc_status in ("suspicious", "quarantined") else "document_added"
     db.add(AuditTimelineEvent(
         entity_type="case",
         entity_id=case_id,
         event_type=event_type,
-        actor=body.added_by,
+        actor=actor,
         summary=f"Документ добавлен: {doc.file_name}",
         details={"document_id": str(body.document_id), "file_name": doc.file_name, "status": doc_status},
     ))
@@ -270,8 +274,13 @@ async def decide_case_approval(
     approval_id: uuid.UUID,
     body: dict,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ) -> dict:
-    """Approve or reject a case approval gate."""
+    """Approve or reject a case approval gate. Requires manager or admin role."""
+    from app.auth.models import UserRole
+    if UserRole.admin not in current_user.roles and UserRole.manager not in current_user.roles:
+        raise HTTPException(status_code=403, detail="Requires manager or admin role")
+
     approval = await db.get(Approval, approval_id)
     if not approval or approval.entity_id != case_id:
         raise HTTPException(404, detail="Approval not found for this case")
@@ -279,11 +288,11 @@ async def decide_case_approval(
         raise HTTPException(422, detail="Approval already decided")
 
     approved = bool(body.get("approved", True))
-    decided_by = body.get("decided_by", "user")
     comment = body.get("comment")
+    actor = current_user.sub
 
     approval.status = ApprovalStatus.approved if approved else ApprovalStatus.rejected
-    approval.decided_by = decided_by
+    approval.decided_by = actor
     approval.decided_at = datetime.now(UTC)
     approval.decision_comment = comment
 
@@ -292,18 +301,23 @@ async def decide_case_approval(
         entity_type="case",
         entity_id=case_id,
         event_type=event_type,
-        actor=decided_by,
+        actor=actor,
         summary=f"Решение по approval: {'одобрено' if approved else 'отклонено'}",
         details={"approval_id": str(approval_id), "comment": comment},
     ))
     await log_action(db, action="case.approval_decide", entity_type="case", entity_id=case_id,
-                     user_id=decided_by, details={"approval_id": str(approval_id), "approved": approved})
+                     user_id=actor, details={"approval_id": str(approval_id), "approved": approved})
     await db.commit()
     return {"ok": True, "status": approval.status.value, "event_type": event_type}
 
 
 @router.patch("/{case_id}")
-async def update_case(case_id: uuid.UUID, body: dict, db: AsyncSession = Depends(get_db)) -> CaseOut:
+async def update_case(
+    case_id: uuid.UUID,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
+) -> CaseOut:
     """Update case status or description."""
     case = await db.get(WorkCase, case_id)
     if not case:

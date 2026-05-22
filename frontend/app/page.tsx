@@ -1,6 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
+import { apiFetch } from "@/lib/auth";
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
@@ -340,7 +341,7 @@ function CreateCaseForm() {
     if (!title.trim()) return;
     setCreating(true);
     try {
-      const res = await fetch(`${API}/api/cases`, {
+      const res = await apiFetch(`${API}/api/cases`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

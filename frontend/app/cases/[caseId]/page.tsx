@@ -1,6 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
+import { apiFetch } from "@/lib/auth";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -76,7 +77,7 @@ export default function CaseCockpitPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch(`${API}/api/cases/${caseId}`).catch(() => null);
+    const res = await apiFetch(`${API}/api/cases/${caseId}`).catch(() => null);
     if (res?.ok) {
       setCaseData(await res.json());
     }
@@ -94,7 +95,7 @@ export default function CaseCockpitPage() {
     try {
       const form = new FormData();
       form.append("file", fileToAdd);
-      const uploadRes = await fetch(`${API}/api/documents/ingest`, {
+      const uploadRes = await apiFetch(`${API}/api/documents/ingest`, {
         method: "POST",
         body: form,
       });
@@ -106,7 +107,7 @@ export default function CaseCockpitPage() {
       const uploaded = await uploadRes.json();
       const docId: string = uploaded.id ?? uploaded.document_id;
 
-      const addRes = await fetch(`${API}/api/cases/${caseId}/documents`, {
+      const addRes = await apiFetch(`${API}/api/cases/${caseId}/documents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ document_id: docId }),
@@ -128,11 +129,14 @@ export default function CaseCockpitPage() {
   async function handleApprove(approvalId: string) {
     setDecidingId(approvalId);
     try {
-      await fetch(`${API}/api/cases/${caseId}/approvals/${approvalId}/decide`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved: true, decided_by: "user" }),
-      });
+      await apiFetch(
+        `${API}/api/cases/${caseId}/approvals/${approvalId}/decide`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved: true }),
+        },
+      );
       await load();
     } finally {
       setDecidingId(null);
@@ -142,11 +146,14 @@ export default function CaseCockpitPage() {
   async function handleReject(approvalId: string) {
     setDecidingId(approvalId);
     try {
-      await fetch(`${API}/api/cases/${caseId}/approvals/${approvalId}/decide`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved: false, decided_by: "user" }),
-      });
+      await apiFetch(
+        `${API}/api/cases/${caseId}/approvals/${approvalId}/decide`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved: false }),
+        },
+      );
       await load();
     } finally {
       setDecidingId(null);

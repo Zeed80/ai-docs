@@ -9,7 +9,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserInfo | null | undefined>(undefined);
 
   useEffect(() => {
-    fetchMe().then((u) => setUser(u ?? null));
+    fetchMe().then((u) => {
+      if (u) {
+        setUser(u);
+      } else if (
+        typeof window !== "undefined" &&
+        !window.location.pathname.startsWith("/auth/")
+      ) {
+        // Cookie missing or expired — redirect to login preserving the current path
+        window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname)}`;
+      } else {
+        setUser(null);
+      }
+    });
   }, []);
 
   return <AuthContext.Provider value={user}>{children}</AuthContext.Provider>;
