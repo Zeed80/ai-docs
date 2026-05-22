@@ -433,6 +433,17 @@ class AgentOrchestrator:
                 workspace_required = True
                 output_type = "table"
 
+        # References to an already open table take priority over grouping
+        if not canvas_id and _references_existing_table(text):
+            canvas_id = _latest_workspace_table_id()
+
+        # Supplier grouping: "сгруппируй по поставщикам" → dedicated canvas
+        if not canvas_id and _is_supplier_grouping_request(text):
+            sg = _canvas_map().get("supplier_grouping", {})
+            workspace_required = True
+            output_type = "table"
+            canvas_id = sg.get("canvas_id", "agent:invoice-items-by-supplier")
+
         # Supplier-specific filter: carry it to the LLM as a hint in filters
         workspace_filters: dict[str, str] = {}
         supplier_name = _extract_supplier_name(text)
@@ -441,6 +452,10 @@ class AgentOrchestrator:
             output_type = "table"
             canvas_id = canvas_id or "agent:invoice-items"
             workspace_filters = {"supplier_query": supplier_name}
+
+        # Resolve canvas_id from workspace state or JSON fallback rules if still unset
+        if workspace_required and not canvas_id:
+            canvas_id = _fallback_canvas_id(content)
 
         # Pass just 1-2 broad skills as a starting hint; LLM picks the exact ones
         skills: list[str] = []

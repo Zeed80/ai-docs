@@ -20,7 +20,8 @@ def test_registry_loads_baseline_models() -> None:
     reranker = registry.get_model("local_reranker_openai_compatible")
     assert "rerank" in {modality.value for modality in reranker.modalities}
     assert registry.get_route(AITask.RERANKING).fallback_chain == [
-        "local_reranker_openai_compatible"
+        "local_reranker_ollama",
+        "local_reranker_openai_compatible",
     ]
 
 

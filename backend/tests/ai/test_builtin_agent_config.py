@@ -143,7 +143,7 @@ tools:
     monkeypatch.setattr(
         agent_loop,
         "gateway_config",
-        SimpleNamespace(registry_path=registry_path, base_prompt_path=tmp_path / "base.md"),
+        SimpleNamespace(registry_path=registry_path, base_prompt_path=tmp_path / "base.md", skills_mode="skills"),
     )
     monkeypatch.setattr(agent_loop.AgentSession, "_log_action", _noop_log_action)
 
@@ -233,7 +233,7 @@ tools:
     monkeypatch.setattr(
         agent_loop,
         "gateway_config",
-        SimpleNamespace(registry_path=registry_path, base_prompt_path=tmp_path / "base.md"),
+        SimpleNamespace(registry_path=registry_path, base_prompt_path=tmp_path / "base.md", skills_mode="skills"),
     )
     monkeypatch.setattr(agent_loop.AgentSession, "_log_action", _noop_log_action)
 

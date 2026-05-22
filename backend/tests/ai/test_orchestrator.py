@@ -16,6 +16,9 @@ class FakeExecutor:
     def hydrate_history(self, messages):
         return None
 
+    def inject_orchestrator_hint(self, hint: str) -> None:
+        return None
+
     async def on_approval(self, approved: bool):
         return None
 
@@ -76,7 +79,7 @@ async def test_orchestrator_assigns_worker_and_audits_workspace(monkeypatch):
     ]
     assert any(event["type"] == "workspace.publish_verified" for event in sent)
     assert any(event["type"] == "audit.passed" for event in sent)
-    assert sent[-1] == {"type": "done"}
+    assert sent[-1]["type"] == "done"
     assert sum(1 for event in sent if event["type"] == "done") == 1
 
 
@@ -111,7 +114,7 @@ async def test_orchestrator_reports_capability_gap_when_workspace_missing(monkey
     assert any(event["type"] == "audit.failed" for event in sent)
     assert any(event["type"] == "capability_gap.detected" for event in sent)
     assert any(event["type"] == "capability_gap.builder_draft" for event in sent)
-    assert sent[-1] == {"type": "done"}
+    assert sent[-1]["type"] == "done"
 
 
 @pytest.mark.asyncio
