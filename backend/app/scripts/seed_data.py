@@ -24,16 +24,25 @@ from app.db.models import (
     Document,
     DocumentStatus,
     DocumentType,
+    Drawing,
+    DrawingFeature,
+    DrawingFeatureType,
+    DrawingStatus,
     EmailMessage,
     EmailThread,
+    InventoryItem,
     Invoice,
     InvoiceLine,
     InvoiceStatus,
+    ManufacturingOperation,
+    ManufacturingProcessPlan,
     Party,
     PartyRole,
     PriceHistoryEntry,
     Reminder,
     SupplierProfile,
+    WarehouseReceipt,
+    WarehouseReceiptLine,
 )
 
 
@@ -464,10 +473,222 @@ def seed():
         )
         db.add(compare_session)
 
+        # ── Drawing + features (Scenario 9: ТП из чертежа) ───────────────
+        drawing_doc = Document(
+            filename="ВАЛ-2024-001.pdf",
+            original_filename="ВАЛ-2024-001.pdf",
+            doc_type=DocumentType.drawing,
+            status=DocumentStatus.approved,
+            source_channel="upload",
+            uploaded_by="engineer1",
+            file_size=184320,
+        )
+        db.add(drawing_doc)
+        db.flush()
+
+        drawing = Drawing(
+            document_id=drawing_doc.id,
+            drawing_number="ВАЛ-2024-001",
+            revision="А",
+            filename="ВАЛ-2024-001.pdf",
+            format="pdf",
+            status=DrawingStatus.analyzed,
+            title_block={
+                "title": "Вал редуктора",
+                "developer": "Иванов И.И.",
+                "material": "Ст.45 ГОСТ 1050-2013",
+                "mass": "2.35",
+                "scale": "1:2",
+            },
+        )
+        db.add(drawing)
+        db.flush()
+
+        drawing_features = [
+            DrawingFeature(
+                drawing_id=drawing.id,
+                feature_type=DrawingFeatureType.external_cylindrical,
+                name="Ø50h6 L=80",
+                description="Наружная цилиндрическая поверхность под подшипник",
+                sort_order=1,
+                confidence=0.95,
+                ai_raw={"nominal_mm": 50.0, "upper_tol": -0.016, "lower_tol": -0.029,
+                        "roughness_ra": 0.8, "fit_system": "h6"},
+            ),
+            DrawingFeature(
+                drawing_id=drawing.id,
+                feature_type=DrawingFeatureType.external_cylindrical,
+                name="Ø40k6 L=50",
+                description="Посадочная поверхность под шкив",
+                sort_order=2,
+                confidence=0.93,
+                ai_raw={"nominal_mm": 40.0, "upper_tol": 0.018, "lower_tol": 0.002,
+                        "roughness_ra": 1.6, "fit_system": "k6"},
+            ),
+            DrawingFeature(
+                drawing_id=drawing.id,
+                feature_type=DrawingFeatureType.thread,
+                name="М24×1.5-6g",
+                description="Резьба крепёжная",
+                sort_order=3,
+                confidence=0.91,
+                ai_raw={"nominal_mm": 24.0, "thread_pitch": 1.5, "tolerance": "6g"},
+            ),
+        ]
+        for f in drawing_features:
+            db.add(f)
+        db.flush()
+
+        # ── ManufacturingProcessPlan (demo ТП) ────────────────────────────
+        process_plan = ManufacturingProcessPlan(
+            product_name="Вал редуктора ВАЛ-2024-001",
+            product_code="ВАЛ-2024-001",
+            version="1.0",
+            status="approved",
+            standard_system="ЕСТД",
+            material="Ст.45 ГОСТ 1050-2013",
+            blank_type="прокат",
+            route_summary="005 Токарная → 010 Токарная → 015 Фрезерная → 020 Резьбонарезная → 025 Шлифовальная → 030 Контроль",
+            drawing_id=drawing.id,
+            tp_type="единичный",
+            normcontrol_status="passed",
+            total_norm_minutes=187.5,
+            created_by="technologist1",
+            approved_by="chief_technologist",
+        )
+        db.add(process_plan)
+        db.flush()
+
+        operations = [
+            ManufacturingOperation(
+                process_plan_id=process_plan.id, sequence_no=5,
+                operation_code="4110", name="Токарная",
+                operation_type="turning",
+                description="Черновая обточка, подрезка торцов. Уст. A.",
+                setup_time_min=15.0, machine_time_min=24.5,
+                tsht_minutes=39.5,
+            ),
+            ManufacturingOperation(
+                process_plan_id=process_plan.id, sequence_no=10,
+                operation_code="4110", name="Токарная (чистовая)",
+                operation_type="turning",
+                description="Чистовая обточка Ø50h6, Ø40k6. Уст. A и B.",
+                setup_time_min=15.0, machine_time_min=31.0,
+                tsht_minutes=46.0,
+            ),
+            ManufacturingOperation(
+                process_plan_id=process_plan.id, sequence_no=15,
+                operation_code="4140", name="Фрезерная",
+                operation_type="milling",
+                description="Фрезерование шпоночного паза.",
+                setup_time_min=12.0, machine_time_min=8.5,
+                tsht_minutes=20.5,
+            ),
+            ManufacturingOperation(
+                process_plan_id=process_plan.id, sequence_no=20,
+                operation_code="4180", name="Резьбонарезная",
+                operation_type="threading",
+                description="Нарезание резьбы М24×1.5-6g.",
+                setup_time_min=10.0, machine_time_min=5.0,
+                tsht_minutes=15.0,
+            ),
+            ManufacturingOperation(
+                process_plan_id=process_plan.id, sequence_no=25,
+                operation_code="4120", name="Шлифовальная",
+                operation_type="grinding",
+                description="Шлифование Ø50h6 Ra 0.8.",
+                setup_time_min=20.0, machine_time_min=18.0,
+                tsht_minutes=38.0,
+            ),
+            ManufacturingOperation(
+                process_plan_id=process_plan.id, sequence_no=30,
+                operation_code="0220", name="Контроль",
+                operation_type="inspection",
+                description="Окончательный контроль ОТК.",
+                setup_time_min=5.0, machine_time_min=10.0,
+                tsht_minutes=15.0,
+            ),
+        ]
+        for op in operations:
+            db.add(op)
+        db.flush()
+
+        # ── Warehouse inventory items (Scenario 11: low_stock_alert) ─────
+        inventory_items = [
+            InventoryItem(
+                sku="BOLT-M8-30-DIN933",
+                name="Болт М8×30 DIN 933 (нержавейка А2)",
+                unit="шт",
+                current_qty=2400.0,
+                min_qty=500.0,
+                location="Склад А, стеллаж 3-2",
+            ),
+            InventoryItem(
+                sku="BEARING-6210-SKF",
+                name="Подшипник шариковый 6210 SKF",
+                unit="шт",
+                current_qty=12.0,
+                min_qty=20.0,   # below minimum → triggers low_stock_alert
+                location="Склад Б, стеллаж 7-1",
+            ),
+            InventoryItem(
+                sku="SEAL-V-RING-50",
+                name="Уплотнение V-кольцо Ø50",
+                unit="шт",
+                current_qty=3.0,
+                min_qty=10.0,   # below minimum
+                location="Склад Б, стеллаж 7-3",
+            ),
+            InventoryItem(
+                sku="STEEL-45-D60",
+                name="Прокат круглый Ст.45, Ø60 мм",
+                unit="кг",
+                current_qty=850.0,
+                min_qty=200.0,
+                location="Склад В, металлопрокат",
+            ),
+        ]
+        for item in inventory_items:
+            db.add(item)
+        db.flush()
+
+        # ── Warehouse receipt (Scenario 10: invoice.approved → receipt) ──
+        receipt = WarehouseReceipt(
+            invoice_id=inv1.id,
+            supplier_id=suppliers[0].id,
+            receipt_number="ПО-2024-001",
+            status="confirmed",
+            received_by="warehouse_manager",
+            notes="Товар принят без замечаний. Накладная №ТТН-001.",
+        )
+        db.add(receipt)
+        db.flush()
+
+        receipt_lines = [
+            WarehouseReceiptLine(
+                receipt_id=receipt.id,
+                description="Болт М8×30 DIN 933",
+                unit="шт",
+                quantity_expected=1000.0,
+                quantity_received=1000.0,
+            ),
+            WarehouseReceiptLine(
+                receipt_id=receipt.id,
+                description="Гайка М8 DIN 934",
+                unit="шт",
+                quantity_expected=1000.0,
+                quantity_received=980.0,
+                discrepancy_note="Недостача 20 шт — акт расхождения",
+            ),
+        ]
+        for line in receipt_lines:
+            db.add(line)
+        db.flush()
+
         db.commit()
         print("Seed data created successfully!")
         print(f"  Suppliers: {len(suppliers)}")
-        print(f"  Documents: {len(docs)}")
+        print(f"  Documents: {len(docs) + 1} (+1 drawing doc)")
         print(f"  Invoices: 1 ({len(lines)} lines)")
         print(f"  Email threads: 2")
         print(f"  Pending approvals: 1")
@@ -475,6 +696,10 @@ def seed():
         print(f"  Anomalies: {len(anomalies)}")
         print(f"  Calendar events: {len(calendar_events)}")
         print(f"  Compare sessions: 1")
+        print(f"  Drawing: 1 ({len(drawing_features)} features)")
+        print(f"  Process plan: 1 ({len(operations)} operations)")
+        print(f"  Inventory items: {len(inventory_items)} ({sum(1 for i in inventory_items if i.current_qty < (i.min_qty or 0))} below min)")
+        print(f"  Warehouse receipt: 1 ({len(receipt_lines)} lines)")
 
 
 if __name__ == "__main__":
