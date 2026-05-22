@@ -8,7 +8,8 @@ from app.ai.evals.agent_roles import (
 )
 
 ROOT = Path(__file__).resolve().parents[3]
-ROLE_MANIFEST = ROOT / "backend/app/ai/evals/agent_role_cases.json"
+# parents[2] works for both host (backend/) and container (/app)
+ROLE_MANIFEST = Path(__file__).resolve().parents[2] / "app/ai/evals/agent_role_cases.json"
 SKILL_REGISTRY = ROOT / "aiagent/skills/_registry.yml"
 
 
