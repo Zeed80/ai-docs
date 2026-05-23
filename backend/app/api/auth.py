@@ -103,9 +103,12 @@ async def login(
         "scope": "openid profile email groups",
         "state": state,
     }
-    # Use external URL for the browser redirect; fall back to authentik_url when not split-brain.
+    # Derive the Authentik authorize base URL from redirect_uri (built by the browser
+    # from window.location.origin). This makes the flow work regardless of how the user
+    # reaches the server: direct, SSH tunnel, LAN IP, or custom domain — Authentik OAuth
+    # paths are all proxied through Traefik on the same host:port as the frontend.
     # Authentik 2024.12+: authorize endpoint is /application/o/authorize/ (no app slug).
-    _ext = settings.authentik_external_url.rstrip("/") or settings.authentik_url.rstrip("/")
+    _ext = _frontend_base_from_uri(redirect_uri)
     auth_url = f"{_ext}/application/o/authorize/?{urlencode(params)}"
     return RedirectResponse(url=auth_url)
 

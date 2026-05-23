@@ -90,12 +90,14 @@ entries:
       client_id: !Env [OAUTH_CLIENT_ID, "ai-workspace"]
       client_secret: !Env [OAUTH_CLIENT_SECRET, ""]
       redirect_uris:
-        # Frontend callback page: receives code from Authentik, proxies to /api/auth/callback
-        - url: !Env [OAUTH_REDIRECT_URI_1, "http://localhost/auth/callback"]
-          matching_mode: strict
-        # Dev direct backend (no Traefik)
-        - url: !Env [OAUTH_REDIRECT_URI_2, "http://localhost:8000/api/auth/callback"]
-          matching_mode: strict
+        # Frontend callback page — regex to support any port (SSH tunnels, LAN IPs).
+        # Matches: http://localhost/auth/callback, http://localhost:8080/auth/callback,
+        #          http://192.168.1.x/auth/callback, http://192.168.1.x:8080/auth/callback
+        - url: "http://(localhost|127\\.0\\.0\\.1|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})(:\\d+)?/auth/callback"
+          matching_mode: regex
+        # Dev direct backend callback (no Traefik / curl testing)
+        - url: "http://(localhost|127\\.0\\.0\\.1)(:\\d+)?/api/auth/callback"
+          matching_mode: regex
       access_code_validity: "minutes=1"
       access_token_validity: "hours=1"
       refresh_token_validity: "days=30"
