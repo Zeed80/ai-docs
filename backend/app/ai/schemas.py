@@ -37,6 +37,7 @@ class AITask(str, Enum):
     INVOICE_OCR = "invoice_ocr"
     STRUCTURED_EXTRACTION = "structured_extraction"
     DRAWING_ANALYSIS = "drawing_analysis"
+    DRAWING_ANALYSIS_VLM = "drawing_analysis_vlm"
     ENGINEERING_REASONING = "engineering_reasoning"
     EMAIL_DRAFTING = "email_drafting"
     EMBEDDING = "embedding"
@@ -133,6 +134,7 @@ class ModelCapability(BaseModel):
     model_family: str | None = None
     capability_source: Literal["discovered", "manual", "verified"] = "manual"
     local_only: bool = True
+    supports_multi_image: bool = False
     cost_per_1k_input: float | None = None
     cost_per_1k_output: float | None = None
     quality_score: float = 0.0

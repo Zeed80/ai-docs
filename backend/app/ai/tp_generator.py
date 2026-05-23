@@ -8,6 +8,7 @@ cutting parameters calculation → time norms.
 from __future__ import annotations
 
 import math
+import re
 import uuid
 from typing import Any
 
@@ -183,6 +184,24 @@ def _roughness_stage(ra: float | None) -> str:
     return "rough"
 
 
+# Feature types that require machining from inside (processed before external surfaces)
+_INTERNAL_FEATURE_TYPES = frozenset({
+    "hole", "pocket", "groove", "slot", "thread", "center_bore", "key_slot", "spline",
+})
+
+# Section view label patterns: "A-A", "Б-Б", "section", "разрез", "B-B", etc.
+_SECTION_VIEW_PATTERN = re.compile(r"[A-ЯЁ]-[A-ЯЁ]|section|разрез", re.IGNORECASE)
+
+
+def _is_internal_feature(feature_type: str, source_view: str | None) -> bool:
+    """Return True if the feature is machined from inside the workpiece."""
+    if feature_type in _INTERNAL_FEATURE_TYPES:
+        return True
+    if source_view and _SECTION_VIEW_PATTERN.search(source_view):
+        return True
+    return False
+
+
 # ── Drawing feature → SurfaceMachiningSpec candidates ────────────────────────
 
 def extract_tp_features_from_drawing(
@@ -216,6 +235,10 @@ def extract_tp_features_from_drawing(
         method = _surface_to_method(feature.feature_type.value, nominal_mm, roughness_ra)
         stage = _roughness_stage(roughness_ra)
 
+        # Internal features: machined from the inside (holes, grooves, key slots, etc.)
+        # or confirmed by a section view (source_view like "A-A", "section", "B-B")
+        is_internal = _is_internal_feature(feature.feature_type.value, getattr(feature, "source_view", None))
+
         specs.append({
             "process_plan_id": str(plan_id),
             "drawing_feature_id": str(feature.id),
@@ -228,6 +251,7 @@ def extract_tp_features_from_drawing(
             "machining_method": method,
             "machining_stage": stage,
             "confidence": feature.confidence,
+            "is_internal": is_internal,
         })
 
     return specs
@@ -250,12 +274,13 @@ def recommend_blank(
     dims: dict[str, float],
     mass_part_kg: float | None,
     annual_volume: int = 1,
+    bounding_box_mm: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Recommend blank type based on КИМ analysis."""
-    d = dims.get("d_mm") or dims.get("a_mm") or 50.0
-    l = dims.get("l_mm") or dims.get("h_mm") or 100.0
+    """Recommend blank type based on КИМ analysis.
 
-    # Estimate blank mass for rod stock
+    If bounding_box_mm is provided (from STEP/IGES geometry), it overrides
+    the heuristic dim-based approach with an exact volumetric calculation.
+    """
     material_lower = material.lower()
     if any(k in material_lower for k in ["алюм", "ад3", "ад0", "амг", "дур", "aluminum", "aluminium"]):
         density = 2.7e-6   # kg/mm³
@@ -263,6 +288,62 @@ def recommend_blank(
         density = 8.5e-6
     else:
         density = 7.85e-6  # steel default
+
+    if bounding_box_mm:
+        # Precise path: use 3D bounding box from STEP/IGES
+        try:
+            from app.ai.step_extractor import StepGeometryResult, recommend_blank_from_geometry
+
+            # Build a minimal result object for the helper
+            x_dim = abs(bounding_box_mm.get("x_max", 0) - bounding_box_mm.get("x_min", 0))
+            y_dim = abs(bounding_box_mm.get("y_max", 0) - bounding_box_mm.get("y_min", 0))
+            z_dim = abs(bounding_box_mm.get("z_max", 0) - bounding_box_mm.get("z_min", 0))
+            vol_mm3 = (mass_part_kg / density) if mass_part_kg else 0.0
+
+            geo = StepGeometryResult(
+                bounding_box_mm=bounding_box_mm,
+                face_count=0,
+                volume_mm3=vol_mm3,
+            )
+            blank_rec = recommend_blank_from_geometry(geo, density_g_cm3=density * 1e6)
+            dims_out = blank_rec["dimensions"]
+            mass_blank = (blank_rec.get("mass_blank_kg") or 0.0)
+            kim = blank_rec.get("kim") or (
+                (mass_part_kg / mass_blank) if mass_part_kg and mass_blank > 0 else 0.5
+            )
+            shape = blank_rec["shape_class"]
+
+            if shape == "shaft" or kim >= 0.7:
+                blank_type = "прокат"
+                std = "ГОСТ 2590-2006"
+                reasoning = f"КИМ={kim:.2f}, форма={shape} → прокат (точный расчёт из 3D)"
+            elif kim >= 0.5:
+                blank_type = "штамповка" if annual_volume >= 100 else "поковка"
+                std = "ГОСТ 7505-89" if annual_volume >= 100 else "ГОСТ 8479-70"
+                reasoning = f"КИМ={kim:.2f}, форма={shape} → {blank_type} (из 3D)"
+            else:
+                blank_type = "поковка"
+                std = "ГОСТ 8479-70"
+                reasoning = f"КИМ={kim:.2f}, форма={shape} → поковка (из 3D)"
+
+            return {
+                "blank_type": blank_type,
+                "material_grade": material,
+                "standard_gost": std,
+                "dimensions": dims_out,
+                "mass_blank_kg": round(mass_blank, 3),
+                "mass_part_kg": mass_part_kg,
+                "utilization_factor": round(kim, 3),
+                "confidence": 0.90,
+                "reasoning": reasoning,
+                "bounding_box_source": "step_iges",
+            }
+        except Exception:
+            pass  # fall through to heuristic
+
+    # Heuristic path: dims dict from drawing text extraction
+    d = dims.get("d_mm") or dims.get("a_mm") or 50.0
+    l = dims.get("l_mm") or dims.get("h_mm") or 100.0
 
     mass_blank = density * math.pi * (d / 2) ** 2 * l
     kim = (mass_part_kg / mass_blank) if mass_part_kg and mass_blank > 0 else 0.5
@@ -290,7 +371,7 @@ def recommend_blank(
             std = "ГОСТ 8479-70"
             reasoning = f"КИМ={kim:.2f} < 0.50 → поковка для сокращения припусков"
 
-    dim_d = round(d * 1.1 + 5)  # blank diameter with allowance
+    dim_d = round(d * 1.1 + 5)
     dim_l = round(l + 10)
 
     return {
@@ -465,10 +546,25 @@ def draft_operations_from_surfaces(
     operations.append(blank_op)
     sequence += 5
 
-    # Machining operations (ordered: rough→semi-finish→finish)
+    # Separate internal (holes, slots, pockets) from external surfaces.
+    # Internal features are machined first: their dimensions remain stable
+    # when clamping for external operations.
+    internal_specs = [s for s in surface_specs if s.get("is_internal")]
+    external_specs = [s for s in surface_specs if not s.get("is_internal")]
+    ordered_specs = internal_specs + external_specs
+
+    # Rebuild method_groups preserving internal-first order
+    method_groups = {}
+    for spec in ordered_specs:
+        m = spec["machining_method"]
+        method_groups.setdefault(m, []).append(spec)
+
+    # Machining operations (ordered: rough→semi-finish→finish within each method)
     stage_order = {"rough": 0, "semi-finish": 1, "finish": 2}
+    # Internal-biased method order: drilling/boring first, then turning, then finishing
     method_order = [
-        "turning", "milling", "drilling", "boring", "reaming",
+        "drilling", "boring", "reaming",
+        "turning", "milling",
         "grinding", "honing", "broaching", "other",
     ]
 

@@ -179,7 +179,13 @@ async def _generate_tp_async(
         else:
             mass_kg = None
 
-        blank_data = recommend_blank(material, dims, mass_kg, annual_volume=batch_size)
+        # Use 3D bounding box from STEP/IGES if available (precise КИМ calculation)
+        bounding_box_mm = drawing.bounding_box if drawing.bounding_box else None
+        blank_data = recommend_blank(
+            material, dims, mass_kg,
+            annual_volume=batch_size,
+            bounding_box_mm=bounding_box_mm,
+        )
         existing_blank = db.query(BlankSpec).filter(
             BlankSpec.process_plan_id == plan_uuid
         ).first()

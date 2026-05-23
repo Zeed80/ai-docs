@@ -6,6 +6,7 @@ Handles:
 """
 
 import asyncio
+import functools
 import io
 import json
 import re
@@ -31,23 +32,37 @@ ALL_SUPPORTED_FORMATS = RASTER_FORMATS | VECTOR_FORMATS | frozenset({"pdf", "ste
 
 
 @celery_app.task(bind=True, name="drawing_analysis.analyze_drawing", max_retries=2)
-def analyze_drawing(self, drawing_id: str, model: str | None = None) -> dict:
+def analyze_drawing(
+    self,
+    drawing_id: str,
+    model: str | None = None,
+    allow_cloud: bool = False,
+    max_views: int = 6,
+    force_drawing_type: str | None = None,
+) -> dict:
     """
     Full drawing analysis pipeline:
     1. Load file from MinIO
     2. Parse format (DXF → entities + SVG, PDF → raster + OCR text)
-    3. AI extraction of features, dimensions, surfaces, GDT
-    4. Save features to DB
-    5. Embed drawing + features → Qdrant
-    6. Build graph nodes
-    7. Notify via WebSocket
+    3. Preprocess: CLAHE, deskew, view segmentation (drawing_preprocessor)
+    4. AI extraction via AIRouter: multi-view VLM features, dimensions, surfaces, GDT
+    5. Save features to DB (with source_view / confidence_votes provenance)
+    6. Embed drawing + features → Qdrant
+    7. Build graph nodes
+    8. Notify via WebSocket
     """
     return asyncio.get_event_loop().run_until_complete(
-        _analyze_drawing_async(drawing_id, model)
+        _analyze_drawing_async(drawing_id, model, allow_cloud, max_views, force_drawing_type)
     )
 
 
-async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
+async def _analyze_drawing_async(
+    drawing_id: str,
+    model: str | None,
+    allow_cloud: bool = False,
+    max_views: int = 6,
+    force_drawing_type: str | None = None,
+) -> dict:
     from app.db.session import _get_session_factory
     from app.db.models import Drawing, DrawingStatus, DrawingFeature, FeatureContour, FeatureDimension, FeatureSurface, FeatureGDT
     from app.ai.drawing_extractor import extract_drawing_features, extract_features_from_image
@@ -60,6 +75,14 @@ async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
         VECTOR_SIZE,
     )
     from sqlalchemy import select
+
+    # AIRouter for policy-aware VLM dispatch (confidential = local only)
+    router = None
+    try:
+        from app.ai.router import AIRouter
+        router = AIRouter()
+    except Exception as _router_exc:
+        logger.warning("drawing_router_unavailable", error=str(_router_exc))
 
     drawing_uuid = uuid.UUID(drawing_id)
 
@@ -78,6 +101,7 @@ async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
     dxf_entities: list[dict] = []
     title_block: dict = {}
     image_bytes_for_vlm: bytes | None = None
+    view_crops: list = []   # list[ViewCrop] from drawing_preprocessor
 
     try:
         # Resolve VLM model from ai_config (Redis-backed, shared across workers)
@@ -117,28 +141,36 @@ async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
 
         elif fmt == "dxf":
             svg_content, dxf_entities, drawing_text = await _parse_dxf(file_bytes, drawing.filename)
-            # Also rasterize for VLM
             if svg_content:
                 image_bytes_for_vlm = await _svg_to_png_bytes(svg_content)
 
         elif fmt == "pdf":
+            # SVG/text from first page (for viewer + OCR hint)
             svg_content, drawing_text = await _parse_pdf_drawing(file_bytes)
-            # Rasterize first page for VLM
-            image_bytes_for_vlm = await _pdf_to_png_bytes(file_bytes)
+            # Multi-page preprocessing: CLAHE + deskew + each page as a ViewCrop
+            try:
+                from app.ai.drawing_preprocessor import preprocess_pdf_pages
+                _page_limit = max(1, min(max_views, 10))
+                view_crops = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    functools.partial(preprocess_pdf_pages, file_bytes, max_pages=_page_limit),
+                )
+                logger.info("pdf_pages_preprocessed", drawing_id=drawing_id, pages=len(view_crops))
+            except Exception as _prep_exc:
+                logger.warning("pdf_preprocessor_failed", error=str(_prep_exc))
+            if not view_crops:
+                image_bytes_for_vlm = await _pdf_to_png_bytes(file_bytes)
 
         elif fmt == "svg":
-            # Parse SVG text, rasterize for VLM
             svg_content = file_bytes.decode("utf-8", errors="replace")
             drawing_text = _extract_text_from_svg(svg_content)
             image_bytes_for_vlm = await _svg_to_png_bytes(svg_content)
 
         elif fmt in RASTER_FORMATS:
-            # For raster formats — normalize to PNG for VLM
             image_bytes_for_vlm = await _normalize_raster_to_png(file_bytes, fmt)
             drawing_text = f"Изображение чертежа: {drawing.filename}"
 
         elif fmt in ("step", "stp", "iges"):
-            # Generate an info-SVG with metadata extracted from the STEP/IGES text
             step_svg, drawing_text = _parse_step_to_info_svg(file_bytes, drawing.filename)
             if step_svg:
                 svg_content = step_svg
@@ -146,14 +178,64 @@ async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
         else:
             drawing_text = f"Файл: {drawing.filename} Формат: {fmt}"
 
+        # ── Preprocess raster images (non-PDF, non-STEP) ─────────────────────
+        # CLAHE + deskew + view segmentation via drawing_preprocessor
+        if image_bytes_for_vlm and not view_crops and fmt not in ("step", "stp", "iges"):
+            try:
+                from app.ai.drawing_preprocessor import preprocess_drawing_image
+                _preprocessed = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    functools.partial(
+                        preprocess_drawing_image, image_bytes_for_vlm, fmt, max_views
+                    ),
+                )
+                if _preprocessed.views:
+                    view_crops = _preprocessed.views
+                    logger.info(
+                        "drawing_views_segmented",
+                        drawing_id=drawing_id,
+                        views=len(view_crops),
+                        enhanced=_preprocessed.was_enhanced,
+                    )
+            except Exception as _prep_exc:
+                logger.warning("drawing_preprocessor_failed", error=str(_prep_exc))
+
+        # ── Assemble VLM input ────────────────────────────────────────────────
+        # Prefer list of view crops; fall back to single rasterised image.
+        vlm_images: bytes | list[bytes] | None = None
+        view_labels_list: list[str] | None = None
+        if view_crops:
+            _valid = [(vc.image_bytes, vc.label) for vc in view_crops if vc.image_bytes]
+            if _valid:
+                vlm_images = [img for img, _ in _valid]
+                view_labels_list = [lbl for _, lbl in _valid]
+        if vlm_images is None:
+            vlm_images = image_bytes_for_vlm
+
+        # Drawing type: explicit override → else default "detail"
+        drawing_type = force_drawing_type or "detail"
+
         # ── AI extraction ────────────────────────────────────────────────────
-        # Strategy: VLM first (if image available), then optionally text-based
-        if image_bytes_for_vlm:
-            logger.info("drawing_vlm_extraction", drawing_id=drawing_id, model=vlm_model, fmt=fmt)
+        # Strategy: VLM first (via AIRouter for policy enforcement), then text-based fallback
+        if vlm_images:
+            _view_count = len(vlm_images) if isinstance(vlm_images, list) else 1
+            logger.info(
+                "drawing_vlm_extraction",
+                drawing_id=drawing_id,
+                model=vlm_model,
+                fmt=fmt,
+                views=_view_count,
+                drawing_type=drawing_type,
+            )
             extraction = await extract_features_from_image(
-                image_bytes_for_vlm,
+                vlm_images,
+                router=router,
+                drawing=drawing,
                 model=vlm_model,
                 hint_text=drawing_text if drawing_text else None,
+                drawing_type=drawing_type,
+                view_labels=view_labels_list,
+                allow_cloud=allow_cloud,
             )
             # If VLM returned nothing meaningful, fall back to text extraction
             if not extraction.get("features") and drawing_text:
@@ -164,7 +246,7 @@ async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
                     model=vlm_model,
                 )
         else:
-            # Text-only path (STEP/IGES/unknown)
+            # Text-only path (STEP/IGES/unknown or all preprocessors failed)
             extraction = await extract_drawing_features(
                 drawing_text=drawing_text,
                 drawing_entities=dxf_entities or None,
@@ -172,6 +254,20 @@ async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
             )
         title_block = extraction.get("title_block", {})
         features_data = extraction.get("features", [])
+
+        # ── Validation ───────────────────────────────────────────────────────
+        # Validates extracted features; auto-fixes Ra/tolerance artifacts in-place.
+        validation_report_dict: dict = {}
+        try:
+            from app.ai.drawing_validator import validate_drawing_extraction, report_to_dict
+            val_report = validate_drawing_extraction(
+                drawing_id=drawing_uuid,
+                features_data=features_data,
+                dxf_entities=dxf_entities or None,
+            )
+            validation_report_dict = report_to_dict(val_report)
+        except Exception as _val_exc:
+            logger.warning("drawing_validation_failed", error=str(_val_exc))
 
         # Save SVG to MinIO if generated
         svg_path = None
@@ -197,7 +293,17 @@ async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
             drawing.drawing_number = (
                 title_block.get("drawing_number") or drawing.drawing_number
             )
-            drawing.status = DrawingStatus.analyzed
+            # Store validation report in metadata; set status based on result
+            if validation_report_dict:
+                drawing.metadata_ = {
+                    **(drawing.metadata_ or {}),
+                    "validation_report": validation_report_dict,
+                }
+            # needs_review overrides analyzed status for human QA queue
+            if validation_report_dict.get("needs_review"):
+                drawing.status = DrawingStatus.needs_review
+            else:
+                drawing.status = DrawingStatus.analyzed
 
             await db.flush()
 
@@ -210,6 +316,9 @@ async def _analyze_drawing_async(drawing_id: str, model: str | None) -> dict:
                     description=feat_data.get("description"),
                     sort_order=idx,
                     confidence=float(feat_data.get("confidence", 0.5)),
+                    source_view=feat_data.get("source_view"),
+                    confirmed_by_views=feat_data.get("confirmed_by_views"),
+                    confidence_votes=int(feat_data.get("confidence_votes", 1)),
                     ai_raw=feat_data,
                 )
                 db.add(feature)

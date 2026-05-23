@@ -2013,6 +2013,11 @@ class DrawingFeatureType(str, enum.Enum):
     radius = "radius"
     slot = "slot"
     contour = "contour"
+    weld = "weld"
+    knurl = "knurl"
+    key_slot = "key_slot"
+    spline = "spline"
+    center_bore = "center_bore"
     other = "other"
 
 
@@ -2082,6 +2087,7 @@ class Drawing(UUIDPrimaryKey, TimestampMixin, Base):
     # {title, developer, checker, approver, date, scale, material, mass, sheet, sheets_total}
     bounding_box: Mapped[dict | None] = mapped_column(JSON)
     # {x_min, y_min, x_max, y_max, units}
+    is_confidential: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     status: Mapped[DrawingStatus] = mapped_column(
         Enum(DrawingStatus), default=DrawingStatus.uploaded, nullable=False, index=True
     )
@@ -2114,6 +2120,10 @@ class DrawingFeature(UUIDPrimaryKey, TimestampMixin, Base):
     reviewed_by: Mapped[str | None] = mapped_column(String(100))
     embedding_id: Mapped[str | None] = mapped_column(String(200), index=True)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+    # Multi-view analysis provenance
+    source_view: Mapped[str | None] = mapped_column(String(50))
+    confirmed_by_views: Mapped[list | None] = mapped_column(JSON)
+    confidence_votes: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     drawing: Mapped["Drawing"] = relationship(back_populates="features")
     contours: Mapped[list["FeatureContour"]] = relationship(
@@ -2307,6 +2317,56 @@ class FeatureToolBinding(UUIDPrimaryKey, TimestampMixin, Base):
     catalog_entry: Mapped["ToolCatalogEntry | None"] = relationship(
         foreign_keys=[catalog_entry_id]
     )
+
+
+class DrawingViewSection(UUIDPrimaryKey, TimestampMixin, Base):
+    """Segmented view crop from a multi-view drawing sheet (front/side/top/section/isometric)."""
+
+    __tablename__ = "drawing_view_sections"
+
+    drawing_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawings.id"), nullable=False, index=True
+    )
+    section_label: Mapped[str | None] = mapped_column(String(20))
+    # "A-A", "B-B", "front", "isometric"
+    section_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    # "front" | "side" | "top" | "section" | "isometric" | "detail"
+    bbox_on_sheet: Mapped[dict | None] = mapped_column(JSON)
+    # {x, y, w, h} in pixels on the full drawing sheet image
+    image_path: Mapped[str | None] = mapped_column(String(1000))
+    # MinIO path for the cropped view image
+    cutting_plane_label: Mapped[str | None] = mapped_column(String(20))
+    cutting_plane_coords: Mapped[dict | None] = mapped_column(JSON)
+    # {x1, y1, x2, y2} coordinates of the cutting plane line on the sheet
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    # For multi-page PDFs: which page this view comes from (1-based)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+
+    drawing: Mapped["Drawing"] = relationship(foreign_keys=[drawing_id])
+
+
+class DrawingAssemblyBOM(UUIDPrimaryKey, TimestampMixin, Base):
+    """Bill of Materials extracted from assembly drawings (ГОСТ BOM table + balloon detection)."""
+
+    __tablename__ = "drawing_assembly_boms"
+
+    drawing_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawings.id"), nullable=False, index=True
+    )
+    item_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Position number (matches balloon numbers on the drawing)
+    designation: Mapped[str] = mapped_column(String(500), nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(20))
+    material: Mapped[str | None] = mapped_column(String(300))
+    drawing_number: Mapped[str | None] = mapped_column(String(200))
+    # Reference to child part drawing number
+    note: Mapped[str | None] = mapped_column(Text)
+    balloon_coords: Mapped[list | None] = mapped_column(JSON)
+    # [{x, y, radius}] — detected balloon positions on the drawing sheet
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
+    drawing: Mapped["Drawing"] = relationship(foreign_keys=[drawing_id])
 
 
 # ── Mailbox / Email Templates ─────────────────────────────────────────────────

@@ -74,6 +74,7 @@ async def upload_drawing(
     file: Annotated[UploadFile, File(description="DXF, DWG, PDF, STEP, IGES")],
     document_id: uuid.UUID | None = Query(None),
     drawing_number: str | None = Query(None),
+    is_confidential: bool = Query(True, description="Конфиденциальный документ — только локальные модели"),
     db: AsyncSession = Depends(get_db),
 ) -> DrawingUploadResponse:
     filename = file.filename or "drawing"
@@ -89,6 +90,7 @@ async def upload_drawing(
         drawing_number=drawing_number,
         filename=filename,
         format=ext,
+        is_confidential=is_confidential,
         status=DrawingStatus.uploaded,
     )
     if document_id:
@@ -111,7 +113,13 @@ async def upload_drawing(
     task_id = None
     try:
         from app.tasks.drawing_analysis import analyze_drawing
-        task = analyze_drawing.delay(str(drawing.id))
+        task = analyze_drawing.delay(
+            str(drawing.id),
+            None,           # model — use ai_config default
+            False,          # allow_cloud — confidential by default
+            6,              # max_views
+            None,           # force_drawing_type
+        )
         task_id = task.id
         drawing.celery_task_id = task_id
         await db.commit()
@@ -321,7 +329,13 @@ async def reanalyze_drawing(
     task_id = None
     try:
         from app.tasks.drawing_analysis import analyze_drawing
-        task = analyze_drawing.delay(str(drawing_id), payload.model)
+        task = analyze_drawing.delay(
+            str(drawing_id),
+            payload.model,
+            payload.allow_cloud,
+            payload.max_views,
+            payload.force_drawing_type,
+        )
         task_id = task.id
         drawing.celery_task_id = task_id
         await db.commit()
@@ -333,6 +347,111 @@ async def reanalyze_drawing(
         task_id=task_id,
         message="Повторный анализ поставлен в очередь",
     )
+
+
+@router.get(
+    "/{drawing_id}/views",
+    summary="Skill: drawing.views — Get segmented view sections for a multi-view drawing.",
+)
+async def get_drawing_views(
+    drawing_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    from app.db.models import DrawingViewSection
+    from sqlalchemy import select
+
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Чертёж не найден")
+
+    result = await db.execute(
+        select(DrawingViewSection)
+        .where(DrawingViewSection.drawing_id == drawing_id)
+        .order_by(DrawingViewSection.created_at)
+    )
+    sections = result.scalars().all()
+
+    return [
+        {
+            "id": str(s.id),
+            "drawing_id": str(s.drawing_id),
+            "section_label": s.section_label,
+            "section_type": s.section_type,
+            "bbox_on_sheet": s.bbox_on_sheet,
+            "image_path": s.image_path,
+            "cutting_plane_label": s.cutting_plane_label,
+            "cutting_plane_coords": s.cutting_plane_coords,
+            "page_number": s.page_number,
+            "confidence": s.confidence,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        }
+        for s in sections
+    ]
+
+
+@router.get(
+    "/{drawing_id}/assembly-bom",
+    summary="Skill: drawing.assembly_bom — Get BOM extracted from assembly drawing.",
+)
+async def get_assembly_bom(
+    drawing_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    from app.db.models import DrawingAssemblyBOM
+    from sqlalchemy import select
+
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Чертёж не найден")
+
+    result = await db.execute(
+        select(DrawingAssemblyBOM)
+        .where(DrawingAssemblyBOM.drawing_id == drawing_id)
+        .order_by(DrawingAssemblyBOM.item_no)
+    )
+    bom_items = result.scalars().all()
+
+    return [
+        {
+            "id": str(b.id),
+            "drawing_id": str(b.drawing_id),
+            "item_no": b.item_no,
+            "designation": b.designation,
+            "quantity": b.quantity,
+            "unit": b.unit,
+            "material": b.material,
+            "drawing_number": b.drawing_number,
+            "note": b.note,
+            "balloon_coords": b.balloon_coords,
+            "confidence": b.confidence,
+            "created_at": b.created_at.isoformat() if b.created_at else None,
+        }
+        for b in bom_items
+    ]
+
+
+@router.get(
+    "/{drawing_id}/validation",
+    summary="Skill: drawing.validation — Get validation report for drawing extraction quality.",
+)
+async def get_drawing_validation(
+    drawing_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Чертёж не найден")
+
+    meta = drawing.metadata_ or {}
+    report = meta.get("validation_report")
+    if not report:
+        return {
+            "drawing_id": str(drawing_id),
+            "status": "not_validated",
+            "message": "Валидация ещё не выполнена. Запустите повторный анализ.",
+        }
+
+    return {"drawing_id": str(drawing_id), **report}
 
 
 @router.get(

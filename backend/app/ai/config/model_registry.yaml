@@ -31,6 +31,11 @@ providers:
     api_key_env: "DEEPSEEK_API_KEY"
     timeout_seconds: 180
     is_local: false
+  gemini:
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    api_key_env: "GOOGLE_API_KEY"
+    timeout_seconds: 180
+    is_local: false
 
 models:
   gemma4_e4b_ollama:
@@ -218,14 +223,15 @@ models:
     provider: "ollama"
     provider_model: "qwen3.6:35b"
     status: "production"
-    modalities: ["text", "tool_calling"]
-    max_context_tokens: 40000
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 262144
     supports_structured_output: true
     supports_tool_calling: true
+    supports_multi_image: true
     local_only: true
     quality_score: 0.89
     speed_score: 0.55
-    notes: "Qwen3.6 35B MoE local model. Primary reasoning and orchestrator model."
+    notes: "Qwen3.6 35B. Released April 2026. Hybrid multimodal (text+image+video), 262K ctx. Primary reasoning + VLM fallback."
   qwen3_5_9b_ollama:
     provider: "ollama"
     provider_model: "qwen3.5:9b"
@@ -263,6 +269,108 @@ models:
     speed_score: 0.0
     notes: "Legacy placeholder. Use claude_sonnet_anthropic or deepseek_r1_openrouter instead."
 
+  # ── Специализированные VLM для технических чертежей (май 2026) ──────────────
+  # Источники: arXiv:2511.21631 (Qwen3-VL), ollama.com/library/qwen3-vl,
+  #            arXiv:2411.02810 (CAD feature recognition), arXiv:2510.21862 (hybrid framework)
+
+  qwen3_vl_32b_ollama:
+    provider: "ollama"
+    provider_model: "qwen3-vl:32b"
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 256000
+    supports_structured_output: false
+    supports_tool_calling: false
+    supports_multi_image: true
+    local_only: true
+    quality_score: 0.95
+    speed_score: 0.35
+    notes: "Qwen3-VL 32B. Dedicated vision series. DocVQA 96.5%, OCRBench 875, 39 languages. Best local VLM for technical docs. ollama pull qwen3-vl:32b"
+
+  qwen3_vl_8b_ollama:
+    provider: "ollama"
+    provider_model: "qwen3-vl:8b"
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 256000
+    supports_structured_output: false
+    supports_tool_calling: false
+    supports_multi_image: true
+    local_only: true
+    quality_score: 0.87
+    speed_score: 0.72
+    notes: "Qwen3-VL 8B. Fast dedicated VLM, officially on Ollama. ollama pull qwen3-vl:8b"
+
+  qwen35_27b_ollama:
+    provider: "ollama"
+    provider_model: "qwen3.5:27b"
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 262144
+    supports_structured_output: true
+    supports_tool_calling: true
+    supports_multi_image: true
+    local_only: true
+    quality_score: 0.93
+    speed_score: 0.50
+    notes: "Qwen3.5 27B. Natively multimodal (early fusion). Outperforms Qwen3-VL on reasoning+vision+agents. Available on Ollama."
+
+  internvl35_76b_vllm:
+    provider: "vllm"
+    provider_model: "OpenGVLab/InternVL3.5-78B-Instruct"
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 128000
+    supports_structured_output: false
+    supports_tool_calling: false
+    supports_multi_image: true
+    local_only: true
+    quality_score: 0.92
+    speed_score: 0.28
+    notes: "InternVL3.5 78B. MMMU SOTA open-source (72.2). Strong 3D spatial understanding. Requires vLLM + ~50GB VRAM."
+
+  glm45v_ollama:
+    provider: "ollama"
+    provider_model: "glm4.5v"
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 128000
+    supports_structured_output: false
+    supports_tool_calling: false
+    supports_multi_image: false
+    local_only: true
+    quality_score: 0.90
+    speed_score: 0.35
+    notes: "GLM-4.5V. 106B/12B MoE. 3D-RoPE for spatial understanding. Good for STEP/IGES geometry views."
+
+  gemma3_27b_vision_ollama:
+    provider: "ollama"
+    provider_model: "gemma3:27b"
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 128000
+    supports_structured_output: false
+    supports_tool_calling: false
+    supports_multi_image: false
+    local_only: true
+    quality_score: 0.82
+    speed_score: 0.60
+    notes: "Gemma3 27B. Accessible on any GPU >=16GB. Vision fallback when VRAM is constrained."
+
+  gemini25_pro_google:
+    provider: "gemini"
+    provider_model: "gemini-2.5-pro"
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 1000000
+    supports_structured_output: true
+    supports_tool_calling: true
+    supports_multi_image: true
+    local_only: false
+    quality_score: 0.96
+    speed_score: 0.65
+    notes: "Gemini 2.5 Pro. 1M context. Excellent for multi-page drawing sets. Cloud only: allow_cloud=True + not confidential. Requires GOOGLE_API_KEY."
+
 routes:
   invoice_ocr:
     required_modalities: ["vision"]
@@ -279,6 +387,21 @@ routes:
     required_modalities: ["vision"]
     local_only: true
     fallback_chain: ["gemma4_26b_ollama", "gemma4_e4b_ollama"]
+    manual_review_fallback: true
+  drawing_analysis_vlm:
+    required_modalities: ["vision"]
+    local_only: true
+    fallback_chain:
+      - "qwen3_vl_32b_ollama"
+      - "qwen35_27b_ollama"
+      - "qwen3_6_35b_ollama"
+      - "qwen3_vl_8b_ollama"
+      - "internvl35_76b_vllm"
+      - "glm45v_ollama"
+      - "gemma4_26b_ollama"
+      - "gemma3_27b_vision_ollama"
+      - "claude_sonnet_anthropic"
+      - "gemini25_pro_google"
     manual_review_fallback: true
   engineering_reasoning:
     required_modalities: ["text"]

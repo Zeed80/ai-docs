@@ -272,6 +272,7 @@ class DrawingCreate(BaseModel):
     revision: str | None = None
     filename: str
     format: str
+    is_confidential: bool = True
     metadata_: dict | None = Field(
         None,
         validation_alias=AliasChoices("metadata_", "metadata"),
@@ -298,6 +299,7 @@ class DrawingOut(BaseModel):
     revision: str | None = None
     filename: str
     format: str
+    is_confidential: bool = True
     svg_path: str | None = None
     thumbnail_path: str | None = None
     title_block: dict | None = None
@@ -336,6 +338,43 @@ class DrawingUploadResponse(BaseModel):
 class DrawingAnalysisRequest(BaseModel):
     model: str | None = None
     force: bool = False
+    allow_cloud: bool = False
+    max_views: int = Field(6, ge=1, le=20)
+    force_drawing_type: str | None = None
+    # "detail" | "assembly" | "section" | "weld" — override auto-detection
+
+
+class DrawingViewSectionOut(BaseModel):
+    id: uuid.UUID
+    drawing_id: uuid.UUID
+    section_label: str | None = None
+    section_type: str
+    bbox_on_sheet: dict | None = None
+    image_path: str | None = None
+    cutting_plane_label: str | None = None
+    cutting_plane_coords: dict | None = None
+    page_number: int | None = None
+    confidence: float
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DrawingAssemblyBOMItemOut(BaseModel):
+    id: uuid.UUID
+    drawing_id: uuid.UUID
+    item_no: int
+    designation: str
+    quantity: float
+    unit: str | None = None
+    material: str | None = None
+    drawing_number: str | None = None
+    note: str | None = None
+    balloon_coords: list | None = None
+    confidence: float
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class ContoursUpdateRequest(BaseModel):
