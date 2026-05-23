@@ -42,6 +42,8 @@ x-authentik-env: &authentik-env
   AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:-please-change-me-in-production}
   AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
   AUTHENTIK_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+  # Trust X-Forwarded-* headers from Traefik (Docker private ranges)
+  AUTHENTIK_WEB__TRUSTED_PROXY_CIDRS: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
   # Bootstrap admin account — used only on first start
   AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-admin@company.com}
   AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-changeme_in_production}

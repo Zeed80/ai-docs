@@ -46,8 +46,9 @@ export function getApiBaseUrl(): string {
 export function getWebSocketBaseUrl(): string {
   const configured = configuredWsUrl();
   if (typeof window === "undefined") {
-    return (configured || getApiBaseUrl() || "http://backend:8000").replace(/^https?/, (p) =>
-      p === "https" ? "wss" : "ws",
+    return (configured || getApiBaseUrl() || "http://backend:8000").replace(
+      /^https?/,
+      (p) => (p === "https" ? "wss" : "ws"),
     );
   }
 
@@ -55,7 +56,10 @@ export function getWebSocketBaseUrl(): string {
   if (configured && configured !== "same-origin") {
     try {
       const url = new URL(configured);
-      if (!isBackendDevPort(url) && (!isLocalHost(url.hostname) || isLocalHost(window.location.hostname))) {
+      if (
+        !isBackendDevPort(url) &&
+        (!isLocalHost(url.hostname) || isLocalHost(window.location.hostname))
+      ) {
         return configured.replace(/^http/, "ws");
       }
     } catch {
@@ -73,9 +77,11 @@ export function getAiAgentWebSocketUrl(): string {
   if (configured) return configured;
 
   if (typeof window === "undefined") {
-    return "ws://localhost:18789";
+    // SSR — Node.js direct connection to AiAgent service (not browser-facing)
+    return process.env.INTERNAL_AIAGENT_WS_URL ?? "ws://aiagent:18789";
   }
 
+  // Browser: always use same-origin path through Traefik (no hardcoded ports)
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.hostname}:18789`;
+  return `${proto}//${window.location.host}/aiagent-ws`;
 }

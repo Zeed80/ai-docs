@@ -1,6 +1,15 @@
 # Traefik dynamic routing configuration for local development.
+#
+# Priority ladder (higher = wins when multiple rules match):
+#   300  authentik-oauth       — /application/, /if/, /.well-known/, /static/dist/, /static/authentik/, /media/
+#   250  authentik-api-v3      — /api/v3/  (Authentik internal API called by browser during login)
+#   100  backend-api           — /api
+#   100  backend-ws            — /ws
+#   100  backend-health        — /health
+#     1  frontend              — everything else → Next.js
 http:
   routers:
+    # ── Frontend ────────────────────────────────────────────────────────────────
     frontend:
       rule: "PathPrefix(`/`)"
       service: frontend
@@ -8,6 +17,7 @@ http:
         - web
       priority: 1
 
+    # ── Backend ─────────────────────────────────────────────────────────────────
     backend-api:
       rule: "PathPrefix(`/api`)"
       service: backend
@@ -29,6 +39,30 @@ http:
         - web
       priority: 100
 
+    # ── Authentik SSO — browser-facing OAuth/UI paths ─────────────────────────
+    # Routes Authentik through port 80 so no separate port (9100) is needed.
+    # Authentik reads X-Forwarded-Host from Traefik to build absolute URLs.
+    authentik-oauth:
+      rule: "PathPrefix(`/application/`) || PathPrefix(`/if/`) || PathPrefix(`/flows/`) || PathPrefix(`/.well-known/`) || PathPrefix(`/static/dist/`) || PathPrefix(`/static/authentik/`) || PathPrefix(`/media/`)"
+      service: authentik
+      entryPoints:
+        - web
+      priority: 300
+      middlewares:
+        - authentik-proxy-headers
+
+    # Authentik's own REST API — called by the browser during the login flow.
+    # Must be higher priority than backend-api (100) to avoid being swallowed.
+    authentik-api-v3:
+      rule: "PathPrefix(`/api/v3/`)"
+      service: authentik
+      entryPoints:
+        - web
+      priority: 250
+      middlewares:
+        - authentik-proxy-headers
+
+    # ── Optional services ────────────────────────────────────────────────────────
     minio-console:
       rule: "Host(`minio.localhost`)"
       service: minio-console
@@ -46,12 +80,23 @@ http:
         servers:
           - url: "http://backend:8000"
 
+    authentik:
+      loadBalancer:
+        servers:
+          - url: "http://authentik-server:9000"
+
     minio-console:
       loadBalancer:
         servers:
           - url: "http://minio:9001"
 
   middlewares:
+    # Pass canonical host to Authentik so it constructs correct absolute URLs.
+    authentik-proxy-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "http"
+
     security-headers:
       headers:
         stsSeconds: 31536000

@@ -60,7 +60,7 @@ def _frontend_base_from_uri(redirect_uri: str) -> str:
 
 @router.get("/login")
 async def login(
-    redirect_uri: str = Query(default="http://localhost:3000/auth/callback"),
+    redirect_uri: str = Query(default="http://localhost/auth/callback"),
     next: str = Query(default="/inbox"),
 ) -> RedirectResponse:
     """Redirect to Authentik OIDC authorization endpoint."""
@@ -103,12 +103,10 @@ async def login(
         "scope": "openid profile email groups",
         "state": state,
     }
-    # Use external URL for the browser redirect; fall back to authentik_url when not split-brain
+    # Use external URL for the browser redirect; fall back to authentik_url when not split-brain.
+    # Authentik 2024.12+: authorize endpoint is /application/o/authorize/ (no app slug).
     _ext = settings.authentik_external_url.rstrip("/") or settings.authentik_url.rstrip("/")
-    auth_url = (
-        f"{_ext}/application/o/{settings.authentik_slug}/authorize/"
-        f"?{urlencode(params)}"
-    )
+    auth_url = f"{_ext}/application/o/authorize/?{urlencode(params)}"
     return RedirectResponse(url=auth_url)
 
 

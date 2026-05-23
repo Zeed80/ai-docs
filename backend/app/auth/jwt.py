@@ -84,9 +84,10 @@ async def _verify_token(token: str) -> UserInfo:
     try:
         from jose import jwt
 
+        # Authentik 2024.12+: JWKS endpoint is /application/o/{slug}/jwks/
         jwks_uri = (
             f"{settings.authentik_url}/application/o"
-            f"/{settings.authentik_slug}/.well-known/jwks.json"
+            f"/{settings.authentik_slug}/jwks/"
         )
 
         import httpx
