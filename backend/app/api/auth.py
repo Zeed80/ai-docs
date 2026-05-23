@@ -6,7 +6,7 @@ import secrets
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -187,21 +187,31 @@ async def callback(
 
 @router.post("/logout")
 async def logout(
+    request: Request,
     response: Response,
-    post_logout_redirect_uri: str = Query(default=""),
+    origin: str = Query(default=""),
 ) -> dict:
-    """Clear auth cookie and return Authentik end-session URL for RP-initiated logout."""
+    """Clear auth cookie and return Authentik end-session URL for RP-initiated logout.
+
+    `origin` should be window.location.origin from the browser — this ensures the
+    returned URL works regardless of port (direct, SSH tunnel, LAN IP, etc.).
+    Falls back to the Referer header, then to authentik_external_url.
+    """
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("csrf_token", path="/")
 
     if settings.auth_enabled:
-        # Build Authentik OIDC end-session URL so the browser can terminate the SSO session.
-        # Without this step the user gets auto-logged-in again on next visit.
         from urllib.parse import urlencode
 
-        base = settings.authentik_external_url.rstrip("/") or "http://localhost"
-        redirect = post_logout_redirect_uri or f"{base}/auth/login"
-        params = urlencode({"post_logout_redirect_uri": redirect})
+        # Derive base from: explicit origin param → Referer header → configured external URL
+        base = (
+            origin.rstrip("/")
+            or _frontend_base_from_uri(request.headers.get("referer", ""))
+            or settings.authentik_external_url.rstrip("/")
+            or "http://localhost"
+        )
+        post_logout = f"{base}/auth/login"
+        params = urlencode({"post_logout_redirect_uri": post_logout})
         logout_url = f"{base}/application/o/{settings.authentik_slug}/end-session/?{params}"
     else:
         logout_url = "/auth/login"

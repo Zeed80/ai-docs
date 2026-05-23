@@ -74,7 +74,11 @@ export function loginUrl(next?: string): string {
 export async function logout(): Promise<string> {
   const fallback = "/auth/login";
   try {
-    const res = await fetch(`${_apiBase()}/api/auth/logout`, {
+    // Pass origin so backend builds the Authentik end-session URL for the right host:port
+    // (works with SSH tunnels, LAN IPs, custom domains — any port the browser is on).
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const params = origin ? `?origin=${encodeURIComponent(origin)}` : "";
+    const res = await fetch(`${_apiBase()}/api/auth/logout${params}`, {
       method: "POST",
       credentials: "include",
       headers: csrfHeaders(),
