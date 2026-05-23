@@ -593,6 +593,7 @@ APPROVAL GATES:
 | 4 | Search, Suppliers, Price History | Hybrid RAG, supplier profile, canonical items, collections, chat context (Scenario 7+8) |
 | 5 | Anomalies, Compare, Calendar | AnomalyCard (Scenario 6), Compare КП (Scenario 4), calendar (Scenario 5), trust score |
 | 6 | Expansion | Telegram channel, mobile, proactive agent, CAD, localization |
+| 9 ✅ | Drawing VLM Upgrade | AIRouter VLM, мультивидовой анализ, STEP 3D, валидация ГОСТ, eval qwen3-vl |
 
 MVP = эпики 0–3 + часть 4 (supplier profile + price history).
 
@@ -1294,6 +1295,55 @@ Approval improvements:
 - [ ] i18n + multi-currency.
 - [ ] iCal export.
 - [ ] Skills marketplace UI.
+
+---
+
+## Эпик 9 — Drawing VLM Upgrade ✅ ВЫПОЛНЕН (2026-05-23)
+
+**Цель**: полноценный пайплайн анализа производственных чертежей — VLM через AIRouter, мультивидовой анализ, STEP/IGES 3D-геометрия, валидация по ГОСТ, интеграция с ТП.
+
+### Sprints
+
+**Sprint 1 — Foundation** ✅
+- `schemas.py`: `AITask.DRAWING_ANALYSIS_VLM`, `ModelCapability.supports_multi_image`
+- `model_registry.yaml`: 7 VLM-моделей (qwen3-vl:32b/8b, qwen3.5:27b, internvl3.5-76b, glm4.5v, gemma3:27b, gemini-2.5-pro), маршрут `drawing_analysis_vlm`
+- `drawing_extractor.py`: рефакторинг через AIRouter, 4 специализированных промпта (DETAIL/ASSEMBLY/SECTION/WELD), `_merge_multiview_results()`, `_classify_drawing_type()`
+- `db/models.py`: `Drawing.is_confidential`, новые enum-значения (weld/knurl/key_slot/spline/center_bore), поля DrawingFeature (source_view/confirmed_by_views/confidence_votes), таблицы DrawingViewSection + DrawingAssemblyBOM
+- `api/drawings.py`: 3 новых endpoint (GET views/assembly-bom/validation), расширен DrawingAnalysisRequest
+- Migration: `20260524_0002_drawing_multiview_vlm.py`
+
+**Sprint 2 — Препроцессор** ✅
+- `drawing_preprocessor.py`: CLAHE/deskew (HoughLinesP)/сегментация видов, multi-page PDF (fitz), `ViewCrop`/`PreprocessedDrawing`, `_adaptive_scale`, `_detect_title_block`, `_assign_view_labels`, `_estimate_dpi`
+- `drawing_analysis.py`: интегрирован препроцессор, параметры задачи (allow_cloud/max_views/force_drawing_type)
+- 23 теста (`test_drawing_preprocessor.py`)
+
+**Sprint 3 — STEP/IGES + Assembly BOM** ✅
+- `step_extractor.py`: pythonocc-core primary path (BBox/faces/cylinders/volume), текстовый fallback CARTESIAN_POINT, классификация формы (shaft/plate/block), `recommend_blank_from_geometry()` с КИМ, `scripts/step_to_views.py` (FreeCAD headless)
+- `assembly_extractor.py`: OpenCV BOM-детекция (ГОСТ 2.106), VLM-извлечение через AIRouter, `cv2.HoughCircles` balloon detection + pytesseract OCR
+
+**Sprint 4 — Валидация + ТП** ✅
+- `drawing_validator.py`: entity coverage, dimension chain check, Ra ГОСТ 2789 (R10 series), GD&T символы, авто-исправление OCR-артефактов (Ra 1.5→1.6 и т.д.), `confidence_score < 0.6` → `needs_review`
+- `tp_generator.py`: `_is_internal_feature()`, internal-first scheduling, `recommend_blank(bounding_box_mm=...)` — точный КИМ из STEP
+- `tp_generation.py`: blank_selection с `bounding_box_mm` из Drawing
+- 20 тестов (`test_drawing_validator.py`)
+
+**Sprint 5 — VLM Eval** ✅
+- `scripts/eval_drawing_vlm.py`: бенчмарк qwen3-vl:8b vs qwen3.5:27b vs qwen3.6:35b, precision/recall/F1, `--smoke` режим, синтетические чертежи через PIL
+
+**Фронтенд** ✅
+- `DrawingWorkspace.tsx`: 4 вкладки в левой панели (Элементы/Виды/Спецификация/Валидация), диалог повторного анализа (allow_cloud/max_views/force_drawing_type), confidential badge
+- `drawings-api.ts`: типы DrawingViewSection/AssemblyBOMItem/DrawingValidationReport, методы getViews/getAssemblyBOM/getValidation, расширен reanalyze()
+
+### Итого: 67 тестов (drawing+technology), 0 регрессий
+
+### VLM топ (май 2026) для чертежей
+| Модель | Деплой | DocVQA |
+|---|---|---|
+| qwen3-vl:32b | Ollama | 96.5% |
+| qwen3.5:27b | Ollama | — |
+| qwen3.6:35b | Ollama (в проекте) | — |
+| claude-sonnet-4-6 | API (allow_cloud) | 74% CAD |
+| gemini-2.5-pro | API (allow_cloud) | — |
 
 ---
 

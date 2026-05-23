@@ -101,7 +101,8 @@ async def _analyze_drawing_async(
     dxf_entities: list[dict] = []
     title_block: dict = {}
     image_bytes_for_vlm: bytes | None = None
-    view_crops: list = []   # list[ViewCrop] from drawing_preprocessor
+    view_crops: list = []        # list[ViewCrop] from drawing_preprocessor
+    step_geometry = None         # StepGeometryResult from step_extractor (STEP/IGES only)
 
     try:
         # Resolve VLM model from ai_config (Redis-backed, shared across workers)
@@ -171,10 +172,57 @@ async def _analyze_drawing_async(
             drawing_text = f"Изображение чертежа: {drawing.filename}"
 
         elif fmt in ("step", "stp", "iges"):
-            step_svg, drawing_text = _parse_step_to_info_svg(file_bytes, drawing.filename)
-            if step_svg:
-                svg_content = step_svg
-                image_bytes_for_vlm = await _svg_to_png_bytes(svg_content)
+            # Primary path: pythonocc-core for real 3D geometry + orthographic views
+            step_geometry = None
+            try:
+                from app.ai.step_extractor import extract_step_geometry, StepGeometryResult
+                step_geometry = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    functools.partial(extract_step_geometry, file_bytes, drawing.filename,
+                                      generate_views=True),
+                )
+                drawing_text = (
+                    f"3D файл: {drawing.filename}\n"
+                    f"Изделия: {', '.join(step_geometry.product_names[:4])}\n"
+                    f"Форма: {step_geometry.shape_class}, "
+                    f"Граней: {step_geometry.face_count}, "
+                    f"Объём: {step_geometry.volume_mm3:.1f} мм³\n"
+                    f"BBox: X={step_geometry.bounding_box_mm.get('x_max', 0) - step_geometry.bounding_box_mm.get('x_min', 0):.1f} "
+                    f"Y={step_geometry.bounding_box_mm.get('y_max', 0) - step_geometry.bounding_box_mm.get('y_min', 0):.1f} "
+                    f"Z={step_geometry.bounding_box_mm.get('z_max', 0) - step_geometry.bounding_box_mm.get('z_min', 0):.1f} мм"
+                )
+                # Use rendered orthographic views as VLM input (if generated)
+                if step_geometry.view_images:
+                    from app.ai.drawing_preprocessor import ViewCrop
+                    for view_name, view_png in step_geometry.view_images.items():
+                        view_crops.append(ViewCrop(
+                            view_type=view_name,
+                            image_bytes=view_png,
+                            bbox=(0, 0, 0, 0),
+                            label=view_name,
+                            confidence=0.9,
+                        ))
+                logger.info(
+                    "step_geometry_extracted",
+                    drawing_id=drawing_id,
+                    source=step_geometry.source,
+                    shape=step_geometry.shape_class,
+                    views=len(view_crops),
+                )
+            except Exception as _step_exc:
+                logger.warning("step_extractor_failed", error=str(_step_exc))
+
+            # Fallback: text info-SVG (always works)
+            if not drawing_text or not step_geometry:
+                step_svg, drawing_text = _parse_step_to_info_svg(file_bytes, drawing.filename)
+                if step_svg:
+                    svg_content = step_svg
+                    image_bytes_for_vlm = await _svg_to_png_bytes(svg_content)
+            else:
+                # Always generate info-SVG for the viewer regardless
+                step_svg, _ = _parse_step_to_info_svg(file_bytes, drawing.filename)
+                if step_svg:
+                    svg_content = step_svg
         else:
             drawing_text = f"Файл: {drawing.filename} Формат: {fmt}"
 
@@ -293,6 +341,9 @@ async def _analyze_drawing_async(
             drawing.drawing_number = (
                 title_block.get("drawing_number") or drawing.drawing_number
             )
+            # Persist 3D bounding box from STEP/IGES for blank selection
+            if step_geometry and step_geometry.bounding_box_mm:
+                drawing.bounding_box = step_geometry.bounding_box_mm
             # Store validation report in metadata; set status based on result
             if validation_report_dict:
                 drawing.metadata_ = {

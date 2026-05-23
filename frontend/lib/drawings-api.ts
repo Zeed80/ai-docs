@@ -191,6 +191,9 @@ export interface DrawingFeature {
   description?: string;
   sort_order: number;
   confidence: number;
+  source_view?: string;
+  confirmed_by_views?: string[];
+  confidence_votes?: number;
   reviewed_at?: string;
   reviewed_by?: string;
   contours: FeatureContour[];
@@ -213,11 +216,63 @@ export interface Drawing {
   thumbnail_path?: string;
   title_block?: Record<string, unknown>;
   bounding_box?: Record<string, number>;
+  is_confidential?: boolean;
   status: DrawingStatus;
   analysis_error?: string;
   celery_task_id?: string;
   created_at: string;
   updated_at?: string;
+}
+
+export interface DrawingViewSection {
+  id: string;
+  drawing_id: string;
+  section_label: string;
+  section_type: "front" | "side" | "top" | "section" | "isometric" | "detail";
+  bbox_on_sheet?: Record<string, number>;
+  image_path?: string;
+  cutting_plane_label?: string;
+  cutting_plane_coords?: Record<string, number>[];
+  page_number?: number;
+  confidence: number;
+  created_at?: string;
+}
+
+export interface AssemblyBOMItem {
+  id: string;
+  drawing_id: string;
+  item_no: number;
+  designation: string;
+  quantity: number;
+  unit: string;
+  material?: string;
+  drawing_number?: string;
+  note?: string;
+  balloon_coords?: Array<{ x: number; y: number; r: number }>;
+  confidence: number;
+  created_at?: string;
+}
+
+export interface DrawingValidationReport {
+  drawing_id: string;
+  status?: string;
+  message?: string;
+  confidence_score?: number;
+  entity_coverage_pct?: number;
+  dimension_chain_ok?: boolean;
+  roughness_valid?: boolean;
+  tolerance_valid?: boolean;
+  warnings?: string[];
+  auto_fixed?: string[];
+  needs_review?: boolean;
+}
+
+export interface ReanalyzeOptions {
+  model?: string;
+  allow_cloud?: boolean;
+  max_views?: number;
+  force_drawing_type?: "detail" | "assembly" | "section" | "weld";
+  force?: boolean;
 }
 
 export interface DrawingWithFeatures extends Drawing {
@@ -348,12 +403,24 @@ export const drawingsApi = {
 
   async reanalyze(
     id: string,
-    model?: string,
+    options?: ReanalyzeOptions,
   ): Promise<{ drawing_id: string; task_id?: string; message: string }> {
     return apiBase.post(`/api/drawings/${id}/reanalyze`, {
-      model,
       force: true,
+      ...options,
     });
+  },
+
+  async getViews(drawingId: string): Promise<DrawingViewSection[]> {
+    return apiBase.get(`/api/drawings/${drawingId}/views`);
+  },
+
+  async getAssemblyBOM(drawingId: string): Promise<AssemblyBOMItem[]> {
+    return apiBase.get(`/api/drawings/${drawingId}/assembly-bom`);
+  },
+
+  async getValidation(drawingId: string): Promise<DrawingValidationReport> {
+    return apiBase.get(`/api/drawings/${drawingId}/validation`);
   },
 
   getSvgUrl(id: string): string {
