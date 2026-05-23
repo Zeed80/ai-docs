@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 interface Props {
   planId: string;
@@ -43,7 +44,7 @@ export default function GostFormsExporter({
     const key = forms.join("+");
     setLoading(key);
     try {
-      const res = await fetch(
+      const res = await mutFetch(
         `/api/technology/process-plans/${planId}/export-gost`,
         {
           method: "POST",

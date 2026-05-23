@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API_BASE = getApiBaseUrl();
 
@@ -125,7 +126,7 @@ export default function EmailPage() {
     if (!draftForm.to_address || !draftForm.subject) return;
     setSavingDraft(true);
     try {
-      const res = await fetch(`${API_BASE}/api/email/drafts`, {
+      const res = await mutFetch(`${API_BASE}/api/email/drafts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draftForm),
@@ -142,7 +143,7 @@ export default function EmailPage() {
   }
 
   async function handleRiskCheck(draftId: string) {
-    const res = await fetch(
+    const res = await mutFetch(
       `${API_BASE}/api/email/drafts/${draftId}/risk-check`,
       {
         method: "POST",
@@ -156,7 +157,7 @@ export default function EmailPage() {
 
   async function handleSend(draftId: string) {
     if (!window.confirm("Отправить письмо?")) return;
-    await fetch(`${API_BASE}/api/email/drafts/${draftId}/send`, {
+    await mutFetch(`${API_BASE}/api/email/drafts/${draftId}/send`, {
       method: "POST",
     });
     await fetchDrafts();
@@ -174,7 +175,7 @@ export default function EmailPage() {
   async function handleDeleteThread(threadId: string, e: React.MouseEvent) {
     e.stopPropagation();
     try {
-      await fetch(`${API_BASE}/api/email/threads/${threadId}`, {
+      await mutFetch(`${API_BASE}/api/email/threads/${threadId}`, {
         method: "DELETE",
       });
       await fetchThreads();
@@ -186,7 +187,7 @@ export default function EmailPage() {
     setDeletingThreads(true);
     try {
       for (const tid of selectedThreadIds) {
-        await fetch(`${API_BASE}/api/email/threads/${tid}`, {
+        await mutFetch(`${API_BASE}/api/email/threads/${tid}`, {
           method: "DELETE",
         });
       }

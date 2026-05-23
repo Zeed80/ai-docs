@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API_BASE = getApiBaseUrl();
 
@@ -210,7 +211,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       const timer = setTimeout(async () => {
         setLoading(true);
         try {
-          const res = await fetch(`${API_BASE}/api/search/hybrid`, {
+          const res = await mutFetch(`${API_BASE}/api/search/hybrid`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ query, limit: 10 }),
@@ -236,7 +237,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     if (!nlQuery) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/search/nl`, {
+      const res = await mutFetch(`${API_BASE}/api/search/nl`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: nlQuery, limit: 10 }),
@@ -520,7 +521,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                   .filter((r) => r.entity_type === "invoice")
                   .map((r) => r.id);
                 if (!ids.length) return;
-                await fetch(`${API_BASE}/api/invoices/bulk-approve`, {
+                await mutFetch(`${API_BASE}/api/invoices/bulk-approve`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ ids }),

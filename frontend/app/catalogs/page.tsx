@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -49,7 +50,7 @@ export default function CatalogsPage() {
     try {
       const url = `${API}/api/suppliers?role=supplier`;
       if (q.length >= 2) {
-        const resp = await fetch(`${API}/api/suppliers/search`, {
+        const resp = await mutFetch(`${API}/api/suppliers/search`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query: q }),

@@ -1,7 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
-
+import { mutFetch } from "@/lib/auth";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -85,7 +85,7 @@ export default function ReceiptDetailPage() {
   }, [id]);
 
   async function updateLine(lineId: string, qty: number, note: string | null) {
-    await fetch(`${API}/api/warehouse/receipts/${id}/lines/${lineId}`, {
+    await mutFetch(`${API}/api/warehouse/receipts/${id}/lines/${lineId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -100,9 +100,12 @@ export default function ReceiptDetailPage() {
     setConfirming(true);
     setError("");
     try {
-      const res = await fetch(`${API}/api/warehouse/receipts/${id}/confirm`, {
-        method: "POST",
-      });
+      const res = await mutFetch(
+        `${API}/api/warehouse/receipts/${id}/confirm`,
+        {
+          method: "POST",
+        },
+      );
       if (!res.ok) {
         const d = await res.json();
         setError(d.detail ?? "Ошибка подтверждения");
@@ -120,7 +123,9 @@ export default function ReceiptDetailPage() {
   async function cancelReceipt() {
     setCancelling(true);
     try {
-      await fetch(`${API}/api/warehouse/receipts/${id}`, { method: "DELETE" });
+      await mutFetch(`${API}/api/warehouse/receipts/${id}`, {
+        method: "DELETE",
+      });
       router.push("/warehouse");
     } finally {
       setCancelling(false);

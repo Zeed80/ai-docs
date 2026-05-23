@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -92,8 +93,8 @@ export default function CompareSessionPage() {
     setLoading(true);
     try {
       const [sessRes, sumRes] = await Promise.all([
-        fetch(`${API}/api/compare/${id}`),
-        fetch(`${API}/api/compare/${id}/summary`),
+        mutFetch(`${API}/api/compare/${id}`),
+        mutFetch(`${API}/api/compare/${id}/summary`),
       ]);
       if (sessRes.ok) setSession(await sessRes.json());
       if (sumRes.ok) setSummary(await sumRes.json());
@@ -110,7 +111,7 @@ export default function CompareSessionPage() {
     setAligning(true);
     setError(null);
     try {
-      const res = await fetch(`${API}/api/compare/${id}/align`, {
+      const res = await mutFetch(`${API}/api/compare/${id}/align`, {
         method: "POST",
       });
       if (res.ok) {
@@ -129,7 +130,7 @@ export default function CompareSessionPage() {
     setDeciding(true);
     setError(null);
     try {
-      const res = await fetch(`${API}/api/compare/${id}/decide`, {
+      const res = await mutFetch(`${API}/api/compare/${id}/decide`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

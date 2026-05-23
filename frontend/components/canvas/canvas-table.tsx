@@ -11,6 +11,7 @@ import {
 import { useMemo, useState } from "react";
 import type { CanvasColumn } from "@/lib/canvas-context";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -176,7 +177,7 @@ function ActionCell({
 }
 
 async function exportWorkspaceBlock(blockId: string, format: "xlsx" | "csv") {
-  const res = await fetch(
+  const res = await mutFetch(
     `${API}/api/workspace/blocks/${encodeURIComponent(blockId)}/export`,
     {
       method: "POST",

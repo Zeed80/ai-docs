@@ -13,6 +13,7 @@ import SurfaceSpecTable, {
   SurfaceSpec,
 } from "@/components/technology/SurfaceSpecTable";
 import GostFormsExporter from "@/components/technology/GostFormsExporter";
+import { mutFetch } from "@/lib/auth";
 
 interface Operation {
   id: string;
@@ -154,7 +155,7 @@ export default function TechPlanPage({
       total_count: 0,
     });
     try {
-      const r = await fetch(`/api/technology/process-plans/${id}/normcontrol`, {
+      const r = await mutFetch(`/api/technology/process-plans/${id}/normcontrol`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -170,7 +171,7 @@ export default function TechPlanPage({
     checkId: string,
     resolution: "fixed" | "waived",
   ) => {
-    const r = await fetch(
+    const r = await mutFetch(
       `/api/technology/process-plans/${id}/normcontrol/${checkId}/resolve`,
       {
         method: "POST",

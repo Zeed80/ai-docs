@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -97,7 +98,7 @@ export default function SuppliersPage() {
     setLoading(true);
     try {
       if (q.length >= 2) {
-        const resp = await fetch(`${API}/api/suppliers/search`, {
+        const resp = await mutFetch(`${API}/api/suppliers/search`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query: q }),
@@ -134,7 +135,7 @@ export default function SuppliersPage() {
     if (checkTimer.current) clearTimeout(checkTimer.current);
     checkTimer.current = setTimeout(async () => {
       try {
-        const resp = await fetch(`${API}/api/suppliers/check-duplicate`, {
+        const resp = await mutFetch(`${API}/api/suppliers/check-duplicate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -177,7 +178,7 @@ export default function SuppliersPage() {
         user_rating: form.user_rating || null,
         force: forceCreate,
       };
-      const resp = await fetch(`${API}/api/suppliers`, {
+      const resp = await mutFetch(`${API}/api/suppliers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -208,7 +209,7 @@ export default function SuppliersPage() {
     if (!selectedIds.size) return;
     setDeletingBulk(true);
     try {
-      await fetch(`${API}/api/suppliers/bulk-delete`, {
+      await mutFetch(`${API}/api/suppliers/bulk-delete`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

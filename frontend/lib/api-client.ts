@@ -207,7 +207,12 @@ export const documents = {
     formData.append("file", file);
     return fetch(
       `${API_BASE}/api/documents/ingest?source_channel=${sourceChannel}`,
-      { method: "POST", body: formData },
+      {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+        headers: csrfHeaders(),
+      },
     ).then((r) => {
       if (!r.ok && r.status !== 202)
         throw new ApiError(r.status, "Upload failed");
@@ -662,7 +667,8 @@ export const tables = {
     // Returns blob for download
     return fetch(`${API_BASE}/api/tables/export`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...csrfHeaders() },
       body: JSON.stringify(data),
     });
   },
@@ -670,7 +676,8 @@ export const tables = {
   export1cUrl: (data: { invoice_ids?: string[]; filters?: TableFilter[] }) => {
     return fetch(`${API_BASE}/api/tables/export-1c`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...csrfHeaders() },
       body: JSON.stringify(data),
     });
   },

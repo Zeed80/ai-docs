@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -50,7 +51,7 @@ export default function HandoversPage() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/handovers/${tab}`, {
+      const res = await mutFetch(`${API}/api/handovers/${tab}`, {
         credentials: "include",
       });
       if (res.ok) setItems(await res.json());
@@ -66,7 +67,7 @@ export default function HandoversPage() {
   async function accept(id: string) {
     setActionId(id);
     try {
-      await fetch(`${API}/api/handovers/${id}/accept`, {
+      await mutFetch(`${API}/api/handovers/${id}/accept`, {
         method: "POST",
         credentials: "include",
       });
@@ -79,7 +80,7 @@ export default function HandoversPage() {
   async function returnIt(id: string) {
     setActionId(id);
     try {
-      await fetch(`${API}/api/handovers/${id}/return`, {
+      await mutFetch(`${API}/api/handovers/${id}/return`, {
         method: "POST",
         credentials: "include",
       });
@@ -93,7 +94,7 @@ export default function HandoversPage() {
     if (!forwardTo.trim()) return;
     setActionId(id);
     try {
-      await fetch(`${API}/api/handovers/${id}/forward`, {
+      await mutFetch(`${API}/api/handovers/${id}/forward`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

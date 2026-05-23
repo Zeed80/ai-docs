@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 
 type TemplateCategory =
   | "payment"
@@ -123,12 +124,12 @@ export function EmailTemplatesSection() {
           : [],
       };
       const res = editing
-        ? await fetch(`${base}/api/email-templates/${editing}`, {
+        ? await mutFetch(`${base}/api/email-templates/${editing}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
           })
-        : await fetch(`${base}/api/email-templates`, {
+        : await mutFetch(`${base}/api/email-templates`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -144,7 +145,7 @@ export function EmailTemplatesSection() {
 
   async function remove(id: string) {
     if (!confirm("Удалить шаблон?")) return;
-    await fetch(`${base}/api/email-templates/${id}`, { method: "DELETE" });
+    await mutFetch(`${base}/api/email-templates/${id}`, { method: "DELETE" });
     await load();
   }
 
@@ -152,7 +153,7 @@ export function EmailTemplatesSection() {
     if (!fromEmailId.trim() || !fromEmailName.trim()) return;
     setCreatingFromEmail(true);
     try {
-      const res = await fetch(`${base}/api/email-templates/from-message`, {
+      const res = await mutFetch(`${base}/api/email-templates/from-message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

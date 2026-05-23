@@ -108,7 +108,7 @@ function ApprovalActions({
   const [loading, setLoading] = useState(false);
   async function decide(approved: boolean) {
     setLoading(true);
-    await fetch(
+    await apiFetch(
       `${API}/api/approvals/${item.id}/${approved ? "approve" : "reject"}`,
       { method: "POST" },
     ).catch(() => {});
@@ -145,7 +145,7 @@ function AnomalyActions({
   const [loading, setLoading] = useState(false);
   async function resolve(resolution: "resolved" | "false_positive") {
     setLoading(true);
-    await fetch(`${API}/api/anomalies/${item.id}/resolve`, {
+    await apiFetch(`${API}/api/anomalies/${item.id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ resolution }),

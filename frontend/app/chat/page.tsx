@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -68,7 +69,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (showNewDm) {
-      fetch(`${API}/api/auth/users`, { credentials: "include" })
+      mutFetch(`${API}/api/auth/users`, { credentials: "include" })
         .then((r) => r.json())
         .then((d) => setUsers(d.items ?? []))
         .catch(() => {});
@@ -79,7 +80,7 @@ export default function ChatPage() {
     if (!newGroupName.trim()) return;
     setCreating(true);
     try {
-      const res = await fetch(`${API}/api/rooms`, {
+      const res = await mutFetch(`${API}/api/rooms`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json", ...csrfHeaders() },

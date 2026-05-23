@@ -1,6 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 import { useEffect, useState, useCallback } from "react";
 import { Sparkline } from "@/components/ui/sparkline";
 
@@ -73,7 +74,7 @@ export default function CanonicalItemsPage() {
     if (!form.name.trim()) return;
     setCreating(true);
     try {
-      const res = await fetch(`${API}/api/canonical`, {
+      const res = await mutFetch(`${API}/api/canonical`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -107,7 +108,7 @@ export default function CanonicalItemsPage() {
     if (!suggestText.trim()) return;
     setSuggesting(true);
     try {
-      const res = await fetch(`${API}/api/canonical/suggest`, {
+      const res = await mutFetch(`${API}/api/canonical/suggest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description: suggestText.trim(), limit: 5 }),
@@ -119,7 +120,7 @@ export default function CanonicalItemsPage() {
   }
 
   async function toggleConfirm(item: CanonicalItem) {
-    const res = await fetch(`${API}/api/canonical/${item.id}`, {
+    const res = await mutFetch(`${API}/api/canonical/${item.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_confirmed: !item.is_confirmed }),
@@ -131,7 +132,9 @@ export default function CanonicalItemsPage() {
   }
 
   async function deleteItem(id: string) {
-    const res = await fetch(`${API}/api/canonical/${id}`, { method: "DELETE" });
+    const res = await mutFetch(`${API}/api/canonical/${id}`, {
+      method: "DELETE",
+    });
     if (res.status === 204) setItems((prev) => prev.filter((i) => i.id !== id));
   }
 

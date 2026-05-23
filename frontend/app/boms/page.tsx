@@ -5,6 +5,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -63,7 +64,7 @@ function CreateBOMModal({ onClose, onCreated }: CreateBOMModalProps) {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/boms`, {
+      const res = await mutFetch(`${API}/api/boms`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

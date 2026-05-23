@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { csrfHeaders, mutFetch } from "@/lib/auth";
 import { MailboxSection } from "@/components/email/mailbox-settings";
 import { EmailTemplatesSection } from "@/components/email/email-templates";
 
@@ -696,7 +697,7 @@ export default function SettingsPage() {
   const [policySaved, setPolicySaved] = useState(false);
 
   useEffect(() => {
-    fetch(`${API}/api/approvals/policy`)
+    mutFetch(`${API}/api/approvals/policy`)
       .then((r) => r.json())
       .then((d) => setApprovalPolicy(d))
       .catch(() => {});
@@ -706,7 +707,7 @@ export default function SettingsPage() {
     setPolicyLoading(true);
     setPolicySaved(false);
     try {
-      const res = await fetch(`${API}/api/approvals/policy`, {
+      const res = await mutFetch(`${API}/api/approvals/policy`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(approvalPolicy),
@@ -960,7 +961,7 @@ export default function SettingsPage() {
         fetch(`${API}/api/agent/tasks`),
         fetch(`${API}/api/agent/teams`),
         fetch(`${API}/api/agent/cron`),
-        fetch(`${API}/api/agent/plugins`),
+        mutFetch(`${API}/api/agent/plugins`),
       ]);
       setAgentTasks(tasksR.ok ? await tasksR.json() : []);
       setAgentTeams(teamsR.ok ? await teamsR.json() : []);
@@ -973,7 +974,7 @@ export default function SettingsPage() {
 
   async function togglePlugin(pluginKey: string, enable: boolean) {
     const action = enable ? "enable" : "disable";
-    await fetch(`${API}/api/agent/plugins/${pluginKey}/${action}`, {
+    await mutFetch(`${API}/api/agent/plugins/${pluginKey}/${action}`, {
       method: "POST",
     });
     await loadAgentWorkRegistry();
@@ -981,7 +982,7 @@ export default function SettingsPage() {
 
   async function toggleCron(cronId: string, enable: boolean) {
     // Cron enable/disable via PATCH (not yet in API — use as placeholder)
-    await fetch(`${API}/api/agent/cron/${cronId}`, {
+    await mutFetch(`${API}/api/agent/cron/${cronId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: enable }),
@@ -1040,7 +1041,7 @@ export default function SettingsPage() {
     setPulling(true);
     setPullLog([`Загрузка ${pullName}...`]);
     try {
-      const resp = await fetch(`${API}/api/ai/models/pull`, {
+      const resp = await mutFetch(`${API}/api/ai/models/pull`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: pullName.trim() }),
@@ -1089,7 +1090,7 @@ export default function SettingsPage() {
     if (!confirm(`Удалить модель ${name}?`)) return;
     setDeletingModel(name);
     try {
-      await fetch(`${API}/api/ai/models/${encodeURIComponent(name)}`, {
+      await mutFetch(`${API}/api/ai/models/${encodeURIComponent(name)}`, {
         method: "DELETE",
       });
       await loadModels();
@@ -1101,11 +1102,12 @@ export default function SettingsPage() {
     if (!config) return;
     setConfigSaving(true);
     try {
-      const r = await fetch(`${API}/api/ai/config`, {
+      const r = await mutFetch(`${API}/api/ai/config`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
       });
+      if (!r.ok) throw new Error(await r.text());
       setConfig(await r.json());
       await loadConfigStatus();
       await loadEmbeddingProfile();
@@ -1120,7 +1122,7 @@ export default function SettingsPage() {
     setRebuildingEmbeddings(true);
     setRebuildMessage(null);
     try {
-      const r = await fetch(`${API}/api/memory/embeddings/rebuild-active`, {
+      const r = await mutFetch(`${API}/api/memory/embeddings/rebuild-active`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1145,7 +1147,7 @@ export default function SettingsPage() {
     setIndexingEmbeddings(true);
     setRebuildMessage(null);
     try {
-      const r = await fetch(`${API}/api/memory/embeddings/index-active`, {
+      const r = await mutFetch(`${API}/api/memory/embeddings/index-active`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ statuses: ["queued", "stale"], limit: 100 }),
@@ -1165,11 +1167,12 @@ export default function SettingsPage() {
   async function handleSaveNtdConfig(mode: NtdControlConfig["mode"]) {
     setNtdSaving(true);
     try {
-      const r = await fetch(`${API}/api/settings/ntd-control`, {
+      const r = await mutFetch(`${API}/api/settings/ntd-control`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode, updated_by: "user" }),
       });
+      if (!r.ok) throw new Error(await r.text());
       setNtdConfig(await r.json());
       setNtdSaved(true);
       setTimeout(() => setNtdSaved(false), 2000);
@@ -1205,16 +1208,17 @@ export default function SettingsPage() {
 
       let nextConfig = agentConfig;
       if (Object.keys(safePatch).length > 0) {
-        const r = await fetch(`${API}/api/ai/agent-config`, {
+        const r = await mutFetch(`${API}/api/ai/agent-config`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(safePatch),
         });
+        if (!r.ok) throw new Error(await r.text());
         nextConfig = await r.json();
       }
 
       for (const [key, value] of protectedChanges) {
-        await fetch(`${API}/api/agent/config/proposals`, {
+        await mutFetch(`${API}/api/agent/config/proposals`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1256,9 +1260,10 @@ export default function SettingsPage() {
     setAgentSaving(true);
     setAgentError(null);
     try {
-      const r = await fetch(`${API}/api/ai/agent-config/reset`, {
+      const r = await mutFetch(`${API}/api/ai/agent-config/reset`, {
         method: "POST",
       });
+      if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
       setAgentConfig(data);
       setAgentConfigBaseline(data);
@@ -1277,7 +1282,7 @@ export default function SettingsPage() {
     setAgentSaving(true);
     setAgentError(null);
     try {
-      const response = await fetch(
+      const response = await mutFetch(
         `${API}/api/ai/agent-config/presets/stable-local`,
         { method: "POST" },
       );
@@ -1311,7 +1316,7 @@ export default function SettingsPage() {
   ) {
     setAgentSaving(true);
     try {
-      await fetch(`${API}/api/agent/config/proposals/${proposalId}/decide`, {
+      await mutFetch(`${API}/api/agent/config/proposals/${proposalId}/decide`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ approved, decided_by: "user" }),
@@ -1332,7 +1337,7 @@ export default function SettingsPage() {
     setAgentSaving(true);
     setAgentError(null);
     try {
-      const response = await fetch(
+      const response = await mutFetch(
         `${API}/api/agent/capabilities/${proposalId}/decide`,
         {
           method: "POST",
@@ -1361,7 +1366,7 @@ export default function SettingsPage() {
     setAgentSaving(true);
     setAgentError(null);
     try {
-      const response = await fetch(
+      const response = await mutFetch(
         `${API}/api/agent/capabilities/${proposalId}/sandbox-apply`,
         {
           method: "POST",
@@ -1392,7 +1397,7 @@ export default function SettingsPage() {
     setAgentSaving(true);
     setAgentError(null);
     try {
-      const response = await fetch(
+      const response = await mutFetch(
         `${API}/api/agent/capabilities/${proposalId}/promote`,
         { method: "POST" },
       );
@@ -1448,7 +1453,7 @@ export default function SettingsPage() {
     setPurgeBusy(true);
     setPurgeMessage(null);
     try {
-      const r = await fetch(`${API}/api/documents/dev/purge-all`, {
+      const r = await mutFetch(`${API}/api/documents/dev/purge-all`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirm: purgeConfirm, delete_files: true }),
@@ -1471,7 +1476,9 @@ export default function SettingsPage() {
     setTgRestarting(true);
     setTgTestResult(null);
     try {
-      const r = await fetch(`${API}/api/telegram/restart`, { method: "POST" });
+      const r = await mutFetch(`${API}/api/telegram/restart`, {
+        method: "POST",
+      });
       const d = await r.json();
       setTgTestResult(
         d.bot_running
@@ -1490,7 +1497,7 @@ export default function SettingsPage() {
     setTgTesting(true);
     setTgTestResult(null);
     try {
-      const r = await fetch(`${API}/api/telegram/test`, { method: "POST" });
+      const r = await mutFetch(`${API}/api/telegram/test`, { method: "POST" });
       const d = await r.json();
       setTgTestResult(
         d.ok ? "✅ Тестовое сообщение отправлено" : `❌ ${d.detail}`,
@@ -1516,7 +1523,7 @@ export default function SettingsPage() {
         payload.notifications_chat_id = tgDraft.notifications_chat_id;
       if (tgDraft.allowed_users !== "")
         payload.allowed_users = tgDraft.allowed_users;
-      const r = await fetch(`${API}/api/telegram/config`, {
+      const r = await mutFetch(`${API}/api/telegram/config`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -3932,7 +3939,7 @@ export default function SettingsPage() {
                 {tgStatus?.bot_running && (
                   <button
                     onClick={async () => {
-                      await fetch(`${API}/api/telegram/stop`, {
+                      await mutFetch(`${API}/api/telegram/stop`, {
                         method: "POST",
                       });
                       await loadTgStatus();

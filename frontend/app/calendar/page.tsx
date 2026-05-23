@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
@@ -75,7 +76,7 @@ export default function CalendarPage() {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API}/api/calendar/upcoming?days=${days}`)
+    mutFetch(`${API}/api/calendar/upcoming?days=${days}`)
       .then((r) => r.json())
       .then((data) => {
         setEvents(data.events ?? []);
@@ -86,14 +87,14 @@ export default function CalendarPage() {
   }, [days]);
 
   const handleMarkSent = async (id: string) => {
-    await fetch(`${API}/api/calendar/reminders/${id}/mark-sent`, {
+    await mutFetch(`${API}/api/calendar/reminders/${id}/mark-sent`, {
       method: "POST",
     });
     setReminders((prev) => prev.filter((r) => r.id !== id));
   };
 
   const handleGenerateFollowup = async (id: string) => {
-    const res = await fetch(
+    const res = await mutFetch(
       `${API}/api/calendar/reminders/${id}/generate-followup`,
       { method: "POST" },
     );
@@ -107,7 +108,7 @@ export default function CalendarPage() {
     if (!reminderMsg.trim() || !reminderAt) return;
     setReminderSaving(true);
     try {
-      const res = await fetch(`${API}/api/calendar/reminders`, {
+      const res = await mutFetch(`${API}/api/calendar/reminders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

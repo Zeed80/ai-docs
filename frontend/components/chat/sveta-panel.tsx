@@ -10,6 +10,7 @@ import {
   type AgentWsMode,
 } from "@/lib/agent-ws";
 import { useDegradedMode } from "@/lib/degraded-mode";
+import { mutFetch } from "@/lib/auth";
 import { genId } from "@/lib/ws-url";
 import {
   createChatSession,
@@ -394,7 +395,7 @@ export function SvetaPanel() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/ai/agent-config")
+    mutFetch("/api/ai/agent-config")
       .then((r) => r.json())
       .then((cfg: Record<string, unknown>) => {
         const m = (cfg.worker_model ?? cfg.model ?? "") as string;
@@ -407,7 +408,7 @@ export function SvetaPanel() {
     if (ratings[msg.id]) return;
     setRatings((prev) => ({ ...prev, [msg.id]: vote }));
     try {
-      await fetch("/api/memory/rate", {
+      await mutFetch("/api/memory/rate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -425,7 +426,7 @@ export function SvetaPanel() {
   async function pinMessage(msg: ChatMessage) {
     if (!msg.content) return;
     try {
-      await fetch("/api/memory/pin", {
+      await mutFetch("/api/memory/pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -724,7 +725,7 @@ export function SvetaPanel() {
     form.append("file", af.file);
     const params = new URLSearchParams({ source_channel: "chat" });
     if (currentSessionId) params.set("chat_session_id", currentSessionId);
-    const res = await fetch(`/api/documents/ingest?${params.toString()}`, {
+    const res = await mutFetch(`/api/documents/ingest?${params.toString()}`, {
       method: "POST",
       body: form,
     });
@@ -853,7 +854,7 @@ export function SvetaPanel() {
       let restOk = false;
       if (proposalId) {
         try {
-          const res = await fetch(
+          const res = await mutFetch(
             `/api/agent/capabilities/${proposalId}/decide`,
             {
               method: "POST",
@@ -962,9 +963,12 @@ export function SvetaPanel() {
   async function handleShareCurrentChat() {
     if (!currentSessionId) return;
     try {
-      const res = await fetch(`/api/chat/sessions/${currentSessionId}/share`, {
-        method: "POST",
-      });
+      const res = await mutFetch(
+        `/api/chat/sessions/${currentSessionId}/share`,
+        {
+          method: "POST",
+        },
+      );
       if (!res.ok) return;
       const data = (await res.json()) as { token: string };
       const link = `${window.location.origin}/chat/share/${data.token}`;

@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -66,7 +67,7 @@ function MarkPaidModal({ schedule, onClose, onPaid }: MarkPaidModalProps) {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch(
+      const res = await mutFetch(
         `${API}/api/payment-schedules/${schedule.id}/mark-paid`,
         {
           method: "POST",

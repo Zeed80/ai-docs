@@ -10,6 +10,7 @@ import {
   type RefObject,
 } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -302,7 +303,7 @@ function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
+  const response = await mutFetch(`${API}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -523,7 +524,7 @@ export default function DocumentsPage() {
 
       const form = new FormData();
       form.append("file", entry.file);
-      const response = await fetch(`${API}/api/documents/ingest?${params}`, {
+      const response = await mutFetch(`${API}/api/documents/ingest?${params}`, {
         method: "POST",
         body: form,
       }).catch(() => null);
@@ -682,7 +683,7 @@ export default function DocumentsPage() {
   async function deleteLink(linkId: string) {
     if (!selected) return;
     await runAction("unlink", () =>
-      fetch(`${API}/api/documents/${selected.id}/links/${linkId}`, {
+      mutFetch(`${API}/api/documents/${selected.id}/links/${linkId}`, {
         method: "DELETE",
       }),
     );

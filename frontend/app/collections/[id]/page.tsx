@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -92,7 +93,7 @@ export default function CollectionDetailPage() {
   async function loadSuggestions() {
     setLoadingSuggestions(true);
     try {
-      const res = await fetch(`${API}/api/collections/${id}/suggest`);
+      const res = await mutFetch(`${API}/api/collections/${id}/suggest`);
       if (res.ok) {
         const data = await res.json();
         setSuggestions(data.suggestions ?? []);
@@ -103,7 +104,7 @@ export default function CollectionDetailPage() {
   }
 
   async function addSuggestion(s: { entity_type: string; entity_id: string }) {
-    await fetch(`${API}/api/collections/${id}/items`, {
+    await mutFetch(`${API}/api/collections/${id}/items`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -120,7 +121,7 @@ export default function CollectionDetailPage() {
     setAdding(true);
     setAddError(null);
     try {
-      const res = await fetch(`${API}/api/collections/${id}/items`, {
+      const res = await mutFetch(`${API}/api/collections/${id}/items`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -144,7 +145,7 @@ export default function CollectionDetailPage() {
   }
 
   async function removeItem(itemId: string) {
-    const res = await fetch(`${API}/api/collections/${id}/items/${itemId}`, {
+    const res = await mutFetch(`${API}/api/collections/${id}/items/${itemId}`, {
       method: "DELETE",
     });
     if (res.ok)
@@ -158,7 +159,7 @@ export default function CollectionDetailPage() {
   async function getSummary() {
     setSummarizing(true);
     try {
-      const res = await fetch(`${API}/api/collections/${id}/summarize`, {
+      const res = await mutFetch(`${API}/api/collections/${id}/summarize`, {
         method: "POST",
       });
       if (res.ok) {
@@ -173,7 +174,7 @@ export default function CollectionDetailPage() {
   async function closeCollection() {
     setClosing(true);
     try {
-      const res = await fetch(`${API}/api/collections/${id}/close`, {
+      const res = await mutFetch(`${API}/api/collections/${id}/close`, {
         method: "POST",
       });
       if (res.ok) {

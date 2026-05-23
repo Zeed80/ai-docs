@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -76,7 +77,7 @@ export default function ImportPage() {
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(`${API}/api/tables/import`, {
+      const res = await mutFetch(`${API}/api/tables/import`, {
         method: "POST",
         body: form,
       });
@@ -124,7 +125,7 @@ export default function ImportPage() {
           changes: r.changes,
         }));
 
-      const res = await fetch(`${API}/api/tables/apply-diff`, {
+      const res = await mutFetch(`${API}/api/tables/apply-diff`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rows }),

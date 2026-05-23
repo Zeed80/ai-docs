@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -73,7 +74,7 @@ export default function CompareDetailPage() {
   const [creatingDraft, setCreatingDraft] = useState(false);
 
   async function loadSession() {
-    const res = await fetch(`${API}/api/compare/${id}`);
+    const res = await mutFetch(`${API}/api/compare/${id}`);
     if (!res.ok) {
       router.push("/compare");
       return;
@@ -82,7 +83,7 @@ export default function CompareDetailPage() {
     setSession(data);
 
     if (data.status !== "draft") {
-      const sumRes = await fetch(`${API}/api/compare/${id}/summary`);
+      const sumRes = await mutFetch(`${API}/api/compare/${id}/summary`);
       if (sumRes.ok) setSummary(await sumRes.json());
     }
     setLoading(false);
@@ -95,7 +96,7 @@ export default function CompareDetailPage() {
   async function align() {
     setAligning(true);
     try {
-      const res = await fetch(`${API}/api/compare/${id}/align`, {
+      const res = await mutFetch(`${API}/api/compare/${id}/align`, {
         method: "POST",
       });
       if (res.ok) await loadSession();
@@ -108,7 +109,7 @@ export default function CompareDetailPage() {
     if (!chosenId) return;
     setDeciding(true);
     try {
-      const res = await fetch(`${API}/api/compare/${id}/decide`, {
+      const res = await mutFetch(`${API}/api/compare/${id}/decide`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -132,7 +133,7 @@ export default function CompareDetailPage() {
       const chosenSupplier =
         suppliers[session.decision.chosen_supplier_id]?.name ??
         session.decision.chosen_supplier_id;
-      const res = await fetch(`${API}/api/drafts`, {
+      const res = await mutFetch(`${API}/api/drafts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

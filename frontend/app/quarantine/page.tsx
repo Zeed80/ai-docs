@@ -1,7 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
-
+import { mutFetch } from "@/lib/auth";
 import { useEffect, useState } from "react";
 
 const API = getApiBaseUrl();
@@ -65,7 +65,7 @@ export default function QuarantinePage() {
   async function release(id: string) {
     setActionId(id);
     try {
-      await fetch(`${API}/api/quarantine/${id}/release`, { method: "POST" });
+      await mutFetch(`${API}/api/quarantine/${id}/release`, { method: "POST" });
       await loadData();
     } finally {
       setActionId(null);
@@ -81,7 +81,7 @@ export default function QuarantinePage() {
       return;
     setActionId(id);
     try {
-      await fetch(`${API}/api/quarantine/${id}`, { method: "DELETE" });
+      await mutFetch(`${API}/api/quarantine/${id}`, { method: "DELETE" });
       await loadData();
     } finally {
       setActionId(null);
@@ -91,7 +91,7 @@ export default function QuarantinePage() {
   async function addToAllowlist() {
     const ext = newExt.trim();
     if (!ext) return;
-    await fetch(`${API}/api/quarantine/allowlist`, {
+    await mutFetch(`${API}/api/quarantine/allowlist`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ extension: ext, is_allowed: true }),
@@ -101,7 +101,9 @@ export default function QuarantinePage() {
   }
 
   async function removeFromAllowlist(id: string) {
-    await fetch(`${API}/api/quarantine/allowlist/${id}`, { method: "DELETE" });
+    await mutFetch(`${API}/api/quarantine/allowlist/${id}`, {
+      method: "DELETE",
+    });
     await loadData();
   }
 

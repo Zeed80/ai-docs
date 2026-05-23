@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -38,7 +39,7 @@ export default function CollectionsPage() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/collections`);
+      const res = await mutFetch(`${API}/api/collections`);
       if (res.ok) setCollections(await res.json());
     } finally {
       setLoading(false);
@@ -53,7 +54,7 @@ export default function CollectionsPage() {
     if (!newName.trim()) return;
     setCreating(true);
     try {
-      const res = await fetch(`${API}/api/collections`, {
+      const res = await mutFetch(`${API}/api/collections`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

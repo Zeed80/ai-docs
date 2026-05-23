@@ -16,6 +16,7 @@ import SurfaceSpecTable, {
   SurfaceSpec,
 } from "@/components/technology/SurfaceSpecTable";
 import GostFormsExporter from "@/components/technology/GostFormsExporter";
+import { mutFetch } from "@/lib/auth";
 
 interface ProcessPlan {
   id: string;
@@ -137,7 +138,7 @@ export default function TechProcessReviewPage() {
       plan.normcontrol_status !== "not_checked" &&
       plan.normcontrol_status !== "checking"
     ) {
-      fetch(`/api/technology/process-plans/${planId}/normcontrol-result`)
+      mutFetch(`/api/technology/process-plans/${planId}/normcontrol-result`)
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
           if (data) setNormcontrol(data);
@@ -155,7 +156,7 @@ export default function TechProcessReviewPage() {
       total_count: 0,
     });
     try {
-      const res = await fetch(
+      const res = await mutFetch(
         `/api/technology/process-plans/${planId}/normcontrol`,
         {
           method: "POST",
@@ -175,7 +176,7 @@ export default function TechProcessReviewPage() {
     checkId: string,
     resolution: "fixed" | "waived",
   ) => {
-    const res = await fetch(
+    const res = await mutFetch(
       `/api/technology/process-plans/${planId}/normcontrol/${checkId}/resolve`,
       {
         method: "POST",
@@ -200,7 +201,7 @@ export default function TechProcessReviewPage() {
     field: string,
     value: unknown,
   ) => {
-    await fetch(`/api/technology/operations/${id}`, {
+    await mutFetch(`/api/technology/operations/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ [field]: value }),
@@ -209,7 +210,7 @@ export default function TechProcessReviewPage() {
   };
 
   const handleApprove = async () => {
-    const res = await fetch(`/api/technology/process-plans/${planId}/approve`, {
+    const res = await mutFetch(`/api/technology/process-plans/${planId}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ approved_by: "user" }),

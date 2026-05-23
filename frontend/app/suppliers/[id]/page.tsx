@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -295,7 +296,7 @@ function CatalogTab({
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const resp = await fetch(
+      const resp = await mutFetch(
         `${API}/tool-catalog/by-supplier/${partyId}/catalog`,
         {
           method: "POST",
@@ -329,7 +330,7 @@ function CatalogTab({
     setUploadError(null);
     setUploadSuccess(null);
     try {
-      const resp = await fetch(
+      const resp = await mutFetch(
         `${API}/api/tool-catalog/suppliers-by-party/${partyId}/refresh`,
         {
           method: "POST",
@@ -337,14 +338,14 @@ function CatalogTab({
       );
       if (!resp.ok) {
         // Try finding the tool_supplier id first
-        const tsResp = await fetch(
+        const tsResp = await mutFetch(
           `${API}/api/tool-catalog/by-supplier/${partyId}`,
         );
         if (tsResp.ok) {
           const tsData = await tsResp.json();
           const supplierId = (tsData.items ?? [])[0]?.id;
           if (supplierId) {
-            const r2 = await fetch(
+            const r2 = await mutFetch(
               `${API}/api/tool-catalog/suppliers/${supplierId}/refresh`,
               { method: "POST" },
             );
@@ -394,7 +395,7 @@ function CatalogTab({
 
   async function handleDeleteEntry(entryId: string) {
     try {
-      await fetch(`${API}/api/tool-catalog/entries/${entryId}`, {
+      await mutFetch(`${API}/api/tool-catalog/entries/${entryId}`, {
         method: "DELETE",
       });
       await loadEntries();
@@ -405,7 +406,7 @@ function CatalogTab({
     if (!selectedEntryIds.size) return;
     setDeletingEntries(true);
     try {
-      await fetch(`${API}/api/tool-catalog/entries/bulk-delete`, {
+      await mutFetch(`${API}/api/tool-catalog/entries/bulk-delete`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ entry_ids: Array.from(selectedEntryIds) }),
@@ -763,11 +764,11 @@ export default function SupplierProfilePage() {
   function load() {
     setLoading(true);
     Promise.all([
-      fetch(`${API}/api/suppliers/${id}`).then((r) => r.json()),
-      fetch(`${API}/api/suppliers/${id}/trust-score`).then((r) => r.json()),
-      fetch(`${API}/api/suppliers/${id}/price-history`).then((r) => r.json()),
-      fetch(`${API}/api/suppliers/${id}/alerts`).then((r) => r.json()),
-      fetch(`${API}/api/suppliers/${id}/check-requisites`, {
+      mutFetch(`${API}/api/suppliers/${id}`).then((r) => r.json()),
+      mutFetch(`${API}/api/suppliers/${id}/trust-score`).then((r) => r.json()),
+      mutFetch(`${API}/api/suppliers/${id}/price-history`).then((r) => r.json()),
+      mutFetch(`${API}/api/suppliers/${id}/alerts`).then((r) => r.json()),
+      mutFetch(`${API}/api/suppliers/${id}/check-requisites`, {
         method: "POST",
       }).then((r) => r.json()),
     ])
@@ -803,7 +804,7 @@ export default function SupplierProfilePage() {
   async function handleDeleteSupplier() {
     setDeleting(true);
     try {
-      const resp = await fetch(`${API}/api/suppliers/${id}?confirm=true`, {
+      const resp = await mutFetch(`${API}/api/suppliers/${id}?confirm=true`, {
         method: "DELETE",
       });
       if (resp.ok) {
@@ -859,7 +860,7 @@ export default function SupplierProfilePage() {
         body[f] = typeof v === "string" && v.trim() === "" ? null : (v ?? null);
       }
       body.user_rating = (editForm.user_rating as number) || null;
-      const resp = await fetch(`${API}/api/suppliers/${id}`, {
+      const resp = await mutFetch(`${API}/api/suppliers/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

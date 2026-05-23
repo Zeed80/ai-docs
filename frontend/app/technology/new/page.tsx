@@ -3,6 +3,7 @@
 import { Suspense, useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { mutFetch } from "@/lib/auth";
 
 interface Drawing {
   id: string;
@@ -67,7 +68,7 @@ function NewTechProcessContent() {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(
+      const res = await mutFetch(
         "/api/technology/process-plans/generate-from-drawing",
         {
           method: "POST",

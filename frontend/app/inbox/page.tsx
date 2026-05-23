@@ -3,6 +3,7 @@
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getApiBaseUrl, getWebSocketBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -259,7 +260,7 @@ export default function InboxPage() {
                   const until = new Date(
                     Date.now() + 24 * 60 * 60 * 1000,
                   ).toISOString();
-                  fetch(`${API}/api/documents/${doc.id}/snooze`, {
+                  mutFetch(`${API}/api/documents/${doc.id}/snooze`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({

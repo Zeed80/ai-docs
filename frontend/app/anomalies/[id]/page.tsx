@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { mutFetch } from "@/lib/auth";
 
 interface SimilarResult {
   id: string;
@@ -76,7 +77,7 @@ export default function AnomalyDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    fetch(`${API}/api/search/similar/anomaly/${id}?limit=4`, {
+    mutFetch(`${API}/api/search/similar/anomaly/${id}?limit=4`, {
       credentials: "include",
     })
       .then((r) => (r.ok ? r.json() : { results: [] }))
@@ -86,7 +87,7 @@ export default function AnomalyDetailPage() {
 
   const resolve = async (resolution: "resolved" | "false_positive") => {
     setResolving(true);
-    await fetch(`${API}/api/anomalies/${id}/resolve`, {
+    await mutFetch(`${API}/api/anomalies/${id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ resolution }),

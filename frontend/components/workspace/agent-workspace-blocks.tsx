@@ -8,6 +8,7 @@ import { CanvasMarkdown } from "@/components/canvas/canvas-markdown";
 import { CanvasTable } from "@/components/canvas/canvas-table";
 import type { CanvasBlock } from "@/lib/canvas-context";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -24,9 +25,10 @@ function BlockView({
   onDeleted: () => void;
 }) {
   async function deleteBlock() {
-    await fetch(`${API}/api/workspace/blocks/${encodeURIComponent(block.id)}`, {
-      method: "DELETE",
-    }).catch(() => {});
+    await mutFetch(
+      `${API}/api/workspace/blocks/${encodeURIComponent(block.id)}`,
+      { method: "DELETE" },
+    ).catch(() => {});
     onDeleted();
   }
 
@@ -98,7 +100,7 @@ export function AgentWorkspaceBlocks({
   }, []);
 
   async function clearBlocks() {
-    await fetch(`${API}/api/workspace/blocks`, { method: "DELETE" }).catch(
+    await mutFetch(`${API}/api/workspace/blocks`, { method: "DELETE" }).catch(
       () => {},
     );
     await load();

@@ -1,7 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
-
+import { mutFetch } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -210,7 +210,7 @@ export default function InvoicesPage() {
     if (!nlQuery.trim()) return;
     setNlLoading(true);
     try {
-      const res = await fetch(`${API}/api/search/nl`, {
+      const res = await mutFetch(`${API}/api/search/nl`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: nlQuery, limit: 1 }),
@@ -265,7 +265,7 @@ export default function InvoicesPage() {
         for (const chunk of chunks) {
           await Promise.all(
             chunk.map((id) =>
-              fetch(`${API}/api/invoices/${id}`, { method: "DELETE" }),
+              mutFetch(`${API}/api/invoices/${id}`, { method: "DELETE" }),
             ),
           );
         }
@@ -277,7 +277,7 @@ export default function InvoicesPage() {
                 ...(statusFilter ? { status: statusFilter } : {}),
                 delete_all: !statusFilter,
               };
-        await fetch(`${API}/api/invoices`, {
+        await mutFetch(`${API}/api/invoices`, {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -327,7 +327,7 @@ export default function InvoicesPage() {
     if (!selectedIds.length) return;
     setBulkAction(action === "approve" ? "approving" : "rejecting");
     try {
-      await fetch(`${API}/api/invoices/bulk-${action}`, {
+      await mutFetch(`${API}/api/invoices/bulk-${action}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: selectedIds }),

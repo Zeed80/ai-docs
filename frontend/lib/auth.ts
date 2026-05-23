@@ -94,6 +94,24 @@ export async function logout(): Promise<string> {
 }
 
 /**
+ * Mutation-safe fetch: adds credentials + CSRF header for POST/PUT/PATCH/DELETE.
+ * Returns the raw Response — caller checks r.ok.
+ */
+export function mutFetch(url: string, init?: RequestInit): Promise<Response> {
+  const method = (init?.method ?? "POST").toUpperCase();
+  return fetch(url, {
+    credentials: "include",
+    ...init,
+    headers: {
+      ...(["POST", "PUT", "PATCH", "DELETE"].includes(method)
+        ? csrfHeaders()
+        : {}),
+      ...init?.headers,
+    },
+  });
+}
+
+/**
  * Fetch wrapper that always includes the auth cookie and CSRF header.
  * On 401 responses it redirects to /auth/login (browser-only).
  */

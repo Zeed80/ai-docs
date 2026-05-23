@@ -4,6 +4,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -84,7 +85,7 @@ export default function EmailThreadPage() {
   async function saveDraft() {
     setSending(true);
     try {
-      const res = await fetch(`${API}/api/email/drafts`, {
+      const res = await mutFetch(`${API}/api/email/drafts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -108,7 +109,7 @@ export default function EmailThreadPage() {
   async function runRiskCheck() {
     setSending(true);
     try {
-      const res = await fetch(`${API}/api/email/risk-check`, {
+      const res = await mutFetch(`${API}/api/email/risk-check`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ body: draft.body, subject: draft.subject }),

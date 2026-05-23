@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -70,7 +71,7 @@ export default function NtdSettingsPage() {
 
   async function searchRequirements(search = query) {
     const q = search.trim() || " ";
-    const res = await fetch(
+    const res = await mutFetch(
       `${API}/api/ntd/requirements/search?query=${encodeURIComponent(q)}&limit=50`,
     ).catch(() => null);
     if (!res?.ok) {
@@ -88,7 +89,7 @@ export default function NtdSettingsPage() {
 
   async function createDocument() {
     setMessage(null);
-    const res = await fetch(`${API}/api/ntd/documents`, {
+    const res = await mutFetch(`${API}/api/ntd/documents`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -108,7 +109,7 @@ export default function NtdSettingsPage() {
 
   async function createFromSource() {
     setMessage(null);
-    const res = await fetch(`${API}/api/ntd/documents/from-source`, {
+    const res = await mutFetch(`${API}/api/ntd/documents/from-source`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -139,7 +140,7 @@ export default function NtdSettingsPage() {
     try {
       const form = new FormData();
       form.append("file", file);
-      const ingest = await fetch(`${API}/api/documents/ingest?source_channel=ntd`, {
+      const ingest = await mutFetch(`${API}/api/documents/ingest?source_channel=ntd`, {
         method: "POST",
         body: form,
       });
@@ -149,7 +150,7 @@ export default function NtdSettingsPage() {
         setMessage("Не удалось загрузить НТД");
         return;
       }
-      const create = await fetch(`${API}/api/ntd/documents/from-source`, {
+      const create = await mutFetch(`${API}/api/ntd/documents/from-source`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -184,7 +185,7 @@ export default function NtdSettingsPage() {
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
-    const res = await fetch(`${API}/api/ntd/requirements`, {
+    const res = await mutFetch(`${API}/api/ntd/requirements`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -210,7 +211,7 @@ export default function NtdSettingsPage() {
 
   async function indexDocument(documentId: string) {
     setMessage(null);
-    const res = await fetch(`${API}/api/ntd/documents/${documentId}/index`, {
+    const res = await mutFetch(`${API}/api/ntd/documents/${documentId}/index`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

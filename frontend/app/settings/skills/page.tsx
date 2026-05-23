@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -143,10 +144,10 @@ export default function SkillsMarketplacePage() {
   async function saveExposed() {
     setSaving(true);
     try {
-      const configR = await fetch(`${API}/api/ai/settings`);
+      const configR = await mutFetch(`${API}/api/ai/settings`);
       if (!configR.ok) return;
       const config = await configR.json();
-      await fetch(`${API}/api/ai/settings`, {
+      await mutFetch(`${API}/api/ai/settings`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -163,7 +164,7 @@ export default function SkillsMarketplacePage() {
   }
 
   async function togglePlugin(pluginKey: string, enable: boolean) {
-    await fetch(
+    await mutFetch(
       `${API}/api/agent/plugins/${pluginKey}/${enable ? "enable" : "disable"}`,
       {
         method: "POST",

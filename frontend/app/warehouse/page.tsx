@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
+import { csrfHeaders, mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -97,8 +98,14 @@ const MOVEMENT_COLORS: Record<string, string> = {
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
 async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
+  const method = (options?.method ?? "GET").toUpperCase();
+  const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
   return fetch(url, {
-    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...(isMutation ? csrfHeaders() : {}),
+    },
     ...options,
   });
 }
@@ -582,7 +589,7 @@ function InventoryTab() {
     const params = new URLSearchParams({ limit: "100" });
     if (search) params.set("search", search);
     if (lowStockOnly) params.set("low_stock", "true");
-    fetch(`${API}/api/warehouse/inventory?${params}`)
+    mutFetch(`${API}/api/warehouse/inventory?${params}`)
       .then((r) => r.json())
       .then((d) => {
         setItems(d.items ?? []);

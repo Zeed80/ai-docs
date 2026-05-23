@@ -11,6 +11,7 @@ import {
 } from "@/lib/agent-ws";
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { genId } from "@/lib/ws-url";
+import { mutFetch } from "@/lib/auth";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -254,7 +255,7 @@ export function ChatWidget() {
     if (ratings[msg.id]) return;
     setRatings((prev) => ({ ...prev, [msg.id]: vote }));
     try {
-      await fetch("/api/memory/rate", {
+      await mutFetch("/api/memory/rate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -280,7 +281,7 @@ export function ChatWidget() {
       let restOk = false;
       if (proposalId) {
         try {
-          const res = await fetch(
+          const res = await mutFetch(
             `/api/agent/capabilities/${proposalId}/decide`,
             {
               method: "POST",

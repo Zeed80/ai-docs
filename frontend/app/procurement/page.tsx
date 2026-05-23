@@ -5,6 +5,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -96,7 +97,7 @@ function CreateModal({ onClose, onCreated }: CreateModalProps) {
             target_price: it.target_price ? Number(it.target_price) : null,
           })),
       };
-      const res = await fetch(`${API}/api/purchase-requests`, {
+      const res = await mutFetch(`${API}/api/purchase-requests`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

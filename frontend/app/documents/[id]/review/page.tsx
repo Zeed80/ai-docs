@@ -20,6 +20,7 @@ import {
   type NTDFinding,
   type ValidationResponse,
 } from "@/lib/api-client";
+import { mutFetch } from "@/lib/auth";
 import { LineItemsTable } from "@/components/review/line-items-table";
 import {
   advanceStreak,
@@ -355,7 +356,7 @@ export default function ReviewPage() {
     setActionLoading(true);
     try {
       const API = getApiBaseUrl();
-      const res = await fetch(`${API}/api/invoices/${invoiceId}/receive`, {
+      const res = await mutFetch(`${API}/api/invoices/${invoiceId}/receive`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -382,7 +383,7 @@ export default function ReviewPage() {
     setActionLoading(true);
     try {
       const API = getApiBaseUrl();
-      const res = await fetch(
+      const res = await mutFetch(
         `${API}/api/invoices/${invoiceId}/schedule-payment`,
         { method: "POST" },
       );
@@ -408,7 +409,7 @@ export default function ReviewPage() {
     setActionLoading(true);
     try {
       const API = getApiBaseUrl();
-      const res = await fetch(`${API}/api/invoices/${invoiceId}/export`, {
+      const res = await mutFetch(`${API}/api/invoices/${invoiceId}/export`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -437,7 +438,7 @@ export default function ReviewPage() {
     setActionLoading(true);
     try {
       const API = getApiBaseUrl();
-      const res = await fetch(`${API}/api/invoices/${invoiceId}/export-1c`, {
+      const res = await mutFetch(`${API}/api/invoices/${invoiceId}/export-1c`, {
         method: "POST",
       });
       if (!res.ok) {

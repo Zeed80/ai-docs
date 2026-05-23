@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { CanvasDocumentItem } from "@/lib/canvas-context";
+import { mutFetch } from "@/lib/auth";
 
 interface CanvasDocumentsProps {
   documents: CanvasDocumentItem[];
@@ -24,7 +25,7 @@ function DocumentRow({ doc }: { doc: CanvasDocumentItem }) {
     if (!window.confirm(`Удалить документ «${doc.title}»?`)) return;
     setDeleteState("pending");
     try {
-      const res = await fetch(doc.delete_url, { method: "DELETE" });
+      const res = await mutFetch(doc.delete_url, { method: "DELETE" });
       setDeleteState(res.ok ? "done" : "error");
     } catch {
       setDeleteState("error");

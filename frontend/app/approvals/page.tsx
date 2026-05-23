@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useCallback, useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -135,7 +136,7 @@ export default function ApprovalsPage() {
     async (id: string, approved: boolean) => {
       setLoading(true);
       try {
-        const res = await fetch(`${API}/api/approvals/${id}/decide`, {
+        const res = await mutFetch(`${API}/api/approvals/${id}/decide`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -166,7 +167,7 @@ export default function ApprovalsPage() {
       if (checkedIds.size === 0) return;
       setBulkLoading(true);
       try {
-        const res = await fetch(`${API}/api/approvals/bulk-decide`, {
+        const res = await mutFetch(`${API}/api/approvals/bulk-decide`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -212,7 +213,7 @@ export default function ApprovalsPage() {
       if (!delegateTo.trim()) return;
       setDelegateLoading(true);
       try {
-        const res = await fetch(`${API}/api/approvals/${approvalId}/delegate`, {
+        const res = await mutFetch(`${API}/api/approvals/${approvalId}/delegate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

@@ -1,7 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
-
+import { mutFetch } from "@/lib/auth";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -85,7 +85,7 @@ function AddLineForm({
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/boms/${bomId}/lines`, {
+      const res = await mutFetch(`${API}/api/boms/${bomId}/lines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -228,14 +228,16 @@ export default function BOMDetailPage() {
   }, [id]);
 
   async function handleDeleteLine(lineId: string) {
-    await fetch(`${API}/api/boms/${id}/lines/${lineId}`, { method: "DELETE" });
+    await mutFetch(`${API}/api/boms/${id}/lines/${lineId}`, {
+      method: "DELETE",
+    });
     loadBom();
   }
 
   async function handleApprove() {
     setActionLoading(true);
     try {
-      const res = await fetch(
+      const res = await mutFetch(
         `${API}/api/boms/${id}/approve?approved_by=user`,
         { method: "POST" },
       );
@@ -266,7 +268,7 @@ export default function BOMDetailPage() {
   async function handleCreatePR() {
     setActionLoading(true);
     try {
-      const res = await fetch(
+      const res = await mutFetch(
         `${API}/api/boms/${id}/create-purchase-request?batch_qty=${batchQty}`,
         { method: "POST" },
       );

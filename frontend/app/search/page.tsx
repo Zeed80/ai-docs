@@ -1,6 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
@@ -71,7 +72,7 @@ function SearchPageInner() {
     if (!query.trim()) return;
     setSaving(true);
     try {
-      await fetch(`${API}/api/search/saved-queries`, {
+      await mutFetch(`${API}/api/search/saved-queries`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -88,7 +89,9 @@ function SearchPageInner() {
   }
 
   async function deleteSavedQuery(id: string) {
-    await fetch(`${API}/api/search/saved-queries/${id}`, { method: "DELETE" });
+    await mutFetch(`${API}/api/search/saved-queries/${id}`, {
+      method: "DELETE",
+    });
     setSavedQueries((prev) => prev.filter((q) => q.id !== id));
   }
 
@@ -107,7 +110,7 @@ function SearchPageInner() {
       setLoading(true);
       try {
         if (mode === "nl") {
-          const res = await fetch(`${API}/api/search/nl`, {
+          const res = await mutFetch(`${API}/api/search/nl`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ query: q, limit: 50 }),
@@ -119,7 +122,7 @@ function SearchPageInner() {
             setParsedFilter(data.structured_filter ?? null);
           }
         } else if (mode === "similar") {
-          const res = await fetch(`${API}/api/search/hybrid`, {
+          const res = await mutFetch(`${API}/api/search/hybrid`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ query: q, limit: 50 }),
@@ -132,7 +135,7 @@ function SearchPageInner() {
           }
         } else {
           // POST /api/search/documents?q=...
-          const res = await fetch(
+          const res = await mutFetch(
             `${API}/api/search/documents?q=${encodeURIComponent(q)}&limit=50`,
             { method: "POST" },
           );

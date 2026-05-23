@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -59,7 +60,7 @@ function CreateNormCardForm({
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/normalization/norm-cards`, {
+      const res = await mutFetch(`${API}/api/normalization/norm-cards`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -230,7 +231,7 @@ function ClassificationModal({
   async function handleSave() {
     setLoading(true);
     try {
-      await fetch(`${API}/api/normalization/canonical-items/${item.id}`, {
+      await mutFetch(`${API}/api/normalization/canonical-items/${item.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -356,9 +357,9 @@ export default function NormCardsPage() {
 
   async function loadAllItems() {
     try {
-      const res = await fetch(
+      const res = await mutFetch(
         `${API}/api/normalization/canonical-items?limit=200`,
-      ).catch(() => fetch(`${API}/api/search/canonical-items?limit=200`));
+      ).catch(() => mutFetch(`${API}/api/search/canonical-items?limit=200`));
       if (res.ok) {
         const data = await res.json();
         setItems(data.items ?? data ?? []);
@@ -376,7 +377,7 @@ export default function NormCardsPage() {
   }, [tab, search]);
 
   async function deleteCard(id: string) {
-    await fetch(`${API}/api/normalization/norm-cards/${id}`, {
+    await mutFetch(`${API}/api/normalization/norm-cards/${id}`, {
       method: "DELETE",
     });
     showToast("Нормкарточка удалена");

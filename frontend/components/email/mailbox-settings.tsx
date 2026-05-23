@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 
 interface MailboxOut {
   id: string;
@@ -148,12 +149,12 @@ export function MailboxSection() {
         assigned_role: form.assigned_role || undefined,
       };
       const res = editing
-        ? await fetch(`${base}/api/mailbox/configs/${editing}`, {
+        ? await mutFetch(`${base}/api/mailbox/configs/${editing}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
           })
-        : await fetch(`${base}/api/mailbox/configs`, {
+        : await mutFetch(`${base}/api/mailbox/configs`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -169,7 +170,7 @@ export function MailboxSection() {
 
   async function remove(id: string) {
     if (!confirm("Удалить почтовый ящик?")) return;
-    await fetch(`${base}/api/mailbox/configs/${id}`, { method: "DELETE" });
+    await mutFetch(`${base}/api/mailbox/configs/${id}`, { method: "DELETE" });
     await load();
   }
 
@@ -177,7 +178,7 @@ export function MailboxSection() {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch(`${base}/api/mailbox/configs/${id}/test`, {
+      const res = await mutFetch(`${base}/api/mailbox/configs/${id}/test`, {
         method: "POST",
       });
       if (res.ok) setTestResult(await res.json());

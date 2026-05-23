@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -109,7 +110,7 @@ export default function ComparePage() {
     if (!formName.trim() || selectedIds.size < 2) return;
     setCreating(true);
     try {
-      const res = await fetch(`${API}/api/compare`, {
+      const res = await mutFetch(`${API}/api/compare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

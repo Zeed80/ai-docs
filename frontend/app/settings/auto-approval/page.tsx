@@ -2,6 +2,7 @@
 
 import { getApiBaseUrl } from "@/lib/api-base";
 import { useEffect, useState } from "react";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -78,7 +79,7 @@ export default function AutoApprovalSettingsPage() {
         body.min_trust_score = parseFloat(form.min_trust_score) / 100;
       body.approval_role = form.approval_role || "auto";
 
-      const res = await fetch(`${API}/api/auto-approval-rules`, {
+      const res = await mutFetch(`${API}/api/auto-approval-rules`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -95,7 +96,7 @@ export default function AutoApprovalSettingsPage() {
   }
 
   async function toggleActive(rule: AutoApprovalRule) {
-    const res = await fetch(`${API}/api/auto-approval-rules/${rule.id}`, {
+    const res = await mutFetch(`${API}/api/auto-approval-rules/${rule.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_active: !rule.is_active }),
@@ -111,7 +112,7 @@ export default function AutoApprovalSettingsPage() {
   }
 
   async function deleteRule(id: string) {
-    const res = await fetch(`${API}/api/auto-approval-rules/${id}`, {
+    const res = await mutFetch(`${API}/api/auto-approval-rules/${id}`, {
       method: "DELETE",
     });
     if (res.status === 204) {

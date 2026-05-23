@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getQueuedUploads, flushQueue } from "@/lib/offline-queue";
 import { getApiBaseUrl } from "@/lib/api-base";
+import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
@@ -41,7 +42,7 @@ export function OfflineQueueWidget() {
         const blob = new Blob([entry.data], { type: entry.mime });
         const fd = new FormData();
         fd.append("file", blob, entry.filename);
-        const r = await fetch(`${API}/api/documents/ingest`, {
+        const r = await mutFetch(`${API}/api/documents/ingest`, {
           method: "POST",
           body: fd,
         });

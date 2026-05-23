@@ -2,9 +2,12 @@
  * API client for drawings, features, contours, tool bindings, and tool catalog.
  */
 
+import { csrfHeaders } from "./auth";
 import { getApiBaseUrl } from "./api-base";
 
 const API_BASE = () => getApiBaseUrl();
+
+const _MUTATIONS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 class ApiError extends Error {
   constructor(
@@ -17,13 +20,21 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? "GET").toUpperCase();
+  const isMutation = _MUTATIONS.has(method);
+
   const res = await fetch(`${API_BASE()}${path}`, {
     ...options,
+    credentials: "include",
     headers:
       options?.body instanceof FormData
-        ? { ...(options?.headers as Record<string, string>) }
+        ? {
+            ...(isMutation ? csrfHeaders() : {}),
+            ...(options?.headers as Record<string, string>),
+          }
         : {
             "Content-Type": "application/json",
+            ...(isMutation ? csrfHeaders() : {}),
             ...(options?.headers as Record<string, string>),
           },
   });
