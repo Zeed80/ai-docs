@@ -2,8 +2,11 @@
 # Automatically applied on first worker start (blueprints.goauthentik.io/instantiate: "true")
 #
 # Creates: groups, OAuth2/OIDC provider, application.
-# After applying, copy OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET from
-# Authentik Admin → Providers → ai-workspace-provider into .env.
+# OAUTH_CLIENT_ID defaults to "ai-workspace".
+# OAUTH_CLIENT_SECRET must be set in .env (generated on first apply).
+# Redirect URI: http://<host>/auth/callback  (frontend callback → backend exchange)
+#
+# Compatible with Authentik 2024.10+
 
 version: 1
 metadata:
@@ -81,11 +84,18 @@ entries:
       authorization_flow: !Find
         - authentik_flows.flow
         - [slug, default-provider-authorization-implicit-consent]
+      invalidation_flow: !Find
+        - authentik_flows.flow
+        - [slug, default-provider-invalidation-flow]
       client_id: !Env [OAUTH_CLIENT_ID, "ai-workspace"]
       client_secret: !Env [OAUTH_CLIENT_SECRET, ""]
-      redirect_uris: !Env
-        - OAUTH_REDIRECT_URIS
-        - "http://localhost:8000/api/auth/callback\nhttp://localhost:3000/api/auth/callback"
+      redirect_uris:
+        # Frontend callback page: receives code from Authentik, proxies to /api/auth/callback
+        - url: !Env [OAUTH_REDIRECT_URI_1, "http://localhost/auth/callback"]
+          matching_mode: strict
+        # Dev direct backend (no Traefik)
+        - url: !Env [OAUTH_REDIRECT_URI_2, "http://localhost:8000/api/auth/callback"]
+          matching_mode: strict
       access_code_validity: "minutes=1"
       access_token_validity: "hours=1"
       refresh_token_validity: "days=30"

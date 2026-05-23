@@ -96,17 +96,29 @@ OLLAMA_MODEL_REASONING=gemma4:26b
 ```bash
 git clone https://github.com/Zeed80/ai-docs.git
 cd ai-docs
-cp .env.example .env
 ```
 
-Проверьте `.env` перед запуском:
+Конфигурация хранится в двух файлах:
+
+| Файл | Назначение |
+|------|-----------|
+| `.env` (корень) | локальная разработка без Docker |
+| `infra/.env` | **Docker Compose** (читается при `docker compose -f infra/docker-compose.yml ...`) |
+
+Перед первым запуском отредактируйте `infra/.env`:
 
 - замените `APP_SECRET_KEY`, `POSTGRES_PASSWORD`, `MINIO_SECRET_KEY`;
-- настройте `OLLAMA_URL`;
-- для доступа с другого компьютера в сети задайте `NEXT_PUBLIC_API_URL` и `NEXT_PUBLIC_WS_URL` с IP сервера;
+- задайте `OLLAMA_URL` (по умолчанию — хост по `host-gateway`);
+- сгенерируйте `OAUTH_CLIENT_SECRET` и задайте `AUTH_ENABLED=true` для включения SSO;
 - не добавляйте реальные ключи и пароли в git.
 
-Запуск dev-стека:
+Запуск стека через Traefik (основной режим):
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+```
+
+Или через Makefile:
 
 ```bash
 make dev          # запустить
@@ -114,24 +126,98 @@ make dev-build    # пересобрать и запустить
 make down         # остановить
 ```
 
-Основные адреса по умолчанию:
+Основные адреса по умолчанию (через Traefik на порту 80):
 
 | Сервис | URL |
 |--------|-----|
-| Frontend | http://localhost:3000 |
-| Backend API | http://localhost:8000 |
-| OpenAPI docs | http://localhost:8000/docs |
-| AI health | http://localhost:8000/health/ai |
+| Frontend | http://localhost |
+| Backend API | http://localhost/api |
+| OpenAPI docs | http://localhost/api/docs |
+| AI health | http://localhost/api/health/ai |
+| Authentik SSO | http://localhost:9100 |
 | MinIO Console | http://localhost:9001 |
 | Qdrant | http://localhost:6333 |
 | Ollama | http://localhost:11434 |
 
-Если frontend открывается с другого компьютера в локальной сети, в `.env` укажите IP машины с backend:
+Если frontend открывается с другого компьютера в локальной сети, в `infra/.env` укажите IP машины:
 
 ```env
-NEXT_PUBLIC_API_URL=http://192.168.1.10:8000
-NEXT_PUBLIC_WS_URL=ws://192.168.1.10:8000
+NEXT_PUBLIC_API_URL=http://192.168.1.10
+NEXT_PUBLIC_WS_URL=ws://192.168.1.10
+AUTHENTIK_EXTERNAL_URL=http://192.168.1.10:9100
+OAUTH_REDIRECT_URI_1=http://192.168.1.10/auth/callback
+OAUTH_REDIRECT_URI_2=http://192.168.1.10:8000/api/auth/callback
 ```
+
+## Аутентификация (Authentik SSO)
+
+Система использует [Authentik](https://goauthentik.io/) как self-hosted SSO с OIDC/OAuth2.
+
+### Быстрый старт с аутентификацией
+
+1. Сгенерируйте `OAUTH_CLIENT_SECRET` (один раз):
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(40))"
+   ```
+
+2. Добавьте/обновите следующие переменные в `infra/.env`:
+   ```env
+   AUTH_ENABLED=true
+   AUTHENTIK_URL=http://authentik-server:9000
+   AUTHENTIK_EXTERNAL_URL=http://localhost:9100
+   AUTHENTIK_SLUG=ai-workspace
+   OAUTH_CLIENT_ID=ai-workspace
+   OAUTH_CLIENT_SECRET=<generated-secret>
+   OAUTH_REDIRECT_URI_1=http://localhost/auth/callback
+   OAUTH_REDIRECT_URI_2=http://localhost:8000/api/auth/callback
+   AUTHENTIK_BOOTSTRAP_EMAIL=admin@company.com
+   AUTHENTIK_BOOTSTRAP_PASSWORD=<strong-password>
+   ```
+
+3. Запустите стек:
+   ```bash
+   docker compose -f infra/docker-compose.yml up -d
+   ```
+
+4. При первом старте Authentik-воркер автоматически применяет blueprint `infra/authentik/blueprints/ai-workspace.yaml`, который создаёт:
+   - группы: `admins`, `managers`, `accountants`, `buyers`, `engineers`, `technologists`
+   - OAuth2/OIDC провайдер с JWT-клеймом `groups`
+   - приложение `AI Workspace`
+
+5. Войдите в Authentik Admin (`http://localhost:9100`) под учётными данными bootstrap и создайте пользователей.
+
+### Роли пользователей (RBAC)
+
+Роль определяется первой группой Authentik пользователя:
+
+| Группа Authentik | Роль в системе | Права |
+|-----------------|---------------|-------|
+| `admins` | admin | полный доступ, управление пользователями |
+| `managers` | manager | утверждение документов, cases, assignment |
+| `accountants` | accountant | счета, финансовые документы |
+| `buyers` | buyer | закупки, КП |
+| `engineers` | engineer | чертежи, НТД |
+| `technologists` | technologist | техпроцессы, нормоконтроль |
+| (без группы) | viewer | чтение |
+
+### OAuth2 flow
+
+```
+Браузер → GET /api/auth/login → Authentik /authorize/
+       → Пользователь логинится в Authentik
+       → Authentik redirect → /auth/callback (frontend)
+       → Frontend → POST /api/auth/callback (через proxy)
+       → Backend обменивает code на token
+       → Backend устанавливает httpOnly cookie access_token
+       → Redirect на исходную страницу
+```
+
+### Важные замечания
+
+- **`infra/.env`** — основной файл конфигурации при запуске через `docker compose -f infra/docker-compose.yml`. Docker Compose берёт `.env` из директории первого `-f` файла (`infra/`), а не из корня проекта.
+- **Корневой `.env`** используется только для локальной разработки без Docker.
+- В dev-режиме (`AUTH_ENABLED=false`) все запросы автоматически выполняются под admin-пользователем без SSO — удобно для разработки.
+- `AUTHENTIK_EXTERNAL_URL` — URL для браузера (может отличаться от `AUTHENTIK_URL`, который используется контейнером backend для JWKS/token).
 
 ## Миграции
 
@@ -213,8 +299,11 @@ Propose → Sandbox → Decide → Promote
 ## Безопасность
 
 - Не коммитьте `.env`, реальные документы, базы данных, дампы, токены и production credentials.
-- Для production обязательно смените все значения `changeme`.
-- Включайте auth/SSO и ограничивайте CORS.
+- Для production обязательно смените все значения `changeme`, `dev-secret-key`, `AUTHENTIK_SECRET_KEY`.
+- **API полностью защищён** — все эндпоинты кроме `/health`, `/api/auth/*` и WebSocket требуют валидный JWT в httpOnly cookie. В dev-режиме (`AUTH_ENABLED=false`) используется автоматический admin-bypass.
+- В production всегда устанавливайте `AUTH_ENABLED=true` и `APP_ENV=production`.
+- CORS по умолчанию разрешает только `http://localhost:3000`; для других доменов задайте `CORS_ORIGINS`.
+- Решения об утверждении (`cases`, счета, email.send, anomaly.resolve) требуют роль `manager` или `admin`.
 - Проверяйте политику хранения документов и журналов аудита.
 - Dev-endpoint полной очистки данных не должен быть доступен без защиты в production.
 - Protected settings (личность агента, approval gates, autonomy_mode, system prompt и др.) требуют явного подтверждения через proposals — агент не меняет их молча.

@@ -103,8 +103,10 @@ async def login(
         "scope": "openid profile email groups",
         "state": state,
     }
+    # Use external URL for the browser redirect; fall back to authentik_url when not split-brain
+    _ext = settings.authentik_external_url.rstrip("/") or settings.authentik_url.rstrip("/")
     auth_url = (
-        f"{settings.authentik_url}/application/o/{settings.authentik_slug}/authorize/"
+        f"{_ext}/application/o/{settings.authentik_slug}/authorize/"
         f"?{urlencode(params)}"
     )
     return RedirectResponse(url=auth_url)

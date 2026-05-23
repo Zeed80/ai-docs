@@ -18,6 +18,7 @@ x-backend-env: &backend-env
   APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
   AUTH_ENABLED: ${AUTH_ENABLED:-false}
   AUTHENTIK_URL: ${AUTHENTIK_URL:-http://authentik-server:9000}
+  AUTHENTIK_EXTERNAL_URL: ${AUTHENTIK_EXTERNAL_URL:-}
   AUTHENTIK_SLUG: ${AUTHENTIK_SLUG:-ai-workspace}
   OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-}
   OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
@@ -47,7 +48,8 @@ x-authentik-env: &authentik-env
   # Expose env vars to blueprints for OAuth client credentials
   OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-ai-workspace}
   OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
-  OAUTH_REDIRECT_URIS: ${OAUTH_REDIRECT_URIS:-http://localhost:8000/api/auth/callback}
+  OAUTH_REDIRECT_URI_1: ${OAUTH_REDIRECT_URI_1:-http://localhost/auth/callback}
+  OAUTH_REDIRECT_URI_2: ${OAUTH_REDIRECT_URI_2:-http://localhost:8000/api/auth/callback}
 
 services:
   # === Database ===

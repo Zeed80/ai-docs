@@ -73,7 +73,9 @@ class Settings(BaseSettings):
 
     # Auth (Authentik SSO)
     auth_enabled: bool = False          # set True in production
-    authentik_url: str = "http://authentik:9000"
+    authentik_url: str = "http://authentik-server:9000"   # internal Docker URL for JWKS/token
+    # External URL for browser login redirects (same as authentik_url when not split-brain)
+    authentik_external_url: str = ""
     authentik_slug: str = "ai-workspace"
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
