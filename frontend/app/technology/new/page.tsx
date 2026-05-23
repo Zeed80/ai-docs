@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 interface Drawing {
@@ -14,7 +15,7 @@ interface Drawing {
 
 const TP_TYPES = ["единичный", "типовой", "групповой"] as const;
 
-export default function NewTechProcessPage() {
+function NewTechProcessContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const preselectedDrawingId = searchParams.get("drawing_id");
@@ -97,9 +98,9 @@ export default function NewTechProcessPage() {
       <div className="max-w-2xl mx-auto">
         {/* Breadcrumb */}
         <div className="text-xs text-zinc-500 mb-4">
-          <a href="/technology" className="hover:text-zinc-300">
+          <Link href="/technology" className="hover:text-zinc-300">
             Техпроцессы
-          </a>{" "}
+          </Link>{" "}
           / <span className="text-zinc-300">Создать из чертежа</span>
         </div>
 
@@ -155,9 +156,12 @@ export default function NewTechProcessPage() {
               ) : filteredDrawings.length === 0 ? (
                 <div className="p-6 text-center text-zinc-500 text-sm">
                   Чертежи не найдены.{" "}
-                  <a href="/drawings" className="text-blue-400 hover:underline">
+                  <Link
+                    href="/drawings"
+                    className="text-blue-400 hover:underline"
+                  >
                     Загрузить чертёж
-                  </a>
+                  </Link>
                 </div>
               ) : (
                 filteredDrawings.map((d) => (
@@ -354,5 +358,13 @@ export default function NewTechProcessPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function NewTechProcessPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-zinc-950" />}>
+      <NewTechProcessContent />
+    </Suspense>
   );
 }

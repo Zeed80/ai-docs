@@ -536,8 +536,10 @@ export function Sidebar() {
   const isAdmin = useHasRole("admin");
 
   async function handleLogout() {
-    await logout();
-    router.push("/auth/login");
+    const logoutUrl = await logout();
+    // Use full navigation so the browser hits Authentik's end-session endpoint,
+    // terminating the SSO session. router.push() is same-page and won't do that.
+    window.location.href = logoutUrl;
   }
 
   return (

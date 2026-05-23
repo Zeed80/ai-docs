@@ -26,12 +26,18 @@ class UserCreate(BaseModel):
     email: str
     role: str = "viewer"
     preferred_username: str = ""
+    password: str = ""
 
 
 class UserUpdate(BaseModel):
     role: str | None = None
     is_active: bool | None = None
+    name: str | None = None
     preferences: dict | None = None
+
+
+class SetPasswordRequest(BaseModel):
+    password: str
 
 
 class UserListResponse(BaseModel):

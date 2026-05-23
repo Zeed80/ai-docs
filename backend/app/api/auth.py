@@ -186,10 +186,27 @@ async def callback(
 
 
 @router.post("/logout")
-async def logout(response: Response) -> dict:
-    """Clear auth cookie."""
+async def logout(
+    response: Response,
+    post_logout_redirect_uri: str = Query(default=""),
+) -> dict:
+    """Clear auth cookie and return Authentik end-session URL for RP-initiated logout."""
     response.delete_cookie("access_token", path="/")
-    return {"status": "logged_out"}
+    response.delete_cookie("csrf_token", path="/")
+
+    if settings.auth_enabled:
+        # Build Authentik OIDC end-session URL so the browser can terminate the SSO session.
+        # Without this step the user gets auto-logged-in again on next visit.
+        from urllib.parse import urlencode
+
+        base = settings.authentik_external_url.rstrip("/") or "http://localhost"
+        redirect = post_logout_redirect_uri or f"{base}/auth/login"
+        params = urlencode({"post_logout_redirect_uri": redirect})
+        logout_url = f"{base}/application/o/{settings.authentik_slug}/end-session/?{params}"
+    else:
+        logout_url = "/auth/login"
+
+    return {"status": "logged_out", "logout_url": logout_url}
 
 
 # ── User directory (for approval assignment) ──────────────────────────────────

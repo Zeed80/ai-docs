@@ -37,6 +37,7 @@ const EMPTY_FORM = {
   email: "",
   role: "viewer",
   preferred_username: "",
+  password: "",
 };
 
 function CreateUserModal({
@@ -149,6 +150,25 @@ function CreateUserModal({
                 </option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">
+              Пароль (необязательно)
+            </label>
+            <input
+              type="password"
+              value={form.password}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, password: e.target.value }))
+              }
+              placeholder="Минимум 8 символов"
+              minLength={8}
+              className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background"
+            />
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Если не задан — пользователь не сможет войти до сброса пароля
+            </p>
           </div>
 
           {error && <p className="text-xs text-destructive">Ошибка: {error}</p>}

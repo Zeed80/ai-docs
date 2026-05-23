@@ -71,16 +71,22 @@ export function loginUrl(next?: string): string {
   return url;
 }
 
-export async function logout(): Promise<void> {
+export async function logout(): Promise<string> {
+  const fallback = "/auth/login";
   try {
-    await fetch(`${_apiBase()}/api/auth/logout`, {
+    const res = await fetch(`${_apiBase()}/api/auth/logout`, {
       method: "POST",
       credentials: "include",
       headers: csrfHeaders(),
     });
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return (data.logout_url as string) || fallback;
+    }
   } catch {
-    // ignore errors — redirect to login regardless
+    // fall through to redirect
   }
+  return fallback;
 }
 
 /**

@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     authentik_slug: str = "ai-workspace"
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
+    # Service-account token for Authentik REST API (user provisioning)
+    authentik_api_token: str = ""
 
     # SMTP
     smtp_host: str = ""

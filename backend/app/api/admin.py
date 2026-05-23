@@ -24,6 +24,7 @@ from app.domain.admin import (
     AuditLogListResponse,
     AuditLogOut,
     PermissionMatrixOut,
+    SetPasswordRequest,
     SystemStatusOut,
     UserCreate,
     UserListResponse,
@@ -46,21 +47,45 @@ async def create_user(
     admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> UserOut:
-    """Manually create a user record (pre-provisioning before first OIDC login)."""
+    """Pre-provision a user: create in our DB and in Authentik (if API token is set)."""
     import uuid as _uuid
+
+    from app.config import settings
 
     valid_roles = {r.value for r in UserRole}
     if payload.role not in valid_roles:
         raise HTTPException(status_code=422, detail=f"Invalid role: {payload.role}")
 
-    # Check email uniqueness
+    if payload.password and len(payload.password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
     existing = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=409, detail="User with this email already exists")
 
     preferred_username = payload.preferred_username or payload.email.split("@")[0]
+
+    # Try to provision in Authentik first (get real sub or fall back to local:UUID)
+    authentik_pk: int | None = None
+    sub = f"local:{_uuid.uuid4()}"
+    if settings.auth_enabled and settings.authentik_api_token:
+        try:
+            from app.services.authentik_api import provision_user
+            authentik_pk = await provision_user(
+                email=payload.email,
+                username=preferred_username,
+                name=payload.name,
+                password=payload.password or None,
+            )
+            # Authentik uses hashed sub — we store the PK as local ref for now;
+            # the real `sub` gets updated on first OIDC login via upsert_user.
+            sub = f"authentik:{authentik_pk}"
+        except Exception as exc:
+            logger.warning("authentik_provision_failed", error=str(exc))
+            # Continue — user is created locally, will sync on first login
+
     user = User(
-        sub=f"local:{_uuid.uuid4()}",
+        sub=sub,
         email=payload.email,
         name=payload.name,
         preferred_username=preferred_username,
@@ -73,14 +98,71 @@ async def create_user(
         user_id=admin.sub,
         action="admin.create_user",
         entity_type="user",
-        details={"email": payload.email, "role": payload.role},
+        details={
+            "email": payload.email,
+            "role": payload.role,
+            "authentik_pk": authentik_pk,
+        },
     )
     db.add(log)
     await db.commit()
     await db.refresh(user)
 
-    logger.info("admin_create_user", admin=admin.sub, email=payload.email)
+    logger.info("admin_create_user", admin=admin.sub, email=payload.email, authentik_pk=authentik_pk)
     return UserOut.model_validate(user)
+
+
+@router.post("/users/{user_sub}/set-password", status_code=204)
+async def set_user_password(
+    user_sub: str,
+    payload: SetPasswordRequest,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Set or reset password for a user via Authentik API."""
+    from app.config import settings
+
+    if not settings.auth_enabled or not settings.authentik_api_token:
+        raise HTTPException(status_code=503, detail="Authentik API not configured")
+
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
+    result = await db.execute(select(User).where(User.sub == user_sub))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    from app.services.authentik_api import find_user_by_email, set_password
+
+    authentik_pk = None
+    # For users with sub=authentik:{pk} we have the PK already
+    if user_sub.startswith("authentik:"):
+        try:
+            authentik_pk = int(user_sub.split(":", 1)[1])
+        except ValueError:
+            pass
+    if authentik_pk is None:
+        authentik_pk = await find_user_by_email(user.email)
+
+    if authentik_pk is None:
+        raise HTTPException(status_code=404, detail="User not found in Authentik; they must log in via SSO first")
+
+    try:
+        await set_password(authentik_pk, payload.password)
+    except Exception as exc:
+        logger.error("set_password_failed", error=str(exc), target=user_sub)
+        raise HTTPException(status_code=502, detail=f"Authentik API error: {exc}")
+
+    log = AuditLog(
+        user_id=admin.sub,
+        action="admin.set_password",
+        entity_type="user",
+        details={"target_sub": user_sub},
+    )
+    db.add(log)
+    await db.commit()
+    logger.info("admin_set_password", admin=admin.sub, target=user_sub)
 
 
 @router.get("/users", response_model=UserListResponse)
@@ -137,6 +219,9 @@ async def update_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
+
+    if payload.name is not None:
+        user.name = payload.name.strip() or user.name
 
     if payload.role is not None:
         valid_roles = {r.value for r in UserRole}

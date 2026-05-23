@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import TechProcessEditor, {
   Operation,
@@ -239,12 +240,12 @@ export default function TechProcessReviewPage() {
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-900 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <a
+          <Link
             href="/technology"
             className="text-xs text-zinc-500 hover:text-zinc-300"
           >
             ← Техпроцессы
-          </a>
+          </Link>
           <span className="text-zinc-700">/</span>
           <span className="text-sm font-medium text-zinc-200 truncate max-w-xs">
             {plan.product_name}
