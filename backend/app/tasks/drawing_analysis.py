@@ -263,6 +263,9 @@ async def _analyze_drawing_async(
         # Drawing type: explicit override → else default "detail"
         drawing_type = force_drawing_type or "detail"
 
+        # ── Few-shot corrections (prioritised over VLM defaults) ─────────────
+        few_shot = await _load_few_shot_corrections(db, drawing_type=drawing_type, limit=10)
+
         # ── AI extraction ────────────────────────────────────────────────────
         # Strategy: VLM first (via AIRouter for policy enforcement), then text-based fallback
         if vlm_images:
@@ -274,6 +277,7 @@ async def _analyze_drawing_async(
                 fmt=fmt,
                 views=_view_count,
                 drawing_type=drawing_type,
+                few_shot_count=len(few_shot),
             )
             extraction = await extract_features_from_image(
                 vlm_images,
@@ -284,6 +288,7 @@ async def _analyze_drawing_async(
                 drawing_type=drawing_type,
                 view_labels=view_labels_list,
                 allow_cloud=allow_cloud,
+                few_shot_examples=few_shot or None,
             )
             # If VLM returned nothing meaningful, fall back to text extraction
             if not extraction.get("features") and drawing_text:
@@ -1615,3 +1620,24 @@ def _build_feature_embed_text(feature: Any, feat_data: dict) -> str:
     for surf in feat_data.get("surfaces", [])[:2]:
         parts.append(f"{surf.get('roughness_type', 'Ra')} {surf.get('value', '')}")
     return " ".join(p for p in parts if p)
+
+
+async def _load_few_shot_corrections(db: Any, *, drawing_type: str, limit: int = 10) -> list[dict]:
+    """Load recent user corrections for use as few-shot examples in VLM prompts."""
+    from sqlalchemy import select as sa_select
+    from app.db.models import DrawingFeatureCorrection
+
+    result = await db.execute(
+        sa_select(DrawingFeatureCorrection)
+        .where(DrawingFeatureCorrection.drawing_type == drawing_type)
+        .order_by(DrawingFeatureCorrection.created_at.desc())
+        .limit(limit)
+    )
+    corrections = result.scalars().all()
+    return [
+        {
+            "description": f"{c.original_name} (VLM: {c.original_type})",
+            "correct_type": c.corrected_type,
+        }
+        for c in corrections
+    ]

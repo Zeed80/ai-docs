@@ -11,6 +11,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     SmallInteger,
     String,
@@ -2367,6 +2368,36 @@ class DrawingAssemblyBOM(UUIDPrimaryKey, TimestampMixin, Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     drawing: Mapped["Drawing"] = relationship(foreign_keys=[drawing_id])
+
+
+class DrawingFeatureCorrection(UUIDPrimaryKey, TimestampMixin, Base):
+    """User corrections for uncertain VLM feature predictions. Used for few-shot learning."""
+
+    __tablename__ = "drawing_feature_corrections"
+    __table_args__ = (
+        Index("ix_dfc_drawing_type_corrected", "drawing_type", "corrected_type"),
+    )
+
+    drawing_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("drawings.id"), nullable=False, index=True
+    )
+    feature_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("drawing_features.id", ondelete="SET NULL"), nullable=True
+    )
+    original_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    corrected_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    original_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    corrected_name: Mapped[str | None] = mapped_column(String(300))
+    confidence_at_correction: Mapped[float] = mapped_column(Float, nullable=False)
+    drawing_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_view: Mapped[str | None] = mapped_column(String(50))
+    context_json: Mapped[dict | None] = mapped_column(JSON)
+    corrected_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    used_as_few_shot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+
+    drawing: Mapped["Drawing"] = relationship(foreign_keys=[drawing_id])
+    feature: Mapped["DrawingFeature | None"] = relationship(foreign_keys=[feature_id])
 
 
 # ── Mailbox / Email Templates ─────────────────────────────────────────────────

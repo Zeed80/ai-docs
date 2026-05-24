@@ -229,6 +229,7 @@ async def extract_features_from_image(
     drawing_type: str = "detail",
     view_labels: list[str] | None = None,
     allow_cloud: bool = False,
+    few_shot_examples: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Extract drawing features using a VLM from raw image bytes.
 
@@ -254,13 +255,21 @@ async def extract_features_from_image(
     if hint_text:
         context_part = f"\n\nДополнительный текстовый контекст с чертежа:\n{hint_text[:4000]}"
 
+    few_shot_part = ""
+    if few_shot_examples:
+        lines = "\n".join(
+            f"- {ex['description']} → \"{ex['correct_type']}\""
+            for ex in few_shot_examples[:10]
+        )
+        few_shot_part = f"\n\n## Уточнения пользователей (приоритетные):\n{lines}"
+
     if len(images) > 1:
         view_list = "\n".join(f"- Изображение {i+1}: {labels[i]}" for i in range(len(images)))
         user_message = f"""Ты анализируешь многовидовой технический чертёж. Тебе предоставлены {len(images)} изображений:
 {view_list}
 
 {specialized_prompt}
-{context_part}
+{context_part}{few_shot_part}
 
 Для каждого элемента укажи source_view из какого вида он извлечён.
 Верни полный JSON без markdown-блоков."""
@@ -268,7 +277,7 @@ async def extract_features_from_image(
         user_message = f"""Ты анализируешь технический чертёж машиностроительной детали.
 
 {specialized_prompt}
-{context_part}
+{context_part}{few_shot_part}
 
 Верни полный JSON без markdown-блоков."""
 

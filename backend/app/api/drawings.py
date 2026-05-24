@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.db.models import (
     Drawing,
     DrawingFeature,
+    DrawingFeatureCorrection,
     DrawingStatus,
     FeatureContour,
     FeatureDimension,
@@ -44,6 +45,8 @@ from app.domain.drawings import (
     DrawingUploadResponse,
     DrawingWithFeaturesOut,
     FeatureContourOut,
+    FeatureCorrectionCreate,
+    FeatureCorrectionOut,
     FeatureToolBindingCreate,
     FeatureToolBindingOut,
     FeatureToolBindingUpdate,
@@ -452,6 +455,93 @@ async def get_drawing_validation(
         }
 
     return {"drawing_id": str(drawing_id), **report}
+
+
+@router.get(
+    "/{drawing_id}/uncertain-features",
+    summary="Skill: drawing.uncertain_features — Features where VLM confidence is below threshold.",
+)
+async def get_uncertain_features(
+    drawing_id: uuid.UUID,
+    threshold: float = Query(default=0.70, ge=0.0, le=1.0, description="Confidence threshold"),
+    db: AsyncSession = Depends(get_db),
+) -> list[DrawingFeatureOut]:
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Чертёж не найден")
+
+    result = await db.execute(
+        select(DrawingFeature)
+        .where(DrawingFeature.drawing_id == drawing_id, DrawingFeature.confidence < threshold)
+        .options(*_FEATURE_LOAD_OPTIONS)
+        .order_by(DrawingFeature.confidence.asc())
+    )
+    features = result.scalars().all()
+    return [DrawingFeatureOut.model_validate(f) for f in features]
+
+
+@router.post(
+    "/{drawing_id}/features/{feature_id}/correct",
+    summary="Skill: drawing.correct_feature — Apply user correction and record for few-shot learning.",
+)
+async def correct_drawing_feature(
+    drawing_id: uuid.UUID,
+    feature_id: uuid.UUID,
+    payload: FeatureCorrectionCreate,
+    db: AsyncSession = Depends(get_db),
+) -> DrawingFeatureOut:
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Чертёж не найден")
+
+    feat_result = await db.execute(
+        select(DrawingFeature)
+        .where(DrawingFeature.id == feature_id)
+        .options(*_FEATURE_LOAD_OPTIONS)
+    )
+    feature = feat_result.scalar_one_or_none()
+    if not feature or feature.drawing_id != drawing_id:
+        raise HTTPException(status_code=404, detail="Элемент не найден")
+
+    correction = DrawingFeatureCorrection(
+        drawing_id=drawing_id,
+        feature_id=feature_id,
+        original_type=payload.original_type or feature.feature_type.value,
+        corrected_type=payload.corrected_type,
+        original_name=feature.name,
+        corrected_name=payload.corrected_name,
+        confidence_at_correction=feature.confidence,
+        drawing_type=(drawing.metadata_ or {}).get("drawing_type", "detail"),
+        source_view=feature.source_view,
+        context_json={
+            "surrounding_types": [],
+            "drawing_filename": (drawing.metadata_ or {}).get("original_filename", ""),
+        },
+        corrected_by=payload.corrected_by,
+        note=payload.note,
+    )
+    db.add(correction)
+
+    from app.db.models import DrawingFeatureType
+    try:
+        feature.feature_type = DrawingFeatureType(payload.corrected_type)
+    except ValueError:
+        pass
+    if payload.corrected_name:
+        feature.name = payload.corrected_name
+    feature.confidence = 1.0
+    feature.reviewed_at = datetime.now(timezone.utc)
+    feature.reviewed_by = payload.corrected_by
+
+    await db.commit()
+
+    refreshed_result = await db.execute(
+        select(DrawingFeature)
+        .where(DrawingFeature.id == feature_id)
+        .options(*_FEATURE_LOAD_OPTIONS)
+    )
+    refreshed = refreshed_result.scalar_one()
+    return DrawingFeatureOut.model_validate(refreshed)
 
 
 @router.get(

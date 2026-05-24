@@ -36,10 +36,12 @@ from typing import Any
 # ── Config ────────────────────────────────────────────────────────────────────
 
 EVAL_MODELS = [
-    "qwen3-vl:8b",          # Sprint 5 candidate A
-    "qwen3.5:27b",          # Sprint 5 candidate B
-    "qwen3.6:35b",          # Current production model (baseline)
+    "qwen3.6:35b",          # Production model (baseline, installed)
+    "qwen3.5:9b",           # Candidate: smaller qwen3.5 (installed)
 ]
+
+# Confidence threshold: features below this are flagged as uncertain
+UNCERTAIN_THRESHOLD = 0.70
 
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
@@ -223,23 +225,28 @@ async def run_model_on_drawing(
 
     b64 = base64.b64encode(image_bytes).decode()
 
-    prompt = f"""Ты — система анализа технических чертежей. Тип чертежа: {drawing_type}.
-Извлеки все конструктивные элементы и верни СТРОГО JSON:
-{{"features": [{{"feature_type": "...", "name": "...", "confidence": 0.9, "dimensions": [{{"nominal": 50.0, "fit_system": "h6"}}]}}]}}
-Без markdown. Только JSON."""
+    prompt = (
+        f"Ты — система анализа технических чертежей. Тип чертежа: {drawing_type}.\n"
+        "Извлеки ВСЕ конструктивные элементы (отверстия, пазы, поверхности, резьбы, канавки, сварные швы и т.д.).\n"
+        "Верни СТРОГО JSON без markdown:\n"
+        '{"features": [{"feature_type": "hole|pocket|groove|slot|thread|chamfer|radius|surface|boss|key_slot|weld|other",'
+        ' "name": "Ø50h6", "confidence": 0.9,'
+        ' "dimensions": [{"dim_type": "diameter|linear|depth", "nominal": 50.0, "fit_system": "h6"}],'
+        ' "surfaces": [{"roughness_type": "Ra", "value": 1.6}]}]}'
+    )
 
+    # Ollama native format: images as list of base64 strings
     payload = {
         "model": model,
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                    {"type": "text", "text": prompt},
-                ],
+                "content": prompt,
+                "images": [b64],
             }
         ],
         "stream": False,
+        "options": {"temperature": 0.1, "num_predict": 2048},
     }
 
     t0 = time.perf_counter()

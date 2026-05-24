@@ -385,6 +385,32 @@ class DrawingFeatureReviewRequest(BaseModel):
     reviewed_by: str = "user"
 
 
+class FeatureCorrectionCreate(BaseModel):
+    original_type: str
+    corrected_type: str
+    corrected_name: str | None = None
+    note: str | None = None
+    corrected_by: str = "user"
+
+
+class FeatureCorrectionOut(BaseModel):
+    id: uuid.UUID
+    drawing_id: uuid.UUID
+    feature_id: uuid.UUID | None
+    original_type: str
+    corrected_type: str
+    original_name: str
+    corrected_name: str | None
+    confidence_at_correction: float
+    drawing_type: str
+    corrected_by: str
+    used_as_few_shot: bool
+    note: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class DrawingDeleteResult(BaseModel):
     drawing_id: uuid.UUID
     deleted: int = 0

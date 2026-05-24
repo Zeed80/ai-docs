@@ -275,6 +275,14 @@ export interface ReanalyzeOptions {
   force?: boolean;
 }
 
+export interface FeatureCorrectionPayload {
+  original_type: string;
+  corrected_type: string;
+  corrected_name?: string;
+  note?: string;
+  corrected_by?: string;
+}
+
 export interface DrawingWithFeatures extends Drawing {
   features: DrawingFeature[];
 }
@@ -421,6 +429,26 @@ export const drawingsApi = {
 
   async getValidation(drawingId: string): Promise<DrawingValidationReport> {
     return apiBase.get(`/api/drawings/${drawingId}/validation`);
+  },
+
+  async getUncertainFeatures(
+    drawingId: string,
+    threshold = 0.7,
+  ): Promise<DrawingFeature[]> {
+    return apiBase.get(
+      `/api/drawings/${drawingId}/uncertain-features?threshold=${threshold}`,
+    );
+  },
+
+  async correctFeature(
+    drawingId: string,
+    featureId: string,
+    payload: FeatureCorrectionPayload,
+  ): Promise<DrawingFeature> {
+    return apiBase.post(
+      `/api/drawings/${drawingId}/features/${featureId}/correct`,
+      payload,
+    );
   },
 
   getSvgUrl(id: string): string {

@@ -11,6 +11,7 @@ import type {
   DrawingValidationReport,
   DrawingWithFeatures,
   ReanalyzeOptions,
+  FeatureCorrectionPayload,
 } from "@/lib/drawings-api";
 import { drawingsApi } from "@/lib/drawings-api";
 import { DrawingViewer } from "./DrawingViewer";
@@ -19,7 +20,7 @@ import { FeatureEditor } from "./FeatureEditor";
 import { ToolBindingPanel } from "./ToolBindingPanel";
 
 type RightPanel = "viewer" | "editor";
-type LeftTab = "features" | "views" | "bom" | "validation";
+type LeftTab = "features" | "views" | "bom" | "validation" | "review";
 
 interface DrawingWorkspaceProps {
   drawingId: string;
@@ -46,6 +47,13 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
   const [validation, setValidation] = useState<DrawingValidationReport | null>(
     null,
   );
+  const [uncertainFeatures, setUncertainFeatures] = useState<
+    DrawingFeature[] | null
+  >(null);
+  const [reviewingFeature, setReviewingFeature] =
+    useState<DrawingFeature | null>(null);
+  const [showReviewPanel, setShowReviewPanel] = useState(false);
+  const [correcting, setCorrecting] = useState(false);
 
   const [showReanalyzeDialog, setShowReanalyzeDialog] = useState(false);
   const [reanalyzing, setReanalyzing] = useState(false);
@@ -112,11 +120,78 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
     }
   }, [drawingId]);
 
+  const loadUncertainFeatures = useCallback(async () => {
+    try {
+      const data = await drawingsApi.getUncertainFeatures(drawingId);
+      setUncertainFeatures(data);
+    } catch {
+      setUncertainFeatures([]);
+    }
+  }, [drawingId]);
+
   useEffect(() => {
     if (leftTab === "views" && views === null) loadViews();
     if (leftTab === "bom" && bom === null) loadBOM();
     if (leftTab === "validation" && validation === null) loadValidation();
-  }, [leftTab, views, bom, validation, loadViews, loadBOM, loadValidation]);
+    if (leftTab === "review" && uncertainFeatures === null)
+      loadUncertainFeatures();
+  }, [
+    leftTab,
+    views,
+    bom,
+    validation,
+    uncertainFeatures,
+    loadViews,
+    loadBOM,
+    loadValidation,
+    loadUncertainFeatures,
+  ]);
+
+  const handleOpenReview = (feature: DrawingFeature) => {
+    setReviewingFeature(feature);
+    setSelectedFeatureId(feature.id);
+    setShowReviewPanel(true);
+    setShowToolPanel(false);
+  };
+
+  const handleCorrectFeature = async (payload: FeatureCorrectionPayload) => {
+    if (!reviewingFeature) return;
+    setCorrecting(true);
+    try {
+      const updated = await drawingsApi.correctFeature(
+        drawingId,
+        reviewingFeature.id,
+        payload,
+      );
+      // Update in main feature list
+      setDrawing((prev) =>
+        prev
+          ? {
+              ...prev,
+              features: prev.features.map((f) =>
+                f.id === updated.id ? updated : f,
+              ),
+            }
+          : prev,
+      );
+      // Remove from uncertain list and advance to next
+      setUncertainFeatures((prev) => {
+        if (!prev) return prev;
+        const remaining = prev.filter((f) => f.id !== reviewingFeature.id);
+        const nextFeature = remaining[0] ?? null;
+        if (nextFeature) {
+          setReviewingFeature(nextFeature);
+          setSelectedFeatureId(nextFeature.id);
+        } else {
+          setReviewingFeature(null);
+          setShowReviewPanel(false);
+        }
+        return remaining;
+      });
+    } finally {
+      setCorrecting(false);
+    }
+  };
 
   const selectedFeature =
     drawing?.features.find((f) => f.id === selectedFeatureId) ?? null;
@@ -300,8 +375,8 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
               [
                 { id: "features", label: "Элементы" },
                 { id: "views", label: "Виды" },
-                { id: "bom", label: "Спецификация" },
-                { id: "validation", label: "Валидация" },
+                { id: "bom", label: "Спец." },
+                { id: "validation", label: "Валид." },
               ] as { id: LeftTab; label: string }[]
             ).map((tab) => (
               <button
@@ -317,6 +392,22 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
                 {tab.label}
               </button>
             ))}
+            <button
+              onClick={() => setLeftTab("review")}
+              className={clsx(
+                "flex-1 text-xs py-2 px-1 font-medium transition-colors",
+                leftTab === "review"
+                  ? "text-amber-400 border-b-2 border-amber-500 bg-amber-500/5"
+                  : "text-white/40 hover:text-white/70 border-b-2 border-transparent",
+              )}
+            >
+              Пров.
+              {uncertainFeatures && uncertainFeatures.length > 0 && (
+                <span className="ml-1 text-xs bg-amber-600 text-white rounded-full px-1 py-px font-bold">
+                  {uncertainFeatures.length}
+                </span>
+              )}
+            </button>
           </div>
 
           {/* Tab content */}
@@ -338,6 +429,13 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
               <ValidationPanel
                 report={validation}
                 drawingStatus={drawing.status}
+              />
+            )}
+            {leftTab === "review" && (
+              <ReviewListPanel
+                features={uncertainFeatures}
+                reviewingId={reviewingFeature?.id ?? null}
+                onSelect={handleOpenReview}
               />
             )}
           </div>
@@ -393,15 +491,51 @@ export function DrawingWorkspace({ drawingId }: DrawingWorkspaceProps) {
           )}
         </div>
 
-        {/* Right panel: Tool binding */}
-        {showToolPanel && (
-          <div className="w-64 shrink-0 bg-zinc-900 border-l border-white/10 overflow-hidden flex flex-col">
-            <ToolBindingPanel
-              drawingId={drawingId}
-              feature={selectedFeature}
-              onBindingChanged={load}
+        {/* Right panel: Review OR Tool binding */}
+        {showReviewPanel && reviewingFeature ? (
+          <div className="w-72 shrink-0 bg-zinc-900 border-l border-amber-500/30 overflow-hidden flex flex-col">
+            <ReviewPanel
+              feature={reviewingFeature}
+              total={
+                uncertainFeatures
+                  ? (uncertainFeatures.length ?? 0) +
+                    (uncertainFeatures.find((f) => f.id === reviewingFeature.id)
+                      ? 1
+                      : 0)
+                  : 1
+              }
+              remaining={uncertainFeatures?.length ?? 0}
+              correcting={correcting}
+              onCorrect={handleCorrectFeature}
+              onSkip={() => {
+                const next =
+                  uncertainFeatures?.find(
+                    (f) => f.id !== reviewingFeature.id,
+                  ) ?? null;
+                if (next) {
+                  setReviewingFeature(next);
+                  setSelectedFeatureId(next.id);
+                } else {
+                  setShowReviewPanel(false);
+                  setReviewingFeature(null);
+                }
+              }}
+              onClose={() => {
+                setShowReviewPanel(false);
+                setReviewingFeature(null);
+              }}
             />
           </div>
+        ) : (
+          showToolPanel && (
+            <div className="w-64 shrink-0 bg-zinc-900 border-l border-white/10 overflow-hidden flex flex-col">
+              <ToolBindingPanel
+                drawingId={drawingId}
+                feature={selectedFeature}
+                onBindingChanged={load}
+              />
+            </div>
+          )
         )}
       </div>
 
@@ -841,5 +975,253 @@ function StatusBadge({ status }: { status: string }) {
     <span className={clsx("text-xs px-1.5 py-0.5 rounded font-medium", c.cls)}>
       {c.label}
     </span>
+  );
+}
+
+// ── Review system ──────────────────────────────────────────────────────────────
+
+function ReviewListPanel({
+  features,
+  reviewingId,
+  onSelect,
+}: {
+  features: DrawingFeature[] | null;
+  reviewingId: string | null;
+  onSelect: (f: DrawingFeature) => void;
+}) {
+  if (features === null) {
+    return (
+      <div className="flex items-center justify-center h-24 text-white/30 text-xs">
+        <div className="w-4 h-4 border border-white/20 border-t-white/50 rounded-full animate-spin mr-2" />
+        Загрузка...
+      </div>
+    );
+  }
+  if (features.length === 0) {
+    return (
+      <div className="px-3 py-6 text-center">
+        <div className="text-green-400 text-2xl mb-2">✓</div>
+        <div className="text-xs text-white/50">
+          Все элементы подтверждены.
+          <br />
+          Уверенность &ge; 70% по всем.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="divide-y divide-white/5">
+      {features.map((f) => {
+        const pct = Math.round(f.confidence * 100);
+        const badgeCls =
+          pct < 40 ? "bg-red-600/80 text-white" : "bg-amber-600/80 text-white";
+        return (
+          <button
+            key={f.id}
+            onClick={() => onSelect(f)}
+            className={clsx(
+              "w-full text-left px-3 py-2.5 hover:bg-white/5 transition-colors",
+              f.id === reviewingId &&
+                "bg-amber-500/10 border-l-2 border-amber-500",
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-white/80 truncate">{f.name}</span>
+              <span
+                className={clsx(
+                  "shrink-0 text-xs px-1.5 py-px rounded font-mono",
+                  badgeCls,
+                )}
+              >
+                {pct}%
+              </span>
+            </div>
+            <div className="text-xs text-white/35 mt-0.5">{f.feature_type}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const FEATURE_TYPE_BUTTONS: { value: string; label: string }[] = [
+  { value: "hole", label: "Отверстие" },
+  { value: "pocket", label: "Карман" },
+  { value: "groove", label: "Канавка" },
+  { value: "slot", label: "Паз" },
+  { value: "thread", label: "Резьба" },
+  { value: "chamfer", label: "Фаска" },
+  { value: "radius", label: "Галтель" },
+  { value: "surface", label: "Поверхность" },
+  { value: "boss", label: "Выступ" },
+  { value: "key_slot", label: "Шпоночный паз" },
+  { value: "center_bore", label: "Центровое отв." },
+  { value: "weld", label: "Сварной шов" },
+];
+
+function ReviewPanel({
+  feature,
+  remaining,
+  correcting,
+  onCorrect,
+  onSkip,
+  onClose,
+}: {
+  feature: DrawingFeature;
+  total: number;
+  remaining: number;
+  correcting: boolean;
+  onCorrect: (p: FeatureCorrectionPayload) => void;
+  onSkip: () => void;
+  onClose: () => void;
+}) {
+  const [selectedType, setSelectedType] = useState<string | null>(null);
+  const [customType, setCustomType] = useState("");
+  const [correctedName, setCorrectedName] = useState("");
+  const [note, setNote] = useState("");
+
+  const pct = Math.round(feature.confidence * 100);
+  const chosenType = selectedType || customType.trim() || null;
+
+  const handleConfirm = () => {
+    if (!chosenType) return;
+    onCorrect({
+      original_type: feature.feature_type,
+      corrected_type: chosenType,
+      corrected_name: correctedName.trim() || undefined,
+      note: note.trim() || undefined,
+    });
+    setSelectedType(null);
+    setCustomType("");
+    setCorrectedName("");
+    setNote("");
+  };
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-amber-500/20 shrink-0">
+        <span className="text-xs font-semibold text-amber-400">
+          Уточните элемент
+        </span>
+        <div className="flex items-center gap-2">
+          {remaining > 0 && (
+            <span className="text-xs text-white/30">{remaining} ост.</span>
+          )}
+          <button
+            onClick={onClose}
+            className="text-white/30 hover:text-white/60 text-lg leading-none"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      {/* Feature info */}
+      <div className="px-3 py-2.5 bg-amber-900/10 border-b border-amber-500/10 shrink-0">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="text-xs font-medium text-white/90">
+              {feature.name}
+            </div>
+            <div className="text-xs text-white/40 mt-0.5">
+              VLM: {feature.feature_type} —{" "}
+              <span className={pct < 40 ? "text-red-400" : "text-amber-400"}>
+                {pct}% уверенность
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="text-xs text-white/30 mt-1.5 italic">
+          Контур подсвечен синим на чертеже ↑
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+        {/* Type buttons */}
+        <div>
+          <div className="text-xs text-white/40 mb-2">Что это?</div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {FEATURE_TYPE_BUTTONS.map((btn) => (
+              <button
+                key={btn.value}
+                onClick={() => {
+                  setSelectedType(btn.value);
+                  setCustomType("");
+                }}
+                className={clsx(
+                  "px-2 py-1.5 rounded text-xs font-medium text-left transition-colors",
+                  selectedType === btn.value
+                    ? "bg-amber-500 text-white"
+                    : "bg-zinc-800 hover:bg-zinc-700 text-white/70",
+                )}
+              >
+                {btn.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Custom type input */}
+        <div>
+          <label className="block text-xs text-white/40 mb-1">
+            Или введите тип:
+          </label>
+          <input
+            value={customType}
+            onChange={(e) => {
+              setCustomType(e.target.value);
+              if (e.target.value) setSelectedType(null);
+            }}
+            placeholder="key_slot, counterbore..."
+            className="w-full bg-zinc-800 border border-white/10 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:border-amber-500/50"
+          />
+        </div>
+
+        {/* Corrected name */}
+        <div>
+          <label className="block text-xs text-white/40 mb-1">
+            Уточнённое название (необязательно):
+          </label>
+          <input
+            value={correctedName}
+            onChange={(e) => setCorrectedName(e.target.value)}
+            placeholder="Шпоночный паз 12×6"
+            className="w-full bg-zinc-800 border border-white/10 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:border-amber-500/50"
+          />
+        </div>
+
+        {/* Note */}
+        <div>
+          <label className="block text-xs text-white/40 mb-1">
+            Примечание:
+          </label>
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Необязательно..."
+            className="w-full bg-zinc-800 border border-white/10 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:border-amber-500/50"
+          />
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="shrink-0 px-3 py-2.5 border-t border-white/10 flex gap-2">
+        <button
+          onClick={handleConfirm}
+          disabled={!chosenType || correcting}
+          className="flex-1 py-2 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-xs font-medium transition-colors"
+        >
+          {correcting ? "Сохраняю..." : "Подтвердить"}
+        </button>
+        <button
+          onClick={onSkip}
+          disabled={correcting}
+          className="px-3 py-2 rounded bg-zinc-800 hover:bg-zinc-700 text-white/60 text-xs transition-colors"
+        >
+          Пропустить
+        </button>
+      </div>
+    </div>
   );
 }
