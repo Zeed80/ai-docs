@@ -345,7 +345,10 @@ async def _extract_via_router(
 
     request = AIRequest(
         task=AITask.DRAWING_ANALYSIS_VLM,
-        messages=[ChatMessage(role="user", content=user_message)],
+        messages=[
+            ChatMessage(role="system", content=DRAWING_ANALYSIS_SYSTEM_PROMPT),
+            ChatMessage(role="user", content=user_message),
+        ],
         images=images_b64,
         confidential=confidential,
         allow_cloud=allow_cloud,
@@ -356,14 +359,16 @@ async def _extract_via_router(
         raw_text = response.text or ""
         result = _parse_json_response(raw_text)
         if not isinstance(result, dict):
-            logger.warning("vlm_router_invalid_json", raw=raw_text[:300])
+            logger.warning("vlm_router_invalid_json", raw=raw_text[:500])
             return {"title_block": {}, "features": []}
+        features = result.get("features") or []
+        logger.info("vlm_router_extraction_done", features=len(features), raw_len=len(raw_text))
         return {
             "title_block": result.get("title_block") or {},
-            "features": result.get("features") or [],
+            "features": features,
         }
     except Exception as exc:
-        logger.error("vlm_router_extraction_failed", error=str(exc))
+        logger.error("vlm_router_extraction_failed", error=str(exc), error_type=type(exc).__name__)
         return {"title_block": {}, "features": []}
 
 
@@ -576,7 +581,10 @@ async def classify_drawing_image(
         if router is not None:
             request = AIRequest(
                 task=AITask.DRAWING_ANALYSIS_VLM,
-                messages=[ChatMessage(role="user", content=DRAWING_CLASSIFICATION_PROMPT)],
+                messages=[
+                    ChatMessage(role="system", content="You are an expert engineering drawing classifier. Return only valid JSON."),
+                    ChatMessage(role="user", content=DRAWING_CLASSIFICATION_PROMPT),
+                ],
                 images=images_b64,
                 confidential=confidential,
                 allow_cloud=allow_cloud,
@@ -659,6 +667,235 @@ async def _classify_drawing_type(
             pass
 
     return "detail"
+
+
+# ── Rule-based DXF feature extraction (deterministic, no VLM needed) ──────────
+
+# Regex patterns for common engineering notation
+_RE_DIAMETER = re.compile(
+    r"[ØÆø∅]?\s*(\d+(?:[.,]\d+)?)\s*(H\d+|h\d+|js\d+|k\d+|m\d+|n\d+|p\d+|r\d+|s\d+|f\d+|g\d+|e\d+|d\d+)?",
+    re.IGNORECASE,
+)
+_RE_RA = re.compile(r"Ra\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
+_RE_RZ = re.compile(r"Rz\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
+_RE_THREAD = re.compile(r"(M\d+(?:×\d+(?:[.,]\d+)?)?)(?:\s*[-–]\s*(\d+[Hgh]))?\b", re.IGNORECASE)
+_RE_TOLERANCE = re.compile(r"(\d+(?:[.,]\d+)?)\s*([+−\-±])\s*(\d+(?:[.,]\d+)?)")
+_RE_KEYWAY = re.compile(r"(\d+)\s*(P9|JS9|N9|H9|D9|E9|F8|B11)\b", re.IGNORECASE)
+_RE_CHAMFER = re.compile(r"(\d+(?:[.,]\d+)?)\s*[Xx×]\s*45°?", re.IGNORECASE)
+_RE_RADIUS = re.compile(r"[Rr]\s*(\d+(?:[.,]\d+)?)\b")
+_RE_GDT = re.compile(r"[⊙⊕⊘∥⊥◎△▷⊡]|(?://|⊥|○|△)\s*(\d+(?:[.,]\d+)?)", re.UNICODE)
+_RE_PERPENDICULARITY = re.compile(r"(\d+(?:[.,]\d+)?)\s*([A-Z])\b")  # like 0.02 A
+
+
+def extract_features_from_dxf_entities(
+    entities: list[dict],
+    drawing_type: str = "detail",
+) -> list[dict]:
+    """Rule-based feature extraction from DXF text entities.
+
+    Parses engineering notation (Ø50h6, Ra1.6, M12×1.5, 8P9, R2, 2×45°, etc.)
+    and maps them to structured feature records without needing a VLM.
+    Used as reliable fallback when VLM returns 0 features.
+    """
+    texts = [
+        e.get("text", "").strip()
+        for e in (entities or [])
+        if e.get("type") in ("TEXT", "MTEXT") and e.get("text", "").strip()
+    ]
+    circles = [e for e in (entities or []) if e.get("type") == "CIRCLE"]
+
+    features: list[dict] = []
+    seen_names: set[str] = set()
+
+    def _add(feat: dict) -> None:
+        name = feat.get("name", "")
+        if name and name in seen_names:
+            return
+        if name:
+            seen_names.add(name)
+        features.append(feat)
+
+    # ── Circles → holes or bosses ──────────────────────────────────────────
+    for circle in circles:
+        r = float(circle.get("radius", 0))
+        if r <= 0:
+            continue
+        diam = round(r * 2, 3)
+        cx = round(float(circle.get("center_x", 0)), 2)
+        cy = round(float(circle.get("center_y", 0)), 2)
+        name = f"Ø{diam}"
+        _add({
+            "feature_type": "hole",
+            "name": name,
+            "description": f"Отверстие Ø{diam} мм",
+            "confidence": 0.6,
+            "source_view": "front",
+            "contours": [{"primitive_type": "circle", "params": {"cx": cx, "cy": cy, "r": r}}],
+            "dimensions": [{"dim_type": "diameter", "nominal": diam, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": None, "label": name}],
+            "surfaces": [],
+            "gdt": [],
+        })
+
+    # ── Text entities → engineering features ──────────────────────────────
+    for raw_text in texts:
+        t = raw_text.strip()
+        if not t:
+            continue
+
+        # Keyway / slot fit must be checked BEFORE general diameter+fit
+        # to prevent "8P9" being parsed as diameter Ø8 with fit P9
+        key_m = re.fullmatch(r"(\d+)\s*(P9|JS9|N9|H9|D9|E9|F8|B11)", t, re.IGNORECASE)
+        if key_m:
+            width = float(key_m.group(1))
+            fit = key_m.group(2).upper()
+            name = f"Паз {width}{fit}"
+            _add({
+                "feature_type": "key_slot",
+                "name": name,
+                "description": f"Шпоночный паз {width} мм, посадка {fit}",
+                "confidence": 0.88,
+                "source_view": "front",
+                "contours": [],
+                "dimensions": [{"dim_type": "linear", "nominal": width, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": fit, "label": name}],
+                "surfaces": [],
+                "gdt": [],
+            })
+            continue
+
+        # Thread BEFORE diameter+fit (M12×1.5-6H starts with M, not Ø)
+        thread_m = re.match(r"(M\d+(?:[.,×x]\d+(?:[.,]\d+)?)?)\s*[-–]?\s*(\d+[Hgh])", t, re.IGNORECASE)
+        if thread_m:
+            size = thread_m.group(1)
+            cls = thread_m.group(2)
+            name = f"{size}-{cls}"
+            nom_m = re.match(r"M(\d+)", size, re.IGNORECASE)
+            nominal = float(nom_m.group(1)) if nom_m else 0.0
+            _add({
+                "feature_type": "thread",
+                "name": name,
+                "description": f"Резьба {name}",
+                "confidence": 0.92,
+                "source_view": "front",
+                "contours": [],
+                "dimensions": [{"dim_type": "diameter", "nominal": nominal, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": cls, "label": name}],
+                "surfaces": [],
+                "gdt": [],
+            })
+            continue
+
+        # Diameter with fit system: Ø50h6, Ø12H7, ⌀25k6
+        diam_match = re.match(
+            r"[ØÆø∅⌀]?\s*(\d+(?:[.,]\d+)?)\s*(H\d+|h\d+|JS\d+|js\d+|K\d+|k\d+|M\d+|m\d+|N\d+|n\d+|P\d+|p\d+|R\d+|r\d+|S\d+|s\d+|F\d+|f\d+|G\d+|g\d+|E\d+|e\d+|D\d+|d\d+)\b",
+            t, re.IGNORECASE,
+        )
+        if diam_match:
+            nominal = float(diam_match.group(1).replace(",", "."))
+            fit = diam_match.group(2)
+            ftype = "hole" if fit[0].upper() in "HJSDEFG" else "surface"
+            name = f"Ø{nominal}{fit}"
+            _add({
+                "feature_type": ftype,
+                "name": name,
+                "description": f"{'Отверстие' if ftype == 'hole' else 'Вал/поверхность'} Ø{nominal} {fit}",
+                "confidence": 0.90,
+                "source_view": "front",
+                "contours": [],
+                "dimensions": [{"dim_type": "diameter", "nominal": nominal, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": fit, "label": name}],
+                "surfaces": [],
+                "gdt": [],
+            })
+            continue
+
+        # Surface roughness: Ra1.6, Ra 3.2, Rz20
+        ra_m = _RE_RA.fullmatch(t) or _RE_RA.search(t) if "Ra" in t or "rA" in t.lower() else None
+        if ra_m and "Ra" in t:
+            val = float(ra_m.group(1).replace(",", "."))
+            name = f"Ra{val}"
+            _add({
+                "feature_type": "surface",
+                "name": name,
+                "description": f"Шероховатость Ra {val} мкм",
+                "confidence": 0.95,
+                "source_view": "front",
+                "contours": [],
+                "dimensions": [],
+                "surfaces": [{"roughness_type": "Ra", "value": val, "machining_required": val <= 3.2}],
+                "gdt": [],
+            })
+            continue
+
+        rz_m = _RE_RZ.fullmatch(t) or (_RE_RZ.search(t) if "Rz" in t else None)
+        if rz_m and "Rz" in t:
+            val = float(rz_m.group(1).replace(",", "."))
+            name = f"Rz{val}"
+            _add({
+                "feature_type": "surface",
+                "name": name,
+                "description": f"Шероховатость Rz {val} мкм",
+                "confidence": 0.95,
+                "source_view": "front",
+                "contours": [],
+                "dimensions": [],
+                "surfaces": [{"roughness_type": "Rz", "value": val, "machining_required": True}],
+                "gdt": [],
+            })
+            continue
+
+        # Chamfer: 2×45°, 1.5×45
+        chamfer_m = re.fullmatch(r"(\d+(?:[.,]\d+)?)\s*[×Xx]\s*45°?", t)
+        if chamfer_m:
+            size = float(chamfer_m.group(1).replace(",", "."))
+            name = f"{size}×45°"
+            _add({
+                "feature_type": "chamfer",
+                "name": name,
+                "description": f"Фаска {name}",
+                "confidence": 0.90,
+                "source_view": "front",
+                "contours": [],
+                "dimensions": [{"dim_type": "linear", "nominal": size, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": None, "label": name}],
+                "surfaces": [],
+                "gdt": [],
+            })
+            continue
+
+        # Radius: R2, r5
+        radius_m = re.fullmatch(r"[Rr]\s*(\d+(?:[.,]\d+)?)", t)
+        if radius_m:
+            val = float(radius_m.group(1).replace(",", "."))
+            name = f"R{val}"
+            _add({
+                "feature_type": "radius",
+                "name": name,
+                "description": f"Радиус скругления R{val} мм",
+                "confidence": 0.85,
+                "source_view": "front",
+                "contours": [],
+                "dimensions": [{"dim_type": "radius", "nominal": val, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": None, "label": name}],
+                "surfaces": [],
+                "gdt": [],
+            })
+            continue
+
+        # Simple diameter without fit: Ø50, ⌀30
+        plain_diam_m = re.fullmatch(r"[ØÆø∅⌀]?\s*(\d+(?:[.,]\d+)?)", t)
+        if plain_diam_m and (t.startswith(("Ø", "⌀", "ø", "∅")) or "мм" in t.lower()):
+            nominal = float(plain_diam_m.group(1).replace(",", "."))
+            name = f"Ø{nominal}"
+            _add({
+                "feature_type": "hole",
+                "name": name,
+                "description": f"Диаметр Ø{nominal} мм",
+                "confidence": 0.65,
+                "source_view": "front",
+                "contours": [],
+                "dimensions": [{"dim_type": "diameter", "nominal": nominal, "upper_tol": None, "lower_tol": None, "unit": "mm", "fit_system": None, "label": name}],
+                "surfaces": [],
+                "gdt": [],
+            })
+
+    logger.info("dxf_rule_extraction_done", feature_count=len(features), text_count=len(texts), circle_count=len(circles))
+    return features
 
 
 # ── Text-based extraction (fallback when no image available) ───────────────────
@@ -833,8 +1070,11 @@ def _summarize_dxf_entities(entities: list[dict]) -> str:
 
 
 def _parse_json_response(text: str) -> Any:
-    """Parse JSON from AI response, stripping markdown code blocks."""
+    """Parse JSON from AI response, stripping markdown blocks and qwen3 thinking tags."""
     text = text.strip()
+    # Strip qwen3/deepseek <think>...</think> blocks (may span multiple lines)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # Strip markdown code fences
     text = re.sub(r"```(?:json)?\s*", "", text)
     text = re.sub(r"```\s*$", "", text)
     text = text.strip()

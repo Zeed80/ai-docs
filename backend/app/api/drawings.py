@@ -219,9 +219,19 @@ async def bulk_delete_drawings(
 
         storage_path = (drawing.metadata_ or {}).get("storage_path")
 
-        # Unlink dependent process plans before deletion
-        from sqlalchemy import update as sa_update
-        from app.db.models import ManufacturingProcessPlan
+        # Unlink dependent records before deletion (FK constraints are NO ACTION)
+        from sqlalchemy import update as sa_update, select as sa_select
+        from app.db.models import ManufacturingProcessPlan, SurfaceMachiningSpec, DrawingFeature
+        feat_result = await db.execute(
+            sa_select(DrawingFeature.id).where(DrawingFeature.drawing_id == drawing_id)
+        )
+        feat_id_list = [row[0] for row in feat_result]
+        if feat_id_list:
+            await db.execute(
+                sa_update(SurfaceMachiningSpec)
+                .where(SurfaceMachiningSpec.drawing_feature_id.in_(feat_id_list))
+                .values(drawing_feature_id=None)
+            )
         await db.execute(
             sa_update(ManufacturingProcessPlan)
             .where(ManufacturingProcessPlan.drawing_id == drawing_id)
@@ -277,9 +287,21 @@ async def delete_drawing(
 
     storage_path = (drawing.metadata_ or {}).get("storage_path")
 
-    # Unlink dependent process plans (drawing_id is nullable — set to NULL to avoid FK violation)
-    from sqlalchemy import update as sa_update
-    from app.db.models import ManufacturingProcessPlan
+    # Unlink dependent records before deleting (FK constraints are NO ACTION)
+    from sqlalchemy import update as sa_update, select as sa_select
+    from app.db.models import ManufacturingProcessPlan, SurfaceMachiningSpec, DrawingFeature
+    # 1. NULL out surface_machining_specs.drawing_feature_id (references drawing_features)
+    drawing_feature_ids = await db.execute(
+        sa_select(DrawingFeature.id).where(DrawingFeature.drawing_id == drawing_id)
+    )
+    feat_id_list = [row[0] for row in drawing_feature_ids]
+    if feat_id_list:
+        await db.execute(
+            sa_update(SurfaceMachiningSpec)
+            .where(SurfaceMachiningSpec.drawing_feature_id.in_(feat_id_list))
+            .values(drawing_feature_id=None)
+        )
+    # 2. NULL out manufacturing_process_plans.drawing_id
     await db.execute(
         sa_update(ManufacturingProcessPlan)
         .where(ManufacturingProcessPlan.drawing_id == drawing_id)

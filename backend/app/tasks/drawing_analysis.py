@@ -335,7 +335,18 @@ async def _analyze_drawing_async(
                 few_shot_examples=few_shot or None,
                 classification=classification,
             )
-            # If VLM returned nothing meaningful, fall back to text extraction
+            # If VLM returned nothing meaningful → try rule-based DXF extraction first
+            if not extraction.get("features") and dxf_entities:
+                from app.ai.drawing_extractor import extract_features_from_dxf_entities
+                rule_features = extract_features_from_dxf_entities(dxf_entities, drawing_type)
+                if rule_features:
+                    logger.info(
+                        "drawing_dxf_rule_extraction",
+                        drawing_id=drawing_id,
+                        features=len(rule_features),
+                    )
+                    extraction["features"] = rule_features
+            # If still nothing and text is available → LLM text fallback
             if not extraction.get("features") and drawing_text:
                 logger.info("drawing_vlm_fallback_to_text", drawing_id=drawing_id)
                 extraction = await extract_drawing_features(
@@ -345,11 +356,24 @@ async def _analyze_drawing_async(
                 )
         else:
             # Text-only path (STEP/IGES/unknown or all preprocessors failed)
-            extraction = await extract_drawing_features(
-                drawing_text=drawing_text,
-                drawing_entities=dxf_entities or None,
-                model=vlm_model,
-            )
+            extraction = {"title_block": {}, "features": []}
+            # Try rule-based first (faster, deterministic)
+            if dxf_entities:
+                from app.ai.drawing_extractor import extract_features_from_dxf_entities
+                rule_features = extract_features_from_dxf_entities(dxf_entities, drawing_type)
+                if rule_features:
+                    logger.info(
+                        "drawing_text_rule_extraction",
+                        drawing_id=drawing_id,
+                        features=len(rule_features),
+                    )
+                    extraction["features"] = rule_features
+            if not extraction.get("features"):
+                extraction = await extract_drawing_features(
+                    drawing_text=drawing_text,
+                    drawing_entities=dxf_entities or None,
+                    model=vlm_model,
+                )
         title_block = extraction.get("title_block", {})
         features_data = extraction.get("features", [])
 

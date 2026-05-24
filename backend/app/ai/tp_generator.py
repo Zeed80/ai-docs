@@ -257,10 +257,21 @@ def extract_tp_features_from_drawing(
     return specs
 
 
+_SURFACE_SPEC_COLUMNS = {
+    "process_plan_id", "operation_id", "drawing_feature_id",
+    "surface_type", "nominal_mm", "upper_tol", "lower_tol",
+    "roughness_ra", "fit_system", "machining_method", "machining_stage",
+    "assigned_machine_id", "assigned_tool_id", "allowance_mm",
+    "confidence", "metadata_",
+}
+
+
 def save_surface_specs(specs: list[dict[str, Any]], db: Session) -> list[SurfaceMachiningSpec]:
     rows = []
     for s in specs:
-        row = SurfaceMachiningSpec(**{k: v for k, v in s.items()})
+        # Strip computed fields that are not DB columns (e.g. is_internal)
+        filtered = {k: v for k, v in s.items() if k in _SURFACE_SPEC_COLUMNS}
+        row = SurfaceMachiningSpec(**filtered)
         db.add(row)
         rows.append(row)
     db.flush()

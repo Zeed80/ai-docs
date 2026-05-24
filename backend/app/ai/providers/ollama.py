@@ -94,15 +94,49 @@ class OllamaProvider(AIProvider):
         )
 
     async def vision(self, request: AIRequest, model: str) -> AIResponse:
+        """Vision call via /api/generate with proper system prompt and JSON format.
+
+        Uses /api/generate (not /api/chat) because many Ollama vision models
+        (qwen2.5, qwen3.x, llava, gemma4) handle images through the generate
+        endpoint. The system field carries the JSON schema instruction and
+        format="json" forces structured output.
+        """
         started = time.perf_counter()
-        payload = {
+
+        # Extract system message from request (e.g. DRAWING_ANALYSIS_SYSTEM_PROMPT)
+        system_text = ""
+        user_parts: list[str] = []
+        for msg in request.messages:
+            if msg.role == "system":
+                system_text = msg.content
+            elif msg.role in ("user", "assistant"):
+                user_parts.append(msg.content)
+
+        # Fall back to legacy flat prompt if messages not structured
+        if not user_parts:
+            prompt_text = request.prompt or request.input_text or ""
+        else:
+            prompt_text = "\n\n".join(user_parts)
+
+        payload: dict = {
             "model": model,
-            "prompt": _request_prompt(request),
-            "images": [_ollama_image_payload(image) for image in request.images],
+            "prompt": prompt_text,
+            "images": [_ollama_image_payload(img) for img in request.images],
             "stream": False,
-            "options": {"temperature": 0.1},
+            "options": {
+                "temperature": 0.1,
+                "num_predict": 8192,
+            },
         }
-        async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
+        if system_text:
+            payload["system"] = system_text
+        # Note: format="json" is intentionally NOT set here — many vision models
+        # (qwen3.x, llava) return empty response when format is forced. JSON output
+        # is controlled via the system prompt instruction instead.
+
+        # Vision inference needs much more time than text tasks (4-11 min for large models)
+        vision_timeout = max(self.config.timeout_seconds, 660.0)
+        async with httpx.AsyncClient(timeout=vision_timeout) as client:
             response = await client.post(
                 f"{str(self.config.base_url).rstrip('/')}/api/generate",
                 json=payload,

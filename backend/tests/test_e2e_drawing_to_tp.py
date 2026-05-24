@@ -98,33 +98,50 @@ def _shaft_dxf() -> bytes:
 
 
 def _minimal_png() -> bytes:
-    """Valid 200×200 white PNG with a circle outline (shaft cross-section sketch)."""
-    # Build a simple PNG manually — 200x200 grayscale
+    """PNG shaft cross-section with engineering annotations (Ø50h6, Ø12H7, Ra1.6, 8P9).
+
+    Attempts to use PIL for readable text annotations.  Falls back to a raw
+    PNG with circle geometry when PIL is not available.  VLM should extract
+    at least one feature from either variant.
+    """
+    try:
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (400, 400), "white")
+        draw = ImageDraw.Draw(img)
+        # External shaft outline (Ø50h6)
+        draw.ellipse([50, 50, 350, 350], outline="black", width=3)
+        # Inner bore (Ø12H7)
+        draw.ellipse([175, 175, 225, 225], outline="black", width=2)
+        # Keyway slot
+        draw.rectangle([168, 38, 232, 75], outline="black", width=2)
+        # Engineering annotations — readable text for VLM
+        for i, txt in enumerate(["Ø50h6", "Ø12H7", "Ra1.6", "Ra3.2", "8P9", "2×45°"]):
+            draw.text((5, 5 + i * 20), txt, fill="black")
+        draw.text((130, 370), "Вал-шестерня  ВШ-001", fill="black")
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue()
+    except ImportError:
+        pass
+
+    # Fallback: raw PNG — 300×300 grayscale with circles + simple pixel text
     def _chunk(tag: bytes, data: bytes) -> bytes:
         crc = zlib.crc32(tag + data) & 0xFFFFFFFF
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
 
-    w, h = 200, 200
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)  # grayscale
+    w, h = 300, 300
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)
 
-    rows = []
-    cx, cy, r = w // 2, h // 2, 80
+    grid = [[255] * w for _ in range(h)]
+    cx, cy, r_outer, r_inner = w // 2, h // 2, 120, 25
     for y in range(h):
-        row = []
         for x in range(w):
             dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
-            # Draw circle border (shaft outline) and center hole
-            if abs(dist - r) < 2 or abs(dist - 15) < 1.5:
-                row.append(0)    # black
-            elif dist < 15:
-                row.append(180)  # inner bore: light gray
-            else:
-                row.append(255)  # white background
-        rows.append(bytes([0]) + bytes(row))  # filter byte
+            if abs(dist - r_outer) < 2.5 or abs(dist - r_inner) < 2.0:
+                grid[y][x] = 0
 
-    raw = b"".join(rows)
-    compressed = zlib.compress(raw, 9)
-
+    rows = b"".join(bytes([0]) + bytes(row) for row in grid)
+    compressed = zlib.compress(rows, 9)
     return (
         b"\x89PNG\r\n\x1a\n"
         + _chunk(b"IHDR", ihdr)
@@ -407,6 +424,15 @@ def test_e2e_03_verify_drawing_data(live_client: httpx.Client, e2e_state: dict):
             "drawing_type should be set after successful analysis"
         )
 
+    # DXF shaft drawing must have engineering features extracted —
+    # either via VLM or deterministic DXF rule-based fallback.
+    if not e2e_state.get("analysis_forced"):
+        assert len(features) > 0, (
+            f"DXF shaft drawing should have ≥1 feature extracted (got 0). "
+            f"Check Celery logs for vlm_router_extraction_failed or rule extraction."
+        )
+        print(f"  ✓ {len(features)} features extracted")
+
     # Check feature details if any were extracted
     for f in features[:3]:
         ft = f.get("feature_type", "?")
@@ -667,7 +693,11 @@ def test_e2e_11_png_raster_pipeline(live_client: httpx.Client, e2e_state: dict):
 
     # For raster drawings with two-stage VLM, drawing_type should be set
     if status in ("analyzed", "needs_review") and not e2e_state.get("analysis_forced"):
-        print("[step 11] Two-stage VLM pipeline ran successfully")
+        assert len(features) > 0, (
+            f"PNG shaft drawing should have ≥1 feature extracted (got 0). "
+            f"The PNG includes text annotations (Ø50h6, Ø12H7, Ra1.6, 8P9) readable by VLM."
+        )
+        print(f"[step 11] Two-stage VLM pipeline ran successfully: {len(features)} features")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
