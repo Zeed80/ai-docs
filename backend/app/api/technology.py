@@ -471,9 +471,10 @@ def _build_techcard_excel(plan: ProcessPlanDetail) -> bytes:
     for col, h in enumerate(headers, 1):
         _cell(op_start, col, h, font=header_font, fill=header_fill, align="center")
 
+    from openpyxl.utils import get_column_letter
     col_widths = [5, 8, 40, 15, 10, 10, 12, 40]
     for i, w in enumerate(col_widths, 1):
-        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = w
+        ws.column_dimensions[get_column_letter(i)].width = w
 
     for i, op in enumerate(getattr(plan, "operations", []), start=1):
         row = op_start + i

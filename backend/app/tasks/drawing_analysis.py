@@ -31,7 +31,13 @@ VECTOR_FORMATS = frozenset({"dxf", "dwg", "svg"})
 ALL_SUPPORTED_FORMATS = RASTER_FORMATS | VECTOR_FORMATS | frozenset({"pdf", "step", "iges", "stp"})
 
 
-@celery_app.task(bind=True, name="drawing_analysis.analyze_drawing", max_retries=2)
+@celery_app.task(
+    bind=True,
+    name="drawing_analysis.analyze_drawing",
+    max_retries=2,
+    soft_time_limit=720,   # 12 min — VLM (qwen3.6:35b) classification + extraction
+    time_limit=780,        # 13 min — hard kill after soft limit
+)
 def analyze_drawing(
     self,
     drawing_id: str,
@@ -1134,14 +1140,14 @@ async def _parse_dxf(
         try:
             from ezdxf.addons.drawing import RenderContext, Frontend
             from ezdxf.addons.drawing.svg import SVGBackend
-            from io import StringIO as SIO
+            from ezdxf.addons.drawing.layout import Page, Units
 
-            out = SIO()
             ctx = RenderContext(doc)
-            backend = SVGBackend(out)
+            backend = SVGBackend()
             frontend = Frontend(ctx, backend)
             frontend.draw_layout(msp)
-            svg_content = out.getvalue()
+            page = Page(420, 297, units=Units.mm)  # A3 landscape
+            svg_content = backend.get_string(page=page)
         except Exception as svg_exc:
             logger.warning("dxf_svg_export_failed", error=str(svg_exc))
 

@@ -219,6 +219,16 @@ async def bulk_delete_drawings(
 
         storage_path = (drawing.metadata_ or {}).get("storage_path")
 
+        # Unlink dependent process plans before deletion
+        from sqlalchemy import update as sa_update
+        from app.db.models import ManufacturingProcessPlan
+        await db.execute(
+            sa_update(ManufacturingProcessPlan)
+            .where(ManufacturingProcessPlan.drawing_id == drawing_id)
+            .values(drawing_id=None)
+        )
+        await db.flush()
+
         await db.delete(drawing)
         await db.flush()
 
@@ -266,6 +276,16 @@ async def delete_drawing(
         raise HTTPException(status_code=404, detail="Чертёж не найден")
 
     storage_path = (drawing.metadata_ or {}).get("storage_path")
+
+    # Unlink dependent process plans (drawing_id is nullable — set to NULL to avoid FK violation)
+    from sqlalchemy import update as sa_update
+    from app.db.models import ManufacturingProcessPlan
+    await db.execute(
+        sa_update(ManufacturingProcessPlan)
+        .where(ManufacturingProcessPlan.drawing_id == drawing_id)
+        .values(drawing_id=None)
+    )
+    await db.flush()
 
     await db.delete(drawing)
     await db.flush()

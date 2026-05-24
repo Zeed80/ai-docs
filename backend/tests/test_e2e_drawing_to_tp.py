@@ -40,48 +40,61 @@ import pytest
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 BASE_URL = "http://localhost"
-POLL_INTERVAL = 8           # seconds between status polls
-ANALYSIS_TIMEOUT = 360      # 6 min: VLM on qwen3.6:35b can take time
-TP_TIMEOUT = 240            # 4 min: TP generation is mostly algorithmic
+POLL_INTERVAL = 10          # seconds between status polls
+ANALYSIS_TIMEOUT = 600      # 10 min: VLM (qwen3.6:35b) classification + extraction
+TP_TIMEOUT = 300            # 5 min: TP generation is mostly algorithmic
 ANALYSIS_TERMINAL = {"analyzed", "needs_review", "failed"}
 
 
 # ── Test drawing file content ──────────────────────────────────────────────────
 
 def _shaft_dxf() -> bytes:
-    """Realistic shaft DXF: outer profile Ø50, center bore Ø12H7, keyway, Ra annotations."""
-    return b"""\
-  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1015\n  9\n$INSUNITS\n 70\n4\n  0\nENDSEC\n
-  0\nSECTION\n  2\nLAYER\n  0\nTABLE\n  2\nLAYER\n 70\n5\n
-  0\nLAYER\n  2\n0\n 70\n0\n 62\n7\n  6\nContinuous\n
-  0\nLAYER\n  2\nDIMENSIONS\n 70\n0\n 62\n2\n  6\nContinuous\n
-  0\nLAYER\n  2\nCENTER\n 70\n0\n 62\n1\n  6\nCENTER\n
-  0\nLAYER\n  2\nROUGHNESS\n 70\n0\n 62\n3\n  6\nContinuous\n
-  0\nLAYER\n  2\nTITLEBLOCK\n 70\n0\n 62\n7\n  6\nContinuous\n
-  0\nENDTAB\n  0\nENDSEC\n
-  0\nSECTION\n  2\nENTITIES\n
-  0\nLINE\n  8\n0\n 10\n-100.0\n 20\n-25.0\n 30\n0.0\n 11\n100.0\n 21\n-25.0\n 31\n0.0\n
-  0\nLINE\n  8\n0\n 10\n-100.0\n 20\n25.0\n 30\n0.0\n 11\n100.0\n 21\n25.0\n 31\n0.0\n
-  0\nLINE\n  8\n0\n 10\n-100.0\n 20\n-25.0\n 30\n0.0\n 11\n-100.0\n 21\n25.0\n 31\n0.0\n
-  0\nLINE\n  8\n0\n 10\n100.0\n 20\n-25.0\n 30\n0.0\n 11\n100.0\n 21\n25.0\n 31\n0.0\n
-  0\nCIRCLE\n  8\nCENTER\n 10\n0.0\n 20\n0.0\n 30\n0.0\n 40\n6.0\n
-  0\nLINE\n  8\nCENTER\n 10\n-110.0\n 20\n0.0\n 30\n0.0\n 11\n110.0\n 21\n0.0\n 31\n0.0\n
-  0\nLINE\n  8\n0\n 10\n-10.0\n 20\n25.0\n 30\n0.0\n 11\n-10.0\n 21\n30.0\n 31\n0.0\n
-  0\nLINE\n  8\n0\n 10\n10.0\n 20\n25.0\n 30\n0.0\n 11\n10.0\n 21\n30.0\n 31\n0.0\n
-  0\nLINE\n  8\n0\n 10\n-10.0\n 20\n28.0\n 30\n0.0\n 11\n10.0\n 21\n28.0\n 31\n0.0\n
-  0\nTEXT\n  8\nDIMENSIONS\n 10\n-120.0\n 20\n-5.0\n 30\n0.0\n 40\n4.0\n  1\n\xc3\x9050h6\n
-  0\nTEXT\n  8\nDIMENSIONS\n 10\n-30.0\n 20\n10.0\n 30\n0.0\n 40\n3.5\n  1\n\xc3\x9012H7\n
-  0\nTEXT\n  8\nDIMENSIONS\n 10\n110.0\n 20\n-5.0\n 30\n0.0\n 40\n3.5\n  1\nL=200\n
-  0\nTEXT\n  8\nDIMENSIONS\n 10\n-10.0\n 20\n32.0\n 30\n0.0\n 40\n2.5\n  1\n8P9\n
-  0\nTEXT\n  8\nROUGHNESS\n 10\n90.0\n 20\n30.0\n 30\n0.0\n 40\n2.5\n  1\nRa1.6\n
-  0\nTEXT\n  8\nROUGHNESS\n 10\n-90.0\n 20\n30.0\n 30\n0.0\n 40\n2.5\n  1\nRa3.2\n
-  0\nTEXT\n  8\nROUGHNESS\n 10\n0.0\n 20\n30.0\n 30\n0.0\n 40\n2.5\n  1\nRa0.8\n
-  0\nTEXT\n  8\nTITLEBLOCK\n 10\n-50.0\n 20\n-50.0\n 30\n0.0\n 40\n5.0\n  1\n\xd0\x92\xd0\xb0\xd0\xbb-\xd1\x88\xd0\xb5\xd1\x81\xd1\x82\xd0\xb5\xd1\x80\xd0\xbd\xd1\x8f\n
-  0\nTEXT\n  8\nTITLEBLOCK\n 10\n-50.0\n 20\n-58.0\n 30\n0.0\n 40\n3.5\n  1\n\xd0\xa1\xd1\x82\xd0\xb0\xd0\xbb\xd1\x8c 45 \xd0\x93\xd0\x9e\xd0\xa1\xd0\xa2 1050-88\n
-  0\nTEXT\n  8\nTITLEBLOCK\n 10\n-50.0\n 20\n-64.0\n 30\n0.0\n 40\n3.5\n  1\n\xd0\x9c\xd0\xb0\xd1\x81\xd1\x81\xd0\xb0 2.5 \xd0\xba\xd0\xb3\n
-  0\nTEXT\n  8\nTITLEBLOCK\n 10\n-50.0\n 20\n-70.0\n 30\n0.0\n 40\n3.0\n  1\n5-05-001\n
-  0\nMTEXT\n  8\nDIMENSIONS\n 10\n60.0\n 20\n5.0\n 30\n0.0\n 40\n3.0\n  1\n\\P 0.02 A\n
-  0\nENDSEC\n  0\nEOF\n"""
+    """Realistic shaft DXF generated via ezdxf API: Ø50h6 shaft, Ø12H7 bore, keyway, Ra marks."""
+    import ezdxf
+    import io as _io
+
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 4  # mm
+    msp = doc.modelspace()
+
+    # Shaft outer profile: 200mm long, Ø50 (half = 25mm)
+    msp.add_line((-100, -25), (100, -25))
+    msp.add_line((-100, 25), (100, 25))
+    msp.add_line((-100, -25), (-100, 25))
+    msp.add_line((100, -25), (100, 25))
+
+    # Center bore Ø12H7 (radius 6)
+    msp.add_circle((0, 0), 6, dxfattribs={"layer": "CENTER"})
+
+    # Centerline
+    msp.add_line((-110, 0), (110, 0), dxfattribs={"layer": "CENTER"})
+
+    # Keyway 8P9 (8mm wide, 3mm deep)
+    msp.add_line((-10, 25), (-10, 30))
+    msp.add_line((10, 25), (10, 30))
+    msp.add_line((-10, 28), (10, 28))
+
+    # Dimensions
+    msp.add_text("ø50h6", dxfattribs={"layer": "DIMENSIONS", "height": 4.0}).set_placement((-120, -5))
+    msp.add_text("ø12H7", dxfattribs={"layer": "DIMENSIONS", "height": 3.5}).set_placement((-30, 10))
+    msp.add_text("L=200", dxfattribs={"layer": "DIMENSIONS", "height": 3.5}).set_placement((110, -5))
+    msp.add_text("8P9", dxfattribs={"layer": "DIMENSIONS", "height": 2.5}).set_placement((-10, 32))
+    msp.add_mtext("0.02 A\nперпендикулярность", dxfattribs={"layer": "DIMENSIONS", "char_height": 3.0}).set_location((60, 5))
+
+    # Surface roughness
+    msp.add_text("Ra1.6", dxfattribs={"layer": "ROUGHNESS", "height": 2.5}).set_placement((90, 30))
+    msp.add_text("Ra3.2", dxfattribs={"layer": "ROUGHNESS", "height": 2.5}).set_placement((-90, 30))
+    msp.add_text("Ra0.8", dxfattribs={"layer": "ROUGHNESS", "height": 2.5}).set_placement((0, 30))
+
+    # Title block (Russian)
+    msp.add_text("Вал-шестерня", dxfattribs={"layer": "TITLEBLOCK", "height": 5.0}).set_placement((-50, -50))
+    msp.add_text("Сталь 45 ГОСТ 1050-88", dxfattribs={"layer": "TITLEBLOCK", "height": 3.5}).set_placement((-50, -58))
+    msp.add_text("Масса 2.5 кг", dxfattribs={"layer": "TITLEBLOCK", "height": 3.5}).set_placement((-50, -64))
+    msp.add_text("5-05-001", dxfattribs={"layer": "TITLEBLOCK", "height": 3.0}).set_placement((-50, -70))
+
+    buf = _io.StringIO()
+    doc.write(buf)
+    return buf.getvalue().encode("utf-8")
 
 
 def _minimal_png() -> bytes:
@@ -473,7 +486,7 @@ def test_e2e_06_tp_completes(live_client: httpx.Client, e2e_state: dict):
             continue
 
         plan = resp.json()
-        meta = plan.get("metadata_") or {}
+        meta = plan.get("metadata") or {}
         steps = meta.get("tp_pipeline_steps", [])
         running = [s["key"] for s in steps if s.get("status") == "running"]
         done = [s["key"] for s in steps if s.get("status") == "done"]
@@ -506,7 +519,7 @@ def test_e2e_06_tp_completes(live_client: httpx.Client, e2e_state: dict):
         resp = live_client.get(f"/api/technology/process-plans/{plan_id}")
         if resp.status_code == 200:
             e2e_state["plan_final_data"] = resp.json()
-            meta = e2e_state["plan_final_data"].get("metadata_") or {}
+            meta = e2e_state["plan_final_data"].get("metadata") or {}
             tp_error = meta.get("tp_error", "")
             if tp_error:
                 pytest.fail(f"TP failed: {tp_error[:300]}")
@@ -540,7 +553,7 @@ def test_e2e_07_verify_process_plan(live_client: httpx.Client, e2e_state: dict):
         tsht = op.get("tsht_k_minutes", 0) or 0
         print(f"    → {op_type}: {name} (Tsht-k={tsht:.2f} мин)")
 
-    meta = plan.get("metadata_") or {}
+    meta = plan.get("metadata") or {}
     nc_result = meta.get("tp_pipeline_steps", [])
     nc_step = next((s for s in nc_result if s.get("key") == "normcontrol"), None)
     print(f"  normcontrol      = {nc_step.get('status') if nc_step else 'N/A'}")
@@ -622,8 +635,8 @@ def test_e2e_11_png_raster_pipeline(live_client: httpx.Client, e2e_state: dict):
     png_bytes = _minimal_png()
     resp = live_client.post(
         "/api/drawings",
+        params={"drawing_number": "E2E-PNG-001"},
         files={"file": ("e2e-shaft-cross-section.png", io.BytesIO(png_bytes), "image/png")},
-        data={"drawing_number": "E2E-PNG-001"},
     )
     assert resp.status_code == 201, f"PNG upload failed: {resp.status_code} {resp.text[:300]}"
     data = resp.json()
