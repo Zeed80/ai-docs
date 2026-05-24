@@ -436,7 +436,7 @@ async def search_tools(
     semantic_ids: list[uuid.UUID] = []
     if query and semantic:
         try:
-            from app.ai.embeddings import get_text_embedding
+            from app.ai.embeddings import embed_text as get_text_embedding
             from app.vector.qdrant_store import search_tool_catalog, ensure_drawing_collections
 
             ensure_drawing_collections()

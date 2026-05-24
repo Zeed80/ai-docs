@@ -67,7 +67,7 @@ async def _analyze_drawing_async(
     from app.db.models import Drawing, DrawingStatus, DrawingFeature, FeatureContour, FeatureDimension, FeatureSurface, FeatureGDT
     from app.ai.drawing_extractor import extract_drawing_features, extract_features_from_image
     from app.domain.drawing_graph import ingest_drawing_graph
-    from app.ai.embeddings import get_text_embedding
+    from app.ai.embeddings import embed_text as get_text_embedding
     from app.vector.qdrant_store import (
         ensure_drawing_collections,
         upsert_drawing,
@@ -603,7 +603,7 @@ async def _ingest_catalog_async(
     from app.db.session import _get_session_factory
     from app.db.models import ToolCatalogEntry, ToolSupplier
     from app.domain.drawing_graph import ingest_tool_catalog_graph
-    from app.ai.embeddings import get_text_embedding
+    from app.ai.embeddings import embed_text as get_text_embedding
     from app.vector.qdrant_store import ensure_drawing_collections, upsert_tool_catalog_entry
 
     supplier_uuid = uuid.UUID(supplier_id)
