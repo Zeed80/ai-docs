@@ -139,6 +139,16 @@ async def _generate_tp_async(
         if not drawing:
             raise ValueError(f"Drawing {drawing_id} not found")
 
+        # Guard: drawing must be fully analyzed before TP generation
+        if drawing.status not in (DrawingStatus.analyzed, DrawingStatus.needs_review):
+            from app.tasks.drawing_analysis import analyze_drawing
+            if drawing.status == DrawingStatus.uploaded:
+                analyze_drawing.delay(str(drawing_id), None, False, 6, None)
+            raise ValueError(
+                f"Чертёж ещё не обработан (статус: {drawing.status.value}). "
+                "Анализ запущен автоматически, повторите через несколько минут."
+            )
+
         material = plan.material or (drawing.title_block or {}).get("material", "Сталь 45") or "Сталь 45"
 
         def _save_steps():

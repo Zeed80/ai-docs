@@ -264,7 +264,12 @@ async def _analyze_drawing_async(
         drawing_type = force_drawing_type or "detail"
 
         # ── Few-shot corrections (prioritised over VLM defaults) ─────────────
-        few_shot = await _load_few_shot_corrections(db, drawing_type=drawing_type, limit=10)
+        few_shot: list[dict] = []
+        try:
+            async with _get_session_factory()() as db_fs:
+                few_shot = await _load_few_shot_corrections(db_fs, drawing_type=drawing_type, limit=10)
+        except Exception as _fs_exc:
+            logger.warning("few_shot_load_failed", error=str(_fs_exc))
 
         # ── AI extraction ────────────────────────────────────────────────────
         # Strategy: VLM first (via AIRouter for policy enforcement), then text-based fallback
@@ -1390,11 +1395,16 @@ async def _parse_pdf_catalog(file_bytes: bytes) -> list[dict]:
 
 
 async def _load_drawing_file(drawing: Any) -> bytes:
-    """Load drawing file bytes from MinIO."""
+    """Load drawing file bytes from MinIO.
+
+    Resolution order:
+    1. metadata_.storage_path  — set by both upload and document-auto-create flows
+    2. drawing.document.storage_path — if document FK is loaded
+    3. drawings/{id}/{filename} — canonical drawing bucket path
+    """
     try:
         from app.config import settings
         from minio import Minio
-        import urllib.parse
 
         client = Minio(
             settings.minio_endpoint,
@@ -1402,16 +1412,35 @@ async def _load_drawing_file(drawing: Any) -> bytes:
             secret_key=settings.minio_secret_key,
             secure=settings.minio_secure,
         )
-        storage_path = drawing.document.storage_path if drawing.document else None
-        if not storage_path:
-            storage_path = f"drawings/{drawing.id}/{drawing.filename}"
+
+        # Try all path sources in priority order
+        candidates: list[str] = []
+        meta_path = (drawing.metadata_ or {}).get("storage_path")
+        if meta_path:
+            candidates.append(meta_path)
+        try:
+            if drawing.document and drawing.document.storage_path:
+                candidates.append(drawing.document.storage_path)
+        except Exception:
+            pass
+        candidates.append(f"drawings/{drawing.id}/{drawing.filename}")
 
         bucket = settings.minio_bucket
-        response = client.get_object(bucket, storage_path)
-        data = response.read()
-        response.close()
-        response.release_conn()
-        return data
+        last_exc: Exception | None = None
+        for path in candidates:
+            try:
+                response = client.get_object(bucket, path)
+                data = response.read()
+                response.close()
+                response.release_conn()
+                return data
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+        logger.error("load_drawing_file_all_paths_failed", drawing_id=str(drawing.id),
+                     tried=candidates, error=str(last_exc))
+        return b""
     except Exception as exc:
         logger.error("load_drawing_file_failed", error=str(exc))
         return b""

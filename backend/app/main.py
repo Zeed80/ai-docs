@@ -334,17 +334,21 @@ async def health_ai() -> dict:
 
 
 @app.get("/api/tasks/{task_id}")
+@app.get("/api/tasks/{task_id}/status")
 async def get_task_status(task_id: str) -> dict:
     """Check Celery task status."""
     from app.tasks.celery_app import celery_app as celery
 
     result = celery.AsyncResult(task_id)
-    response = {
+    response: dict = {
         "task_id": task_id,
         "status": result.status,
     }
     if result.ready():
-        response["result"] = result.result
+        try:
+            response["result"] = result.result
+        except Exception:
+            response["result"] = None
     return response
 
 

@@ -29,15 +29,16 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    task_soft_time_limit=270,  # 4.5 minutes — soft limit raises exception
-    task_time_limit=300,       # 5 minutes — hard kill
+    task_soft_time_limit=300,  # 5 minutes — soft limit raises exception
+    task_time_limit=360,       # 6 minutes — hard kill
     worker_concurrency=1,      # sequential processing (safe for GPU)
     task_routes={
         "app.tasks.ingest.*": {"queue": "ingest"},
         "app.tasks.extraction.*": {"queue": "extraction"},
         "app.tasks.scheduler.*": {"queue": "scheduler"},
-        # name= on @celery_app.task in drawing_analysis.py
+        # name= on @celery_app.task in drawing_analysis.py and tp_generation.py
         "drawing_analysis.*": {"queue": "extraction"},
+        "tp_generation.*": {"queue": "celery"},
     },
 )
 
@@ -120,3 +121,4 @@ from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
 from app.tasks import proactive as _proactive  # noqa: F401
 from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
 from app.tasks import canonical_cluster as _canonical_cluster  # noqa: F401
+from app.tasks import tp_generation as _tp_generation  # noqa: F401

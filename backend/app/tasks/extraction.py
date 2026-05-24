@@ -8,6 +8,7 @@ import asyncio
 import base64
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 from sqlalchemy import create_engine, func, select
@@ -226,31 +227,44 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
         doc.status = DocumentStatus.classifying
         db.commit()
 
-        # Get PDF text
-        text = _get_document_text(doc)
-        if not text:
-            logger.warning("classify_no_text", document_id=document_id)
-            doc.status = DocumentStatus.needs_review
-            error = "No text extracted from document"
-            _set_job_step(job, "classification", "failed", error=error)
-            _finish_job(job, "failed", error=error)
-            db.commit()
-            return {"error": error}
+        # ── Early detection: drawing formats are unambiguous by extension ─────
+        _drawing_extensions = frozenset({"dxf", "dwg", "step", "stp", "iges", "slddrw", "ipt"})
+        _file_ext = (doc.file_name.rsplit(".", 1)[-1].lower() if "." in doc.file_name else "")
+        if _file_ext in _drawing_extensions:
+            doc_type = "drawing"
+            confidence = 1.0
+        else:
+            # Get PDF/text content for AI classification
+            text = _get_document_text(doc)
+            if not text:
+                # Binary file without recognized drawing extension — mark for review
+                logger.warning("classify_no_text", document_id=document_id)
+                doc.status = DocumentStatus.needs_review
+                error = "No text extracted from document"
+                _set_job_step(job, "classification", "failed", error=error)
+                _finish_job(job, "failed", error=error)
+                db.commit()
+                return {"error": error}
+
+            try:
+                from app.ai.router import ai_router
+                result = _run_async(ai_router.classify_document(text))
+                doc_type = result.get("type", "other")
+                confidence = result.get("confidence", 0.5)
+                valid_types = {t.value for t in DocumentType}
+                if doc_type not in valid_types:
+                    doc_type = "other"
+            except Exception as e:
+                logger.error("classify_error", document_id=document_id, error=str(e))
+                doc.status = DocumentStatus.needs_review
+                _set_job_step(job, "classification", "failed", error=str(e))
+                _finish_job(job, "failed", error=str(e))
+                db.commit()
+                self.retry(countdown=30, exc=e)
+                return {"error": str(e)}
 
         # Classify via Ollama
         try:
-            from app.ai.router import ai_router
-
-            result = _run_async(ai_router.classify_document(text))
-
-            doc_type = result.get("type", "other")
-            confidence = result.get("confidence", 0.5)
-
-            # Validate type
-            valid_types = {t.value for t in DocumentType}
-            if doc_type not in valid_types:
-                doc_type = "other"
-
             doc.doc_type = DocumentType(doc_type)
             doc.doc_type_confidence = confidence
             doc.status = DocumentStatus.extracting
@@ -264,10 +278,16 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
                 confidence=confidence,
             )
 
-            # Chain: if invoice → extract
+            # Chain: if invoice → extract; if drawing → trigger drawing analysis
             if doc_type == "invoice":
                 _set_job_step(job, "extraction", "queued")
                 extract_invoice.delay(document_id)
+                db.commit()
+            elif doc_type == "drawing":
+                _trigger_drawing_analysis_from_document(doc, db)
+                doc.status = DocumentStatus.analyzed
+                _skip_remaining_steps(job, {"extraction", "sql_records", "memory_graph"})
+                _finish_job(job, "done")
                 db.commit()
             else:
                 doc.status = DocumentStatus.needs_review
@@ -285,13 +305,49 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
             }
 
         except Exception as e:
-            logger.error("classify_error", document_id=document_id, error=str(e))
+            logger.error("classify_chain_error", document_id=document_id, error=str(e))
             doc.status = DocumentStatus.needs_review
             _set_job_step(job, "classification", "failed", error=str(e))
             _finish_job(job, "failed", error=str(e))
             db.commit()
             self.retry(countdown=30, exc=e)
             return {"error": str(e)}
+
+
+def _trigger_drawing_analysis_from_document(doc: Document, db: Any) -> str | None:
+    """Create Drawing record from an existing document and queue analyze_drawing."""
+    import uuid as _uuid
+    from app.db.models import Drawing, DrawingStatus
+
+    ext = doc.file_name.rsplit(".", 1)[-1].lower() if "." in doc.file_name else "pdf"
+    drawing_id = _uuid.uuid4()
+
+    drawing = Drawing(
+        id=drawing_id,
+        document_id=doc.id,
+        filename=doc.file_name,
+        format=ext,
+        is_confidential=True,
+        status=DrawingStatus.uploaded,
+        metadata_={"storage_path": doc.storage_path, "from_document": True},
+    )
+    db.add(drawing)
+    db.flush()
+    db.commit()
+
+    try:
+        from app.tasks.drawing_analysis import analyze_drawing
+        analyze_drawing.delay(str(drawing_id), None, False, 6, None)
+        logger.info(
+            "drawing_analysis_triggered_from_document",
+            document_id=str(doc.id),
+            drawing_id=str(drawing_id),
+            filename=doc.file_name,
+        )
+    except Exception as exc:
+        logger.warning("drawing_analysis_enqueue_failed", error=str(exc))
+
+    return str(drawing_id)
 
 
 @celery_app.task(name="app.tasks.extraction.extract_invoice", bind=True, max_retries=2)
