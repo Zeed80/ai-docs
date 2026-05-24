@@ -284,7 +284,14 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
                 extract_invoice.delay(document_id)
                 db.commit()
             elif doc_type == "drawing":
-                _trigger_drawing_analysis_from_document(doc, db)
+                try:
+                    from app.tasks.drawing_analysis import _create_drawing_from_doc_sync
+                    ext = doc.file_name.rsplit(".", 1)[-1].lower() if "." in doc.file_name else "pdf"
+                    _create_drawing_from_doc_sync(
+                        str(doc.id), doc.file_name, ext, doc.storage_path or ""
+                    )
+                except Exception as exc:
+                    logger.warning("drawing_from_doc_failed", document_id=document_id, error=str(exc))
                 doc.status = DocumentStatus.analyzed
                 _skip_remaining_steps(job, {"extraction", "sql_records", "memory_graph"})
                 _finish_job(job, "done")
@@ -312,42 +319,6 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
             db.commit()
             self.retry(countdown=30, exc=e)
             return {"error": str(e)}
-
-
-def _trigger_drawing_analysis_from_document(doc: Document, db: Any) -> str | None:
-    """Create Drawing record from an existing document and queue analyze_drawing."""
-    import uuid as _uuid
-    from app.db.models import Drawing, DrawingStatus
-
-    ext = doc.file_name.rsplit(".", 1)[-1].lower() if "." in doc.file_name else "pdf"
-    drawing_id = _uuid.uuid4()
-
-    drawing = Drawing(
-        id=drawing_id,
-        document_id=doc.id,
-        filename=doc.file_name,
-        format=ext,
-        is_confidential=True,
-        status=DrawingStatus.uploaded,
-        metadata_={"storage_path": doc.storage_path, "from_document": True},
-    )
-    db.add(drawing)
-    db.flush()
-    db.commit()
-
-    try:
-        from app.tasks.drawing_analysis import analyze_drawing
-        analyze_drawing.delay(str(drawing_id), None, False, 6, None)
-        logger.info(
-            "drawing_analysis_triggered_from_document",
-            document_id=str(doc.id),
-            drawing_id=str(drawing_id),
-            filename=doc.file_name,
-        )
-    except Exception as exc:
-        logger.warning("drawing_analysis_enqueue_failed", error=str(exc))
-
-    return str(drawing_id)
 
 
 @celery_app.task(name="app.tasks.extraction.extract_invoice", bind=True, max_retries=2)

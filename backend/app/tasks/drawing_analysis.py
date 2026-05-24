@@ -542,9 +542,45 @@ async def _analyze_drawing_async(
             if drawing:
                 from app.db.models import DrawingStatus
                 drawing.status = DrawingStatus.failed
-                drawing.analysis_error = str(exc)
+                drawing.analysis_error = str(exc)[:2000]
                 await db.commit()
         raise
+
+
+# ── Sync helper: create Drawing from Document (called from Celery sync tasks) ─
+
+
+def _create_drawing_from_doc_sync(
+    document_id: str, filename: str, fmt: str, storage_path: str
+) -> None:
+    """Sync helper: create Drawing record and enqueue analyze_drawing from a document."""
+
+    async def _inner() -> None:
+        from app.db.models import Drawing, DrawingStatus
+        from app.db.session import _get_session_factory
+        async with _get_session_factory()() as db:
+            drawing = Drawing(
+                document_id=uuid.UUID(document_id),
+                filename=filename,
+                format=fmt,
+                is_confidential=True,
+                status=DrawingStatus.uploaded,
+                metadata_={"storage_path": storage_path, "from_document": True},
+            )
+            db.add(drawing)
+            await db.commit()
+            await db.refresh(drawing)
+            try:
+                analyze_drawing.delay(str(drawing.id), None, False, 6, None)
+                logger.info(
+                    "drawing_from_doc_enqueued",
+                    document_id=document_id,
+                    drawing_id=str(drawing.id),
+                )
+            except Exception as exc:
+                logger.warning("drawing_from_doc_enqueue_failed", error=str(exc))
+
+    asyncio.get_event_loop().run_until_complete(_inner())
 
 
 # ── Supplier Catalog Ingestion Task ───────────────────────────────────────────

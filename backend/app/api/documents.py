@@ -588,29 +588,31 @@ async def ingest_document(
 
     logger.info("document_ingested", doc_id=str(doc.id), file_name=doc.file_name)
 
-    # DWG / DXF → automatically route to drawing analysis pipeline
-    _drawing_formats = {".dwg", ".dxf", ".svg"}
+    # DWG / DXF / SVG → automatically route to drawing analysis pipeline
+    from app.services.drawing_service import DRAWING_EXTENSIONS
     file_ext_lower = Path(doc.file_name or "").suffix.lower()
-    if file_ext_lower in _drawing_formats:
+    fmt = file_ext_lower.lstrip(".")
+    if fmt in DRAWING_EXTENSIONS:
         try:
-            from app.db.models import Drawing, DrawingStatus
-            from app.tasks.drawing_analysis import analyze_drawing
-
-            drawing = Drawing(
-                document_id=doc.id,
+            from app.services.drawing_service import create_and_analyze_drawing
+            from app.storage import download_file
+            file_bytes = download_file(doc.storage_path) if doc.storage_path else b""
+            drawing, drawing_task_id = await create_and_analyze_drawing(
+                file_bytes=file_bytes,
                 filename=doc.file_name or "",
-                format=file_ext_lower.lstrip("."),
-                status=DrawingStatus.uploaded,
+                fmt=fmt,
+                db=db,
+                document_id=doc.id,
+                is_confidential=True,
+                allow_cloud=False,
+                max_views=6,
+                created_by="document_ingest",
             )
-            db.add(drawing)
-            await db.flush()
-            drawing_task = analyze_drawing.delay(str(drawing.id))
-            await db.commit()
             logger.info(
                 "drawing_analysis_auto_queued",
                 doc_id=str(doc.id),
                 drawing_id=str(drawing.id),
-                task_id=drawing_task.id,
+                task_id=drawing_task_id,
             )
         except Exception as e:
             logger.warning("drawing_auto_queue_failed", doc_id=str(doc.id), error=str(e))

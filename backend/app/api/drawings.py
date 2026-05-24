@@ -80,54 +80,23 @@ async def upload_drawing(
     is_confidential: bool = Query(True, description="Конфиденциальный документ — только локальные модели"),
     db: AsyncSession = Depends(get_db),
 ) -> DrawingUploadResponse:
+    from app.services.drawing_service import create_and_analyze_drawing, DRAWING_EXTENSIONS
+
+    file_bytes = await file.read()
     filename = file.filename or "drawing"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
 
-    file_bytes = await file.read()
-
-    # Upload to MinIO
-    storage_path = await _upload_to_minio(file_bytes, filename, drawing_id_hint=None)
-
-    drawing = Drawing(
+    drawing, task_id = await create_and_analyze_drawing(
+        file_bytes=file_bytes,
+        filename=filename,
+        fmt=ext,
+        db=db,
         document_id=document_id,
         drawing_number=drawing_number,
-        filename=filename,
-        format=ext,
         is_confidential=is_confidential,
-        status=DrawingStatus.uploaded,
+        allow_cloud=False,
+        max_views=6,
     )
-    if document_id:
-        from app.db.models import Document
-        doc = await db.get(Document, document_id)
-        if doc:
-            drawing.metadata_ = {"original_doc_storage": doc.storage_path}
-
-    db.add(drawing)
-    await db.flush()
-
-    # Update MinIO path with actual drawing_id
-    if storage_path:
-        final_path = await _upload_to_minio(file_bytes, filename, drawing_id_hint=str(drawing.id))
-        drawing.metadata_ = {**(drawing.metadata_ or {}), "storage_path": final_path}
-    await db.commit()
-    await db.refresh(drawing)
-
-    # Enqueue Celery analysis
-    task_id = None
-    try:
-        from app.tasks.drawing_analysis import analyze_drawing
-        task = analyze_drawing.delay(
-            str(drawing.id),
-            None,           # model — use ai_config default
-            False,          # allow_cloud — confidential by default
-            6,              # max_views
-            None,           # force_drawing_type
-        )
-        task_id = task.id
-        drawing.celery_task_id = task_id
-        await db.commit()
-    except Exception as exc:
-        logger.warning("drawing_analysis_enqueue_failed", error=str(exc))
 
     return DrawingUploadResponse(
         drawing_id=drawing.id,
@@ -147,6 +116,10 @@ async def list_drawings(
     status: DrawingStatus | None = Query(None),
     document_id: uuid.UUID | None = Query(None),
     drawing_number: str | None = Query(None),
+    drawing_type: str | None = Query(None, description="Filter by drawing type: detail|assembly|section|weld"),
+    part_class: str | None = Query(None, description="Filter by part class: shaft|housing|etc."),
+    format: str | None = Query(None, description="Filter by file format: pdf|dxf|dwg|step|etc."),
+    analysis_error: bool | None = Query(None, description="If True, only drawings with analysis errors"),
     db: AsyncSession = Depends(get_db),
 ) -> DrawingListResponse:
     q = select(Drawing)
@@ -156,6 +129,16 @@ async def list_drawings(
         q = q.where(Drawing.document_id == document_id)
     if drawing_number:
         q = q.where(Drawing.drawing_number.ilike(f"%{drawing_number}%"))
+    if drawing_type:
+        q = q.where(Drawing.drawing_type == drawing_type)
+    if part_class:
+        q = q.where(Drawing.part_class == part_class)
+    if format:
+        q = q.where(Drawing.format == format)
+    if analysis_error is True:
+        q = q.where(Drawing.analysis_error.isnot(None))
+    elif analysis_error is False:
+        q = q.where(Drawing.analysis_error.is_(None))
 
     total_result = await db.execute(select(func.count()).select_from(q.subquery()))
     total = total_result.scalar_one()
@@ -350,6 +333,104 @@ async def reanalyze_drawing(
         task_id=task_id,
         message="Повторный анализ поставлен в очередь",
     )
+
+
+@router.post(
+    "/bulk-reanalyze",
+    summary="Skill: drawing.bulk_reanalyze — Reanalyze multiple drawings.",
+)
+async def bulk_reanalyze_drawings(
+    drawing_ids: list[uuid.UUID] = __import__("fastapi").Body(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.tasks.drawing_analysis import analyze_drawing
+
+    queued: int = 0
+    not_found: list[str] = []
+
+    for drawing_id in drawing_ids:
+        drawing = await db.get(Drawing, drawing_id)
+        if not drawing:
+            not_found.append(str(drawing_id))
+            continue
+        drawing.status = DrawingStatus.uploaded
+        drawing.analysis_error = None
+        await db.flush()
+        try:
+            task = analyze_drawing.delay(str(drawing_id), None, False, 6, None)
+            drawing.celery_task_id = task.id
+            queued += 1
+        except Exception as exc:
+            logger.warning("bulk_reanalyze_enqueue_failed",
+                           drawing_id=str(drawing_id), error=str(exc))
+
+    await db.commit()
+    logger.info("drawings_bulk_reanalyzed", queued=queued, not_found=len(not_found))
+    return {"queued": queued, "not_found": not_found}
+
+
+@router.get(
+    "/{drawing_id}/download",
+    summary="Skill: drawing.download — Download original drawing file.",
+)
+async def download_drawing_file(
+    drawing_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> __import__("fastapi").responses.Response:
+    import mimetypes
+    from fastapi.responses import Response, StreamingResponse
+
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Чертёж не найден")
+
+    storage_path = (drawing.metadata_ or {}).get("storage_path")
+    if not storage_path:
+        raise HTTPException(status_code=404, detail="Файл чертежа не найден в хранилище")
+
+    try:
+        file_bytes = await _load_from_minio(storage_path)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ошибка загрузки файла: {exc}")
+
+    mime_type, _ = mimetypes.guess_type(drawing.filename)
+    if not mime_type:
+        mime_type = "application/octet-stream"
+
+    return Response(
+        content=file_bytes,
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{drawing.filename}\"",
+        },
+    )
+
+
+@router.patch(
+    "/{drawing_id}/status",
+    response_model=DrawingOut,
+    summary="Skill: drawing.set_status — Manually set drawing status.",
+)
+async def set_drawing_status(
+    drawing_id: uuid.UUID,
+    status: DrawingStatus = __import__("fastapi").Body(..., embed=True),
+    db: AsyncSession = Depends(get_db),
+) -> DrawingOut:
+    _allowed_transitions = {DrawingStatus.needs_review, DrawingStatus.approved, DrawingStatus.uploaded}
+    if status not in _allowed_transitions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недопустимый статус. Разрешены: {[s.value for s in _allowed_transitions]}",
+        )
+
+    drawing = await db.get(Drawing, drawing_id)
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Чертёж не найден")
+
+    drawing.status = status
+    await db.commit()
+    await db.refresh(drawing)
+    return DrawingOut.model_validate(drawing)
 
 
 @router.get(
