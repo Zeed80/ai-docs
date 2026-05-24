@@ -5,9 +5,14 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from backend.app.config import get_settings
-from backend.app.db.base import Base
-from backend.app.domain import models as _models  # noqa: F401
+try:
+    from app.config import settings
+    from app.db.base import Base
+    from app.db import models as _models  # noqa: F401  # registers all ORM models with Base.metadata
+except ImportError:
+    from backend.app.config import settings  # type: ignore[no-redef]
+    from backend.app.db.base import Base  # type: ignore[no-redef]
+    from backend.app.db import models as _models  # type: ignore[no-redef] # noqa: F401
 
 
 config = context.config
@@ -18,9 +23,8 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    settings = get_settings()
     context.configure(
-        url=settings.database_url,
+        url=settings.database_url_sync,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -30,9 +34,8 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    settings = get_settings()
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.database_url
+    configuration["sqlalchemy.url"] = settings.database_url_sync
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",

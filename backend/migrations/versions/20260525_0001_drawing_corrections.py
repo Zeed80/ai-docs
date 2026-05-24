@@ -2,6 +2,7 @@
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect as sa_inspect
 
 revision = "20260525_0001"
 down_revision = "20260524_0002"
@@ -10,6 +11,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if sa_inspect(op.get_bind()).has_table("drawing_feature_corrections"):
+        return
+
     op.create_table(
         "drawing_feature_corrections",
         sa.Column("id", sa.UUID(), nullable=False),

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects import postgresql
 
 revision = "20260522_0001"
@@ -18,6 +19,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if sa_inspect(op.get_bind()).has_table("scenario_traces"):
+        return
+
     op.create_table(
         "scenario_traces",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),

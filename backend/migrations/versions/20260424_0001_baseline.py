@@ -9,8 +9,12 @@ from __future__ import annotations
 
 from alembic import op
 
-from backend.app.db.base import Base
-from backend.app.domain import models as _models  # noqa: F401
+try:
+    from app.db.base import Base
+    from app.db import models as _models  # noqa: F401  # registers all ORM models
+except ImportError:
+    from backend.app.db.base import Base  # type: ignore[no-redef]
+    from backend.app.db import models as _models  # type: ignore[no-redef] # noqa: F401
 
 
 revision = "20260424_0001"
