@@ -300,6 +300,8 @@ class DrawingOut(BaseModel):
     filename: str
     format: str
     is_confidential: bool = True
+    drawing_type: str | None = None
+    part_class: str | None = None
     svg_path: str | None = None
     thumbnail_path: str | None = None
     title_block: dict | None = None

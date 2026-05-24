@@ -13,6 +13,7 @@ import base64
 import json
 import re
 import structlog
+from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
 from app.config import settings
@@ -230,6 +231,7 @@ async def extract_features_from_image(
     view_labels: list[str] | None = None,
     allow_cloud: bool = False,
     few_shot_examples: list[dict] | None = None,
+    classification: DrawingClassification | None = None,
 ) -> dict[str, Any]:
     """Extract drawing features using a VLM from raw image bytes.
 
@@ -246,6 +248,7 @@ async def extract_features_from_image(
         drawing_type: "detail"|"assembly"|"section"|"weld" — selects specialized prompt
         view_labels: Labels for each view image ["front", "side", "A-A"]
         allow_cloud: Allow cloud VLMs (only if drawing.is_confidential=False)
+        classification: Optional Stage-1 classification result to enrich the prompt
     """
     images = [image_bytes] if isinstance(image_bytes, bytes) else image_bytes
     labels = view_labels or [f"view_{i+1}" for i in range(len(images))]
@@ -263,13 +266,22 @@ async def extract_features_from_image(
         )
         few_shot_part = f"\n\n## Уточнения пользователей (приоритетные):\n{lines}"
 
+    classification_ctx = ""
+    if classification:
+        classification_ctx = (
+            f"\n\n## Контекст от предварительной классификации:\n"
+            f"- Тип: {classification.drawing_type} ({classification.part_name})\n"
+            f"- Класс изделия: {classification.part_class}\n"
+            f"- Видимые проекции: {', '.join(classification.views_present)}\n"
+        )
+
     if len(images) > 1:
         view_list = "\n".join(f"- Изображение {i+1}: {labels[i]}" for i in range(len(images)))
         user_message = f"""Ты анализируешь многовидовой технический чертёж. Тебе предоставлены {len(images)} изображений:
 {view_list}
 
 {specialized_prompt}
-{context_part}{few_shot_part}
+{classification_ctx}{context_part}{few_shot_part}
 
 Для каждого элемента укажи source_view из какого вида он извлечён.
 Верни полный JSON без markdown-блоков."""
@@ -277,7 +289,7 @@ async def extract_features_from_image(
         user_message = f"""Ты анализируешь технический чертёж машиностроительной детали.
 
 {specialized_prompt}
-{context_part}{few_shot_part}
+{classification_ctx}{context_part}{few_shot_part}
 
 Верни полный JSON без markdown-блоков."""
 
@@ -499,6 +511,108 @@ def _primary_nominal(feature: dict) -> float | None:
             except (TypeError, ValueError):
                 pass
     return None
+
+
+@dataclass
+class DrawingClassification:
+    drawing_type: str          # "detail" | "assembly" | "section" | "weld"
+    part_class: str            # "shaft" | "plate" | "bracket" | "housing" | "flange" | "gear" | "spring" | "pipe" | "frame" | "cover" | "bushing" | "coupling" | "lever" | "gearbox" | "pump" | "valve" | "bearing_unit" | "hydraulic_cylinder" | "other"
+    part_name: str             # name from title block or inferred
+    views_present: list[str]   # ["front", "side", "top", "section_A-A", ...]
+    confidence: float          # 0.0-1.0
+    notes: str = ""
+
+
+DRAWING_CLASSIFICATION_PROMPT = """Examine this engineering/manufacturing drawing and classify it.
+Return ONLY a JSON object — no markdown fences, no explanation:
+
+{
+  "drawing_type": "detail",
+  "part_class": "shaft",
+  "part_name": "Вал ведомый",
+  "views_present": ["front", "side", "top"],
+  "confidence": 0.90,
+  "notes": ""
+}
+
+drawing_type values:
+  detail   — single part, orthographic views, dimensions, tolerances
+  assembly — multiple parts, position balloons (номера позиций), BOM/parts list
+  section  — cross-section or cut-view (hatching pattern dominant)
+  weld     — welding symbols (ГОСТ 2.312), weld seam callouts
+
+part_class values (for detail drawings):
+  shaft | plate | bracket | housing | flange | gear | spring | pipe | frame | cover | bushing | coupling | lever | other
+
+part_class values (for assembly drawings):
+  gearbox | pump | valve | bearing_unit | hydraulic_cylinder | other
+
+views_present: list of views visible in the image:
+  front | side | top | isometric | section_A-A | section_B-B | detail | unfolded | other
+"""
+
+
+async def classify_drawing_image(
+    image_bytes: bytes,
+    *,
+    router: "AIRouter | None" = None,
+    drawing: "Drawing | None" = None,
+    allow_cloud: bool = False,
+) -> DrawingClassification | None:
+    """Stage-1 VLM call: classify what kind of drawing/part this is.
+
+    Uses a short, focused prompt. Result guides Stage-2 extraction prompt selection.
+    Returns None on failure (caller falls back to text heuristics).
+    """
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
+
+    confidential = True
+    if drawing is not None and hasattr(drawing, "is_confidential"):
+        confidential = drawing.is_confidential
+
+    images_b64 = [base64.b64encode(image_bytes).decode()]
+
+    try:
+        if router is not None:
+            request = AIRequest(
+                task=AITask.DRAWING_ANALYSIS_VLM,
+                messages=[ChatMessage(role="user", content=DRAWING_CLASSIFICATION_PROMPT)],
+                images=images_b64,
+                confidential=confidential,
+                allow_cloud=allow_cloud,
+            )
+            response = await router.run(request)
+            raw_text = response.text or ""
+        else:
+            # Legacy path — direct Ollama call with classification prompt
+            from app.ai.ollama_client import chat_with_images as ollama_vlm
+            _model = getattr(settings, "ollama_model_vlm", getattr(settings, "ollama_model_ocr", "gemma4:e4b"))
+            _resp = await ollama_vlm(
+                prompt=DRAWING_CLASSIFICATION_PROMPT,
+                images=[image_bytes],
+                model=_model,
+                temperature=0.1,
+                max_tokens=512,
+                format_json=True,
+            )
+            raw_text = _resp.text if hasattr(_resp, "text") else str(_resp)
+
+        parsed = _parse_json_response(raw_text)
+        if not isinstance(parsed, dict):
+            logger.warning("classify_drawing_image_invalid_json", raw=raw_text[:300])
+            return None
+
+        return DrawingClassification(
+            drawing_type=str(parsed.get("drawing_type", "detail")),
+            part_class=str(parsed.get("part_class", "other")),
+            part_name=str(parsed.get("part_name", "")),
+            views_present=list(parsed.get("views_present") or []),
+            confidence=float(parsed.get("confidence", 0.5)),
+            notes=str(parsed.get("notes", "")),
+        )
+    except Exception as exc:
+        logger.warning("classify_drawing_image_failed", error=str(exc))
+        return None
 
 
 async def _classify_drawing_type(

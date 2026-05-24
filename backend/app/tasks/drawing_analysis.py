@@ -263,6 +263,39 @@ async def _analyze_drawing_async(
         # Drawing type: explicit override → else default "detail"
         drawing_type = force_drawing_type or "detail"
 
+        # ── Stage 1: Classify drawing type from image (raster + PDF paths) ───────────
+        classification = None
+        if vlm_images is not None:
+            try:
+                from app.ai.drawing_extractor import classify_drawing_image, DrawingClassification
+                _classify_img = vlm_images[0] if isinstance(vlm_images, list) else vlm_images
+                classification = await classify_drawing_image(
+                    _classify_img,
+                    router=router,
+                    drawing=drawing,
+                    allow_cloud=allow_cloud,
+                )
+                if classification:
+                    drawing_type = classification.drawing_type
+                    # Prepend classification context to hint text for Stage-2
+                    _cls_ctx = (
+                        f"Тип чертежа: {classification.drawing_type}\n"
+                        f"Класс изделия: {classification.part_class}\n"
+                        f"Наименование: {classification.part_name}\n"
+                        f"Виды: {', '.join(classification.views_present)}"
+                    )
+                    drawing_text = f"{_cls_ctx}\n\n{drawing_text}" if drawing_text else _cls_ctx
+                    logger.info(
+                        "drawing_classified",
+                        drawing_id=drawing_id,
+                        drawing_type=classification.drawing_type,
+                        part_class=classification.part_class,
+                        part_name=classification.part_name,
+                        confidence=classification.confidence,
+                    )
+            except Exception as _cls_exc:
+                logger.warning("drawing_classification_failed", error=str(_cls_exc))
+
         # ── Few-shot corrections (prioritised over VLM defaults) ─────────────
         few_shot: list[dict] = []
         try:
@@ -294,6 +327,7 @@ async def _analyze_drawing_async(
                 view_labels=view_labels_list,
                 allow_cloud=allow_cloud,
                 few_shot_examples=few_shot or None,
+                classification=classification,
             )
             # If VLM returned nothing meaningful, fall back to text extraction
             if not extraction.get("features") and drawing_text:
@@ -351,6 +385,13 @@ async def _analyze_drawing_async(
             drawing.drawing_number = (
                 title_block.get("drawing_number") or drawing.drawing_number
             )
+            drawing.drawing_type = drawing_type
+            if classification:
+                drawing.part_class = classification.part_class
+                # Merge part_name into title_block if title is missing
+                if not title_block.get("title") and classification.part_name:
+                    title_block["title"] = classification.part_name
+                    drawing.title_block = title_block
             # Persist 3D bounding box from STEP/IGES for blank selection
             if step_geometry and step_geometry.bounding_box_mm:
                 drawing.bounding_box = step_geometry.bounding_box_mm

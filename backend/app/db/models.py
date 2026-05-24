@@ -2089,6 +2089,10 @@ class Drawing(UUIDPrimaryKey, TimestampMixin, Base):
     bounding_box: Mapped[dict | None] = mapped_column(JSON)
     # {x_min, y_min, x_max, y_max, units}
     is_confidential: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    drawing_type: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    # "detail" | "assembly" | "section" | "weld"
+    part_class: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # "shaft" | "plate" | "bracket" | "housing" | "flange" | "gear" | ...
     status: Mapped[DrawingStatus] = mapped_column(
         Enum(DrawingStatus), default=DrawingStatus.uploaded, nullable=False, index=True
     )
