@@ -35,6 +35,7 @@ from app.db.models import (
     NTDCheckRun,
     QuarantineEntry,
 )
+from app.config import settings
 from app.db.session import get_db
 from app.domain.document_deletion import (
     hard_delete_document,
@@ -380,8 +381,31 @@ async def ingest_document(
 ):
     """Skill: doc.ingest — Accept file, store, create Document record."""
     content = await file.read()
-    file_hash = hashlib.sha256(content).hexdigest()
     file_size = len(content)
+
+    # File size limit check (before antivirus — saves resources on huge files)
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    if file_size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "stage": "validation",
+                "file_name": file.filename or "unknown",
+                "error": f"File too large: {file_size // (1024*1024)} MB exceeds limit of {settings.max_upload_size_mb} MB",
+            },
+        )
+
+    if file_size == 0:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "stage": "validation",
+                "file_name": file.filename or "unknown",
+                "error": "Empty file is not allowed",
+            },
+        )
+
+    file_hash = hashlib.sha256(content).hexdigest()
 
     # ClamAV antivirus scan (skipped gracefully if clamd not available)
     from app.security.clamav import scan_bytes

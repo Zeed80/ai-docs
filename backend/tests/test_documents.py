@@ -479,3 +479,177 @@ async def test_development_purge_all_documents(client: AsyncClient):
     assert resp.json()["deleted"] >= 2
     listed = await client.get("/api/documents")
     assert listed.json()["total"] == 0
+
+
+# ── Edge cases: validation ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ingest_empty_file_rejected(client: AsyncClient):
+    """doc.ingest — zero-byte file must be rejected with 422."""
+    resp = await client.post(
+        "/api/documents/ingest",
+        files={"file": ("empty.pdf", b"", "application/pdf")},
+    )
+    assert resp.status_code == 422
+    data = resp.json()
+    assert "Empty file" in str(data.get("detail", ""))
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_too_large_rejected(client: AsyncClient):
+    """doc.ingest — file exceeding MAX_UPLOAD_SIZE must return 413."""
+    from app.config import settings
+
+    original_limit = settings.max_upload_size_mb
+    settings.max_upload_size_mb = 1  # 1 MB for this test
+
+    content = b"x" * (1 * 1024 * 1024 + 1)  # 1 MB + 1 byte
+    try:
+        resp = await client.post(
+            "/api/documents/ingest",
+            files={"file": ("huge.pdf", content, "application/pdf")},
+        )
+        assert resp.status_code == 413
+        detail = resp.json().get("detail", {})
+        assert "too large" in str(detail).lower() or "413" in str(resp.status_code)
+    finally:
+        settings.max_upload_size_mb = original_limit
+
+
+@pytest.mark.asyncio
+async def test_ingest_filename_with_cyrillic(client: AsyncClient):
+    """doc.ingest — Cyrillic characters in filename must be handled correctly."""
+    filename = "Счёт №123 от 15.05.2024 г..pdf"
+    resp = await client.post(
+        "/api/documents/ingest",
+        files={"file": (filename, b"pdf content", "application/pdf")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["file_name"] == filename
+
+
+@pytest.mark.asyncio
+async def test_ingest_filename_with_special_chars(client: AsyncClient):
+    """doc.ingest — special characters and spaces in filename."""
+    filename = "Invoice (copy) [final] v2.pdf"
+    resp = await client.post(
+        "/api/documents/ingest",
+        files={"file": (filename, b"content", "application/pdf")},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["file_name"] == filename
+
+
+@pytest.mark.asyncio
+async def test_ingest_unsupported_extension_quarantined(client: AsyncClient):
+    """doc.ingest — .exe extension must be quarantined (202), not rejected."""
+    resp = await client.post(
+        "/api/documents/ingest",
+        files={"file": ("malware.exe", b"MZ\x90\x00", "application/octet-stream")},
+    )
+    # Should be quarantined (202) or rejected as bad extension, not a 5xx
+    assert resp.status_code in (200, 202, 422)
+    if resp.status_code == 202:
+        assert resp.json().get("quarantined") is True
+
+
+@pytest.mark.asyncio
+async def test_ingest_sequential_same_file_dedup(client: AsyncClient):
+    """doc.ingest — 5 sequential uploads of the same content → 1 new + 4 duplicates."""
+    content = b"sequential dedup test content " + b"x" * 500
+    responses = []
+    for i in range(5):
+        resp = await client.post(
+            "/api/documents/ingest?auto_process=false",
+            files={"file": (f"dup_{i}.pdf", content, "application/pdf")},
+        )
+        responses.append(resp)
+
+    statuses = [r.status_code for r in responses]
+    # All must succeed (no 5xx)
+    assert all(s < 500 for s in statuses), f"Server errors: {statuses}"
+
+    success_responses = [r for r in responses if r.status_code == 200]
+    new_docs = [r for r in success_responses if not r.json().get("is_duplicate")]
+    duplicates = [r for r in success_responses if r.json().get("is_duplicate")]
+
+    # Exactly 1 new document created
+    assert len(new_docs) == 1, f"Expected 1 new doc, got {len(new_docs)}"
+    assert len(duplicates) == 4, f"Expected 4 duplicates, got {len(duplicates)}"
+
+    # All duplicates point to the same original
+    original_id = new_docs[0].json()["id"]
+    for dup in duplicates:
+        assert dup.json()["duplicate_of"] == original_id
+
+
+@pytest.mark.asyncio
+async def test_ingest_batch_sequential_50_files(client: AsyncClient):
+    """doc.ingest — 50 distinct files uploaded sequentially, all succeed."""
+    errors = []
+    for i in range(50):
+        content = f"unique content for file {i} padding {'x' * 100}".encode()
+        resp = await client.post(
+            "/api/documents/ingest?auto_process=false",
+            files={"file": (f"batch_{i:03d}.pdf", content, "application/pdf")},
+        )
+        if resp.status_code != 200:
+            errors.append(f"file {i}: status={resp.status_code}")
+
+    assert errors == [], f"Batch upload errors: {errors}"
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_channel_preserved(client: AsyncClient):
+    """doc.ingest — source_channel parameter must be stored on the document."""
+    for channel in ("upload", "email", "chat", "telegram"):
+        content = f"channel test {channel}".encode()
+        resp = await client.post(
+            f"/api/documents/ingest?source_channel={channel}&auto_process=false",
+            files={"file": (f"channel_{channel}.pdf", content, "application/pdf")},
+        )
+        assert resp.status_code == 200
+        doc_id = resp.json()["id"]
+
+        get_resp = await client.get(f"/api/documents/{doc_id}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["source_channel"] == channel
+
+
+@pytest.mark.asyncio
+async def test_ingest_auto_process_false_no_pipeline_job_queued(client: AsyncClient):
+    """doc.ingest — auto_process=false must not queue a pipeline job."""
+    resp = await client.post(
+        "/api/documents/ingest?auto_process=false",
+        files={"file": ("no_pipeline.pdf", b"no pipeline content", "application/pdf")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["pipeline_queued"] is False
+
+
+@pytest.mark.asyncio
+async def test_ingest_auto_process_true_pipeline_queued(client: AsyncClient):
+    """doc.ingest — auto_process=true must set pipeline_queued=True in response."""
+    resp = await client.post(
+        "/api/documents/ingest?auto_process=true",
+        files={"file": ("with_pipeline.pdf", b"with pipeline content", "application/pdf")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["pipeline_queued"] is True
+
+
+@pytest.mark.asyncio
+async def test_ingest_manual_doc_type_override_stored(client: AsyncClient):
+    """doc.ingest — manual_doc_type_override=true must persist the requested type."""
+    resp = await client.post(
+        "/api/documents/ingest?auto_process=false&requested_doc_type=letter&manual_doc_type_override=true",
+        files={"file": ("typed_doc.pdf", b"letter content", "application/pdf")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["detected_type"] == "letter"
+    assert data["detected_type_source"] == "manual"

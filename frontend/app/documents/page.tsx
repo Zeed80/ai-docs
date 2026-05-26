@@ -13,6 +13,8 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
+const MAX_UPLOAD_MB = 100;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 type WorkspaceTab = "upload" | "registry" | "queue" | "graph" | "ntd";
 
@@ -135,11 +137,15 @@ interface PendingFile {
   /** Type the user confirmed (starts as guessedType, editable) */
   confirmedType: string;
   status: PendingFileStatus;
+  /** Upload progress 0–100 (only during "uploading") */
+  progress?: number;
   /** Actual type returned by backend after upload */
   detectedType?: string;
   detectedTypeSource?: string;
   detail?: string;
   documentId?: string;
+  /** ID of the original document if this is a duplicate */
+  duplicateOf?: string;
 }
 
 interface SearchDocument {
@@ -468,6 +474,27 @@ export default function DocumentsPage() {
       // If batch type is manually locked, use it; otherwise use per-file guess
       const confirmed =
         manualUploadType && uploadDocType ? uploadDocType : guessed;
+      // Client-side size validation — fail fast without hitting the server
+      if (file.size > MAX_UPLOAD_BYTES) {
+        return {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          file,
+          guessedType: guessed,
+          confirmedType: confirmed,
+          status: "error" as PendingFileStatus,
+          detail: `Файл слишком большой: ${(file.size / (1024 * 1024)).toFixed(1)} МБ (лимит ${MAX_UPLOAD_MB} МБ)`,
+        };
+      }
+      if (file.size === 0) {
+        return {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          file,
+          guessedType: guessed,
+          confirmedType: confirmed,
+          status: "error" as PendingFileStatus,
+          detail: "Пустой файл",
+        };
+      }
       return {
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         file,
@@ -495,6 +522,64 @@ export default function DocumentsPage() {
     setPendingFiles((prev) => prev.filter((f) => f.status === "pending"));
   }
 
+  /** Upload a single file entry using XHR (for upload progress tracking). */
+  async function uploadOneFile(entry: PendingFile): Promise<{
+    ok: boolean;
+    status: number;
+    payload: Record<string, unknown>;
+  }> {
+    const docType =
+      manualUploadType && uploadDocType ? uploadDocType : entry.confirmedType;
+    const params = new URLSearchParams({
+      source_channel: sourceChannel || "upload",
+      auto_process: String(autoProcess),
+      auto_verify: String(autoVerify && autoProcess),
+      manual_doc_type_override: String(Boolean(docType && manualUploadType)),
+    });
+    if (docType) params.set("requested_doc_type", docType);
+
+    const form = new FormData();
+    form.append("file", entry.file);
+    const url = `${API}/api/documents/ingest?${params}`;
+
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+
+      // Pass auth cookie automatically (same-origin) — set CSRF header if needed
+      xhr.withCredentials = true;
+
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) {
+          const pct = Math.round((ev.loaded / ev.total) * 100);
+          setPendingFiles((prev) =>
+            prev.map((f) => (f.id === entry.id ? { ...f, progress: pct } : f)),
+          );
+        }
+      };
+
+      xhr.onload = () => {
+        let payload: Record<string, unknown> = {};
+        try {
+          payload = JSON.parse(xhr.responseText);
+        } catch {
+          /* ignore */
+        }
+        resolve({
+          ok: xhr.status >= 200 && xhr.status < 300,
+          status: xhr.status,
+          payload,
+        });
+      };
+
+      xhr.onerror = () => resolve({ ok: false, status: 0, payload: {} });
+      xhr.ontimeout = () =>
+        resolve({ ok: false, status: 0, payload: { detail: "timeout" } });
+
+      xhr.send(form);
+    });
+  }
+
   async function uploadPendingFiles() {
     const toUpload = pendingFiles.filter((f) => f.status === "pending");
     if (!toUpload.length) return;
@@ -506,93 +591,97 @@ export default function DocumentsPage() {
       // Mark as uploading
       setPendingFiles((prev) =>
         prev.map((f) =>
-          f.id === entry.id ? { ...f, status: "uploading" } : f,
+          f.id === entry.id ? { ...f, status: "uploading", progress: 0 } : f,
         ),
       );
 
-      // Effective type: batch manual override > per-file confirmed type
-      const docType =
-        manualUploadType && uploadDocType ? uploadDocType : entry.confirmedType;
+      const { ok, status, payload } = await uploadOneFile(entry).catch(() => ({
+        ok: false,
+        status: 0,
+        payload: {} as Record<string, unknown>,
+      }));
 
-      const params = new URLSearchParams({
-        source_channel: sourceChannel || "upload",
-        auto_process: String(autoProcess),
-        auto_verify: String(autoVerify && autoProcess),
-        manual_doc_type_override: String(Boolean(docType && manualUploadType)),
-      });
-      if (docType) params.set("requested_doc_type", docType);
-
-      const form = new FormData();
-      form.append("file", entry.file);
-      const response = await mutFetch(`${API}/api/documents/ingest?${params}`, {
-        method: "POST",
-        body: form,
-      }).catch(() => null);
-
-      if (!response) {
-        setPendingFiles((prev) =>
-          prev.map((f) =>
-            f.id === entry.id
-              ? { ...f, status: "error", detail: "backend недоступен" }
-              : f,
-          ),
-        );
-        continue;
-      }
-
-      const payload = await response.json().catch(() => ({}));
-
-      if (response.status === 202 || payload.quarantined) {
-        setPendingFiles((prev) =>
-          prev.map((f) =>
-            f.id === entry.id
-              ? {
-                  ...f,
-                  status: "quarantined",
-                  detail: payload.reason ?? "карантин",
-                }
-              : f,
-          ),
-        );
-      } else if (response.ok && payload.is_duplicate) {
-        setPendingFiles((prev) =>
-          prev.map((f) =>
-            f.id === entry.id
-              ? {
-                  ...f,
-                  status: "duplicate",
-                  detail: `дубликат ${String(payload.duplicate_of).slice(0, 8)}`,
-                }
-              : f,
-          ),
-        );
-      } else if (response.ok) {
-        if (payload.id) uploadedIds.push(payload.id);
-        setPendingFiles((prev) =>
-          prev.map((f) =>
-            f.id === entry.id
-              ? {
-                  ...f,
-                  status: "done",
-                  detail: payload.pipeline_queued
-                    ? "пайплайн запущен"
-                    : "сохранён",
-                  detectedType: payload.detected_type ?? undefined,
-                  detectedTypeSource: payload.detected_type_source ?? undefined,
-                  documentId: payload.id,
-                }
-              : f,
-          ),
-        );
-      } else {
+      if (status === 0) {
         setPendingFiles((prev) =>
           prev.map((f) =>
             f.id === entry.id
               ? {
                   ...f,
                   status: "error",
-                  detail: payload.detail ?? `HTTP ${response.status}`,
+                  progress: undefined,
+                  detail: "backend недоступен",
                 }
+              : f,
+          ),
+        );
+        continue;
+      }
+
+      if (status === 202 || payload.quarantined) {
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === entry.id
+              ? {
+                  ...f,
+                  status: "quarantined",
+                  progress: undefined,
+                  detail: String(payload.reason ?? "карантин"),
+                }
+              : f,
+          ),
+        );
+      } else if (ok && payload.is_duplicate) {
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === entry.id
+              ? {
+                  ...f,
+                  status: "duplicate",
+                  progress: undefined,
+                  detail: `дубликат`,
+                  duplicateOf: payload.duplicate_of
+                    ? String(payload.duplicate_of)
+                    : undefined,
+                }
+              : f,
+          ),
+        );
+      } else if (ok) {
+        if (payload.id) uploadedIds.push(String(payload.id));
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === entry.id
+              ? {
+                  ...f,
+                  status: "done",
+                  progress: undefined,
+                  detail: payload.pipeline_queued
+                    ? "пайплайн запущен"
+                    : "сохранён",
+                  detectedType: payload.detected_type
+                    ? String(payload.detected_type)
+                    : undefined,
+                  detectedTypeSource: payload.detected_type_source
+                    ? String(payload.detected_type_source)
+                    : undefined,
+                  documentId: payload.id ? String(payload.id) : undefined,
+                }
+              : f,
+          ),
+        );
+      } else {
+        const errDetail = payload.detail;
+        const detail =
+          typeof errDetail === "object" && errDetail !== null
+            ? String(
+                (errDetail as Record<string, unknown>).error ??
+                  `HTTP ${status}`,
+              )
+            : String(errDetail ?? `HTTP ${status}`);
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === entry.id
+              ? { ...f, status: "error", progress: undefined, detail }
               : f,
           ),
         );
@@ -601,13 +690,24 @@ export default function DocumentsPage() {
 
     setUploading(false);
     const hasErrors = pendingFiles.some((f) => f.status === "error");
-    setMessage(hasErrors ? "Есть ошибки" : "Готово");
+    setMessage(hasErrors ? "Есть ошибки загрузки" : "Готово");
     await loadWorkspace();
     if (uploadedIds.length) {
       setSelectedIds(new Set(uploadedIds));
       setSelectedId(uploadedIds[uploadedIds.length - 1]);
       setTab(autoProcess ? "queue" : "registry");
     }
+  }
+
+  /** Retry uploading a single failed file. */
+  function retryFile(id: string) {
+    setPendingFiles((prev) =>
+      prev.map((f) =>
+        f.id === id && f.status === "error"
+          ? { ...f, status: "pending", detail: undefined, progress: undefined }
+          : f,
+      ),
+    );
   }
 
   async function runAction(action: string, fn: () => Promise<unknown>) {
@@ -796,6 +896,7 @@ export default function DocumentsPage() {
               onSetFileType={setQueueFileType}
               onUpload={uploadPendingFiles}
               onClearDone={clearDoneFromQueue}
+              onRetryFile={retryFile}
             />
           )}
 
@@ -1050,6 +1151,7 @@ function UploadPanel({
   onSetFileType,
   onUpload,
   onClearDone,
+  onRetryFile,
 }: {
   dragging: boolean;
   uploading: boolean;
@@ -1069,6 +1171,7 @@ function UploadPanel({
   onSetFileType: (id: string, type: string) => void;
   onUpload: () => void;
   onClearDone: () => void;
+  onRetryFile: (id: string) => void;
 }) {
   const pendingCount = pendingFiles.filter(
     (f) => f.status === "pending",
@@ -1239,6 +1342,17 @@ function UploadPanel({
                         )}
                       </div>
 
+                      {/* Upload progress bar */}
+                      {pf.status === "uploading" &&
+                        pf.progress !== undefined && (
+                          <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-slate-700">
+                            <div
+                              className="h-full rounded-full bg-blue-500 transition-all duration-150"
+                              style={{ width: `${pf.progress}%` }}
+                            />
+                          </div>
+                        )}
+
                       {/* Result detail */}
                       {pf.detail && (
                         <div
@@ -1252,21 +1366,42 @@ function UploadPanel({
                                   : "text-emerald-400"
                           }`}
                         >
-                          {pf.detail}
+                          {pf.status === "duplicate" && pf.duplicateOf ? (
+                            <Link
+                              href={`/documents?id=${pf.duplicateOf}`}
+                              className="underline hover:text-slate-300"
+                              title="Открыть оригинал"
+                            >
+                              дубликат →
+                            </Link>
+                          ) : (
+                            pf.detail
+                          )}
                         </div>
                       )}
                     </div>
 
-                    {/* Remove button (only for pending) */}
-                    {pf.status === "pending" && (
-                      <button
-                        onClick={() => onRemoveFile(pf.id)}
-                        className="ml-1 shrink-0 text-slate-600 hover:text-red-400"
-                        title="Убрать из очереди"
-                      >
-                        ×
-                      </button>
-                    )}
+                    {/* Action buttons */}
+                    <div className="ml-1 flex shrink-0 items-center gap-1">
+                      {pf.status === "error" && (
+                        <button
+                          onClick={() => onRetryFile(pf.id)}
+                          className="text-slate-500 hover:text-blue-400"
+                          title="Повторить загрузку"
+                        >
+                          ↺
+                        </button>
+                      )}
+                      {pf.status === "pending" && (
+                        <button
+                          onClick={() => onRemoveFile(pf.id)}
+                          className="text-slate-600 hover:text-red-400"
+                          title="Убрать из очереди"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}

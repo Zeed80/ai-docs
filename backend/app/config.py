@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     telegram_notifications_chat_id: str = ""  # default chat for push notifications
     telegram_notifications_enabled: bool = False
 
+    # Upload limits
+    max_upload_size_mb: int = 100       # max single file size in MB
+    max_batch_size: int = 50            # max files per batch upload
+
     # Celery beat schedules (intervals in seconds or minutes)
     imap_poll_interval_minutes: int = 5
     approval_escalation_interval_seconds: int = 900  # 15 minutes
