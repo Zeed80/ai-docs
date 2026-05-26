@@ -10,6 +10,7 @@ interface ExtractionPanelProps {
   onFieldFocus: (fieldName: string) => void;
   onCorrect: (fieldName: string, value: string) => void;
   disabled?: boolean;
+  heatmapEnabled?: boolean;
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -114,6 +115,7 @@ interface FieldRowProps {
   field: ExtractionField;
   isActive: boolean;
   disabled: boolean;
+  heatmapEnabled: boolean;
   onFocus: () => void;
   onCorrect: (value: string) => void;
 }
@@ -122,6 +124,7 @@ function FieldRow({
   field,
   isActive,
   disabled,
+  heatmapEnabled,
   onFocus,
   onCorrect,
 }: FieldRowProps) {
@@ -129,7 +132,8 @@ function FieldRow({
   const [editValue, setEditValue] = useState("");
   const [ruleMade, setRuleMade] = useState(false);
   const [ruleLoading, setRuleLoading] = useState(false);
-  const isLow = field.confidence != null && field.confidence < 0.6;
+  const isLow =
+    heatmapEnabled && field.confidence != null && field.confidence < 0.6;
 
   function startEdit() {
     setEditing(true);
@@ -270,6 +274,7 @@ export function ExtractionPanel({
   onFieldFocus,
   onCorrect,
   disabled = false,
+  heatmapEnabled = true,
 }: ExtractionPanelProps) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
     bank: true,
@@ -361,6 +366,7 @@ export function ExtractionPanel({
                       field={field}
                       isActive={activeField === field.field_name}
                       disabled={disabled}
+                      heatmapEnabled={heatmapEnabled}
                       onFocus={() => onFieldFocus(field.field_name)}
                       onCorrect={(v) => onCorrect(field.field_name, v)}
                     />
@@ -386,6 +392,7 @@ export function ExtractionPanel({
                   field={field}
                   isActive={activeField === field.field_name}
                   disabled={disabled}
+                  heatmapEnabled={heatmapEnabled}
                   onFocus={() => onFieldFocus(field.field_name)}
                   onCorrect={(v) => onCorrect(field.field_name, v)}
                 />

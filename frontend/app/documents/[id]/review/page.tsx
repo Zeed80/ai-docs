@@ -51,6 +51,8 @@ export default function ReviewPage() {
     useState<NTDCheckAvailability | null>(null);
   const [ntdFindings, setNtdFindings] = useState<NTDFinding[]>([]);
   const [toast, setToast] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const [heatmapEnabled, setHeatmapEnabled] = useState(true);
   const [streak, setStreak] = useState<ReviewQueue>(getQueue());
   const [priceCheck, setPriceCheck] = useState<{
     supplier_name: string | null;
@@ -194,7 +196,11 @@ export default function ReviewPage() {
 
       switch (e.key) {
         case "Escape":
-          router.push(`/documents/${documentId}`);
+          if (showHelp) {
+            setShowHelp(false);
+          } else {
+            router.push(`/documents/${documentId}`);
+          }
           break;
         case "a":
           if (!e.ctrlKey && !e.metaKey) handleApprove();
@@ -231,6 +237,21 @@ export default function ReviewPage() {
           }
           break;
         }
+        case "?":
+          e.preventDefault();
+          setShowHelp((v) => !v);
+          break;
+        case "h":
+          if (!e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            setHeatmapEnabled((v) => !v);
+            showToast(
+              heatmapEnabled
+                ? "Тепловая карта выключена"
+                : "Тепловая карта включена",
+            );
+          }
+          break;
       }
     }
 
@@ -532,30 +553,79 @@ export default function ReviewPage() {
               Осталось: {queueRemaining}
             </span>
           )}
-          <div className="text-xs text-slate-500">
-            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800">
-              j
-            </kbd>
-            /
-            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800">
-              k
-            </kbd>{" "}
-            поля
-            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800 ml-2">
-              a
-            </kbd>{" "}
-            утвердить
-            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800 ml-2">
-              n
-            </kbd>{" "}
-            пропустить
-            <kbd className="px-1 border border-slate-700 rounded text-[10px] bg-slate-800 ml-2">
-              Esc
-            </kbd>{" "}
-            выход
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setHeatmapEnabled((v) => !v);
+              }}
+              title="Тепловая карта уверенности (h)"
+              className={`px-2 py-1 rounded text-[11px] border transition-colors ${
+                heatmapEnabled
+                  ? "bg-amber-900/50 border-amber-600 text-amber-300"
+                  : "bg-slate-800 border-slate-600 text-slate-400 hover:border-slate-500"
+              }`}
+            >
+              🌡 Тепловая карта
+            </button>
+            <button
+              onClick={() => setShowHelp(true)}
+              title="Горячие клавиши (?)"
+              className="px-2 py-1 rounded text-[11px] bg-slate-800 border border-slate-600 text-slate-400 hover:border-slate-500 transition-colors"
+            >
+              ?
+            </button>
           </div>
         </div>
       </div>
+
+      {/* Keyboard help overlay */}
+      {showHelp && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onClick={() => setShowHelp(false)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-6 w-96 max-w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold text-slate-100">
+                Горячие клавиши
+              </h2>
+              <button
+                onClick={() => setShowHelp(false)}
+                className="text-slate-400 hover:text-slate-200 text-lg"
+              >
+                ×
+              </button>
+            </div>
+            <table className="w-full text-sm">
+              <tbody className="divide-y divide-slate-800">
+                {[
+                  ["j / k", "Следующее / предыдущее поле"],
+                  ["a", "Утвердить документ"],
+                  ["n", "Пропустить (без решения)"],
+                  ["h", "Вкл/выкл тепловую карту"],
+                  ["Esc", "Выход к карточке документа"],
+                  ["?", "Показать эту справку"],
+                ].map(([key, desc]) => (
+                  <tr key={key} className="py-2">
+                    <td className="py-1.5 pr-4 w-24">
+                      <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-600 rounded text-[11px] text-slate-200 font-mono">
+                        {key}
+                      </kbd>
+                    </td>
+                    <td className="py-1.5 text-slate-300">{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-4 text-[11px] text-slate-500 text-center">
+              Нажмите Esc или кликните за пределами для закрытия
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Validation errors banner */}
       {validation && !validation.is_valid && (
@@ -661,6 +731,7 @@ export default function ReviewPage() {
               onFieldFocus={setActiveField}
               onCorrect={handleCorrect}
               disabled={doc.status === "approved" || doc.status === "rejected"}
+              heatmapEnabled={heatmapEnabled}
             />
           </div>
 

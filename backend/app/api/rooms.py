@@ -42,6 +42,8 @@ class RoomCreate(BaseModel):
 
 
 class RoomOut(BaseModel):
+    model_config = {"from_attributes": True}
+
     id: uuid.UUID
     name: str
     type: str
@@ -51,9 +53,6 @@ class RoomOut(BaseModel):
     unread_count: int = 0
     member_count: int = 0
     last_message_at: datetime | None = None
-
-    class Config:
-        from_attributes = True
 
 
 class RoomListResponse(BaseModel):

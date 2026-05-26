@@ -89,7 +89,7 @@ async def test_dev_mode_returns_dev_user():
 
     with patch("app.auth.jwt.settings") as mock_settings:
         mock_settings.auth_enabled = False
-        user = await get_current_user(mock_request, None, None)
+        user = await get_current_user(mock_request, None)
 
     assert user is _DEV_USER
     assert UserRole.admin in user.roles
@@ -104,7 +104,7 @@ async def test_auth_enabled_no_token_raises_401():
     with patch("app.auth.jwt.settings") as mock_settings:
         mock_settings.auth_enabled = True
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(mock_request, None, None)
+            await get_current_user(mock_request, None)
 
     assert exc_info.value.status_code == 401
 

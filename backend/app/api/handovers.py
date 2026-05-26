@@ -26,6 +26,8 @@ class HandoverCreate(BaseModel):
 
 
 class HandoverOut(BaseModel):
+    model_config = {"from_attributes": True}
+
     id: uuid.UUID
     entity_type: str
     entity_id: uuid.UUID
@@ -34,9 +36,6 @@ class HandoverOut(BaseModel):
     comment: str | None
     status: str
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 @router.post("", response_model=HandoverOut, status_code=201)

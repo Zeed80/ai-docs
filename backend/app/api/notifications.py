@@ -20,6 +20,8 @@ logger = structlog.get_logger()
 
 
 class NotificationOut(BaseModel):
+    model_config = {"from_attributes": True}
+
     id: uuid.UUID
     type: str
     title: str
@@ -29,9 +31,6 @@ class NotificationOut(BaseModel):
     action_url: str | None
     is_read: bool
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 class NotificationListResponse(BaseModel):
