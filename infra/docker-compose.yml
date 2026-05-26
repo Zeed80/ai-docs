@@ -34,6 +34,13 @@ x-backend-env: &backend-env
   TELEGRAM_NOTIFICATIONS_CHAT_ID: ${TELEGRAM_NOTIFICATIONS_CHAT_ID:-}
   TELEGRAM_NOTIFICATIONS_ENABLED: ${TELEGRAM_NOTIFICATIONS_ENABLED:-false}
   AIAGENT_ROOT: /aiagent
+  LLAMACPP_URL: ${LLAMACPP_URL:-http://llama-server:8080}
+  LLAMACPP_MODEL: ${LLAMACPP_MODEL:-/models/model.gguf}
+  LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-8192}
+  LLAMACPP_KV_CACHE_TYPE: ${LLAMACPP_KV_CACHE_TYPE:-q8_0}
+  LLAMACPP_N_GPU_LAYERS: ${LLAMACPP_N_GPU_LAYERS:--1}
+  LLAMACPP_PARALLEL: ${LLAMACPP_PARALLEL:-4}
+  LLAMACPP_FLASH_ATTN: ${LLAMACPP_FLASH_ATTN:-true}
 
 x-authentik-env: &authentik-env
   AUTHENTIK_REDIS__HOST: redis
@@ -147,6 +154,49 @@ services:
     # Host 11434 is often already taken by a system Ollama — publish on 11435 instead
     ports:
       - "11435:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - app
+
+  # === AI (Local) — llama.cpp server ===
+  # Profile: embedded-llamacpp (opt-in, same as embedded-ollama)
+  # Usage: docker compose --profile embedded-llamacpp up
+  # Mount your GGUF models: -v /path/to/models:/models
+  # GPU image variant: ghcr.io/ggml-org/llama.cpp:server-cuda  (NVIDIA)
+  #                    ghcr.io/ggml-org/llama.cpp:server-rocm   (AMD)
+  llama-server:
+    image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    profiles:
+      - embedded-llamacpp
+    volumes:
+      - llamacpp_models:/models
+    ports:
+      - "11436:8080"
+    command: >
+      --host 0.0.0.0
+      --port 8080
+      --model ${LLAMACPP_MODEL:-/models/model.gguf}
+      --ctx-size ${LLAMACPP_CTX_SIZE:-8192}
+      --n-gpu-layers ${LLAMACPP_N_GPU_LAYERS:--1}
+      --kv-cache-type ${LLAMACPP_KV_CACHE_TYPE:-q8_0}
+      --parallel ${LLAMACPP_PARALLEL:-4}
+      --flash-attn
+      --metrics
+      --log-disable
+    environment:
+      GGML_CUDA_NO_PINNED: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     deploy:
       resources:
         reservations:
@@ -317,6 +367,7 @@ volumes:
   minio_data:
   qdrant_data:
   ollama_data:
+  llamacpp_models:
   traefik_acme:
   authentik_db_data:
   authentik_media:

@@ -95,6 +95,15 @@ class Settings(BaseSettings):
     telegram_notifications_chat_id: str = ""  # default chat for push notifications
     telegram_notifications_enabled: bool = False
 
+    # llama.cpp server (optional embedded backend)
+    llamacpp_url: str = "http://localhost:11436"
+    llamacpp_model: str = "/models/model.gguf"
+    llamacpp_ctx_size: int = 8192
+    llamacpp_kv_cache_type: str = "q8_0"   # q8_0 = TurboQuant, f16 = full precision
+    llamacpp_n_gpu_layers: int = -1          # -1 = all layers on GPU
+    llamacpp_parallel: int = 4
+    llamacpp_flash_attn: bool = True
+
     # Upload limits
     max_upload_size_mb: int = 100       # max single file size in MB
     max_batch_size: int = 50            # max files per batch upload

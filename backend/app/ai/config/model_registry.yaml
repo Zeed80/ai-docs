@@ -3,6 +3,11 @@ providers:
     base_url: "http://localhost:11434"
     timeout_seconds: 180
     is_local: true
+  llamacpp:
+    base_url: "http://localhost:11436"
+    timeout_seconds: 300
+    is_local: true
+    notes: "llama.cpp server — OpenAI-compatible API. Start with: docker compose --profile embedded-llamacpp up"
   vllm:
     base_url: "http://localhost:8000"
     timeout_seconds: 180
@@ -74,6 +79,19 @@ models:
     quality_score: 0.0
     speed_score: 0.0
     notes: "Optional vLLM long-context profile. NOT used by any active route. Set provider_model and promote to production after benchmarking. VLM/vision tasks use gemma4_e4b_ollama via invoice_ocr and drawing_analysis routes."
+  llamacpp_active:
+    provider: "llamacpp"
+    provider_model: "local"
+    status: "candidate"
+    modalities: ["text"]
+    max_context_tokens: 8192
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.0
+    speed_score: 0.0
+    notes: "Active llama.cpp model (GGUF). Model path and context size configured via llamacpp settings. Enable after loading a GGUF model."
+
   local_embedding_ollama:
     provider: "ollama"
     provider_model: "nomic-embed-text"

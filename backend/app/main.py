@@ -82,6 +82,7 @@ from app.api import dynamic_skill_runner
 from app.api import handovers, notifications, rooms
 from app.api import setup as setup_api
 from app.api.capability_router import router as capability_router
+from app.api import llamacpp_api
 from app.config import settings
 from app.db.session import engine  # lazy proxy
 import app.core.metrics  # noqa: F401 — registers Prometheus metrics at startup
@@ -265,6 +266,7 @@ def create_app() -> FastAPI:
         dependencies=_auth,
     )
     app.include_router(ai_settings.router, prefix="/api/ai", tags=["ai"], dependencies=_auth)
+    app.include_router(llamacpp_api.router, prefix="/api/llamacpp", tags=["llamacpp"], dependencies=_auth)
     app.include_router(agent_actions.router, prefix="/api/agent-actions", tags=["agent"], dependencies=_auth)
     app.include_router(export.router, prefix="/api", tags=["export"], dependencies=_auth)
     app.include_router(draft_email.router, prefix="/api/draft-emails", tags=["email"], dependencies=_auth)
