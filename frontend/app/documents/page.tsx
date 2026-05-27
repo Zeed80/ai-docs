@@ -308,6 +308,10 @@ function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
   return [value, set];
 }
 
+// Guard: redirect to login only once per page load (prevents redirect storm
+// when multiple parallel requests all get 401 simultaneously).
+let _redirectingToLogin = false;
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await mutFetch(`${API}${path}`, {
     ...init,
@@ -317,9 +321,11 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (response.status === 401 && typeof window !== "undefined") {
-    // Session expired — redirect to login, then come back
-    window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname)}`;
-    // Throw so the caller knows this failed (the redirect is async)
+    if (!_redirectingToLogin) {
+      _redirectingToLogin = true;
+      // Session expired — redirect to login page once, then come back
+      window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname)}`;
+    }
     throw new Error(
       "Сессия истекла. Выполняется перенаправление на страницу входа…",
     );

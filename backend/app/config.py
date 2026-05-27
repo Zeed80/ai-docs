@@ -60,8 +60,8 @@ class Settings(BaseSettings):
 
     # Security
     csrf_secret: str = "dev-csrf-secret"   # set to secrets.token_hex(32) in production
-    rate_limit_login_per_minute: int = 5
-    rate_limit_api_per_minute: int = 200
+    rate_limit_login_per_minute: int = 30  # 30/min = 1 request per 2s; plenty for dev, still safe
+    rate_limit_api_per_minute: int = 600   # 10 req/s per IP — generous for rich SPA polling
     csp_enabled: bool = False              # enable in production
 
     # Admin bootstrap — email of the first admin user (auto-promoted on first login if no admin exists)
