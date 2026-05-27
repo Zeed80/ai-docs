@@ -848,9 +848,14 @@ async def _call_openai_streaming(
     if tools:
         payload["tools"] = tools
     if _thinking_disabled(config, disable_thinking):
-        # OpenAI-compatible providers may honor this to suppress reasoning traces
-        # and force concise direct outputs on "thinking" models.
-        payload["reasoning"] = {"enabled": False}
+        if provider == "llamacpp":
+            # llama.cpp uses chat_template_kwargs to control thinking in Qwen3/thinking models.
+            # The generic OpenAI "reasoning" field is NOT supported by llama.cpp.
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        else:
+            # OpenAI-compatible providers (OpenRouter, DeepSeek, etc.) use this
+            # to suppress reasoning traces on thinking models.
+            payload["reasoning"] = {"enabled": False}
 
     full_content = ""
     scrubber = StreamingContextScrubber()

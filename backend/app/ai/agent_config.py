@@ -50,7 +50,7 @@ class BuiltinAgentConfig(BaseModel):
     backend_url: str = "http://localhost:8000"
     temperature: float = Field(0.1, ge=0.0, le=2.0)
     max_steps: int = Field(10, ge=1, le=30)
-    llm_timeout_seconds: int = Field(180, ge=10, le=1800)
+    llm_timeout_seconds: int = Field(600, ge=10, le=1800)
     backend_timeout_seconds: int = Field(30, ge=5, le=300)
     approval_timeout_seconds: int = Field(120, ge=10, le=1800)
     max_worker_steps: int = Field(12, ge=1, le=60)
