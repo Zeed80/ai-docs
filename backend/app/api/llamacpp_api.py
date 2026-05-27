@@ -224,20 +224,36 @@ async def get_llamacpp_status() -> LlamaCppStatus:
     model_loaded = None
     ctx_size = None
     version = None
+    slots_idle = None
+    slots_processing = None
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
+            # props: model path, total slots
             rp = await client.get(f"{base}/props")
             if rp.status_code == 200:
                 props = rp.json()
-                model_loaded = props.get("model_path") or props.get("model")
-                ctx_size = props.get("n_ctx")
+                model_loaded = props.get("model_path") or props.get("model_alias")
                 bi = props.get("build_info")
                 version = bi.get("version") if isinstance(bi, dict) else None
+
+            # v1/models: n_ctx from meta
+            rm = await client.get(f"{base}/v1/models")
+            if rm.status_code == 200:
+                models_data = (rm.json().get("data") or [])
+                if models_data:
+                    ctx_size = (models_data[0].get("meta") or {}).get("n_ctx")
+
+            # slots: idle/processing count
+            rs = await client.get(f"{base}/slots")
+            if rs.status_code == 200:
+                slots = rs.json() or []
+                slots_idle = sum(1 for s in slots if not s.get("is_processing"))
+                slots_processing = sum(1 for s in slots if s.get("is_processing"))
     except Exception:
         pass
 
     return LlamaCppStatus(running=True, url=base, model_loaded=model_loaded, ctx_size=ctx_size,
-                          slots_idle=health.get("slots_idle"), slots_processing=health.get("slots_processing"),
+                          slots_idle=slots_idle, slots_processing=slots_processing,
                           version=version, kv_cache_type=cfg.get("kv_cache_type"))
 
 
