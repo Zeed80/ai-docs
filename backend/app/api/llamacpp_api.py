@@ -452,21 +452,36 @@ async def search_ms_models(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=50),
 ) -> list[MSModelResult]:
-    """Search ModelScope for GGUF models."""
+    """Search ModelScope for GGUF models (requires ModelScope token)."""
+    token = _load_tokens().get("modelscope", "")
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="ModelScope token required. Add it in the Tokens tab.",
+        )
+    headers = {"User-Agent": "llama-manager/1.0", "Authorization": f"token {token}"}
     try:
-        async with httpx.AsyncClient(timeout=15.0, headers=_ms_headers()) as client:
-            r = await client.get(
+        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+            r = await client.post(
                 f"{MS_API}/models",
-                params={"name": q, "task": "text-generation", "PageSize": limit},
+                json={"Name": q, "PageSize": limit, "PageNumber": 1},
             )
+            if r.status_code in (401, 403):
+                raise HTTPException(status_code=401, detail="Invalid ModelScope token.")
             if r.status_code == 404:
                 return []
             r.raise_for_status()
             data = r.json()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"ModelScope API error: {e}")
 
-    models_raw = (data.get("Data") or {}).get("Models") or data.get("data") or []
+    models_raw = (
+        (data.get("Data") or {}).get("Models")
+        or data.get("data")
+        or []
+    )
     results: list[MSModelResult] = []
     for m in models_raw:
         repo_id = m.get("Path") or m.get("name") or ""

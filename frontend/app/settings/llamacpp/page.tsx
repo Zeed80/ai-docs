@@ -168,10 +168,19 @@ function SearchTab({
         );
         setHfResults(Array.isArray(r) ? r : []);
       } else {
-        const r = await fetch(
+        const resp = await fetch(
           `${API}/api/llamacpp/ms/search?q=${encodeURIComponent(query)}&limit=24`,
-        ).then((r) => r.json());
-        setMsResults(Array.isArray(r) ? r : []);
+        );
+        if (resp.status === 401) {
+          const err = await resp.json().catch(() => ({}));
+          showToast(
+            err.detail ||
+              "ModelScope: необходим токен — добавьте его во вкладке Токены",
+          );
+        } else {
+          const r = await resp.json();
+          setMsResults(Array.isArray(r) ? r : []);
+        }
       }
     } catch {
       showToast("Ошибка поиска");
