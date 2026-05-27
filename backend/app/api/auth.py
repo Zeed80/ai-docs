@@ -171,12 +171,30 @@ async def callback(
 
     logger.info("oidc_callback_success")
 
+    # Determine cookie lifetime from token's 'expires_in' claim (or exp - iat),
+    # falling back to a generous 8 hours for development.
+    _token_ttl = int(tokens.get("expires_in", 0))
+    if not _token_ttl:
+        # Parse exp from JWT directly (no signature check needed here — already verified above)
+        try:
+            import base64 as _b64
+            import json as _json
+            _payload_b64 = access_token.split(".")[1]
+            _payload_b64 += "=" * (-len(_payload_b64) % 4)
+            _claims = _json.loads(_b64.urlsafe_b64decode(_payload_b64))
+            import time as _time
+            _token_ttl = max(0, int(_claims.get("exp", 0)) - int(_time.time()))
+        except Exception:
+            pass
+    # Default to 8 hours if we couldn't determine expiry from the token
+    _cookie_max_age = _token_ttl if _token_ttl > 60 else 28800
+
     is_production = settings.app_env == "production"
     cookie_opts = dict(
         httponly=True,
         secure=is_production,
         samesite="lax",
-        max_age=3600,
+        max_age=_cookie_max_age,
     )
 
     frontend_base = _frontend_base_from_uri(redirect_uri)
