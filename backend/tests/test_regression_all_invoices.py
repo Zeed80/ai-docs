@@ -124,6 +124,7 @@ async def test_ingest_real_invoice(invoice_path: Path, client: AsyncClient):
 
 @pytest.mark.skipif(not _ALL_INVOICES, reason="example-invoices/ directory not found")
 @pytest.mark.asyncio
+@pytest.mark.timeout(3600)
 async def test_bulk_ingest_all_invoices_no_server_errors(client: AsyncClient):
     """Upload all example invoices sequentially; count outcomes, assert 0 server errors."""
     results: dict[str, list[str]] = {
@@ -231,6 +232,7 @@ async def test_dedup_different_name_same_content(client: AsyncClient):
 
 @pytest.mark.skipif(not _ALL_INVOICES, reason="example-invoices/ directory not found")
 @pytest.mark.asyncio
+@pytest.mark.timeout(300)
 async def test_pdf_invoices_not_classified_as_drawing(client: AsyncClient):
     """PDF invoices must not be auto-classified as drawing type."""
     pdf_invoices = [p for p in _ALL_INVOICES if p.suffix.lower() == ".pdf"][:10]
