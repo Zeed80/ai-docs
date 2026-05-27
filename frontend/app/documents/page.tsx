@@ -546,8 +546,15 @@ export default function DocumentsPage() {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
 
-      // Pass auth cookie automatically (same-origin) — set CSRF header if needed
+      // Pass auth cookie automatically (same-origin)
       xhr.withCredentials = true;
+      // CSRF double-submit: read csrf_token cookie and echo it in the header
+      const csrfToken = document.cookie.match(
+        /(?:^|;\s*)csrf_token=([^;]+)/,
+      )?.[1];
+      if (csrfToken) {
+        xhr.setRequestHeader("X-CSRF-Token", decodeURIComponent(csrfToken));
+      }
 
       xhr.upload.onprogress = (ev) => {
         if (ev.lengthComputable) {
