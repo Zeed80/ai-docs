@@ -105,10 +105,12 @@ async def _llm_enrich(context: str, fallback: str) -> str:
             f"Контекст: {context}\n"
             "Ответ только текстом, без кавычек."
         )
+        from app.ai.model_resolver import get_ocr_model as _proactive_get_ocr
+        _p_ocr = _proactive_get_ocr()
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{settings.ollama_url.rstrip('/')}/api/generate",
-                json={"model": settings.ollama_model_ocr, "prompt": prompt, "stream": False},
+                json={"model": _p_ocr.model, "prompt": prompt, "stream": False},
             )
             resp.raise_for_status()
             text = resp.json().get("response", "").strip()

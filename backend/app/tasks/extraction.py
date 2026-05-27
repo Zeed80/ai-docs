@@ -400,9 +400,11 @@ def extract_invoice(self, document_id: str) -> dict:
         field_confs = _apply_normalization_rules(db, field_confs)
 
         # Save DocumentExtraction
+        from app.ai.model_resolver import get_ocr_model as _get_ocr
+        _ocr_cfg = _get_ocr()
         extraction = DocumentExtraction(
             document_id=doc.id,
-            model_name=settings.ollama_model_ocr,
+            model_name=f"{_ocr_cfg.provider}/{_ocr_cfg.model}",
             raw_output=extracted,
             structured_data=extracted,
             overall_confidence=overall_confidence,
@@ -636,12 +638,16 @@ def _get_dxf_text(content: bytes) -> str:
 
 
 def _get_configured_ocr_model() -> str:
-    """Read OCR model name from ai_config.json, fall back to config default."""
-    try:
-        from app.api.ai_settings import get_ai_config
-        return get_ai_config().get("model_ocr") or settings.ollama_model_ocr
-    except Exception:
-        return settings.ollama_model_ocr
+    """Read OCR model name from ai_config (via model_resolver). Legacy: returns only model name."""
+    from app.ai.model_resolver import get_ocr_model
+    return get_ocr_model().model
+
+
+def _get_configured_ocr_model_and_provider() -> tuple[str, str]:
+    """Read OCR model + provider from ai_config (via model_resolver)."""
+    from app.ai.model_resolver import get_ocr_model
+    cfg = get_ocr_model()
+    return cfg.model, cfg.provider
 
 
 _VISION_FALLBACK_MODELS = ["gemma4:e4b", "gemma4:e2b", "gemma4:31b"]
@@ -1356,7 +1362,9 @@ def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUI
             logger.info("supplier_norm_matched", new=new_name, existing=p.name)
             return p.id
 
-    # LLM path
+    # LLM path — use configured OCR model+provider
+    from app.ai.model_resolver import get_ocr_model as _get_ocr_resolver
+    _ocr = _get_ocr_resolver()
     names_list = "\n".join(f"{i + 1}. {p.name}" for i, p in enumerate(existing_parties[:30]))
     prompt = (
         f'Task: decide if the new company is the same legal entity as any in the list.\n'
@@ -1367,18 +1375,34 @@ def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUI
         f'Answer JSON only: {{"match": true/false, "index": <1-based int or null>}}'
     )
     try:
-        resp = httpx.post(
-            f"{str(settings.ollama_url).rstrip('/')}/api/chat",
-            json={
-                "model": settings.ollama_model_ocr,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "options": {"temperature": 0.0},
-            },
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        content = resp.json().get("message", {}).get("content", "")
+        if _ocr.provider == "llamacpp":
+            _llamacpp_url = f"{str(settings.llamacpp_url).rstrip('/v1')}/v1/chat/completions"
+            resp = httpx.post(
+                _llamacpp_url,
+                json={
+                    "model": _ocr.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "temperature": 0.0,
+                    "max_tokens": 64,
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        else:
+            resp = httpx.post(
+                f"{str(settings.ollama_url).rstrip('/')}/api/chat",
+                json={
+                    "model": _ocr.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "options": {"temperature": 0.0},
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            content = resp.json().get("message", {}).get("content", "")
         m = _re.search(r'\{.*?\}', content, _re.DOTALL)
         if m:
             result = _json.loads(m.group())

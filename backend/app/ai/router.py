@@ -96,16 +96,16 @@ _CHAT_TITLE_PROMPT = """Сформулируй краткое название �
 
 
 def _runtime_ocr_model() -> str:
-    """Resolve OCR/extraction model from runtime AI config."""
-    try:
-        from app.api.ai_settings import get_ai_config
+    """Resolve OCR/extraction model name from runtime AI config (legacy helper)."""
+    from app.ai.model_resolver import get_ocr_model
+    return get_ocr_model().model
 
-        model = get_ai_config().get("model_ocr")
-        if model and str(model).strip():
-            return str(model).strip()
-    except Exception:
-        pass
-    return settings.ollama_model_ocr
+
+def _runtime_ocr_model_and_provider() -> tuple[str, str]:
+    """Resolve OCR/extraction model + provider from runtime AI config."""
+    from app.ai.model_resolver import get_ocr_model
+    cfg = get_ocr_model()
+    return cfg.model, cfg.provider
 
 
 def _clean_chat_title(title: str, *, fallback: str) -> str:
@@ -279,42 +279,43 @@ class AIRouter:
         allowed = {tool.name for tool in request.tools}
         return [call for call in response.proposed_tool_calls if call.name in allowed]
 
-    def _ocr_model_name(self) -> str:
-        """Return the currently configured OCR model from ai_config.json, with fallback."""
-        try:
-            from app.api.ai_settings import get_ai_config
-            return get_ai_config().get("model_ocr") or settings.ollama_model_ocr
-        except Exception:
-            return settings.ollama_model_ocr
+    def _ocr_model_and_provider(self) -> tuple[str, str]:
+        """Return (model, provider) for OCR tasks from ai_config."""
+        from app.ai.model_resolver import get_ocr_model
+        cfg = get_ocr_model()
+        return cfg.model, cfg.provider
 
     async def extract_invoice(self, text: str) -> dict:
-        model = self._ocr_model_name()
-        logger.info("extract_invoice_model", model=model)
+        model, provider = self._ocr_model_and_provider()
+        logger.info("extract_invoice_model", model=model, provider=provider)
         prompt = EXTRACT_INVOICE_PROMPT.format(text=text[:8000])
         return await generate_json(
             prompt,
             model=model,
+            provider=provider,
             system=EXTRACT_INVOICE_SYSTEM,
             max_tokens=8192,
             timeout_seconds=180.0,
         )
 
     async def classify_document(self, text: str) -> dict:
-        model = self._ocr_model_name()
-        logger.info("classify_document_model", model=model)
+        model, provider = self._ocr_model_and_provider()
+        logger.info("classify_document_model", model=model, provider=provider)
         prompt = CLASSIFY_PROMPT.format(text=text[:3000])
         return await generate_json(
             prompt,
             model=model,
+            provider=provider,
             system=CLASSIFY_SYSTEM,
         )
 
     async def summarize_document(self, text: str) -> dict:
-        model = self._ocr_model_name()
+        model, provider = self._ocr_model_and_provider()
         prompt = SUMMARIZE_PROMPT.format(text=text[:4000])
         return await generate_json(
             prompt,
             model=model,
+            provider=provider,
             system=SUMMARIZE_SYSTEM,
         )
 
@@ -351,6 +352,8 @@ class AIRouter:
         return _clean_chat_title(response.text or "", fallback=first_message)
 
     async def analyze_email_style(self, emails_text: str, count: int) -> dict:
+        from app.ai.model_resolver import get_ocr_model
+        ocr_cfg = get_ocr_model()
         system = """You are a communication style analyzer for business emails.
 Analyze the writing style of emails and provide recommendations. Respond in JSON only."""
         prompt = f"""Analyze the writing style of these {count} emails:
@@ -368,7 +371,8 @@ Respond with JSON:
 }}"""
         return await generate_json(
             prompt,
-            model=_runtime_ocr_model(),
+            model=ocr_cfg.model,
+            provider=ocr_cfg.provider,
             system=system,
             timeout_seconds=30.0,
         )

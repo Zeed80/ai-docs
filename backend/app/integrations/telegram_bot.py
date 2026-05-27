@@ -189,11 +189,13 @@ class SvetaTelegramBot:
         with open(audio_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
 
+        from app.ai.model_resolver import get_ocr_model as _get_ocr
         from app.config import settings
         import httpx
 
+        _ocr = _get_ocr()
         payload = {
-            "model": settings.ollama_model_ocr,
+            "model": _ocr.model,
             "prompt": "Transcribe the following audio to Russian text.",
             "images": [b64],
             "stream": False,

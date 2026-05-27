@@ -111,13 +111,10 @@ async def _analyze_drawing_async(
     step_geometry = None         # StepGeometryResult from step_extractor (STEP/IGES only)
 
     try:
-        # Resolve VLM model from ai_config (Redis-backed, shared across workers)
-        try:
-            from app.api.ai_settings import get_ai_config
-            ai_cfg = get_ai_config()
-            vlm_model = model or ai_cfg.get("model_vlm") or ai_cfg.get("model_ocr")
-        except Exception:
-            vlm_model = model
+        # Resolve VLM model+provider from ai_config via model_resolver
+        from app.ai.model_resolver import get_vlm_model as _get_vlm
+        _vlm_cfg = _get_vlm()
+        vlm_model = model or _vlm_cfg.model
 
         # Load file from MinIO
         file_bytes = await _load_drawing_file(drawing)

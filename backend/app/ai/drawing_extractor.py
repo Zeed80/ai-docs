@@ -413,12 +413,12 @@ async def _extract_legacy(
     model: str | None,
     user_message: str,
 ) -> dict[str, Any]:
-    """Legacy path: direct Ollama call without router policy enforcement."""
+    """Legacy path: direct call using configured VLM provider."""
+    from app.ai.model_resolver import get_vlm_model
     from app.ai.ollama_client import chat_with_images as ollama_vlm
 
-    effective_model = model or getattr(
-        settings, "ollama_model_vlm", getattr(settings, "ollama_model_ocr", "gemma4:e4b")
-    )
+    vlm_cfg = get_vlm_model()
+    effective_model = model or vlm_cfg.model
 
     try:
         response = await ollama_vlm(
@@ -592,13 +592,14 @@ async def classify_drawing_image(
             response = await router.run(request)
             raw_text = response.text or ""
         else:
-            # Legacy path — direct Ollama call with classification prompt
+            # Legacy path — direct VLM call using configured model
+            from app.ai.model_resolver import get_vlm_model
             from app.ai.ollama_client import chat_with_images as ollama_vlm
-            _model = getattr(settings, "ollama_model_vlm", getattr(settings, "ollama_model_ocr", "gemma4:e4b"))
+            _vlm_cfg = get_vlm_model()
             _resp = await ollama_vlm(
                 prompt=DRAWING_CLASSIFICATION_PROMPT,
                 images=[image_bytes],
-                model=_model,
+                model=_vlm_cfg.model,
                 temperature=0.1,
                 max_tokens=512,
                 format_json=True,
@@ -913,11 +914,11 @@ async def extract_drawing_features(
         drawing_entities: Structured entities from DXF (optional)
         model: Model name (defaults from settings)
     """
+    from app.ai.model_resolver import get_vlm_model
     from app.ai.ollama_client import chat as ollama_chat
 
-    effective_model = model or getattr(
-        settings, "ollama_model_vlm", getattr(settings, "ollama_model_ocr", "gemma4:e4b")
-    )
+    vlm_cfg = get_vlm_model()
+    effective_model = model or vlm_cfg.model
 
     entities_context = ""
     if drawing_entities:

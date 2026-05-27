@@ -255,13 +255,14 @@ async def _extract_bom_via_vlm(
     import base64
 
     if router is None:
-        # Direct Ollama fallback
+        # Direct fallback using configured VLM model
+        from app.ai.model_resolver import get_vlm_model as _get_vlm_cfg
         from app.ai.ollama_client import chat_with_images  # type: ignore
-        from app.config import settings
 
+        _vlm = _get_vlm_cfg()
         b64 = base64.b64encode(image_bytes).decode()
         response_text = await chat_with_images(
-            model=getattr(settings, "model_vlm", None) or "qwen3.6:35b",
+            model=_vlm.model,
             system_prompt=_ASSEMBLY_BOM_PROMPT,
             user_message="Извлеки спецификацию из таблицы на изображении.",
             images=[b64],

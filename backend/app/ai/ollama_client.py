@@ -305,6 +305,87 @@ def _extract_json_from_text(text: str) -> str:
     return text.strip()
 
 
+async def _generate_json_anthropic(
+    prompt: str,
+    *,
+    model: str,
+    system: str | None,
+    temperature: float,
+    max_tokens: int,
+    timeout_seconds: float,
+) -> dict:
+    """Generate structured JSON via Anthropic Messages API."""
+    messages = [{"role": "user", "content": prompt}]
+    payload: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": messages,
+    }
+    if system:
+        payload["system"] = system
+
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": settings.anthropic_api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=payload,
+        )
+    resp.raise_for_status()
+    text = resp.json()["content"][0]["text"]
+    cleaned = _extract_json_from_text(text)
+    return json.loads(cleaned or "{}")
+
+
+async def _generate_json_openai_compatible(
+    prompt: str,
+    *,
+    model: str,
+    provider: str,
+    system: str | None,
+    temperature: float,
+    max_tokens: int,
+    timeout_seconds: float,
+) -> dict:
+    """Generate structured JSON via any OpenAI-compatible endpoint (openrouter, deepseek, vllm…)."""
+    from app.ai.model_resolver import _provider_base_url, _provider_api_key
+
+    base_url = _provider_base_url(provider)
+    api_key = _provider_api_key(provider)
+    # Ensure base_url ends with /v1
+    if not base_url.endswith("/v1"):
+        base_url = base_url.rstrip("/") + "/v1"
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    payload: dict = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+
+    headers = {"content-type": "application/json"}
+    if api_key:
+        headers["authorization"] = f"Bearer {api_key}"
+
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
+    resp.raise_for_status()
+    text = resp.json()["choices"][0]["message"]["content"]
+    cleaned = _extract_json_from_text(text)
+    return json.loads(cleaned or "{}")
+
+
 async def generate_json(
     prompt: str,
     *,
@@ -315,9 +396,19 @@ async def generate_json(
     max_tokens: int = 4096,
     timeout_seconds: float = 120.0,
 ) -> dict:
-    """Generate structured JSON — routes to Ollama or llama.cpp based on configured OCR provider.
+    """Generate structured JSON — routes to the correct backend based on provider.
 
-    Uses chat endpoint with think:false to suppress reasoning preamble.
+    Provider routing:
+      ollama            → Ollama /api/chat (with format:json + think:false)
+      llamacpp          → llama-server /v1/chat/completions (OpenAI-compat)
+      anthropic         → Anthropic Messages API
+      openrouter        → OpenRouter (OpenAI-compat)
+      deepseek          → DeepSeek (OpenAI-compat)
+      vllm/lmstudio/
+      openai_compatible → custom OpenAI-compat URL
+      openai/gemini/
+      mistral/groq/…    → respective cloud (OpenAI-compat endpoints)
+
     Falls back to regex JSON extraction if the model wraps output in markdown.
     """
     if model is None or provider is None:
@@ -329,6 +420,41 @@ async def generate_json(
     if not breaker.is_available:
         raise RuntimeError(f"Circuit breaker open for model {model}")
 
+    # ── Anthropic: own API format ─────────────────────────────────────────────
+    if provider == "anthropic":
+        try:
+            result = await _generate_json_anthropic(
+                prompt, model=model, system=system,
+                temperature=temperature, max_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
+            )
+            breaker.record_success()
+            return result
+        except Exception as exc:
+            breaker.record_failure()
+            logger.error("generate_json_anthropic_error", model=model, error=str(exc))
+            raise
+
+    # ── OpenAI-compatible cloud providers ─────────────────────────────────────
+    _openai_compat_providers = {
+        "openrouter", "openai", "deepseek", "gemini", "mistral", "groq",
+        "together", "fireworks", "xai", "cohere", "perplexity", "minimax",
+        "kimi", "qwen", "vllm", "lmstudio", "openai_compatible",
+    }
+    if provider in _openai_compat_providers:
+        try:
+            result = await _generate_json_openai_compatible(
+                prompt, model=model, provider=provider, system=system,
+                temperature=temperature, max_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
+            )
+            breaker.record_success()
+            return result
+        except Exception as exc:
+            breaker.record_failure()
+            logger.error("generate_json_cloud_error", provider=provider, model=model, error=str(exc))
+            raise
+
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -337,7 +463,7 @@ async def generate_json(
     use_llamacpp = provider == "llamacpp"
 
     if use_llamacpp:
-        url = f"{settings.llamacpp_url}/v1/chat/completions"
+        url = f"{settings.llamacpp_url.rstrip('/v1')}/v1/chat/completions"
         payload: dict = {
             "model": model,
             "messages": messages,
@@ -347,6 +473,7 @@ async def generate_json(
             "response_format": {"type": "json_object"},
         }
     else:
+        # Default: Ollama
         url = f"{settings.ollama_url}/api/chat"
         payload = {
             "model": model,
@@ -485,19 +612,85 @@ async def reasoning_generate(
     format_json: bool = False,
     confidential: bool = False,
 ) -> str:
-    """Generate using the reasoning backend (local Ollama or Claude API).
+    """Generate using the reasoning backend.
 
-    Automatically routes to the configured backend.
-    When confidential=True, always uses local Ollama even if Claude backend is configured.
+    Routes based on ai_config model_reasoning_provider (set in Settings → Models UI).
+    When confidential=True, only local providers (ollama/llamacpp) are used.
+
+    Provider priority:
+      1. ai_config.model_reasoning_provider  (from Settings → Models tab)
+      2. Legacy settings.ai_reasoning_backend fallback (backward compat)
     """
-    model_name = _runtime_reasoning_model()
+    from app.ai.model_resolver import get_reasoning_model
+
+    cfg = get_reasoning_model(confidential=confidential)
+    model_name = cfg.model
+    provider = cfg.provider
+
+    # ── Cloud providers ───────────────────────────────────────────────────────
+    if not confidential and provider == "anthropic" and settings.anthropic_api_key:
+        return await _claude_generate(
+            prompt, model=model_name, system=system,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+
+    if not confidential and provider in (
+        "openrouter", "openai", "deepseek", "gemini", "mistral", "groq",
+        "together", "fireworks", "xai", "cohere", "perplexity", "minimax",
+        "kimi", "qwen",
+    ):
+        from app.ai.model_resolver import _provider_base_url, _provider_api_key
+        base_url = _provider_base_url(provider)
+        if not base_url.endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        api_key = _provider_api_key(provider)
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload: dict = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        if format_json:
+            payload["response_format"] = {"type": "json_object"}
+        headers = {"content-type": "application/json"}
+        if api_key:
+            headers["authorization"] = f"Bearer {api_key}"
+        async with httpx.AsyncClient(timeout=float(max_tokens * 0.1 + 60)) as client:
+            resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+    # ── llamacpp ─────────────────────────────────────────────────────────────
+    if provider == "llamacpp":
+        llamacpp_url = f"{settings.llamacpp_url.rstrip('/v1')}/v1/chat/completions"
+        messages_lc: list[dict] = []
+        if system:
+            messages_lc.append({"role": "system", "content": system})
+        messages_lc.append({"role": "user", "content": prompt})
+        payload_lc: dict = {
+            "model": model_name,
+            "messages": messages_lc,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        if format_json:
+            payload_lc["response_format"] = {"type": "json_object"}
+        async with httpx.AsyncClient(timeout=float(max_tokens * 0.1 + 60)) as client:
+            resp_lc = await client.post(llamacpp_url, json=payload_lc)
+        resp_lc.raise_for_status()
+        return resp_lc.json()["choices"][0]["message"]["content"]
+
+    # ── Legacy fallback: check old ai_reasoning_backend setting ───────────────
     if not confidential and settings.ai_reasoning_backend == "claude" and settings.anthropic_api_key:
         return await _claude_generate(
-            prompt,
-            model=model_name,
-            system=system,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            prompt, model=model_name, system=system,
+            temperature=temperature, max_tokens=max_tokens,
         )
 
     # Default: local Ollama with reasoning model
