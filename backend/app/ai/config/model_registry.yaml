@@ -43,6 +43,18 @@ providers:
     is_local: false
 
 models:
+  gemma4_e2b_ollama:
+    provider: "ollama"
+    provider_model: "gemma4:e2b"
+    status: "production"
+    modalities: ["text", "vision", "audio"]
+    max_context_tokens: 128000
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    quality_score: 0.65
+    speed_score: 0.95
+    notes: "Compact 2B multimodal model (7.2 GB). Fast vision OCR; use when VRAM is constrained."
   gemma4_e4b_ollama:
     provider: "ollama"
     provider_model: "gemma4:e4b"
@@ -410,6 +422,9 @@ routes:
     required_modalities: ["vision"]
     local_only: true
     fallback_chain:
+      # gemma4:e4b (9.6 GB) and gemma4:e2b (7.2 GB) are installed → try first
+      - "gemma4_e4b_ollama"
+      - "gemma4_e2b_ollama"
       - "qwen3_vl_32b_ollama"
       - "qwen35_27b_ollama"
       - "qwen3_6_35b_ollama"

@@ -373,6 +373,11 @@ async def _generate_json_openai_compatible(
         "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
+    # llamacpp / Qwen3 thinking models: disable CoT so the answer lands in
+    # `content` instead of `reasoning_content`. Without this flag the response
+    # content is empty and extraction fails.
+    if provider == "llamacpp":
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     headers = {"content-type": "application/json"}
     if api_key:
@@ -381,8 +386,11 @@ async def _generate_json_openai_compatible(
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
         resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
     resp.raise_for_status()
-    text = resp.json()["choices"][0]["message"]["content"]
-    cleaned = _extract_json_from_text(text)
+    raw_content = resp.json()["choices"][0]["message"]["content"]
+    if not raw_content:
+        # Thinking model may still have put the answer in reasoning_content
+        raw_content = resp.json()["choices"][0]["message"].get("reasoning_content", "")
+    cleaned = _extract_json_from_text(raw_content)
     return json.loads(cleaned or "{}")
 
 
@@ -471,6 +479,10 @@ async def generate_json(
             "temperature": temperature,
             "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
+            # Qwen3 / thinking models: disable CoT so answer lands in `content` not
+            # `reasoning_content`. Without this the model writes <think>…</think> only
+            # and content is empty → extract returns "".
+            "chat_template_kwargs": {"enable_thinking": False},
         }
     else:
         # Default: Ollama

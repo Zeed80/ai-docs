@@ -650,17 +650,27 @@ def _get_configured_ocr_model_and_provider() -> tuple[str, str]:
     return cfg.model, cfg.provider
 
 
-_VISION_FALLBACK_MODELS = ["gemma4:e4b", "gemma4:e2b", "gemma4:31b"]
+def _is_llamacpp_vision_capable() -> bool:
+    """Query llamacpp /props to check if the current model supports vision."""
+    import httpx
+    try:
+        resp = httpx.get(
+            f"{settings.llamacpp_url.rstrip('/v1').rstrip('/')}/props",
+            timeout=5.0,
+        )
+        return bool(resp.json().get("vision", False))
+    except Exception:
+        return False
 
 
-def _ollama_vision_ocr(images_b64: list[str], model_name: str, prompt: str) -> str:
-    """Call Ollama vision API synchronously. images_b64 must be raw base64 (no data: prefix).
+def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) -> str:
+    """Call Ollama vision API synchronously with a proper Ollama model name.
 
-    Retries once after a short delay if the primary model returns empty (cold start).
-    Falls back to known vision-capable models if still empty.
+    images_b64 must be raw base64 (no data: prefix).
+    Retries once after a short delay if the model returns empty (cold start).
+    Falls back to settings.ollama_model_ocr if a different primary model fails.
     """
     import time
-
     import httpx
 
     def _call(model: str) -> str:
@@ -677,27 +687,26 @@ def _ollama_vision_ocr(images_b64: list[str], model_name: str, prompt: str) -> s
         resp.raise_for_status()
         return resp.json().get("message", {}).get("content", "")
 
-    # Try the configured model; retry once on empty to survive cold-start
+    # Try the configured Ollama model; retry once on empty to survive cold-start
     try:
-        text = _call(model_name)
+        text = _call(ollama_model)
         if not text.strip():
-            logger.warning("ollama_vision_ocr_empty_retry", model=model_name)
+            logger.warning("ollama_vision_ocr_empty_retry", model=ollama_model)
             time.sleep(5)
-            text = _call(model_name)
+            text = _call(ollama_model)
         if text.strip():
             return text
-        logger.warning("ollama_vision_ocr_empty", model=model_name)
+        logger.warning("ollama_vision_ocr_empty", model=ollama_model)
     except Exception as e:
-        logger.warning("ollama_vision_ocr_failed", model=model_name, error=str(e))
+        logger.warning("ollama_vision_ocr_failed", model=ollama_model, error=str(e))
 
-    # Fallback to known vision-capable models
-    for fallback in _VISION_FALLBACK_MODELS:
-        if fallback == model_name:
-            continue
+    # Fallback: settings.ollama_model_ocr (may be same model, skip if so)
+    fallback = settings.ollama_model_ocr
+    if fallback and fallback != ollama_model:
         try:
             text = _call(fallback)
             if text.strip():
-                logger.info("ollama_vision_ocr_fallback_used", primary=model_name, fallback=fallback)
+                logger.info("ollama_vision_ocr_fallback_used", primary=ollama_model, fallback=fallback)
                 return text
         except Exception as e:
             logger.warning("ollama_vision_ocr_fallback_failed", model=fallback, error=str(e))
@@ -731,14 +740,39 @@ def _preprocess_image(content: bytes) -> bytes:
         return content
 
 
+def _resolve_vision_ocr_model() -> tuple[str, str]:
+    """Return (ollama_model_name, provider) for vision OCR.
+
+    When the configured OCR provider is llamacpp we check whether the loaded
+    llamacpp model actually supports vision (via /props).  If it does, we use it
+    via the llamacpp OpenAI-compatible endpoint.  If it does NOT (current default:
+    Qwen3.5-9B is text-only), we fall back to Ollama with settings.ollama_model_ocr
+    so we never send a llamacpp model-path to Ollama and trigger a 400/fallback
+    cascade that loads a huge unexpected model.
+    """
+    model, provider = _get_configured_ocr_model_and_provider()
+    if provider == "llamacpp":
+        if _is_llamacpp_vision_capable():
+            # Use llamacpp directly (handled by caller)
+            return model, "llamacpp"
+        # llamacpp model has no vision → use the Ollama OCR model instead
+        logger.info(
+            "ocr_llamacpp_no_vision_fallback_ollama",
+            llamacpp_model=model,
+            ollama_model=settings.ollama_model_ocr,
+        )
+        return settings.ollama_model_ocr, "ollama"
+    return model, provider
+
+
 def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
-    """OCR an image using the configured OCR model."""
-    model = _get_configured_ocr_model()
-    logger.info("image_ocr_start", document_id=str(doc.id), model=model)
+    """OCR an image using the configured OCR model (provider-aware)."""
+    ollama_model, provider = _resolve_vision_ocr_model()
+    logger.info("image_ocr_start", document_id=str(doc.id), model=ollama_model, provider=provider)
     enhanced = _preprocess_image(content)
     encoded = base64.b64encode(enhanced).decode("ascii")
-    text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
-    logger.info("image_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
+    text = _ollama_vision_ocr([encoded], ollama_model, _OCR_PROMPT)
+    logger.info("image_ocr_done", document_id=str(doc.id), model=ollama_model, text_len=len(text))
     return text
 
 
@@ -757,10 +791,10 @@ def _ocr_pdf_content(content: bytes, doc: Document) -> str:
         if not images_b64:
             return ""
 
-        model = _get_configured_ocr_model()
-        logger.info("pdf_ocr_start", document_id=str(doc.id), model=model, pages=len(images_b64))
-        text = _ollama_vision_ocr(images_b64, model, _OCR_PROMPT)
-        logger.info("pdf_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
+        ollama_model, provider = _resolve_vision_ocr_model()
+        logger.info("pdf_ocr_start", document_id=str(doc.id), model=ollama_model, provider=provider, pages=len(images_b64))
+        text = _ollama_vision_ocr(images_b64, ollama_model, _OCR_PROMPT)
+        logger.info("pdf_ocr_done", document_id=str(doc.id), model=ollama_model, text_len=len(text))
         return text
     except Exception as e:
         logger.warning("pdf_ocr_failed", document_id=str(doc.id), error=str(e))
