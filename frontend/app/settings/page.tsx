@@ -659,6 +659,98 @@ function modelOptionsForProvider(
   );
 }
 
+function DefaultModelField({
+  provider,
+  model,
+  ollamaModels,
+  ggufModels,
+  registryModels,
+  onChange,
+}: {
+  provider: string;
+  model: string;
+  ollamaModels: OllamaModel[];
+  ggufModels: GgufModel[];
+  registryModels: RegistryModel[];
+  onChange: (model: string) => void;
+}) {
+  const isOllama = provider === "ollama";
+  const isLlamacpp = provider === "llamacpp";
+
+  const options: { value: string; label: string }[] = isOllama
+    ? ollamaModels.map((m) => ({
+        value: m.name,
+        label: m.parameter_size ? `${m.name} — ${m.parameter_size}` : m.name,
+      }))
+    : isLlamacpp
+      ? ggufModels.map((m) => ({
+          value: m.path,
+          label: `${m.name} (${m.size_human})`,
+        }))
+      : modelOptionsForProvider(provider, ollamaModels, registryModels).map(
+          (o) => ({ value: o, label: o }),
+        );
+
+  const useSelect = isOllama || isLlamacpp || options.length > 0;
+  const hint = isLlamacpp
+    ? "GGUF-модель из локального хранилища"
+    : isOllama
+      ? "Fallback-модель для диалога и инструментов"
+      : `Пример: ${PROVIDER_MODEL_PLACEHOLDER[provider] ?? "model-name"}`;
+
+  return (
+    <Field label="Модель по умолчанию" hint={hint}>
+      {useSelect ? (
+        <select
+          value={model}
+          onChange={(e) => onChange(e.target.value)}
+          className={selectCls}
+        >
+          {isLlamacpp && ggufModels.length === 0 && (
+            <option value="" disabled>
+              — нет GGUF-моделей —
+            </option>
+          )}
+          {!options.find((o) => o.value === model) && model && (
+            <option value={model}>{model}</option>
+          )}
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <>
+          <input
+            className={inputCls}
+            list="default-model-datalist"
+            value={model}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={PROVIDER_MODEL_PLACEHOLDER[provider] ?? "model-name"}
+          />
+          <datalist id="default-model-datalist">
+            {options.map((o) => (
+              <option key={o.value} value={o.value} />
+            ))}
+          </datalist>
+        </>
+      )}
+      {isLlamacpp && ggufModels.length === 0 && (
+        <p className="mt-1 text-xs text-amber-400">
+          Нет локальных GGUF-моделей.{" "}
+          <a
+            href="/settings/llamacpp"
+            className="underline hover:text-amber-300"
+          >
+            Загрузите модель →
+          </a>
+        </p>
+      )}
+    </Field>
+  );
+}
+
 function AgentModelProviderSelector({
   label,
   provider,
@@ -2525,70 +2617,16 @@ export default function SettingsPage() {
                         </select>
                       </Field>
 
-                      {agentConfig.provider === "ollama" ? (
-                        <Field
-                          label="Модель по умолчанию"
-                          hint="Fallback-модель для диалога и инструментов"
-                        >
-                          <select
-                            value={agentConfig.model}
-                            onChange={(e) =>
-                              setAgentConfig({
-                                ...agentConfig,
-                                model: e.target.value,
-                              })
-                            }
-                            className={selectCls}
-                          >
-                            {!models.find(
-                              (m) => m.name === agentConfig.model,
-                            ) && (
-                              <option value={agentConfig.model}>
-                                {agentConfig.model} (не установлена)
-                              </option>
-                            )}
-                            {models.map((m) => (
-                              <option key={m.name} value={m.name}>
-                                {m.name}
-                                {m.parameter_size
-                                  ? ` — ${m.parameter_size}`
-                                  : ""}
-                              </option>
-                            ))}
-                          </select>
-                        </Field>
-                      ) : (
-                        <Field
-                          label="Модель по умолчанию"
-                          hint={`Пример: ${PROVIDER_MODEL_PLACEHOLDER[agentConfig.provider] ?? "model-name"}`}
-                        >
-                          <input
-                            className={inputCls}
-                            list="default-model-options"
-                            value={agentConfig.model}
-                            onChange={(e) =>
-                              setAgentConfig({
-                                ...agentConfig,
-                                model: e.target.value,
-                              })
-                            }
-                            placeholder={
-                              PROVIDER_MODEL_PLACEHOLDER[
-                                agentConfig.provider
-                              ] ?? "model-name"
-                            }
-                          />
-                          <datalist id="default-model-options">
-                            {modelOptionsForProvider(
-                              agentConfig.provider,
-                              models,
-                              registryModels,
-                            ).map((option) => (
-                              <option key={option} value={option} />
-                            ))}
-                          </datalist>
-                        </Field>
-                      )}
+                      <DefaultModelField
+                        provider={agentConfig.provider}
+                        model={agentConfig.model}
+                        ollamaModels={models}
+                        ggufModels={ggufModels}
+                        registryModels={registryModels}
+                        onChange={(model) =>
+                          setAgentConfig({ ...agentConfig, model })
+                        }
+                      />
                     </div>
 
                     {/* Local endpoint URL */}
