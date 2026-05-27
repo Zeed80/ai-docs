@@ -36,10 +36,10 @@ x-backend-env: &backend-env
   AIAGENT_ROOT: /aiagent
   LLAMACPP_URL: ${LLAMACPP_URL:-http://llama-server:8080}
   LLAMACPP_MODEL: ${LLAMACPP_MODEL:-/models/model.gguf}
-  LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-8192}
+  LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-16384}
   LLAMACPP_KV_CACHE_TYPE: ${LLAMACPP_KV_CACHE_TYPE:-q8_0}
   LLAMACPP_N_GPU_LAYERS: ${LLAMACPP_N_GPU_LAYERS:--1}
-  LLAMACPP_PARALLEL: ${LLAMACPP_PARALLEL:-4}
+  LLAMACPP_PARALLEL: ${LLAMACPP_PARALLEL:-2}
   LLAMACPP_FLASH_ATTN: ${LLAMACPP_FLASH_ATTN:-true}
 
 x-authentik-env: &authentik-env
@@ -183,10 +183,10 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        CTX=$${LLAMACPP_CTX_SIZE:-8192}
+        CTX=$${LLAMACPP_CTX_SIZE:-16384}
         GPU=$${LLAMACPP_N_GPU_LAYERS:--1}
         KV=$${LLAMACPP_KV_CACHE_TYPE:-q8_0}
-        PAR=$${LLAMACPP_PARALLEL:-4}
+        PAR=$${LLAMACPP_PARALLEL:-2}
         FA=$${LLAMACPP_FLASH_ATTN:-true}
         MDL=$${LLAMACPP_MODEL:-/models/model.gguf}
         BASEARGS="--host 0.0.0.0 --port 8080 --ctx-size $$CTX --n-gpu-layers $$GPU --cache-type-k $$KV --cache-type-v $$KV --parallel $$PAR --metrics"
@@ -201,10 +201,10 @@ services:
     environment:
       GGML_CUDA_NO_PINNED: "1"
       LLAMACPP_MODEL: ${LLAMACPP_MODEL:-/models/model.gguf}
-      LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-8192}
+      LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-16384}
       LLAMACPP_KV_CACHE_TYPE: ${LLAMACPP_KV_CACHE_TYPE:-q8_0}
       LLAMACPP_N_GPU_LAYERS: ${LLAMACPP_N_GPU_LAYERS:--1}
-      LLAMACPP_PARALLEL: ${LLAMACPP_PARALLEL:-4}
+      LLAMACPP_PARALLEL: ${LLAMACPP_PARALLEL:-2}
       LLAMACPP_FLASH_ATTN: ${LLAMACPP_FLASH_ATTN:-true}
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
