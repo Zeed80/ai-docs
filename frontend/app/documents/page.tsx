@@ -316,9 +316,24 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
+  if (response.status === 401 && typeof window !== "undefined") {
+    // Session expired — redirect to login, then come back
+    window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname)}`;
+    // Throw so the caller knows this failed (the redirect is async)
+    throw new Error(
+      "Сессия истекла. Выполняется перенаправление на страницу входа…",
+    );
+  }
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(body || `HTTP ${response.status}`);
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail =
+        typeof body?.detail === "string" ? body.detail : JSON.stringify(body);
+    } catch {
+      detail = await response.text().catch(() => "");
+    }
+    throw new Error(detail || `HTTP ${response.status}`);
   }
   return response.json();
 }
@@ -356,6 +371,9 @@ export default function DocumentsPage() {
   const [uploading, setUploading] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageType, setMessageType] = useState<"success" | "error">(
+    "success",
+  );
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [dependencyQuery, setDependencyQuery] = useState("");
   const [linkType, setLinkType] = useState("related");
@@ -697,7 +715,8 @@ export default function DocumentsPage() {
 
     setUploading(false);
     const hasErrors = pendingFiles.some((f) => f.status === "error");
-    setMessage(hasErrors ? "Есть ошибки загрузки" : "Готово");
+    setMessageType(hasErrors ? "error" : "success");
+    setMessage(hasErrors ? "Есть ошибки загрузки" : "Загрузка завершена");
     await loadWorkspace();
     if (uploadedIds.length) {
       setSelectedIds(new Set(uploadedIds));
@@ -717,13 +736,20 @@ export default function DocumentsPage() {
     );
   }
 
-  async function runAction(action: string, fn: () => Promise<unknown>) {
+  async function runAction(
+    action: string,
+    fn: () => Promise<unknown>,
+    onSuccess?: () => void,
+  ) {
     setBusyAction(action);
     setMessage(null);
     try {
       await fn();
+      setMessageType("success");
       setMessage("Команда выполнена");
+      onSuccess?.();
     } catch (error) {
+      setMessageType("error");
       setMessage(error instanceof Error ? error.message : "Ошибка выполнения");
     } finally {
       setBusyAction(null);
@@ -747,11 +773,27 @@ export default function DocumentsPage() {
     body: Record<string, unknown> = {},
   ) {
     if (!selectedIdsArray.length) return;
-    await runAction(action, () =>
-      requestJson(`/api/documents/${path}`, {
-        method: path === "bulk-delete" ? "DELETE" : "POST",
-        body: JSON.stringify({ document_ids: selectedIdsArray, ...body }),
-      }),
+    // Require explicit confirmation for destructive bulk operations
+    if (path === "bulk-delete") {
+      const ok = confirm(
+        `Удалить ${selectedIdsArray.length} документ(ов) и все связанные записи? Это действие необратимо.`,
+      );
+      if (!ok) return;
+    }
+    await runAction(
+      action,
+      () =>
+        requestJson(`/api/documents/${path}`, {
+          method: path === "bulk-delete" ? "DELETE" : "POST",
+          body: JSON.stringify({ document_ids: selectedIdsArray, ...body }),
+        }),
+      // On success: clear stale selection so deleted IDs don't linger in state
+      path === "bulk-delete"
+        ? () => {
+            setSelectedIds(new Set());
+            setSelectedId(null);
+          }
+        : undefined,
     );
   }
 
@@ -878,7 +920,13 @@ export default function DocumentsPage() {
           />
 
           {message && (
-            <div className="mt-4 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300">
+            <div
+              className={`mt-4 rounded-md border px-3 py-2 text-sm ${
+                messageType === "error"
+                  ? "border-red-800 bg-red-950/60 text-red-300"
+                  : "border-green-800 bg-green-950/60 text-green-300"
+              }`}
+            >
               {message}
             </div>
           )}
