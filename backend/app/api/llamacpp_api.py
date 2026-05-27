@@ -1,4 +1,4 @@
-"""llama.cpp server management API — status, config, model listing and download."""
+"""llama.cpp server management API — status, config, model search (HF/ModelScope), download."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import AsyncIterator
 
 import httpx
 import structlog
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -22,136 +22,50 @@ router = APIRouter()
 logger = structlog.get_logger()
 
 _REDIS_KEY = "llamacpp_config"
+_TOKENS_KEY = "llamacpp_tokens"
 _MODELS_DIR = Path(os.environ.get("LLAMACPP_MODELS_DIR", "/llamacpp-models"))
 
-# Well-known GGUF models — user can one-click download these
-GGUF_CATALOG: list[dict] = [
-    {
-        "id": "qwen2.5-3b-q8_0",
-        "name": "Qwen2.5 3B",
-        "description": "Быстрый компактный, хорош для классификации и коротких задач",
-        "repo": "Qwen/Qwen2.5-3B-Instruct-GGUF",
-        "filename": "qwen2.5-3b-instruct-q8_0.gguf",
-        "size_human": "3.6 GB",
-        "quant": "Q8_0",
-        "params": "3B",
-        "ctx": 32768,
-        "tags": ["fast", "classification"],
-    },
-    {
-        "id": "qwen2.5-7b-q8_0",
-        "name": "Qwen2.5 7B",
-        "description": "Сбалансированная модель — reasoning + русский язык, отличный выбор для старта",
-        "repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
-        "filename": "qwen2.5-7b-instruct-q8_0.gguf",
-        "size_human": "8.1 GB",
-        "quant": "Q8_0",
-        "params": "7B",
-        "ctx": 32768,
-        "tags": ["balanced", "russian", "recommended"],
-    },
-    {
-        "id": "qwen2.5-14b-q4_k_m",
-        "name": "Qwen2.5 14B Q4_K_M",
-        "description": "Мощная модель с хорошим балансом качество/память",
-        "repo": "Qwen/Qwen2.5-14B-Instruct-GGUF",
-        "filename": "qwen2.5-14b-instruct-q4_k_m.gguf",
-        "size_human": "9.0 GB",
-        "quant": "Q4_K_M",
-        "params": "14B",
-        "ctx": 32768,
-        "tags": ["powerful", "russian"],
-    },
-    {
-        "id": "llama3.2-3b-q8_0",
-        "name": "Llama 3.2 3B",
-        "description": "Быстрый Llama, хорош для инструкций",
-        "repo": "bartowski/Llama-3.2-3B-Instruct-GGUF",
-        "filename": "Llama-3.2-3B-Instruct-Q8_0.gguf",
-        "size_human": "3.4 GB",
-        "quant": "Q8_0",
-        "params": "3B",
-        "ctx": 131072,
-        "tags": ["fast", "long-context"],
-    },
-    {
-        "id": "llama3.1-8b-q8_0",
-        "name": "Llama 3.1 8B",
-        "description": "Популярная модель с длинным контекстом 128K",
-        "repo": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-        "filename": "Meta-Llama-3.1-8B-Instruct-Q8_0.gguf",
-        "size_human": "8.5 GB",
-        "quant": "Q8_0",
-        "params": "8B",
-        "ctx": 131072,
-        "tags": ["popular", "long-context"],
-    },
-    {
-        "id": "gemma2-2b-q8_0",
-        "name": "Gemma 2 2B",
-        "description": "Ультракомпактная модель Google, быстрый старт",
-        "repo": "bartowski/gemma-2-2b-it-GGUF",
-        "filename": "gemma-2-2b-it-Q8_0.gguf",
-        "size_human": "2.8 GB",
-        "quant": "Q8_0",
-        "params": "2B",
-        "ctx": 8192,
-        "tags": ["tiny", "fast"],
-    },
-    {
-        "id": "mistral-7b-q8_0",
-        "name": "Mistral 7B v0.3",
-        "description": "Классическая модель, хорошо протестирована",
-        "repo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
-        "filename": "Mistral-7B-Instruct-v0.3-Q8_0.gguf",
-        "size_human": "8.1 GB",
-        "quant": "Q8_0",
-        "params": "7B",
-        "ctx": 32768,
-        "tags": ["classic", "reliable"],
-    },
-    {
-        "id": "phi3.5-mini-q8_0",
-        "name": "Phi-3.5 Mini 3.8B",
-        "description": "Компактная модель Microsoft, хороший reasoning для своего размера",
-        "repo": "bartowski/Phi-3.5-mini-instruct-GGUF",
-        "filename": "Phi-3.5-mini-instruct-Q8_0.gguf",
-        "size_human": "4.1 GB",
-        "quant": "Q8_0",
-        "params": "3.8B",
-        "ctx": 131072,
-        "tags": ["microsoft", "reasoning"],
-    },
-]
+HF_API = "https://huggingface.co/api"
+MS_API = "https://modelscope.cn/api/v1"
 
-# Active downloads: model_id -> {progress, total, done, error}
+# Active downloads: download_id -> progress dict
 _downloads: dict[str, dict] = {}
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Redis helpers ─────────────────────────────────────────────────────────────
 
-def _get_llamacpp_base_url() -> str:
-    cfg = _load_config()
-    return cfg.get("url", settings.llamacpp_url).rstrip("/")
+def _redis_get(key: str) -> dict | None:
+    try:
+        from app.utils.redis_client import get_sync_redis
+        raw = get_sync_redis().get(key)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _redis_set(key: str, value: dict) -> None:
+    try:
+        from app.utils.redis_client import get_sync_redis
+        get_sync_redis().set(key, json.dumps(value, ensure_ascii=False))
+    except Exception as e:
+        logger.warning("redis_write_failed", key=key, error=str(e))
 
 
 def _load_config() -> dict:
-    try:
-        from app.utils.redis_client import get_sync_redis
-        raw = get_sync_redis().get(_REDIS_KEY)
-        if raw:
-            return {**_default_config(), **json.loads(raw)}
-    except Exception:
-        pass
-    return _default_config()
+    stored = _redis_get(_REDIS_KEY)
+    return {**_default_config(), **(stored or {})}
 
 
 def _save_config(cfg: dict) -> None:
-    try:
-        from app.utils.redis_client import get_sync_redis
-        get_sync_redis().set(_REDIS_KEY, json.dumps(cfg, ensure_ascii=False))
-    except Exception as e:
-        logger.warning("llamacpp_config_redis_write_failed", error=str(e))
+    _redis_set(_REDIS_KEY, cfg)
+
+
+def _load_tokens() -> dict:
+    return _redis_get(_TOKENS_KEY) or {}
+
+
+def _save_tokens(tokens: dict) -> None:
+    _redis_set(_TOKENS_KEY, tokens)
 
 
 def _default_config() -> dict:
@@ -166,16 +80,29 @@ def _default_config() -> dict:
     }
 
 
+def _get_llamacpp_base_url() -> str:
+    return _load_config().get("url", settings.llamacpp_url).rstrip("/")
+
+
+def _hf_headers() -> dict:
+    token = _load_tokens().get("huggingface", "")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _ms_headers() -> dict:
+    token = _load_tokens().get("modelscope", "")
+    h = {"User-Agent": "llama-manager/1.0"}
+    if token:
+        h["Authorization"] = f"token {token}"
+    return h
+
+
 def _human_size(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
             return f"{n:.1f} {unit}"
         n //= 1024
     return f"{n:.1f} TB"
-
-
-def _hf_url(repo: str, filename: str) -> str:
-    return f"https://huggingface.co/{repo}/resolve/main/{filename}"
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -219,38 +146,68 @@ class GgufModel(BaseModel):
     active: bool = False
 
 
-class CatalogEntry(BaseModel):
-    id: str
-    name: str
-    description: str
-    repo: str
+class TokensUpdate(BaseModel):
+    huggingface: str | None = None
+    modelscope: str | None = None
+
+
+class TokensStatus(BaseModel):
+    huggingface_set: bool
+    modelscope_set: bool
+
+
+class HFFile(BaseModel):
     filename: str
+    size_bytes: int
     size_human: str
-    quant: str
-    params: str
-    ctx: int
+    quant: str                # detected quant type (Q4_K_M, Q8_0, F16, …)
+    is_split: bool            # multi-part file
+    split_group: str | None = None   # e.g. "q8_0" — all parts share same group
+    part_index: int | None = None    # 1-based part number
+    total_parts: int | None = None
+
+
+class HFModelResult(BaseModel):
+    repo_id: str
+    author: str
+    model_name: str
+    downloads: int
+    likes: int
     tags: list[str]
-    downloaded: bool = False
-    local_path: str | None = None
+    gated: bool
+    files: list[HFFile] = []
+
+
+class MSModelResult(BaseModel):
+    repo_id: str
+    name: str
+    downloads: int
+    stars: int
+    tags: list[str]
+    files: list[HFFile] = []
 
 
 class DownloadRequest(BaseModel):
-    model_id: str
-    url: str | None = None  # override download URL
+    repo_id: str
+    filename: str
+    source: str = "huggingface"   # huggingface | modelscope | url
+    url: str | None = None        # override download URL
 
 
 class DownloadStatus(BaseModel):
-    model_id: str
-    status: str  # pending | downloading | done | error
+    download_id: str
+    repo_id: str
+    filename: str
+    status: str
     progress_bytes: int
     total_bytes: int
     progress_pct: float
     error: str | None
 
 
-# ── Status & Config endpoints ─────────────────────────────────────────────────
+# ── Status & Config ───────────────────────────────────────────────────────────
 
-@router.get("/status", response_model=LlamaCppStatus, summary="llama.cpp server status")
+@router.get("/status", response_model=LlamaCppStatus)
 async def get_llamacpp_status() -> LlamaCppStatus:
     base = _get_llamacpp_base_url()
     cfg = _load_config()
@@ -260,14 +217,10 @@ async def get_llamacpp_status() -> LlamaCppStatus:
             r.raise_for_status()
             health = r.json()
     except Exception:
-        return LlamaCppStatus(
-            running=False, url=base, model_loaded=None, ctx_size=None,
-            slots_idle=None, slots_processing=None, version=None,
-            kv_cache_type=cfg.get("kv_cache_type"),
-        )
+        return LlamaCppStatus(running=False, url=base, model_loaded=None, ctx_size=None,
+                              slots_idle=None, slots_processing=None, version=None,
+                              kv_cache_type=cfg.get("kv_cache_type"))
 
-    slots_idle = health.get("slots_idle")
-    slots_processing = health.get("slots_processing")
     model_loaded = None
     ctx_size = None
     version = None
@@ -283,62 +236,301 @@ async def get_llamacpp_status() -> LlamaCppStatus:
     except Exception:
         pass
 
-    return LlamaCppStatus(
-        running=True, url=base, model_loaded=model_loaded, ctx_size=ctx_size,
-        slots_idle=slots_idle, slots_processing=slots_processing, version=version,
-        kv_cache_type=cfg.get("kv_cache_type"),
-    )
+    return LlamaCppStatus(running=True, url=base, model_loaded=model_loaded, ctx_size=ctx_size,
+                          slots_idle=health.get("slots_idle"), slots_processing=health.get("slots_processing"),
+                          version=version, kv_cache_type=cfg.get("kv_cache_type"))
 
 
-@router.get("/config", response_model=LlamaCppConfig, summary="Current llama.cpp config")
+@router.get("/config", response_model=LlamaCppConfig)
 async def get_llamacpp_config() -> LlamaCppConfig:
     return LlamaCppConfig(**_load_config())
 
 
-@router.patch("/config", response_model=LlamaCppConfig, summary="Update llama.cpp config")
+@router.patch("/config", response_model=LlamaCppConfig)
 async def update_llamacpp_config(update: LlamaCppConfigUpdate) -> LlamaCppConfig:
     cfg = _load_config()
     for field, value in update.model_dump(exclude_none=True).items():
         cfg[field] = value
     _save_config(cfg)
-    logger.info("llamacpp_config_updated", changes=update.model_dump(exclude_none=True))
     return LlamaCppConfig(**cfg)
 
 
-# ── Model file management ─────────────────────────────────────────────────────
+# ── Token management ──────────────────────────────────────────────────────────
 
-@router.get("/models", response_model=list[GgufModel], summary="List local GGUF models")
+@router.get("/tokens", response_model=TokensStatus)
+async def get_tokens_status() -> TokensStatus:
+    t = _load_tokens()
+    return TokensStatus(huggingface_set=bool(t.get("huggingface")),
+                        modelscope_set=bool(t.get("modelscope")))
+
+
+@router.patch("/tokens", response_model=TokensStatus)
+async def update_tokens(update: TokensUpdate) -> TokensStatus:
+    t = _load_tokens()
+    if update.huggingface is not None:
+        t["huggingface"] = update.huggingface.strip()
+    if update.modelscope is not None:
+        t["modelscope"] = update.modelscope.strip()
+    _save_tokens(t)
+    return TokensStatus(huggingface_set=bool(t.get("huggingface")),
+                        modelscope_set=bool(t.get("modelscope")))
+
+
+@router.delete("/tokens/{provider}", response_model=TokensStatus)
+async def delete_token(provider: str) -> TokensStatus:
+    if provider not in ("huggingface", "modelscope"):
+        raise HTTPException(status_code=400, detail="Unknown provider")
+    t = _load_tokens()
+    t.pop(provider, None)
+    _save_tokens(t)
+    return TokensStatus(huggingface_set=bool(t.get("huggingface")),
+                        modelscope_set=bool(t.get("modelscope")))
+
+
+# ── HuggingFace search ────────────────────────────────────────────────────────
+
+def _detect_quant(filename: str) -> str:
+    """Detect quantization from GGUF filename."""
+    fn = filename.upper()
+    for q in ("Q2_K_S", "Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q3_K",
+              "Q4_0", "Q4_1", "Q4_K_S", "Q4_K_M", "Q4_K_L", "Q4_K",
+              "Q5_0", "Q5_1", "Q5_K_S", "Q5_K_M", "Q5_K",
+              "Q6_K", "Q8_0", "F16", "BF16", "F32",
+              "IQ1_S", "IQ2_S", "IQ2_M", "IQ3_S", "IQ3_M", "IQ4_XS", "IQ4_NL"):
+        if q in fn:
+            return q
+    return "UNKNOWN"
+
+
+def _parse_hf_file(f: dict) -> HFFile:
+    fn = f.get("rfilename", "")
+    size = f.get("size") or 0
+    m = re.search(r'-(\d+)-of-(\d+)', fn)
+    is_split = m is not None
+    part_index = int(m.group(1)) if m else None
+    total_parts = int(m.group(2)) if m else None
+    # group key = base name without -XXXXX-of-YYYYY part
+    split_group = re.sub(r'-\d+-of-\d+', '', fn).rstrip(".gguf").lower() if is_split else None
+    return HFFile(filename=fn, size_bytes=size, size_human=_human_size(size),
+                  quant=_detect_quant(fn), is_split=is_split,
+                  split_group=split_group, part_index=part_index, total_parts=total_parts)
+
+
+@router.get("/hf/search", response_model=list[HFModelResult])
+async def search_hf_models(
+    q: str = Query(..., min_length=1),
+    quant: str | None = Query(None, description="Filter: Q4_K_M, Q8_0, F16 …"),
+    min_gb: float = Query(0, ge=0),
+    max_gb: float = Query(100, le=1000),
+    sort: str = Query("downloads", description="downloads | likes | lastModified"),
+    limit: int = Query(20, ge=1, le=50),
+) -> list[HFModelResult]:
+    params = {
+        "search": q,
+        "filter": "gguf",
+        "sort": sort,
+        "direction": "-1",
+        "limit": min(limit * 2, 100),  # over-fetch to allow client-side filtering
+        "full": "true",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0, headers=_hf_headers()) as client:
+            r = await client.get(f"{HF_API}/models", params=params)
+            r.raise_for_status()
+            raw = r.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            raise HTTPException(status_code=401, detail="HuggingFace token required for gated models")
+        raise HTTPException(status_code=502, detail=f"HuggingFace API error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"HuggingFace API unavailable: {e}")
+
+    results: list[HFModelResult] = []
+    for m in raw:
+        repo_id = m.get("id", "")
+        author = repo_id.split("/")[0] if "/" in repo_id else ""
+        model_name = repo_id.split("/")[1] if "/" in repo_id else repo_id
+        tags = m.get("tags", [])
+        gated = bool(m.get("gated"))
+
+        # Parse files from siblings (requires blobs=true for sizes, but full=true gives some info)
+        siblings = m.get("siblings", [])
+        files = [_parse_hf_file(f) for f in siblings if f.get("rfilename", "").endswith(".gguf")]
+
+        # Filter by quant
+        if quant:
+            qt = quant.upper().replace("-", "_")
+            files = [f for f in files if qt in f.quant.upper()]
+
+        # Filter by size
+        files = [f for f in files
+                 if not f.is_split  # skip split files by default
+                 and (min_gb * 1e9 <= f.size_bytes <= max_gb * 1e9 or f.size_bytes == 0)]
+
+        # Sort files by size
+        files.sort(key=lambda f: f.size_bytes)
+
+        results.append(HFModelResult(
+            repo_id=repo_id, author=author, model_name=model_name,
+            downloads=m.get("downloads", 0) or 0,
+            likes=m.get("likes", 0) or 0,
+            tags=tags, gated=gated, files=files,
+        ))
+
+    # Sort results & trim
+    results = results[:limit]
+    return results
+
+
+@router.get("/hf/model/{repo_id:path}/files", response_model=list[HFFile])
+async def get_hf_model_files(
+    repo_id: str,
+    quant: str | None = Query(None),
+    max_gb: float = Query(100),
+    include_split: bool = Query(True),
+) -> list[HFFile]:
+    """Fetch GGUF file list for a specific HuggingFace repo with sizes.
+
+    Returns single-file GGUFs first, then split-file groups (only part 1 shown as representative).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15.0, headers=_hf_headers()) as client:
+            r = await client.get(f"{HF_API}/models/{repo_id}", params={"blobs": "true"})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"HuggingFace API error: {e}")
+
+    siblings = data.get("siblings", [])
+    all_files = [_parse_hf_file(f) for f in siblings if f.get("rfilename", "").endswith(".gguf")]
+
+    if quant:
+        qt = quant.upper().replace("-", "_")
+        all_files = [f for f in all_files if qt in f.quant.upper()]
+
+    # Single files — straightforward
+    single_files = [f for f in all_files if not f.is_split]
+    single_files = [f for f in single_files if f.size_bytes <= max_gb * 1e9 or f.size_bytes == 0]
+    single_files.sort(key=lambda f: f.size_bytes)
+
+    if not include_split:
+        return single_files
+
+    # For split groups: show only part 1 as representative; compute total size
+    groups: dict[str, list[HFFile]] = {}
+    for f in all_files:
+        if f.is_split and f.split_group:
+            groups.setdefault(f.split_group, []).append(f)
+
+    split_representatives: list[HFFile] = []
+    for group_files in groups.values():
+        group_files.sort(key=lambda f: f.part_index or 0)
+        total_size = sum(f.size_bytes for f in group_files)
+        if total_size > max_gb * 1e9 and total_size > 0:
+            continue
+        rep = group_files[0]
+        # Annotate representative with total size
+        split_representatives.append(HFFile(
+            filename=rep.filename,
+            size_bytes=total_size,
+            size_human=f"{_human_size(total_size)} ({len(group_files)} частей)",
+            quant=rep.quant,
+            is_split=True,
+            split_group=rep.split_group,
+            part_index=1,
+            total_parts=len(group_files),
+        ))
+
+    split_representatives.sort(key=lambda f: f.size_bytes)
+    return single_files + split_representatives
+
+
+# ── ModelScope search ─────────────────────────────────────────────────────────
+
+@router.get("/ms/search", response_model=list[MSModelResult])
+async def search_ms_models(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=50),
+) -> list[MSModelResult]:
+    """Search ModelScope for GGUF models."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0, headers=_ms_headers()) as client:
+            r = await client.get(
+                f"{MS_API}/models",
+                params={"name": q, "task": "text-generation", "PageSize": limit},
+            )
+            if r.status_code == 404:
+                return []
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"ModelScope API error: {e}")
+
+    models_raw = (data.get("Data") or {}).get("Models") or data.get("data") or []
+    results: list[MSModelResult] = []
+    for m in models_raw:
+        repo_id = m.get("Path") or m.get("name") or ""
+        results.append(MSModelResult(
+            repo_id=repo_id,
+            name=m.get("Name") or m.get("name") or repo_id,
+            downloads=m.get("Downloads") or m.get("downloads") or 0,
+            stars=m.get("Stars") or m.get("stars") or 0,
+            tags=m.get("Tags") or m.get("tags") or [],
+            files=[],
+        ))
+    return results
+
+
+@router.get("/ms/model/{repo_id:path}/files", response_model=list[HFFile])
+async def get_ms_model_files(repo_id: str) -> list[HFFile]:
+    """List GGUF files for a ModelScope repo."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0, headers=_ms_headers()) as client:
+            r = await client.get(f"{MS_API}/models/{repo_id}/repo/files")
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"ModelScope API error: {e}")
+
+    files_raw = (data.get("Data") or {}).get("Files") or data.get("data") or []
+    files = []
+    for f in files_raw:
+        fn = f.get("Name") or f.get("name") or ""
+        if not fn.endswith(".gguf"):
+            continue
+        size = f.get("Size") or f.get("size") or 0
+        files.append(HFFile(filename=fn, size_bytes=size, size_human=_human_size(size),
+                            quant=_detect_quant(fn), is_split=False))
+    files.sort(key=lambda f: f.size_bytes)
+    return files
+
+
+# ── Local model management ────────────────────────────────────────────────────
+
+@router.get("/models", response_model=list[GgufModel])
 async def list_gguf_models() -> list[GgufModel]:
     active_path = _load_config().get("model", "")
     result: list[GgufModel] = []
-
     if _MODELS_DIR.exists():
         for p in sorted(_MODELS_DIR.rglob("*.gguf")):
             size = p.stat().st_size
-            result.append(GgufModel(
-                name=p.name,
-                path=str(p),
-                size_bytes=size,
-                size_human=_human_size(size),
-                active=(str(p) == active_path),
-            ))
-
+            result.append(GgufModel(name=p.name, path=str(p), size_bytes=size,
+                                    size_human=_human_size(size), active=(str(p) == active_path)))
     return result
 
 
-@router.delete("/models/{filename}", summary="Delete a local GGUF model")
+@router.delete("/models/{filename}")
 async def delete_gguf_model(filename: str) -> dict:
-    if not re.match(r'^[\w\-\.]+\.gguf$', filename):
+    if not re.match(r'^[\w\-\. ]+\.gguf$', filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
     path = _MODELS_DIR / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="Model not found")
     path.unlink()
-    logger.info("llamacpp_model_deleted", filename=filename)
     return {"deleted": filename}
 
 
-@router.post("/models/activate", response_model=LlamaCppConfig, summary="Set active model")
+@router.post("/models/activate", response_model=LlamaCppConfig)
 async def activate_model(body: dict) -> LlamaCppConfig:
     path = body.get("path", "")
     if not path:
@@ -346,141 +538,148 @@ async def activate_model(body: dict) -> LlamaCppConfig:
     cfg = _load_config()
     cfg["model"] = path
     _save_config(cfg)
-    logger.info("llamacpp_model_activated", path=path)
     return LlamaCppConfig(**cfg)
 
 
-# ── Catalog & Download ────────────────────────────────────────────────────────
+# ── Download ──────────────────────────────────────────────────────────────────
 
-@router.get("/catalog", response_model=list[CatalogEntry], summary="GGUF model catalog")
-async def get_catalog() -> list[CatalogEntry]:
+@router.get("/downloads", response_model=list[DownloadStatus])
+async def list_downloads() -> list[DownloadStatus]:
     result = []
-    for entry in GGUF_CATALOG:
-        local_path = _MODELS_DIR / entry["filename"]
-        result.append(CatalogEntry(
-            **entry,
-            downloaded=local_path.exists(),
-            local_path=str(local_path) if local_path.exists() else None,
+    for dl_id, d in _downloads.items():
+        total = d.get("total_bytes", 0)
+        progress = d.get("progress_bytes", 0)
+        result.append(DownloadStatus(
+            download_id=dl_id,
+            repo_id=d.get("repo_id", ""),
+            filename=d.get("filename", ""),
+            status=d.get("status", "unknown"),
+            progress_bytes=progress,
+            total_bytes=total,
+            progress_pct=round(progress / total * 100, 1) if total > 0 else 0.0,
+            error=d.get("error"),
         ))
     return result
 
 
 @router.post("/download", summary="Start downloading a GGUF model")
 async def start_download(req: DownloadRequest, background_tasks: BackgroundTasks) -> dict:
-    model_id = req.model_id
-    if model_id in _downloads and _downloads[model_id].get("status") == "downloading":
-        return {"message": "Already downloading", "model_id": model_id}
+    dl_id = f"{req.repo_id}/{req.filename}".replace("/", "__")
 
-    # Find catalog entry or use custom URL
-    catalog_entry = next((e for e in GGUF_CATALOG if e["id"] == model_id), None)
-    if catalog_entry:
-        url = req.url or _hf_url(catalog_entry["repo"], catalog_entry["filename"])
-        dest_name = catalog_entry["filename"]
-    elif req.url:
+    if dl_id in _downloads and _downloads[dl_id].get("status") == "downloading":
+        return {"message": "Already downloading", "download_id": dl_id}
+
+    # Resolve download URL
+    if req.url:
         url = req.url
-        dest_name = Path(req.url).name
-        if not dest_name.endswith(".gguf"):
-            dest_name += ".gguf"
+    elif req.source == "huggingface":
+        url = f"https://huggingface.co/{req.repo_id}/resolve/main/{req.filename}"
+        token = _load_tokens().get("huggingface", "")
+        if token:
+            url += f"?token={token}"
+    elif req.source == "modelscope":
+        url = f"https://modelscope.cn/api/v1/models/{req.repo_id}/repo?FilePath={req.filename}"
     else:
-        raise HTTPException(status_code=404, detail=f"Unknown model_id '{model_id}' and no URL provided")
+        raise HTTPException(status_code=400, detail="Unknown source")
 
-    _downloads[model_id] = {"status": "pending", "progress_bytes": 0, "total_bytes": 0, "error": None}
-    background_tasks.add_task(_download_model, model_id, url, dest_name)
-    return {"message": "Download started", "model_id": model_id, "url": url, "dest": dest_name}
-
-
-@router.delete("/download/{model_id}", summary="Cancel an active download")
-async def cancel_download(model_id: str) -> dict:
-    if model_id in _downloads:
-        _downloads[model_id]["status"] = "cancelled"
-    return {"cancelled": model_id}
+    dest_name = req.filename
+    _downloads[dl_id] = {"status": "pending", "progress_bytes": 0, "total_bytes": 0,
+                         "error": None, "repo_id": req.repo_id, "filename": req.filename}
+    background_tasks.add_task(_download_model, dl_id, url, dest_name, req.source)
+    return {"message": "Download started", "download_id": dl_id, "dest": dest_name}
 
 
-@router.get("/download/{model_id}/status", response_model=DownloadStatus, summary="Download progress")
-async def get_download_status(model_id: str) -> DownloadStatus:
-    d = _downloads.get(model_id)
+@router.delete("/download/{dl_id:path}")
+async def cancel_download(dl_id: str) -> dict:
+    if dl_id in _downloads:
+        _downloads[dl_id]["status"] = "cancelled"
+    return {"cancelled": dl_id}
+
+
+@router.get("/download/{dl_id:path}/status", response_model=DownloadStatus)
+async def get_download_status(dl_id: str) -> DownloadStatus:
+    d = _downloads.get(dl_id)
     if not d:
-        raise HTTPException(status_code=404, detail="No download found for this model_id")
+        raise HTTPException(status_code=404, detail="Download not found")
     total = d.get("total_bytes", 0)
     progress = d.get("progress_bytes", 0)
-    pct = round(progress / total * 100, 1) if total > 0 else 0.0
-    return DownloadStatus(
-        model_id=model_id,
-        status=d.get("status", "unknown"),
-        progress_bytes=progress,
-        total_bytes=total,
-        progress_pct=pct,
-        error=d.get("error"),
-    )
+    return DownloadStatus(download_id=dl_id, repo_id=d.get("repo_id", ""),
+                          filename=d.get("filename", ""), status=d.get("status", "unknown"),
+                          progress_bytes=progress, total_bytes=total,
+                          progress_pct=round(progress / total * 100, 1) if total > 0 else 0.0,
+                          error=d.get("error"))
 
 
-@router.get("/download/{model_id}/stream", summary="SSE stream of download progress")
-async def stream_download_progress(model_id: str):
-    """Server-Sent Events stream: sends progress updates every 500ms until done."""
+@router.get("/download/{dl_id:path}/stream")
+async def stream_download(dl_id: str):
     async def _gen() -> AsyncIterator[str]:
         while True:
-            d = _downloads.get(model_id)
+            d = _downloads.get(dl_id)
             if not d:
                 yield f"data: {json.dumps({'status': 'not_found'})}\n\n"
                 break
             total = d.get("total_bytes", 0)
             progress = d.get("progress_bytes", 0)
-            pct = round(progress / total * 100, 1) if total > 0 else 0.0
-            payload = {
-                "status": d.get("status"),
-                "progress_bytes": progress,
-                "total_bytes": total,
-                "progress_pct": pct,
-                "error": d.get("error"),
-            }
+            payload = {"status": d.get("status"), "progress_bytes": progress, "total_bytes": total,
+                       "progress_pct": round(progress / total * 100, 1) if total > 0 else 0.0,
+                       "error": d.get("error")}
             yield f"data: {json.dumps(payload)}\n\n"
             if d.get("status") in ("done", "error", "cancelled"):
                 break
             await asyncio.sleep(0.5)
-
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
-async def _download_model(model_id: str, url: str, dest_name: str) -> None:
-    """Background task: stream-download a GGUF file to _MODELS_DIR."""
+async def _download_model(dl_id: str, url: str, dest_name: str, source: str = "huggingface") -> None:
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
     dest = _MODELS_DIR / dest_name
     tmp = _MODELS_DIR / f"{dest_name}.tmp"
+    _downloads[dl_id] = {**_downloads.get(dl_id, {}), "status": "downloading",
+                         "progress_bytes": 0, "total_bytes": 0, "error": None}
+    logger.info("llamacpp_download_start", dl_id=dl_id, url=url[:80])
 
-    _downloads[model_id] = {"status": "downloading", "progress_bytes": 0, "total_bytes": 0, "error": None}
-    logger.info("llamacpp_download_start", model_id=model_id, url=url, dest=str(dest))
+    headers: dict = {}
+    if source == "huggingface":
+        token = _load_tokens().get("huggingface", "")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    elif source == "modelscope":
+        token = _load_tokens().get("modelscope", "")
+        if token:
+            headers["Authorization"] = f"token {token}"
+    headers["User-Agent"] = "llama-manager/1.0"
 
     try:
-        async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
-            async with client.stream("GET", url, headers={"User-Agent": "llama-manager/1.0"}) as resp:
+        async with httpx.AsyncClient(timeout=None, follow_redirects=True, headers=headers) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code == 401:
+                    raise RuntimeError("Authentication required — set your API token in Настройки токенов")
                 if resp.status_code != 200:
-                    raise RuntimeError(f"HTTP {resp.status_code} from {url}")
+                    raise RuntimeError(f"HTTP {resp.status_code} from server")
                 total = int(resp.headers.get("content-length", 0))
-                _downloads[model_id]["total_bytes"] = total
+                _downloads[dl_id]["total_bytes"] = total
                 downloaded = 0
                 with open(tmp, "wb") as f:
                     async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
-                        if _downloads.get(model_id, {}).get("status") == "cancelled":
-                            logger.info("llamacpp_download_cancelled", model_id=model_id)
+                        if _downloads.get(dl_id, {}).get("status") == "cancelled":
                             tmp.unlink(missing_ok=True)
                             return
                         f.write(chunk)
                         downloaded += len(chunk)
-                        _downloads[model_id]["progress_bytes"] = downloaded
-
+                        _downloads[dl_id]["progress_bytes"] = downloaded
         shutil.move(str(tmp), str(dest))
-        _downloads[model_id]["status"] = "done"
-        logger.info("llamacpp_download_done", model_id=model_id, path=str(dest))
+        _downloads[dl_id]["status"] = "done"
+        logger.info("llamacpp_download_done", dl_id=dl_id, path=str(dest))
     except Exception as e:
         tmp.unlink(missing_ok=True)
-        _downloads[model_id]["status"] = "error"
-        _downloads[model_id]["error"] = str(e)
-        logger.error("llamacpp_download_failed", model_id=model_id, error=str(e))
+        _downloads[dl_id]["status"] = "error"
+        _downloads[dl_id]["error"] = str(e)
+        logger.error("llamacpp_download_failed", dl_id=dl_id, error=str(e))
 
 
-# ── Inference proxy / diagnostics ────────────────────────────────────────────
+# ── Diagnostics ───────────────────────────────────────────────────────────────
 
-@router.get("/slots", summary="llama.cpp active inference slots")
+@router.get("/slots")
 async def get_llamacpp_slots() -> dict:
     base = _get_llamacpp_base_url()
     try:
@@ -492,7 +691,7 @@ async def get_llamacpp_slots() -> dict:
         raise HTTPException(status_code=503, detail=f"llama-server unavailable: {e}")
 
 
-@router.get("/metrics", summary="llama.cpp Prometheus metrics")
+@router.get("/metrics")
 async def get_llamacpp_metrics():
     base = _get_llamacpp_base_url()
     try:
@@ -500,24 +699,19 @@ async def get_llamacpp_metrics():
             r = await client.get(f"{base}/metrics")
             return PlainTextResponse(r.text, status_code=r.status_code)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"llama-server unavailable: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
 
 
-@router.post("/test", summary="Quick test generation on running llama-server")
+@router.post("/test")
 async def test_generation() -> dict:
-    """Send a minimal prompt to verify the model is responding."""
     base = _get_llamacpp_base_url()
-    payload = {
-        "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-        "max_tokens": 16,
-        "temperature": 0,
-    }
+    payload = {"messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+               "max_tokens": 16, "temperature": 0}
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(f"{base}/v1/chat/completions", json=payload)
             r.raise_for_status()
             data = r.json()
-            text = data["choices"][0]["message"]["content"]
-            return {"ok": True, "response": text, "model": data.get("model")}
+            return {"ok": True, "response": data["choices"][0]["message"]["content"], "model": data.get("model")}
     except Exception as e:
         return {"ok": False, "error": str(e)}
