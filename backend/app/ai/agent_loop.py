@@ -18,6 +18,7 @@ import yaml
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.gateway_config import gateway_config
 from app.ai.streaming_scrubber import StreamingContextScrubber
+from app.config import settings as _settings
 from app.formatting import format_money
 
 logger = structlog.get_logger()
@@ -798,6 +799,9 @@ def _openai_compatible_provider_config(
         ),
     }
     local_mapping: dict[str, tuple[str, str, dict[str, str]]] = {
+        # llamacpp: use runtime settings URL (Docker: http://llama-server:8080)
+        # config.llamacpp_url is a user-editable override; settings.llamacpp_url is the env default
+        "llamacpp": (_settings.llamacpp_url.rstrip("/"), "", {}),
         "vllm": (config.vllm_url.rstrip("/"), "VLLM_API_KEY", {}),
         "lmstudio": (config.lmstudio_url.rstrip("/"), "LMSTUDIO_API_KEY", {}),
         "openai_compatible": (
@@ -1120,6 +1124,7 @@ _OPENAI_COMPATIBLE_PROVIDERS = frozenset({
     "vllm",
     "lmstudio",
     "openai_compatible",
+    "llamacpp",
     "openrouter",
     "deepseek",
     "openai",

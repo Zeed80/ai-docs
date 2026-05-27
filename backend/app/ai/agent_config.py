@@ -43,6 +43,7 @@ class BuiltinAgentConfig(BaseModel):
     prompt_cache_enabled: bool = False
     disable_thinking: bool = False
     ollama_url: str = "http://localhost:11434"
+    llamacpp_url: str = "http://localhost:11436"
     vllm_url: str = "http://localhost:8001/v1"
     lmstudio_url: str = "http://localhost:1234/v1"
     openai_compatible_url: str = "http://localhost:8001/v1"
@@ -96,6 +97,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     prompt_cache_enabled: bool | None = None
     disable_thinking: bool | None = None
     ollama_url: str | None = None
+    llamacpp_url: str | None = None
     vllm_url: str | None = None
     lmstudio_url: str | None = None
     openai_compatible_url: str | None = None
