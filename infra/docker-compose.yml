@@ -178,19 +178,34 @@ services:
       - llamacpp_models:/models
     ports:
       - "11436:8080"
-    command: >
-      --host 0.0.0.0
-      --port 8080
-      --model ${LLAMACPP_MODEL:-/models/model.gguf}
-      --ctx-size ${LLAMACPP_CTX_SIZE:-8192}
-      --n-gpu-layers ${LLAMACPP_N_GPU_LAYERS:--1}
-      --kv-cache-type ${LLAMACPP_KV_CACHE_TYPE:-q8_0}
-      --parallel ${LLAMACPP_PARALLEL:-4}
-      --flash-attn
-      --metrics
-      --log-disable
+    # Wrapper: start without model if GGUF missing (API-only mode for model management).
+    # --cache-type-k/v replaces old --kv-cache-type flag (llama.cpp b4300+).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        CTX=$${LLAMACPP_CTX_SIZE:-8192}
+        GPU=$${LLAMACPP_N_GPU_LAYERS:--1}
+        KV=$${LLAMACPP_KV_CACHE_TYPE:-q8_0}
+        PAR=$${LLAMACPP_PARALLEL:-4}
+        FA=$${LLAMACPP_FLASH_ATTN:-true}
+        MDL=$${LLAMACPP_MODEL:-/models/model.gguf}
+        BASEARGS="--host 0.0.0.0 --port 8080 --ctx-size $$CTX --n-gpu-layers $$GPU --cache-type-k $$KV --cache-type-v $$KV --parallel $$PAR --metrics"
+        if [ -f "$$MDL" ]; then
+          MODELARGS="--model $$MDL"
+          [ "$$FA" = "true" ] && MODELARGS="$$MODELARGS --flash-attn"
+        else
+          echo "No GGUF at $$MDL — starting in API-only mode (use /settings/llamacpp to download a model)"
+          MODELARGS=""
+        fi
+        exec /app/llama-server $$BASEARGS $$MODELARGS
     environment:
       GGML_CUDA_NO_PINNED: "1"
+      LLAMACPP_MODEL: ${LLAMACPP_MODEL:-/models/model.gguf}
+      LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-8192}
+      LLAMACPP_KV_CACHE_TYPE: ${LLAMACPP_KV_CACHE_TYPE:-q8_0}
+      LLAMACPP_N_GPU_LAYERS: ${LLAMACPP_N_GPU_LAYERS:--1}
+      LLAMACPP_PARALLEL: ${LLAMACPP_PARALLEL:-4}
+      LLAMACPP_FLASH_ATTN: ${LLAMACPP_FLASH_ATTN:-true}
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 15s
@@ -214,8 +229,10 @@ services:
       dockerfile: Dockerfile
     environment:
       <<: *backend-env
+      LLAMACPP_MODELS_DIR: /llamacpp-models
     volumes:
       - ../aiagent:/aiagent:ro
+      - llamacpp_models:/llamacpp-models
     extra_hosts:
       - "host-gateway:host-gateway"
     depends_on:

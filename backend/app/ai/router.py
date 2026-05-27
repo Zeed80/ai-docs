@@ -161,6 +161,10 @@ class AIRouter:
             return OllamaProvider(config)
         if kind == ProviderKind.VLLM:
             return VLLMProvider(config)
+        if kind == ProviderKind.LLAMACPP:
+            # llama-server speaks OpenAI-compatible API; use runtime URL from settings
+            config = config.model_copy(update={"base_url": settings.llamacpp_url})
+            return OpenAICompatibleProvider(config)
         if kind in (ProviderKind.OPENAI_COMPATIBLE, ProviderKind.CLOUD_PROVIDER):
             return OpenAICompatibleProvider(config)
         if kind == ProviderKind.ANTHROPIC:

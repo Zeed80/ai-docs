@@ -115,6 +115,12 @@ const NAV_ITEMS: NavItem[] = [
     group: "Настройки",
   },
   { id: "admin", label: "Администратор", href: "/admin", group: "Настройки" },
+  {
+    id: "llamacpp",
+    label: "llama.cpp — загрузка и управление GGUF",
+    href: "/settings/llamacpp",
+    group: "Настройки",
+  },
 ];
 
 const HISTORY_KEY = "cmd_palette_history";

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 class ProviderKind(str, Enum):
     OLLAMA = "ollama"
+    LLAMACPP = "llamacpp"
     VLLM = "vllm"
     OPENAI_COMPATIBLE = "openai_compatible"
     CLOUD_PROVIDER = "cloud_provider"

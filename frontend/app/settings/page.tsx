@@ -3245,9 +3245,31 @@ export default function SettingsPage() {
       {/* ── TAB: Модели ──────────────────────────────────────────────────── */}
       {activeTab === "models" && (
         <div className="space-y-6">
+          {/* llama.cpp quick-access card */}
+          <div className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/50 px-5 py-4">
+            <div className="flex items-center gap-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-700 text-lg font-bold text-white">
+                ⚡
+              </div>
+              <div>
+                <div className="font-semibold text-slate-100">llama.cpp</div>
+                <div className="text-xs text-slate-400">
+                  Локальный GGUF-бэкенд: TurboQuant KV-кэш, MTP, загрузка
+                  моделей
+                </div>
+              </div>
+            </div>
+            <Link
+              href="/settings/llamacpp"
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Открыть →
+            </Link>
+          </div>
+
           {/* Status + model config */}
           <SectionCard
-            title="Выбор моделей"
+            title="Выбор моделей (Ollama)"
             subtitle="Модели для OCR, reasoning и верификации. Используются Celery-задачами и маршрутизатором AI."
             action={
               <button
