@@ -6,6 +6,14 @@ api:
 entryPoints:
   web:
     address: ":80"
+    transport:
+      respondingTimeouts:
+        # Extend timeouts to survive long thinking-model inference (Qwopus/Qwen3 can
+        # think for 300+ seconds before emitting content).  Status pings are sent
+        # every 15 s by the backend, so idle detection is a safety net only.
+        readTimeout: "0"    # no read timeout (data arrives when model finishes)
+        writeTimeout: "0"   # no write timeout
+        idleTimeout: "900s" # close truly idle connections after 15 min
 
 providers:
   file:

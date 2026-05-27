@@ -826,11 +826,17 @@ async def _call_openai_streaming(
     provider: str,
     model_override: str | None = None,
     disable_thinking: bool | None = None,
+    on_thinking: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict:
     """Stream an OpenAI-compatible SSE endpoint (OpenRouter, DeepSeek).
 
     Returns a normalised message dict identical to the Ollama format so that
     the rest of AgentSession._run() needs no changes.
+
+    ``on_thinking`` — optional async callback invoked with each ``reasoning_content``
+    chunk emitted by thinking models (Qwen3, DeepSeek-R1, etc.).  Use it to send
+    keepalive / status frames through the WebSocket so idle-connection timeouts
+    (Traefik default ~180 s) do not drop the connection during long think phases.
     """
     model = _get_agent_model(config, model_override=model_override)
     base_url, api_key, extra = _openai_compatible_provider_config(provider, config)
@@ -887,6 +893,12 @@ async def _call_openai_streaming(
                     full_content += visible
                     await on_token(visible)
 
+                # reasoning_content (thinking phase) — forward to on_thinking callback
+                # so the caller can send keepalive/status frames during long think phases.
+                thinking_token: str = delta.get("reasoning_content") or ""
+                if thinking_token and on_thinking:
+                    await on_thinking(thinking_token)
+
                 for tc_delta in delta.get("tool_calls") or []:
                     idx: int = tc_delta.get("index", 0)
                     if idx not in tool_acc:
@@ -912,6 +924,7 @@ async def _call_openai_streaming(
         except json.JSONDecodeError:
             args = {}
         normalized_tool_calls.append({
+            "type": "function",  # Required by llama.cpp when replaying tool-call history
             "id": tc["id"],
             "function": {"name": tc["name"], "arguments": args},
         })
@@ -1155,6 +1168,7 @@ async def _call_provider_streaming(
     model_override: str | None = None,
     provider_override: str | None = None,
     disable_thinking_override: bool | None = None,
+    on_thinking: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict:
     """Dispatch to the configured LLM provider with optional fallback chain."""
     primary_provider = _get_agent_provider(config, provider_override=provider_override)
@@ -1195,6 +1209,7 @@ async def _call_provider_streaming(
                         provider=p,
                         model_override=model_override,
                         disable_thinking=disable_thinking_override,
+                        on_thinking=on_thinking,
                     )
                 elif p == "anthropic":
                     return await _call_anthropic_streaming(
@@ -1944,6 +1959,23 @@ class AgentSession:
                 async def on_token(token: str) -> None:
                     accumulated_text.append(token)
 
+                # Thinking-model keepalive: send a status frame at most every 15 seconds
+                # while the model emits reasoning_content (think phase).  This prevents
+                # Traefik (default idle timeout ~180 s) from dropping the WebSocket.
+                _last_thinking_ping: list[float] = [0.0]
+
+                async def _on_thinking(chunk: str) -> None:
+                    now = time.time()
+                    if now - _last_thinking_ping[0] >= 15.0:
+                        _last_thinking_ping[0] = now
+                        try:
+                            await self._send({
+                                "type": "status",
+                                "content": "Модель думает…",
+                            })
+                        except Exception:
+                            pass
+
                 model_override, provider_override, disable_thinking = _turn_model_overrides(
                     self._config,
                     self.messages,
@@ -1957,6 +1989,7 @@ class AgentSession:
                     model_override=model_override,
                     provider_override=provider_override,
                     disable_thinking_override=disable_thinking,
+                    on_thinking=_on_thinking,
                 )
                 duration_ms = int((time.time() - t_start) * 1000)
                 tool_calls = message.get("tool_calls") or []

@@ -185,6 +185,11 @@ def _env_overrides() -> dict:
     ollama_url = os.environ.get("OLLAMA_URL")
     if ollama_url:
         overrides["ollama_url"] = ollama_url.rstrip("/")
+    # llamacpp URL must come from environment when running inside Docker —
+    # the saved config may have localhost:11436 which is unreachable from containers.
+    llamacpp_url = os.environ.get("LLAMACPP_URL")
+    if llamacpp_url:
+        overrides["llamacpp_url"] = llamacpp_url.rstrip("/")
     fastapi_url = os.environ.get("FASTAPI_URL")
     if fastapi_url:
         overrides["backend_url"] = fastapi_url.rstrip("/")
