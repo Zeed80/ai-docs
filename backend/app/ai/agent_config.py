@@ -180,20 +180,33 @@ def _redis_set_agent_config(data: dict) -> None:
 
 
 def _env_overrides() -> dict:
-    """Values that MUST come from environment, never from saved file."""
+    """Values that MUST come from environment, never from saved file.
+
+    URL settings for local providers are always read from env vars so that the
+    correct Docker-internal hostnames win over whatever was saved in Redis/file
+    (which may have been set from a browser session running on the host).
+    """
     overrides: dict = {}
-    ollama_url = os.environ.get("OLLAMA_URL")
-    if ollama_url:
-        overrides["ollama_url"] = ollama_url.rstrip("/")
-    # llamacpp URL must come from environment when running inside Docker —
-    # the saved config may have localhost:11436 which is unreachable from containers.
-    llamacpp_url = os.environ.get("LLAMACPP_URL")
-    if llamacpp_url:
-        overrides["llamacpp_url"] = llamacpp_url.rstrip("/")
-    fastapi_url = os.environ.get("FASTAPI_URL")
+
+    # Primary provider URLs — always override saved config
+    _url_vars = [
+        ("OLLAMA_URL", "ollama_url"),
+        # llamacpp URL must come from env when running inside Docker —
+        # saved config may hold localhost:11436 which is unreachable from containers.
+        ("LLAMACPP_URL", "llamacpp_url"),
+        ("VLLM_URL", "vllm_url"),
+        ("LMSTUDIO_URL", "lmstudio_url"),
+        ("OPENAI_COMPATIBLE_URL", "openai_compatible_url"),
+    ]
+    for env_var, config_key in _url_vars:
+        val = os.environ.get(env_var, "").strip()
+        if val:
+            overrides[config_key] = val.rstrip("/")
+
+    fastapi_url = os.environ.get("FASTAPI_URL", "").strip()
     if fastapi_url:
         overrides["backend_url"] = fastapi_url.rstrip("/")
-    # Load exposed_skills and approval_gates from gateway.yml if not set
+
     return overrides
 
 

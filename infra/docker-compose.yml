@@ -41,6 +41,12 @@ x-backend-env: &backend-env
   LLAMACPP_N_GPU_LAYERS: ${LLAMACPP_N_GPU_LAYERS:--1}
   LLAMACPP_PARALLEL: ${LLAMACPP_PARALLEL:-2}
   LLAMACPP_FLASH_ATTN: ${LLAMACPP_FLASH_ATTN:-true}
+  # compose service name used by activate_model to find the container via Docker API
+  LLAMACPP_SERVICE_NAME: llama-server
+  # Local OpenAI-compatible provider URLs (optional, override agent config defaults)
+  VLLM_URL: ${VLLM_URL:-}
+  LMSTUDIO_URL: ${LMSTUDIO_URL:-}
+  OPENAI_COMPATIBLE_URL: ${OPENAI_COMPATIBLE_URL:-}
 
 x-authentik-env: &authentik-env
   AUTHENTIK_REDIS__HOST: redis
@@ -171,7 +177,8 @@ services:
   # GPU image variant: ghcr.io/ggml-org/llama.cpp:server-cuda  (NVIDIA)
   #                    ghcr.io/ggml-org/llama.cpp:server-rocm   (AMD)
   llama-server:
-    image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    runtime: nvidia          # required for CUDA images; harmless if nvidia runtime is default
     profiles:
       - embedded-llamacpp
     volumes:
@@ -188,7 +195,14 @@ services:
         KV=$${LLAMACPP_KV_CACHE_TYPE:-q8_0}
         PAR=$${LLAMACPP_PARALLEL:-2}
         FA=$${LLAMACPP_FLASH_ATTN:-true}
-        MDL=$${LLAMACPP_MODEL:-/models/model.gguf}
+        # .active_model file written by backend/activate_model takes priority over env var.
+        # This lets the UI switch models without recreating the container.
+        if [ -f /models/.active_model ]; then
+          MDL=$(cat /models/.active_model)
+          echo "Loading model from .active_model: $$MDL"
+        else
+          MDL=$${LLAMACPP_MODEL:-/models/model.gguf}
+        fi
         BASEARGS="--host 0.0.0.0 --port 8080 --ctx-size $$CTX --n-gpu-layers $$GPU --cache-type-k $$KV --cache-type-v $$KV --parallel $$PAR --metrics"
         if [ -f "$$MDL" ]; then
           MODELARGS="--model $$MDL"
@@ -233,6 +247,8 @@ services:
     volumes:
       - ../aiagent:/aiagent:ro
       - llamacpp_models:/llamacpp-models
+      # Docker socket — lets backend restart llama-server when activating a new model
+      - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host-gateway:host-gateway"
     depends_on:

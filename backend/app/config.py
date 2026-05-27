@@ -96,12 +96,13 @@ class Settings(BaseSettings):
     telegram_notifications_enabled: bool = False
 
     # llama.cpp server (optional embedded backend)
-    llamacpp_url: str = "http://localhost:11436"
+    # Defaults match docker-compose.yml values; env vars always win via Pydantic BaseSettings.
+    llamacpp_url: str = "http://localhost:11436"   # override: LLAMACPP_URL=http://llama-server:8080
     llamacpp_model: str = "/models/model.gguf"
-    llamacpp_ctx_size: int = 8192
-    llamacpp_kv_cache_type: str = "q8_0"   # q8_0 = TurboQuant, f16 = full precision
-    llamacpp_n_gpu_layers: int = -1          # -1 = all layers on GPU
-    llamacpp_parallel: int = 4
+    llamacpp_ctx_size: int = 16384   # 16 384 / parallel(2) = 8 192 tokens per slot
+    llamacpp_kv_cache_type: str = "q8_0"
+    llamacpp_n_gpu_layers: int = -1   # -1 = all layers on GPU
+    llamacpp_parallel: int = 2        # 2 slots × 8 192 tokens; was 4 (too many, caused OOM)
     llamacpp_flash_attn: bool = True
 
     # Upload limits

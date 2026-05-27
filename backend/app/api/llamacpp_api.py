@@ -24,6 +24,12 @@ logger = structlog.get_logger()
 _REDIS_KEY = "llamacpp_config"
 _TOKENS_KEY = "llamacpp_tokens"
 _MODELS_DIR = Path(os.environ.get("LLAMACPP_MODELS_DIR", "/llamacpp-models"))
+# File written by activate_model so llama-server picks up the new model on restart.
+# Uses /models/ path (inside llama-server container), not the backend's /llamacpp-models/.
+_ACTIVE_MODEL_FILE = _MODELS_DIR / ".active_model"
+# Path prefix inside the llama-server container (mapped from the same llamacpp_models volume).
+_SERVER_MODELS_PREFIX = "/models"
+_DOCKER_SOCK = "/var/run/docker.sock"
 
 HF_API = "https://huggingface.co/api"
 MS_API = "https://modelscope.cn/api/v1"
@@ -203,6 +209,74 @@ class DownloadStatus(BaseModel):
     total_bytes: int
     progress_pct: float
     error: str | None
+
+
+class ActivateModelResponse(BaseModel):
+    status: str           # "ok" | "restarting" | "no_docker" | "error"
+    model: str            # backend path that was activated
+    server_path: str      # path as seen inside llama-server container
+    message: str
+    server_running: bool = False
+
+
+# ── Docker helpers ────────────────────────────────────────────────────────────
+
+def _backend_to_server_path(backend_path: str) -> str:
+    """Translate /llamacpp-models/foo.gguf → /models/foo.gguf (llama-server view)."""
+    p = Path(backend_path)
+    try:
+        rel = p.relative_to(_MODELS_DIR)
+    except ValueError:
+        rel = Path(p.name)
+    return str(Path(_SERVER_MODELS_PREFIX) / rel)
+
+
+async def _docker_find_container(service_name: str) -> str | None:
+    """Return container ID for the given compose service name, or None."""
+    if not Path(_DOCKER_SOCK).exists():
+        return None
+    try:
+        transport = httpx.AsyncHTTPTransport(uds=_DOCKER_SOCK)
+        filters = json.dumps({"label": [f"com.docker.compose.service={service_name}"]})
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://localhost", timeout=5.0
+        ) as client:
+            r = await client.get("/containers/json", params={"filters": filters})
+            if r.status_code == 200:
+                containers = r.json()
+                if containers:
+                    return containers[0]["Id"]
+    except Exception as exc:
+        logger.warning("docker_find_container_failed", service=service_name, error=str(exc))
+    return None
+
+
+async def _docker_restart_container(container_id: str, stop_timeout: int = 5) -> None:
+    """Gracefully stop then start a container via Docker Engine API."""
+    transport = httpx.AsyncHTTPTransport(uds=_DOCKER_SOCK)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://localhost", timeout=30.0
+    ) as client:
+        r = await client.post(
+            f"/containers/{container_id}/restart",
+            params={"t": str(stop_timeout)},
+        )
+        r.raise_for_status()
+
+
+async def _wait_llama_healthy(url: str, timeout: int = 120) -> bool:
+    """Poll /health until 200 or timeout."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{url}/health")
+                if r.status_code == 200:
+                    return True
+        except Exception:
+            pass
+        await asyncio.sleep(2.0)
+    return False
 
 
 # ── Status & Config ───────────────────────────────────────────────────────────
@@ -561,15 +635,121 @@ async def delete_gguf_model(filename: str) -> dict:
     return {"deleted": filename}
 
 
-@router.post("/models/activate", response_model=LlamaCppConfig)
-async def activate_model(body: dict) -> LlamaCppConfig:
-    path = body.get("path", "")
+@router.post("/models/activate", response_model=ActivateModelResponse)
+async def activate_model(body: dict) -> ActivateModelResponse:
+    """Activate a GGUF model: save config, write .active_model, restart llama-server.
+
+    The llama-server entrypoint reads /models/.active_model on startup, so a
+    container restart is sufficient to switch models without recreating it.
+    Backend communicates with Docker Engine via Unix socket.
+    """
+    path = (body.get("path") or "").strip()
     if not path:
         raise HTTPException(status_code=422, detail="path is required")
+    if not Path(path).exists():
+        raise HTTPException(status_code=404, detail=f"Model file not found: {path}")
+
+    server_path = _backend_to_server_path(path)
+
+    # 1. Persist to agent config (Redis)
     cfg = _load_config()
     cfg["model"] = path
     _save_config(cfg)
-    return LlamaCppConfig(**cfg)
+
+    # 2. Write .active_model so llama-server reads it on next start
+    try:
+        _ACTIVE_MODEL_FILE.write_text(server_path, encoding="utf-8")
+        logger.info("active_model_written", server_path=server_path)
+    except Exception as exc:
+        logger.warning("active_model_file_write_failed", error=str(exc))
+
+    # 3. Find the llama-server container via Docker socket
+    if not Path(_DOCKER_SOCK).exists():
+        return ActivateModelResponse(
+            status="no_docker",
+            model=path,
+            server_path=server_path,
+            message=(
+                f"Модель сохранена ({Path(path).name}). "
+                "Docker socket недоступен — перезапустите llama-server вручную: "
+                "docker compose restart llama-server"
+            ),
+        )
+
+    service_name = os.environ.get("LLAMACPP_SERVICE_NAME", "llama-server")
+    container_id = await _docker_find_container(service_name)
+    if not container_id:
+        return ActivateModelResponse(
+            status="no_docker",
+            model=path,
+            server_path=server_path,
+            message=(
+                f"Модель сохранена ({Path(path).name}). "
+                f"Контейнер '{service_name}' не найден — перезапустите вручную."
+            ),
+        )
+
+    # 4. Restart the container (graceful stop → start)
+    try:
+        logger.info("llamacpp_restart_triggered", container=container_id[:12], model=Path(path).name)
+        await _docker_restart_container(container_id)
+    except Exception as exc:
+        logger.error("llamacpp_restart_failed", error=str(exc))
+        return ActivateModelResponse(
+            status="error",
+            model=path,
+            server_path=server_path,
+            message=f"Модель сохранена, но перезапуск не удался: {exc}",
+        )
+
+    # 5. Wait until healthy (model loading can take 30-90 s for large GGUFs)
+    base_url = _get_llamacpp_base_url()
+    healthy = await _wait_llama_healthy(base_url, timeout=120)
+    logger.info("llamacpp_after_activate", healthy=healthy, model=Path(path).name)
+
+    if healthy:
+        return ActivateModelResponse(
+            status="ok",
+            model=path,
+            server_path=server_path,
+            message=f"Модель активирована: {Path(path).name}",
+            server_running=True,
+        )
+    return ActivateModelResponse(
+        status="restarting",
+        model=path,
+        server_path=server_path,
+        message="Сервер перезапускается. Загрузка большой модели может занять больше 2 мин — проверьте /status.",
+        server_running=False,
+    )
+
+
+@router.post("/restart", response_model=ActivateModelResponse)
+async def restart_llamacpp_server() -> ActivateModelResponse:
+    """Restart llama-server without changing the model (e.g. after config update)."""
+    cfg = _load_config()
+    path = cfg.get("model", "")
+    server_path = _backend_to_server_path(path) if path else ""
+
+    if not Path(_DOCKER_SOCK).exists():
+        raise HTTPException(status_code=503, detail="Docker socket недоступен.")
+
+    service_name = os.environ.get("LLAMACPP_SERVICE_NAME", "llama-server")
+    container_id = await _docker_find_container(service_name)
+    if not container_id:
+        raise HTTPException(status_code=404, detail=f"Контейнер '{service_name}' не найден.")
+
+    await _docker_restart_container(container_id)
+    base_url = _get_llamacpp_base_url()
+    healthy = await _wait_llama_healthy(base_url, timeout=120)
+
+    return ActivateModelResponse(
+        status="ok" if healthy else "restarting",
+        model=path,
+        server_path=server_path,
+        message="Сервер перезапущен успешно." if healthy else "Сервер перезапускается…",
+        server_running=healthy,
+    )
 
 
 # ── Download ──────────────────────────────────────────────────────────────────
