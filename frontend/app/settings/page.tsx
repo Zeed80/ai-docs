@@ -1205,6 +1205,7 @@ export default function SettingsPage() {
         loadAgentWorkRegistry();
         loadModels();
         loadCapabilities();
+        loadGgufModels();
       } else if (tab === "models") {
         loadModels();
         loadConfig();
@@ -2656,8 +2657,22 @@ export default function SettingsPage() {
                       </div>
                     )}
 
+                    {/* llamacpp info */}
+                    {agentConfig.provider === "llamacpp" && (
+                      <div className="mt-3 flex items-start gap-2 rounded-md bg-blue-950/30 border border-blue-800/40 px-3 py-2 text-xs text-blue-300">
+                        <span>⚡</span>
+                        <span>
+                          llama.cpp сервер: настройки и загрузка моделей в{" "}
+                          <a href="/settings/llamacpp" className="underline">
+                            Настройки / llama.cpp
+                          </a>
+                        </span>
+                      </div>
+                    )}
+
                     {/* Cloud API key hint */}
                     {agentConfig.provider !== "ollama" &&
+                      agentConfig.provider !== "llamacpp" &&
                       !LOCAL_PROVIDER_URL_LABEL[agentConfig.provider] && (
                         <div className="mt-3 flex items-start gap-2 rounded-md bg-amber-950/30 border border-amber-800/40 px-3 py-2 text-xs text-amber-300">
                           <span>🔑</span>
