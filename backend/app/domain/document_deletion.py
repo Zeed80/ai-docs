@@ -21,6 +21,12 @@ from app.db.models import (
     DocumentLink,
     DocumentProcessingJob,
     DocumentVersion,
+    Drawing,
+    DrawingAssemblyBOM,
+    DrawingFeature,
+    DrawingFeatureCorrection,
+    DrawingTPLink,
+    DrawingViewSection,
     EmailThread,
     EntityMention,
     EvidenceSpan,
@@ -366,6 +372,30 @@ async def hard_delete_document(
     await remove(ManufacturingProcessPlan, ManufacturingProcessPlan.document_id == document_id)
 
     await _delete_cross_entity_records(db, document_id, invoice_ids, bom_ids, counts)
+
+    # ── Drawing cascade ──────────────────────────────────────────────────────
+    # Must happen before deleting Document (drawings.document_id → documents.id)
+    drawing_ids = set(
+        (
+            await db.execute(
+                select(Drawing.id).where(Drawing.document_id == document_id)
+            )
+        ).scalars().all()
+    )
+    if drawing_ids:
+        # Nullify nullable drawing_id FK in process plans from *other* documents
+        await db.execute(
+            ManufacturingProcessPlan.__table__.update()  # type: ignore[attr-defined]
+            .where(ManufacturingProcessPlan.drawing_id.in_(drawing_ids))
+            .values(drawing_id=None)
+        )
+        # Delete child tables of Drawing (all have NOT NULL FK to drawings.id)
+        await remove(DrawingFeature, DrawingFeature.drawing_id.in_(drawing_ids))
+        await remove(DrawingViewSection, DrawingViewSection.drawing_id.in_(drawing_ids))
+        await remove(DrawingAssemblyBOM, DrawingAssemblyBOM.drawing_id.in_(drawing_ids))
+        await remove(DrawingFeatureCorrection, DrawingFeatureCorrection.drawing_id.in_(drawing_ids))
+        await remove(DrawingTPLink, DrawingTPLink.drawing_id.in_(drawing_ids))
+        await remove(Drawing, Drawing.id.in_(drawing_ids))
 
     if version_ids:
         await remove(DocumentVersion, DocumentVersion.id.in_(version_ids))
