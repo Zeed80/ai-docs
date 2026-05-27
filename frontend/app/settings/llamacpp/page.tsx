@@ -6,6 +6,16 @@ import { csrfHeaders, mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
+// ── Shared style tokens (dark-first, matching settings/page.tsx) ────────────
+const inputCls =
+  "w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50";
+const selectCls =
+  "w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500";
+const cardCls = "border border-slate-700 rounded-lg overflow-hidden";
+const cardHeaderCls =
+  "px-4 py-2 bg-slate-800 border-b border-slate-700 flex items-center justify-between";
+const rowHoverCls = "hover:bg-slate-700/50 transition-colors";
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface Status {
@@ -116,17 +126,20 @@ function fmtNum(n: number): string {
 }
 function quantColor(q: string): string {
   if (q.includes("Q8") || q.includes("F16") || q.includes("BF16"))
-    return "bg-green-100 text-green-800";
-  if (q.includes("Q6") || q.includes("Q5")) return "bg-teal-100 text-teal-800";
+    return "bg-green-900/60 text-green-300";
+  if (q.includes("Q6") || q.includes("Q5"))
+    return "bg-teal-900/60 text-teal-300";
   if (q.includes("Q4_K_M") || q.includes("Q4_K_L"))
-    return "bg-blue-100 text-blue-800";
-  if (q.includes("Q4")) return "bg-indigo-100 text-indigo-700";
-  if (q.includes("Q3")) return "bg-orange-100 text-orange-700";
-  if (q.includes("Q2") || q.includes("IQ")) return "bg-red-100 text-red-700";
-  return "bg-gray-100 text-gray-600";
+    return "bg-blue-900/60 text-blue-300";
+  if (q.includes("Q4")) return "bg-indigo-900/60 text-indigo-300";
+  if (q.includes("Q3")) return "bg-orange-900/60 text-orange-300";
+  if (q.includes("Q2") || q.includes("IQ")) return "bg-red-900/60 text-red-300";
+  return "bg-slate-700 text-slate-300";
 }
 
 // ── Search Tab ─────────────────────────────────────────────────────────────
+
+const SS_KEY = "llamacpp_search_state";
 
 function SearchTab({
   onDownloadStart,
@@ -134,7 +147,6 @@ function SearchTab({
   onDownloadStart: (dl: DownloadStatus) => void;
 }) {
   const [source, setSource] = useState<Source>("huggingface");
-  const [q, setQ] = useState("");
   const [inputQ, setInputQ] = useState("");
   const [quant, setQuant] = useState("");
   const [maxGb, setMaxGb] = useState(100);
@@ -147,6 +159,43 @@ function SearchTab({
   const [downloading, setDownloading] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restoredRef = useRef(false);
+
+  // Restore from sessionStorage on mount
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    try {
+      const raw = sessionStorage.getItem(SS_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (s.source) setSource(s.source);
+      if (s.inputQ) setInputQ(s.inputQ);
+      if (s.quant !== undefined) setQuant(s.quant);
+      if (s.maxGb !== undefined) setMaxGb(s.maxGb);
+      if (s.sort) setSort(s.sort);
+      if (Array.isArray(s.hfResults)) setHfResults(s.hfResults);
+      if (Array.isArray(s.msResults)) setMsResults(s.msResults);
+    } catch {}
+  }, []);
+
+  // Persist to sessionStorage whenever key state changes
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        SS_KEY,
+        JSON.stringify({
+          source,
+          inputQ,
+          quant,
+          maxGb,
+          sort,
+          hfResults,
+          msResults,
+        }),
+      );
+    } catch {}
+  }, [source, inputQ, quant, maxGb, sort, hfResults, msResults]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -192,10 +241,7 @@ function SearchTab({
   function handleInput(v: string) {
     setInputQ(v);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      setQ(v);
-      search(v);
-    }, 600);
+    debounceRef.current = setTimeout(() => search(v), 600);
   }
 
   async function loadFiles(repoId: string) {
@@ -265,7 +311,7 @@ function SearchTab({
   return (
     <div className="space-y-4">
       {/* Source toggle */}
-      <div className="flex gap-1 p-1 bg-gray-100 rounded-lg w-fit">
+      <div className="flex gap-1 p-1 bg-slate-700 rounded-lg w-fit">
         {(["huggingface", "modelscope"] as Source[]).map((s) => (
           <button
             key={s}
@@ -274,7 +320,11 @@ function SearchTab({
               setHfResults([]);
               setMsResults([]);
             }}
-            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${source === s ? "bg-white shadow text-gray-900" : "text-gray-500 hover:text-gray-700"}`}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              source === s
+                ? "bg-slate-900 shadow text-slate-100"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
           >
             {s === "huggingface" ? "🤗 HuggingFace" : "🌐 ModelScope"}
           </button>
@@ -296,7 +346,7 @@ function SearchTab({
                 ? "Qwen2.5, Llama, Mistral, gemma…"
                 : "Qwen, deepseek…"
             }
-            className="w-full border rounded-lg px-4 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className={inputCls + " pr-10"}
           />
           {loading && (
             <div className="absolute right-3 top-3 w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
@@ -312,11 +362,11 @@ function SearchTab({
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
-        <span className="text-xs text-gray-500 font-medium">Фильтры:</span>
+        <span className="text-xs text-slate-400 font-medium">Фильтры:</span>
         <select
           value={quant}
           onChange={(e) => setQuant(e.target.value)}
-          className="border rounded px-2 py-1 text-xs"
+          className="border border-slate-600 bg-slate-800 text-slate-200 rounded px-2 py-1 text-xs"
         >
           <option value="">Любой квант</option>
           {QUANTS.map((q) => (
@@ -328,7 +378,7 @@ function SearchTab({
         <select
           value={String(maxGb)}
           onChange={(e) => setMaxGb(Number(e.target.value))}
-          className="border rounded px-2 py-1 text-xs"
+          className="border border-slate-600 bg-slate-800 text-slate-200 rounded px-2 py-1 text-xs"
         >
           <option value="100">Любой размер</option>
           <option value="3">до 3 GB</option>
@@ -341,7 +391,7 @@ function SearchTab({
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value)}
-            className="border rounded px-2 py-1 text-xs"
+            className="border border-slate-600 bg-slate-800 text-slate-200 rounded px-2 py-1 text-xs"
           >
             <option value="downloads">По популярности</option>
             <option value="likes">По лайкам</option>
@@ -354,22 +404,23 @@ function SearchTab({
               setQuant("");
               setMaxGb(100);
             }}
-            className="text-xs text-red-500 hover:underline"
+            className="text-xs text-red-400 hover:underline"
           >
             Сбросить
           </button>
         )}
       </div>
 
-      {/* Results */}
+      {/* Empty state */}
       {results.length === 0 && !loading && inputQ && (
-        <div className="text-sm text-gray-500 py-8 text-center">
+        <div className="text-sm text-slate-500 py-8 text-center">
           {source === "huggingface"
             ? "Ничего не найдено. Попробуйте другой запрос."
             : "ModelScope: модели не найдены или API временно недоступен."}
         </div>
       )}
 
+      {/* Results */}
       <div className="space-y-2">
         {(results as (HFModel | MSModel)[]).map((m) => {
           const repoId = m.repo_id;
@@ -381,26 +432,26 @@ function SearchTab({
           const isLoadingFiles = loadingFiles[repoId];
 
           return (
-            <div key={repoId} className="border rounded-lg overflow-hidden">
+            <div key={repoId} className={cardCls}>
               {/* Model header */}
-              <div className="p-4 flex items-start gap-3 hover:bg-gray-50">
+              <div className={`p-4 flex items-start gap-3 ${rowHoverCls}`}>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-sm font-semibold text-blue-700 truncate">
+                    <span className="font-mono text-sm font-semibold text-blue-400 truncate">
                       {repoId}
                     </span>
                     {isHF && hf.gated && (
-                      <span className="text-xs bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded">
+                      <span className="text-xs bg-yellow-900/60 text-yellow-300 px-1.5 py-0.5 rounded">
                         🔒 gated
                       </span>
                     )}
                     {isHF && hf.files.length > 0 && (
-                      <span className="text-xs text-gray-400">
+                      <span className="text-xs text-slate-500">
                         {hf.files.length} файлов в кэше
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                  <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
                     <span>⬇ {fmtNum(isHF ? hf.downloads : ms.downloads)}</span>
                     <span>
                       {isHF ? `♥ ${fmtNum(hf.likes)}` : `★ ${fmtNum(ms.stars)}`}
@@ -409,7 +460,7 @@ function SearchTab({
                       hf.tags.slice(0, 3).map((t) => (
                         <span
                           key={t}
-                          className="bg-gray-100 px-1.5 py-0.5 rounded"
+                          className="bg-slate-700 px-1.5 py-0.5 rounded"
                         >
                           {t}
                         </span>
@@ -419,7 +470,7 @@ function SearchTab({
                 <button
                   onClick={() => loadFiles(repoId)}
                   disabled={isLoadingFiles}
-                  className="text-xs px-3 py-1.5 border rounded-md hover:bg-gray-100 whitespace-nowrap disabled:opacity-50"
+                  className="text-xs px-3 py-1.5 border border-slate-600 rounded-md hover:bg-slate-700 text-slate-300 whitespace-nowrap disabled:opacity-50"
                 >
                   {isLoadingFiles ? "…" : isExpanded ? "▲ Скрыть" : "▼ Файлы"}
                 </button>
@@ -427,9 +478,9 @@ function SearchTab({
 
               {/* File list */}
               {isExpanded && (
-                <div className="border-t bg-gray-50">
+                <div className="border-t border-slate-700 bg-slate-900/50">
                   {files.length === 0 ? (
-                    <div className="px-4 py-3 text-sm text-gray-500">
+                    <div className="px-4 py-3 text-sm text-slate-500">
                       GGUF-файлы не найдены в этом репозитории.
                     </div>
                   ) : (
@@ -442,7 +493,7 @@ function SearchTab({
                       return (
                         <div
                           key={f.filename}
-                          className="flex items-center gap-3 px-4 py-2.5 border-b last:border-0 hover:bg-white"
+                          className={`flex items-center gap-3 px-4 py-2.5 border-b border-slate-700/50 last:border-0 ${rowHoverCls}`}
                         >
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -452,21 +503,21 @@ function SearchTab({
                                 {f.quant}
                               </span>
                               {f.is_split && (
-                                <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">
+                                <span className="text-xs bg-orange-900/60 text-orange-300 px-1.5 py-0.5 rounded">
                                   {f.total_parts} частей
                                 </span>
                               )}
-                              <span className="text-sm font-mono truncate text-gray-700">
+                              <span className="text-sm font-mono truncate text-slate-200">
                                 {displayName}
                               </span>
                             </div>
                             {f.is_split && (
-                              <p className="text-xs text-gray-400 mt-0.5">
+                              <p className="text-xs text-slate-500 mt-0.5">
                                 Загрузит все {f.total_parts} части в один запуск
                               </p>
                             )}
                           </div>
-                          <span className="text-xs text-gray-500 whitespace-nowrap">
+                          <span className="text-xs text-slate-500 whitespace-nowrap">
                             {f.size_human}
                           </span>
                           <button
@@ -488,7 +539,7 @@ function SearchTab({
       </div>
 
       {toast && (
-        <div className="fixed bottom-6 right-6 bg-gray-900 text-white text-sm px-4 py-2 rounded-lg shadow-lg z-50">
+        <div className="fixed bottom-6 right-6 bg-slate-700 text-slate-100 text-sm px-4 py-2 rounded-lg shadow-lg z-50 border border-slate-600">
           {toast}
         </div>
       )}
@@ -511,38 +562,41 @@ function DownloadsPanel({
   if (active.length === 0 && downloads.length === 0) return null;
 
   return (
-    <div className="border rounded-lg overflow-hidden">
-      <div className="px-4 py-2 bg-gray-50 border-b flex items-center justify-between">
-        <span className="text-sm font-medium">
-          Загрузки {active.length > 0 && `(${active.length} активных)`}
+    <div className={cardCls}>
+      <div className={cardHeaderCls}>
+        <span className="text-sm font-medium text-slate-200">
+          Загрузки{active.length > 0 && ` (${active.length} активных)`}
         </span>
         {downloads.some((d) => d.status === "done") && (
           <button
             onClick={onDone}
-            className="text-xs text-gray-500 hover:underline"
+            className="text-xs text-slate-400 hover:text-slate-200"
           >
             Очистить завершённые
           </button>
         )}
       </div>
       {downloads.map((d) => (
-        <div key={d.download_id} className="px-4 py-3 border-b last:border-0">
+        <div
+          key={d.download_id}
+          className="px-4 py-3 border-b border-slate-700 last:border-0"
+        >
           <div className="flex items-center justify-between mb-1">
             <div className="min-w-0">
-              <span className="text-xs font-mono text-gray-600 truncate block">
+              <span className="text-xs font-mono text-slate-300 truncate block">
                 {d.filename}
               </span>
-              <span className="text-xs text-gray-400">{d.repo_id}</span>
+              <span className="text-xs text-slate-500">{d.repo_id}</span>
             </div>
             <span
-              className={`text-xs font-medium ${
+              className={`text-xs font-medium ml-3 ${
                 d.status === "done"
-                  ? "text-green-600"
+                  ? "text-green-400"
                   : d.status === "error"
-                    ? "text-red-600"
+                    ? "text-red-400"
                     : d.status === "cancelled"
-                      ? "text-gray-400"
-                      : "text-blue-600"
+                      ? "text-slate-500"
+                      : "text-blue-400"
               }`}
             >
               {d.status === "done"
@@ -555,7 +609,7 @@ function DownloadsPanel({
             </span>
           </div>
           {["downloading", "pending"].includes(d.status) && (
-            <div className="w-full bg-gray-200 rounded-full h-1.5">
+            <div className="w-full bg-slate-700 rounded-full h-1.5">
               <div
                 className="bg-blue-500 h-1.5 rounded-full transition-all"
                 style={{ width: `${d.progress_pct}%` }}
@@ -563,13 +617,13 @@ function DownloadsPanel({
             </div>
           )}
           {d.status === "downloading" && (
-            <div className="text-xs text-gray-400 mt-0.5">
+            <div className="text-xs text-slate-500 mt-0.5">
               {humanBytes(d.progress_bytes)} /{" "}
               {d.total_bytes > 0 ? humanBytes(d.total_bytes) : "?"}
             </div>
           )}
           {d.error && (
-            <div className="text-xs text-red-600 mt-1">{d.error}</div>
+            <div className="text-xs text-red-400 mt-1">{d.error}</div>
           )}
         </div>
       ))}
@@ -621,17 +675,17 @@ function LocalTab({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="font-semibold">Локальные модели</h2>
+        <h2 className="font-semibold text-slate-100">Локальные модели</h2>
         <button
           onClick={onRefresh}
-          className="text-sm text-blue-600 hover:underline"
+          className="text-sm text-blue-400 hover:text-blue-300"
         >
           ↺ Обновить
         </button>
       </div>
 
       {models.length === 0 ? (
-        <div className="border rounded-lg p-8 text-center text-sm text-gray-500">
+        <div className={`${cardCls} p-8 text-center text-sm text-slate-500`}>
           <p className="text-2xl mb-2">📂</p>
           <p>GGUF-файлы не найдены. Перейдите в «Поиск» и загрузите модель.</p>
         </div>
@@ -640,11 +694,13 @@ function LocalTab({
           {models.map((m) => (
             <div
               key={m.path}
-              className={`border rounded-lg p-3 flex items-center gap-3 ${m.active ? "border-blue-400 bg-blue-50" : "hover:bg-gray-50"}`}
+              className={`${cardCls} p-3 flex items-center gap-3 ${
+                m.active ? "border-blue-500 bg-blue-900/20" : rowHoverCls
+              }`}
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-sm font-medium truncate">
+                  <span className="font-mono text-sm font-medium truncate text-slate-200">
                     {m.name}
                   </span>
                   {m.active && (
@@ -653,7 +709,7 @@ function LocalTab({
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-gray-400 mt-0.5 flex gap-3">
+                <div className="text-xs text-slate-500 mt-0.5 flex gap-3">
                   <span>{m.size_human}</span>
                   <span className="truncate">{m.path}</span>
                 </div>
@@ -671,7 +727,7 @@ function LocalTab({
                   onClick={() => {
                     if (confirm(`Удалить ${m.name}?`)) onDelete(m.name);
                   }}
-                  className="text-xs px-2 py-1 border border-red-300 text-red-600 rounded hover:bg-red-50"
+                  className="text-xs px-2 py-1 border border-red-800 text-red-400 rounded hover:bg-red-900/30"
                 >
                   ✕
                 </button>
@@ -681,15 +737,17 @@ function LocalTab({
         </div>
       )}
 
-      <div className="border rounded-lg p-4 space-y-2">
-        <p className="text-sm font-medium">Добавить по прямой ссылке</p>
+      <div className={`${cardCls} p-4 space-y-2`}>
+        <p className="text-sm font-medium text-slate-200">
+          Добавить по прямой ссылке
+        </p>
         <div className="flex gap-2">
           <input
             type="url"
             value={customUrl}
             onChange={(e) => setCustomUrl(e.target.value)}
             placeholder="https://huggingface.co/.../model.gguf"
-            className="flex-1 border rounded px-3 py-2 text-xs font-mono"
+            className={inputCls + " font-mono text-xs"}
           />
           <button
             onClick={downloadFromUrl}
@@ -725,32 +783,41 @@ function ConfigTab({
 
   return (
     <div className="space-y-5">
-      <h2 className="font-semibold">Конфигурация llama-server</h2>
-      <p className="text-sm text-gray-500">
-        Применяется при следующем запуске сервера.
-      </p>
-
-      <div className="space-y-1">
-        <label className="text-sm font-medium">URL сервера</label>
-        <input
-          type="text"
-          value={draft.url}
-          onChange={(e) => set("url", e.target.value)}
-          className="w-full border rounded px-3 py-2 text-sm font-mono"
-        />
-        <p className="text-xs text-gray-400">
-          Docker: <code>http://llama-server:8080</code> | Хост:{" "}
-          <code>http://localhost:11436</code>
+      <div>
+        <h2 className="font-semibold text-slate-100">
+          Конфигурация llama-server
+        </h2>
+        <p className="text-sm text-slate-400 mt-1">
+          Применяется при следующем запуске сервера.
         </p>
       </div>
 
       <div className="space-y-1">
-        <label className="text-sm font-medium">Активная модель</label>
+        <label className="text-sm font-medium text-slate-300">
+          URL сервера
+        </label>
+        <input
+          type="text"
+          value={draft.url}
+          onChange={(e) => set("url", e.target.value)}
+          className={inputCls + " font-mono"}
+        />
+        <p className="text-xs text-slate-500">
+          Docker:{" "}
+          <code className="text-slate-400">http://llama-server:8080</code> |
+          Хост: <code className="text-slate-400">http://localhost:11436</code>
+        </p>
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-sm font-medium text-slate-300">
+          Активная модель
+        </label>
         {models.length > 0 ? (
           <select
             value={draft.model}
             onChange={(e) => set("model", e.target.value)}
-            className="w-full border rounded px-3 py-2 text-sm"
+            className={selectCls}
           >
             <option value="">— не выбрана —</option>
             {models.map((m) => (
@@ -765,15 +832,15 @@ function ConfigTab({
             value={draft.model}
             onChange={(e) => set("model", e.target.value)}
             placeholder="/llamacpp-models/model.gguf"
-            className="w-full border rounded px-3 py-2 text-sm font-mono"
+            className={inputCls + " font-mono"}
           />
         )}
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-medium">
+        <label className="text-sm font-medium text-slate-300">
           Контекст:{" "}
-          <span className="font-mono">
+          <span className="font-mono text-slate-100">
             {draft.ctx_size.toLocaleString()} токенов
           </span>
         </label>
@@ -784,9 +851,9 @@ function ConfigTab({
           step={512}
           value={draft.ctx_size}
           onChange={(e) => set("ctx_size", Number(e.target.value))}
-          className="w-full"
+          className="w-full accent-blue-500"
         />
-        <div className="flex justify-between text-xs text-gray-400">
+        <div className="flex justify-between text-xs text-slate-500">
           <span>512</span>
           <span>8K</span>
           <span>32K</span>
@@ -796,11 +863,13 @@ function ConfigTab({
       </div>
 
       <div className="space-y-1">
-        <label className="text-sm font-medium">KV-кэш (TurboQuant)</label>
+        <label className="text-sm font-medium text-slate-300">
+          KV-кэш (TurboQuant)
+        </label>
         <select
           value={draft.kv_cache_type}
           onChange={(e) => set("kv_cache_type", e.target.value)}
-          className="w-full border rounded px-3 py-2 text-sm"
+          className={selectCls}
         >
           {KV_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -811,9 +880,9 @@ function ConfigTab({
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-medium">
+        <label className="text-sm font-medium text-slate-300">
           GPU слои:{" "}
-          <span className="font-mono">
+          <span className="font-mono text-slate-100">
             {draft.n_gpu_layers === -1 ? "все (-1)" : draft.n_gpu_layers}
           </span>
         </label>
@@ -824,9 +893,9 @@ function ConfigTab({
           step={1}
           value={draft.n_gpu_layers}
           onChange={(e) => set("n_gpu_layers", Number(e.target.value))}
-          className="w-full"
+          className="w-full accent-blue-500"
         />
-        <div className="flex justify-between text-xs text-gray-400">
+        <div className="flex justify-between text-xs text-slate-500">
           <span>CPU (−1=все)</span>
           <span>32</span>
           <span>64</span>
@@ -835,9 +904,9 @@ function ConfigTab({
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-medium">
+        <label className="text-sm font-medium text-slate-300">
           Слотов параллельно:{" "}
-          <span className="font-mono">{draft.parallel}</span>
+          <span className="font-mono text-slate-100">{draft.parallel}</span>
         </label>
         <input
           type="range"
@@ -846,24 +915,24 @@ function ConfigTab({
           step={1}
           value={draft.parallel}
           onChange={(e) => set("parallel", Number(e.target.value))}
-          className="w-full"
+          className="w-full accent-blue-500"
         />
       </div>
 
-      <div className="flex items-center gap-2">
+      <label className="flex items-center gap-3 cursor-pointer">
         <input
           id="fa"
           type="checkbox"
           checked={draft.flash_attn}
           onChange={(e) => set("flash_attn", e.target.checked)}
-          className="w-4 h-4"
+          className="w-4 h-4 accent-blue-500"
         />
-        <label htmlFor="fa" className="text-sm cursor-pointer">
+        <span className="text-sm text-slate-200">
           Flash Attention (~15–25% быстрее на совместимых GPU)
-        </label>
-      </div>
+        </span>
+      </label>
 
-      <div className="flex gap-3 pt-2 border-t">
+      <div className="flex gap-3 pt-2 border-t border-slate-700">
         <button
           onClick={() => onSave(draft)}
           disabled={!hasChanges}
@@ -874,15 +943,15 @@ function ConfigTab({
         {hasChanges && (
           <button
             onClick={() => setDraft(config)}
-            className="px-4 py-2 border rounded text-sm hover:bg-gray-50"
+            className="px-4 py-2 border border-slate-600 text-slate-300 rounded text-sm hover:bg-slate-700"
           >
             Отменить
           </button>
         )}
       </div>
 
-      <div className="border rounded-lg p-4 bg-gray-50 text-sm space-y-2">
-        <p className="font-medium text-xs text-gray-500 uppercase tracking-wide">
+      <div className={`${cardCls} p-4 space-y-2 bg-slate-900/50`}>
+        <p className="font-medium text-xs text-slate-500 uppercase tracking-wide">
           Команды управления
         </p>
         {[
@@ -897,8 +966,8 @@ function ConfigTab({
           ],
         ].map(([label, cmd]) => (
           <div key={label}>
-            <span className="text-xs text-gray-400"># {label}</span>
-            <code className="block bg-white border rounded px-2 py-1 text-xs font-mono mt-0.5">
+            <span className="text-xs text-slate-500"># {label}</span>
+            <code className="block bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs font-mono mt-0.5 text-slate-300">
               {cmd}
             </code>
           </div>
@@ -915,7 +984,7 @@ function TokensTab() {
   const [hfToken, setHfToken] = useState("");
   const [msToken, setMsToken] = useState("");
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
     fetch(`${API}/api/llamacpp/tokens`)
@@ -942,9 +1011,9 @@ function TokensTab() {
       setTokens(r);
       setHfToken("");
       setMsToken("");
-      setMsg("Токены сохранены");
+      setMsg({ text: "Токены сохранены", ok: true });
     } catch {
-      setMsg("Ошибка сохранения");
+      setMsg({ text: "Ошибка сохранения", ok: false });
     } finally {
       setSaving(false);
     }
@@ -956,14 +1025,14 @@ function TokensTab() {
       headers: await csrfHeaders(),
     }).then((r) => r.json());
     setTokens(r);
-    setMsg(`Токен ${provider} удалён`);
+    setMsg({ text: `Токен ${provider} удалён`, ok: true });
   }
 
   return (
     <div className="space-y-6 max-w-lg">
       <div>
-        <h2 className="font-semibold">API-токены</h2>
-        <p className="text-sm text-gray-500 mt-1">
+        <h2 className="font-semibold text-slate-100">API-токены</h2>
+        <p className="text-sm text-slate-400 mt-1">
           Нужны для загрузки gated-моделей (Llama 3, Mistral и др.) и увеличения
           лимитов API. Хранятся в Redis, не передаются третьим лицам.
         </p>
@@ -989,17 +1058,19 @@ function TokensTab() {
           placeholder: "ms_…",
         },
       ].map(({ provider, label, value, setValue, set, hint, placeholder }) => (
-        <div key={provider} className="border rounded-lg p-4 space-y-2">
+        <div key={provider} className={`${cardCls} p-4 space-y-2`}>
           <div className="flex items-center justify-between">
-            <label className="font-medium text-sm">{label}</label>
+            <label className="font-medium text-sm text-slate-200">
+              {label}
+            </label>
             {set && (
               <div className="flex items-center gap-2">
-                <span className="text-xs text-green-600 font-medium">
+                <span className="text-xs text-green-400 font-medium">
                   ✓ Установлен
                 </span>
                 <button
                   onClick={() => removeToken(provider)}
-                  className="text-xs text-red-500 hover:underline"
+                  className="text-xs text-red-400 hover:underline"
                 >
                   Удалить
                 </button>
@@ -1011,9 +1082,9 @@ function TokensTab() {
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder={set ? "Введите новый токен для замены" : placeholder}
-            className="w-full border rounded px-3 py-2 text-sm font-mono"
+            className={inputCls + " font-mono"}
           />
-          <p className="text-xs text-gray-400">{hint}</p>
+          <p className="text-xs text-slate-500">{hint}</p>
         </div>
       ))}
 
@@ -1026,7 +1097,11 @@ function TokensTab() {
           {saving ? "Сохранение…" : "Сохранить токены"}
         </button>
       )}
-      {msg && <p className="text-sm text-green-700">{msg}</p>}
+      {msg && (
+        <p className={`text-sm ${msg.ok ? "text-green-400" : "text-red-400"}`}>
+          {msg.text}
+        </p>
+      )}
     </div>
   );
 }
@@ -1055,6 +1130,7 @@ export default function LlamaCppPage() {
       setStatus(s);
     } catch {}
   }, []);
+
   const loadModels = useCallback(async () => {
     try {
       setModels(
@@ -1062,20 +1138,13 @@ export default function LlamaCppPage() {
       );
     } catch {}
   }, []);
+
   const loadConfig = useCallback(async () => {
     try {
       const c = await fetch(`${API}/api/llamacpp/config`).then((r) => r.json());
       setConfig(c);
     } catch {}
   }, []);
-
-  useEffect(() => {
-    loadStatus();
-    loadConfig();
-    loadModels();
-    const iv = setInterval(loadStatus, 10000);
-    return () => clearInterval(iv);
-  }, [loadStatus, loadConfig, loadModels]);
 
   function startSSE(dl: DownloadStatus) {
     const id = dl.download_id;
@@ -1105,6 +1174,34 @@ export default function LlamaCppPage() {
       delete sseRefs.current[id];
     };
   }
+
+  // Initial load + restore active downloads
+  useEffect(() => {
+    loadStatus();
+    loadConfig();
+    loadModels();
+    const iv = setInterval(loadStatus, 10000);
+
+    // Restore active downloads from backend (survives page navigation)
+    fetch(`${API}/api/llamacpp/downloads`)
+      .then((r) => r.json())
+      .then((existing: DownloadStatus[]) => {
+        if (!Array.isArray(existing) || existing.length === 0) return;
+        setDownloads(existing);
+        for (const dl of existing) {
+          if (["downloading", "pending"].includes(dl.status)) {
+            startSSE(dl);
+          }
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      clearInterval(iv);
+      for (const es of Object.values(sseRefs.current)) es.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadStatus, loadConfig, loadModels]);
 
   function handleDownloadStart(dl: DownloadStatus) {
     setDownloads((prev) => {
@@ -1174,19 +1271,19 @@ export default function LlamaCppPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
-      {/* Header with status indicator */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold">llama.cpp</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h1 className="text-xl font-bold text-slate-100">llama.cpp</h1>
+          <p className="text-sm text-slate-400 mt-0.5">
             Локальный GGUF-бэкенд · TurboQuant · Flash Attention
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm">
           <span
-            className={`w-2.5 h-2.5 rounded-full ${status?.running ? "bg-green-500" : "bg-gray-300"}`}
+            className={`w-2.5 h-2.5 rounded-full ${status?.running ? "bg-green-500" : "bg-slate-600"}`}
           />
-          <span className="text-gray-600">
+          <span className="text-slate-300">
             {status?.running
               ? status.model_loaded
                 ? status.model_loaded.split("/").pop()?.slice(0, 30)
@@ -1194,15 +1291,20 @@ export default function LlamaCppPage() {
               : "Выключен"}
           </span>
           {status?.running && (
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-slate-500">
               · слоты {status.slots_idle ?? "?"}/
               {(status.slots_idle ?? 0) + (status.slots_processing ?? 0)}
+            </span>
+          )}
+          {status?.running && status.ctx_size && (
+            <span className="text-xs text-slate-500">
+              · {(status.ctx_size / 1024).toFixed(0)}K ctx
             </span>
           )}
         </div>
       </div>
 
-      {/* Active downloads */}
+      {/* Active downloads — always visible */}
       {downloads.length > 0 && (
         <DownloadsPanel
           downloads={downloads}
@@ -1213,20 +1315,20 @@ export default function LlamaCppPage() {
       )}
 
       {/* Tab nav */}
-      <div className="flex gap-0 border-b">
+      <div className="flex gap-0 border-b border-slate-700">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${
               tab === t.id
-                ? "border-blue-600 text-blue-600"
-                : "border-transparent text-gray-500 hover:text-gray-800"
+                ? "border-blue-500 text-blue-400"
+                : "border-transparent text-slate-500 hover:text-slate-200"
             }`}
           >
             {t.label}
             {t.badge != null && (
-              <span className="text-xs bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-full">
+              <span className="text-xs bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded-full">
                 {t.badge}
               </span>
             )}
@@ -1234,29 +1336,35 @@ export default function LlamaCppPage() {
         ))}
       </div>
 
-      {/* Content */}
-      <div>
-        {tab === "search" && (
-          <SearchTab onDownloadStart={handleDownloadStart} />
-        )}
-        {tab === "local" && (
-          <LocalTab
-            models={models}
-            onRefresh={loadModels}
-            onActivate={activateModel}
-            onDelete={deleteModel}
-          />
-        )}
-        {tab === "config" && config && (
+      {/* Tab content — always rendered, hidden when inactive to preserve state */}
+      <div className={tab !== "search" ? "hidden" : ""}>
+        <SearchTab onDownloadStart={handleDownloadStart} />
+      </div>
+      <div className={tab !== "local" ? "hidden" : ""}>
+        <LocalTab
+          models={models}
+          onRefresh={loadModels}
+          onActivate={activateModel}
+          onDelete={deleteModel}
+        />
+      </div>
+      <div className={tab !== "config" ? "hidden" : ""}>
+        {config && (
           <ConfigTab config={config} models={models} onSave={saveConfig} />
         )}
-        {tab === "tokens" && <TokensTab />}
+      </div>
+      <div className={tab !== "tokens" ? "hidden" : ""}>
+        <TokensTab />
       </div>
 
       {/* Toast */}
       {toast && (
         <div
-          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${toast.ok ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}
+          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium border ${
+            toast.ok
+              ? "bg-green-800 text-green-100 border-green-700"
+              : "bg-red-800 text-red-100 border-red-700"
+          }`}
         >
           {toast.text}
         </div>

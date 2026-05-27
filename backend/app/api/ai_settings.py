@@ -37,11 +37,15 @@ _REDIS_KEY = "ai_config"
 _DEFAULT_CONFIG = {
     "model_agent": "qwen3.5:9b",
     "model_ocr": settings.ollama_model_ocr,
+    "model_ocr_provider": "ollama",
     "model_reasoning": settings.ollama_model_reasoning,
+    "model_reasoning_provider": "ollama",
     "model_vlm": settings.ollama_model_vlm,
+    "model_vlm_provider": "ollama",
     "embedding_model": "qwen3_embedding_8b_ollama",
     "reranker_model": "local_reranker_ollama",
     "verify_model_1": settings.ollama_model_ocr,
+    "verify_model_1_provider": "ollama",
     "turboquant_enabled": False,
     "turboquant_kv_cache_dtype": "turboquant_k8v4",
     "turboquant_max_model_len": 131072,
@@ -284,11 +288,15 @@ async def get_config_status() -> dict:
 class ConfigUpdate(BaseModel):
     model_agent: str | None = None
     model_ocr: str | None = None
+    model_ocr_provider: str | None = None
     model_reasoning: str | None = None
+    model_reasoning_provider: str | None = None
     model_vlm: str | None = None
+    model_vlm_provider: str | None = None
     embedding_model: str | None = None
     reranker_model: str | None = None
     verify_model_1: str | None = None
+    verify_model_1_provider: str | None = None
     turboquant_enabled: bool | None = None
     turboquant_kv_cache_dtype: str | None = None
     turboquant_max_model_len: int | None = None

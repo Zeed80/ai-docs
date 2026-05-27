@@ -22,14 +22,26 @@ interface OllamaModel {
 interface AiConfig {
   model_agent: string;
   model_ocr: string;
+  model_ocr_provider: string;
   model_reasoning: string;
+  model_reasoning_provider: string;
   model_vlm: string;
+  model_vlm_provider: string;
   embedding_model: string;
   reranker_model: string | null;
   verify_model_1: string;
+  verify_model_1_provider: string;
   turboquant_enabled: boolean;
   turboquant_kv_cache_dtype: string;
   turboquant_max_model_len: number;
+}
+
+interface GgufModel {
+  name: string;
+  path: string;
+  size_bytes: number;
+  size_human: string;
+  active: boolean;
 }
 
 interface RegistryModel {
@@ -288,6 +300,7 @@ interface AgentPlugin {
 
 const PROVIDERS = [
   { value: "ollama", label: "Ollama (локально)" },
+  { value: "llamacpp", label: "llama.cpp GGUF (локально)" },
   { value: "vllm", label: "vLLM (локально)" },
   { value: "lmstudio", label: "LM Studio (локально)" },
   { value: "openai_compatible", label: "OpenAI-compatible" },
@@ -331,6 +344,7 @@ const PROVIDER_ENV: Record<string, string> = {
 
 const PROVIDER_MODEL_PLACEHOLDER: Record<string, string> = {
   ollama: "qwen3.5:9b",
+  llamacpp: "/llamacpp-models/model.gguf",
   vllm: "Qwen/Qwen3-32B-AWQ",
   lmstudio: "local-model",
   openai_compatible: "model-name",
@@ -514,36 +528,111 @@ function SaveRow({
   );
 }
 
-function ModelSelector({
+const LOCAL_ONLY_PROVIDERS = [
+  { value: "ollama", label: "Ollama (локально)" },
+  { value: "llamacpp", label: "llama.cpp GGUF (локально)" },
+];
+
+function ProviderModelSelector({
   label,
   description,
   value,
-  models,
+  provider,
+  ollamaModels,
+  ggufModels,
+  localOnly,
   onChange,
 }: {
   label: string;
   description: string;
   value: string;
-  models: OllamaModel[];
-  onChange: (v: string) => void;
+  provider: string;
+  ollamaModels: OllamaModel[];
+  ggufModels: GgufModel[];
+  localOnly?: boolean;
+  onChange: (provider: string, model: string) => void;
 }) {
+  const availableProviders = localOnly ? LOCAL_ONLY_PROVIDERS : PROVIDERS;
+
+  const modelOptions: string[] =
+    provider === "ollama"
+      ? ollamaModels.map((m) => m.name)
+      : provider === "llamacpp"
+        ? ggufModels.map((m) => m.path)
+        : (PROVIDER_COMMON_MODELS[provider] ?? []);
+
+  const isLocal = provider === "ollama" || provider === "llamacpp";
+  const listId = `model-list-${label.replace(/\s/g, "-")}`;
+
   return (
     <Field label={label} hint={description}>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={selectCls}
-      >
-        {!models.find((m) => m.name === value) && (
-          <option value={value}>{value} (не установлена)</option>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-5">
+        <select
+          value={provider}
+          onChange={(e) => {
+            const newProvider = e.target.value;
+            const firstModel =
+              newProvider === "ollama"
+                ? (ollamaModels[0]?.name ?? "")
+                : newProvider === "llamacpp"
+                  ? (ggufModels[0]?.path ?? "")
+                  : (PROVIDER_COMMON_MODELS[newProvider]?.[0] ?? "");
+            onChange(newProvider, firstModel);
+          }}
+          className={selectCls + " sm:col-span-2"}
+        >
+          {availableProviders.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+        {isLocal ? (
+          <select
+            value={value}
+            onChange={(e) => onChange(provider, e.target.value)}
+            className={selectCls + " sm:col-span-3"}
+          >
+            {modelOptions.length === 0 && (
+              <option value={value}>{value || "— нет установленных —"}</option>
+            )}
+            {!modelOptions.includes(value) && value && (
+              <option value={value}>{value}</option>
+            )}
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>
+                {provider === "llamacpp" ? m.split("/").pop() : m}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <>
+            <input
+              list={listId}
+              value={value}
+              onChange={(e) => onChange(provider, e.target.value)}
+              placeholder={PROVIDER_MODEL_PLACEHOLDER[provider] ?? "model-name"}
+              className={inputCls + " sm:col-span-3"}
+            />
+            <datalist id={listId}>
+              {modelOptions.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </>
         )}
-        {models.map((m) => (
-          <option key={m.name} value={m.name}>
-            {m.name}
-            {m.parameter_size ? ` — ${m.parameter_size}` : ""}
-          </option>
-        ))}
-      </select>
+      </div>
+      {provider === "llamacpp" && ggufModels.length === 0 && (
+        <p className="mt-1 text-xs text-amber-400">
+          Нет локальных GGUF-моделей.{" "}
+          <a
+            href="/settings/llamacpp"
+            className="underline hover:text-amber-300"
+          >
+            Загрузите модель →
+          </a>
+        </p>
+      )}
     </Field>
   );
 }
@@ -733,6 +822,7 @@ export default function SettingsPage() {
   const [config, setConfig] = useState<AiConfig | null>(null);
   const [registryModels, setRegistryModels] = useState<RegistryModel[]>([]);
   const [configStatus, setConfigStatus] = useState<AiConfigStatus | null>(null);
+  const [ggufModels, setGgufModels] = useState<GgufModel[]>([]);
   const [loadingModels, setLoadingModels] = useState(true);
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
@@ -854,6 +944,16 @@ export default function SettingsPage() {
       setConfigStatus(await r.json());
     } catch {
       setConfigStatus(null);
+    }
+  }
+
+  async function loadGgufModels() {
+    try {
+      const r = await fetch(`${API}/api/llamacpp/models`);
+      const d = await r.json();
+      setGgufModels(Array.isArray(d) ? d : []);
+    } catch {
+      setGgufModels([]);
     }
   }
 
@@ -1017,6 +1117,7 @@ export default function SettingsPage() {
         loadModels();
         loadConfig();
         loadCapabilities();
+        loadGgufModels();
       } else if (tab === "memory") {
         loadEmbeddingProfile();
         loadEmbeddingStats();
@@ -2425,15 +2526,37 @@ export default function SettingsPage() {
                       </Field>
 
                       {agentConfig.provider === "ollama" ? (
-                        <ModelSelector
+                        <Field
                           label="Модель по умолчанию"
-                          description="Fallback-модель для диалога и инструментов"
-                          value={agentConfig.model}
-                          models={models}
-                          onChange={(v) =>
-                            setAgentConfig({ ...agentConfig, model: v })
-                          }
-                        />
+                          hint="Fallback-модель для диалога и инструментов"
+                        >
+                          <select
+                            value={agentConfig.model}
+                            onChange={(e) =>
+                              setAgentConfig({
+                                ...agentConfig,
+                                model: e.target.value,
+                              })
+                            }
+                            className={selectCls}
+                          >
+                            {!models.find(
+                              (m) => m.name === agentConfig.model,
+                            ) && (
+                              <option value={agentConfig.model}>
+                                {agentConfig.model} (не установлена)
+                              </option>
+                            )}
+                            {models.map((m) => (
+                              <option key={m.name} value={m.name}>
+                                {m.name}
+                                {m.parameter_size
+                                  ? ` — ${m.parameter_size}`
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
                       ) : (
                         <Field
                           label="Модель по умолчанию"
@@ -3269,12 +3392,13 @@ export default function SettingsPage() {
 
           {/* Status + model config */}
           <SectionCard
-            title="Выбор моделей (Ollama)"
-            subtitle="Модели для OCR, reasoning и верификации. Используются Celery-задачами и маршрутизатором AI."
+            title="Выбор моделей"
+            subtitle="Модели для OCR, reasoning и верификации. Поддерживаются Ollama и llama.cpp (локально), а также облачные провайдеры."
             action={
               <button
                 onClick={() => {
                   loadModels();
+                  loadGgufModels();
                   loadConfigStatus();
                 }}
                 className="rounded-md bg-slate-700 px-3 py-2 text-xs text-slate-100 hover:bg-slate-600"
@@ -3291,10 +3415,20 @@ export default function SettingsPage() {
                     : "border-amber-800 bg-amber-950/30 text-amber-200"
                 }`}
               >
-                <div>
-                  Ollama:{" "}
-                  {configStatus.ollama_available ? "доступна" : "недоступна"} ·
-                  моделей: {configStatus.installed_models.length}
+                <div className="flex flex-wrap gap-4">
+                  <span>
+                    Ollama:{" "}
+                    {configStatus.ollama_available
+                      ? "✓ доступна"
+                      : "✗ недоступна"}{" "}
+                    · моделей: {configStatus.installed_models.length}
+                  </span>
+                  <span>
+                    llama.cpp:{" "}
+                    {ggufModels.length > 0
+                      ? `✓ ${ggufModels.length} GGUF`
+                      : "нет моделей"}
+                  </span>
                 </div>
                 {configStatus.warnings.length > 0 && (
                   <div className="mt-2 space-y-1 text-xs">
@@ -3307,33 +3441,68 @@ export default function SettingsPage() {
             )}
             {config && (
               <div className="space-y-4">
-                <ModelSelector
+                <ProviderModelSelector
                   label="Модель OCR / извлечения"
-                  description="Распознавание и извлечение данных из документов. Работает только локально."
+                  description="Распознавание и извлечение данных из документов. Только локально — документы конфиденциальны."
                   value={config.model_ocr}
-                  models={models}
-                  onChange={(v) => setConfig({ ...config, model_ocr: v })}
+                  provider={config.model_ocr_provider ?? "ollama"}
+                  ollamaModels={models}
+                  ggufModels={ggufModels}
+                  localOnly
+                  onChange={(p, v) =>
+                    setConfig({
+                      ...config,
+                      model_ocr_provider: p,
+                      model_ocr: v,
+                    })
+                  }
                 />
-                <ModelSelector
+                <ProviderModelSelector
                   label="Модель VLM для чертежей"
-                  description="Vision Language Model для анализа чертежей (DXF, PDF, PNG, JPG, TIFF и др.). Должна поддерживать изображения. Рекомендуется: gemma4, llava, llava-llama3, minicpm-v, qwen2-vl."
+                  description="Vision Language Model для анализа чертежей. Должна поддерживать изображения. Рекомендуется: gemma4, llava, minicpm-v, qwen2-vl."
                   value={config.model_vlm ?? config.model_ocr}
-                  models={models}
-                  onChange={(v) => setConfig({ ...config, model_vlm: v })}
+                  provider={config.model_vlm_provider ?? "ollama"}
+                  ollamaModels={models}
+                  ggufModels={ggufModels}
+                  localOnly
+                  onChange={(p, v) =>
+                    setConfig({
+                      ...config,
+                      model_vlm_provider: p,
+                      model_vlm: v,
+                    })
+                  }
                 />
-                <ModelSelector
+                <ProviderModelSelector
                   label="Модель reasoning"
-                  description="Сложные рассуждения, генерация писем, отчётов."
+                  description="Сложные рассуждения, генерация писем, отчётов. Можно использовать облачного провайдера."
                   value={config.model_reasoning}
-                  models={models}
-                  onChange={(v) => setConfig({ ...config, model_reasoning: v })}
+                  provider={config.model_reasoning_provider ?? "ollama"}
+                  ollamaModels={models}
+                  ggufModels={ggufModels}
+                  onChange={(p, v) =>
+                    setConfig({
+                      ...config,
+                      model_reasoning_provider: p,
+                      model_reasoning: v,
+                    })
+                  }
                 />
-                <ModelSelector
+                <ProviderModelSelector
                   label="Проверочная модель"
-                  description="Повторная экстракция для автоверификации."
+                  description="Повторная экстракция для автоверификации. Только локально — работает с оригиналом документа."
                   value={config.verify_model_1}
-                  models={models}
-                  onChange={(v) => setConfig({ ...config, verify_model_1: v })}
+                  provider={config.verify_model_1_provider ?? "ollama"}
+                  ollamaModels={models}
+                  ggufModels={ggufModels}
+                  localOnly
+                  onChange={(p, v) =>
+                    setConfig({
+                      ...config,
+                      verify_model_1_provider: p,
+                      verify_model_1: v,
+                    })
+                  }
                 />
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field
