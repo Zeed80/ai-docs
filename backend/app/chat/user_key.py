@@ -24,22 +24,37 @@ async def get_user_key(user: UserInfo | None = Depends(get_current_user_optional
 
 
 async def get_ws_user_key(ws: WebSocket) -> str:
-    # WebSocket auth is currently optional for the built-in panel;
-    # keep behavior compatible and isolate chats by authenticated subject when available.
+    """Resolve user key for a WebSocket connection.
+
+    Mirrors get_current_user_optional logic:
+    Priority: X-API-Key header → httpOnly cookie → Bearer header.
+    Browsers send cookies automatically with same-origin WS, so this
+    correctly identifies the same authenticated user as REST endpoints.
+    """
     if not settings.auth_enabled:
-        # Keep WS behavior consistent with REST dependencies in dev mode.
         return "dev-user"
 
-    auth_header = ws.headers.get("authorization") or ""
-    if not auth_header.lower().startswith("bearer "):
-        return "anonymous"
-    token = auth_header.split(" ", 1)[1].strip()
+    from app.auth.jwt import _extract_bearer, _verify_api_key, _verify_token
+
+    # Service-account API key header
+    api_key_raw = ws.headers.get("x-api-key") or ws.headers.get("X-API-Key")
+    if api_key_raw:
+        try:
+            user = await _verify_api_key(api_key_raw)
+            return to_user_key(user)
+        except Exception:
+            pass
+
+    # Cookie (sent automatically by browsers with same-origin WS connections)
+    cookie_token = ws.cookies.get("access_token")
+    # Bearer header (for non-browser clients / API integrations)
+    bearer = _extract_bearer(ws)
+    token = cookie_token or bearer
+
     if not token:
         return "anonymous"
-    try:
-        # Reuse JWT validation logic; if verification fails, keep anonymous key.
-        from app.auth.jwt import _verify_token
 
+    try:
         user = await _verify_token(token)
         return to_user_key(user)
     except Exception:
