@@ -192,7 +192,7 @@ services:
         BASEARGS="--host 0.0.0.0 --port 8080 --ctx-size $$CTX --n-gpu-layers $$GPU --cache-type-k $$KV --cache-type-v $$KV --parallel $$PAR --metrics"
         if [ -f "$$MDL" ]; then
           MODELARGS="--model $$MDL"
-          [ "$$FA" = "true" ] && MODELARGS="$$MODELARGS --flash-attn"
+          [ "$$FA" = "true" ] && MODELARGS="$$MODELARGS --flash-attn on"
         else
           echo "No GGUF at $$MDL — starting in API-only mode (use /settings/llamacpp to download a model)"
           MODELARGS=""
