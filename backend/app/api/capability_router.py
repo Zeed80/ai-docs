@@ -225,6 +225,14 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
 }
 
 
+def _service_headers() -> dict:
+    """Auth headers for internal service-to-service calls."""
+    from app.config import settings
+    if settings.agent_service_key:
+        return {"X-API-Key": settings.agent_service_key}
+    return {}
+
+
 async def _proxy(
     method: str,
     path: str,
@@ -245,16 +253,17 @@ async def _proxy(
             payload[k] = v
 
     url = base_url.rstrip("/") + path
+    headers = _service_headers()
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             if method == "GET":
-                resp = await client.get(url, params=query)
+                resp = await client.get(url, params=query, headers=headers)
             elif method == "POST":
-                resp = await client.post(url, json=payload)
+                resp = await client.post(url, json=payload, headers=headers)
             elif method == "PATCH":
-                resp = await client.patch(url, json=payload)
+                resp = await client.patch(url, json=payload, headers=headers)
             elif method == "DELETE":
-                resp = await client.delete(url)
+                resp = await client.delete(url, headers=headers)
             else:
                 return {"error": f"Unsupported method: {method}"}
 

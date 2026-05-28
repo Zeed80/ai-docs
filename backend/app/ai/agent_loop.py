@@ -23,6 +23,15 @@ from app.formatting import format_money
 
 logger = structlog.get_logger()
 
+
+def _internal_headers() -> dict:
+    """Headers for agent → backend service calls (auth + internal marker)."""
+    h: dict = {"X-Internal-Agent": "1"}
+    if _settings.agent_service_key:
+        h["X-API-Key"] = _settings.agent_service_key
+    return h
+
+
 # Max chars for a single tool result stored in the LLM message history.
 # Large lists (invoices, inventory, etc.) can easily hit 100k+ chars which
 # triggers unnecessary context compression. Keep enough for the model to
@@ -650,19 +659,18 @@ async def _execute_skill(
     url = base_url + path
     max_retries = 3
     last_error: Exception | None = None
-    _internal_headers = {"X-Internal-Agent": "1"}
-
     for attempt in range(max_retries):
         try:
+            _hdrs = _internal_headers()
             async with httpx.AsyncClient(timeout=float(timeout)) as client:
                 if method == "GET":
-                    resp = await client.get(url, params=query_args, headers=_internal_headers)
+                    resp = await client.get(url, params=query_args, headers=_hdrs)
                 elif method == "POST":
-                    resp = await client.post(url, json=body_args, headers=_internal_headers)
+                    resp = await client.post(url, json=body_args, headers=_hdrs)
                 elif method == "PATCH":
-                    resp = await client.patch(url, json=body_args, headers=_internal_headers)
+                    resp = await client.patch(url, json=body_args, headers=_hdrs)
                 elif method == "DELETE":
-                    resp = await client.delete(url, headers=_internal_headers)
+                    resp = await client.delete(url, headers=_hdrs)
                 else:
                     return {"error": f"Unsupported method: {method}"}
 
@@ -1329,7 +1337,7 @@ class AgentSession:
                 await client.post(
                     f"{self._config.backend_url.rstrip('/')}/api/agent-actions",
                     json={"session_id": self._session_id, **kwargs},
-                    headers={"X-Internal-Agent": "1"},
+                    headers=_internal_headers(),
                 )
         except Exception:
             pass
@@ -1510,7 +1518,7 @@ class AgentSession:
                 await client.post(
                     f"{self._config.backend_url.rstrip('/')}/api/canvas/publish",
                     json={"canvas_id": canvas_id, "block": block, "append": append},
-                    headers={"X-Internal-Agent": "1"},
+                    headers=_internal_headers(),
                 )
         except Exception:
             pass
@@ -2351,7 +2359,7 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
                     "need_full_coverage": False,
                     "include_explain": False,
                 },
-                headers={"X-Internal-Agent": "1"},
+                headers=_internal_headers(),
             )
         if resp.status_code >= 400:
             return ""
@@ -2409,7 +2417,7 @@ async def _publish_invoice_table_direct(
     url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/table"
     try:
         async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.post(url, json=args, headers={"X-Internal-Agent": "1"})
+            resp = await client.post(url, json=args, headers=_internal_headers())
         if resp.status_code >= 400:
             return None
         data = resp.json()
@@ -2425,7 +2433,7 @@ async def _publish_invoice_items_table_direct(
     url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/items-table"
     try:
         async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.post(url, json=args, headers={"X-Internal-Agent": "1"})
+            resp = await client.post(url, json=args, headers=_internal_headers())
         if resp.status_code >= 400:
             return None
         data = resp.json()
@@ -2441,7 +2449,7 @@ async def _publish_invoice_items_grouped_table_direct(
     url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/items-grouped-table"
     try:
         async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.post(url, json=args, headers={"X-Internal-Agent": "1"})
+            resp = await client.post(url, json=args, headers=_internal_headers())
         if resp.status_code >= 400:
             return None
         data = resp.json()
@@ -2457,7 +2465,7 @@ async def _publish_invoice_items_by_supplier_table_direct(
     url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/items-by-supplier-table"
     try:
         async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.post(url, json=args, headers={"X-Internal-Agent": "1"})
+            resp = await client.post(url, json=args, headers=_internal_headers())
         if resp.status_code >= 400:
             return None
         data = resp.json()
@@ -2668,7 +2676,6 @@ async def _create_db_approval(skill_name: str, args: dict) -> str | None:
 
     entity_type = skill_name.split(".")[0]
 
-    _hdr = {"X-Internal-Agent": "1"}
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"{get_builtin_agent_config().backend_url.rstrip('/')}/api/approvals",
@@ -2679,7 +2686,7 @@ async def _create_db_approval(skill_name: str, args: dict) -> str | None:
                 "requested_by": "sveta",
                 "context": args,
             },
-            headers=_hdr,
+            headers=_internal_headers(),
         )
         if resp.status_code == 201:
             return resp.json().get("id")
@@ -2695,5 +2702,5 @@ async def _decide_db_approval(approval_id: str, approved: bool) -> None:
                 "status": "approved" if approved else "rejected",
                 "decided_by": "user",
             },
-            headers={"X-Internal-Agent": "1"},
+            headers=_internal_headers(),
         )

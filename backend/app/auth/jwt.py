@@ -141,6 +141,17 @@ async def _verify_api_key(raw_key: str) -> UserInfo:
     from app.db.models import ApiKey
     from app.db.session import _get_session_factory
 
+    # Internal service-to-service key — no DB lookup, no expiry check.
+    if settings.agent_service_key and raw_key == settings.agent_service_key:
+        return UserInfo(
+            sub="agent-service",
+            email="agent@internal",
+            name="AI Agent (Света)",
+            preferred_username="agent",
+            roles=[UserRole.admin],
+            groups=["agents"],
+        )
+
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
 
     async with _get_session_factory()() as db:

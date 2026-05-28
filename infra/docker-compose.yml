@@ -20,6 +20,7 @@ x-backend-env: &backend-env
   CSP_ENABLED: ${CSP_ENABLED:-false}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
   AUTH_ENABLED: ${AUTH_ENABLED:-false}
+  AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-agent-internal-key-2026}
   AUTHENTIK_URL: ${AUTHENTIK_URL:-http://authentik-server:9000}
   AUTHENTIK_EXTERNAL_URL: ${AUTHENTIK_EXTERNAL_URL:-}
   AUTHENTIK_SLUG: ${AUTHENTIK_SLUG:-ai-workspace}

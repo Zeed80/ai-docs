@@ -22,6 +22,14 @@ from pydantic import BaseModel, Field
 
 logger = structlog.get_logger()
 
+
+def _agent_headers() -> dict:
+    """X-API-Key for internal orchestrator → backend service calls."""
+    from app.config import settings
+    if settings.agent_service_key:
+        return {"X-API-Key": settings.agent_service_key}
+    return {}
+
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession
 from app.ai.model_tier import Tier, inject_chain_of_draft, score_complexity, should_use_cod
@@ -767,6 +775,7 @@ class AgentOrchestrator:
                 resp = await client.post(
                     f"{config.backend_url.rstrip('/')}{spec['path']}",
                     json=spec["args"],
+                    headers=_agent_headers(),
                 )
             if resp.status_code >= 400:
                 await self._record_orchestrator_tool_event({
@@ -927,6 +936,7 @@ class AgentOrchestrator:
                             "used_tools": self._trace.tool_calls,
                         },
                     },
+                    headers=_agent_headers(),
                 )
             if resp.status_code >= 400:
                 return None
@@ -951,6 +961,7 @@ class AgentOrchestrator:
                 await client.post(
                     f"{config.backend_url.rstrip('/')}/api/agent/capabilities/"
                     f"{proposal_id}/sandbox-apply",
+                    headers=_agent_headers(),
                 )
         except Exception:
             pass
