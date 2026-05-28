@@ -442,6 +442,15 @@ def extract_invoice(self, document_id: str) -> dict:
 
         db.commit()
 
+        # Queue embedding AFTER OCR/extraction finishes (sequential — no VRAM conflict).
+        # process_approved_document will re-embed with richer data after approval.
+        try:
+            from app.tasks.embedding import embed_document
+            embed_document.delay(document_id)
+            logger.info("embed_queued_after_extract", document_id=document_id)
+        except Exception as _e:
+            logger.warning("embed_queue_failed_post_extract", document_id=document_id, error=str(_e))
+
         logger.info(
             "extract_done",
             document_id=document_id,

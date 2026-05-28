@@ -665,12 +665,15 @@ async def ingest_document(
                 await db.commit()
             logger.warning("extraction_queue_failed", doc_id=str(doc.id), error=str(e))
 
-    # Auto-trigger embedding (after extraction completes; also embed file_name immediately)
-    try:
-        from app.tasks.embedding import embed_document
-        embed_document.apply_async(args=[str(doc.id)], countdown=5)
-    except Exception as e:
-        logger.warning("embed_queue_failed", doc_id=str(doc.id), error=str(e))
+    # Embedding is triggered at the END of extract_invoice (after OCR completes) to avoid
+    # loading both the OCR model and the embedding model simultaneously.
+    # Only schedule here when the extraction pipeline is NOT running.
+    if not auto_process:
+        try:
+            from app.tasks.embedding import embed_document
+            embed_document.delay(str(doc.id))
+        except Exception as e:
+            logger.warning("embed_queue_failed", doc_id=str(doc.id), error=str(e))
 
     return DocumentIngestResponse(
         id=doc.id,

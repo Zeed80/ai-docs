@@ -12,9 +12,16 @@ logger = structlog.get_logger()
 
 @celery_app.task(name="app.tasks.embedding.embed_document", bind=True, max_retries=3)
 def embed_document(self, document_id: str) -> dict:
-    """Embed a document and store vector in Qdrant."""
+    """Embed a document and store vector in Qdrant.
+
+    Runs sequentially AFTER OCR/extraction — never in parallel with the vision model.
+    If an active extraction job is still running (race condition), retries in 15 s.
+    """
     try:
-        return asyncio.run(_embed_document(document_id))
+        result = asyncio.run(_embed_document(document_id))
+        if result.get("status") == "ocr_running":
+            raise self.retry(countdown=15, max_retries=8)
+        return result
     except Exception as exc:
         logger.error("embed_failed", doc_id=document_id, error=str(exc))
         raise self.retry(exc=exc, countdown=30)
@@ -39,6 +46,27 @@ async def _embed_document(document_id: str) -> dict:
     _get_engine.cache_clear()
     _get_session_factory.cache_clear()
     async with _get_session_factory()() as db:
+        # Guard: if OCR/extraction is still running for this document, defer embedding
+        # so the vision model and embedding model don't compete for VRAM.
+        active_job = (
+            await db.execute(
+                select(DocumentProcessingJob)
+                .where(
+                    DocumentProcessingJob.document_id == uuid.UUID(document_id),
+                    DocumentProcessingJob.status == "running",
+                )
+                .order_by(DocumentProcessingJob.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if active_job and active_job.current_step in ("classification", "extraction"):
+            logger.info(
+                "embed_deferred_ocr_running",
+                doc_id=document_id,
+                step=active_job.current_step,
+            )
+            return {"status": "ocr_running"}
+
         result = await db.execute(
             select(Document)
             .where(Document.id == document_id)

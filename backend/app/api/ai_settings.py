@@ -42,9 +42,9 @@ _DEFAULT_CONFIG = {
     "model_reasoning_provider": "ollama",
     "model_vlm": settings.ollama_model_vlm,
     "model_vlm_provider": "ollama",
-    # nomic-embed-text via Ollama (0.3 GB) — safe default that works out of the box.
-    # Upgrade to "qwen3_embedding_8b_ollama" in the Settings UI when you have free VRAM.
-    "embedding_model": "local_embedding_ollama",
+    # qwen3-embedding:8b via Ollama (4.4 GB, 4096-dim) — best quality for 24 GB VRAM.
+    # Runs AFTER OCR completes (sequential pipeline), so no VRAM conflict.
+    "embedding_model": "qwen3_embedding_8b_ollama",
     "reranker_model": "local_reranker_ollama",
     "verify_model_1": settings.ollama_model_ocr,
     "verify_model_1_provider": "ollama",

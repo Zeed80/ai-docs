@@ -157,6 +157,11 @@ services:
       - embedded-ollama
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      # RTX 3090 24 GB: keep OCR model (9.2 GB) + embedding model (4.4 GB) loaded at once.
+      # Sequential pipeline ensures they don't run in parallel — just avoids cold reloads.
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      OLLAMA_NUM_PARALLEL: "1"
     # Host 11434 is often already taken by a system Ollama — publish on 11435 instead
     ports:
       - "11435:11434"
