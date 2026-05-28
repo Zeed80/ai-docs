@@ -43,6 +43,7 @@ x-backend-env: &backend-env
   LLAMACPP_FLASH_ATTN: ${LLAMACPP_FLASH_ATTN:-true}
   # compose service name used by activate_model to find the container via Docker API
   LLAMACPP_SERVICE_NAME: llama-server
+  LLAMACPP_MMPROJ: ${LLAMACPP_MMPROJ:-}
   # Local OpenAI-compatible provider URLs (optional, override agent config defaults)
   VLLM_URL: ${VLLM_URL:-}
   LMSTUDIO_URL: ${LMSTUDIO_URL:-}
@@ -178,9 +179,15 @@ services:
   # === AI (Local) — llama.cpp server ===
   # Profile: embedded-llamacpp (opt-in, same as embedded-ollama)
   # Usage: docker compose --profile embedded-llamacpp up
+  #        make dev-llamacpp
   # Mount your GGUF models: -v /path/to/models:/models
   # GPU image variant: ghcr.io/ggml-org/llama.cpp:server-cuda  (NVIDIA)
   #                    ghcr.io/ggml-org/llama.cpp:server-rocm   (AMD)
+  #
+  # Vision (multimodal) support:
+  #   Download the mmproj GGUF for your model and place it in the models volume.
+  #   Set LLAMACPP_MMPROJ=/models/mmproj-YourModel.gguf  — OR —
+  #   the script auto-detects any mmproj-*.gguf next to the active model.
   llama-server:
     image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
     runtime: nvidia          # required for CUDA images; harmless if nvidia runtime is default
@@ -212,6 +219,24 @@ services:
         if [ -f "$$MDL" ]; then
           MODELARGS="--model $$MDL"
           [ "$$FA" = "true" ] && MODELARGS="$$MODELARGS --flash-attn on"
+          # Vision support: use explicit LLAMACPP_MMPROJ or auto-detect mmproj-*.gguf
+          # next to the model file. Required to enable vision=true in /props.
+          MMPROJ=$${LLAMACPP_MMPROJ:-}
+          if [ -z "$$MMPROJ" ]; then
+            MDLDIR=$$(dirname "$$MDL")
+            MDLBASE=$$(basename "$$MDL" .gguf)
+            # Try exact match first (mmproj-ModelName.gguf), then any mmproj-*.gguf
+            for CANDIDATE in "$$MDLDIR/mmproj-$${MDLBASE}.gguf" "$$MDLDIR"/mmproj-*.gguf; do
+              if [ -f "$$CANDIDATE" ]; then
+                MMPROJ="$$CANDIDATE"
+                break
+              fi
+            done
+          fi
+          if [ -n "$$MMPROJ" ] && [ -f "$$MMPROJ" ]; then
+            echo "Vision projector found: $$MMPROJ"
+            MODELARGS="$$MODELARGS --mmproj $$MMPROJ"
+          fi
         else
           echo "No GGUF at $$MDL — starting in API-only mode (use /settings/llamacpp to download a model)"
           MODELARGS=""
@@ -220,6 +245,7 @@ services:
     environment:
       GGML_CUDA_NO_PINNED: "1"
       LLAMACPP_MODEL: ${LLAMACPP_MODEL:-/models/model.gguf}
+      LLAMACPP_MMPROJ: ${LLAMACPP_MMPROJ:-}
       LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-16384}
       LLAMACPP_KV_CACHE_TYPE: ${LLAMACPP_KV_CACHE_TYPE:-q8_0}
       LLAMACPP_N_GPU_LAYERS: ${LLAMACPP_N_GPU_LAYERS:--1}
