@@ -749,7 +749,9 @@ def _resolve_vision_ocr_model() -> tuple[str, str] | None:
                 f"{settings.llamacpp_url.rstrip('/v1').rstrip('/')}/props",
                 timeout=5.0,
             )
-            if resp.json().get("vision"):
+            props = resp.json()
+            modalities = props.get("modalities") or {}
+            if modalities.get("vision") or props.get("vision"):
                 return model, "llamacpp"
         except Exception:
             pass
