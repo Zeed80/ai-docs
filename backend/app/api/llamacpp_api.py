@@ -314,7 +314,9 @@ async def get_llamacpp_status() -> LlamaCppStatus:
                 model_loaded = props.get("model_path") or props.get("model_alias")
                 bi = props.get("build_info")
                 version = bi.get("version") if isinstance(bi, dict) else None
-                vision = bool(props.get("vision"))
+                # newer llama.cpp: modalities.vision; older: top-level vision bool
+                modalities = props.get("modalities") or {}
+                vision = bool(modalities.get("vision") or props.get("vision"))
                 mmproj_path = props.get("mmproj_path") or None
 
             # v1/models: n_ctx from meta
