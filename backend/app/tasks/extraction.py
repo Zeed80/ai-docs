@@ -168,7 +168,7 @@ def _finish_job(
 
 @celery_app.task(name="app.tasks.extraction.classify_document", bind=True, max_retries=2)
 def classify_document(self, document_id: str, force: bool = False) -> dict:
-    """Classify document type using gemma4:e4b.
+    """Classify document type using the configured OCR/extraction model.
 
     Updates Document.doc_type and doc_type_confidence.
     """
@@ -323,7 +323,7 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
 
 @celery_app.task(name="app.tasks.extraction.extract_invoice", bind=True, max_retries=2)
 def extract_invoice(self, document_id: str) -> dict:
-    """Extract invoice fields using gemma4:e4b.
+    """Extract invoice fields using the configured OCR/extraction model.
 
     Creates DocumentExtraction, ExtractionFields, Invoice, InvoiceLines.
     """
@@ -661,20 +661,15 @@ def _get_configured_ocr_model_and_provider() -> tuple[str, str]:
 
 
 def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) -> str:
-    """Call Ollama vision API synchronously with a proper Ollama model name.
-
-    images_b64 must be raw base64 (no data: prefix).
-    Retries once after a short delay if the model returns empty (cold start).
-    Falls back to settings.ollama_model_ocr if a different primary model fails.
-    """
+    """Call Ollama vision API with the model the user configured. Retries once on cold-start empty."""
     import time
     import httpx
 
-    def _call(model: str) -> str:
+    def _call() -> str:
         resp = httpx.post(
             f"{str(settings.ollama_url).rstrip('/')}/api/chat",
             json={
-                "model": model,
+                "model": ollama_model,
                 "messages": [{"role": "user", "content": prompt, "images": images_b64}],
                 "stream": False,
                 "options": {"temperature": 0.0},
@@ -684,30 +679,17 @@ def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) ->
         resp.raise_for_status()
         return resp.json().get("message", {}).get("content", "")
 
-    # Try the configured Ollama model; retry once on empty to survive cold-start
     try:
-        text = _call(ollama_model)
+        text = _call()
         if not text.strip():
             logger.warning("ollama_vision_ocr_empty_retry", model=ollama_model)
             time.sleep(5)
-            text = _call(ollama_model)
+            text = _call()
         if text.strip():
             return text
         logger.warning("ollama_vision_ocr_empty", model=ollama_model)
     except Exception as e:
         logger.warning("ollama_vision_ocr_failed", model=ollama_model, error=str(e))
-
-    # Fallback: settings.ollama_model_ocr (may be same model, skip if so)
-    fallback = settings.ollama_model_ocr
-    if fallback and fallback != ollama_model:
-        try:
-            text = _call(fallback)
-            if text.strip():
-                logger.info("ollama_vision_ocr_fallback_used", primary=ollama_model, fallback=fallback)
-                return text
-        except Exception as e:
-            logger.warning("ollama_vision_ocr_fallback_failed", model=fallback, error=str(e))
-
     return ""
 
 
@@ -737,102 +719,74 @@ def _preprocess_image(content: bytes) -> bytes:
         return content
 
 
-def _tesseract_ocr(image_bytes: bytes) -> str:
-    """Run Tesseract OCR (rus+eng) on raw image bytes. Returns empty string if unavailable."""
-    try:
-        import io
-        import pytesseract
-        from PIL import Image
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        return pytesseract.image_to_string(img, lang="rus+eng", config="--psm 6")
-    except Exception as e:
-        logger.debug("tesseract_unavailable", error=str(e))
-        return ""
+def _resolve_vision_ocr_model() -> tuple[str, str] | None:
+    """Return (model, provider) for vision OCR based strictly on user settings.
 
-
-def _resolve_vision_fallback_model() -> tuple[str, str] | None:
-    """Return (ollama_model_name, 'ollama') for vision OCR fallback, or None.
-
-    Uses the VLM model configured in AI settings (model_vlm / model_vlm_provider).
-    Only returns an Ollama model name — never sends a llamacpp path to Ollama.
-    Skips models known to be text-only.
+    Rules:
+    - llamacpp model configured → use llamacpp if it reports vision=true, else None
+    - ollama / other provider → use as-is
+    Never loads any model not explicitly configured by the user.
+    Returns None when the configured model cannot handle images.
     """
-    from app.ai.model_resolver import get_vlm_model
-    try:
-        vlm = get_vlm_model()
-        if vlm.provider == "ollama" and vlm.model:
-            return vlm.model, "ollama"
-    except Exception:
-        pass
-    # Hard fallback: smallest installed vision model
-    fallback = settings.ollama_model_ocr
-    if fallback and "/" not in fallback:  # skip llamacpp paths like /llamacpp-models/...
-        return fallback, "ollama"
-    return None
+    model, provider = _get_configured_ocr_model_and_provider()
+    if provider == "llamacpp":
+        import httpx
+        try:
+            resp = httpx.get(
+                f"{settings.llamacpp_url.rstrip('/v1').rstrip('/')}/props",
+                timeout=5.0,
+            )
+            if resp.json().get("vision"):
+                return model, "llamacpp"
+        except Exception:
+            pass
+        logger.info("ocr_llamacpp_no_vision_skip", model=model)
+        return None
+    return model, provider
 
 
 def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
-    """OCR an image: Tesseract first (CPU, best for Russian), then Ollama VLM fallback."""
+    """OCR an image using only the model configured in AI settings."""
+    vision = _resolve_vision_ocr_model()
+    if not vision:
+        logger.warning(
+            "image_ocr_skipped_no_vision_model",
+            document_id=str(doc.id),
+            hint="Configure an Ollama vision model or a llamacpp model with vision support",
+        )
+        return ""
+    model, provider = vision
+    logger.info("image_ocr_start", document_id=str(doc.id), model=model, provider=provider)
     enhanced = _preprocess_image(content)
-
-    # 1. Tesseract — fast, no GPU, excellent Cyrillic support
-    text = _tesseract_ocr(enhanced)
-    if text.strip():
-        logger.info("image_ocr_tesseract", document_id=str(doc.id), text_len=len(text))
-        return text
-
-    # 2. Ollama VLM fallback (only if user configured a vision-capable Ollama model)
-    fallback = _resolve_vision_fallback_model()
-    if fallback:
-        ollama_model, provider = fallback
-        logger.info("image_ocr_vlm_fallback", document_id=str(doc.id), model=ollama_model)
-        encoded = base64.b64encode(enhanced).decode("ascii")
-        text = _ollama_vision_ocr([encoded], ollama_model, _OCR_PROMPT)
-        if text.strip():
-            return text
-
-    logger.warning("image_ocr_empty", document_id=str(doc.id))
-    return ""
+    encoded = base64.b64encode(enhanced).decode("ascii")
+    text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
+    logger.info("image_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
+    return text
 
 
 def _ocr_pdf_content(content: bytes, doc: Document) -> str:
-    """OCR a scanned PDF: render pages → Tesseract, then Ollama VLM fallback."""
+    """OCR a scanned PDF using only the model configured in AI settings."""
+    vision = _resolve_vision_ocr_model()
+    if not vision:
+        logger.warning(
+            "pdf_ocr_skipped_no_vision_model",
+            document_id=str(doc.id),
+            hint="Configure an Ollama vision model or a llamacpp model with vision support",
+        )
+        return ""
+    model, provider = vision
     try:
-        import io
         import fitz
-        from PIL import Image
-
-        pages_text: list[str] = []
         images_b64: list[str] = []
-
         with fitz.open(stream=content, filetype="pdf") as pdf:
             for page in list(pdf)[:3]:
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
-                png_bytes = pixmap.tobytes("png")
-
-                # Tesseract on each page
-                tess = _tesseract_ocr(png_bytes)
-                if tess.strip():
-                    pages_text.append(tess)
-                else:
-                    images_b64.append(base64.b64encode(png_bytes).decode("ascii"))
-
-        if pages_text:
-            text = "\n\n".join(pages_text)
-            logger.info("pdf_ocr_tesseract", document_id=str(doc.id), pages=len(pages_text), text_len=len(text))
-            return text
-
-        # Tesseract returned nothing (e.g. very stylised scan) → Ollama VLM fallback
+                images_b64.append(base64.b64encode(pixmap.tobytes("png")).decode("ascii"))
         if not images_b64:
             return ""
-        fallback = _resolve_vision_fallback_model()
-        if not fallback:
-            logger.warning("pdf_ocr_no_vision_model", document_id=str(doc.id))
-            return ""
-        ollama_model, _ = fallback
-        logger.info("pdf_ocr_vlm_fallback", document_id=str(doc.id), model=ollama_model, pages=len(images_b64))
-        text = _ollama_vision_ocr(images_b64, ollama_model, _OCR_PROMPT)
-        logger.info("pdf_ocr_done", document_id=str(doc.id), model=ollama_model, text_len=len(text))
+        logger.info("pdf_ocr_start", document_id=str(doc.id), model=model, pages=len(images_b64))
+        text = _ollama_vision_ocr(images_b64, model, _OCR_PROMPT)
+        logger.info("pdf_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
         return text
     except Exception as e:
         logger.warning("pdf_ocr_failed", document_id=str(doc.id), error=str(e))
