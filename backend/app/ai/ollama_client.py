@@ -383,8 +383,16 @@ async def _generate_json_openai_compatible(
     if api_key:
         headers["authorization"] = f"Bearer {api_key}"
 
-    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if provider == "llamacpp":
+            raise RuntimeError(
+                f"Сервер llamacpp недоступен ({base_url}). "
+                "Запустите: docker compose --profile embedded-llamacpp up -d llama-server"
+            ) from e
+        raise
     resp.raise_for_status()
     raw_content = resp.json()["choices"][0]["message"]["content"]
     if not raw_content:
@@ -546,8 +554,15 @@ async def generate_json(
                 await _asyncio.sleep(2 ** attempt)
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
-            last_error = e
             breaker.record_failure()
+            if provider == "llamacpp":
+                last_error = RuntimeError(
+                    f"Сервер llamacpp недоступен ({url}). "
+                    "Запустите: docker compose --profile embedded-llamacpp up -d llama-server"
+                )
+                logger.error("llamacpp_unreachable", url=url, error=str(e))
+                break  # no point retrying — server is simply not running
+            last_error = e
             logger.warning("generate_json_retry", model=model, provider=provider, attempt=attempt + 1, error=str(e))
             if attempt < 2:
                 import asyncio

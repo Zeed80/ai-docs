@@ -237,10 +237,16 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
             # Get PDF/text content for AI classification
             text = _get_document_text(doc)
             if not text:
-                # Binary file without recognized drawing extension — mark for review
                 logger.warning("classify_no_text", document_id=document_id)
                 doc.status = DocumentStatus.needs_review
-                error = "No text extracted from document"
+                if doc.mime_type.startswith("image/"):
+                    error = (
+                        "Изображение требует модели с поддержкой vision. "
+                        "Настройте Ollama vision-модель или llamacpp-модель с vision=true "
+                        "в разделе Настройки → Модели."
+                    )
+                else:
+                    error = "No text extracted from document"
                 _set_job_step(job, "classification", "failed", error=error)
                 _finish_job(job, "failed", error=error)
                 db.commit()
@@ -347,7 +353,14 @@ def extract_invoice(self, document_id: str) -> dict:
 
         text = _get_document_text(doc)
         if not text:
-            error = "No text extracted from document"
+            if doc.mime_type.startswith("image/"):
+                error = (
+                    "Изображение требует модели с поддержкой vision. "
+                    "Настройте Ollama vision-модель или llamacpp-модель с vision=true "
+                    "в разделе Настройки → Модели."
+                )
+            else:
+                error = "No text extracted from document"
             doc.status = DocumentStatus.needs_review
             _set_job_step(job, "extraction", "failed", error=error)
             _finish_job(job, "failed", error=error)

@@ -1,8 +1,9 @@
-.PHONY: dev dev-build down prod prod-build prod-down test e2e regression agent-regression agent-test agent-ws-smoke turboquant-benchmark turboquant-quality lint migrate seed skills logs ps monitoring monitoring-down
+.PHONY: dev dev-build dev-llamacpp down prod prod-build prod-down test e2e regression agent-regression agent-test agent-ws-smoke turboquant-benchmark turboquant-quality lint migrate seed skills logs ps monitoring monitoring-down
 
 # Docker Compose file sets
-COMPOSE_DEV  := -f infra/docker-compose.yml -f infra/docker-compose.dev.yml
-COMPOSE_PROD := -f infra/docker-compose.yml --profile prod
+COMPOSE_DEV      := -f infra/docker-compose.yml -f infra/docker-compose.dev.yml
+COMPOSE_PROD     := -f infra/docker-compose.yml --profile prod
+COMPOSE_LLAMACPP := -f infra/docker-compose.yml --profile embedded-llamacpp
 
 # === Development (default — code is hot-reloaded via volume mounts) ===
 dev:
@@ -10,6 +11,10 @@ dev:
 
 dev-build:
 	docker compose $(COMPOSE_DEV) up --build
+
+# Start local llama.cpp server (NVIDIA GPU required, GGUF model must be in llamacpp_models volume)
+dev-llamacpp:
+	docker compose $(COMPOSE_LLAMACPP) up -d llama-server
 
 down:
 	docker compose $(COMPOSE_DEV) down
