@@ -706,6 +706,43 @@ def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) ->
     return ""
 
 
+def _llamacpp_vision_ocr(images_b64: list[str], prompt: str) -> str:
+    """Send images to llamacpp via OpenAI-compatible /v1/chat/completions."""
+    import httpx
+
+    base = settings.llamacpp_url.rstrip("/")
+    # Strip /v1 suffix if already included in the configured URL
+    if base.endswith("/v1"):
+        base = base[:-3]
+
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for img in images_b64:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{img}"},
+        })
+
+    try:
+        resp = httpx.post(
+            f"{base}/v1/chat/completions",
+            json={
+                "model": "local",
+                "messages": [{"role": "user", "content": content}],
+                "temperature": 0.0,
+                "stream": False,
+            },
+            timeout=300.0,
+        )
+        resp.raise_for_status()
+        choices = resp.json().get("choices") or []
+        if choices:
+            msg = choices[0].get("message") or {}
+            return msg.get("content") or ""
+    except Exception as e:
+        logger.warning("llamacpp_vision_ocr_failed", error=str(e))
+    return ""
+
+
 _OCR_PROMPT = (
     "Распознай ВЕСЬ текст на изображении документа. "
     "Точно сохрани: номера счётов/договоров, даты, ИНН, КПП, ОГРН, БИК, "
@@ -774,7 +811,10 @@ def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
     logger.info("image_ocr_start", document_id=str(doc.id), model=model, provider=provider)
     enhanced = _preprocess_image(content)
     encoded = base64.b64encode(enhanced).decode("ascii")
-    text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
+    if provider == "llamacpp":
+        text = _llamacpp_vision_ocr([encoded], _OCR_PROMPT)
+    else:
+        text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
     logger.info("image_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
     return text
 
@@ -800,7 +840,10 @@ def _ocr_pdf_content(content: bytes, doc: Document) -> str:
         if not images_b64:
             return ""
         logger.info("pdf_ocr_start", document_id=str(doc.id), model=model, pages=len(images_b64))
-        text = _ollama_vision_ocr(images_b64, model, _OCR_PROMPT)
+        if provider == "llamacpp":
+            text = _llamacpp_vision_ocr(images_b64, _OCR_PROMPT)
+        else:
+            text = _ollama_vision_ocr(images_b64, model, _OCR_PROMPT)
         logger.info("pdf_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
         return text
     except Exception as e:
