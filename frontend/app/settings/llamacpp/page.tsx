@@ -27,6 +27,8 @@ interface Status {
   slots_processing: number | null;
   version: string | null;
   kv_cache_type: string | null;
+  vision: boolean;
+  mmproj_path: string | null;
 }
 interface Config {
   url: string;
@@ -43,6 +45,7 @@ interface GgufModel {
   size_bytes: number;
   size_human: string;
   active: boolean;
+  is_mmproj: boolean;
 }
 interface HFFile {
   filename: string;
@@ -635,17 +638,24 @@ function DownloadsPanel({
 
 function LocalTab({
   models,
+  vision,
+  mmproj_path,
   onRefresh,
   onActivate,
   onDelete,
 }: {
   models: GgufModel[];
+  vision: boolean;
+  mmproj_path: string | null;
   onRefresh: () => void;
   onActivate: (path: string) => void;
   onDelete: (name: string) => void;
 }) {
   const [customUrl, setCustomUrl] = useState("");
   const [downloading, setDownloading] = useState(false);
+
+  const mainModels = models.filter((m) => !m.is_mmproj);
+  const mmproj = models.filter((m) => m.is_mmproj);
 
   async function downloadFromUrl() {
     if (!customUrl) return;
@@ -672,6 +682,65 @@ function LocalTab({
     }
   }
 
+  function ModelRow({
+    m,
+    showActivate,
+  }: {
+    m: GgufModel;
+    showActivate: boolean;
+  }) {
+    const isLoadedMmproj = m.is_mmproj && mmproj_path === m.path;
+    return (
+      <div
+        className={`${cardCls} p-3 flex items-center gap-3 ${
+          m.active || isLoadedMmproj
+            ? "border-blue-500 bg-blue-900/20"
+            : rowHoverCls
+        }`}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-sm font-medium truncate text-slate-200">
+              {m.name}
+            </span>
+            {m.active && (
+              <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded">
+                активна
+              </span>
+            )}
+            {isLoadedMmproj && (
+              <span className="text-xs bg-purple-700 text-white px-2 py-0.5 rounded">
+                загружен
+              </span>
+            )}
+          </div>
+          <div className="text-xs text-slate-500 mt-0.5 flex gap-3">
+            <span>{m.size_human}</span>
+            <span className="truncate">{m.path}</span>
+          </div>
+        </div>
+        <div className="flex gap-2 flex-shrink-0">
+          {showActivate && !m.active && (
+            <button
+              onClick={() => onActivate(m.path)}
+              className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              Активировать
+            </button>
+          )}
+          <button
+            onClick={() => {
+              if (confirm(`Удалить ${m.name}?`)) onDelete(m.name);
+            }}
+            className="text-xs px-2 py-1 border border-red-800 text-red-400 rounded hover:bg-red-900/30"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -690,51 +759,45 @@ function LocalTab({
           <p>GGUF-файлы не найдены. Перейдите в «Поиск» и загрузите модель.</p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {models.map((m) => (
-            <div
-              key={m.path}
-              className={`${cardCls} p-3 flex items-center gap-3 ${
-                m.active ? "border-blue-500 bg-blue-900/20" : rowHoverCls
-              }`}
-            >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-sm font-medium truncate text-slate-200">
-                    {m.name}
-                  </span>
-                  {m.active && (
-                    <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded">
-                      активна
-                    </span>
-                  )}
-                </div>
-                <div className="text-xs text-slate-500 mt-0.5 flex gap-3">
-                  <span>{m.size_human}</span>
-                  <span className="truncate">{m.path}</span>
-                </div>
-              </div>
-              <div className="flex gap-2 flex-shrink-0">
-                {!m.active && (
-                  <button
-                    onClick={() => onActivate(m.path)}
-                    className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-                  >
-                    Активировать
-                  </button>
-                )}
-                <button
-                  onClick={() => {
-                    if (confirm(`Удалить ${m.name}?`)) onDelete(m.name);
-                  }}
-                  className="text-xs px-2 py-1 border border-red-800 text-red-400 rounded hover:bg-red-900/30"
-                >
-                  ✕
-                </button>
-              </div>
+        <>
+          {mainModels.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-slate-400 uppercase tracking-wide">
+                Языковые модели
+              </p>
+              {mainModels.map((m) => (
+                <ModelRow key={m.path} m={m} showActivate={true} />
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+
+          {mmproj.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  Vision-проектор (mmproj)
+                </p>
+                {vision ? (
+                  <span className="text-xs bg-purple-700 text-white px-2 py-0.5 rounded">
+                    👁 vision включён
+                  </span>
+                ) : (
+                  <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded">
+                    vision выключен
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500">
+                mmproj-файлы определяются автоматически при запуске
+                llama-server. Файл должен находиться в той же папке, что и
+                основная модель.
+              </p>
+              {mmproj.map((m) => (
+                <ModelRow key={m.path} m={m} showActivate={false} />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       <div className={`${cardCls} p-4 space-y-2`}>
@@ -1301,6 +1364,17 @@ export default function LlamaCppPage() {
               · {(status.ctx_size / 1024).toFixed(0)}K ctx
             </span>
           )}
+          {status?.running && (
+            <span
+              className={`text-xs px-1.5 py-0.5 rounded ${
+                status.vision
+                  ? "bg-purple-800 text-purple-200"
+                  : "bg-slate-700 text-slate-400"
+              }`}
+            >
+              {status.vision ? "👁 vision" : "text-only"}
+            </span>
+          )}
         </div>
       </div>
 
@@ -1343,6 +1417,8 @@ export default function LlamaCppPage() {
       <div className={tab !== "local" ? "hidden" : ""}>
         <LocalTab
           models={models}
+          vision={status?.vision ?? false}
+          mmproj_path={status?.mmproj_path ?? null}
           onRefresh={loadModels}
           onActivate={activateModel}
           onDelete={deleteModel}

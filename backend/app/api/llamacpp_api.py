@@ -142,6 +142,8 @@ class LlamaCppStatus(BaseModel):
     slots_processing: int | None
     version: str | None
     kv_cache_type: str | None
+    vision: bool = False          # True when mmproj is loaded and vision=true in /props
+    mmproj_path: str | None = None  # path of the loaded mmproj file (from /props)
 
 
 class GgufModel(BaseModel):
@@ -150,6 +152,7 @@ class GgufModel(BaseModel):
     size_bytes: int
     size_human: str
     active: bool = False
+    is_mmproj: bool = False   # True for mmproj-*.gguf vision projector files
 
 
 class TokensUpdate(BaseModel):
@@ -300,15 +303,19 @@ async def get_llamacpp_status() -> LlamaCppStatus:
     version = None
     slots_idle = None
     slots_processing = None
+    vision = False
+    mmproj_path = None
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            # props: model path, total slots
+            # props: model path, vision flag, mmproj path
             rp = await client.get(f"{base}/props")
             if rp.status_code == 200:
                 props = rp.json()
                 model_loaded = props.get("model_path") or props.get("model_alias")
                 bi = props.get("build_info")
                 version = bi.get("version") if isinstance(bi, dict) else None
+                vision = bool(props.get("vision"))
+                mmproj_path = props.get("mmproj_path") or None
 
             # v1/models: n_ctx from meta
             rm = await client.get(f"{base}/v1/models")
@@ -328,7 +335,8 @@ async def get_llamacpp_status() -> LlamaCppStatus:
 
     return LlamaCppStatus(running=True, url=base, model_loaded=model_loaded, ctx_size=ctx_size,
                           slots_idle=slots_idle, slots_processing=slots_processing,
-                          version=version, kv_cache_type=cfg.get("kv_cache_type"))
+                          version=version, kv_cache_type=cfg.get("kv_cache_type"),
+                          vision=vision, mmproj_path=mmproj_path)
 
 
 @router.get("/config", response_model=LlamaCppConfig)
@@ -619,8 +627,10 @@ async def list_gguf_models() -> list[GgufModel]:
     if _MODELS_DIR.exists():
         for p in sorted(_MODELS_DIR.rglob("*.gguf")):
             size = p.stat().st_size
+            is_mmproj = p.name.startswith("mmproj")
             result.append(GgufModel(name=p.name, path=str(p), size_bytes=size,
-                                    size_human=_human_size(size), active=(str(p) == active_path)))
+                                    size_human=_human_size(size), active=(str(p) == active_path),
+                                    is_mmproj=is_mmproj))
     return result
 
 
