@@ -1,4 +1,4 @@
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const API_CACHE = `api-${CACHE_VERSION}`;
 
@@ -57,7 +57,29 @@ self.addEventListener("fetch", (event) => {
     return; // other API calls: let them fail normally (no offline fallback for mutations)
   }
 
-  // Static assets: cache-first
+  // Page navigations (HTML): NETWORK-FIRST so the app shell is never stale.
+  // Falls back to cache, then the offline page, when the network is down.
+  const isNavigation =
+    request.mode === "navigate" ||
+    (request.headers.get("accept") || "").includes("text/html");
+  if (isNavigation) {
+    event.respondWith(
+      fetch(request)
+        .then((res) => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(STATIC_CACHE).then((c) => c.put(request, clone));
+          }
+          return res;
+        })
+        .catch(() =>
+          caches.match(request).then((c) => c || caches.match("/offline")),
+        ),
+    );
+    return;
+  }
+
+  // Hashed/static assets (/_next/static, images, fonts, manifest): cache-first.
   event.respondWith(
     caches.match(request).then(
       (cached) =>

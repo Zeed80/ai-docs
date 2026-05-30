@@ -220,6 +220,55 @@ async def test_ollama_real_generation_through_router():
     assert resp.usage.total_tokens is None or resp.usage.total_tokens >= 0
 
 
+def _served_model(provider: str) -> str | None:
+    """Return a model name the running provider actually serves."""
+    try:
+        if provider == "ollama":
+            url = os.environ.get("OLLAMA_URL", "http://host-gateway:11434")
+            data = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=5.0).json()
+            models = [m.get("name") for m in data.get("models", [])]
+            return models[0] if models else None
+        base = {
+            "llamacpp": os.environ.get("LLAMACPP_URL", "http://llama-server:8080"),
+            "vllm": os.environ.get("VLLM_URL", "http://vllm-server:8000"),
+        }[provider]
+        data = httpx.get(f"{base.rstrip('/')}/v1/models", timeout=5.0).json()
+        items = data.get("data") or []
+        return items[0].get("id") if items else None
+    except Exception:
+        return None
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("provider", AVAILABLE or ["__none__"])
+@pytest.mark.asyncio
+async def test_provider_chat_adapter_real(provider):
+    """Real chat generation through each available provider's adapter."""
+    if provider == "__none__":
+        pytest.skip("no local provider available")
+    from app.ai.router import ai_router
+    from app.ai.schemas import AIRequest, ChatMessage, ProviderKind
+
+    model = _served_model(provider)
+    if not model:
+        pytest.skip(f"{provider} serves no model")
+
+    kind = ProviderKind(provider)
+    adapter = ai_router.providers.get(kind)
+    assert adapter is not None, f"no adapter for {provider}"
+
+    resp = await adapter.chat(
+        AIRequest(
+            task=AITask.CLASSIFICATION,
+            messages=[ChatMessage(role="user", content="Ответь одним словом: да или нет? 2+2=4?")],
+            confidential=True,
+        ),
+        model,
+    )
+    assert resp.text, f"{provider} returned empty text"
+    print(f"\n  [{provider}] model={model} → {resp.text[:60]!r}")
+
+
 @pytest.mark.slow
 @pytest.mark.asyncio
 async def test_benchmark_endpoint_ollama():
