@@ -31,27 +31,11 @@ def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:
         return None
 
 
-def _ollama_keep_alive(model: str) -> str:
-    """Return keep_alive duration for a model.
-
-    Strategy:
-      - Embedding / reranker models: 10 minutes (called frequently, cheap to keep)
-      - Vision / large reasoning models: 5 minutes (valuable VRAM, unload sooner)
-      - Default: 5 minutes
-
-    Override via env OLLAMA_KEEP_ALIVE (e.g. "0" to always immediately unload,
-    "30m" for 30 minutes). Useful when GPU is shared with vLLM.
-    """
-    import os
-    env_override = os.environ.get("OLLAMA_KEEP_ALIVE", "").strip()
-    if env_override:
-        return env_override
-    model_lower = model.lower()
-    if any(x in model_lower for x in ("embed", "rerank", "nomic", "bge")):
-        return "10m"
-    if any(x in model_lower for x in ("35b", "31b", "30b", "27b", "26b")):
-        return "3m"
-    return "5m"
+def _ollama_keep_alive(model: str) -> str | int:
+    """Return keep_alive for a model: -1 for the pinned orchestrator, short
+    (ephemeral) otherwise. See app.ai.model_lifecycle for the policy."""
+    from app.ai.model_lifecycle import keep_alive_for
+    return keep_alive_for(model)
 
 
 class OllamaProvider(AIProvider):

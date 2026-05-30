@@ -1460,9 +1460,7 @@ def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUI
             logger.info("supplier_norm_matched", new=new_name, existing=p.name)
             return p.id
 
-    # LLM path — use configured OCR model+provider
-    from app.ai.model_resolver import get_ocr_model as _get_ocr_resolver
-    _ocr = _get_ocr_resolver()
+    # LLM path — route through AIRouter (classification, local-only).
     names_list = "\n".join(f"{i + 1}. {p.name}" for i, p in enumerate(existing_parties[:30]))
     prompt = (
         f'Task: decide if the new company is the same legal entity as any in the list.\n'
@@ -1473,34 +1471,19 @@ def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUI
         f'Answer JSON only: {{"match": true/false, "index": <1-based int or null>}}'
     )
     try:
-        if _ocr.provider == "llamacpp":
-            _llamacpp_url = f"{str(settings.llamacpp_url).rstrip('/v1')}/v1/chat/completions"
-            resp = httpx.post(
-                _llamacpp_url,
-                json={
-                    "model": _ocr.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "temperature": 0.0,
-                    "max_tokens": 64,
-                },
-                timeout=30.0,
+        from app.ai.router import ai_router
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
+
+        response = _run_async(
+            ai_router.run(
+                AIRequest(
+                    task=AITask.CLASSIFICATION,
+                    messages=[ChatMessage(role="user", content=prompt)],
+                    confidential=True,
+                )
             )
-            resp.raise_for_status()
-            content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-        else:
-            resp = httpx.post(
-                f"{str(settings.ollama_url).rstrip('/')}/api/chat",
-                json={
-                    "model": _ocr.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "options": {"temperature": 0.0},
-                },
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            content = resp.json().get("message", {}).get("content", "")
+        )
+        content = response.text or ""
         m = _re.search(r'\{.*?\}', content, _re.DOTALL)
         if m:
             result = _json.loads(m.group())

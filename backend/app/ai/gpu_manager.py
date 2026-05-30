@@ -377,9 +377,23 @@ async def unload_ollama_model(model_name: str, ollama_url: str | None = None) ->
         return False
 
 
-async def unload_all_ollama_models(ollama_url: str | None = None) -> list[str]:
-    """Unload ALL loaded Ollama models from VRAM. Returns list of unloaded model names."""
+async def unload_all_ollama_models(
+    ollama_url: str | None = None, *, exclude_pinned: bool = True
+) -> list[str]:
+    """Unload loaded Ollama models from VRAM. Returns unloaded model names.
+
+    By default the pinned orchestrator model is preserved so the agent keeps an
+    instant response. Pass exclude_pinned=False to force-unload everything.
+    """
     url = (ollama_url or str(settings.ollama_url).rstrip("/"))
+    pinned: set[str] = set()
+    if exclude_pinned:
+        try:
+            from app.ai.model_lifecycle import pinned_ollama_models
+            pinned = pinned_ollama_models()
+        except Exception:
+            pinned = set()
+
     unloaded: list[str] = []
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -393,7 +407,14 @@ async def unload_all_ollama_models(ollama_url: str | None = None) -> list[str]:
 
     for m in models:
         name = m.get("name", "")
-        if name and await unload_ollama_model(name, url):
+        if not name:
+            continue
+        # Match against pinned by exact name or base (strip :tag) to be safe.
+        base = name.split(":")[0]
+        if name in pinned or base in {p.split(":")[0] for p in pinned}:
+            logger.debug("ollama_keep_pinned", model=name)
+            continue
+        if await unload_ollama_model(name, url):
             unloaded.append(name)
             logger.info("ollama_model_unloaded", model=name)
 

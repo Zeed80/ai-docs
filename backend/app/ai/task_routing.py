@@ -145,6 +145,15 @@ def _is_local_key(key: str) -> bool:
         return True  # be permissive if catalog unavailable
 
 
+def _invalidate_lifecycle_cache() -> None:
+    """Drop the pinned-model cache so orchestrator changes take effect."""
+    try:
+        from app.ai.model_lifecycle import invalidate_cache
+        invalidate_cache()
+    except Exception:
+        pass
+
+
 def _enforce_confidential(task: AITask, routing: TaskRouting) -> TaskRouting:
     if task in CONFIDENTIAL_TASKS and (not routing.local_only or routing.allow_cloud):
         return routing.model_copy(update={"local_only": True, "allow_cloud": False})
@@ -223,6 +232,7 @@ def save_task_routing(task: AITask, routing: TaskRouting) -> TaskRouting:
     overlay = _redis_get() or {}
     overlay[task.value] = routing.model_dump()
     _redis_set(overlay)
+    _invalidate_lifecycle_cache()
     logger.info(
         "task_routing_saved",
         task=task.value,
@@ -237,6 +247,7 @@ def reset_task_routing(task: AITask) -> TaskRouting:
     overlay = _redis_get() or {}
     overlay.pop(task.value, None)
     _redis_set(overlay)
+    _invalidate_lifecycle_cache()
     return get_routing_for(task)
 
 

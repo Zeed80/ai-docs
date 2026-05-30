@@ -95,26 +95,25 @@ async def _tg_notify_stale_approval(
 
 
 async def _llm_enrich(context: str, fallback: str) -> str:
-    """Generate a short contextual message via Ollama; return fallback on error."""
+    """Generate a short contextual message via AIRouter; return fallback on error."""
     try:
-        from app.config import settings
-        import httpx
+        from app.ai.router import ai_router
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
         prompt = (
             "Напиши краткое (1 предложение) уведомление для сотрудника на основе контекста.\n"
             f"Контекст: {context}\n"
             "Ответ только текстом, без кавычек."
         )
-        from app.ai.model_resolver import get_ocr_model as _proactive_get_ocr
-        _p_ocr = _proactive_get_ocr()
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{settings.ollama_url.rstrip('/')}/api/generate",
-                json={"model": _p_ocr.model, "prompt": prompt, "stream": False},
+        resp = await ai_router.run(
+            AIRequest(
+                task=AITask.ENGINEERING_REASONING,
+                messages=[ChatMessage(role="user", content=prompt)],
+                confidential=True,
             )
-            resp.raise_for_status()
-            text = resp.json().get("response", "").strip()
-            return text if text else fallback
+        )
+        text = (resp.text or "").strip()
+        return text if text else fallback
     except Exception:
         return fallback
 
