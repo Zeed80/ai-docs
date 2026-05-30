@@ -126,7 +126,9 @@ models:
     provider: "llamacpp"
     provider_model: "local"
     status: "candidate"
-    modalities: ["text"]
+    # vision is available when the loaded GGUF ships an mmproj projector
+    # (llama-server auto-detects it); leave it selectable for OCR/vision slots.
+    modalities: ["text", "vision"]
     max_context_tokens: 8192
     supports_structured_output: false
     supports_tool_calling: false
@@ -134,7 +136,7 @@ models:
     vram_gb_estimate: 0.0
     quality_score: 0.0
     speed_score: 0.0
-    notes: "Active llama.cpp model (GGUF). Model path and context size configured via llamacpp settings. Enable after loading a GGUF model."
+    notes: "Active llama.cpp model (GGUF). Model path and context size configured via llamacpp settings. Vision works only if the GGUF has an mmproj. Enable after loading a GGUF model."
 
   local_embedding_ollama:
     provider: "ollama"

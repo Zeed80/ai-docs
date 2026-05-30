@@ -2206,9 +2206,9 @@ function ProviderModelSelect({
   };
 
   return (
-    <div className="flex gap-2">
+    <div className="flex gap-2 min-w-0">
       <select
-        className={`${select} w-36 shrink-0`}
+        className={`${select} w-32 shrink-0`}
         value={selectedProvider}
         onChange={(e) => onProvider(e.target.value)}
       >
@@ -2221,7 +2221,7 @@ function ProviderModelSelect({
         ))}
       </select>
       <select
-        className={select}
+        className={`${select} flex-1 min-w-0`}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
