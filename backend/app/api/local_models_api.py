@@ -828,6 +828,10 @@ async def control_provider_server(
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Docker socket unavailable: {exc}")
+    # Reset the idle timer so a just-started server isn't swept immediately.
+    if action in ("start", "restart"):
+        from app.ai.server_lifecycle import mark_used
+        mark_used(provider)
     return {"ok": True, "provider": provider, "service": service, "action": action}
 
 

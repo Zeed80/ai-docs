@@ -133,6 +133,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Start Redis pub/sub subscriber for cross-worker chat events
     _redis_sub_task: asyncio.Task | None = None
+    _idle_sweep_task: asyncio.Task | None = None
     try:
         from app.core.chat_bus import start_redis_subscriber
         _redis_sub_task = await start_redis_subscriber()
@@ -187,6 +188,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("pinned_models_warm_failed", error=str(exc))
 
+    # Background sweep: stop idle vLLM/llama.cpp servers so only the pinned
+    # orchestrator holds VRAM. Runs in the backend (which has the Docker socket).
+    async def _idle_server_sweep() -> None:
+        from app.ai import server_lifecycle
+
+        while True:
+            await asyncio.sleep(120.0)
+            try:
+                await server_lifecycle.stop_idle_servers()
+            except Exception as exc:
+                logger.debug("idle_server_sweep_error", error=str(exc))
+
+    try:
+        _idle_sweep_task = asyncio.create_task(_idle_server_sweep())
+    except Exception as exc:
+        logger.warning("idle_server_sweep_start_failed", error=str(exc))
+
     try:
         from app.api.health import ai_health
         result = await ai_health()
@@ -208,6 +226,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _redis_sub_task.cancel()
         try:
             await _redis_sub_task
+        except asyncio.CancelledError:
+            pass
+
+    if _idle_sweep_task and not _idle_sweep_task.done():
+        _idle_sweep_task.cancel()
+        try:
+            await _idle_sweep_task
         except asyncio.CancelledError:
             pass
 

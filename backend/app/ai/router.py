@@ -210,6 +210,14 @@ class AIRouter:
             model = self.registry.get_model(model_name)
             self._enforce_policy(request, model)  # policy errors are not per-model failures
             provider = self.providers[model.provider]
+            # Container-bound servers (vLLM/llama.cpp) are started on demand and
+            # auto-stopped when idle; bring the target up before dispatching.
+            try:
+                from app.ai import server_lifecycle
+
+                await server_lifecycle.ensure_running(model.provider.value)
+            except Exception as exc:
+                logger.debug("ensure_server_running_failed", model=model_name, error=str(exc))
             started = _time.perf_counter()
             try:
                 response = await self._dispatch(provider, request, model)

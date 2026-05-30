@@ -2157,35 +2157,85 @@ interface AgentGroup {
   large_provider?: string | null;
 }
 
-function CatalogSelect({
+const PROVIDER_DISPLAY: Record<string, string> = {
+  ollama: "Ollama",
+  llamacpp: "llama.cpp",
+  vllm: "vLLM",
+  anthropic: "Anthropic",
+  openrouter: "OpenRouter",
+  deepseek: "DeepSeek",
+  gemini: "Gemini",
+  openai_compatible: "OpenAI-совм.",
+  lmstudio: "LM Studio",
+};
+const providerLabel = (p: string) => PROVIDER_DISPLAY[p] ?? p;
+
+// Two-step cascade: pick a provider, then a model of that provider. Far clearer
+// than one flat list mixing every provider's models. `value` is a catalog key.
+function ProviderModelSelect({
   value,
   options,
   onChange,
   placeholder,
   allowEmpty,
+  statuses,
 }: {
   value: string;
   options: CatalogEntry[];
   onChange: (key: string) => void;
   placeholder?: string;
   allowEmpty?: boolean;
+  statuses?: Record<string, boolean>; // provider -> running (for the ●/○ hint)
 }) {
+  const providers = Array.from(new Set(options.map((o) => o.provider)));
+  const current = options.find((o) => o.key === value);
+  const selectedProvider = current?.provider ?? providers[0] ?? "";
+  const models = options.filter((o) => o.provider === selectedProvider);
+
+  const dot = (p: string) => {
+    if (!statuses || !(p in statuses)) return "";
+    return statuses[p] ? " ●" : " ○";
+  };
+
+  const onProvider = (p: string) => {
+    if (p === selectedProvider) return;
+    const first = options.find((o) => o.provider === p);
+    // Auto-pick the first model of the new provider so the result is always
+    // valid; optional fields stay empty until the user chooses.
+    onChange(allowEmpty ? "" : (first?.key ?? ""));
+  };
+
   return (
-    <select
-      className={select}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {(allowEmpty || !value) && (
-        <option value="">{placeholder ?? "— не задано —"}</option>
-      )}
-      {options.map((c) => (
-        <option key={c.key} value={c.key}>
-          {c.provider_model} · {c.provider}
-          {c.vram_gb_estimate ? ` · ${c.vram_gb_estimate} GB` : ""}
-        </option>
-      ))}
-    </select>
+    <div className="flex gap-2">
+      <select
+        className={`${select} w-36 shrink-0`}
+        value={selectedProvider}
+        onChange={(e) => onProvider(e.target.value)}
+      >
+        {providers.length === 0 && <option value="">— нет —</option>}
+        {providers.map((p) => (
+          <option key={p} value={p}>
+            {providerLabel(p)}
+            {dot(p)}
+          </option>
+        ))}
+      </select>
+      <select
+        className={select}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {(allowEmpty || !value) && (
+          <option value="">{placeholder ?? "— модель —"}</option>
+        )}
+        {models.map((c) => (
+          <option key={c.key} value={c.key}>
+            {c.provider_model}
+            {c.vram_gb_estimate ? ` · ${c.vram_gb_estimate} GB` : ""}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 
@@ -2197,17 +2247,28 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
   const [savingDocs, setSavingDocs] = useState(false);
   const [savingAgent, setSavingAgent] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [running, setRunning] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/api/local-models/assignment`, {
-        credentials: "include",
-      });
-      if (r.ok) {
-        const d = await r.json();
+      const [a, s] = await Promise.all([
+        fetch(`${API}/api/local-models/assignment`, { credentials: "include" }),
+        fetch(`${API}/api/local-models/status`, { credentials: "include" }),
+      ]);
+      if (a.ok) {
+        const d = await a.json();
         setCatalog(d.catalog || []);
         setDocs(d.documents || {});
         setAgent(d.agent || {});
+      }
+      if (s.ok) {
+        const st = await s.json();
+        const provs = st.providers || {};
+        setRunning({
+          ollama: !!provs.ollama?.running,
+          llamacpp: !!provs.llamacpp?.running,
+          vllm: !!provs.vllm?.running,
+        });
       }
     } catch {
       /* ignore */
@@ -2298,17 +2359,25 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
 
   return (
     <div className="space-y-6">
-      <p className="text-sm text-slate-400">
-        Простое назначение моделей для двух главных задач. Тонкая настройка по
-        отдельным задачам и ролям —{" "}
-        <button
-          className="text-blue-400 hover:underline"
-          onClick={() => onTabChange("routing")}
-        >
-          в Маршрутизации
-        </button>
-        .
-      </p>
+      <div className="space-y-1">
+        <p className="text-sm text-slate-400">
+          Сначала выберите провайдера, затем модель. Тонкая настройка по
+          отдельным задачам и ролям —{" "}
+          <button
+            className="text-blue-400 hover:underline"
+            onClick={() => onTabChange("routing")}
+          >
+            в Маршрутизации
+          </button>
+          .
+        </p>
+        <p className="text-xs text-slate-600">
+          <span className="text-emerald-400">●</span> запущен ·{" "}
+          <span className="text-slate-500">○</span> остановлен — vLLM и
+          llama.cpp стартуют по требованию и выгружаются после простоя (только
+          оркестратор агента всегда в памяти).
+        </p>
+      </div>
 
       {/* Document processing */}
       <div className={card}>
@@ -2324,9 +2393,10 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
               <span className="text-xs text-slate-400">
                 Распознавание (OCR, чертежи) — vision
               </span>
-              <CatalogSelect
+              <ProviderModelSelect
                 value={docs.vision_model ?? ""}
                 options={visionModels}
+                statuses={running}
                 onChange={(v) => setDocs((d) => ({ ...d, vision_model: v }))}
               />
             </label>
@@ -2334,25 +2404,28 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
               <span className="text-xs text-slate-400">
                 Извлечение, письма, рассуждение — текст
               </span>
-              <CatalogSelect
+              <ProviderModelSelect
                 value={docs.text_model ?? ""}
                 options={textModels}
+                statuses={running}
                 onChange={(v) => setDocs((d) => ({ ...d, text_model: v }))}
               />
             </label>
             <label className="space-y-1">
               <span className="text-xs text-slate-400">Эмбеддинги (поиск)</span>
-              <CatalogSelect
+              <ProviderModelSelect
                 value={docs.embedding_model ?? ""}
                 options={embedModels}
+                statuses={running}
                 onChange={(v) => setDocs((d) => ({ ...d, embedding_model: v }))}
               />
             </label>
             <label className="space-y-1">
               <span className="text-xs text-slate-400">Реранкинг</span>
-              <CatalogSelect
+              <ProviderModelSelect
                 value={docs.rerank_model ?? ""}
                 options={rerankModels}
+                statuses={running}
                 onChange={(v) => setDocs((d) => ({ ...d, rerank_model: v }))}
               />
             </label>
@@ -2388,9 +2461,10 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
               <span className="text-xs text-slate-400">
                 Модель агента (основная)
               </span>
-              <CatalogSelect
+              <ProviderModelSelect
                 value={agentKey(agent.agent_model, agent.agent_provider)}
                 options={agentModels}
+                statuses={running}
                 onChange={(key) => {
                   const { model, provider } = keyToNameProvider(key);
                   setAgent((a) => ({
@@ -2405,9 +2479,10 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
               <span className="text-xs text-slate-400">
                 Большая модель (опционально) — сложные задачи
               </span>
-              <CatalogSelect
+              <ProviderModelSelect
                 value={agentKey(agent.large_model, agent.large_provider)}
                 options={agentModels}
+                statuses={running}
                 allowEmpty
                 placeholder="— как основная —"
                 onChange={(key) => {
