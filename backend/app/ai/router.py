@@ -159,6 +159,12 @@ class AIRouter:
             config = config.model_copy(update={"base_url": settings.ollama_url})
             return OllamaProvider(config)
         if kind == ProviderKind.VLLM:
+            # Use the runtime VLLM_URL (e.g. http://vllm-server:8000) rather than
+            # the static registry base_url, mirroring ollama/llamacpp.
+            import os
+            vllm_url = os.environ.get("VLLM_URL", "").strip()
+            if vllm_url:
+                config = config.model_copy(update={"base_url": vllm_url})
             return VLLMProvider(config)
         if kind == ProviderKind.LLAMACPP:
             # llama-server speaks OpenAI-compatible API; use runtime URL from settings
