@@ -112,7 +112,7 @@ async def get_all_providers_status() -> dict:
         ollama_status["error"] = str(exc)
 
     # llama.cpp status
-    from app.api.llamacpp_api import get_llamacpp_status
+    from app.ai.providers.llamacpp_manager import get_llamacpp_status
     try:
         lc_status = await get_llamacpp_status()
         llamacpp_status = lc_status.model_dump()
@@ -207,10 +207,10 @@ async def search_models(
     from app.ai.providers.vllm_manager import (
         search_ms_models as vllm_ms_search,
     )
-    from app.api.llamacpp_api import (
+    from app.ai.providers.llamacpp_manager import (
         _hf_headers as lc_hf_headers,
     )
-    from app.api.llamacpp_api import (
+    from app.ai.providers.llamacpp_manager import (
         _ms_headers as lc_ms_headers,
     )
 
@@ -288,7 +288,7 @@ async def search_models(
 @router.get("/{provider}/models")
 async def list_provider_models(provider: ProviderName) -> dict:
     if provider == "llamacpp":
-        from app.api.llamacpp_api import list_gguf_models
+        from app.ai.providers.llamacpp_manager import list_gguf_models
         models = await list_gguf_models()
         return {"provider": "llamacpp", "models": [m.model_dump() for m in models]}
 
@@ -341,6 +341,62 @@ async def unload_ollama_model(model_name: str) -> dict:
     return {"ok": ok, "model": model_name}
 
 
+class OllamaPullRequest(BaseModel):
+    name: str
+
+
+@router.post("/ollama/pull")
+async def pull_ollama_model(body: OllamaPullRequest) -> StreamingResponse:
+    """Pull a model from the Ollama registry. Streams NDJSON progress."""
+    import httpx
+
+    from app.config import settings
+
+    async def _stream():
+        try:
+            async with httpx.AsyncClient(timeout=600) as client:
+                async with client.stream(
+                    "POST",
+                    f"{settings.ollama_url.rstrip('/')}/api/pull",
+                    json={"name": body.name, "stream": True},
+                ) as resp:
+                    if resp.status_code >= 400:
+                        err = await resp.aread()
+                        yield json.dumps({"status": "error", "error": err.decode()}) + "\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if line:
+                            yield line + "\n"
+        except Exception as exc:
+            yield json.dumps({"status": "error", "error": str(exc)}) + "\n"
+
+    return StreamingResponse(_stream(), media_type="application/x-ndjson")
+
+
+@router.delete("/ollama/models/{model_name:path}")
+async def delete_ollama_model(model_name: str) -> dict:
+    """Delete a model from local Ollama storage."""
+    import httpx
+
+    from app.config import settings
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.request(
+                "DELETE",
+                f"{settings.ollama_url.rstrip('/')}/api/delete",
+                json={"name": model_name},
+            )
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail="Model not found")
+            resp.raise_for_status()
+            return {"deleted": model_name}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
 @router.post("/{provider}/activate")
 async def activate_provider_model(provider: ProviderName, body: ActivateRequest) -> dict:
     # VRAM pre-check with optional auto-free of Ollama models
@@ -352,7 +408,7 @@ async def activate_provider_model(provider: ProviderName, body: ActivateRequest)
             raise HTTPException(status_code=409, detail=reason)
 
     if provider == "llamacpp":
-        from app.api.llamacpp_api import activate_model as lc_activate
+        from app.ai.providers.llamacpp_manager import activate_model as lc_activate
         result = await lc_activate({"path": body.model_path})
         return result.model_dump() if hasattr(result, "model_dump") else result
 
@@ -381,10 +437,10 @@ async def start_model_download(provider: ProviderName, body: DownloadRequest) ->
     import asyncio
 
     if provider == "llamacpp":
-        from app.api.llamacpp_api import (
+        from app.ai.providers.llamacpp_manager import (
             _download_model as lc_download_model,
         )
-        from app.api.llamacpp_api import (
+        from app.ai.providers.llamacpp_manager import (
             _downloads as lc_downloads,
         )
         dl_id = f"{body.repo_id}/{body.filename}".replace("/", "__")
@@ -414,7 +470,7 @@ async def start_model_download(provider: ProviderName, body: DownloadRequest) ->
 @router.get("/{provider}/download/{download_id}/stream")
 async def stream_download_progress(provider: ProviderName, download_id: str) -> StreamingResponse:
     if provider == "llamacpp":
-        from app.api.llamacpp_api import _downloads as lc_downloads
+        from app.ai.providers.llamacpp_manager import _downloads as lc_downloads
 
         async def gen():
             import asyncio as _asyncio
@@ -605,6 +661,51 @@ async def reset_routing(task: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Simplified assignment — two groups (Документы / Агент)
+# ---------------------------------------------------------------------------
+
+class DocumentGroupUpdate(BaseModel):
+    vision_model: str | None = None
+    text_model: str | None = None
+    embedding_model: str | None = None
+    rerank_model: str | None = None
+
+
+class AgentGroupUpdate(BaseModel):
+    agent_model: str | None = None
+    agent_provider: str | None = None
+    large_model: str | None = None
+    large_provider: str | None = None
+
+
+@router.get("/assignment")
+async def get_assignment() -> dict:
+    """Both assignment groups + catalog for the simplified Назначение UI."""
+    from app.ai.assignment_groups import get_groups
+
+    return {**get_groups(), "catalog": _catalog_entries()}
+
+
+@router.put("/assignment/documents")
+async def set_document_assignment(body: DocumentGroupUpdate) -> dict:
+    from app.ai.assignment_groups import DocumentGroup, set_document_group
+
+    try:
+        result = set_document_group(DocumentGroup(**body.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result.model_dump()
+
+
+@router.put("/assignment/agent")
+async def set_agent_assignment(body: AgentGroupUpdate) -> dict:
+    from app.ai.assignment_groups import AgentGroup, set_agent_group
+
+    result = set_agent_group(AgentGroup(**body.model_dump()))
+    return result.model_dump()
+
+
+# ---------------------------------------------------------------------------
 # Per-provider server config / tokens / lifecycle / repo files
 # ---------------------------------------------------------------------------
 
@@ -628,7 +729,7 @@ _SERVICE_NAMES = {
 @router.get("/{provider}/config")
 async def get_provider_config(provider: ProviderName) -> dict:
     if provider == "llamacpp":
-        from app.api.llamacpp_api import _load_config
+        from app.ai.providers.llamacpp_manager import _load_config
         return {"provider": "llamacpp", "config": _load_config()}
     if provider == "vllm":
         from app.ai.providers.vllm_manager import load_vllm_config
@@ -644,7 +745,7 @@ async def get_provider_config(provider: ProviderName) -> dict:
 @router.patch("/{provider}/config")
 async def patch_provider_config(provider: ProviderName, body: ConfigUpdate) -> dict:
     if provider == "llamacpp":
-        from app.api.llamacpp_api import _load_config, _save_config
+        from app.ai.providers.llamacpp_manager import _load_config, _save_config
         cfg = {**_load_config(), **body.config}
         _save_config(cfg)
         return {"provider": "llamacpp", "config": cfg}
@@ -659,7 +760,7 @@ async def patch_provider_config(provider: ProviderName, body: ConfigUpdate) -> d
 @router.get("/tokens")
 async def get_tokens() -> dict:
     """HF/ModelScope tokens are shared across providers (used for gated downloads)."""
-    from app.api.llamacpp_api import _load_tokens
+    from app.ai.providers.llamacpp_manager import _load_tokens
     tokens = _load_tokens()
     return {
         "huggingface": bool(tokens.get("huggingface")),
@@ -669,7 +770,7 @@ async def get_tokens() -> dict:
 
 @router.patch("/tokens")
 async def patch_tokens(body: TokensUpdate) -> dict:
-    from app.api.llamacpp_api import _load_tokens, _save_tokens
+    from app.ai.providers.llamacpp_manager import _load_tokens, _save_tokens
     tokens = _load_tokens()
     if body.huggingface is not None:
         tokens["huggingface"] = body.huggingface
@@ -684,7 +785,7 @@ async def patch_tokens(body: TokensUpdate) -> dict:
 
 @router.delete("/tokens/{token_provider}")
 async def delete_token(token_provider: Literal["huggingface", "modelscope"]) -> dict:
-    from app.api.llamacpp_api import _load_tokens, _save_tokens
+    from app.ai.providers.llamacpp_manager import _load_tokens, _save_tokens
     tokens = _load_tokens()
     tokens.pop(token_provider, None)
     _save_tokens(tokens)
@@ -830,7 +931,7 @@ async def get_model_files(
         return {"provider": "vllm", "repo_id": repo_id, "files": files}
 
     # llamacpp / ollama → GGUF files via existing llamacpp helpers
-    from app.api.llamacpp_api import get_hf_model_files, get_ms_model_files
+    from app.ai.providers.llamacpp_manager import get_hf_model_files, get_ms_model_files
     if source == "huggingface":
         files = await get_hf_model_files(
             repo_id, quant=quant, max_gb=max_gb if max_gb is not None else 100

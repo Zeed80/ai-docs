@@ -120,3 +120,27 @@ def test_migration_from_ai_config(mem_store, monkeypatch):
 
     # Idempotent: second run is a no-op.
     assert tr.migrate_from_ai_config()["migrated"] is False
+
+
+def test_migration_covers_embedding_and_reranking(mem_store, monkeypatch):
+    """embedding_model / reranker_model hold catalog keys (no _provider sibling)."""
+    import app.api.ai_settings as ai_settings
+
+    monkeypatch.setattr(
+        ai_settings,
+        "get_ai_config",
+        lambda: {
+            "embedding_model": "qwen3_embedding_8b_ollama",
+            "reranker_model": "local_reranker_ollama",
+        },
+    )
+    result = tr.migrate_from_ai_config()
+    assert result["migrated"] is True
+
+    emb = tr.get_routing_for(AITask.EMBEDDING)
+    assert emb.models[0] == "qwen3_embedding_8b_ollama"
+    assert emb.local_only is True
+
+    rer = tr.get_routing_for(AITask.RERANKING)
+    assert rer.models[0] == "local_reranker_ollama"
+    assert rer.local_only is True

@@ -256,10 +256,18 @@ def reset_task_routing(task: AITask) -> TaskRouting:
 # ---------------------------------------------------------------------------
 
 # Legacy ai_config field → tasks it used to drive.
+# These fields hold raw provider model names (+ a "<field>_provider" sibling).
 _LEGACY_FIELD_TASKS: dict[str, list[AITask]] = {
     "model_ocr": [AITask.INVOICE_OCR, AITask.CLASSIFICATION, AITask.STRUCTURED_EXTRACTION],
     "model_vlm": [AITask.DRAWING_ANALYSIS, AITask.DRAWING_ANALYSIS_VLM],
     "model_reasoning": [AITask.ENGINEERING_REASONING, AITask.EMAIL_DRAFTING],
+}
+
+# These legacy fields already store a *catalog key* (not a raw name), have no
+# "_provider" sibling, and always resolve to local (confidential) tasks.
+_LEGACY_KEY_FIELD_TASKS: dict[str, list[AITask]] = {
+    "embedding_model": [AITask.EMBEDDING],
+    "reranker_model": [AITask.RERANKING],
 }
 
 
@@ -319,6 +327,22 @@ def migrate_from_ai_config() -> dict[str, Any]:
                 update["local_only"] = False
                 update["allow_cloud"] = True
             routing = _enforce_confidential(task, base.model_copy(update=update))
+            overlay[task.value] = routing.model_dump()
+            resolved.append(f"{task.value}→{key}")
+
+    # Catalog-key valued fields (embedding / reranker) — value is the key itself.
+    known = known_model_keys()
+    for field, tasks in _LEGACY_KEY_FIELD_TASKS.items():
+        key = (cfg.get(field) or "").strip()
+        if not key:
+            continue
+        if key not in known:
+            skipped.append(f"{field}={key}(unknown key)")
+            continue
+        for task in tasks:
+            base = defaults.get(task.value) or TaskRouting(task=task.value)
+            chain = [key] + [m for m in base.models if m != key]
+            routing = _enforce_confidential(task, base.model_copy(update={"models": chain}))
             overlay[task.value] = routing.model_dump()
             resolved.append(f"{task.value}→{key}")
 
