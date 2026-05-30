@@ -52,6 +52,7 @@ models:
     supports_structured_output: false
     supports_tool_calling: false
     local_only: true
+    vram_gb_estimate: 3.5
     quality_score: 0.65
     speed_score: 0.95
     notes: "Compact 2B multimodal model (7.2 GB). Fast vision OCR; use when VRAM is constrained."
@@ -64,6 +65,7 @@ models:
     supports_structured_output: false
     supports_tool_calling: false
     local_only: true
+    vram_gb_estimate: 9.6
     quality_score: 0.72
     speed_score: 0.85
     notes: "Baseline local fast multimodal model for OCR, classification, and extraction."
@@ -76,21 +78,50 @@ models:
     supports_structured_output: false
     supports_tool_calling: true
     local_only: true
+    vram_gb_estimate: 18.0
     quality_score: 0.86
     speed_score: 0.55
     notes: "Baseline local reasoning model. Replace through registry when better local models pass evals."
-  local_reasoning_vllm_turboquant:
+  # ── vLLM models (RTX 3090 24 GB compatible) ─────────────────────────────────
+  qwen25_14b_awq_vllm:
     provider: "vllm"
-    provider_model: "PLACEHOLDER-set-actual-model-before-enabling"
-    status: "candidate"
-    modalities: ["text"]
+    provider_model: "Qwen/Qwen2.5-14B-Instruct-AWQ"
+    status: "staging"
+    modalities: ["text", "tool_calling"]
     max_context_tokens: 131072
-    supports_structured_output: false
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: true
+    vram_gb_estimate: 8.2
+    quality_score: 0.88
+    speed_score: 0.70
+    notes: "Qwen2.5 14B AWQ quantized. ~8.2 GB VRAM on RTX 3090. Long context 131K. Excellent Russian + structured output."
+  qwen25_7b_awq_vllm:
+    provider: "vllm"
+    provider_model: "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    status: "staging"
+    modalities: ["text", "tool_calling"]
+    max_context_tokens: 131072
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: true
+    vram_gb_estimate: 4.5
+    quality_score: 0.80
+    speed_score: 0.88
+    notes: "Qwen2.5 7B AWQ. ~4.5 GB VRAM. Fast inference, leaves headroom to co-run with Ollama models."
+  qwen25_vl_7b_awq_vllm:
+    provider: "vllm"
+    provider_model: "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
+    status: "staging"
+    modalities: ["text", "vision"]
+    max_context_tokens: 32768
+    supports_structured_output: true
     supports_tool_calling: false
     local_only: true
-    quality_score: 0.0
-    speed_score: 0.0
-    notes: "Optional vLLM long-context profile. NOT used by any active route. Set provider_model and promote to production after benchmarking. VLM/vision tasks use gemma4_e4b_ollama via invoice_ocr and drawing_analysis routes."
+    vram_gb_estimate: 5.0
+    quality_score: 0.82
+    speed_score: 0.80
+    notes: "Qwen2.5-VL 7B AWQ. Vision language model. ~5 GB VRAM. Good for technical drawing analysis via vLLM."
   llamacpp_active:
     provider: "llamacpp"
     provider_model: "local"
@@ -100,6 +131,7 @@ models:
     supports_structured_output: false
     supports_tool_calling: false
     local_only: true
+    vram_gb_estimate: 0.0
     quality_score: 0.0
     speed_score: 0.0
     notes: "Active llama.cpp model (GGUF). Model path and context size configured via llamacpp settings. Enable after loading a GGUF model."
@@ -122,6 +154,7 @@ models:
     supports_structured_output: false
     supports_tool_calling: false
     local_only: true
+    vram_gb_estimate: 0.6
     quality_score: 0.62
     speed_score: 0.75
     notes: "Current production embedding model used by the existing 768-dim Qdrant collection."
@@ -143,6 +176,7 @@ models:
     supports_structured_output: false
     supports_tool_calling: false
     local_only: true
+    vram_gb_estimate: 4.4
     quality_score: 0.87
     speed_score: 0.55
     notes: "MTEB SOTA 2025 multilingual embedding, strong Russian. Uses task prefix query:/passage: for best results."
@@ -164,6 +198,7 @@ models:
     supports_structured_output: false
     supports_tool_calling: false
     local_only: true
+    vram_gb_estimate: 1.2
     quality_score: 0.65
     speed_score: 0.70
   local_reranker_ollama:
@@ -181,6 +216,7 @@ models:
     supports_structured_output: false
     supports_tool_calling: false
     local_only: true
+    vram_gb_estimate: 1.2
     quality_score: 0.75
     speed_score: 0.70
     notes: "Cross-encoder reranker via Ollama generate. Compact (1.2 GB), reliable."
@@ -199,6 +235,7 @@ models:
     supports_structured_output: false
     supports_tool_calling: false
     local_only: true
+    vram_gb_estimate: 1.2
     quality_score: 0.70
     speed_score: 0.55
   claude_sonnet_anthropic:
@@ -210,6 +247,7 @@ models:
     supports_structured_output: true
     supports_tool_calling: true
     local_only: false
+    vram_gb_estimate: 0.0
     quality_score: 0.93
     speed_score: 0.70
     notes: "Claude Sonnet via Anthropic API. Enable only with allow_cloud=True. Prompt caching supported."
@@ -222,6 +260,7 @@ models:
     supports_structured_output: true
     supports_tool_calling: true
     local_only: false
+    vram_gb_estimate: 0.0
     quality_score: 0.82
     speed_score: 0.92
     notes: "Claude Haiku — fast and cheap. Good for summarisation and context compression."
@@ -234,6 +273,7 @@ models:
     supports_structured_output: true
     supports_tool_calling: true
     local_only: false
+    vram_gb_estimate: 0.0
     quality_score: 0.91
     speed_score: 0.55
     notes: "DeepSeek-R1 via OpenRouter. Strong reasoning, open-weight. Requires OPENROUTER_API_KEY."
@@ -246,6 +286,7 @@ models:
     supports_structured_output: true
     supports_tool_calling: true
     local_only: false
+    vram_gb_estimate: 0.0
     quality_score: 0.89
     speed_score: 0.60
     notes: "Qwen3-235B MoE via OpenRouter. Excellent multilingual + Russian support."
@@ -259,6 +300,7 @@ models:
     supports_tool_calling: true
     supports_multi_image: true
     local_only: true
+    vram_gb_estimate: 20.0
     quality_score: 0.89
     speed_score: 0.55
     notes: "Qwen3.6 35B. Released April 2026. Hybrid multimodal (text+image+video), 262K ctx. Primary reasoning + VLM fallback."
@@ -271,6 +313,7 @@ models:
     supports_structured_output: true
     supports_tool_calling: true
     local_only: true
+    vram_gb_estimate: 5.5
     quality_score: 0.80
     speed_score: 0.85
     notes: "Qwen3.5 9B local model. Fast worker and fallback reasoning model."
@@ -283,6 +326,7 @@ models:
     supports_structured_output: true
     supports_tool_calling: true
     local_only: true
+    vram_gb_estimate: 4.8
     quality_score: 0.75
     speed_score: 0.98
     notes: "Ministral-3 8B — ultra-fast local model. Primary worker and orchestrator model. Excellent tool calling."
@@ -295,6 +339,7 @@ models:
     supports_structured_output: true
     supports_tool_calling: true
     local_only: false
+    vram_gb_estimate: 0.0
     quality_score: 0.0
     speed_score: 0.0
     notes: "Legacy placeholder. Use claude_sonnet_anthropic or deepseek_r1_openrouter instead."
@@ -313,6 +358,7 @@ models:
     supports_tool_calling: false
     supports_multi_image: true
     local_only: true
+    vram_gb_estimate: 20.0
     quality_score: 0.95
     speed_score: 0.35
     notes: "Qwen3-VL 32B. Dedicated vision series. DocVQA 96.5%, OCRBench 875, 39 languages. Best local VLM for technical docs. ollama pull qwen3-vl:32b"
@@ -327,6 +373,7 @@ models:
     supports_tool_calling: false
     supports_multi_image: true
     local_only: true
+    vram_gb_estimate: 5.0
     quality_score: 0.87
     speed_score: 0.72
     notes: "Qwen3-VL 8B. Fast dedicated VLM, officially on Ollama. ollama pull qwen3-vl:8b"
@@ -341,6 +388,7 @@ models:
     supports_tool_calling: true
     supports_multi_image: true
     local_only: true
+    vram_gb_estimate: 16.5
     quality_score: 0.93
     speed_score: 0.50
     notes: "Qwen3.5 27B. Natively multimodal (early fusion). Outperforms Qwen3-VL on reasoning+vision+agents. Available on Ollama."
@@ -348,16 +396,17 @@ models:
   internvl35_76b_vllm:
     provider: "vllm"
     provider_model: "OpenGVLab/InternVL3.5-78B-Instruct"
-    status: "candidate"
+    status: "disabled"
     modalities: ["text", "vision"]
     max_context_tokens: 128000
     supports_structured_output: false
     supports_tool_calling: false
     supports_multi_image: true
     local_only: true
+    vram_gb_estimate: 50.0
     quality_score: 0.92
     speed_score: 0.28
-    notes: "InternVL3.5 78B. MMMU SOTA open-source (72.2). Strong 3D spatial understanding. Requires vLLM + ~50GB VRAM."
+    notes: "InternVL3.5 78B. MMMU SOTA open-source (72.2). Requires ~50 GB VRAM — does NOT fit on RTX 3090 24 GB. Disabled."
 
   glm45v_ollama:
     provider: "ollama"
@@ -369,6 +418,7 @@ models:
     supports_tool_calling: false
     supports_multi_image: false
     local_only: true
+    vram_gb_estimate: 22.0
     quality_score: 0.90
     speed_score: 0.35
     notes: "GLM-4.5V. 106B/12B MoE. 3D-RoPE for spatial understanding. Good for STEP/IGES geometry views."
@@ -383,6 +433,7 @@ models:
     supports_tool_calling: false
     supports_multi_image: false
     local_only: true
+    vram_gb_estimate: 16.0
     quality_score: 0.82
     speed_score: 0.60
     notes: "Gemma3 27B. Accessible on any GPU >=16GB. Vision fallback when VRAM is constrained."
@@ -397,6 +448,7 @@ models:
     supports_tool_calling: true
     supports_multi_image: true
     local_only: false
+    vram_gb_estimate: 0.0
     quality_score: 0.96
     speed_score: 0.65
     notes: "Gemini 2.5 Pro. 1M context. Excellent for multi-page drawing sets. Cloud only: allow_cloud=True + not confidential. Requires GOOGLE_API_KEY."

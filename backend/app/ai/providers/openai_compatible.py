@@ -17,6 +17,19 @@ from app.ai.schemas import (
 )
 
 
+def _inference_params(request: AIRequest, default_temperature: float = 0.2) -> dict[str, Any]:
+    """Extract inference parameters from request metadata."""
+    params = (request.metadata or {}).get("inference_params") or {}
+    result: dict[str, Any] = {"temperature": params.get("temperature", default_temperature)}
+    if "top_p" in params:
+        result["top_p"] = params["top_p"]
+    if "top_k" in params:
+        result["top_k"] = params["top_k"]
+    if "repeat_penalty" in params:
+        result["frequency_penalty"] = params["repeat_penalty"] - 1.0  # OpenAI uses frequency_penalty
+    return result
+
+
 class OpenAICompatibleProvider(AIProvider):
     kind = ProviderKind.OPENAI_COMPATIBLE
 
@@ -42,7 +55,7 @@ class OpenAICompatibleProvider(AIProvider):
         payload: dict[str, Any] = {
             "model": model,
             "messages": self._messages(request),
-            "temperature": 0.2,
+            **_inference_params(request, default_temperature=0.2),
         }
         if request.tools:
             payload["tools"] = [
@@ -103,7 +116,7 @@ class OpenAICompatibleProvider(AIProvider):
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": content}],
-            "temperature": 0.1,
+            **_inference_params(request, default_temperature=0.0),
         }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(

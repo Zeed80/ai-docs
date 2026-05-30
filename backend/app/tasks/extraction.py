@@ -49,16 +49,30 @@ def _get_sync_session() -> Session:
 
 
 def _run_async(coro):
-    """Run async function from sync Celery task."""
+    """Run async coroutine from sync Celery task.
+
+    Always creates a fresh event loop to avoid two bugs:
+    1. "cannot reuse already awaited coroutine" — happens when a domain RuntimeError
+       raised inside the coroutine was mistakenly caught by the old except-RuntimeError
+       fallback, causing asyncio.run() to re-use an already-consumed coroutine.
+    2. Fork-inherited loop state — forked Celery workers inherit asyncio state from
+       the parent process, making asyncio.get_event_loop() unreliable.
+    """
     try:
         loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(asyncio.run, coro).result()
-        return loop.run_until_complete(coro)
     except RuntimeError:
-        return asyncio.run(coro)
+        loop = None
+
+    if loop is not None and loop.is_running():
+        # We're already inside an event loop (e.g. called from async context via thread).
+        # Use a thread-pool to create a new isolated loop.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+
+    # Standard Celery sync-worker path: always create a fresh loop.
+    # asyncio.run() handles cleanup (close, shutdown_asyncgens) reliably.
+    return asyncio.run(coro)
 
 
 def _default_pipeline_steps() -> list[dict]:

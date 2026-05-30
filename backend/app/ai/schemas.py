@@ -106,6 +106,20 @@ class AIResponse(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProviderNode(BaseModel):
+    """A single provider endpoint (forward-looking: multi-GPU / remote nodes).
+
+    ``base_url`` is the primary node. Additional nodes let the router fan out
+    across several GPUs/machines. Wiring (load balancing, per-node VRAM) is
+    added incrementally; this is the schema hook.
+    """
+
+    name: str
+    base_url: HttpUrl | str
+    vram_gb: float | None = None
+    enabled: bool = True
+
+
 class ProviderConfig(BaseModel):
     kind: ProviderKind
     base_url: HttpUrl | str
@@ -113,6 +127,8 @@ class ProviderConfig(BaseModel):
     timeout_seconds: float = 120.0
     is_local: bool = True
     extra_headers: dict[str, str] = Field(default_factory=dict)
+    # Forward-looking: extra endpoints for the same provider (multi-GPU/remote).
+    nodes: list[ProviderNode] = Field(default_factory=list)
 
 
 class ModelCapability(BaseModel):
@@ -140,6 +156,7 @@ class ModelCapability(BaseModel):
     cost_per_1k_output: float | None = None
     quality_score: float = 0.0
     speed_score: float = 0.0
+    vram_gb_estimate: float | None = None   # expected VRAM usage in GB
     notes: str | None = None
 
 

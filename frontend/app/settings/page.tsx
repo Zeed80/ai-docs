@@ -528,115 +528,6 @@ function SaveRow({
   );
 }
 
-const LOCAL_ONLY_PROVIDERS = [
-  { value: "ollama", label: "Ollama (локально)" },
-  { value: "llamacpp", label: "llama.cpp GGUF (локально)" },
-];
-
-function ProviderModelSelector({
-  label,
-  description,
-  value,
-  provider,
-  ollamaModels,
-  ggufModels,
-  localOnly,
-  onChange,
-}: {
-  label: string;
-  description: string;
-  value: string;
-  provider: string;
-  ollamaModels: OllamaModel[];
-  ggufModels: GgufModel[];
-  localOnly?: boolean;
-  onChange: (provider: string, model: string) => void;
-}) {
-  const availableProviders = localOnly ? LOCAL_ONLY_PROVIDERS : PROVIDERS;
-
-  const modelOptions: string[] =
-    provider === "ollama"
-      ? ollamaModels.map((m) => m.name)
-      : provider === "llamacpp"
-        ? ggufModels.map((m) => m.path)
-        : (PROVIDER_COMMON_MODELS[provider] ?? []);
-
-  const isLocal = provider === "ollama" || provider === "llamacpp";
-  const listId = `model-list-${label.replace(/\s/g, "-")}`;
-
-  return (
-    <Field label={label} hint={description}>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-5">
-        <select
-          value={provider}
-          onChange={(e) => {
-            const newProvider = e.target.value;
-            const firstModel =
-              newProvider === "ollama"
-                ? (ollamaModels[0]?.name ?? "")
-                : newProvider === "llamacpp"
-                  ? (ggufModels[0]?.path ?? "")
-                  : (PROVIDER_COMMON_MODELS[newProvider]?.[0] ?? "");
-            onChange(newProvider, firstModel);
-          }}
-          className={selectCls + " sm:col-span-2"}
-        >
-          {availableProviders.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        {isLocal ? (
-          <select
-            value={value}
-            onChange={(e) => onChange(provider, e.target.value)}
-            className={selectCls + " sm:col-span-3"}
-          >
-            {modelOptions.length === 0 && (
-              <option value={value}>{value || "— нет установленных —"}</option>
-            )}
-            {!modelOptions.includes(value) && value && (
-              <option value={value}>{value}</option>
-            )}
-            {modelOptions.map((m) => (
-              <option key={m} value={m}>
-                {provider === "llamacpp" ? m.split("/").pop() : m}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <>
-            <input
-              list={listId}
-              value={value}
-              onChange={(e) => onChange(provider, e.target.value)}
-              placeholder={PROVIDER_MODEL_PLACEHOLDER[provider] ?? "model-name"}
-              className={inputCls + " sm:col-span-3"}
-            />
-            <datalist id={listId}>
-              {modelOptions.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          </>
-        )}
-      </div>
-      {provider === "llamacpp" && ggufModels.length === 0 && (
-        <p className="mt-1 text-xs text-amber-400">
-          Нет локальных GGUF-моделей.{" "}
-          <a
-            href="/settings/llamacpp"
-            className="underline hover:text-amber-300"
-          >
-            Загрузите модель →
-          </a>
-        </p>
-      )}
-    </Field>
-  );
-}
-
 function modelOptionsForProvider(
   provider: string,
   models: OllamaModel[],
@@ -740,7 +631,7 @@ function DefaultModelField({
         <p className="mt-1 text-xs text-amber-400">
           Нет локальных GGUF-моделей.{" "}
           <a
-            href="/settings/llamacpp"
+            href="/settings/models"
             className="underline hover:text-amber-300"
           >
             Загрузите модель →
@@ -2663,7 +2554,7 @@ export default function SettingsPage() {
                         <span>⚡</span>
                         <span>
                           llama.cpp сервер: настройки и загрузка моделей в{" "}
-                          <a href="/settings/llamacpp" className="underline">
+                          <a href="/settings/models" className="underline">
                             Настройки / llama.cpp
                           </a>
                         </span>
@@ -3436,7 +3327,7 @@ export default function SettingsPage() {
               </div>
             </div>
             <Link
-              href="/settings/llamacpp"
+              href="/settings/models"
               className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
               Открыть →
@@ -3492,138 +3383,18 @@ export default function SettingsPage() {
                 )}
               </div>
             )}
-            {config && (
-              <div className="space-y-4">
-                <ProviderModelSelector
-                  label="Модель OCR / извлечения"
-                  description="Распознавание и извлечение данных из документов. Только локально — документы конфиденциальны."
-                  value={config.model_ocr}
-                  provider={config.model_ocr_provider ?? "ollama"}
-                  ollamaModels={models}
-                  ggufModels={ggufModels}
-                  localOnly
-                  onChange={(p, v) =>
-                    setConfig({
-                      ...config,
-                      model_ocr_provider: p,
-                      model_ocr: v,
-                    })
-                  }
-                />
-                <ProviderModelSelector
-                  label="Модель VLM для чертежей"
-                  description="Vision Language Model для анализа чертежей. Должна поддерживать изображения. Рекомендуется: gemma4, llava, minicpm-v, qwen2-vl."
-                  value={config.model_vlm ?? config.model_ocr}
-                  provider={config.model_vlm_provider ?? "ollama"}
-                  ollamaModels={models}
-                  ggufModels={ggufModels}
-                  localOnly
-                  onChange={(p, v) =>
-                    setConfig({
-                      ...config,
-                      model_vlm_provider: p,
-                      model_vlm: v,
-                    })
-                  }
-                />
-                <ProviderModelSelector
-                  label="Модель reasoning"
-                  description="Сложные рассуждения, генерация писем, отчётов. Можно использовать облачного провайдера."
-                  value={config.model_reasoning}
-                  provider={config.model_reasoning_provider ?? "ollama"}
-                  ollamaModels={models}
-                  ggufModels={ggufModels}
-                  onChange={(p, v) =>
-                    setConfig({
-                      ...config,
-                      model_reasoning_provider: p,
-                      model_reasoning: v,
-                    })
-                  }
-                />
-                <ProviderModelSelector
-                  label="Проверочная модель"
-                  description="Повторная экстракция для автоверификации. Только локально — работает с оригиналом документа."
-                  value={config.verify_model_1}
-                  provider={config.verify_model_1_provider ?? "ollama"}
-                  ollamaModels={models}
-                  ggufModels={ggufModels}
-                  localOnly
-                  onChange={(p, v) =>
-                    setConfig({
-                      ...config,
-                      verify_model_1_provider: p,
-                      verify_model_1: v,
-                    })
-                  }
-                />
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <Field
-                    label="Embedding модель"
-                    hint="Для векторной памяти; параметры из registry"
-                  >
-                    <select
-                      value={config.embedding_model}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          embedding_model: e.target.value,
-                        })
-                      }
-                      className={selectCls}
-                    >
-                      {registryModels
-                        .filter((m) => m.modalities.includes("embedding"))
-                        .map((m) => (
-                          <option key={m.name} value={m.name}>
-                            {m.name}
-                            {m.embedding_dimension
-                              ? ` · ${m.embedding_dimension}`
-                              : ""}
-                          </option>
-                        ))}
-                    </select>
-                    {embeddingProfile && (
-                      <p className="text-[11px] text-slate-500 mt-1">
-                        Коллекция: {embeddingProfile.collection_name} ·{" "}
-                        {embeddingProfile.dimension} ·{" "}
-                        {embeddingProfile.distance_metric}
-                      </p>
-                    )}
-                  </Field>
-                  <Field
-                    label="Reranker модель"
-                    hint="Применяется к top-K кандидатам поиска"
-                  >
-                    <select
-                      value={config.reranker_model ?? ""}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          reranker_model: e.target.value || null,
-                        })
-                      }
-                      className={selectCls}
-                    >
-                      <option value="">Не использовать</option>
-                      {registryModels
-                        .filter((m) => m.modalities.includes("rerank"))
-                        .map((m) => (
-                          <option key={m.name} value={m.name}>
-                            {m.name}
-                          </option>
-                        ))}
-                    </select>
-                  </Field>
-                </div>
-                <SaveRow
-                  saving={configSaving}
-                  saved={configSaved}
-                  onSave={handleSaveConfig}
-                  saveLabel="Сохранить выбор моделей"
-                />
-              </div>
-            )}
+            <div className="rounded-md border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
+              Назначение моделей на задачи (OCR, чертежи, reasoning, проверка,
+              эмбеддинги, реранкинг) переехало в единый раздел{" "}
+              <a
+                href="/settings/models"
+                className="text-blue-400 underline hover:text-blue-300"
+              >
+                Модели → Маршрутизация
+              </a>
+              . Там для каждой задачи задаётся основная модель, цепочка
+              fallback, профиль инференса и политика local/cloud.
+            </div>
           </SectionCard>
 
           {/* TurboQuant */}

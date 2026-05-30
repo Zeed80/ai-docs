@@ -1,10 +1,14 @@
-"""Unified model+provider resolution for all AI tasks.
+"""Model+provider name resolution for direct-call sites.
 
-Single source of truth: all code that needs to know "which model and which
-provider to use for OCR / VLM / reasoning / verify" should call this module.
-Settings hierarchy (highest to lowest priority):
-  1. ai_config in Redis/file (saved from the Settings → Models UI)
-  2. Environment variables / pydantic Settings defaults
+The single source of truth for "which model for which task" is
+``app.ai.task_routing`` (editable from the Settings → Модели → Маршрутизация
+UI). This module is a thin adapter that turns a task's primary catalog key into
+a concrete ``(model_name, provider)`` pair for code paths that call providers
+directly instead of through :meth:`AIRouter.run` (drawing_extractor, telegram,
+extraction helpers, ``reasoning_generate``).
+
+It no longer reads the legacy ``ai_config`` store. Environment/pydantic defaults
+are used only as a last-resort fallback when routing yields nothing.
 """
 
 from __future__ import annotations
@@ -12,9 +16,12 @@ from __future__ import annotations
 import structlog
 from dataclasses import dataclass
 
+from app.ai.schemas import AITask
 from app.config import settings
 
 logger = structlog.get_logger()
+
+_LOCAL_PROVIDERS = ("ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible")
 
 
 @dataclass
@@ -38,22 +45,21 @@ class ModelConfig:
         return not self.is_local
 
 
-def _get_ai_config() -> dict:
+def _resolve(task: AITask, fallback_model: str) -> tuple[str, str]:
+    """Resolve a task's primary model via task_routing, with an env fallback."""
     try:
-        from app.api.ai_settings import get_ai_config
-        return get_ai_config()
+        from app.ai.task_routing import resolve_model
+        model, provider = resolve_model(task)
     except Exception as exc:
-        logger.warning("model_resolver_config_unavailable", error=str(exc))
-        return {}
+        logger.warning("model_resolver_routing_unavailable", task=task.value, error=str(exc))
+        model, provider = None, None
+    return (model or fallback_model), (provider or "ollama")
 
 
 def get_ocr_model() -> ModelConfig:
     """Model for OCR / invoice extraction. Must be local (documents are confidential)."""
-    cfg = _get_ai_config()
-    model = (cfg.get("model_ocr") or "").strip() or settings.ollama_model_ocr
-    provider = (cfg.get("model_ocr_provider") or "").strip() or "ollama"
-    # Safety: OCR is always local-only
-    if provider not in ("ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible"):
+    model, provider = _resolve(AITask.INVOICE_OCR, settings.ollama_model_ocr)
+    if provider not in _LOCAL_PROVIDERS:
         logger.warning("model_resolver_ocr_cloud_blocked", provider=provider, model=model)
         provider = "ollama"
     return ModelConfig(model=model, provider=provider)
@@ -61,11 +67,8 @@ def get_ocr_model() -> ModelConfig:
 
 def get_vlm_model() -> ModelConfig:
     """Vision Language Model for drawing / image analysis. Must be local."""
-    cfg = _get_ai_config()
-    model = (cfg.get("model_vlm") or "").strip() or settings.ollama_model_vlm
-    provider = (cfg.get("model_vlm_provider") or "").strip() or "ollama"
-    # Safety: VLM (drawings) is always local-only
-    if provider not in ("ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible"):
+    model, provider = _resolve(AITask.DRAWING_ANALYSIS_VLM, settings.ollama_model_vlm)
+    if provider not in _LOCAL_PROVIDERS:
         logger.warning("model_resolver_vlm_cloud_blocked", provider=provider, model=model)
         provider = "ollama"
     return ModelConfig(model=model, provider=provider)
@@ -73,11 +76,9 @@ def get_vlm_model() -> ModelConfig:
 
 def get_reasoning_model(confidential: bool = False) -> ModelConfig:
     """Model for reasoning tasks. Cloud providers allowed when confidential=False."""
-    cfg = _get_ai_config()
-    model = (cfg.get("model_reasoning") or "").strip() or settings.ollama_model_reasoning
-    provider = (cfg.get("model_reasoning_provider") or "").strip() or "ollama"
+    model, provider = _resolve(AITask.ENGINEERING_REASONING, settings.ollama_model_reasoning)
     # Enforce local-only for confidential tasks
-    if confidential and provider not in ("ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible"):
+    if confidential and provider not in _LOCAL_PROVIDERS:
         logger.warning(
             "model_resolver_reasoning_cloud_blocked_confidential",
             provider=provider, model=model,
@@ -89,10 +90,8 @@ def get_reasoning_model(confidential: bool = False) -> ModelConfig:
 
 def get_verify_model() -> ModelConfig:
     """Model for extraction verification. Must be local."""
-    cfg = _get_ai_config()
-    model = (cfg.get("verify_model_1") or "").strip() or settings.ollama_model_ocr
-    provider = (cfg.get("verify_model_1_provider") or "").strip() or "ollama"
-    if provider not in ("ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible"):
+    model, provider = _resolve(AITask.STRUCTURED_EXTRACTION, settings.ollama_model_ocr)
+    if provider not in _LOCAL_PROVIDERS:
         provider = "ollama"
     return ModelConfig(model=model, provider=provider)
 

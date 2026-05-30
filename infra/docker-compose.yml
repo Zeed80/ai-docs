@@ -46,7 +46,10 @@ x-backend-env: &backend-env
   LLAMACPP_SERVICE_NAME: llama-server
   LLAMACPP_MMPROJ: ${LLAMACPP_MMPROJ:-}
   # Local OpenAI-compatible provider URLs (optional, override agent config defaults)
-  VLLM_URL: ${VLLM_URL:-}
+  VLLM_URL: ${VLLM_URL:-http://vllm-server:8000}
+  VLLM_SERVICE_NAME: vllm-server
+  VLLM_MODELS_DIR: /vllm-models
+  GPU_TOTAL_VRAM_GB: ${GPU_TOTAL_VRAM_GB:-24.0}
   LMSTUDIO_URL: ${LMSTUDIO_URL:-}
   OPENAI_COMPATIBLE_URL: ${OPENAI_COMPATIBLE_URL:-}
 
@@ -268,6 +271,100 @@ services:
     networks:
       - app
 
+  # === AI (Local) — vLLM server ===
+  # Profile: embedded-vllm (opt-in)
+  # Usage: docker compose --profile embedded-vllm up
+  #        make dev-vllm
+  # Place model directory in vllm_models volume.
+  # Designed for RTX 3090 24 GB; adjust VLLM_GPU_MEMORY_UTILIZATION for other GPUs.
+  # Compatible formats: Safetensors, AWQ, GPTQ (download via /settings/models).
+  vllm-server:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.22.0}
+    profiles:
+      - embedded-vllm
+    ports:
+      - "11437:8000"
+    volumes:
+      - vllm_models:/models
+      # Shared read-only access to llama.cpp GGUF models.
+      # vLLM ≥0.6 can load GGUF directly: set VLLM_QUANTIZATION=gguf when activating.
+      - llamacpp_models:/llamacpp-models:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        MDL=$${VLLM_MODEL:-}
+        # A model is "local" if it starts with /. HuggingFace IDs (e.g. Qwen/Qwen2.5-1.5B-Instruct)
+        # do NOT start with / — vLLM downloads them automatically.
+        IS_LOCAL=false
+        if echo "$$MDL" | grep -q "^/"; then IS_LOCAL=true; fi
+
+        if [ -z "$$MDL" ] || ([ "$$IS_LOCAL" = "true" ] && [ ! -e "$$MDL" ]); then
+          echo "No model set or local path not found — starting vLLM in health-only mode."
+          echo "  Set VLLM_MODEL to a HuggingFace ID (e.g. Qwen/Qwen2.5-1.5B-Instruct)"
+          echo "  or a local path (e.g. /models/mymodel). Use /settings/models to manage."
+          python3 -u - <<'PYEOF'
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        import json
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_GET(self):
+                if self.path == '/health':
+                    self.send_response(200); self.end_headers(); self.wfile.write(b'ok')
+                elif self.path == '/v1/models':
+                    body = json.dumps({'object':'list','data':[]}).encode()
+                    self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+                else:
+                    self.send_response(404); self.end_headers()
+        HTTPServer(('0.0.0.0', 8000), H).serve_forever()
+        PYEOF
+        else
+          # Auto-detect GGUF: use --quantization gguf when loading from a .gguf file
+          QUANT=$${VLLM_QUANTIZATION:-}
+          if echo "$$MDL" | grep -q "\.gguf$"; then
+            QUANT="gguf"
+          fi
+          QFLAG=""
+          [ -n "$$QUANT" ] && QFLAG="--quantization $$QUANT"
+          exec python3 -m vllm.entrypoints.openai.api_server \
+            --model $$MDL \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --gpu-memory-utilization $${VLLM_GPU_MEMORY_UTILIZATION:-0.85} \
+            --max-model-len $${VLLM_MAX_MODEL_LEN:-16384} \
+            --dtype $${VLLM_DTYPE:-bfloat16} \
+            --tensor-parallel-size $${VLLM_TENSOR_PARALLEL:-1} \
+            $$QFLAG \
+            --served-model-name local
+        fi
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    environment:
+      # Default: Qwen3-VL-8B-Instruct (vision + text, 20.9 GB VRAM on RTX 3090)
+      # Override: VLLM_MODEL=cyankiwi/Qwen3.6-27B-AWQ-INT4 (requires ~22+ GB, tight fit)
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.90}
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-12000}
+      VLLM_DTYPE: ${VLLM_DTYPE:-bfloat16}
+      VLLM_QUANTIZATION: ${VLLM_QUANTIZATION:-}
+      VLLM_TENSOR_PARALLEL: ${VLLM_TENSOR_PARALLEL:-1}
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+      # Required for CUDA 13.x host compatibility
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_VISIBLE_DEVICES: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - app
+
   # === Backend API ===
   backend:
     build:
@@ -276,10 +373,12 @@ services:
     environment:
       <<: *backend-env
       LLAMACPP_MODELS_DIR: /llamacpp-models
+      VLLM_MODELS_DIR: /vllm-models
     volumes:
       - ../aiagent:/aiagent:ro
       - llamacpp_models:/llamacpp-models
-      # Docker socket — lets backend restart llama-server when activating a new model
+      - vllm_models:/vllm-models
+      # Docker socket — lets backend restart llama-server / vllm-server when activating a new model
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host-gateway:host-gateway"
@@ -433,6 +532,7 @@ volumes:
   qdrant_data:
   ollama_data:
   llamacpp_models:
+  vllm_models:
   traefik_acme:
   authentik_db_data:
   authentik_media:
