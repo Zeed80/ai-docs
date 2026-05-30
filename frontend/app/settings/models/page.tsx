@@ -22,7 +22,13 @@ const btnDanger = `${btn} bg-red-700 hover:bg-red-600 text-white`;
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type Provider = "ollama" | "llamacpp" | "vllm";
-type Tab = "overview" | "library" | "routing" | "parameters" | "gpu";
+type Tab =
+  | "assignment"
+  | "overview"
+  | "library"
+  | "routing"
+  | "parameters"
+  | "gpu";
 type Source = "local" | "huggingface" | "modelscope";
 
 interface CatalogEntry {
@@ -842,6 +848,9 @@ function LibraryTab() {
     },
   );
   const [activating, setActivating] = useState<string | null>(null);
+  const [pullName, setPullName] = useState("");
+  const [pulling, setPulling] = useState(false);
+  const [pullStatus, setPullStatus] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<
     Record<string, { pct: number; status: string }>
   >({});
@@ -940,6 +949,76 @@ function LibraryTab() {
       alert(`Ошибка: ${e}`);
     }
     setActivating(null);
+  };
+
+  const doDeleteOllama = async (name: string) => {
+    if (!confirm(`Удалить модель «${name}» из Ollama?`)) return;
+    try {
+      const r = await fetch(
+        `${API}/api/local-models/ollama/models/${encodeURIComponent(name)}`,
+        {
+          method: "DELETE",
+          headers: await csrfHeaders(),
+          credentials: "include",
+        },
+      );
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        alert(`Ошибка: ${data.detail || r.status}`);
+      }
+      loadLocal();
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    }
+  };
+
+  const doPullOllama = async () => {
+    const name = pullName.trim();
+    if (!name) return;
+    setPulling(true);
+    setPullStatus("Запуск…");
+    try {
+      const r = await fetch(`${API}/api/local-models/ollama/pull`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await csrfHeaders()),
+        },
+        credentials: "include",
+        body: JSON.stringify({ name }),
+      });
+      if (!r.ok || !r.body) {
+        setPullStatus(`Ошибка: ${r.status}`);
+        setPulling(false);
+        return;
+      }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const j = JSON.parse(line);
+            if (j.error) setPullStatus(`Ошибка: ${j.error}`);
+            else setPullStatus(j.status || "…");
+          } catch {
+            /* ignore partial */
+          }
+        }
+      }
+      setPullStatus("Готово");
+      setPullName("");
+      loadLocal();
+    } catch (e) {
+      setPullStatus(`Ошибка: ${e}`);
+    }
+    setPulling(false);
   };
 
   const doDownload = async (
@@ -1226,6 +1305,30 @@ function LibraryTab() {
                 {models.length} моделей
               </span>
             </div>
+            {p === "ollama" && (
+              <div className="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
+                <input
+                  className={`${input} flex-1`}
+                  placeholder="Загрузить из реестра Ollama (напр. qwen3:8b)"
+                  value={pullName}
+                  onChange={(e) => setPullName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && doPullOllama()}
+                  disabled={pulling}
+                />
+                <button
+                  className={btnPrimary}
+                  onClick={doPullOllama}
+                  disabled={pulling || !pullName.trim()}
+                >
+                  {pulling ? "Загрузка…" : "Pull"}
+                </button>
+                {pullStatus && (
+                  <span className="text-xs text-slate-400 truncate max-w-[12rem]">
+                    {pullStatus}
+                  </span>
+                )}
+              </div>
+            )}
             <div className="divide-y divide-slate-800">
               {models.length === 0 && (
                 <div className="px-4 py-3 text-sm text-slate-500">
@@ -1260,23 +1363,34 @@ function LibraryTab() {
                           )}
                       </div>
                     </div>
-                    <button
-                      onClick={() =>
-                        doActivate(p, m.path ?? name, m.vram_gb_estimate)
-                      }
-                      disabled={activating === (m.path ?? name) || !!m.active}
-                      className={
-                        m.active
-                          ? `${btn} bg-slate-800 text-slate-500 cursor-default`
-                          : btnSecondary
-                      }
-                    >
-                      {activating === (m.path ?? name)
-                        ? "..."
-                        : m.active
-                          ? "Активна"
-                          : "Активировать"}
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() =>
+                          doActivate(p, m.path ?? name, m.vram_gb_estimate)
+                        }
+                        disabled={activating === (m.path ?? name) || !!m.active}
+                        className={
+                          m.active
+                            ? `${btn} bg-slate-800 text-slate-500 cursor-default`
+                            : btnSecondary
+                        }
+                      >
+                        {activating === (m.path ?? name)
+                          ? "..."
+                          : m.active
+                            ? "Активна"
+                            : "Активировать"}
+                      </button>
+                      {p === "ollama" && (
+                        <button
+                          onClick={() => doDeleteOllama(name)}
+                          className={btnDanger}
+                          title="Удалить модель из Ollama"
+                        >
+                          Удалить
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -2028,8 +2142,393 @@ function GPUTab({ status }: { status: AllStatus | null }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
+// ── Assignment Tab (simplified: 2 groups) ──────────────────────────────────────
+
+interface DocGroup {
+  vision_model?: string | null;
+  text_model?: string | null;
+  embedding_model?: string | null;
+  rerank_model?: string | null;
+}
+interface AgentGroup {
+  agent_model?: string | null;
+  agent_provider?: string | null;
+  large_model?: string | null;
+  large_provider?: string | null;
+}
+
+const PROVIDER_DISPLAY: Record<string, string> = {
+  ollama: "Ollama",
+  llamacpp: "llama.cpp",
+  vllm: "vLLM",
+  anthropic: "Anthropic",
+  openrouter: "OpenRouter",
+  deepseek: "DeepSeek",
+  gemini: "Gemini",
+  openai_compatible: "OpenAI-совм.",
+  lmstudio: "LM Studio",
+};
+const providerLabel = (p: string) => PROVIDER_DISPLAY[p] ?? p;
+
+// Two-step cascade: pick a provider, then a model of that provider. Far clearer
+// than one flat list mixing every provider's models. `value` is a catalog key.
+function ProviderModelSelect({
+  value,
+  options,
+  onChange,
+  placeholder,
+  allowEmpty,
+  statuses,
+}: {
+  value: string;
+  options: CatalogEntry[];
+  onChange: (key: string) => void;
+  placeholder?: string;
+  allowEmpty?: boolean;
+  statuses?: Record<string, boolean>; // provider -> running (for the ●/○ hint)
+}) {
+  const providers = Array.from(new Set(options.map((o) => o.provider)));
+  const current = options.find((o) => o.key === value);
+  const selectedProvider = current?.provider ?? providers[0] ?? "";
+  const models = options.filter((o) => o.provider === selectedProvider);
+
+  const dot = (p: string) => {
+    if (!statuses || !(p in statuses)) return "";
+    return statuses[p] ? " ●" : " ○";
+  };
+
+  const onProvider = (p: string) => {
+    if (p === selectedProvider) return;
+    const first = options.find((o) => o.provider === p);
+    // Auto-pick the first model of the new provider so the result is always
+    // valid; optional fields stay empty until the user chooses.
+    onChange(allowEmpty ? "" : (first?.key ?? ""));
+  };
+
+  return (
+    <div className="flex gap-2">
+      <select
+        className={`${select} w-36 shrink-0`}
+        value={selectedProvider}
+        onChange={(e) => onProvider(e.target.value)}
+      >
+        {providers.length === 0 && <option value="">— нет —</option>}
+        {providers.map((p) => (
+          <option key={p} value={p}>
+            {providerLabel(p)}
+            {dot(p)}
+          </option>
+        ))}
+      </select>
+      <select
+        className={select}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {(allowEmpty || !value) && (
+          <option value="">{placeholder ?? "— модель —"}</option>
+        )}
+        {models.map((c) => (
+          <option key={c.key} value={c.key}>
+            {c.provider_model}
+            {c.vram_gb_estimate ? ` · ${c.vram_gb_estimate} GB` : ""}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
+  const [docs, setDocs] = useState<DocGroup>({});
+  const [agent, setAgent] = useState<AgentGroup>({});
+  const [loading, setLoading] = useState(true);
+  const [savingDocs, setSavingDocs] = useState(false);
+  const [savingAgent, setSavingAgent] = useState(false);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [running, setRunning] = useState<Record<string, boolean>>({});
+
+  const load = useCallback(async () => {
+    try {
+      const [a, s] = await Promise.all([
+        fetch(`${API}/api/local-models/assignment`, { credentials: "include" }),
+        fetch(`${API}/api/local-models/status`, { credentials: "include" }),
+      ]);
+      if (a.ok) {
+        const d = await a.json();
+        setCatalog(d.catalog || []);
+        setDocs(d.documents || {});
+        setAgent(d.agent || {});
+      }
+      if (s.ok) {
+        const st = await s.json();
+        const provs = st.providers || {};
+        setRunning({
+          ollama: !!provs.ollama?.running,
+          llamacpp: !!provs.llamacpp?.running,
+          vllm: !!provs.vllm?.running,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+    setLoading(false);
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const isLocal = (c: CatalogEntry) => LOCAL_PROVIDERS.includes(c.provider);
+  const byMod = (m: string, localOnly = false) =>
+    catalog.filter(
+      (c) => c.modalities.includes(m) && (!localOnly || isLocal(c)),
+    );
+
+  const visionModels = byMod("vision", true);
+  const textModels = byMod("text", true);
+  const embedModels = byMod("embedding");
+  const rerankModels = byMod("rerank");
+  // Agent reasoning models — text-capable, local first.
+  const agentModels = [...byMod("text")].sort(
+    (a, b) => Number(isLocal(b)) - Number(isLocal(a)),
+  );
+
+  // Agent group works with raw provider_model + provider; map to/from a catalog key.
+  const agentKey = (model?: string | null, provider?: string | null) =>
+    catalog.find((c) => c.provider_model === model && c.provider === provider)
+      ?.key ?? "";
+  const keyToNameProvider = (key: string) => {
+    const c = catalog.find((e) => e.key === key);
+    return c
+      ? { model: c.provider_model, provider: c.provider }
+      : { model: "", provider: "" };
+  };
+
+  const saveDocs = async () => {
+    setSavingDocs(true);
+    setSavedMsg(null);
+    try {
+      const r = await fetch(`${API}/api/local-models/assignment/documents`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await csrfHeaders()),
+        },
+        credentials: "include",
+        body: JSON.stringify(docs),
+      });
+      const data = await r.json();
+      if (!r.ok) alert(`Ошибка: ${data.detail || JSON.stringify(data)}`);
+      else {
+        setDocs(data);
+        setSavedMsg("Сохранено");
+      }
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    }
+    setSavingDocs(false);
+  };
+
+  const saveAgent = async () => {
+    setSavingAgent(true);
+    setSavedMsg(null);
+    try {
+      const r = await fetch(`${API}/api/local-models/assignment/agent`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await csrfHeaders()),
+        },
+        credentials: "include",
+        body: JSON.stringify(agent),
+      });
+      const data = await r.json();
+      if (!r.ok) alert(`Ошибка: ${data.detail || JSON.stringify(data)}`);
+      else {
+        setAgent(data);
+        setSavedMsg("Сохранено");
+      }
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    }
+    setSavingAgent(false);
+  };
+
+  if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-1">
+        <p className="text-sm text-slate-400">
+          Сначала выберите провайдера, затем модель. Тонкая настройка по
+          отдельным задачам и ролям —{" "}
+          <button
+            className="text-blue-400 hover:underline"
+            onClick={() => onTabChange("routing")}
+          >
+            в Маршрутизации
+          </button>
+          .
+        </p>
+        <p className="text-xs text-slate-600">
+          <span className="text-emerald-400">●</span> запущен ·{" "}
+          <span className="text-slate-500">○</span> остановлен — vLLM и
+          llama.cpp стартуют по требованию и выгружаются после простоя (только
+          оркестратор агента всегда в памяти).
+        </p>
+      </div>
+
+      {/* Document processing */}
+      <div className={card}>
+        <div className={cardH}>
+          <span className="text-sm font-semibold text-slate-100">
+            Обработка документов
+          </span>
+          <span className="text-xs text-slate-500">🔒 только локально</span>
+        </div>
+        <div className="p-4 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="space-y-1">
+              <span className="text-xs text-slate-400">
+                Распознавание (OCR, чертежи) — vision
+              </span>
+              <ProviderModelSelect
+                value={docs.vision_model ?? ""}
+                options={visionModels}
+                statuses={running}
+                onChange={(v) => setDocs((d) => ({ ...d, vision_model: v }))}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs text-slate-400">
+                Извлечение, письма, рассуждение — текст
+              </span>
+              <ProviderModelSelect
+                value={docs.text_model ?? ""}
+                options={textModels}
+                statuses={running}
+                onChange={(v) => setDocs((d) => ({ ...d, text_model: v }))}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs text-slate-400">Эмбеддинги (поиск)</span>
+              <ProviderModelSelect
+                value={docs.embedding_model ?? ""}
+                options={embedModels}
+                statuses={running}
+                onChange={(v) => setDocs((d) => ({ ...d, embedding_model: v }))}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs text-slate-400">Реранкинг</span>
+              <ProviderModelSelect
+                value={docs.rerank_model ?? ""}
+                options={rerankModels}
+                statuses={running}
+                onChange={(v) => setDocs((d) => ({ ...d, rerank_model: v }))}
+              />
+            </label>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              className={btnPrimary}
+              onClick={saveDocs}
+              disabled={savingDocs}
+            >
+              {savingDocs ? "Сохранение…" : "Сохранить"}
+            </button>
+            {savedMsg && (
+              <span className="text-xs text-emerald-400">{savedMsg}</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Agent */}
+      <div className={card}>
+        <div className={cardH}>
+          <span className="text-sm font-semibold text-slate-100">
+            Агент «Света»
+          </span>
+          <span className="text-xs text-slate-500">
+            оркестратор · исполнитель · аудитор
+          </span>
+        </div>
+        <div className="p-4 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="space-y-1">
+              <span className="text-xs text-slate-400">
+                Модель агента (основная)
+              </span>
+              <ProviderModelSelect
+                value={agentKey(agent.agent_model, agent.agent_provider)}
+                options={agentModels}
+                statuses={running}
+                onChange={(key) => {
+                  const { model, provider } = keyToNameProvider(key);
+                  setAgent((a) => ({
+                    ...a,
+                    agent_model: model,
+                    agent_provider: provider,
+                  }));
+                }}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs text-slate-400">
+                Большая модель (опционально) — сложные задачи
+              </span>
+              <ProviderModelSelect
+                value={agentKey(agent.large_model, agent.large_provider)}
+                options={agentModels}
+                statuses={running}
+                allowEmpty
+                placeholder="— как основная —"
+                onChange={(key) => {
+                  if (!key) {
+                    setAgent((a) => ({
+                      ...a,
+                      large_model: null,
+                      large_provider: null,
+                    }));
+                    return;
+                  }
+                  const { model, provider } = keyToNameProvider(key);
+                  setAgent((a) => ({
+                    ...a,
+                    large_model: model,
+                    large_provider: provider,
+                  }));
+                }}
+              />
+            </label>
+          </div>
+          <p className="text-xs text-slate-600">
+            Основная модель используется для планирования, исполнения и аудита.
+            Большая модель — для тяжёлых задач (например, генерация новых
+            возможностей).
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              className={btnPrimary}
+              onClick={saveAgent}
+              disabled={savingAgent}
+            >
+              {savingAgent ? "Сохранение…" : "Сохранить"}
+            </button>
+            {savedMsg && (
+              <span className="text-xs text-emerald-400">{savedMsg}</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ModelsPage() {
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("assignment");
   const [status, setStatus] = useState<AllStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -2052,7 +2551,8 @@ export default function ModelsPage() {
   }, [loadStatus]);
 
   const TABS: { id: Tab; label: string }[] = [
-    { id: "overview", label: "Обзор" },
+    { id: "assignment", label: "Назначение" },
+    { id: "overview", label: "Провайдеры" },
     { id: "library", label: "Библиотека" },
     { id: "routing", label: "Маршрутизация" },
     { id: "parameters", label: "Параметры" },
@@ -2100,6 +2600,7 @@ export default function ModelsPage() {
 
         {/* Tab content */}
         <div>
+          {tab === "assignment" && <AssignmentTab onTabChange={setTab} />}
           {tab === "overview" && (
             <OverviewTab status={status} onTabChange={setTab} />
           )}

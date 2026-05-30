@@ -1,4 +1,9 @@
-"""llama.cpp server management API — status, config, model search (HF/ModelScope), download."""
+"""llama.cpp server manager — status, config, model search (HF/ModelScope), download.
+
+Internal provider module (no public router). Exposed to the rest of the app only
+through ``app.api.local_models_api``, which imports these helpers directly.
+Symmetric with ``app.ai.providers.vllm_manager``.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +23,6 @@ from pydantic import BaseModel
 
 from app.config import settings
 
-router = APIRouter()
 logger = structlog.get_logger()
 
 _REDIS_KEY = "llamacpp_config"
@@ -284,7 +288,6 @@ async def _wait_llama_healthy(url: str, timeout: int = 120) -> bool:
 
 # ── Status & Config ───────────────────────────────────────────────────────────
 
-@router.get("/status", response_model=LlamaCppStatus)
 async def get_llamacpp_status() -> LlamaCppStatus:
     base = _get_llamacpp_base_url()
     cfg = _load_config()
@@ -341,12 +344,10 @@ async def get_llamacpp_status() -> LlamaCppStatus:
                           vision=vision, mmproj_path=mmproj_path)
 
 
-@router.get("/config", response_model=LlamaCppConfig)
 async def get_llamacpp_config() -> LlamaCppConfig:
     return LlamaCppConfig(**_load_config())
 
 
-@router.patch("/config", response_model=LlamaCppConfig)
 async def update_llamacpp_config(update: LlamaCppConfigUpdate) -> LlamaCppConfig:
     cfg = _load_config()
     for field, value in update.model_dump(exclude_none=True).items():
@@ -357,14 +358,12 @@ async def update_llamacpp_config(update: LlamaCppConfigUpdate) -> LlamaCppConfig
 
 # ── Token management ──────────────────────────────────────────────────────────
 
-@router.get("/tokens", response_model=TokensStatus)
 async def get_tokens_status() -> TokensStatus:
     t = _load_tokens()
     return TokensStatus(huggingface_set=bool(t.get("huggingface")),
                         modelscope_set=bool(t.get("modelscope")))
 
 
-@router.patch("/tokens", response_model=TokensStatus)
 async def update_tokens(update: TokensUpdate) -> TokensStatus:
     t = _load_tokens()
     if update.huggingface is not None:
@@ -376,7 +375,6 @@ async def update_tokens(update: TokensUpdate) -> TokensStatus:
                         modelscope_set=bool(t.get("modelscope")))
 
 
-@router.delete("/tokens/{provider}", response_model=TokensStatus)
 async def delete_token(provider: str) -> TokensStatus:
     if provider not in ("huggingface", "modelscope"):
         raise HTTPException(status_code=400, detail="Unknown provider")
@@ -416,7 +414,6 @@ def _parse_hf_file(f: dict) -> HFFile:
                   split_group=split_group, part_index=part_index, total_parts=total_parts)
 
 
-@router.get("/hf/search", response_model=list[HFModelResult])
 async def search_hf_models(
     q: str = Query(..., min_length=1),
     quant: str | None = Query(None, description="Filter: Q4_K_M, Q8_0, F16 …"),
@@ -482,7 +479,6 @@ async def search_hf_models(
     return results
 
 
-@router.get("/hf/model/{repo_id:path}/files", response_model=list[HFFile])
 async def get_hf_model_files(
     repo_id: str,
     quant: str | None = Query(None),
@@ -547,7 +543,6 @@ async def get_hf_model_files(
 
 # ── ModelScope search ─────────────────────────────────────────────────────────
 
-@router.get("/ms/search", response_model=list[MSModelResult])
 async def search_ms_models(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=50),
@@ -596,7 +591,6 @@ async def search_ms_models(
     return results
 
 
-@router.get("/ms/model/{repo_id:path}/files", response_model=list[HFFile])
 async def get_ms_model_files(repo_id: str) -> list[HFFile]:
     """List GGUF files for a ModelScope repo."""
     try:
@@ -622,7 +616,6 @@ async def get_ms_model_files(repo_id: str) -> list[HFFile]:
 
 # ── Local model management ────────────────────────────────────────────────────
 
-@router.get("/models", response_model=list[GgufModel])
 async def list_gguf_models() -> list[GgufModel]:
     active_path = _load_config().get("model", "")
     result: list[GgufModel] = []
@@ -636,7 +629,6 @@ async def list_gguf_models() -> list[GgufModel]:
     return result
 
 
-@router.delete("/models/{filename}")
 async def delete_gguf_model(filename: str) -> dict:
     if not re.match(r'^[\w\-\. ]+\.gguf$', filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -647,7 +639,6 @@ async def delete_gguf_model(filename: str) -> dict:
     return {"deleted": filename}
 
 
-@router.post("/models/activate", response_model=ActivateModelResponse)
 async def activate_model(body: dict) -> ActivateModelResponse:
     """Activate a GGUF model: save config, write .active_model, restart llama-server.
 
@@ -736,7 +727,6 @@ async def activate_model(body: dict) -> ActivateModelResponse:
     )
 
 
-@router.post("/restart", response_model=ActivateModelResponse)
 async def restart_llamacpp_server() -> ActivateModelResponse:
     """Restart llama-server without changing the model (e.g. after config update)."""
     cfg = _load_config()
@@ -766,7 +756,6 @@ async def restart_llamacpp_server() -> ActivateModelResponse:
 
 # ── Download ──────────────────────────────────────────────────────────────────
 
-@router.get("/downloads", response_model=list[DownloadStatus])
 async def list_downloads() -> list[DownloadStatus]:
     result = []
     for dl_id, d in _downloads.items():
@@ -785,7 +774,6 @@ async def list_downloads() -> list[DownloadStatus]:
     return result
 
 
-@router.post("/download", summary="Start downloading a GGUF model")
 async def start_download(req: DownloadRequest, background_tasks: BackgroundTasks) -> dict:
     dl_id = f"{req.repo_id}/{req.filename}".replace("/", "__")
 
@@ -812,14 +800,12 @@ async def start_download(req: DownloadRequest, background_tasks: BackgroundTasks
     return {"message": "Download started", "download_id": dl_id, "dest": dest_name}
 
 
-@router.delete("/download/{dl_id:path}")
 async def cancel_download(dl_id: str) -> dict:
     if dl_id in _downloads:
         _downloads[dl_id]["status"] = "cancelled"
     return {"cancelled": dl_id}
 
 
-@router.get("/download/{dl_id:path}/status", response_model=DownloadStatus)
 async def get_download_status(dl_id: str) -> DownloadStatus:
     d = _downloads.get(dl_id)
     if not d:
@@ -833,7 +819,6 @@ async def get_download_status(dl_id: str) -> DownloadStatus:
                           error=d.get("error"))
 
 
-@router.get("/download/{dl_id:path}/stream")
 async def stream_download(dl_id: str):
     async def _gen() -> AsyncIterator[str]:
         while True:
@@ -902,7 +887,6 @@ async def _download_model(dl_id: str, url: str, dest_name: str, source: str = "h
 
 # ── Diagnostics ───────────────────────────────────────────────────────────────
 
-@router.get("/slots")
 async def get_llamacpp_slots() -> dict:
     base = _get_llamacpp_base_url()
     try:
@@ -914,7 +898,6 @@ async def get_llamacpp_slots() -> dict:
         raise HTTPException(status_code=503, detail=f"llama-server unavailable: {e}")
 
 
-@router.get("/metrics")
 async def get_llamacpp_metrics():
     base = _get_llamacpp_base_url()
     try:
@@ -925,7 +908,6 @@ async def get_llamacpp_metrics():
         raise HTTPException(status_code=503, detail=str(e))
 
 
-@router.post("/test")
 async def test_generation() -> dict:
     base = _get_llamacpp_base_url()
     payload = {"messages": [{"role": "user", "content": "Reply with exactly: OK"}],

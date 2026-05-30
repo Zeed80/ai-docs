@@ -406,6 +406,9 @@ services:
       SKIP_DB_MIGRATE: "1"
     volumes:
       - ../aiagent:/aiagent:ro
+      # On-demand start of vLLM/llama.cpp servers when a document task routes to
+      # them (see app/ai/server_lifecycle.py). Takes effect after a worker rebuild.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     extra_hosts:
       - "host-gateway:host-gateway"
     depends_on:

@@ -406,11 +406,10 @@ const LOCAL_PROVIDER_URL_LABEL: Record<string, keyof AgentConfig> = {
   openai_compatible: "openai_compatible_url",
 };
 
-type TabId = "agent" | "models" | "memory" | "data" | "system" | "email";
+type TabId = "agent" | "memory" | "data" | "system" | "email";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "agent", label: "Агент" },
-  { id: "models", label: "Модели" },
   { id: "memory", label: "Память" },
   { id: "data", label: "Данные" },
   { id: "system", label: "Система" },
@@ -630,10 +629,7 @@ function DefaultModelField({
       {isLlamacpp && ggufModels.length === 0 && (
         <p className="mt-1 text-xs text-amber-400">
           Нет локальных GGUF-моделей.{" "}
-          <a
-            href="/settings/models"
-            className="underline hover:text-amber-300"
-          >
+          <a href="/settings/models" className="underline hover:text-amber-300">
             Загрузите модель →
           </a>
         </p>
@@ -932,9 +928,10 @@ export default function SettingsPage() {
 
   async function loadGgufModels() {
     try {
-      const r = await fetch(`${API}/api/llamacpp/models`);
+      const r = await fetch(`${API}/api/local-models/llamacpp/models`);
       const d = await r.json();
-      setGgufModels(Array.isArray(d) ? d : []);
+      const list = Array.isArray(d) ? d : d?.models;
+      setGgufModels(Array.isArray(list) ? list : []);
     } catch {
       setGgufModels([]);
     }
@@ -1097,11 +1094,6 @@ export default function SettingsPage() {
         loadModels();
         loadCapabilities();
         loadGgufModels();
-      } else if (tab === "models") {
-        loadModels();
-        loadConfig();
-        loadCapabilities();
-        loadGgufModels();
       } else if (tab === "memory") {
         loadEmbeddingProfile();
         loadEmbeddingStats();
@@ -1121,87 +1113,6 @@ export default function SettingsPage() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  async function handlePull() {
-    if (!pullName.trim()) return;
-    setPulling(true);
-    setPullLog([`Загрузка ${pullName}...`]);
-    try {
-      const resp = await mutFetch(`${API}/api/ai/models/pull`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: pullName.trim() }),
-      });
-      const reader = resp.body?.getReader();
-      if (!reader) throw new Error("No response body");
-      const dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const obj = JSON.parse(line);
-            const status = obj.status ?? "";
-            const detail =
-              obj.completed && obj.total
-                ? ` ${Math.round((obj.completed / obj.total) * 100)}%`
-                : "";
-            setPullLog((prev) => {
-              const last = prev[prev.length - 1] ?? "";
-              const msg = status + detail;
-              if (last.startsWith(status.split(" ")[0]))
-                return [...prev.slice(0, -1), msg];
-              return [...prev, msg];
-            });
-            if (obj.status === "error") break;
-          } catch {}
-        }
-      }
-      setPullLog((prev) => [...prev, "Готово!"]);
-      setPullName("");
-      await loadModels();
-    } catch (e) {
-      setPullLog((prev) => [...prev, `Ошибка: ${e}`]);
-    } finally {
-      setPulling(false);
-    }
-  }
-
-  async function handleDelete(name: string) {
-    if (!confirm(`Удалить модель ${name}?`)) return;
-    setDeletingModel(name);
-    try {
-      await mutFetch(`${API}/api/ai/models/${encodeURIComponent(name)}`, {
-        method: "DELETE",
-      });
-      await loadModels();
-    } catch {}
-    setDeletingModel(null);
-  }
-
-  async function handleSaveConfig() {
-    if (!config) return;
-    setConfigSaving(true);
-    try {
-      const r = await mutFetch(`${API}/api/ai/config`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      setConfig(await r.json());
-      await loadConfigStatus();
-      await loadEmbeddingProfile();
-      await loadEmbeddingStats();
-      setConfigSaved(true);
-      setTimeout(() => setConfigSaved(false), 2000);
-    } catch {}
-    setConfigSaving(false);
-  }
 
   async function handleRebuildEmbeddings() {
     setRebuildingEmbeddings(true);
@@ -3307,239 +3218,6 @@ export default function SettingsPage() {
             </div>
           </div>
         </SectionCard>
-      )}
-
-      {/* ── TAB: Модели ──────────────────────────────────────────────────── */}
-      {activeTab === "models" && (
-        <div className="space-y-6">
-          {/* llama.cpp quick-access card */}
-          <div className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/50 px-5 py-4">
-            <div className="flex items-center gap-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-700 text-lg font-bold text-white">
-                ⚡
-              </div>
-              <div>
-                <div className="font-semibold text-slate-100">llama.cpp</div>
-                <div className="text-xs text-slate-400">
-                  Локальный GGUF-бэкенд: TurboQuant KV-кэш, MTP, загрузка
-                  моделей
-                </div>
-              </div>
-            </div>
-            <Link
-              href="/settings/models"
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              Открыть →
-            </Link>
-          </div>
-
-          {/* Status + model config */}
-          <SectionCard
-            title="Выбор моделей"
-            subtitle="Модели для OCR, reasoning и верификации. Поддерживаются Ollama и llama.cpp (локально), а также облачные провайдеры."
-            action={
-              <button
-                onClick={() => {
-                  loadModels();
-                  loadGgufModels();
-                  loadConfigStatus();
-                }}
-                className="rounded-md bg-slate-700 px-3 py-2 text-xs text-slate-100 hover:bg-slate-600"
-              >
-                Проверить
-              </button>
-            }
-          >
-            {configStatus && (
-              <div
-                className={`mb-4 rounded-md border p-3 text-sm ${
-                  configStatus.ok
-                    ? "border-emerald-800 bg-emerald-950/30 text-emerald-200"
-                    : "border-amber-800 bg-amber-950/30 text-amber-200"
-                }`}
-              >
-                <div className="flex flex-wrap gap-4">
-                  <span>
-                    Ollama:{" "}
-                    {configStatus.ollama_available
-                      ? "✓ доступна"
-                      : "✗ недоступна"}{" "}
-                    · моделей: {configStatus.installed_models.length}
-                  </span>
-                  <span>
-                    llama.cpp:{" "}
-                    {ggufModels.length > 0
-                      ? `✓ ${ggufModels.length} GGUF`
-                      : "нет моделей"}
-                  </span>
-                </div>
-                {configStatus.warnings.length > 0 && (
-                  <div className="mt-2 space-y-1 text-xs">
-                    {configStatus.warnings.map((w) => (
-                      <div key={w}>{w}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="rounded-md border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
-              Назначение моделей на задачи (OCR, чертежи, reasoning, проверка,
-              эмбеддинги, реранкинг) переехало в единый раздел{" "}
-              <a
-                href="/settings/models"
-                className="text-blue-400 underline hover:text-blue-300"
-              >
-                Модели → Маршрутизация
-              </a>
-              . Там для каждой задачи задаётся основная модель, цепочка
-              fallback, профиль инференса и политика local/cloud.
-            </div>
-          </SectionCard>
-
-          {/* TurboQuant */}
-          <SectionCard
-            title="TurboQuant"
-            subtitle="Optional vLLM KV-cache профиль для long-context reasoning. Включайте только после benchmark."
-          >
-            {config && (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <label className="flex items-center gap-2 rounded-md bg-slate-900/50 p-3 text-sm text-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={config.turboquant_enabled}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        turboquant_enabled: e.target.checked,
-                      })
-                    }
-                  />
-                  Включить профиль
-                </label>
-                <Field label="KV-cache dtype">
-                  <input
-                    className={inputCls}
-                    value={config.turboquant_kv_cache_dtype}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        turboquant_kv_cache_dtype: e.target.value,
-                      })
-                    }
-                  />
-                </Field>
-                <Field label="Max model len (токенов)">
-                  <input
-                    className={inputCls}
-                    type="number"
-                    value={config.turboquant_max_model_len}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        turboquant_max_model_len: Number(e.target.value),
-                      })
-                    }
-                  />
-                </Field>
-              </div>
-            )}
-          </SectionCard>
-
-          {/* Installed models */}
-          <SectionCard
-            title="Установленные модели"
-            action={
-              <button
-                onClick={loadModels}
-                disabled={loadingModels}
-                className="text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded hover:bg-slate-700"
-              >
-                {loadingModels ? "Загрузка..." : "Обновить"}
-              </button>
-            }
-          >
-            {loadingModels ? (
-              <div className="text-sm text-slate-400 py-4 text-center">
-                Загрузка списка моделей…
-              </div>
-            ) : models.length === 0 ? (
-              <p className="text-sm text-slate-500">
-                Нет установленных моделей
-              </p>
-            ) : (
-              <div className="divide-y divide-slate-700">
-                {models.map((m) => (
-                  <div
-                    key={m.name}
-                    className="flex items-center justify-between py-2.5"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-mono font-medium text-slate-200 truncate">
-                        {m.name}
-                      </p>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        {[m.parameter_size, m.family, fmtBytes(m.size)]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleDelete(m.name)}
-                      disabled={deletingModel === m.name}
-                      className="ml-4 px-2 py-1 text-xs text-red-400 hover:text-red-300 hover:bg-red-950/30 rounded disabled:opacity-40 shrink-0"
-                    >
-                      {deletingModel === m.name ? "…" : "Удалить"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </SectionCard>
-
-          {/* Pull new model */}
-          <SectionCard title="Загрузить новую модель">
-            <div className="flex gap-2 mb-3">
-              <input
-                type="text"
-                value={pullName}
-                onChange={(e) => setPullName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !pulling && handlePull()}
-                placeholder="например: llama3.2:3b, qwen3:8b"
-                disabled={pulling}
-                className={`flex-1 ${inputCls}`}
-              />
-              <button
-                onClick={handlePull}
-                disabled={pulling || !pullName.trim()}
-                className={btnPrimary}
-              >
-                {pulling ? "Загрузка..." : "Pull"}
-              </button>
-            </div>
-            {pullLog.length > 0 && (
-              <div
-                ref={pullLogRef}
-                className="bg-slate-900 text-slate-300 text-xs font-mono rounded-md p-3 h-32 overflow-y-auto"
-              >
-                {pullLog.map((line, i) => (
-                  <div key={i}>{line}</div>
-                ))}
-              </div>
-            )}
-            <p className="text-xs text-slate-400 mt-2">
-              Библиотека:&nbsp;
-              <a
-                href="https://ollama.com/library"
-                target="_blank"
-                rel="noreferrer"
-                className="underline hover:text-slate-300"
-              >
-                ollama.com/library
-              </a>
-            </p>
-          </SectionCard>
-        </div>
       )}
 
       {/* ── TAB: Память ──────────────────────────────────────────────────── */}
