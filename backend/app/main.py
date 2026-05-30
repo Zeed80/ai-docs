@@ -178,6 +178,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("task_routing_migration_failed", error=str(exc))
 
+    # Warm the pinned orchestrator model so the agent has an instant first
+    # response; other models load on demand and free VRAM when idle.
+    try:
+        from app.ai.model_lifecycle import warm_pinned
+        warmed = await warm_pinned()
+        if warmed:
+            logger.info("pinned_models_warmed", models=warmed)
+    except Exception as exc:
+        logger.warning("pinned_models_warm_failed", error=str(exc))
+
     try:
         from app.api.health import ai_health
         result = await ai_health()

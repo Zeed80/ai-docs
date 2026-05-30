@@ -183,30 +183,28 @@ class SvetaTelegramBot:
         await self._process_message(update, user.id, text)
 
     async def _transcribe(self, audio_path: str) -> str:
-        """Transcribe audio via Ollama (gemma4:e4b supports audio)."""
+        """Transcribe audio via the local multimodal model (routed by AIRouter)."""
         import base64
 
         with open(audio_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
 
-        from app.ai.model_resolver import get_ocr_model as _get_ocr
-        from app.config import settings
-        import httpx
+        from app.ai.router import ai_router
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
 
-        _ocr = _get_ocr()
-        payload = {
-            "model": _ocr.model,
-            "prompt": "Transcribe the following audio to Russian text.",
-            "images": [b64],
-            "stream": False,
-        }
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{settings.ollama_url.rstrip('/')}/api/generate",
-                json=payload,
+        # The local OCR/vision model handles audio bytes as a multimodal input;
+        # route through AIRouter so it stays local and uses the configured model.
+        resp = await ai_router.run(
+            AIRequest(
+                task=AITask.INVOICE_OCR,
+                messages=[
+                    ChatMessage(role="user", content="Transcribe the following audio to Russian text."),
+                ],
+                images=[b64],
+                confidential=True,
             )
-            resp.raise_for_status()
-            return resp.json().get("response", "")
+        )
+        return resp.text or ""
 
     async def _handle_document(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
