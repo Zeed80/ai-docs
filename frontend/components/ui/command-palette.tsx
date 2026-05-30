@@ -116,9 +116,9 @@ const NAV_ITEMS: NavItem[] = [
   },
   { id: "admin", label: "Администратор", href: "/admin", group: "Настройки" },
   {
-    id: "llamacpp",
-    label: "llama.cpp — загрузка и управление GGUF",
-    href: "/settings/llamacpp",
+    id: "models",
+    label: "Модели — провайдеры, библиотека, маршрутизация задач",
+    href: "/settings/models",
     group: "Настройки",
   },
 ];

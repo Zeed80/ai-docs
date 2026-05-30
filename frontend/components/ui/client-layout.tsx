@@ -1,11 +1,24 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { AuthProvider } from "@/lib/auth-context";
-import { SvetaPanel } from "@/components/chat/sveta-panel";
 import { Sidebar } from "@/components/ui/sidebar";
 import { ResizableLayout } from "@/components/ui/resizable-layout";
 import { CommandPalette } from "@/components/ui/command-palette";
 import { useEffect, useState } from "react";
+
+// SvetaPanel uses WebSocket, localStorage, and client-only state — never SSR it.
+// ssr: false eliminates hydration mismatches on disabled/placeholder attributes.
+const SvetaPanel = dynamic(
+  () =>
+    import("@/components/chat/sveta-panel").then((m) => ({
+      default: m.SvetaPanel,
+    })),
+  {
+    ssr: false,
+    loading: () => <div className="relative w-full h-full bg-slate-800" />,
+  },
+);
 
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);

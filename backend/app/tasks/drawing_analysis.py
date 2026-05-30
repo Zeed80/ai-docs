@@ -111,10 +111,12 @@ async def _analyze_drawing_async(
     step_geometry = None         # StepGeometryResult from step_extractor (STEP/IGES only)
 
     try:
-        # Resolve VLM model+provider from ai_config via model_resolver
-        from app.ai.model_resolver import get_vlm_model as _get_vlm
-        _vlm_cfg = _get_vlm()
-        vlm_model = model or _vlm_cfg.model
+        # VLM model is resolved by AIRouter from task_routing at dispatch time;
+        # resolve a display name here only for logging.
+        from app.ai.task_routing import resolve_model
+        from app.ai.schemas import AITask as _AITask
+        _routed_model, _ = resolve_model(_AITask.DRAWING_ANALYSIS_VLM)
+        vlm_model = model or _routed_model or "auto"
 
         # Load file from MinIO
         file_bytes = await _load_drawing_file(drawing)

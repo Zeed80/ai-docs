@@ -365,6 +365,23 @@ async def _generate_json_openai_compatible(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
+    # For vLLM: cap max_tokens so that prompt + output fit within max_model_len.
+    # vLLM rejects requests where prompt_tokens + max_tokens > max_model_len.
+    # Use conservative token estimate (1 token ≈ 3 chars for Cyrillic/mixed content).
+    if provider == "vllm":
+        prompt_chars = sum(len(m.get("content", "")) for m in messages)
+        # Conservative: 3 chars/token for Cyrillic-heavy content (vs 4 for ASCII)
+        prompt_tokens_est = int(prompt_chars / 3.0)
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as _c:
+                _r = await _c.get(f"{base_url}/models")
+                if _r.status_code == 200:
+                    _mlen = _r.json()["data"][0].get("max_model_len", 8192)
+                    # 512-token safety buffer; at least 512 output tokens
+                    max_tokens = min(max_tokens, max(512, _mlen - prompt_tokens_est - 512))
+        except Exception:
+            max_tokens = min(max_tokens, max(512, 8192 - prompt_tokens_est - 512))
+
     payload: dict = {
         "model": model,
         "messages": messages,

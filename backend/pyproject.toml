@@ -65,6 +65,12 @@ select = ["E", "F", "I", "N", "W", "UP"]
 asyncio_mode = "auto"
 asyncio_loop_scope = "session"
 testpaths = ["tests"]
+markers = [
+    "live: requires running Ollama at host-gateway:11434",
+    "llamacpp: requires llama.cpp at llama-server:8080",
+    "vllm: requires vLLM at vllm-server:8000",
+    "slow: takes >10s per test",
+]
 
 [tool.mypy]
 python_version = "3.11"

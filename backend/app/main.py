@@ -83,6 +83,7 @@ from app.api import handovers, notifications, rooms
 from app.api import setup as setup_api
 from app.api.capability_router import router as capability_router
 from app.api import llamacpp_api
+from app.api import local_models_api
 from app.config import settings
 from app.db.session import engine  # lazy proxy
 import app.core.metrics  # noqa: F401 — registers Prometheus metrics at startup
@@ -166,6 +167,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info("dev_user_seeded", sub=_DEV_USER.sub)
         except Exception as exc:
             logger.warning("dev_user_seed_failed", error=str(exc))
+
+    # One-time migration of legacy ai_config (model_ocr/vlm/reasoning) into the
+    # unified task_routing store. Idempotent — no-op once routing exists.
+    try:
+        from app.ai.task_routing import migrate_from_ai_config
+        result = migrate_from_ai_config()
+        if result.get("migrated"):
+            logger.info("task_routing_migration_done", **{k: v for k, v in result.items() if k != "migrated"})
+    except Exception as exc:
+        logger.warning("task_routing_migration_failed", error=str(exc))
 
     try:
         from app.api.health import ai_health
@@ -267,6 +278,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(ai_settings.router, prefix="/api/ai", tags=["ai"], dependencies=_auth)
     app.include_router(llamacpp_api.router, prefix="/api/llamacpp", tags=["llamacpp"], dependencies=_auth)
+    app.include_router(local_models_api.router, prefix="/api/local-models", tags=["local-models"], dependencies=_auth)
     app.include_router(agent_actions.router, prefix="/api/agent-actions", tags=["agent"], dependencies=_auth)
     app.include_router(export.router, prefix="/api", tags=["export"], dependencies=_auth)
     app.include_router(draft_email.router, prefix="/api/draft-emails", tags=["email"], dependencies=_auth)

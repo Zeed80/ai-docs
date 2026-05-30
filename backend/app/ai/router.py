@@ -33,7 +33,6 @@ from app.ai.schemas import (
     AIResponse,
     AITask,
     ChatMessage,
-    Modality,
     ModelCapability,
     ProviderKind,
 )
@@ -160,6 +159,12 @@ class AIRouter:
             config = config.model_copy(update={"base_url": settings.ollama_url})
             return OllamaProvider(config)
         if kind == ProviderKind.VLLM:
+            # Use the runtime VLLM_URL (e.g. http://vllm-server:8000) rather than
+            # the static registry base_url, mirroring ollama/llamacpp.
+            import os
+            vllm_url = os.environ.get("VLLM_URL", "").strip()
+            if vllm_url:
+                config = config.model_copy(update={"base_url": vllm_url})
             return VLLMProvider(config)
         if kind == ProviderKind.LLAMACPP:
             # llama-server speaks OpenAI-compatible API; use runtime URL from settings
@@ -177,24 +182,44 @@ class AIRouter:
         raise KeyError(f"Unsupported AI provider: {kind.value}")
 
     async def run(self, request: AIRequest) -> AIResponse:
-        """Run one AI task through the registry and validate the result."""
-        route = self.registry.get_route(request.task)
-        candidates = [request.preferred_model] if request.preferred_model else route.fallback_chain
+        """Run one AI task through the routing config and validate the result.
+
+        Candidate models and the local/cloud policy come from ``task_routing``
+        (the single source of truth, editable from the UI), not from the static
+        YAML ``fallback_chain``. The per-call ``confidential`` flag can only
+        tighten the configured policy, never loosen it.
+        """
+        from app.ai.task_routing import get_routing_for
+
+        routing = get_routing_for(request.task)
+        candidates = [request.preferred_model] if request.preferred_model else routing.models
+
+        # Merge per-call request with the task's configured policy.
+        eff_confidential = request.confidential or routing.local_only
+        eff_allow_cloud = (not eff_confidential) and (request.allow_cloud or routing.allow_cloud)
+        if (eff_confidential, eff_allow_cloud) != (request.confidential, request.allow_cloud):
+            request = request.model_copy(
+                update={"confidential": eff_confidential, "allow_cloud": eff_allow_cloud}
+            )
+
         last_error: Exception | None = None
+
+        import time as _time
 
         for model_name in [name for name in candidates if name]:
             model = self.registry.get_model(model_name)
+            self._enforce_policy(request, model)  # policy errors are not per-model failures
+            provider = self.providers[model.provider]
+            started = _time.perf_counter()
             try:
-                self._enforce_policy(request, model)
-                provider = self.providers[model.provider]
                 response = await self._dispatch(provider, request, model)
                 response = self._validate_structured_output(request, response)
                 response.proposed_tool_calls = self._filter_tool_calls(request, response)
+                self._record_telemetry(request, model, started, ok=True, response=response)
                 return response
-            except AIConfidentialityPolicyError:
-                raise
             except Exception as exc:
                 last_error = exc
+                self._record_telemetry(request, model, started, ok=False, error=str(exc))
                 logger.warning(
                     "ai_route_model_failed",
                     task=request.task.value,
@@ -205,6 +230,35 @@ class AIRouter:
         if last_error:
             raise last_error
         raise KeyError(f"No model configured for task {request.task.value}")
+
+    def _record_telemetry(
+        self,
+        request: AIRequest,
+        model: ModelCapability,
+        started: float,
+        *,
+        ok: bool,
+        response: AIResponse | None = None,
+        error: str | None = None,
+    ) -> None:
+        import time as _time
+
+        try:
+            from app.ai import telemetry
+
+            usage = response.usage if response else None
+            telemetry.record_call(
+                task=request.task.value,
+                model=model.name,
+                provider=model.provider.value,
+                latency_ms=int((_time.perf_counter() - started) * 1000),
+                ok=ok,
+                input_tokens=usage.input_tokens if usage else None,
+                output_tokens=usage.output_tokens if usage else None,
+                error=error,
+            )
+        except Exception:
+            pass
 
     def _enforce_policy(self, request: AIRequest, model: ModelCapability) -> None:
         provider = self.registry.providers[model.provider]
@@ -225,6 +279,17 @@ class AIRouter:
         model: ModelCapability,
     ) -> AIResponse:
         provider_model = model.provider_model
+        # Inject inference parameters from profile unless caller explicitly set them
+        if not request.metadata.get("inference_params"):
+            try:
+                from app.ai.parameter_profiles import get_inference_params
+                params = get_inference_params(request.task)
+                request = request.model_copy(
+                    update={"metadata": {**request.metadata, "inference_params": params}}
+                )
+            except Exception:
+                pass
+
         if request.task == AITask.EMBEDDING:
             return await provider.embedding(request, provider_model)
         if request.task == AITask.RERANKING:
@@ -233,7 +298,9 @@ class AIRouter:
             return await provider.speech(request, provider_model)
         if request.task == AITask.TOOL_CALLING:
             return await provider.tool_calling(request, provider_model)
-        if request.images or Modality.VISION in model.modalities:
+        # Vision only when images are actually supplied — a model having the
+        # vision modality must still serve text-only requests via chat.
+        if request.images:
             return await provider.vision(request, provider_model)
         if request.response_schema is not None:
             return await provider.structured_extract(request, provider_model)
@@ -285,6 +352,14 @@ class AIRouter:
         cfg = get_ocr_model()
         return cfg.model, cfg.provider
 
+    def _ocr_temperature(self, task: AITask = AITask.INVOICE_OCR) -> float:
+        """Return temperature for OCR/classification tasks from the active profile."""
+        try:
+            from app.ai.parameter_profiles import get_inference_params
+            return float(get_inference_params(task).get("temperature", 0.0))
+        except Exception:
+            return 0.0
+
     async def extract_invoice(self, text: str) -> dict:
         model, provider = self._ocr_model_and_provider()
         logger.info("extract_invoice_model", model=model, provider=provider)
@@ -294,6 +369,7 @@ class AIRouter:
             model=model,
             provider=provider,
             system=EXTRACT_INVOICE_SYSTEM,
+            temperature=self._ocr_temperature(AITask.INVOICE_OCR),
             max_tokens=8192,
             timeout_seconds=180.0,
         )
@@ -307,6 +383,7 @@ class AIRouter:
             model=model,
             provider=provider,
             system=CLASSIFY_SYSTEM,
+            temperature=self._ocr_temperature(AITask.CLASSIFICATION),
         )
 
     async def summarize_document(self, text: str) -> dict:
@@ -317,6 +394,7 @@ class AIRouter:
             model=model,
             provider=provider,
             system=SUMMARIZE_SYSTEM,
+            temperature=self._ocr_temperature(AITask.LONG_CONTEXT_SUMMARIZATION),
         )
 
     async def generate_email(self, context: dict) -> dict:

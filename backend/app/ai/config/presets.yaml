@@ -1,0 +1,71 @@
+# Hardware presets — one-click routing + VRAM-budget bundles.
+# Applying a preset writes the listed task routings (via task_routing) and the
+# per-provider VRAM soft limits (via gpu_manager). Tasks not listed keep their
+# current routing. Model keys must exist in model_registry.yaml.
+
+presets:
+  rtx3090_balanced:
+    label: "RTX 3090 24GB — баланс"
+    description: "Сбалансированный профиль для одной RTX 3090 24GB: лёгкие локальные модели для OCR/классификации, средние для reasoning."
+    vram_limits:
+      ollama: 20
+      llamacpp: 22
+      vllm: 22
+    routing:
+      invoice_ocr:
+        models: ["gemma4_e4b_ollama", "gemma4_26b_ollama"]
+        profile: "anti_hallucination"
+      classification:
+        models: ["gemma4_e4b_ollama", "gemma4_26b_ollama"]
+        profile: "anti_hallucination"
+      structured_extraction:
+        models: ["gemma4_e4b_ollama", "gemma4_26b_ollama"]
+        profile: "anti_hallucination"
+      drawing_analysis_vlm:
+        models: ["gemma4_e4b_ollama", "qwen3_vl_8b_ollama"]
+        profile: "anti_hallucination"
+      engineering_reasoning:
+        models: ["qwen3_5_9b_ollama", "qwen3_6_35b_ollama", "gemma4_26b_ollama"]
+        profile: "structured_reasoning"
+      email_drafting:
+        models: ["qwen3_5_9b_ollama", "gemma4_26b_ollama"]
+        profile: "creative"
+
+  rtx3090_quality:
+    label: "RTX 3090 24GB — качество"
+    description: "Приоритет качеству: крупные модели для reasoning и VLM, медленнее, но точнее. Может требовать выгрузки лишних моделей."
+    vram_limits:
+      ollama: 23
+      llamacpp: 23
+      vllm: 23
+    routing:
+      drawing_analysis_vlm:
+        models: ["qwen3_vl_32b_ollama", "gemma4_e4b_ollama"]
+        profile: "anti_hallucination"
+      engineering_reasoning:
+        models: ["qwen3_6_35b_ollama", "qwen3_5_9b_ollama"]
+        profile: "structured_reasoning"
+      email_drafting:
+        models: ["qwen3_6_35b_ollama", "qwen3_5_9b_ollama"]
+        profile: "creative"
+
+  low_vram_12gb:
+    label: "12GB GPU — компактный"
+    description: "Для GPU с 12GB: только компактные модели, строгие VRAM-лимиты."
+    vram_limits:
+      ollama: 10
+      llamacpp: 11
+      vllm: 11
+    routing:
+      invoice_ocr:
+        models: ["gemma4_e2b_ollama", "gemma4_e4b_ollama"]
+        profile: "anti_hallucination"
+      classification:
+        models: ["gemma4_e2b_ollama", "gemma4_e4b_ollama"]
+        profile: "anti_hallucination"
+      drawing_analysis_vlm:
+        models: ["gemma4_e2b_ollama", "gemma4_e4b_ollama"]
+        profile: "anti_hallucination"
+      engineering_reasoning:
+        models: ["qwen3_5_9b_ollama", "ministral_3_8b_ollama"]
+        profile: "structured_reasoning"

@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     # Minimum number of active admins (prevents demoting the last admin)
     min_admin_count: int = 1
 
+    # Internal service-to-service key used by the AI orchestrator and capability proxy.
+    # Must be set to the same value in all services that need to call the backend API.
+    agent_service_key: str = ""
+
     # Auth (Authentik SSO)
     auth_enabled: bool = False          # set True in production
     authentik_url: str = "http://authentik-server:9000"   # internal Docker URL for JWKS/token

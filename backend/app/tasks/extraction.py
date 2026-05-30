@@ -49,16 +49,30 @@ def _get_sync_session() -> Session:
 
 
 def _run_async(coro):
-    """Run async function from sync Celery task."""
+    """Run async coroutine from sync Celery task.
+
+    Always creates a fresh event loop to avoid two bugs:
+    1. "cannot reuse already awaited coroutine" — happens when a domain RuntimeError
+       raised inside the coroutine was mistakenly caught by the old except-RuntimeError
+       fallback, causing asyncio.run() to re-use an already-consumed coroutine.
+    2. Fork-inherited loop state — forked Celery workers inherit asyncio state from
+       the parent process, making asyncio.get_event_loop() unreliable.
+    """
     try:
         loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(asyncio.run, coro).result()
-        return loop.run_until_complete(coro)
     except RuntimeError:
-        return asyncio.run(coro)
+        loop = None
+
+    if loop is not None and loop.is_running():
+        # We're already inside an event loop (e.g. called from async context via thread).
+        # Use a thread-pool to create a new isolated loop.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+
+    # Standard Celery sync-worker path: always create a fresh loop.
+    # asyncio.run() handles cleanup (close, shutdown_asyncgens) reliably.
+    return asyncio.run(coro)
 
 
 def _default_pipeline_steps() -> list[dict]:
@@ -706,6 +720,43 @@ def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) ->
     return ""
 
 
+def _llamacpp_vision_ocr(images_b64: list[str], prompt: str) -> str:
+    """Send images to llamacpp via OpenAI-compatible /v1/chat/completions."""
+    import httpx
+
+    base = settings.llamacpp_url.rstrip("/")
+    # Strip /v1 suffix if already included in the configured URL
+    if base.endswith("/v1"):
+        base = base[:-3]
+
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for img in images_b64:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{img}"},
+        })
+
+    try:
+        resp = httpx.post(
+            f"{base}/v1/chat/completions",
+            json={
+                "model": "local",
+                "messages": [{"role": "user", "content": content}],
+                "temperature": 0.0,
+                "stream": False,
+            },
+            timeout=300.0,
+        )
+        resp.raise_for_status()
+        choices = resp.json().get("choices") or []
+        if choices:
+            msg = choices[0].get("message") or {}
+            return msg.get("content") or ""
+    except Exception as e:
+        logger.warning("llamacpp_vision_ocr_failed", error=str(e))
+    return ""
+
+
 _OCR_PROMPT = (
     "Распознай ВЕСЬ текст на изображении документа. "
     "Точно сохрани: номера счётов/договоров, даты, ИНН, КПП, ОГРН, БИК, "
@@ -749,7 +800,9 @@ def _resolve_vision_ocr_model() -> tuple[str, str] | None:
                 f"{settings.llamacpp_url.rstrip('/v1').rstrip('/')}/props",
                 timeout=5.0,
             )
-            if resp.json().get("vision"):
+            props = resp.json()
+            modalities = props.get("modalities") or {}
+            if modalities.get("vision") or props.get("vision"):
                 return model, "llamacpp"
         except Exception:
             pass
@@ -772,7 +825,10 @@ def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
     logger.info("image_ocr_start", document_id=str(doc.id), model=model, provider=provider)
     enhanced = _preprocess_image(content)
     encoded = base64.b64encode(enhanced).decode("ascii")
-    text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
+    if provider == "llamacpp":
+        text = _llamacpp_vision_ocr([encoded], _OCR_PROMPT)
+    else:
+        text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
     logger.info("image_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
     return text
 
@@ -798,7 +854,10 @@ def _ocr_pdf_content(content: bytes, doc: Document) -> str:
         if not images_b64:
             return ""
         logger.info("pdf_ocr_start", document_id=str(doc.id), model=model, pages=len(images_b64))
-        text = _ollama_vision_ocr(images_b64, model, _OCR_PROMPT)
+        if provider == "llamacpp":
+            text = _llamacpp_vision_ocr(images_b64, _OCR_PROMPT)
+        else:
+            text = _ollama_vision_ocr(images_b64, model, _OCR_PROMPT)
         logger.info("pdf_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
         return text
     except Exception as e:

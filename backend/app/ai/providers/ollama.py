@@ -9,6 +9,19 @@ from app.ai.providers.base import AIProvider
 from app.ai.schemas import AIRequest, AIResponse, AIUsage, ProviderKind
 
 
+def _inference_options(request: AIRequest, default_temperature: float = 0.2) -> dict[str, Any]:
+    """Build Ollama options dict from request inference_params metadata."""
+    params = (request.metadata or {}).get("inference_params") or {}
+    opts: dict[str, Any] = {"temperature": params.get("temperature", default_temperature)}
+    if "top_p" in params:
+        opts["top_p"] = params["top_p"]
+    if "top_k" in params:
+        opts["top_k"] = params["top_k"]
+    if "repeat_penalty" in params:
+        opts["repeat_penalty"] = params["repeat_penalty"]
+    return opts
+
+
 def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:
     """Convert a Pydantic model class to an Ollama-compatible JSON schema for structured output."""
     try:
@@ -16,6 +29,29 @@ def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:
         return {"type": "object", **{k: v for k, v in schema.items() if k != "title"}}
     except Exception:
         return None
+
+
+def _ollama_keep_alive(model: str) -> str:
+    """Return keep_alive duration for a model.
+
+    Strategy:
+      - Embedding / reranker models: 10 minutes (called frequently, cheap to keep)
+      - Vision / large reasoning models: 5 minutes (valuable VRAM, unload sooner)
+      - Default: 5 minutes
+
+    Override via env OLLAMA_KEEP_ALIVE (e.g. "0" to always immediately unload,
+    "30m" for 30 minutes). Useful when GPU is shared with vLLM.
+    """
+    import os
+    env_override = os.environ.get("OLLAMA_KEEP_ALIVE", "").strip()
+    if env_override:
+        return env_override
+    model_lower = model.lower()
+    if any(x in model_lower for x in ("embed", "rerank", "nomic", "bge")):
+        return "10m"
+    if any(x in model_lower for x in ("35b", "31b", "30b", "27b", "26b")):
+        return "3m"
+    return "5m"
 
 
 class OllamaProvider(AIProvider):
@@ -30,7 +66,8 @@ class OllamaProvider(AIProvider):
             "model": model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": 0.2},
+            "options": _inference_options(request, default_temperature=0.2),
+            "keep_alive": _ollama_keep_alive(model),
         }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(
@@ -67,7 +104,8 @@ class OllamaProvider(AIProvider):
             "model": model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": 0.1},
+            "options": _inference_options(request, default_temperature=0.0),
+            "keep_alive": _ollama_keep_alive(model),
         }
         if fmt:
             payload["format"] = fmt
@@ -118,15 +156,14 @@ class OllamaProvider(AIProvider):
         else:
             prompt_text = "\n\n".join(user_parts)
 
+        opts = _inference_options(request, default_temperature=0.0)
+        opts["num_predict"] = 8192
         payload: dict = {
             "model": model,
             "prompt": prompt_text,
             "images": [_ollama_image_payload(img) for img in request.images],
             "stream": False,
-            "options": {
-                "temperature": 0.1,
-                "num_predict": 8192,
-            },
+            "options": opts,
         }
         if system_text:
             payload["system"] = system_text
@@ -159,7 +196,11 @@ class OllamaProvider(AIProvider):
 
     async def embedding(self, request: AIRequest, model: str) -> AIResponse:
         started = time.perf_counter()
-        payload = {"model": model, "input": request.input_text or request.prompt or ""}
+        payload = {
+            "model": model,
+            "input": request.input_text or request.prompt or "",
+            "keep_alive": _ollama_keep_alive(model),
+        }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             response = await client.post(
                 f"{str(self.config.base_url).rstrip('/')}/api/embed",
