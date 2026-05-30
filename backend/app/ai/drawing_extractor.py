@@ -293,20 +293,16 @@ async def extract_features_from_image(
 
 Верни полный JSON без markdown-блоков."""
 
-    if router is not None:
-        return await _extract_via_router(
-            images=images,
-            router=router,
-            drawing=drawing,
-            user_message=user_message,
-            allow_cloud=allow_cloud,
-        )
+    if router is None:
+        from app.ai.router import ai_router
+        router = ai_router
 
-    # Legacy path — direct Ollama call
-    return await _extract_legacy(
+    return await _extract_via_router(
         images=images,
-        model=model,
+        router=router,
+        drawing=drawing,
         user_message=user_message,
+        allow_cloud=allow_cloud,
     )
 
 
@@ -326,9 +322,11 @@ async def _extract_via_router(
 
     images_b64 = [base64.b64encode(img).decode() for img in images]
 
-    # Check if resolved model supports multi-image; if not, process sequentially
-    route = router.registry.get_route(AITask.DRAWING_ANALYSIS_VLM)
-    resolved_model_name = _resolve_available_model(router, route.fallback_chain)
+    # Check if resolved model supports multi-image; if not, process sequentially.
+    # Candidate models come from task_routing (the single source of truth).
+    from app.ai.task_routing import get_routing_for
+    routed_models = get_routing_for(AITask.DRAWING_ANALYSIS_VLM).models
+    resolved_model_name = _resolve_available_model(router, routed_models)
     supports_multi = False
     if resolved_model_name:
         cap = router.registry.get_model(resolved_model_name)
@@ -406,42 +404,6 @@ def _resolve_available_model(router: "AIRouter", fallback_chain: list[str]) -> s
         except KeyError:
             continue
     return None
-
-
-async def _extract_legacy(
-    images: list[bytes],
-    model: str | None,
-    user_message: str,
-) -> dict[str, Any]:
-    """Legacy path: direct call using configured VLM provider."""
-    from app.ai.model_resolver import get_vlm_model
-    from app.ai.ollama_client import chat_with_images as ollama_vlm
-
-    vlm_cfg = get_vlm_model()
-    effective_model = model or vlm_cfg.model
-
-    try:
-        response = await ollama_vlm(
-            prompt=user_message,
-            images=images,
-            model=effective_model,
-            system=DRAWING_ANALYSIS_SYSTEM_PROMPT,
-            temperature=0.1,
-            max_tokens=8192,
-            format_json=True,
-        )
-        raw_text = response.text if hasattr(response, "text") else str(response)
-        result = _parse_json_response(raw_text)
-        if not isinstance(result, dict):
-            logger.warning("vlm_legacy_invalid_json", model=effective_model, raw=raw_text[:300])
-            return {"title_block": {}, "features": []}
-        return {
-            "title_block": result.get("title_block") or {},
-            "features": result.get("features") or [],
-        }
-    except Exception as exc:
-        logger.error("vlm_legacy_extraction_failed", model=effective_model, error=str(exc))
-        return {"title_block": {}, "features": []}
 
 
 def _merge_multiview_results(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -577,34 +539,23 @@ async def classify_drawing_image(
 
     images_b64 = [base64.b64encode(image_bytes).decode()]
 
+    if router is None:
+        from app.ai.router import ai_router
+        router = ai_router
+
     try:
-        if router is not None:
-            request = AIRequest(
-                task=AITask.DRAWING_ANALYSIS_VLM,
-                messages=[
-                    ChatMessage(role="system", content="You are an expert engineering drawing classifier. Return only valid JSON."),
-                    ChatMessage(role="user", content=DRAWING_CLASSIFICATION_PROMPT),
-                ],
-                images=images_b64,
-                confidential=confidential,
-                allow_cloud=allow_cloud,
-            )
-            response = await router.run(request)
-            raw_text = response.text or ""
-        else:
-            # Legacy path — direct VLM call using configured model
-            from app.ai.model_resolver import get_vlm_model
-            from app.ai.ollama_client import chat_with_images as ollama_vlm
-            _vlm_cfg = get_vlm_model()
-            _resp = await ollama_vlm(
-                prompt=DRAWING_CLASSIFICATION_PROMPT,
-                images=[image_bytes],
-                model=_vlm_cfg.model,
-                temperature=0.1,
-                max_tokens=512,
-                format_json=True,
-            )
-            raw_text = _resp.text if hasattr(_resp, "text") else str(_resp)
+        request = AIRequest(
+            task=AITask.DRAWING_ANALYSIS_VLM,
+            messages=[
+                ChatMessage(role="system", content="You are an expert engineering drawing classifier. Return only valid JSON."),
+                ChatMessage(role="user", content=DRAWING_CLASSIFICATION_PROMPT),
+            ],
+            images=images_b64,
+            confidential=confidential,
+            allow_cloud=allow_cloud,
+        )
+        response = await router.run(request)
+        raw_text = response.text or ""
 
         parsed = _parse_json_response(raw_text)
         if not isinstance(parsed, dict):
@@ -914,11 +865,8 @@ async def extract_drawing_features(
         drawing_entities: Structured entities from DXF (optional)
         model: Model name (defaults from settings)
     """
-    from app.ai.model_resolver import get_vlm_model
-    from app.ai.ollama_client import chat as ollama_chat
-
-    vlm_cfg = get_vlm_model()
-    effective_model = model or vlm_cfg.model
+    from app.ai.router import ai_router
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
 
     entities_context = ""
     if drawing_entities:
@@ -934,18 +882,20 @@ async def extract_drawing_features(
 Верни полный JSON со всеми элементами чертежа."""
 
     try:
-        response = await ollama_chat(
-            model=effective_model,
-            messages=[
-                {"role": "system", "content": DRAWING_ANALYSIS_SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0.1,
+        # Text-only fallback: route through AIRouter (no images → chat path) on
+        # the drawing task's configured local model.
+        response = await ai_router.run(
+            AIRequest(
+                task=AITask.DRAWING_ANALYSIS_VLM,
+                messages=[
+                    ChatMessage(role="system", content=DRAWING_ANALYSIS_SYSTEM_PROMPT),
+                    ChatMessage(role="user", content=user_message),
+                ],
+                confidential=True,
+            )
         )
 
-        raw_text = response.text if hasattr(response, "text") else (
-            response.get("message", {}).get("content", "") if isinstance(response, dict) else str(response)
-        )
+        raw_text = response.text or ""
         result = _parse_json_response(raw_text)
 
         if not isinstance(result, dict):

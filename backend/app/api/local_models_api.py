@@ -20,6 +20,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Literal
 
 import structlog
@@ -91,10 +92,11 @@ class RoutingUpdate(BaseModel):
 @router.get("/status")
 async def get_all_providers_status() -> dict:
     """Return status of all local providers + real GPU stats."""
+
+    import httpx
+
     from app.ai.providers.vllm_manager import get_vllm_status
     from app.config import settings
-    import httpx
-    import os
 
     # Ollama status
     ollama_status = {"running": False, "url": str(settings.ollama_url), "models": []}
@@ -199,13 +201,17 @@ async def search_models(
     - provider=vllm → Safetensors/AWQ/GPTQ, vllm_manager search
     - provider=ollama or None → falls through to HF general search
     """
-    from app.api.llamacpp_api import (
-        _hf_headers as lc_hf_headers,
-        _ms_headers as lc_ms_headers,
-    )
     from app.ai.providers.vllm_manager import (
         search_hf_models as vllm_hf_search,
+    )
+    from app.ai.providers.vllm_manager import (
         search_ms_models as vllm_ms_search,
+    )
+    from app.api.llamacpp_api import (
+        _hf_headers as lc_hf_headers,
+    )
+    from app.api.llamacpp_api import (
+        _ms_headers as lc_ms_headers,
     )
 
     # vLLM-native search (safetensors/AWQ)
@@ -291,8 +297,9 @@ async def list_provider_models(provider: ProviderName) -> dict:
         return {"provider": "vllm", "models": list_local_models()}
 
     if provider == "ollama":
-        from app.config import settings
         import httpx
+
+        from app.config import settings
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 r = await client.get(f"{settings.ollama_url.rstrip('/')}/api/tags")
@@ -375,9 +382,10 @@ async def start_model_download(provider: ProviderName, body: DownloadRequest) ->
 
     if provider == "llamacpp":
         from app.api.llamacpp_api import (
-            _downloads as lc_downloads,
             _download_model as lc_download_model,
-            _load_tokens,
+        )
+        from app.api.llamacpp_api import (
+            _downloads as lc_downloads,
         )
         dl_id = f"{body.repo_id}/{body.filename}".replace("/", "__")
         if dl_id in lc_downloads and lc_downloads[dl_id].get("status") == "downloading":
@@ -546,8 +554,8 @@ def _catalog_entries() -> list[dict]:
 @router.get("/routing")
 async def get_routing() -> dict:
     """All tasks with their effective routing + catalog for the Маршрутизация UI."""
-    from app.ai.task_routing import CONFIDENTIAL_TASKS, get_task_routing
     from app.ai.model_registry import ModelRegistry
+    from app.ai.task_routing import CONFIDENTIAL_TASKS, get_task_routing
 
     reg = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     routing = get_task_routing()
@@ -562,7 +570,9 @@ async def get_routing() -> dict:
             "local_only": r.local_only,
             "allow_cloud": r.allow_cloud,
             "confidential_locked": task in CONFIDENTIAL_TASKS,
-            "required_modalities": sorted(m.value for m in route.required_modalities) if route else [],
+            "required_modalities": (
+                sorted(m.value for m in route.required_modalities) if route else []
+            ),
             "params": get_inference_params(task),
         })
     return {"tasks": tasks, "catalog": _catalog_entries()}
@@ -608,12 +618,10 @@ class TokensUpdate(BaseModel):
 
 
 # Docker compose service name per provider (override via env).
-import os as _os
-
 _SERVICE_NAMES = {
-    "llamacpp": _os.environ.get("LLAMACPP_SERVICE_NAME", "llama-server"),
-    "vllm": _os.environ.get("VLLM_SERVICE_NAME", "vllm-server"),
-    "ollama": _os.environ.get("OLLAMA_SERVICE_NAME", "ollama"),
+    "llamacpp": os.environ.get("LLAMACPP_SERVICE_NAME", "llama-server"),
+    "vllm": os.environ.get("VLLM_SERVICE_NAME", "vllm-server"),
+    "ollama": os.environ.get("OLLAMA_SERVICE_NAME", "ollama"),
 }
 
 
@@ -626,7 +634,11 @@ async def get_provider_config(provider: ProviderName) -> dict:
         from app.ai.providers.vllm_manager import load_vllm_config
         return {"provider": "vllm", "config": load_vllm_config()}
     # Ollama has no editable server config — expose hardware defaults read-only.
-    return {"provider": "ollama", "config": PROVIDER_HARDWARE_DEFAULTS.get("ollama", {}), "readonly": True}
+    return {
+        "provider": "ollama",
+        "config": PROVIDER_HARDWARE_DEFAULTS.get("ollama", {}),
+        "readonly": True,
+    }
 
 
 @router.patch("/{provider}/config")
@@ -664,7 +676,10 @@ async def patch_tokens(body: TokensUpdate) -> dict:
     if body.modelscope is not None:
         tokens["modelscope"] = body.modelscope
     _save_tokens(tokens)
-    return {"huggingface": bool(tokens.get("huggingface")), "modelscope": bool(tokens.get("modelscope"))}
+    return {
+        "huggingface": bool(tokens.get("huggingface")),
+        "modelscope": bool(tokens.get("modelscope")),
+    }
 
 
 @router.delete("/tokens/{token_provider}")
@@ -673,7 +688,10 @@ async def delete_token(token_provider: Literal["huggingface", "modelscope"]) -> 
     tokens = _load_tokens()
     tokens.pop(token_provider, None)
     _save_tokens(tokens)
-    return {"huggingface": bool(tokens.get("huggingface")), "modelscope": bool(tokens.get("modelscope"))}
+    return {
+        "huggingface": bool(tokens.get("huggingface")),
+        "modelscope": bool(tokens.get("modelscope")),
+    }
 
 
 @router.post("/{provider}/server/{action}")
@@ -814,7 +832,9 @@ async def get_model_files(
     # llamacpp / ollama → GGUF files via existing llamacpp helpers
     from app.api.llamacpp_api import get_hf_model_files, get_ms_model_files
     if source == "huggingface":
-        files = await get_hf_model_files(repo_id, quant=quant, max_gb=max_gb if max_gb is not None else 100)
+        files = await get_hf_model_files(
+            repo_id, quant=quant, max_gb=max_gb if max_gb is not None else 100
+        )
     else:
         files = await get_ms_model_files(repo_id)
     return {

@@ -56,7 +56,7 @@ def apply_preset(name: str) -> dict[str, Any]:
         raise ValueError(f"Unknown preset: {name}")
 
     from app.ai import gpu_manager
-    from app.ai.task_routing import TaskRouting, get_routing_for, save_task_routing
+    from app.ai.task_routing import get_routing_for, save_task_routing
 
     applied: list[str] = []
     skipped: list[str] = []

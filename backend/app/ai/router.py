@@ -33,7 +33,6 @@ from app.ai.schemas import (
     AIResponse,
     AITask,
     ChatMessage,
-    Modality,
     ModelCapability,
     ProviderKind,
 )
@@ -279,7 +278,9 @@ class AIRouter:
             try:
                 from app.ai.parameter_profiles import get_inference_params
                 params = get_inference_params(request.task)
-                request = request.model_copy(update={"metadata": {**request.metadata, "inference_params": params}})
+                request = request.model_copy(
+                    update={"metadata": {**request.metadata, "inference_params": params}}
+                )
             except Exception:
                 pass
 
@@ -291,7 +292,9 @@ class AIRouter:
             return await provider.speech(request, provider_model)
         if request.task == AITask.TOOL_CALLING:
             return await provider.tool_calling(request, provider_model)
-        if request.images or Modality.VISION in model.modalities:
+        # Vision only when images are actually supplied — a model having the
+        # vision modality must still serve text-only requests via chat.
+        if request.images:
             return await provider.vision(request, provider_model)
         if request.response_schema is not None:
             return await provider.structured_extract(request, provider_model)

@@ -133,6 +133,18 @@ def known_model_keys() -> set[str]:
         return set()
 
 
+_LOCAL_PROVIDER_KINDS = {"ollama", "llamacpp", "vllm", "openai_compatible", "lmstudio"}
+
+
+def _is_local_key(key: str) -> bool:
+    """True if a catalog model key resolves to a local provider."""
+    try:
+        cap = _registry().models.get(key)
+        return cap is not None and cap.provider.value in _LOCAL_PROVIDER_KINDS
+    except Exception:
+        return True  # be permissive if catalog unavailable
+
+
 def _enforce_confidential(task: AITask, routing: TaskRouting) -> TaskRouting:
     if task in CONFIDENTIAL_TASKS and (not routing.local_only or routing.allow_cloud):
         return routing.model_copy(update={"local_only": True, "allow_cloud": False})
@@ -186,24 +198,37 @@ def resolve_model(task: AITask) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _validate(routing: TaskRouting) -> None:
+def _validate(task: AITask, routing: TaskRouting) -> None:
     keys = known_model_keys()
     unknown = [m for m in routing.models if m not in keys]
     if unknown:
         raise ValueError(f"Unknown model keys: {', '.join(unknown)}")
     if routing.profile not in get_all_profiles():
         raise ValueError(f"Unknown inference profile: {routing.profile}")
+    # Confidential tasks must reference only local models — a cloud model would
+    # be blocked at dispatch and abort the whole call.
+    if task in CONFIDENTIAL_TASKS:
+        cloud = [m for m in routing.models if not _is_local_key(m)]
+        if cloud:
+            raise ValueError(
+                f"Confidential task {task.value} cannot use non-local models: {', '.join(cloud)}"
+            )
 
 
 def save_task_routing(task: AITask, routing: TaskRouting) -> TaskRouting:
     """Persist a per-task routing override (validated, confidentiality enforced)."""
     routing = routing.model_copy(update={"task": task.value})
     routing = _enforce_confidential(task, routing)
-    _validate(routing)
+    _validate(task, routing)
     overlay = _redis_get() or {}
     overlay[task.value] = routing.model_dump()
     _redis_set(overlay)
-    logger.info("task_routing_saved", task=task.value, models=routing.models, profile=routing.profile)
+    logger.info(
+        "task_routing_saved",
+        task=task.value,
+        models=routing.models,
+        profile=routing.profile,
+    )
     return routing
 
 

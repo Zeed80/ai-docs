@@ -254,41 +254,29 @@ async def _extract_bom_via_vlm(
     """Call VLM to parse BOM table image into structured items."""
     import base64
 
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
+
     if router is None:
-        # Direct fallback using configured VLM model
-        from app.ai.model_resolver import get_vlm_model as _get_vlm_cfg
-        from app.ai.ollama_client import chat_with_images  # type: ignore
+        from app.ai.router import ai_router
+        router = ai_router
 
-        _vlm = _get_vlm_cfg()
-        b64 = base64.b64encode(image_bytes).decode()
-        response_text = await chat_with_images(
-            model=_vlm.model,
-            system_prompt=_ASSEMBLY_BOM_PROMPT,
-            user_message="Извлеки спецификацию из таблицы на изображении.",
-            images=[b64],
-        )
-    else:
-        from app.ai.schemas import AITask, AIRequest
-
-        is_confidential = getattr(drawing, "is_confidential", True) if drawing else True
-        b64 = base64.b64encode(image_bytes).decode()
-        request = AIRequest(
-            task=AITask.DRAWING_ANALYSIS_VLM,
-            messages=[
-                {"role": "system", "content": _ASSEMBLY_BOM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                        {"type": "text", "text": "Извлеки спецификацию из таблицы на изображении."},
-                    ],
-                },
-            ],
-            confidential=is_confidential,
-            allow_cloud=allow_cloud,
-        )
-        response = await router.run(request)
-        response_text = response.content if hasattr(response, "content") else str(response)
+    is_confidential = getattr(drawing, "is_confidential", True) if drawing else True
+    b64 = base64.b64encode(image_bytes).decode()
+    request = AIRequest(
+        task=AITask.DRAWING_ANALYSIS_VLM,
+        messages=[
+            ChatMessage(role="system", content=_ASSEMBLY_BOM_PROMPT),
+            ChatMessage(
+                role="user",
+                content="Извлеки спецификацию из таблицы на изображении.",
+            ),
+        ],
+        images=[b64],
+        confidential=is_confidential,
+        allow_cloud=allow_cloud,
+    )
+    response = await router.run(request)
+    response_text = response.text or ""
 
     return _parse_bom_json(response_text)
 

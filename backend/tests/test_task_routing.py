@@ -36,18 +36,30 @@ def test_defaults_from_yaml(mem_store):
     assert cg.allow_cloud is True
 
 
-def test_confidential_task_cannot_go_cloud(mem_store):
-    # Try to force OCR to cloud — must be re-locked to local.
+def test_confidential_task_rejects_cloud_model(mem_store):
+    # A confidential task must not accept a cloud model in its chain.
     keys = list(tr.known_model_keys())
     cloud_key = next(k for k in keys if "anthropic" in k or "google" in k)
+    with pytest.raises(ValueError, match="non-local"):
+        tr.save_task_routing(
+            AITask.INVOICE_OCR,
+            tr.TaskRouting(task="invoice_ocr", models=[cloud_key], profile="anti_hallucination",
+                           local_only=False, allow_cloud=True),
+        )
+    # Default stays local-only.
+    assert tr.get_routing_for(AITask.INVOICE_OCR).local_only is True
+
+
+def test_confidential_task_accepts_local_and_locks_policy(mem_store):
+    # Local models are fine; policy is forced local even if cloud was requested.
+    local_key = next(k for k in tr.known_model_keys() if k.endswith("_ollama"))
     saved = tr.save_task_routing(
         AITask.INVOICE_OCR,
-        tr.TaskRouting(task="invoice_ocr", models=[cloud_key], profile="anti_hallucination",
+        tr.TaskRouting(task="invoice_ocr", models=[local_key], profile="anti_hallucination",
                        local_only=False, allow_cloud=True),
     )
     assert saved.local_only is True
     assert saved.allow_cloud is False
-    assert tr.get_routing_for(AITask.INVOICE_OCR).local_only is True
 
 
 def test_save_and_reset_non_confidential(mem_store):
