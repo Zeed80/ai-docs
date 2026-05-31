@@ -8,9 +8,9 @@ logger = structlog.get_logger()
 
 
 def _headers() -> dict[str, str]:
-    from app.config import settings
+    from app.services.integration_config import get_authentik_token
     return {
-        "Authorization": f"Bearer {settings.authentik_api_token}",
+        "Authorization": f"Bearer {get_authentik_token()}",
         "Content-Type": "application/json",
     }
 

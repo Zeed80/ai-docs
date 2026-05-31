@@ -71,6 +71,25 @@ class DepartmentListResponse(BaseModel):
     total: int
 
 
+class IntegrationAuthentikOut(BaseModel):
+    auth_enabled: bool
+    external_url: str
+    admin_url: str
+    token_set: bool
+    token_hint: str  # masked — never the full token
+
+
+class IntegrationAuthentikUpdate(BaseModel):
+    # Provide api_token to set it; empty string clears. Omit to leave unchanged.
+    api_token: str | None = None
+    external_url: str | None = None
+
+
+class IntegrationTestResult(BaseModel):
+    ok: bool
+    detail: str
+
+
 class SetPasswordRequest(BaseModel):
     password: str
 

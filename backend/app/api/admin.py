@@ -27,6 +27,9 @@ from app.domain.admin import (
     DepartmentListResponse,
     DepartmentOut,
     DepartmentUpdate,
+    IntegrationAuthentikOut,
+    IntegrationAuthentikUpdate,
+    IntegrationTestResult,
     PermissionMatrixOut,
     SetPasswordRequest,
     SystemStatusOut,
@@ -72,7 +75,8 @@ async def create_user(
     # Try to provision in Authentik first (get real sub or fall back to local:UUID)
     authentik_pk: int | None = None
     sub = f"local:{_uuid.uuid4()}"
-    if settings.auth_enabled and settings.authentik_api_token:
+    from app.services.integration_config import get_authentik_token
+    if settings.auth_enabled and get_authentik_token():
         try:
             from app.services.authentik_api import provision_user
             authentik_pk = await provision_user(
@@ -125,8 +129,9 @@ async def set_user_password(
 ) -> None:
     """Set or reset password for a user via Authentik API."""
     from app.config import settings
+    from app.services.integration_config import get_authentik_token
 
-    if not settings.auth_enabled or not settings.authentik_api_token:
+    if not settings.auth_enabled or not get_authentik_token():
         raise HTTPException(status_code=503, detail="Authentik API not configured")
 
     if len(payload.password) < 8:
@@ -452,6 +457,86 @@ async def delete_department(
     )
     await db.commit()
     logger.info("admin_delete_department", admin=admin.sub, department_id=str(department_id))
+
+
+# ── Integrations: Authentik ─────────────────────────────────────────────────
+
+
+def _authentik_admin_url(external_url: str) -> str:
+    base = (external_url or "").rstrip("/")
+    return f"{base}/if/admin/" if base else ""
+
+
+@router.get("/integrations/authentik", response_model=IntegrationAuthentikOut)
+async def get_authentik_integration(
+    admin: UserInfo = _admin_dep,
+) -> IntegrationAuthentikOut:
+    from app.config import settings
+    from app.services.integration_config import get_authentik_external_url, get_authentik_token, mask_token
+
+    token = get_authentik_token()
+    ext = get_authentik_external_url()
+    return IntegrationAuthentikOut(
+        auth_enabled=settings.auth_enabled,
+        external_url=ext,
+        admin_url=_authentik_admin_url(ext),
+        token_set=bool(token),
+        token_hint=mask_token(token),
+    )
+
+
+@router.put("/integrations/authentik", response_model=IntegrationAuthentikOut)
+async def update_authentik_integration(
+    payload: IntegrationAuthentikUpdate,
+    admin: UserInfo = _admin_dep,
+) -> IntegrationAuthentikOut:
+    from app.services.integration_config import (
+        set_authentik_external_url,
+        set_authentik_token,
+    )
+
+    fields = payload.model_fields_set
+    if "api_token" in fields:
+        set_authentik_token((payload.api_token or "").strip() or None)
+    if "external_url" in fields:
+        set_authentik_external_url((payload.external_url or "").strip() or None)
+
+    logger.info(
+        "admin_update_authentik_integration",
+        admin=admin.sub,
+        token_changed="api_token" in fields,
+        url_changed="external_url" in fields,
+    )
+    return await get_authentik_integration(admin=admin)
+
+
+@router.post("/integrations/authentik/test", response_model=IntegrationTestResult)
+async def test_authentik_integration(
+    admin: UserInfo = _admin_dep,
+) -> IntegrationTestResult:
+    """Validate the stored token by calling the Authentik API."""
+    from app.config import settings
+    from app.services.integration_config import get_authentik_token
+
+    if not get_authentik_token():
+        return IntegrationTestResult(ok=False, detail="API-токен не задан")
+
+    import httpx
+
+    from app.services.authentik_api import _base, _headers
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                f"{_base()}/core/users/", params={"page_size": 1}, headers=_headers()
+            )
+        if r.status_code == 200:
+            return IntegrationTestResult(ok=True, detail="Соединение успешно, токен валиден")
+        if r.status_code in (401, 403):
+            return IntegrationTestResult(ok=False, detail="Токен отклонён Authentik (401/403)")
+        return IntegrationTestResult(ok=False, detail=f"Authentik вернул HTTP {r.status_code}")
+    except Exception as exc:
+        return IntegrationTestResult(ok=False, detail=f"Ошибка соединения: {exc}")
 
 
 # ── Permission matrix ─────────────────────────────────────────────────────────
