@@ -57,6 +57,18 @@ http:
         certResolver: letsencrypt
       priority: 100
 
+    # Authentik live-UI WebSocket (/ws/client/, /ws/outpost/). Must outrank
+    # backend-ws (PathPrefix(`/ws`), prio 100) which otherwise swallows it and breaks
+    # the Authentik admin UI ("connection error, reconnecting"). Our app WS is /ws/chat,
+    # so these more specific prefixes don't collide.
+    authentik-ws:
+      rule: "PathPrefix(`/ws/client`) || PathPrefix(`/ws/outpost`)"
+      service: authentik
+      entryPoints: [web, websecure]
+      tls:
+        certResolver: letsencrypt
+      priority: 250
+
     # ── Authentik SSO — browser-facing OAuth/UI paths, proxied on 443 ────────────
     authentik-oauth:
       rule: "PathPrefix(`/application/`) || PathPrefix(`/if/`) || PathPrefix(`/flows/`) || PathPrefix(`/.well-known/`) || PathPrefix(`/static/dist/`) || PathPrefix(`/static/authentik/`) || PathPrefix(`/media/`)"
