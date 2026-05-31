@@ -21,6 +21,9 @@ services:
     environment:
       TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN:?set TRAEFIK_DOMAIN in infra/.env}
       TRAEFIK_ACME_EMAIL: ${TRAEFIK_ACME_EMAIL:?set TRAEFIK_ACME_EMAIL in infra/.env}
+      # Traefik-recognized env (overrides the placeholder email in traefik.prod.yml),
+      # so the real ACME contact stays in gitignored infra/.env, not in the repo.
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${TRAEFIK_ACME_EMAIL}
     restart: unless-stopped
 
   backend:

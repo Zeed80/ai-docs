@@ -24,7 +24,11 @@ providers:
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: "${TRAEFIK_ACME_EMAIL}"
+      # Traefik does NOT expand ${ENV} in static YAML. The real contact is injected
+      # via the env var TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL
+      # (set from gitignored infra/.env, see docker-compose.prod.yml), which overrides
+      # this placeholder. Keeps the contact email out of the public repo.
+      email: "admin@example.com"
       storage: /etc/traefik/acme/acme.json
       # tlsChallenge issues certificates on-demand for any domain that connects via HTTPS,
       # without requiring a Host() matcher in routing rules.

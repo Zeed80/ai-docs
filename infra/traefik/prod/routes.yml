@@ -20,6 +20,11 @@ http:
       entryPoints: [web, websecure]
       tls:
         certResolver: letsencrypt
+        # Explicit domain so ACME knows what to request (PathPrefix rules carry no
+        # Host(), so Traefik can't infer the domain). Set to your deployment domain;
+        # the issued cert is served for all routers via SNI.
+        domains:
+          - main: ptsai.ru
       middlewares:
         - security-headers
         - rate-limit
