@@ -96,3 +96,7 @@ backend/app/db/versions/*.pyc
 backend/data/**
 !backend/data/canvas_skill_map.json
 eval_results_*.json
+
+# Local env backups / secrets
+*.bak
+infra/.env.dev.bak
