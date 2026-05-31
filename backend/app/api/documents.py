@@ -14,7 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import add_timeline_event, log_action
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo
 from app.chat.store import append_chat_attachment
+from app.domain.access import apply_visibility
 from app.db.models import (
     Document,
     DocumentArtifact,
@@ -701,6 +704,7 @@ async def list_documents(
     offset: int = 0,
     limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: doc.list — List documents with filters."""
     query = select(Document)
@@ -713,6 +717,12 @@ async def list_documents(
         query = query.where(Document.source_channel == source_channel)
     if search:
         query = query.where(Document.file_name.ilike(f"%{search}%"))
+
+    # Row-level visibility: hide other departments' owned documents from non-managers.
+    query = await apply_visibility(
+        db, current_user, query,
+        owner_col=Document.owner_sub, department_col=Document.department_id,
+    )
 
     # Count
     count_query = select(func.count()).select_from(query.subquery())

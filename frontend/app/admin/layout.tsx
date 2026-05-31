@@ -10,6 +10,7 @@ import { useCurrentUser } from "@/lib/auth-context";
 const ADMIN_TABS = [
   { href: "/admin", label: "Обзор", exact: true },
   { href: "/admin/users", label: "Пользователи" },
+  { href: "/admin/departments", label: "Отделы" },
   { href: "/admin/permissions", label: "Права доступа" },
   { href: "/admin/audit", label: "Журнал аудита" },
   { href: "/admin/api-keys", label: "API-ключи" },

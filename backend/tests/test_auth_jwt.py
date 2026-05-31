@@ -7,7 +7,13 @@ from fastapi import HTTPException
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.auth.models import UserInfo, UserRole, ROLE_PERMISSIONS
-from app.auth.jwt import _groups_to_roles, require_role, get_current_user, _DEV_USER
+from app.auth.jwt import (
+    _groups_to_roles,
+    require_role,
+    get_current_user,
+    _DEV_USER,
+    _assert_user_active,
+)
 
 
 # ── _groups_to_roles ──────────────────────────────────────────────────────────
@@ -107,6 +113,36 @@ async def test_auth_enabled_no_token_raises_401():
             await get_current_user(mock_request, None)
 
     assert exc_info.value.status_code == 401
+
+
+# ── _assert_user_active (token revocation) ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_active_cache_hit_allows():
+    """Cached '1' (active) returns without touching the DB."""
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value="1")
+    with patch("app.utils.redis_client.get_async_redis", return_value=redis):
+        await _assert_user_active("sub-active")  # no exception
+
+
+@pytest.mark.asyncio
+async def test_active_cache_inactive_raises_403():
+    """Cached '0' (deactivated) rejects with 403."""
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value="0")
+    with patch("app.utils.redis_client.get_async_redis", return_value=redis):
+        with pytest.raises(HTTPException) as exc_info:
+            await _assert_user_active("sub-inactive")
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_active_check_fails_open_on_infra_error():
+    """If Redis and DB both fail, access is allowed (no global lockout)."""
+    with patch("app.utils.redis_client.get_async_redis", side_effect=RuntimeError("down")), \
+         patch("app.db.session._get_session_factory", side_effect=RuntimeError("db down")):
+        await _assert_user_active("sub-any")  # no exception
 
 
 # ── require_role ───────────────────────────────────────────────────────────────

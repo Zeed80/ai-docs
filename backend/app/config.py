@@ -119,5 +119,48 @@ class Settings(BaseSettings):
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.lower() == "production"
+
+    def model_post_init(self, __context) -> None:
+        """Fail-closed in production: refuse to start with dev defaults / weak secrets.
+
+        Catches the most dangerous misconfigurations (auth disabled, default
+        passwords, empty OAuth secret) at process start rather than silently
+        running an insecure stack. No-op outside production.
+        """
+        if not self.is_production:
+            return
+
+        # (field value, dev-default/blank marker that must NOT survive into prod)
+        _weak = {
+            "APP_SECRET_KEY": (self.app_secret_key, {"", "dev-secret-key", "dev-secret-key-2026"}),
+            "CSRF_SECRET": (self.csrf_secret, {"", "dev-csrf-secret"}),
+            "POSTGRES_PASSWORD": (self.postgres_password, {"", "changeme"}),
+            "MINIO_SECRET_KEY": (self.minio_secret_key, {"", "changeme"}),
+            "AGENT_SERVICE_KEY": (self.agent_service_key, {"", "agent-internal-key-2026"}),
+        }
+        problems: list[str] = [
+            f"{name} is unset or uses an insecure dev default"
+            for name, (value, bad) in _weak.items()
+            if value in bad
+        ]
+
+        if not self.auth_enabled:
+            problems.append("AUTH_ENABLED must be true in production (no anonymous admin access)")
+        else:
+            if not self.oauth_client_secret:
+                problems.append("OAUTH_CLIENT_SECRET must be set when AUTH_ENABLED=true")
+            if not self.oauth_client_id:
+                problems.append("OAUTH_CLIENT_ID must be set when AUTH_ENABLED=true")
+
+        if problems:
+            raise RuntimeError(
+                "Insecure production configuration — refusing to start:\n  - "
+                + "\n  - ".join(problems)
+                + "\nGenerate secrets with infra/scripts/gen-secrets.sh and set APP_ENV/AUTH_ENABLED."
+            )
+
 
 settings = Settings()

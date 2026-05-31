@@ -167,9 +167,8 @@ services:
       # Sequential pipeline ensures they don't run in parallel — just avoids cold reloads.
       OLLAMA_MAX_LOADED_MODELS: "2"
       OLLAMA_NUM_PARALLEL: "1"
-    # Host 11434 is often already taken by a system Ollama — publish on 11435 instead
-    ports:
-      - "11435:11434"
+    # Reachable internally as http://ollama:11434. Host port published only in dev
+    # (docker-compose.dev.yml) — never exposed in production.
     deploy:
       resources:
         reservations:
@@ -199,8 +198,8 @@ services:
       - embedded-llamacpp
     volumes:
       - llamacpp_models:/models
-    ports:
-      - "11436:8080"
+    # Reachable internally as http://llama-server:8080. Host port published only in
+    # dev (docker-compose.dev.yml) — never exposed in production.
     # Wrapper: start without model if GGUF missing (API-only mode for model management).
     # --cache-type-k/v replaces old --kv-cache-type flag (llama.cpp b4300+).
     entrypoint: ["/bin/sh", "-c"]
@@ -282,8 +281,8 @@ services:
     image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.22.0}
     profiles:
       - embedded-vllm
-    ports:
-      - "11437:8000"
+    # Reachable internally as http://vllm-server:8000. Host port published only in
+    # dev (docker-compose.dev.yml) — never exposed in production.
     volumes:
       - vllm_models:/models
       # Shared read-only access to llama.cpp GGUF models.
@@ -481,9 +480,9 @@ services:
     volumes:
       - authentik_media:/media
       - authentik_templates:/templates
-    ports:
-      - "9100:9000"
-      - "9443:9443"
+    # No host ports: Authentik is reached through Traefik (OIDC paths /application/,
+    # /if/, /flows/, /.well-known/, /api/v3/). Direct ports 9100/9443 are added back
+    # only in dev (docker-compose.dev.yml).
     depends_on:
       authentik-db:
         condition: service_healthy
@@ -511,12 +510,15 @@ services:
       - app
 
   # === Reverse Proxy ===
+  # SECURE-BY-DEFAULT: only 80/443 are published. The insecure dashboard port (8080)
+  # and direct service ports (authentik 9100/9443, ML 1143x) are added back ONLY in
+  # docker-compose.dev.yml. docker compose appends `ports` across files, so they can
+  # never be removed by an overlay — the base must stay minimal.
   traefik:
     image: traefik:v3.2
     ports:
       - "80:80"
       - "443:443"
-      - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro

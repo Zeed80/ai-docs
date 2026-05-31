@@ -12,11 +12,13 @@ from sqlalchemy.orm import selectinload
 from app.audit.service import log_action
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo
+from app.domain.access import apply_visibility
 from app.db.models import (
     Approval,
     ApprovalStatus,
     AuditTimelineEvent,
     CaseDocument,
+    CaseMember,
     Document,
     WorkCase,
 )
@@ -123,15 +125,23 @@ async def create_case(
 ) -> CaseOut:
     """Create a new work case."""
     actor = current_user.sub
+    # Stamp the owning department from the creator so departmental visibility applies.
+    from app.domain.org import get_user
+
+    creator = await get_user(db, actor)
     case = WorkCase(
         title=body.title,
         customer=body.customer,
         task_description=body.task_description,
         created_by=actor,
         status="open",
+        department_id=creator.department_id if creator else None,
     )
     db.add(case)
     await db.flush()
+
+    # Creator is the owning member.
+    db.add(CaseMember(case_id=case.id, user_sub=actor, role="owner", added_by=actor))
 
     db.add(AuditTimelineEvent(
         entity_type="case",
@@ -157,11 +167,26 @@ async def list_cases(
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0),
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ) -> dict:
     """List work cases."""
-    stmt = select(WorkCase).order_by(WorkCase.created_at.desc()).limit(limit).offset(offset)
+    stmt = select(WorkCase).order_by(WorkCase.created_at.desc())
     if status:
         stmt = stmt.where(WorkCase.status == status)
+    # Row-level visibility: owner (created_by) + department subtree, OR explicit
+    # case membership. Managers/admins are unrestricted (clause is None).
+    from sqlalchemy import or_ as _or
+
+    from app.domain.access import visibility_filter
+
+    clause = await visibility_filter(
+        db, current_user,
+        owner_col=WorkCase.created_by, department_col=WorkCase.department_id,
+    )
+    if clause is not None:
+        member_cases = select(CaseMember.case_id).where(CaseMember.user_sub == current_user.sub)
+        stmt = stmt.where(_or(clause, WorkCase.id.in_(member_cases)))
+    stmt = stmt.limit(limit).offset(offset)
     rows = (await db.execute(stmt)).scalars().all()
     items = []
     for c in rows:
@@ -334,3 +359,104 @@ async def update_case(
     await db.refresh(case)
     out = CaseOut.model_validate(case)
     return out
+
+
+# ── Members (multi-user collaboration) ─────────────────────────────────────────
+
+
+class CaseMemberIn(BaseModel):
+    user_sub: str
+    role: str = "collaborator"  # owner | collaborator | watcher
+
+
+class CaseMemberOut(BaseModel):
+    user_sub: str
+    role: str
+    added_by: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/{case_id}/members", response_model=list[CaseMemberOut])
+async def list_case_members(
+    case_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
+) -> list[CaseMemberOut]:
+    await _get_case(db, case_id)
+    rows = (
+        await db.execute(select(CaseMember).where(CaseMember.case_id == case_id))
+    ).scalars().all()
+    return [CaseMemberOut.model_validate(m) for m in rows]
+
+
+@router.post("/{case_id}/members", response_model=CaseMemberOut, status_code=201)
+async def add_case_member(
+    case_id: uuid.UUID,
+    body: CaseMemberIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
+) -> CaseMemberOut:
+    case = await _get_case(db, case_id)
+    if body.role not in {"owner", "collaborator", "watcher"}:
+        raise HTTPException(422, detail="Invalid member role")
+
+    existing = (
+        await db.execute(
+            select(CaseMember).where(
+                CaseMember.case_id == case_id, CaseMember.user_sub == body.user_sub
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        existing.role = body.role
+        member = existing
+    else:
+        member = CaseMember(
+            case_id=case_id, user_sub=body.user_sub, role=body.role, added_by=current_user.sub
+        )
+        db.add(member)
+
+    db.add(AuditTimelineEvent(
+        entity_type="case", entity_id=case_id, event_type="member_added",
+        actor=current_user.sub,
+        summary=f"Участник добавлен: {body.user_sub} ({body.role})",
+    ))
+    # Notify the added collaborator.
+    from app.db.models import NotificationType
+    from app.services.notifications import create_notification
+
+    if body.user_sub != current_user.sub:
+        await create_notification(
+            db=db, user_sub=body.user_sub, type=NotificationType.system,
+            title="Вас добавили в кейс",
+            body=case.title,
+            entity_type="case", entity_id=case_id, action_url=f"/cases/{case_id}",
+        )
+    await db.commit()
+    await db.refresh(member)
+    return CaseMemberOut.model_validate(member)
+
+
+@router.delete("/{case_id}/members/{user_sub}", status_code=204)
+async def remove_case_member(
+    case_id: uuid.UUID,
+    user_sub: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
+) -> None:
+    member = (
+        await db.execute(
+            select(CaseMember).where(
+                CaseMember.case_id == case_id, CaseMember.user_sub == user_sub
+            )
+        )
+    ).scalar_one_or_none()
+    if member is None:
+        raise HTTPException(404, detail="Member not found")
+    await db.delete(member)
+    db.add(AuditTimelineEvent(
+        entity_type="case", entity_id=case_id, event_type="member_removed",
+        actor=current_user.sub, summary=f"Участник удалён: {user_sub}",
+    ))
+    await db.commit()

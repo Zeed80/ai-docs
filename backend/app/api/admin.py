@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import get_current_user, require_role
 from app.auth.models import ROLE_PERMISSIONS, UserInfo, UserRole
-from app.db.models import ApiKey, AuditLog, User
+from app.db.models import ApiKey, AuditLog, Department, User
 from app.db.session import get_db
 from app.domain.admin import (
     ApiKeyCreate,
@@ -23,6 +23,10 @@ from app.domain.admin import (
     ApiKeyOut,
     AuditLogListResponse,
     AuditLogOut,
+    DepartmentCreate,
+    DepartmentListResponse,
+    DepartmentOut,
+    DepartmentUpdate,
     PermissionMatrixOut,
     SetPasswordRequest,
     SystemStatusOut,
@@ -253,6 +257,26 @@ async def update_user(
     if payload.preferences is not None:
         user.preferences = payload.preferences
 
+    # Org fields: applied only when explicitly present in the request body, so an
+    # explicit null clears the field while an absent field is left untouched.
+    fields_set = payload.model_fields_set
+    if "title" in fields_set:
+        user.title = payload.title
+    if "manager_sub" in fields_set:
+        if payload.manager_sub == user.sub:
+            raise HTTPException(status_code=400, detail="A user cannot be their own manager")
+        user.manager_sub = payload.manager_sub
+    if "department_id" in fields_set:
+        if payload.department_id is not None:
+            from app.db.models import Department
+
+            exists = await db.execute(
+                select(Department.id).where(Department.id == payload.department_id)
+            )
+            if exists.scalar_one_or_none() is None:
+                raise HTTPException(status_code=404, detail="Department not found")
+        user.department_id = payload.department_id
+
     await db.commit()
     await db.refresh(user)
 
@@ -261,10 +285,15 @@ async def update_user(
         action="admin.update_user",
         entity_type="user",
         entity_id=user.id,
-        details={"target_sub": user_sub, "changes": payload.model_dump(exclude_none=True)},
+        details={"target_sub": user_sub, "changes": payload.model_dump(mode="json", exclude_none=True)},
     )
     db.add(log)
     await db.commit()
+
+    # Role/active changes must take effect immediately, not after JWT expiry.
+    from app.auth.jwt import invalidate_active_cache
+
+    await invalidate_active_cache(user_sub)
 
     logger.info("admin_update_user", admin=admin.sub, target=user_sub)
     return UserOut.model_validate(user)
@@ -295,8 +324,134 @@ async def deactivate_user(
     await db.commit()
     await db.refresh(user)
 
+    # Revoke access now (bounded by cache TTL otherwise).
+    from app.auth.jwt import invalidate_active_cache
+
+    await invalidate_active_cache(user_sub)
+
     logger.info("admin_deactivate_user", admin=admin.sub, target=user_sub)
     return UserOut.model_validate(user)
+
+
+# ── Departments ───────────────────────────────────────────────────────────────
+
+
+@router.get("/departments", response_model=DepartmentListResponse)
+async def list_departments(
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> DepartmentListResponse:
+    rows = (await db.execute(select(Department).order_by(Department.name))).scalars().all()
+    return DepartmentListResponse(
+        items=[DepartmentOut.model_validate(d) for d in rows], total=len(rows)
+    )
+
+
+@router.post("/departments", response_model=DepartmentOut, status_code=201)
+async def create_department(
+    payload: DepartmentCreate,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> DepartmentOut:
+    code = payload.code.strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="code is required")
+    existing = await db.execute(select(Department.id).where(Department.code == code))
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail=f"Department code already exists: {code}")
+    if payload.parent_id is not None:
+        parent = await db.execute(select(Department.id).where(Department.id == payload.parent_id))
+        if parent.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Parent department not found")
+
+    dept = Department(name=payload.name.strip(), code=code, parent_id=payload.parent_id)
+    db.add(dept)
+    await db.commit()
+    await db.refresh(dept)
+    db.add(
+        AuditLog(
+            user_id=admin.sub,
+            action="admin.create_department",
+            entity_type="department",
+            entity_id=dept.id,
+            details={"code": code, "name": dept.name},
+        )
+    )
+    await db.commit()
+    logger.info("admin_create_department", admin=admin.sub, code=code)
+    return DepartmentOut.model_validate(dept)
+
+
+@router.patch("/departments/{department_id}", response_model=DepartmentOut)
+async def update_department(
+    department_id: uuid.UUID,
+    payload: DepartmentUpdate,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> DepartmentOut:
+    dept = (
+        await db.execute(select(Department).where(Department.id == department_id))
+    ).scalar_one_or_none()
+    if dept is None:
+        raise HTTPException(status_code=404, detail="Department not found")
+
+    if payload.name is not None:
+        dept.name = payload.name.strip() or dept.name
+    if payload.code is not None:
+        code = payload.code.strip()
+        clash = await db.execute(
+            select(Department.id).where(Department.code == code, Department.id != department_id)
+        )
+        if clash.scalar_one_or_none() is not None:
+            raise HTTPException(status_code=409, detail=f"Department code already exists: {code}")
+        dept.code = code
+    if "parent_id" in payload.model_fields_set:
+        if payload.parent_id == department_id:
+            raise HTTPException(status_code=400, detail="A department cannot be its own parent")
+        dept.parent_id = payload.parent_id
+
+    await db.commit()
+    await db.refresh(dept)
+    logger.info("admin_update_department", admin=admin.sub, department_id=str(department_id))
+    return DepartmentOut.model_validate(dept)
+
+
+@router.delete("/departments/{department_id}", status_code=204)
+async def delete_department(
+    department_id: uuid.UUID,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    dept = (
+        await db.execute(select(Department).where(Department.id == department_id))
+    ).scalar_one_or_none()
+    if dept is None:
+        raise HTTPException(status_code=404, detail="Department not found")
+
+    # Block deletion while users or child departments still reference it.
+    in_use = await db.execute(
+        select(func.count()).where(User.department_id == department_id)
+    )
+    if (in_use.scalar() or 0) > 0:
+        raise HTTPException(status_code=409, detail="Department still has assigned users")
+    has_children = await db.execute(
+        select(func.count()).where(Department.parent_id == department_id)
+    )
+    if (has_children.scalar() or 0) > 0:
+        raise HTTPException(status_code=409, detail="Department has sub-departments")
+
+    await db.delete(dept)
+    db.add(
+        AuditLog(
+            user_id=admin.sub,
+            action="admin.delete_department",
+            entity_type="department",
+            entity_id=department_id,
+            details={"code": dept.code},
+        )
+    )
+    await db.commit()
+    logger.info("admin_delete_department", admin=admin.sub, department_id=str(department_id))
 
 
 # ── Permission matrix ─────────────────────────────────────────────────────────

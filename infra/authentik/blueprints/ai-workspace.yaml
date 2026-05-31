@@ -90,7 +90,13 @@ entries:
       client_id: !Env [OAUTH_CLIENT_ID, "ai-workspace"]
       client_secret: !Env [OAUTH_CLIENT_SECRET, ""]
       redirect_uris:
-        # Frontend callback page — regex to support any port (SSH tunnels, LAN IPs).
+        # Production: exact HTTPS callbacks on the configured domain. Scoped to the
+        # real domain (not a wildcard) to avoid OAuth open-redirect exposure.
+        - url: !Format ["https://%s/auth/callback", !Env [TRAEFIK_DOMAIN, "localhost"]]
+          matching_mode: strict
+        - url: !Format ["https://%s/api/auth/callback", !Env [TRAEFIK_DOMAIN, "localhost"]]
+          matching_mode: strict
+        # Dev / LAN: frontend callback — regex to support any port (SSH tunnels, LAN IPs).
         # Matches: http://localhost/auth/callback, http://localhost:8080/auth/callback,
         #          http://192.168.1.x/auth/callback, http://192.168.1.x:8080/auth/callback
         - url: "http://(localhost|127\\.0\\.0\\.1|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})(:\\d+)?/auth/callback"

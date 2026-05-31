@@ -157,6 +157,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("email_templates_seed_failed", error=str(exc))
 
     if not settings.auth_enabled:
+        logger.warning(
+            "auth_disabled",
+            msg="AUTH_ENABLED=false — all requests are treated as admin (dev mode). "
+            "Never run this configuration on a network-exposed deployment.",
+            app_env=settings.app_env,
+        )
         try:
             from app.auth.jwt import _DEV_USER
             from app.auth.user_service import upsert_user

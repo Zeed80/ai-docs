@@ -114,6 +114,8 @@ async def _verify_token(token: str) -> UserInfo:
         groups: list[str] = claims.get("groups", [])
         roles = _groups_to_roles(groups)
 
+        await _assert_user_active(claims["sub"])
+
         return UserInfo(
             sub=claims["sub"],
             email=claims.get("email", ""),
@@ -178,6 +180,76 @@ async def _verify_api_key(raw_key: str) -> UserInfo:
         roles=[UserRole.viewer],
         groups=[],
     )
+
+
+# Active-status cache: bridges the gap between deactivating a user and their JWT
+# expiring. Short TTL keeps the DB load low while bounding stale access to seconds.
+_ACTIVE_CACHE_TTL = 45  # seconds
+_ACTIVE_CACHE_PREFIX = "auth:active:"
+
+
+async def invalidate_active_cache(sub: str) -> None:
+    """Drop the cached active-status for a user so a change takes effect immediately.
+
+    Call after activating/deactivating a user. Best-effort — ignores Redis errors.
+    """
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        await get_async_redis().delete(f"{_ACTIVE_CACHE_PREFIX}{sub}")
+    except Exception:  # pragma: no cover - cache invalidation is best-effort
+        pass
+
+
+async def _assert_user_active(sub: str) -> None:
+    """Reject tokens belonging to a deactivated user (is_active=False).
+
+    Fail-open on infrastructure errors (Redis/DB) so a transient outage can never
+    lock every user out. Unknown subs (not yet upserted) are treated as active.
+    """
+    cache_key = f"{_ACTIVE_CACHE_PREFIX}{sub}"
+    redis = None
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        redis = get_async_redis()
+        cached = await redis.get(cache_key)
+        if cached == "1":
+            return
+        if cached == "0":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User account is deactivated",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        redis = None  # Redis unavailable — fall back to DB without caching
+
+    try:
+        from sqlalchemy import select
+
+        from app.db.models import User
+        from app.db.session import _get_session_factory
+
+        async with _get_session_factory()() as db:
+            result = await db.execute(select(User.is_active).where(User.sub == sub))
+            row = result.scalar_one_or_none()
+    except Exception as e:
+        logger.warning("active_check_db_failed", error=str(e))
+        return  # fail-open
+
+    is_active = True if row is None else bool(row)
+    if redis is not None:
+        try:
+            await redis.set(cache_key, "1" if is_active else "0", ex=_ACTIVE_CACHE_TTL)
+        except Exception:  # pragma: no cover
+            pass
+    if not is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is deactivated",
+        )
 
 
 def _groups_to_roles(groups: list[str]) -> list[UserRole]:

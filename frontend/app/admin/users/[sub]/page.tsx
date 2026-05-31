@@ -27,6 +27,15 @@ interface UserOut {
   is_active: boolean;
   last_seen_at: string | null;
   created_at: string;
+  department_id: string | null;
+  manager_sub: string | null;
+  title: string | null;
+}
+
+interface DepartmentOut {
+  id: string;
+  name: string;
+  code: string;
 }
 
 function SetPasswordSection({ userSub }: { userSub: string }) {
@@ -116,6 +125,10 @@ function UserEditContent() {
   const [user, setUser] = useState<UserOut | null>(null);
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
+  const [deptId, setDeptId] = useState("");
+  const [title, setTitle] = useState("");
+  const [managerSub, setManagerSub] = useState("");
+  const [departments, setDepartments] = useState<DepartmentOut[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -134,8 +147,16 @@ function UserEditContent() {
         setUser(u);
         setRole(u.role);
         setName(u.name);
+        setDeptId(u.department_id ?? "");
+        setTitle(u.title ?? "");
+        setManagerSub(u.manager_sub ?? "");
       })
       .catch((e) => setError(e.message));
+
+    fetch(`${API}/api/admin/departments`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((d) => setDepartments(d.items ?? []))
+      .catch(() => setDepartments([]));
   }, [sub]);
 
   async function save() {
@@ -146,6 +167,12 @@ function UserEditContent() {
       const changes: Record<string, unknown> = {};
       if (role !== user!.role) changes.role = role;
       if (name.trim() && name.trim() !== user!.name) changes.name = name.trim();
+      // Org fields: send explicit null to clear. Compare against current values.
+      if (deptId !== (user!.department_id ?? ""))
+        changes.department_id = deptId || null;
+      if (title !== (user!.title ?? "")) changes.title = title.trim() || null;
+      if (managerSub !== (user!.manager_sub ?? ""))
+        changes.manager_sub = managerSub.trim() || null;
       if (Object.keys(changes).length === 0) return;
 
       const res = await fetch(
@@ -161,6 +188,8 @@ function UserEditContent() {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.detail ?? `HTTP ${res.status}`);
       }
+      const updated: UserOut = await res.json();
+      setUser(updated); // refresh baseline so isDirty resets
       setSuccess(true);
       router.refresh();
     } catch (e: unknown) {
@@ -220,7 +249,11 @@ function UserEditContent() {
     return <p className="text-sm text-muted-foreground">Загрузка...</p>;
 
   const isDirty =
-    role !== user.role || (name.trim() && name.trim() !== user.name);
+    role !== user.role ||
+    (name.trim() && name.trim() !== user.name) ||
+    deptId !== (user.department_id ?? "") ||
+    title !== (user.title ?? "") ||
+    managerSub !== (user.manager_sub ?? "");
 
   return (
     <div className="max-w-md space-y-4">
@@ -270,6 +303,53 @@ function UserEditContent() {
               </option>
             ))}
           </select>
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">
+            Отдел
+          </label>
+          <select
+            value={deptId}
+            onChange={(e) => setDeptId(e.target.value)}
+            className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background"
+          >
+            <option value="">— не задан —</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">
+            Должность
+          </label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Ведущий инженер"
+            className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">
+            Руководитель (sub)
+          </label>
+          <input
+            type="text"
+            value={managerSub}
+            onChange={(e) => setManagerSub(e.target.value)}
+            placeholder="sub руководителя"
+            className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background font-mono"
+          />
+          <p className="text-[10px] text-muted-foreground mt-0.5">
+            Согласования по умолчанию уходят руководителю отдела
+          </p>
         </div>
 
         <div className="text-xs text-muted-foreground space-y-1">

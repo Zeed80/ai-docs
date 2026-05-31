@@ -103,12 +103,25 @@ async def request_approval(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: approval.request — Request human approval. Blocks agent."""
+    # Auto-route to the requester's department manager when no assignee is given,
+    # so approvals follow the org hierarchy instead of landing in a global queue.
+    assigned_to = payload.assigned_to
+    if not assigned_to and payload.requested_by:
+        from app.domain.org import get_department_manager_sub, get_user
+
+        requester = await get_user(db, payload.requested_by)
+        if requester is not None and requester.department_id is not None:
+            mgr = await get_department_manager_sub(db, requester.department_id)
+            # Don't assign the requester to approve their own request.
+            if mgr and mgr != payload.requested_by:
+                assigned_to = mgr
+
     approval = Approval(
         action_type=payload.action_type,
         entity_type=payload.entity_type,
         entity_id=payload.entity_id,
         requested_by=payload.requested_by,
-        assigned_to=payload.assigned_to,
+        assigned_to=assigned_to,
         context=payload.context,
         expires_at=payload.expires_at,
     )
@@ -124,12 +137,12 @@ async def request_approval(
     )
 
     # Notify the assigned user
-    if payload.assigned_to:
+    if assigned_to:
         from app.services.notifications import create_notification
         from app.db.models import NotificationType
         await create_notification(
             db=db,
-            user_sub=payload.assigned_to,
+            user_sub=assigned_to,
             type=NotificationType.approval_assigned,
             title="Новое согласование",
             body=f"Требуется ваше решение: {payload.action_type.value}",

@@ -14,7 +14,7 @@
 # Docker Compose file sets
 # ──────────────────────────────────────────────────────────────────────────────
 COMPOSE_DEV      := -f infra/docker-compose.yml -f infra/docker-compose.dev.yml
-COMPOSE_PROD     := -f infra/docker-compose.yml --profile prod
+COMPOSE_PROD     := -f infra/docker-compose.yml -f infra/docker-compose.prod.yml
 COMPOSE_LLAMACPP := -f infra/docker-compose.yml --profile embedded-llamacpp
 
 # ──────────────────────────────────────────────────────────────────────────────

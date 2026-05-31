@@ -1,36 +1,45 @@
 # Traefik dynamic routing for production.
-# Routes by PathPrefix only — works with any IP, hostname, or domain without reconfiguration.
-# TLS (Let's Encrypt) is handled automatically via TLS-ALPN-01 challenge for any domain
-# pointing to this server. For plain HTTP (no domain, LAN/IP access), the web entryPoint
-# serves traffic directly; comment out the http→https redirect in traefik.prod.yml first.
+#
+# Single-domain, PathPrefix-based routing — works with any domain pointing at this
+# server (TLS issued on-demand via Let's Encrypt TLS-ALPN-01, see traefik.prod.yml).
+#
+# Priority ladder (higher wins):
+#   300  authentik-oauth   — /application/, /if/, /flows/, /.well-known/, /static/.., /media/
+#   250  authentik-api-v3  — /api/v3/  (Authentik REST API used by the browser at login)
+#   100  backend-api/ws/health
+#     1  frontend          — everything else → Next.js
+#
+# Authentik has NO published host port in production; the OIDC login flow reaches it
+# only through these routers on 443. Traefik sets X-Forwarded-Proto/Host automatically
+# (Authentik trusts them via AUTHENTIK_WEB__TRUSTED_PROXY_CIDRS).
 http:
   routers:
     frontend:
       rule: "PathPrefix(`/`)"
       service: frontend
-      entryPoints:
-        - web
-        - websecure
+      entryPoints: [web, websecure]
       tls:
         certResolver: letsencrypt
+      middlewares:
+        - security-headers
+        - rate-limit
       priority: 1
 
     backend-api:
       rule: "PathPrefix(`/api`)"
       service: backend
-      entryPoints:
-        - web
-        - websecure
+      entryPoints: [web, websecure]
       tls:
         certResolver: letsencrypt
+      middlewares:
+        - security-headers
+        - rate-limit
       priority: 100
 
     backend-ws:
       rule: "PathPrefix(`/ws`)"
       service: backend
-      entryPoints:
-        - web
-        - websecure
+      entryPoints: [web, websecure]
       tls:
         certResolver: letsencrypt
       priority: 100
@@ -38,12 +47,46 @@ http:
     backend-health:
       rule: "Path(`/health`)"
       service: backend
-      entryPoints:
-        - web
-        - websecure
+      entryPoints: [web, websecure]
       tls:
         certResolver: letsencrypt
       priority: 100
+
+    # ── Authentik SSO — browser-facing OAuth/UI paths, proxied on 443 ────────────
+    authentik-oauth:
+      rule: "PathPrefix(`/application/`) || PathPrefix(`/if/`) || PathPrefix(`/flows/`) || PathPrefix(`/.well-known/`) || PathPrefix(`/static/dist/`) || PathPrefix(`/static/authentik/`) || PathPrefix(`/media/`)"
+      service: authentik
+      entryPoints: [web, websecure]
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - security-headers
+      priority: 300
+
+    # Authentik's own REST API — called by the browser during the login flow.
+    # Higher priority than backend-api (100) so it is not swallowed by /api.
+    authentik-api-v3:
+      rule: "PathPrefix(`/api/v3/`)"
+      service: authentik
+      entryPoints: [web, websecure]
+      tls:
+        certResolver: letsencrypt
+      priority: 250
+
+    # ── Optional: infra admin UIs (MinIO console, monitoring) ────────────────────
+    # These services are NOT in the production stack by default. To expose one,
+    # publish it on a subdomain and protect it with the authentik-forwardauth
+    # middleware below so only authenticated admins reach it. Example:
+    #
+    # minio-console:
+    #   rule: "Host(`minio.${TRAEFIK_DOMAIN}`)"
+    #   service: minio-console
+    #   entryPoints: [websecure]
+    #   tls:
+    #     certResolver: letsencrypt
+    #   middlewares:
+    #     - authentik-forwardauth
+    #     - security-headers
 
   services:
     frontend:
@@ -56,17 +99,45 @@ http:
         servers:
           - url: "http://backend:8000"
 
+    authentik:
+      loadBalancer:
+        servers:
+          - url: "http://authentik-server:9000"
+
+    # minio-console:
+    #   loadBalancer:
+    #     servers:
+    #       - url: "http://minio:9001"
+
   middlewares:
+    # Edge transport/clickjacking headers for ALL routes (incl. Authentik, which
+    # bypasses FastAPI). CSP is intentionally NOT set here: the app's CSP is owned by
+    # FastAPI (CSP_ENABLED=true) and Authentik ships its own nonce-based CSP — adding
+    # ours on top would break Authentik's login UI.
     security-headers:
       headers:
         stsSeconds: 31536000
         stsIncludeSubdomains: true
+        stsPreload: true
         contentTypeNosniff: true
         frameDeny: true
         browserXssFilter: true
-        contentSecurityPolicy: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:"
+        referrerPolicy: "strict-origin-when-cross-origin"
 
     rate-limit:
       rateLimit:
         average: 100
         burst: 50
+
+    # Defense-in-depth for infra admin UIs only. Requires an Authentik Proxy Provider
+    # + embedded outpost (see infra/authentik/blueprints/ai-workspace.yaml). Do NOT
+    # apply to the app/API routers — app auth lives in FastAPI and forward-auth would
+    # break the cookie-OIDC SPA flow, WebSockets and X-API-Key service accounts.
+    authentik-forwardauth:
+      forwardAuth:
+        address: "http://authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-authentik-username
+          - X-authentik-groups
+          - X-authentik-email

@@ -16,8 +16,18 @@ _ROLE_PRIORITY = [
     UserRole.accountant,
     UserRole.buyer,
     UserRole.engineer,
+    UserRole.technologist,
     UserRole.viewer,
 ]
+
+
+def _department_code_from_groups(groups: list[str]) -> str | None:
+    """Extract a department code from a `dept:<code>` Authentik group, if present."""
+    for g in groups:
+        low = g.lower()
+        if low.startswith("dept:") and len(low) > 5:
+            return g.split(":", 1)[1].strip()
+    return None
 
 
 def pick_primary_role(roles: list[UserRole]) -> str:
@@ -73,6 +83,18 @@ async def upsert_user(db: AsyncSession, info: UserInfo) -> User:
         user.name = info.name
         user.preferred_username = info.preferred_username
         user.role = canonical_role
+
+    # Sync department from a `dept:<code>` group, if one is present and matches an
+    # existing Department. Absent group → leave any admin-assigned department intact.
+    dept_code = _department_code_from_groups(info.groups)
+    if dept_code:
+        from app.db.models import Department
+
+        dept = (
+            await db.execute(select(Department).where(Department.code == dept_code))
+        ).scalar_one_or_none()
+        if dept is not None:
+            user.department_id = dept.id
 
     user.last_seen_at = now
     await db.flush()

@@ -67,27 +67,21 @@ async def _fire_mention_notifications(
 ) -> None:
     from app.services.notifications import create_notification
     from app.db.models import NotificationType
+    from app.domain.mentions import resolve_mentioned_subs
 
-    mentions = set(_MENTION_RE.findall(comment.body))
-    for mention in mentions:
-        user_q = await db.execute(
-            select(User).where(
-                or_(User.preferred_username == mention, User.sub == mention)
-            )
+    mentioned_subs = await resolve_mentioned_subs(db, comment.body, exclude_sub=author_sub)
+    action_url = f"/{comment.entity_type}s/{comment.entity_id}"
+    for sub in mentioned_subs:
+        await create_notification(
+            db=db,
+            user_sub=sub,
+            type=NotificationType.mention,
+            title="Вас упомянули в комментарии",
+            body=comment.body[:200],
+            entity_type=comment.entity_type,
+            entity_id=comment.entity_id,
+            action_url=action_url,
         )
-        mentioned = user_q.scalar_one_or_none()
-        if mentioned and mentioned.sub != author_sub:
-            action_url = f"/{comment.entity_type}s/{comment.entity_id}"
-            await create_notification(
-                db=db,
-                user_sub=mentioned.sub,
-                type=NotificationType.mention,
-                title="Вас упомянули в комментарии",
-                body=comment.body[:200],
-                entity_type=comment.entity_type,
-                entity_id=comment.entity_id,
-                action_url=action_url,
-            )
 
 
 @router.get("", response_model=list[CommentOut])

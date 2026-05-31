@@ -1,0 +1,54 @@
+# Production overlay. Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   (or: make prod)
+#
+# The base file (docker-compose.yml) is already secure-by-default: only Traefik's
+# 80/443 are published; Postgres, Redis, Qdrant, MinIO, Authentik and the ML servers
+# stay on the internal `app` network. This overlay swaps Traefik onto the hardened
+# production config (TLS via Let's Encrypt, HTTP→HTTPS redirect, no insecure dashboard)
+# and routes Authentik OIDC + the app through port 443.
+#
+# Volumes merge by target path, so the mounts below REPLACE the dev config that the
+# base mounts at the same container paths. Ports merge by append, so nothing here
+# re-publishes the dev-only ports.
+services:
+  traefik:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.prod.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/prod:/etc/traefik/dynamic:ro
+      - traefik_acme:/etc/traefik/acme
+    environment:
+      TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN:?set TRAEFIK_DOMAIN in infra/.env}
+      TRAEFIK_ACME_EMAIL: ${TRAEFIK_ACME_EMAIL:?set TRAEFIK_ACME_EMAIL in infra/.env}
+    restart: unless-stopped
+
+  backend:
+    restart: unless-stopped
+
+  celery-worker:
+    restart: unless-stopped
+
+  celery-beat:
+    restart: unless-stopped
+
+  frontend:
+    restart: unless-stopped
+
+  postgres:
+    restart: unless-stopped
+
+  redis:
+    restart: unless-stopped
+
+  qdrant:
+    restart: unless-stopped
+
+  minio:
+    restart: unless-stopped
+
+  authentik-server:
+    restart: unless-stopped
+
+  authentik-worker:
+    restart: unless-stopped

@@ -129,6 +129,12 @@ class Document(UUIDPrimaryKey, TimestampMixin, Base):
         GUID(), ForeignKey("email_messages.id")
     )
 
+    # Ownership / visibility (nullable: legacy docs stay visible to all readers).
+    owner_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("departments.id"), nullable=True, index=True
+    )
+
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
     # Relationships
@@ -2485,7 +2491,19 @@ class MessageRating(UUIDPrimaryKey, TimestampMixin, Base):
     comment: Mapped[str | None] = mapped_column(String(500))
 
 
-# ── Users & API Keys ─────────────────────────────────────────────────────────
+# ── Organization, Users & API Keys ────────────────────────────────────────────
+
+
+class Department(UUIDPrimaryKey, TimestampMixin, Base):
+    """Organizational unit. Supports a tree via self-referencing parent_id."""
+
+    __tablename__ = "departments"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("departments.id"), nullable=True, index=True
+    )
 
 
 class User(UUIDPrimaryKey, TimestampMixin, Base):
@@ -2501,6 +2519,15 @@ class User(UUIDPrimaryKey, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     preferences: Mapped[dict | None] = mapped_column(JSON)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Organization placement (all nullable for backward compatibility).
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("departments.id"), nullable=True, index=True
+    )
+    # Direct manager, referenced by their `sub` (not a hard FK — managers may be
+    # provisioned after their reports, and sub is the stable cross-system identity).
+    manager_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(150), nullable=True)
 
 
 class ApiKey(UUIDPrimaryKey, TimestampMixin, Base):
@@ -2642,10 +2669,35 @@ class WorkCase(UUIDPrimaryKey, TimestampMixin, Base):
     task_description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="open", index=True)
     created_by: Mapped[str] = mapped_column(String(100), nullable=False, default="system")
+    # Owning department for visibility (created_by acts as the owner_sub).
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("departments.id"), nullable=True, index=True
+    )
 
     documents: Mapped[list["CaseDocument"]] = relationship(
         back_populates="case", cascade="all, delete-orphan"
     )
+
+
+class CaseMember(UUIDPrimaryKey, Base):
+    """Membership of a user in a work case — enables multi-user collaboration."""
+
+    __tablename__ = "case_members"
+    __table_args__ = (
+        UniqueConstraint("case_id", "user_sub", name="uq_case_member"),
+    )
+
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_cases.id"), nullable=False, index=True
+    )
+    user_sub: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="collaborator"
+    )  # owner | collaborator | watcher
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    added_by: Mapped[str | None] = mapped_column(String(255))
 
 
 class CaseDocument(UUIDPrimaryKey, Base):

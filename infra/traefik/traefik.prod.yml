@@ -5,13 +5,14 @@ api:
 entryPoints:
   web:
     address: ":80"
-    # Uncomment the block below to redirect all HTTP to HTTPS once you have a valid domain/cert.
-    # Without a domain (IP-only access), leave this commented out so HTTP works directly.
-    # http:
-    #   redirections:
-    #     entryPoint:
-    #       to: websecure
-    #       scheme: https
+    # Domain + valid TLS deployment: force every HTTP request to HTTPS.
+    # The ACME HTTP-01/TLS-ALPN-01 challenge still works because Traefik handles it
+    # on the same entrypoints before this redirect applies.
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
   websecure:
     address: ":443"
 

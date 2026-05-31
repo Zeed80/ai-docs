@@ -54,3 +54,29 @@ services:
   ollama:
     deploy:
       resources: {}
+    # Host 11434 is often taken by a system Ollama — publish on 11435 for dev access.
+    ports:
+      - "11435:11434"
+
+  # === Dev-only published ports ===================================================
+  # These are appended to the secure base (docker-compose.yml), which publishes only
+  # 80/443. They give developers direct access to admin UIs and ML servers.
+  # They are intentionally absent from production (make prod / docker-compose.prod.yml).
+  llama-server:
+    ports:
+      - "11436:8080"
+
+  vllm-server:
+    ports:
+      - "11437:8000"
+
+  authentik-server:
+    # Direct access to the Authentik admin UI during development.
+    ports:
+      - "9100:9000"
+      - "9443:9443"
+
+  traefik:
+    # Insecure dashboard (traefik.yml has api.insecure: true) — dev only.
+    ports:
+      - "8080:8080"
