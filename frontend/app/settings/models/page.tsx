@@ -12,8 +12,11 @@ const cardH =
   "px-4 py-2 bg-slate-800 border-b border-slate-700 flex items-center justify-between";
 const input =
   "w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50";
-const select =
-  "w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500";
+// Width-less base so callers can size selects without a `w-full` conflict
+// (Tailwind can't predictably override `w-full` with `w-32`/`flex-1`).
+const selectBase =
+  "rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500";
+const select = `w-full ${selectBase}`;
 const btn = "px-3 py-1.5 rounded text-sm font-medium transition-colors";
 const btnPrimary = `${btn} bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50`;
 const btnSecondary = `${btn} bg-slate-700 hover:bg-slate-600 text-slate-200`;
@@ -2208,7 +2211,7 @@ function ProviderModelSelect({
   return (
     <div className="flex gap-2 min-w-0">
       <select
-        className={`${select} w-32 shrink-0`}
+        className={`${selectBase} w-32 shrink-0`}
         value={selectedProvider}
         onChange={(e) => onProvider(e.target.value)}
       >
@@ -2221,7 +2224,7 @@ function ProviderModelSelect({
         ))}
       </select>
       <select
-        className={`${select} flex-1 min-w-0`}
+        className={`${selectBase} flex-1 min-w-0`}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
@@ -2389,7 +2392,7 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
         </div>
         <div className="p-4 space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="space-y-1">
+            <label className="space-y-1 min-w-0">
               <span className="text-xs text-slate-400">
                 Распознавание (OCR, чертежи) — vision
               </span>
@@ -2400,7 +2403,7 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
                 onChange={(v) => setDocs((d) => ({ ...d, vision_model: v }))}
               />
             </label>
-            <label className="space-y-1">
+            <label className="space-y-1 min-w-0">
               <span className="text-xs text-slate-400">
                 Извлечение, письма, рассуждение — текст
               </span>
@@ -2411,7 +2414,7 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
                 onChange={(v) => setDocs((d) => ({ ...d, text_model: v }))}
               />
             </label>
-            <label className="space-y-1">
+            <label className="space-y-1 min-w-0">
               <span className="text-xs text-slate-400">Эмбеддинги (поиск)</span>
               <ProviderModelSelect
                 value={docs.embedding_model ?? ""}
@@ -2420,7 +2423,7 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
                 onChange={(v) => setDocs((d) => ({ ...d, embedding_model: v }))}
               />
             </label>
-            <label className="space-y-1">
+            <label className="space-y-1 min-w-0">
               <span className="text-xs text-slate-400">Реранкинг</span>
               <ProviderModelSelect
                 value={docs.rerank_model ?? ""}
@@ -2457,7 +2460,7 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
         </div>
         <div className="p-4 space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="space-y-1">
+            <label className="space-y-1 min-w-0">
               <span className="text-xs text-slate-400">
                 Модель агента (основная)
               </span>
@@ -2475,7 +2478,7 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
                 }}
               />
             </label>
-            <label className="space-y-1">
+            <label className="space-y-1 min-w-0">
               <span className="text-xs text-slate-400">
                 Большая модель (опционально) — сложные задачи
               </span>
