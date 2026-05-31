@@ -74,6 +74,8 @@ x-authentik-env: &authentik-env
   OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
   OAUTH_REDIRECT_URI_1: ${OAUTH_REDIRECT_URI_1:-http://localhost/auth/callback}
   OAUTH_REDIRECT_URI_2: ${OAUTH_REDIRECT_URI_2:-http://localhost:8000/api/auth/callback}
+  # Domain used by the blueprint to build strict https redirect_uris for production
+  TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN:-localhost}
 
 services:
   # === Database ===
