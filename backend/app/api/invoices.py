@@ -26,8 +26,9 @@ from app.domain.invoices import (
     PriceComparison,
 )
 from app.audit.service import log_action, add_timeline_event
-from app.auth.jwt import require_role
+from app.auth.jwt import get_current_user, require_role
 from app.auth.models import UserInfo, UserRole
+from app.domain.access import visibility_filter
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -48,6 +49,7 @@ async def list_invoices(
     offset: int = 0,
     limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: invoice.list — List invoices with filters."""
     query = select(Invoice).options(
@@ -55,6 +57,16 @@ async def list_invoices(
         selectinload(Invoice.supplier),
         selectinload(Invoice.buyer),
     )
+
+    # Row-level visibility: an invoice inherits the visibility of its source document
+    # (owner_sub/department_id). Invoices without a document (legacy/unowned) stay
+    # visible to all — the outer join yields NULL columns, caught by the legacy clause.
+    clause = await visibility_filter(
+        db, current_user,
+        owner_col=Document.owner_sub, department_col=Document.department_id,
+    )
+    if clause is not None:
+        query = query.outerjoin(Document, Invoice.document_id == Document.id).where(clause)
 
     if status:
         query = query.where(Invoice.status == status)

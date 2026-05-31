@@ -165,6 +165,7 @@ async def list_pending_approvals(
     offset: int = 0,
     limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: approval.list_pending — List pending approvals (excludes dormant chain steps)."""
     # Exclude dormant chain steps only (chain step with no assigned_to = not yet active)
@@ -176,6 +177,18 @@ async def list_pending_approvals(
             Approval.chain_root_id.is_(None),
         ),
     )
+
+    # Row-level visibility: admins/managers oversee everything; others see approvals
+    # assigned to them, requested by them, or unassigned (the shared pickup queue).
+    if not (UserRole.admin in current_user.roles or UserRole.manager in current_user.roles):
+        query = query.where(
+            sql_or(
+                Approval.assigned_to == current_user.sub,
+                Approval.assigned_to.is_(None),
+                Approval.requested_by == current_user.sub,
+            )
+        )
+
     if action_type:
         query = query.where(Approval.action_type == action_type)
     if chain_root_id:
