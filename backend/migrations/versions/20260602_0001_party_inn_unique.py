@@ -17,7 +17,8 @@ down_revision = "20260531_0003"
 branch_labels = None
 depends_on = None
 
-# Every column that references parties.id.
+# Every column that references parties.id (besides supplier_profiles.party_id,
+# which is unique and handled separately by merging stats).
 _FK_COLUMNS = [
     ("invoices", "supplier_id"),
     ("invoices", "buyer_id"),
@@ -25,6 +26,7 @@ _FK_COLUMNS = [
     ("price_history_entries", "supplier_id"),
     ("warehouse_receipts", "supplier_id"),
     ("supplier_contracts", "supplier_id"),
+    ("tool_suppliers", "main_supplier_id"),
 ]
 
 
