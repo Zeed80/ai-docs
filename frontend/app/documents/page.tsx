@@ -198,9 +198,12 @@ const EXT_TYPE_MAP: Record<string, string> = {
   igs: "drawing",
   xlsx: "invoice",
   xls: "invoice",
+  xlsm: "invoice",
   docx: "letter",
   doc: "letter",
   odt: "letter",
+  eml: "letter",
+  msg: "letter",
 };
 
 function guessDocType(filename: string): string {
@@ -1250,7 +1253,7 @@ function UploadPanel({
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".pdf,.dwg,.dxf,.svg,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp,.gif,.docx,.xlsx,.xls,.csv,.json,.xml,.txt,.step,.stp,.iges,.igs"
+        accept=".pdf,.dwg,.dxf,.svg,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp,.gif,.docx,.doc,.odt,.xlsx,.xls,.xlsm,.csv,.json,.xml,.txt,.md,.eml,.msg,.step,.stp,.iges,.igs"
         className="hidden"
         onChange={(event) => {
           if (event.target.files) onAddFiles(event.target.files);

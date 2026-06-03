@@ -179,7 +179,7 @@ function FieldRow({
       onClick={onFocus}
     >
       <div className="flex items-center justify-between mb-0.5">
-        <span className="text-[11px] text-slate-400">
+        <span className="text-[11px] text-slate-300">
           {fieldLabel(field.field_name)}
         </span>
         <div className="flex items-center gap-1">

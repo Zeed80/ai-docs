@@ -2192,7 +2192,16 @@ function ProviderModelSelect({
 }) {
   const providers = Array.from(new Set(options.map((o) => o.provider)));
   const current = options.find((o) => o.key === value);
-  const selectedProvider = current?.provider ?? providers[0] ?? "";
+  // Remember the chosen provider locally so it survives an empty model value.
+  // Without this, an optional (allowEmpty) field whose model is cleared would
+  // snap the provider back to providers[0], making it impossible to switch
+  // provider before picking a model.
+  const [provOverride, setProvOverride] = useState<string | null>(null);
+  const selectedProvider =
+    current?.provider ??
+    (provOverride && providers.includes(provOverride)
+      ? provOverride
+      : (providers[0] ?? ""));
   const models = options.filter((o) => o.provider === selectedProvider);
 
   const dot = (p: string) => {
@@ -2202,9 +2211,11 @@ function ProviderModelSelect({
 
   const onProvider = (p: string) => {
     if (p === selectedProvider) return;
+    setProvOverride(p);
     const first = options.find((o) => o.provider === p);
-    // Auto-pick the first model of the new provider so the result is always
-    // valid; optional fields stay empty until the user chooses.
+    // For required fields auto-pick the first model so the result is always
+    // valid; optional fields stay empty (provider remembered via provOverride)
+    // until the user chooses a model.
     onChange(allowEmpty ? "" : (first?.key ?? ""));
   };
 
