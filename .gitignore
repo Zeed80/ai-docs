@@ -100,3 +100,10 @@ eval_results_*.json
 # Local env backups / secrets
 *.bak
 infra/.env.dev.bak
+
+# Real invoice samples (confidential data — used for local regression only)
+example-invoices/
+backend/example-invoices/
+
+# Generated test/quality reports
+backend/tests/reports/
