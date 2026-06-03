@@ -21,5 +21,9 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|public/|api/).*)"],
+  // Exclude static assets and the PDF.js worker (root-level public file) so the
+  // viewer can load the worker without an auth redirect.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|public/|api/|pdf.worker.min.mjs|manifest.json|sw.js).*)",
+  ],
 };

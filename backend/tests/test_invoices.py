@@ -159,6 +159,39 @@ async def test_update_invoice(client: AsyncClient, db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_update_invoice_line(client: AsyncClient, db_session: AsyncSession):
+    """invoice.line.update — patch a single line; amount recomputed from qty×price."""
+    _, invoice_id = await _create_invoice(db_session)
+
+    detail = (await client.get(f"/api/invoices/{invoice_id}")).json()
+    line_id = detail["lines"][0]["id"]
+
+    resp = await client.patch(
+        f"/api/invoices/{invoice_id}/lines/{line_id}",
+        json={"description": "Болты М12", "quantity": 200, "unit_price": 60},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["description"] == "Болты М12"
+    assert data["quantity"] == 200
+    assert data["unit_price"] == 60
+    # amount recomputed: 200 × 60 = 12000
+    assert data["amount"] == 12000
+    assert data["confidence"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_update_invoice_line_not_found(client: AsyncClient, db_session: AsyncSession):
+    """invoice.line.update — 404 for unknown line id."""
+    _, invoice_id = await _create_invoice(db_session)
+    resp = await client.patch(
+        f"/api/invoices/{invoice_id}/lines/00000000-0000-0000-0000-000000000000",
+        json={"quantity": 5},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_approve_invoice(client: AsyncClient, db_session: AsyncSession):
     """invoice.approve — approve invoice."""
     _, invoice_id = await _create_invoice(db_session)

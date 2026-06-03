@@ -184,7 +184,7 @@ export default function DocumentPage() {
         <div>
           <button
             onClick={() => router.push("/inbox")}
-            className="text-sm text-slate-400 hover:text-slate-600 mb-2"
+            className="text-sm text-slate-400 hover:text-slate-300 mb-2"
           >
             &larr; Back to Inbox
           </button>
@@ -193,12 +193,12 @@ export default function DocumentPage() {
             <span
               className={`px-2 py-0.5 text-xs font-medium rounded-full ${
                 doc.status === "needs_review"
-                  ? "bg-amber-100 text-amber-700"
+                  ? "bg-amber-900/40 text-amber-300"
                   : doc.status === "approved"
-                    ? "bg-green-100 text-green-700"
+                    ? "bg-green-900/40 text-green-300"
                     : doc.status === "rejected"
-                      ? "bg-red-100 text-red-700"
-                      : "bg-slate-100 text-slate-600"
+                      ? "bg-red-900/40 text-red-300"
+                      : "bg-slate-700 text-slate-200"
               }`}
             >
               {tDoc(`status.${doc.status}`)}
@@ -240,7 +240,7 @@ export default function DocumentPage() {
           </button>
           <button
             onClick={() => setShowForwardModal(true)}
-            className="px-3 py-1.5 text-sm bg-slate-600 text-slate-100 rounded-md hover:bg-slate-500"
+            className="px-3 py-1.5 text-sm bg-slate-600 text-slate-100 rounded-md hover:bg-slate-8000"
           >
             Переслать →
           </button>
@@ -253,9 +253,12 @@ export default function DocumentPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-6" style={{ minHeight: 600 }}>
-        {/* PDF Viewer */}
-        <div className="col-span-2" style={{ height: 640 }}>
+      <div
+        className="grid grid-cols-3 gap-6"
+        style={{ height: "calc(100vh - 180px)", minHeight: 600 }}
+      >
+        {/* PDF Viewer — fills the column height; resize the browser/zoom inside */}
+        <div className="col-span-2 h-full min-h-0">
           <PdfViewer
             documentId={doc.id}
             mimeType={doc.mime_type}
@@ -266,9 +269,9 @@ export default function DocumentPage() {
         </div>
 
         {/* Sidebar — metadata + extraction */}
-        <div className="space-y-4">
+        <div className="space-y-4 h-full min-h-0 overflow-auto pr-1">
           {/* Metadata */}
-          <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
             <h3 className="text-sm font-semibold mb-3">Metadata</h3>
             <dl className="space-y-2 text-sm">
               <div>
@@ -294,17 +297,17 @@ export default function DocumentPage() {
 
           {/* Extraction fields */}
           {latestExtraction && (
-            <div className="bg-white border border-slate-200 rounded-lg p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold">Extracted Fields</h3>
                 {latestExtraction.overall_confidence != null && (
                   <span
                     className={`text-xs px-2 py-0.5 rounded-full ${
                       latestExtraction.overall_confidence > 0.8
-                        ? "bg-green-100 text-green-700"
+                        ? "bg-green-900/40 text-green-300"
                         : latestExtraction.overall_confidence > 0.5
-                          ? "bg-amber-100 text-amber-700"
-                          : "bg-red-100 text-red-700"
+                          ? "bg-amber-900/40 text-amber-300"
+                          : "bg-red-900/40 text-red-300"
                     }`}
                   >
                     {(latestExtraction.overall_confidence * 100).toFixed(0)}%
@@ -315,7 +318,7 @@ export default function DocumentPage() {
                 {latestExtraction.fields.map((f) => (
                   <div
                     key={f.field_name}
-                    className={`${f.confidence != null && f.confidence < 0.6 ? "bg-amber-50 -mx-2 px-2 py-1 rounded" : ""}`}
+                    className={`${f.confidence != null && f.confidence < 0.6 ? "bg-amber-900/20 -mx-2 px-2 py-1 rounded" : ""}`}
                   >
                     <dt className="text-slate-400 flex items-center gap-1">
                       {f.field_name}
@@ -341,11 +344,11 @@ export default function DocumentPage() {
 
           {/* Links */}
           {(doc.links?.length ?? 0) > 0 && (
-            <div className="bg-white border border-slate-200 rounded-lg p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
               <h3 className="text-sm font-semibold mb-3">Links</h3>
               <ul className="space-y-1 text-sm">
                 {(doc.links ?? []).map((l) => (
-                  <li key={l.id} className="text-slate-600">
+                  <li key={l.id} className="text-slate-300">
                     {l.link_type}: {l.linked_entity_type}{" "}
                     {l.linked_entity_id.slice(0, 8)}...
                   </li>
@@ -356,7 +359,7 @@ export default function DocumentPage() {
 
           {/* Similar documents */}
           {similarDocs.length > 0 && (
-            <div className="bg-white border border-slate-200 rounded-lg p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
               <h3 className="text-sm font-semibold mb-3">Похожие документы</h3>
               <ul className="space-y-2">
                 {similarDocs.map((s) => (
@@ -366,7 +369,7 @@ export default function DocumentPage() {
                       className="w-full text-left group"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-blue-600 group-hover:underline truncate">
+                        <span className="text-xs text-blue-400 group-hover:underline truncate">
                           {s.snippet ?? s.id.slice(0, 12) + "…"}
                         </span>
                         <span className="shrink-0 text-xs text-slate-400">
@@ -444,8 +447,8 @@ export default function DocumentPage() {
       {/* Reject dialog */}
       {showRejectDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-96 max-w-full mx-4 rounded-lg bg-white p-6 shadow-xl">
-            <h3 className="mb-3 text-sm font-semibold text-slate-800">
+          <div className="w-96 max-w-full mx-4 rounded-lg bg-slate-900 p-6 shadow-xl">
+            <h3 className="mb-3 text-sm font-semibold text-slate-100">
               Причина отклонения
             </h3>
             <textarea
@@ -454,12 +457,12 @@ export default function DocumentPage() {
               onChange={(e) => setRejectReason(e.target.value)}
               placeholder="Укажите причину..."
               rows={3}
-              className="w-full resize-none rounded border border-slate-200 p-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+              className="w-full resize-none rounded border border-slate-700 bg-slate-800 p-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-red-400"
             />
             <div className="mt-3 flex justify-end gap-2">
               <button
                 onClick={() => setShowRejectDialog(false)}
-                className="rounded border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+                className="rounded border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
               >
                 Отмена
               </button>

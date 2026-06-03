@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -483,6 +484,17 @@ class InvoiceLine(UUIDPrimaryKey, Base):
 
 class Party(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "parties"
+    __table_args__ = (
+        # One Party per ИНН — prevents concurrent _upsert_party races from
+        # creating duplicate counterparties (which then crash lookups with
+        # MultipleResultsFound). Partial: parties without ИНН are exempt.
+        Index(
+            "uq_parties_inn",
+            "inn",
+            unique=True,
+            postgresql_where=text("inn IS NOT NULL"),
+        ),
+    )
 
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     inn: Mapped[str | None] = mapped_column(String(12), index=True)

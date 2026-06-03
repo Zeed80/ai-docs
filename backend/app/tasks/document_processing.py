@@ -16,11 +16,7 @@ from app.domain.schemas import (
 from app.domain.storage import LocalFileStorage
 
 
-TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xml"}
-DOCX_EXTENSIONS = {".docx"}
-XLSX_EXTENSIONS = {".xlsx"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
-CAD_EXTENSIONS = {".dxf", ".dwg", ".step", ".stp", ".iges", ".igs"}
 TEXT_PREVIEW_LIMIT = 12000
 
 
@@ -81,45 +77,42 @@ async def process_document(
 
 
 def extract_text(document: Document) -> RawExtractionResult:
+    """Extract text via the shared parser registry.
+
+    Delegates to :func:`app.ai.parsers.parse_document` (single source of truth,
+    also used by the live Celery pipeline). When the registry flags ``needs_ocr``
+    (images / scanned PDFs), this returns UNSUPPORTED so :func:`process_document`
+    runs the VLM OCR-artifact fallback.
+    """
+    from app.ai.parsers import parse_document
+
     path = Path(document.storage_path)
-    suffix = path.suffix.lower()
     if not path.exists():
         return RawExtractionResult(
             status=ProcessingJobStatus.FAILED,
             parser_name="missing_file",
             unsupported_reason="Stored file does not exist.",
         )
-    if suffix in TEXT_EXTENSIONS:
-        return _extract_plain_text(path)
-    if suffix in DOCX_EXTENSIONS:
-        return _extract_docx(path)
-    if suffix in XLSX_EXTENSIONS:
-        return _extract_xlsx(path)
-    if suffix == ".pdf":
-        return _extract_pdf_text_layer(path)
-    if suffix in IMAGE_EXTENSIONS:
+
+    parsed = parse_document(
+        path.read_bytes(), document.filename, document.content_type
+    )
+    if parsed.text.strip():
         return RawExtractionResult(
-            status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="image_placeholder",
-            unsupported_reason="Image OCR is not implemented yet; route to AI vision/OCR later.",
+            status=ProcessingJobStatus.COMPLETED,
+            parser_name=parsed.parser_name,
+            text=parsed.text,
         )
-    if suffix == ".dxf":
-        return _extract_dxf(path)
-    if suffix in {".step", ".stp"}:
-        return _extract_step(path)
-    if suffix in {".dwg", ".iges", ".igs"}:
+    if parsed.needs_ocr:
         return RawExtractionResult(
             status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="cad_placeholder",
-            unsupported_reason=(
-                "This CAD format requires a dedicated geometry backend; DWG/IGES parsing is not "
-                "enabled in the local Ubuntu pipeline."
-            ),
+            parser_name=parsed.parser_name,
+            unsupported_reason="No text layer; routing to VLM OCR fallback.",
         )
     return RawExtractionResult(
         status=ProcessingJobStatus.UNSUPPORTED,
-        parser_name="unsupported_extension",
-        unsupported_reason=f"Unsupported document extension: {suffix or 'none'}.",
+        parser_name=parsed.parser_name,
+        unsupported_reason="No extractable text for this document.",
     )
 
 
@@ -203,222 +196,6 @@ async def ocr_preview_artifacts(
         )
     )
     return response.text or ""
-
-
-def _extract_plain_text(path: Path) -> RawExtractionResult:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        text = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError as exc:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.FAILED,
-            parser_name="plain_text",
-            unsupported_reason=str(exc),
-        )
-    return RawExtractionResult(
-        status=ProcessingJobStatus.COMPLETED,
-        parser_name=f"text{path.suffix.lower()}",
-        text=text,
-    )
-
-
-def _extract_pdf_text_layer(path: Path) -> RawExtractionResult:
-    try:
-        import fitz  # type: ignore[import-not-found]
-    except ImportError:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="pdf_text_layer_unavailable",
-            unsupported_reason="PyMuPDF is not installed; PDF text extraction is skipped safely.",
-        )
-
-    try:
-        parts: list[str] = []
-        with fitz.open(path) as pdf:
-            for page in pdf:
-                page_text = page.get_text("text").strip()
-                if page_text:
-                    parts.append(page_text)
-        text = "\n\n".join(parts)
-    except Exception as exc:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.FAILED,
-            parser_name="pdf_text_layer",
-            unsupported_reason=str(exc),
-        )
-
-    if not text.strip():
-        return RawExtractionResult(
-            status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="pdf_text_layer",
-            unsupported_reason="PDF text layer is empty; OCR/render fallback is not implemented yet.",
-        )
-    return RawExtractionResult(
-        status=ProcessingJobStatus.COMPLETED,
-        parser_name="pdf_text_layer",
-        text=text,
-    )
-
-
-def _extract_docx(path: Path) -> RawExtractionResult:
-    try:
-        import docx  # type: ignore[import-not-found]
-    except ImportError:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="docx_unavailable",
-            unsupported_reason="python-docx is not installed; DOCX text extraction is skipped safely.",
-        )
-
-    try:
-        document = docx.Document(path)
-        paragraphs = [paragraph.text.strip() for paragraph in document.paragraphs]
-        table_rows: list[str] = []
-        for table in document.tables:
-            for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells]
-                if any(cells):
-                    table_rows.append(" | ".join(cells))
-        text = "\n".join([part for part in paragraphs + table_rows if part])
-    except Exception as exc:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.FAILED,
-            parser_name="docx",
-            unsupported_reason=str(exc),
-        )
-
-    if not text.strip():
-        return RawExtractionResult(
-            status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="docx",
-            unsupported_reason="DOCX contains no extractable text.",
-        )
-    return RawExtractionResult(status=ProcessingJobStatus.COMPLETED, parser_name="docx", text=text)
-
-
-def _extract_xlsx(path: Path) -> RawExtractionResult:
-    try:
-        import openpyxl  # type: ignore[import-not-found]
-    except ImportError:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="xlsx_unavailable",
-            unsupported_reason="openpyxl is not installed; XLSX text extraction is skipped safely.",
-        )
-
-    try:
-        workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
-        lines: list[str] = []
-        for sheet in workbook.worksheets:
-            lines.append(f"[Sheet: {sheet.title}]")
-            for row in sheet.iter_rows(values_only=True):
-                values = ["" if value is None else str(value) for value in row]
-                if any(value.strip() for value in values):
-                    lines.append(" | ".join(values))
-        workbook.close()
-        text = "\n".join(lines)
-    except Exception as exc:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.FAILED,
-            parser_name="xlsx",
-            unsupported_reason=str(exc),
-        )
-
-    if not text.strip():
-        return RawExtractionResult(
-            status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="xlsx",
-            unsupported_reason="XLSX contains no extractable cell values.",
-        )
-    return RawExtractionResult(status=ProcessingJobStatus.COMPLETED, parser_name="xlsx", text=text)
-
-
-def _extract_dxf(path: Path) -> RawExtractionResult:
-    try:
-        import ezdxf  # type: ignore[import-not-found]
-    except ImportError:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="dxf_unavailable",
-            unsupported_reason="ezdxf is not installed; DXF extraction is skipped safely.",
-        )
-
-    try:
-        doc = ezdxf.readfile(path)
-        modelspace = doc.modelspace()
-        entity_counts: dict[str, int] = {}
-        layers = sorted({entity.dxf.layer for entity in modelspace if hasattr(entity.dxf, "layer")})
-        for entity in modelspace:
-            entity_type = entity.dxftype()
-            entity_counts[entity_type] = entity_counts.get(entity_type, 0) + 1
-        text = (
-            f"DXF version: {doc.dxfversion}\n"
-            f"Layers: {', '.join(layers) if layers else 'none'}\n"
-            f"Entity counts: {json.dumps(entity_counts, ensure_ascii=False, sort_keys=True)}"
-        )
-    except Exception as exc:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.FAILED,
-            parser_name="dxf",
-            unsupported_reason=str(exc),
-        )
-
-    return RawExtractionResult(status=ProcessingJobStatus.COMPLETED, parser_name="dxf", text=text)
-
-
-def _extract_step(path: Path) -> RawExtractionResult:
-    try:
-        content = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError as exc:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.FAILED,
-            parser_name="step_header",
-            unsupported_reason=str(exc),
-        )
-
-    header = _step_header(content)
-    entity_counts = _step_entity_counts(content)
-    text = (
-        "STEP header preview. Full geometry analysis requires FreeCAD/pythonOCC backend.\n"
-        f"{header}\n"
-        f"Entity counts: {json.dumps(entity_counts, ensure_ascii=False, sort_keys=True)}"
-    ).strip()
-    if not header and not entity_counts:
-        return RawExtractionResult(
-            status=ProcessingJobStatus.UNSUPPORTED,
-            parser_name="step_header",
-            unsupported_reason="STEP file has no readable ISO-10303 header or entity section.",
-        )
-    return RawExtractionResult(status=ProcessingJobStatus.COMPLETED, parser_name="step_header", text=text)
-
-
-def _step_header(content: str) -> str:
-    header_start = content.find("HEADER;")
-    data_start = content.find("DATA;")
-    if header_start == -1:
-        return ""
-    header_end = data_start if data_start != -1 else min(len(content), header_start + 4000)
-    lines = [line.strip() for line in content[header_start:header_end].splitlines()]
-    interesting = [
-        line
-        for line in lines
-        if line.startswith(("FILE_DESCRIPTION", "FILE_NAME", "FILE_SCHEMA"))
-    ]
-    return "\n".join(interesting)
-
-
-def _step_entity_counts(content: str) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for line in content.splitlines():
-        line = line.strip()
-        if not line.startswith("#") or "=" not in line or "(" not in line:
-            continue
-        entity_name = line.split("=", 1)[1].split("(", 1)[0].strip().upper()
-        if not entity_name:
-            continue
-        counts[entity_name] = counts.get(entity_name, 0) + 1
-    return counts
 
 
 def _create_image_preview(

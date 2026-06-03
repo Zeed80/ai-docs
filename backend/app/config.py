@@ -109,6 +109,10 @@ class Settings(BaseSettings):
     llamacpp_parallel: int = 2        # 2 slots × 8 192 tokens; was 4 (too many, caused OOM)
     llamacpp_flash_attn: bool = True
 
+    # OCR (local VLM fallback for scanned PDFs / images)
+    ocr_max_pages: int = 15             # max PDF pages rendered for VLM OCR
+    ocr_render_scale: float = 2.5       # PyMuPDF render matrix scale for OCR pages
+
     # Upload limits
     max_upload_size_mb: int = 100       # max single file size in MB
     max_batch_size: int = 50            # max files per batch upload

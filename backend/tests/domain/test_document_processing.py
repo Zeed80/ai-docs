@@ -51,7 +51,7 @@ def test_extract_text_unsupported_cad_fallback(tmp_path: Path) -> None:
     result = extract_text(document)
 
     assert result.status == ProcessingJobStatus.UNSUPPORTED
-    assert result.parser_name == "step_header"
+    assert result.parser_name == "step_empty"
     assert result.unsupported_reason is not None
 
 
@@ -114,8 +114,11 @@ def test_extract_text_dxf_without_ezdxf_is_safe(tmp_path: Path, monkeypatch) -> 
 
     result = extract_text(document)
 
-    assert result.status == ProcessingJobStatus.UNSUPPORTED
-    assert result.parser_name == "dxf_unavailable"
+    # Without ezdxf the registry safely falls back to the raw decoded DXF text
+    # (ASCII) instead of failing — no annotation parsing, but never crashes.
+    assert result.status == ProcessingJobStatus.COMPLETED
+    assert result.parser_name == "dxf"
+    assert "ENTITIES" in result.text
 
 
 def test_extract_text_xlsx_when_openpyxl_is_available(tmp_path: Path) -> None:

@@ -15,7 +15,7 @@ export interface BBox {
 interface PdfViewerProps {
   documentId: string;
   mimeType?: string | null;
-  highlightedBbox: BBox | null;
+  highlightedBbox?: BBox | null;
   onBboxClick?: (bbox: BBox) => void;
   bboxes?: Record<string, BBox>;
   activeField?: string | null;
@@ -23,93 +23,118 @@ interface PdfViewerProps {
 
 const API_BASE = getApiBaseUrl();
 
+/**
+ * Renders PDFs to <canvas> with PDF.js instead of an <iframe>/<object>.
+ *
+ * Why: a client-side antivirus (e.g. Kaspersky) injects a strict CSP
+ * (`frame-src 'none'`, `object-src 'none'`) that blocks every iframe/object —
+ * including blob: and same-origin. Canvas drawing isn't governed by those
+ * directives, and PDF.js fetches the bytes over `connect-src 'self'` (allowed),
+ * so this works regardless of the injected CSP. The worker is served same-origin
+ * from /pdf.worker.min.mjs (covered by `script-src 'self'`).
+ */
 export function PdfViewer({
   documentId,
   mimeType,
-  highlightedBbox,
   bboxes = {},
   activeField,
 }: PdfViewerProps) {
   const isImage = mimeType?.startsWith("image/") ?? false;
-  // Use backend proxy — avoids MinIO localhost URL issues across network
-  const viewUrl = `${API_BASE}/api/documents/${documentId}/download?inline=true`;
+  const inlineUrl = `${API_BASE}/api/documents/${documentId}/download?inline=true`;
+  const downloadUrl = `${API_BASE}/api/documents/${documentId}/download`;
+
+  const [loading, setLoading] = useState(!isImage);
   const [error, setError] = useState<string | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const pagesRef = useRef<HTMLDivElement>(null);
 
-  // Scroll to highlighted bbox
   useEffect(() => {
-    if (highlightedBbox && containerRef.current) {
-      setCurrentPage(highlightedBbox.page);
-    }
-  }, [highlightedBbox]);
+    if (isImage) return;
+    let cancelled = false;
 
-  const allBboxesOnPage = Object.entries(bboxes).filter(
-    ([, b]) => b.page === currentPage,
-  );
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(inlineUrl, { credentials: "include" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.arrayBuffer();
+        if (cancelled) return;
+
+        const pdfjs = await import("pdfjs-dist");
+        pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+        const pdf = await pdfjs.getDocument({ data }).promise;
+        if (cancelled) return;
+
+        const host = pagesRef.current;
+        if (!host) return;
+        host.innerHTML = "";
+
+        for (let n = 1; n <= pdf.numPages; n++) {
+          const page = await pdf.getPage(n);
+          if (cancelled) return;
+          const scale = (window.devicePixelRatio || 1) * 1.4;
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement("canvas");
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.style.width = "100%";
+          canvas.style.maxWidth = `${viewport.width / (window.devicePixelRatio || 1)}px`;
+          canvas.className = "mx-auto mb-3 block rounded bg-white shadow";
+          host.appendChild(canvas);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) continue;
+          await page.render({ canvasContext: ctx, viewport }).promise;
+          if (cancelled) return;
+        }
+        setLoading(false);
+      } catch (e) {
+        if (!cancelled) {
+          setError(
+            `Не удалось отобразить PDF (${String((e as Error)?.message ?? e)})`,
+          );
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [inlineUrl, isImage]);
+
+  const overlays = Object.entries(bboxes);
 
   return (
-    <div className="flex flex-col h-full bg-white border border-slate-200 rounded-lg overflow-hidden">
+    <div className="flex h-full flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 bg-slate-50">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            className="px-2 py-1 text-xs border rounded hover:bg-white disabled:opacity-40"
-            disabled={currentPage <= 1}
-          >
-            &larr;
-          </button>
-          <span className="text-xs text-slate-500">Стр. {currentPage}</span>
-          <button
-            onClick={() => setCurrentPage((p) => p + 1)}
-            className="px-2 py-1 text-xs border rounded hover:bg-white"
-          >
-            &rarr;
-          </button>
-        </div>
+      <div className="flex items-center justify-between border-b border-slate-700 bg-slate-800 px-3 py-2">
+        <span className="text-xs text-slate-400">
+          {isImage ? "Изображение" : "PDF"}
+        </span>
         <a
-          href={`${API_BASE}/api/documents/${documentId}/download`}
+          href={downloadUrl}
           target="_blank"
           rel="noreferrer"
-          className="text-xs text-blue-500 hover:underline"
+          className="text-xs text-blue-400 hover:underline"
         >
-          Скачать оригинал
+          Открыть оригинал ↗
         </a>
       </div>
 
-      {/* PDF area */}
-      <div
-        ref={containerRef}
-        className="flex-1 relative overflow-auto bg-slate-100 p-4"
-      >
-        {error ? (
-          <div className="flex items-center justify-center h-full text-slate-400">
-            {error}
-          </div>
-        ) : (
-          <div className="relative mx-auto" style={{ maxWidth: 800 }}>
-            {isImage ? (
-              <img
-                src={viewUrl}
-                alt="Document preview"
-                className="w-full object-contain rounded"
-                onError={() => setError("Изображение недоступно")}
-              />
-            ) : (
-              <iframe
-                src={viewUrl}
-                className="w-full border-0"
-                style={{ height: "calc(100vh - 200px)" }}
-                title="PDF Preview"
-                onError={() => setError("PDF недоступен")}
-              />
-            )}
-            {/* Bbox overlays */}
-            {allBboxesOnPage.map(([fieldName, bbox]) => (
+      {/* Document area — dark canvas so the (white) page stands out */}
+      <div className="relative flex-1 overflow-auto bg-slate-800 p-4">
+        {isImage ? (
+          <div className="relative mx-auto" style={{ maxWidth: 1100 }}>
+            <img
+              src={inlineUrl}
+              alt="Документ"
+              className="w-full rounded bg-white object-contain"
+            />
+            {overlays.map(([fieldName, bbox]) => (
               <div
                 key={fieldName}
-                className={`absolute border-2 transition-all pointer-events-none ${
+                className={`pointer-events-none absolute border-2 transition-all ${
                   activeField === fieldName
                     ? "border-blue-500 bg-blue-500/10 ring-2 ring-blue-300"
                     : "border-amber-400 bg-amber-400/5"
@@ -124,6 +149,31 @@ export function PdfViewer({
               />
             ))}
           </div>
+        ) : (
+          <>
+            {loading && (
+              <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                Загрузка документа…
+              </div>
+            )}
+            {error && (
+              <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-slate-400">
+                <span>{error}</span>
+                <a
+                  href={downloadUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-blue-400 hover:underline"
+                >
+                  Открыть в новой вкладке ↗
+                </a>
+              </div>
+            )}
+            <div
+              ref={pagesRef}
+              className={loading || error ? "hidden" : "mx-auto max-w-3xl"}
+            />
+          </>
         )}
       </div>
     </div>

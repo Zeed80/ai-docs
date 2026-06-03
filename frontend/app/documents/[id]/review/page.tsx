@@ -15,6 +15,7 @@ import {
   ntd as ntdApi,
   type Document,
   type InvoiceDetail,
+  type InvoiceLine,
   type NTDCheckAvailability,
   type NTDCheck,
   type NTDFinding,
@@ -116,6 +117,21 @@ export default function ReviewPage() {
       setInvoiceDetail(null);
     }
   }, [documentId]);
+
+  // Inline line-item correction → PATCH then refresh invoice detail.
+  const handleLineUpdate = useCallback(
+    async (lineId: string, data: Partial<InvoiceLine>) => {
+      const invoiceId = invoiceDetail?.id;
+      if (!invoiceId) return;
+      try {
+        await invoicesApi.updateLine(invoiceId, lineId, data);
+        await fetchInvoice();
+      } catch (err) {
+        console.error("line_update_failed", err);
+      }
+    },
+    [invoiceDetail?.id, fetchInvoice],
+  );
 
   useEffect(() => {
     setLoading(true);
@@ -763,6 +779,10 @@ export default function ReviewPage() {
                 <LineItemsTable
                   lines={invoiceDetail.lines}
                   currency={invoiceDetail.currency}
+                  onLineUpdate={handleLineUpdate}
+                  disabled={
+                    doc.status === "approved" || doc.status === "rejected"
+                  }
                 />
               </div>
             </div>

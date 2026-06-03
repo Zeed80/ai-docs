@@ -469,6 +469,12 @@ export const invoices = {
       body: JSON.stringify(data),
     }),
 
+  updateLine: (invoiceId: string, lineId: string, data: Partial<InvoiceLine>) =>
+    request<InvoiceLine>(`/api/invoices/${invoiceId}/lines/${lineId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
   validate: (id: string) =>
     request<ValidationResponse>(`/api/invoices/${id}/validate`, {
       method: "POST",
