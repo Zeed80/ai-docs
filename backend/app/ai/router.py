@@ -15,8 +15,11 @@ import structlog
 from app.ai.extraction_prompts import (
     CLASSIFY_PROMPT,
     CLASSIFY_SYSTEM,
+    EXTRACT_GENERIC_PROMPT,
+    EXTRACT_GENERIC_SYSTEM,
     EXTRACT_INVOICE_PROMPT,
     EXTRACT_INVOICE_SYSTEM,
+    GENERIC_FIELD_HINTS,
     SUMMARIZE_PROMPT,
     SUMMARIZE_SYSTEM,
 )
@@ -379,6 +382,28 @@ class AIRouter:
             system=EXTRACT_INVOICE_SYSTEM,
             temperature=self._ocr_temperature(AITask.INVOICE_OCR),
             max_tokens=8192,
+            timeout_seconds=180.0,
+        )
+
+    async def extract_document_fields(self, text: str, doc_type: str) -> dict:
+        """Extract editable fields from a non-invoice document (letter/contract/etc.).
+
+        Returns ``{"summary": str, "fields": [{"name", "value", "confidence"}]}``.
+        Strictly local (confidential OCR model), same as invoice extraction.
+        """
+        model, provider = self._ocr_model_and_provider()
+        logger.info("extract_generic_model", model=model, provider=provider, doc_type=doc_type)
+        hints = GENERIC_FIELD_HINTS.get(doc_type, "key parties, dates, numbers, amounts, subject")
+        prompt = EXTRACT_GENERIC_PROMPT.format(
+            doc_type=doc_type, text=text[:8000], field_hints=hints
+        )
+        return await generate_json(
+            prompt,
+            model=model,
+            provider=provider,
+            system=EXTRACT_GENERIC_SYSTEM,
+            temperature=self._ocr_temperature(AITask.INVOICE_OCR),
+            max_tokens=4096,
             timeout_seconds=180.0,
         )
 

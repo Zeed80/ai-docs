@@ -25,6 +25,19 @@ class InvoiceLineOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class InvoiceLineUpdate(BaseModel):
+    """Editable fields of a single invoice line (human review correction)."""
+
+    description: str | None = None
+    sku: str | None = None
+    quantity: float | None = None
+    unit: str | None = None
+    unit_price: float | None = None
+    amount: float | None = None
+    tax_rate: float | None = None
+    tax_amount: float | None = None
+
+
 class PartyOut(BaseModel):
     id: uuid.UUID
     name: str

@@ -192,3 +192,55 @@ Respond with JSON:
   }},
   "overall_confidence": <0.0-1.0>
 }}"""
+
+
+# ── Generic (non-invoice) document field extraction ──────────────────────────
+# Used for letters, contracts, acts, waybills and commercial offers. Produces a
+# flat, editable field list stored as ExtractionField rows (same review UI as
+# invoices). Field hints are per document type; the model may add relevant
+# fields it finds and omit absent ones (value=null).
+
+EXTRACT_GENERIC_SYSTEM = """You are a document data-extraction system for a Russian manufacturing company.
+Extract structured, verifiable fields from the document text. Respond in valid JSON only.
+Use null for fields that are not present. Do not invent values. Keep field names in snake_case (English)."""
+
+GENERIC_FIELD_HINTS: dict[str, str] = {
+    "letter": (
+        "sender, recipient, letter_date, outgoing_number, subject, "
+        "reference_number, key_request, deadline, signatory"
+    ),
+    "contract": (
+        "contract_number, contract_date, party_supplier, party_buyer, subject, "
+        "total_amount, currency, valid_from, valid_until, payment_terms, signatories"
+    ),
+    "act": (
+        "act_number, act_date, party_executor, party_customer, subject, "
+        "total_amount, currency, period, basis_document"
+    ),
+    "waybill": (
+        "waybill_number, waybill_date, shipper, consignee, carrier, "
+        "total_quantity, total_amount, currency, vehicle"
+    ),
+    "commercial_offer": (
+        "offer_number, offer_date, supplier, buyer, subject, "
+        "total_amount, currency, valid_until, delivery_terms, payment_terms"
+    ),
+}
+
+EXTRACT_GENERIC_PROMPT = """Extract structured fields from this Russian document of type "{doc_type}".
+
+Document text:
+---
+{text}
+---
+
+Suggested fields to look for (extract those present, add other clearly relevant ones):
+{field_hints}
+
+Return JSON in EXACTLY this shape:
+{{
+  "summary": "<one-sentence Russian summary>",
+  "fields": [
+    {{"name": "<snake_case_field>", "value": "<string value or null>", "confidence": <0.0-1.0>}}
+  ]
+}}"""

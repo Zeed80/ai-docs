@@ -1,9 +1,22 @@
-"""Confidence scoring — combines AI self-reported confidence with deterministic checks."""
+"""Confidence scoring — grounds the AI's self-reported confidence in objective
+deterministic checks (control-digit checksums, arithmetic). A field that passes
+its check is reported as verified-high; one that fails is reported low — so the
+percentages reflect reality, not the model's guess."""
 
 import re
 from dataclasses import dataclass
 
+from app.ai import ru_validators as rv
 from app.db.models import ConfidenceReason
+
+# Confidence levels for objectively *verifiable* fields.
+_VERIFIED = 0.98   # checksum / arithmetic passed → near-certain
+_FAILED = 0.25     # checksum / arithmetic failed → almost certainly wrong
+# Prior for present fields we cannot verify objectively (names, free text).
+# High, because the extraction model is strong; it just can't be *proven*.
+_UNVERIFIABLE = 0.9
+
+_AMOUNT_FIELDS = {"subtotal", "tax_amount", "total_amount"}
 
 
 @dataclass
@@ -38,7 +51,6 @@ def compute_field_confidences(
 
     for field_name in top_fields:
         value = extracted.get(field_name)
-        ai_conf = ai_confidences.get(field_name, 0.5)
 
         if value is None:
             results.append(FieldConfidence(
@@ -49,24 +61,30 @@ def compute_field_confidences(
             ))
             continue
 
-        # Start with AI confidence
-        confidence = ai_conf
-
-        # Deterministic checks
+        str_value = str(value)
         reason = ConfidenceReason.high_quality_ocr
 
-        if field_name in error_fields:
-            confidence = min(confidence, 0.3)
-            reason = ConfidenceReason.arithmetic_error
-        elif field_name in warning_fields:
-            confidence = min(confidence, 0.6)
-            reason = ConfidenceReason.ambiguous_value
-
-        # Format checks
-        str_value = str(value)
-        if field_name == "invoice_date" and not _is_valid_date(str_value):
-            confidence = min(confidence, 0.4)
-            reason = ConfidenceReason.format_mismatch
+        if field_name in _AMOUNT_FIELDS:
+            # Grounded in arithmetic: verified-consistent → high, else low.
+            if field_name in error_fields:
+                confidence, reason = _FAILED, ConfidenceReason.arithmetic_error
+            elif field_name in warning_fields:
+                confidence, reason = 0.6, ConfidenceReason.ambiguous_value
+            else:
+                confidence = _VERIFIED
+        elif field_name == "invoice_date":
+            if _is_valid_date(str_value):
+                confidence = 0.92
+            else:
+                confidence, reason = 0.4, ConfidenceReason.format_mismatch
+        else:
+            # Not objectively verifiable (number, currency, notes): trust the
+            # model's reported confidence, but never below a sensible prior.
+            confidence = max(ai_confidences.get(field_name, 0.0), _UNVERIFIABLE)
+            if field_name in error_fields:
+                confidence, reason = _FAILED, ConfidenceReason.arithmetic_error
+            elif field_name in warning_fields:
+                confidence, reason = 0.6, ConfidenceReason.ambiguous_value
 
         results.append(FieldConfidence(
             field_name=field_name,
@@ -75,55 +93,47 @@ def compute_field_confidences(
             reason=reason,
         ))
 
-    # Supplier fields
+    def _add_party_field(prefix: str, data: dict, key: str, checksum=None):
+        """Add a party field. ``checksum`` (bool result) → verified/failed;
+        otherwise a present-but-unverifiable prior."""
+        val = data.get(key)
+        if not val:
+            return
+        if checksum is not None:
+            ok = bool(checksum(val))
+            conf = _VERIFIED if ok else _FAILED
+            reason = ConfidenceReason.high_quality_ocr if ok else ConfidenceReason.format_mismatch
+        else:
+            conf, reason = _UNVERIFIABLE, ConfidenceReason.high_quality_ocr
+        results.append(FieldConfidence(
+            field_name=f"{prefix}.{key}",
+            value=str(val),
+            confidence=round(conf, 2),
+            reason=reason,
+        ))
+
+    # Supplier fields — ИНН/БИК/счета verified by control-digit checksums.
     supplier = extracted.get("supplier", {}) or {}
     if supplier:
-        def _add_supplier(key: str, validator=None, default_conf: float = 0.85):
-            val = supplier.get(key)
-            if not val:
-                return
-            conf = validator(str(val)) if validator else default_conf
-            if isinstance(conf, bool):
-                conf = 0.95 if conf else 0.3
-            results.append(FieldConfidence(
-                field_name=f"supplier.{key}",
-                value=str(val),
-                confidence=round(conf, 2),
-                reason=ConfidenceReason.high_quality_ocr if conf > 0.5 else ConfidenceReason.format_mismatch,
-            ))
-
-        _add_supplier("name")
-        _add_supplier("inn", _is_valid_inn)
-        _add_supplier("kpp", _is_valid_kpp)
-        _add_supplier("address")
-        _add_supplier("phone")
-        _add_supplier("email")
-        _add_supplier("bank_name")
-        _add_supplier("bank_bik", _is_valid_bik)
-        _add_supplier("bank_account", _is_valid_account)
-        _add_supplier("corr_account", _is_valid_account)
+        sbik = supplier.get("bank_bik")
+        _add_party_field("supplier", supplier, "name")
+        _add_party_field("supplier", supplier, "inn", rv.inn_valid)
+        _add_party_field("supplier", supplier, "kpp", rv.kpp_valid)
+        _add_party_field("supplier", supplier, "address")
+        _add_party_field("supplier", supplier, "phone")
+        _add_party_field("supplier", supplier, "email")
+        _add_party_field("supplier", supplier, "bank_name")
+        _add_party_field("supplier", supplier, "bank_bik", rv.bik_valid)
+        _add_party_field("supplier", supplier, "bank_account", lambda v: rv.account_valid(v, sbik))
+        _add_party_field("supplier", supplier, "corr_account", lambda v: rv.corr_account_valid(v, sbik))
 
     # Buyer fields
     buyer = extracted.get("buyer", {}) or {}
     if buyer:
-        def _add_buyer(key: str, validator=None, default_conf: float = 0.85):
-            val = buyer.get(key)
-            if not val:
-                return
-            conf = validator(str(val)) if validator else default_conf
-            if isinstance(conf, bool):
-                conf = 0.95 if conf else 0.3
-            results.append(FieldConfidence(
-                field_name=f"buyer.{key}",
-                value=str(val),
-                confidence=round(conf, 2),
-                reason=ConfidenceReason.high_quality_ocr if conf > 0.5 else ConfidenceReason.format_mismatch,
-            ))
-
-        _add_buyer("name")
-        _add_buyer("inn", _is_valid_inn)
-        _add_buyer("kpp", _is_valid_kpp)
-        _add_buyer("address")
+        _add_party_field("buyer", buyer, "name")
+        _add_party_field("buyer", buyer, "inn", rv.inn_valid)
+        _add_party_field("buyer", buyer, "kpp", rv.kpp_valid)
+        _add_party_field("buyer", buyer, "address")
 
     # Line-level SKU fields (first few lines for ExtractionPanel display)
     for line in (extracted.get("lines") or [])[:20]:
@@ -192,10 +202,16 @@ def validate_arithmetic(extracted: dict) -> list[dict]:
                     "severity": "error",
                 })
 
-    # Check line amounts sum ≈ subtotal
+    # Check line amounts sum ≈ subtotal (net lines) OR ≈ total (VAT-inclusive
+    # lines) — both conventions occur on real Russian invoices.
     if subtotal is not None and lines:
         line_sum = sum(l.get("amount", 0) or 0 for l in lines)
-        if abs(line_sum - subtotal) > 1.0:
+        matches_subtotal = abs(line_sum - subtotal) <= max(1.0, 0.01 * abs(subtotal))
+        matches_total = (
+            total_amount is not None
+            and abs(line_sum - total_amount) <= max(1.0, 0.01 * abs(total_amount))
+        )
+        if not matches_subtotal and not matches_total:
             errors.append({
                 "field": "subtotal",
                 "error_type": "arithmetic",
@@ -205,15 +221,15 @@ def validate_arithmetic(extracted: dict) -> list[dict]:
                 "severity": "error",
             })
 
-    # Check subtotal + tax ≈ total
+    # Check subtotal / tax / total reconcile under either VAT convention
+    # (НДС сверху OR НДС в том числе) — see ru_validators.arith_total_ok.
     if subtotal is not None and tax_amount is not None and total_amount is not None:
-        expected_total = round(subtotal + tax_amount, 2)
-        if abs(expected_total - total_amount) > 1.0:
+        if not rv.arith_total_ok(subtotal, tax_amount, total_amount):
             errors.append({
                 "field": "total_amount",
                 "error_type": "arithmetic",
-                "message": f"subtotal + tax ({expected_total}) ≠ total ({total_amount})",
-                "expected": str(expected_total),
+                "message": f"subtotal ({subtotal}) + tax ({tax_amount}) ≠ total ({total_amount})",
+                "expected": "consistent VAT total",
                 "actual": str(total_amount),
                 "severity": "error",
             })
@@ -223,21 +239,3 @@ def validate_arithmetic(extracted: dict) -> list[dict]:
 
 def _is_valid_date(value: str) -> bool:
     return bool(re.match(r"^\d{4}-\d{2}-\d{2}$", value))
-
-
-def _is_valid_inn(value: str) -> bool:
-    return bool(re.match(r"^\d{10}$|^\d{12}$", value))
-
-
-def _is_valid_kpp(value: str) -> bool:
-    return bool(re.match(r"^\d{9}$", value))
-
-
-def _is_valid_bik(value: str) -> bool:
-    clean = re.sub(r"\s", "", value)
-    return bool(re.match(r"^\d{9}$", clean))
-
-
-def _is_valid_account(value: str) -> bool:
-    clean = re.sub(r"\s", "", value)
-    return bool(re.match(r"^\d{20}$", clean))

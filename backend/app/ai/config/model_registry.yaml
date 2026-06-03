@@ -310,7 +310,7 @@ models:
     provider: "ollama"
     provider_model: "qwen3.5:9b"
     status: "production"
-    modalities: ["text", "tool_calling"]
+    modalities: ["text", "vision", "tool_calling"]
     max_context_tokens: 40000
     supports_structured_output: true
     supports_tool_calling: true
@@ -318,7 +318,7 @@ models:
     vram_gb_estimate: 5.5
     quality_score: 0.80
     speed_score: 0.85
-    notes: "Qwen3.5 9B local model. Fast worker and fallback reasoning model."
+    notes: "Qwen3.5 9B local model. Natively multimodal (early fusion) like the 27B — usable for vision OCR/drawings. Fast worker and fallback reasoning model."
   ministral_3_8b_ollama:
     provider: "ollama"
     provider_model: "ministral-3:8b"

@@ -26,7 +26,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        # SAMEORIGIN (not DENY) so the app can embed its own document/PDF
+        # download responses in the review iframe; cross-origin framing
+        # (clickjacking) is still blocked.
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
 
@@ -39,7 +42,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data: blob:; "
                 "connect-src 'self' ws: wss:; "
-                "frame-ancestors 'none';"
+                "frame-src 'self' blob:; "
+                # Chrome's built-in PDF viewer loads blob: PDFs via the object/
+                # plugin context — without object-src it falls back to
+                # default-src ('self') and the embedded PDF renders blank.
+                "object-src 'self' blob:; "
+                "frame-ancestors 'self';"
             )
 
         if settings.app_env == "production":

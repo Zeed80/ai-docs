@@ -94,6 +94,9 @@ _EXT_TO_DOC_TYPE: dict[str, str] = {
     ".docx": "letter",
     ".doc": "letter",
     ".odt": "letter",
+    # Email
+    ".eml": "letter",
+    ".msg": "letter",
 }
 
 _MIME_TO_DOC_TYPE: dict[str, str] = {
@@ -101,6 +104,7 @@ _MIME_TO_DOC_TYPE: dict[str, str] = {
     "application/vnd.ms-excel": "invoice",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "letter",
     "application/msword": "letter",
+    "message/rfc822": "letter",
 }
 
 
@@ -134,15 +138,21 @@ PIPELINE_STEP_DEFINITIONS = [
 DEFAULT_ALLOWED_EXTENSIONS = {
     ".bmp",
     ".csv",
+    ".doc",
     ".docx",
     ".dwg",
     ".dxf",
+    ".eml",
     ".gif",
     ".iges",
     ".igs",
     ".jpeg",
     ".jpg",
     ".json",
+    ".log",
+    ".md",
+    ".msg",
+    ".odt",
     ".pdf",
     ".png",
     ".step",
@@ -154,6 +164,7 @@ DEFAULT_ALLOWED_EXTENSIONS = {
     ".webp",
     ".xls",
     ".xlsx",
+    ".xlsm",
     ".xml",
 }
 
@@ -314,6 +325,82 @@ async def _create_processing_job(
     db.add(job)
     await db.flush()
     return job
+
+
+async def _ingest_eml_attachments(
+    db: AsyncSession,
+    parent_doc: Document,
+    content: bytes,
+    *,
+    owner_sub: str | None,
+    department_id: uuid.UUID | None,
+) -> list[Document]:
+    """Best-effort: store each .eml attachment as a linked, auto-processed Document.
+
+    Attachments are extracted by the shared parser registry (same MIME parser as
+    IMAP polling). Each allowed attachment becomes a child Document linked to the
+    parent email via a ``email_attachment`` :class:`DocumentLink`, deduplicated by
+    SHA-256. Never raises — failures are logged and skipped so the parent ingest
+    always succeeds.
+    """
+    from app.ai.parsers import parse_document
+    from app.storage import file_exists, upload_file
+
+    parsed = parse_document(content, parent_doc.file_name, parent_doc.mime_type)
+    attachments = parsed.meta.get("attachments") or []
+    new_children: list[Document] = []
+    for att in attachments:
+        try:
+            att_bytes = att.get("content") or b""
+            att_name = att.get("filename") or "attachment"
+            if not att_bytes:
+                continue
+            ext = Path(att_name).suffix.lower()
+            if ext not in DEFAULT_ALLOWED_EXTENSIONS:
+                logger.info("eml_attachment_skipped_ext", filename=att_name, ext=ext)
+                continue
+            att_hash = att.get("sha256") or hashlib.sha256(att_bytes).hexdigest()
+            existing = await db.execute(
+                select(Document).where(Document.file_hash == att_hash)
+            )
+            if existing.scalar_one_or_none() is not None:
+                continue  # already ingested elsewhere; skip duplicate
+
+            storage_path = f"documents/{att_hash[:2]}/{att_hash[2:4]}/{att_hash}"
+            if not file_exists(storage_path):
+                upload_file(att_bytes, storage_path, att.get("content_type"))
+            dt, src = _quick_detect_doc_type(att_name, att.get("content_type") or "")
+            child = Document(
+                file_name=att_name,
+                file_hash=att_hash,
+                file_size=len(att_bytes),
+                mime_type=att.get("content_type") or "application/octet-stream",
+                storage_path=storage_path,
+                source_channel="email",
+                status="ingested",
+                doc_type=dt,
+                doc_type_confidence=0.9 if dt else None,
+                owner_sub=owner_sub,
+                department_id=department_id,
+                metadata_={"doc_type_source": src} if src else None,
+            )
+            db.add(child)
+            await db.flush()
+            await _create_processing_job(
+                db, child, status="queued", current_step="classification"
+            )
+            db.add(
+                DocumentLink(
+                    document_id=child.id,
+                    linked_entity_type="document",
+                    linked_entity_id=parent_doc.id,
+                    link_type="email_attachment",
+                )
+            )
+            new_children.append(child)
+        except Exception as exc:
+            logger.warning("eml_attachment_ingest_failed", error=str(exc))
+    return new_children
 
 
 # ── doc.download + presigned URL ─────────────────────────────────────────────
@@ -615,9 +702,42 @@ async def ingest_document(
 
     logger.info("document_ingested", doc_id=str(doc.id), file_name=doc.file_name)
 
+    file_ext_lower = Path(doc.file_name or "").suffix.lower()
+
+    # .eml / .msg → split out embedded attachments as linked child documents
+    if file_ext_lower in {".eml", ".msg"}:
+        try:
+            children = await _ingest_eml_attachments(
+                db,
+                doc,
+                content,
+                owner_sub=doc.owner_sub,
+                department_id=doc.department_id,
+            )
+            if children:
+                await db.commit()
+                from app.tasks.extraction import process_document as _process_doc
+
+                for child in children:
+                    try:
+                        _process_doc.delay(str(child.id))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "eml_attachment_queue_failed",
+                            doc_id=str(child.id),
+                            error=str(exc),
+                        )
+                logger.info(
+                    "eml_attachments_ingested",
+                    doc_id=str(doc.id),
+                    count=len(children),
+                )
+        except Exception as exc:  # noqa: BLE001
+            await db.rollback()
+            logger.warning("eml_attachment_split_failed", doc_id=str(doc.id), error=str(exc))
+
     # DWG / DXF / SVG → automatically route to drawing analysis pipeline
     from app.services.drawing_service import DRAWING_EXTENSIONS
-    file_ext_lower = Path(doc.file_name or "").suffix.lower()
     fmt = file_ext_lower.lstrip(".")
     if fmt in DRAWING_EXTENSIONS:
         try:

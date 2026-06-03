@@ -28,25 +28,25 @@ NIL_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 @celery_app.task(name="proactive.check_due_dates")
 def check_due_dates() -> dict:
     """Create reminders for invoices with due dates approaching in the next 3 days."""
-    return asyncio.get_event_loop().run_until_complete(_check_due_dates())
+    return asyncio.run(_check_due_dates())
 
 
 @celery_app.task(name="proactive.alert_critical_anomalies")
 def alert_critical_anomalies() -> dict:
     """Notify on critical unresolved anomalies older than 1 hour."""
-    return asyncio.get_event_loop().run_until_complete(_alert_critical_anomalies())
+    return asyncio.run(_alert_critical_anomalies())
 
 
 @celery_app.task(name="proactive.dispatch_due_reminders")
 def dispatch_due_reminders() -> dict:
     """Send notifications for reminders whose remind_at time has passed."""
-    return asyncio.get_event_loop().run_until_complete(_dispatch_due_reminders())
+    return asyncio.run(_dispatch_due_reminders())
 
 
 @celery_app.task(name="proactive.check_stale_approvals")
 def check_stale_approvals() -> dict:
     """Notify assignees about approval requests that have been pending too long."""
-    return asyncio.get_event_loop().run_until_complete(_check_stale_approvals())
+    return asyncio.run(_check_stale_approvals())
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

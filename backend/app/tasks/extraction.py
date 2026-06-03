@@ -218,6 +218,10 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
                 _set_job_step(job, "extraction", "queued")
                 extract_invoice.delay(document_id)
                 db.commit()
+            elif doc_type in GENERIC_EXTRACTION_TYPES:
+                _set_job_step(job, "extraction", "queued")
+                db.commit()
+                extract_generic_fields.delay(document_id)
             else:
                 doc.status = DocumentStatus.needs_review
                 _skip_remaining_steps(
@@ -316,6 +320,10 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
                 _skip_remaining_steps(job, {"extraction", "sql_records", "memory_graph"})
                 _finish_job(job, "done")
                 db.commit()
+            elif doc_type in GENERIC_EXTRACTION_TYPES:
+                _set_job_step(job, "extraction", "queued")
+                db.commit()
+                extract_generic_fields.delay(document_id)
             else:
                 doc.status = DocumentStatus.needs_review
                 _skip_remaining_steps(
@@ -461,6 +469,15 @@ def extract_invoice(self, document_id: str) -> dict:
         doc.status = DocumentStatus.needs_review
         _finish_job(job, "done")
 
+        # Record control-digit failures so the review UI / agent can flag them
+        # ("ИНН/счёт не прошёл контрольную сумму — проверьте") even on manual review.
+        _csum = _checksum_issues(extracted)
+        doc.metadata_ = {**(doc.metadata_ or {}), "checksum_issues": _csum}
+        if _csum:
+            logger.warning(
+                "extract_checksum_issues", document_id=document_id, issues=_csum
+            )
+
         # Check if auto_verify is requested
         doc_meta = doc.metadata_ or {}
         if doc_meta.get("auto_verify"):
@@ -495,6 +512,157 @@ def extract_invoice(self, document_id: str) -> dict:
         }
 
 
+#: Non-invoice document types that get structured field extraction.
+GENERIC_EXTRACTION_TYPES = frozenset(
+    {"letter", "contract", "act", "waybill", "commercial_offer"}
+)
+
+
+@celery_app.task(name="app.tasks.extraction.extract_generic_fields", bind=True, max_retries=2)
+def extract_generic_fields(self, document_id: str) -> dict:
+    """Extract editable fields for non-invoice documents (letter/contract/act/…).
+
+    Mirrors :func:`extract_invoice` but stores a flat, type-aware field list into
+    DocumentExtraction / ExtractionField so the same review UI can display and
+    correct them. No arithmetic validation (not financial line items).
+    """
+    logger.info("extract_generic_start", document_id=document_id)
+    import time
+
+    with _get_sync_session() as db:
+        doc = db.get(Document, uuid.UUID(document_id))
+        if not doc:
+            return {"error": "Document not found"}
+        job = _get_or_create_processing_job(
+            db,
+            doc,
+            current_step="extraction",
+            celery_task_id=getattr(self.request, "id", None),
+        )
+        _set_job_step(job, "extraction", "running")
+        doc.status = DocumentStatus.extracting
+        db.commit()
+
+        doc_type = doc.doc_type.value if doc.doc_type else "other"
+        text = _get_document_text(doc)
+        if not text:
+            error = "No text extracted from document"
+            doc.status = DocumentStatus.needs_review
+            _set_job_step(job, "extraction", "failed", error=error)
+            _finish_job(job, "failed", error=error)
+            db.commit()
+            return {"error": error}
+
+        start_time = time.time()
+        try:
+            from app.ai.router import ai_router
+
+            result = _run_async(ai_router.extract_document_fields(text, doc_type))
+            processing_time_ms = int((time.time() - start_time) * 1000)
+        except Exception as e:
+            logger.error("extract_generic_error", document_id=document_id, error=str(e))
+            doc.status = DocumentStatus.needs_review
+            _set_job_step(job, "extraction", "failed", error=str(e))
+            _finish_job(job, "failed", error=str(e))
+            db.commit()
+            self.retry(countdown=30, exc=e)
+            return {"error": str(e)}
+
+        raw_fields = result.get("fields") or []
+        # Normalize to (name, value, confidence) triples.
+        triples: list[tuple[str, str | None, float]] = []
+        for f in raw_fields:
+            if not isinstance(f, dict):
+                continue
+            name = str(f.get("name") or "").strip()
+            if not name:
+                continue
+            value = f.get("value")
+            value = None if value is None else str(value)
+            try:
+                conf = float(f.get("confidence", 0.6))
+            except (TypeError, ValueError):
+                conf = 0.6
+            triples.append((name, value, max(0.0, min(1.0, conf))))
+
+        overall_confidence = (
+            sum(c for _, _, c in triples) / len(triples) if triples else 0.0
+        )
+
+        # Bbox binding (only meaningful for PDFs with a text layer).
+        bbox_map: dict[str, dict | None] = {}
+        try:
+            content = _download_document(doc)
+            if content and doc.mime_type == "application/pdf":
+                from app.ai.pdf_processor import bind_bboxes, extract_pdf
+
+                pdf_data = extract_pdf(content, render_pages=False)
+                bbox_map = bind_bboxes(
+                    pdf_data.pages, {n: v for n, v, _ in triples}
+                )
+        except Exception as e:
+            logger.warning("generic_bbox_binding_failed", error=str(e))
+
+        from app.ai.model_resolver import get_ocr_model as _get_ocr
+
+        _ocr_cfg = _get_ocr()
+        extraction = DocumentExtraction(
+            document_id=doc.id,
+            model_name=f"{_ocr_cfg.provider}/{_ocr_cfg.model}",
+            raw_output=result,
+            structured_data=result,
+            overall_confidence=overall_confidence,
+            processing_time_ms=processing_time_ms,
+        )
+        db.add(extraction)
+        db.flush()
+        _set_job_step(job, "extraction", "done")
+
+        for name, value, conf in triples:
+            bbox = bbox_map.get(name)
+            db.add(
+                ExtractionField(
+                    extraction_id=extraction.id,
+                    field_name=name,
+                    field_value=value,
+                    confidence=conf,
+                    bbox_page=bbox["page"] if bbox else None,
+                    bbox_x=bbox["x"] if bbox else None,
+                    bbox_y=bbox["y"] if bbox else None,
+                    bbox_w=bbox["w"] if bbox else None,
+                    bbox_h=bbox["h"] if bbox else None,
+                )
+            )
+
+        doc.status = DocumentStatus.needs_review
+        _skip_remaining_steps(job, {"sql_records", "memory_graph"})
+        _finish_job(job, "done")
+        db.commit()
+
+        try:
+            from app.tasks.embedding import embed_document
+
+            embed_document.delay(document_id)
+        except Exception as _e:
+            logger.warning(
+                "embed_queue_failed_post_generic", document_id=document_id, error=str(_e)
+            )
+
+        logger.info(
+            "extract_generic_done",
+            document_id=document_id,
+            doc_type=doc_type,
+            field_count=len(triples),
+            confidence=overall_confidence,
+        )
+        return {
+            "document_id": document_id,
+            "doc_type": doc_type,
+            "field_count": len(triples),
+            "overall_confidence": overall_confidence,
+        }
+
+
 @celery_app.task(name="app.tasks.extraction.process_document")
 def process_document(document_id: str, force: bool = False) -> dict:
     """Full pipeline: classify → extract → validate.
@@ -505,25 +673,35 @@ def process_document(document_id: str, force: bool = False) -> dict:
 
 
 def _get_document_text(doc: Document) -> str:
-    """Get text from a document — try PDF extraction, fallback to OCR.
+    """Get text via the parser registry; fall back to VLM OCR when needed.
 
-    If OCR returns empty on first attempt (model cold start), waits 10 s and retries once.
+    Text-bearing formats (PDF text layer, DOCX, XLSX, EML, DXF/DWG, STEP, plain
+    text) are handled by :func:`app.ai.parsers.parse_document`. Images and
+    scanned PDFs (no text layer) are flagged ``needs_ocr`` and routed to the
+    local VLM OCR fallback below.
+
+    If OCR returns empty on first attempt (model cold start), waits 10 s and
+    retries once.
     """
     import time
+
+    from app.ai.parsers import parse_document
 
     content = _download_document(doc)
     if not content:
         return ""
 
-    if doc.mime_type == "application/pdf":
-        try:
-            from app.ai.pdf_processor import extract_pdf
-            pdf_data = extract_pdf(content, render_pages=False)
-            if pdf_data.full_text.strip():
-                return pdf_data.full_text
-        except Exception as e:
-            logger.warning("pdf_text_extraction_failed", error=str(e))
+    parsed = parse_document(content, doc.file_name, doc.mime_type)
+    if parsed.text.strip():
+        return parsed.text
 
+    if not parsed.needs_ocr:
+        # Nothing extractable and not an OCR candidate (e.g. unsupported binary).
+        return parsed.text
+
+    # OCR fallback — strictly local VLM (see _ocr_*_content).
+    is_pdf = doc.mime_type == "application/pdf" or (doc.file_name or "").lower().endswith(".pdf")
+    if is_pdf:
         text = _ocr_pdf_content(content, doc)
         if not text.strip():
             logger.warning("pdf_ocr_empty_retry", document_id=str(doc.id))
@@ -531,146 +709,13 @@ def _get_document_text(doc: Document) -> str:
             text = _ocr_pdf_content(content, doc)
         return text
 
-    if doc.mime_type.startswith("image/"):
+    # Otherwise it is an image flagged for OCR.
+    text = _ocr_image_content(content, doc.mime_type, doc)
+    if not text.strip():
+        logger.warning("image_ocr_empty_retry", document_id=str(doc.id))
+        time.sleep(10)
         text = _ocr_image_content(content, doc.mime_type, doc)
-        if not text.strip():
-            logger.warning("image_ocr_empty_retry", document_id=str(doc.id))
-            time.sleep(10)
-            text = _ocr_image_content(content, doc.mime_type, doc)
-        return text
-
-    # DWG: convert → DXF → extract text
-    if (doc.file_name or "").lower().endswith(".dwg"):
-        return _get_dwg_text(content)
-
-    # DXF: extract text entities directly
-    if (doc.file_name or "").lower().endswith(".dxf"):
-        return _get_dxf_text(content)
-
-    # Plain text
-    try:
-        return content.decode("utf-8", errors="replace")
-    except Exception:
-        return ""
-
-
-def _get_dwg_text(content: bytes) -> str:
-    """
-    Extract text/annotation content from a DWG file for classification.
-
-    Converts DWG → DXF using dwg2dxf (libredwg), then parses DXF text entities.
-    Falls back to a descriptive stub if the converter is unavailable.
-    """
-    import os
-    import shutil
-    import subprocess
-    import tempfile
-
-    with tempfile.TemporaryDirectory(prefix="dwg_text_") as tmpdir:
-        dwg_path = os.path.join(tmpdir, "input.dwg")
-        dxf_path = os.path.join(tmpdir, "input.dxf")
-        with open(dwg_path, "wb") as f:
-            f.write(content)
-
-        dwg2dxf_bin = shutil.which("dwg2dxf")
-        if dwg2dxf_bin:
-            try:
-                result = subprocess.run(
-                    [dwg2dxf_bin, "--as", "R2018", "-o", dxf_path, dwg_path],
-                    timeout=60,
-                    capture_output=True,
-                )
-                if result.returncode == 0 and os.path.exists(dxf_path):
-                    with open(dxf_path, "rb") as f:
-                        dxf_bytes = f.read()
-                    text = _get_dxf_text(dxf_bytes)
-                    if text.strip():
-                        return f"[DWG конвертирован в DXF]\n{text}"
-            except Exception as exc:
-                logger.warning("dwg_text_extraction_failed", error=str(exc))
-
-    # Fallback: return a useful stub for classification
-    return f"Технический чертёж DWG. Размер файла: {len(content)} байт. Требуется конвертация."
-
-
-def _get_dxf_text(content: bytes) -> str:
-    """Extract all text annotations from DXF file using ezdxf."""
-    try:
-        import io as _io
-
-        import ezdxf
-        import ezdxf.recover as recover
-
-        doc = None
-        try:
-            doc = ezdxf.read(_io.StringIO(content.decode("utf-8", errors="replace")))
-        except Exception:
-            pass
-
-        if doc is None:
-            import os
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tf:
-                tf.write(content)
-                tmp_path = tf.name
-            try:
-                try:
-                    doc = ezdxf.readfile(tmp_path)
-                except Exception:
-                    doc, _ = recover.readfile(tmp_path)
-            finally:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-
-        if doc is None:
-            return content.decode("utf-8", errors="replace")[:2000]
-
-        texts: list[str] = []
-        msp = doc.modelspace()
-        for entity in msp:
-            etype = entity.dxftype()
-            try:
-                if etype in ("TEXT", "ATTRIB", "ATTDEF"):
-                    t = str(entity.dxf.text or "")
-                    if t:
-                        texts.append(t)
-                elif etype == "MTEXT":
-                    t = entity.plain_mtext()
-                    if t:
-                        texts.append(t)
-                elif etype == "DIMENSION":
-                    try:
-                        m = entity.dxf.actual_measurement
-                        if m:
-                            texts.append(str(m))
-                    except Exception:
-                        pass
-                    try:
-                        ov = entity.dxf.text
-                        if ov:
-                            texts.append(ov)
-                    except Exception:
-                        pass
-                elif etype == "TOLERANCE":
-                    try:
-                        t = entity.dxf.string or ""
-                        if t:
-                            texts.append(t)
-                    except Exception:
-                        pass
-            except Exception:
-                continue
-
-        return "\n".join(texts)
-
-    except ImportError:
-        return content.decode("utf-8", errors="replace")[:2000]
-    except Exception as exc:
-        logger.warning("dxf_text_extraction_failed", error=str(exc))
-        return content.decode("utf-8", errors="replace")[:2000]
+    return text
 
 
 def _get_configured_ocr_model() -> str:
@@ -783,82 +828,171 @@ def _preprocess_image(content: bytes) -> bytes:
         return content
 
 
-def _resolve_vision_ocr_model() -> tuple[str, str] | None:
-    """Return (model, provider) for vision OCR based strictly on user settings.
+def _provider_supports_vision(model: str, provider: str) -> bool:
+    """Whether a (model, provider) pair can accept images.
 
-    Rules:
-    - llamacpp model configured → use llamacpp if it reports vision=true, else None
-    - ollama / other provider → use as-is
-    Never loads any model not explicitly configured by the user.
-    Returns None when the configured model cannot handle images.
+    llama.cpp must report vision support via /props; other local providers
+    (Ollama, vLLM, lmstudio) are assumed capable when the user configured them
+    for OCR. Cloud providers are never reached here (INVOICE_OCR is confidential
+    and routing validation rejects non-local keys).
     """
+    if provider != "llamacpp":
+        return True
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"{settings.llamacpp_url.rstrip('/v1').rstrip('/')}/props",
+            timeout=5.0,
+        )
+        props = resp.json()
+        modalities = props.get("modalities") or {}
+        if modalities.get("vision") or props.get("vision"):
+            return True
+    except Exception:
+        pass
+    logger.info("ocr_llamacpp_no_vision_skip", model=model)
+    return False
+
+
+def _resolve_vision_ocr_model() -> tuple[str, str] | None:
+    """Return the primary (model, provider) for vision OCR, or None if unusable."""
     model, provider = _get_configured_ocr_model_and_provider()
-    if provider == "llamacpp":
-        import httpx
-        try:
-            resp = httpx.get(
-                f"{settings.llamacpp_url.rstrip('/v1').rstrip('/')}/props",
-                timeout=5.0,
-            )
-            props = resp.json()
-            modalities = props.get("modalities") or {}
-            if modalities.get("vision") or props.get("vision"):
-                return model, "llamacpp"
-        except Exception:
-            pass
-        logger.info("ocr_llamacpp_no_vision_skip", model=model)
-        return None
-    return model, provider
+    return (model, provider) if _provider_supports_vision(model, provider) else None
+
+
+def _resolve_ocr_model_chain() -> list[tuple[str, str]]:
+    """Ordered list of local (model, provider) OCR candidates to try in turn.
+
+    Built from the INVOICE_OCR task routing (``models[0]`` is primary, the rest
+    are fallbacks), filtered to vision-capable providers. Falls back to the
+    single configured OCR model when routing is unavailable. All candidates are
+    local — confidentiality is preserved.
+    """
+    chain: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    try:
+        from app.ai.schemas import AITask
+        from app.ai.task_routing import _registry as _routing_registry
+        from app.ai.task_routing import get_routing_for
+
+        routing = get_routing_for(AITask.INVOICE_OCR)
+        for key in routing.models:
+            model = provider = None
+            try:
+                cap = _routing_registry().models.get(key)
+                if cap is not None:
+                    model, provider = cap.provider_model, cap.provider.value
+            except Exception:
+                model = provider = None
+            if not model or not provider:
+                continue
+            pair = (model, provider)
+            if pair in seen or not _provider_supports_vision(model, provider):
+                continue
+            seen.add(pair)
+            chain.append(pair)
+    except Exception as exc:
+        logger.debug("ocr_chain_routing_unavailable", error=str(exc))
+
+    if not chain:
+        primary = _resolve_vision_ocr_model()
+        if primary:
+            chain.append(primary)
+    return chain
+
+
+def _preprocess_ocr_page(raw_image: bytes) -> bytes:
+    """Enhance a rendered page/image for OCR: CLAHE + deskew, contrast fallback.
+
+    Reuses the drawing preprocessor (OpenCV CLAHE/deskew/scaling) used for
+    technical drawings; on any failure falls back to the lightweight PIL
+    contrast/sharpness enhancement.
+    """
+    try:
+        from app.ai.drawing_preprocessor import preprocess_drawing_image
+
+        pre = preprocess_drawing_image(raw_image, fmt="pdf_raster", max_views=1)
+        if pre.full_image:
+            return pre.full_image
+    except Exception as exc:
+        logger.debug("ocr_preprocess_drawing_failed", error=str(exc))
+    return _preprocess_image(raw_image)
+
+
+def _ocr_image_with_chain(image_bytes: bytes, chain: list[tuple[str, str]]) -> str:
+    """OCR a single already-encoded image, trying each model until non-empty."""
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    for model, provider in chain:
+        if provider == "llamacpp":
+            text = _llamacpp_vision_ocr([encoded], _OCR_PROMPT)
+        else:
+            text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
+        if text.strip():
+            return text
+        logger.info("ocr_model_empty_try_next", model=model, provider=provider)
+    return ""
 
 
 def _ocr_image_content(content: bytes, mime_type: str, doc: Document) -> str:
-    """OCR an image using only the model configured in AI settings."""
-    vision = _resolve_vision_ocr_model()
-    if not vision:
+    """OCR an image using the local vision model chain (strictly local)."""
+    chain = _resolve_ocr_model_chain()
+    if not chain:
         logger.warning(
             "image_ocr_skipped_no_vision_model",
             document_id=str(doc.id),
             hint="Configure an Ollama vision model or a llamacpp model with vision support",
         )
         return ""
-    model, provider = vision
-    logger.info("image_ocr_start", document_id=str(doc.id), model=model, provider=provider)
-    enhanced = _preprocess_image(content)
-    encoded = base64.b64encode(enhanced).decode("ascii")
-    if provider == "llamacpp":
-        text = _llamacpp_vision_ocr([encoded], _OCR_PROMPT)
-    else:
-        text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
-    logger.info("image_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
+    logger.info("image_ocr_start", document_id=str(doc.id), candidates=len(chain))
+    enhanced = _preprocess_ocr_page(content)
+    text = _ocr_image_with_chain(enhanced, chain)
+    logger.info("image_ocr_done", document_id=str(doc.id), text_len=len(text))
     return text
 
 
 def _ocr_pdf_content(content: bytes, doc: Document) -> str:
-    """OCR a scanned PDF using only the model configured in AI settings."""
-    vision = _resolve_vision_ocr_model()
-    if not vision:
+    """OCR a scanned PDF page-by-page with the local vision model chain.
+
+    Renders up to ``settings.ocr_max_pages`` pages, preprocesses each
+    (CLAHE/deskew), OCRs each page in its own VLM call, then concatenates with
+    ``[Страница N]`` markers. Per-page calls avoid table/field jumbling that
+    occurs when many pages are sent in a single request.
+    """
+    chain = _resolve_ocr_model_chain()
+    if not chain:
         logger.warning(
             "pdf_ocr_skipped_no_vision_model",
             document_id=str(doc.id),
             hint="Configure an Ollama vision model or a llamacpp model with vision support",
         )
         return ""
-    model, provider = vision
     try:
         import fitz
-        images_b64: list[str] = []
+
+        max_pages = getattr(settings, "ocr_max_pages", 15)
+        scale = getattr(settings, "ocr_render_scale", 2.5)
+        page_images: list[bytes] = []
         with fitz.open(stream=content, filetype="pdf") as pdf:
-            for page in list(pdf)[:3]:
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
-                images_b64.append(base64.b64encode(pixmap.tobytes("png")).decode("ascii"))
-        if not images_b64:
+            n_pages = min(len(pdf), max_pages)
+            for i in range(n_pages):
+                pixmap = pdf[i].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                page_images.append(_preprocess_ocr_page(pixmap.tobytes("png")))
+        if not page_images:
             return ""
-        logger.info("pdf_ocr_start", document_id=str(doc.id), model=model, pages=len(images_b64))
-        if provider == "llamacpp":
-            text = _llamacpp_vision_ocr(images_b64, _OCR_PROMPT)
-        else:
-            text = _ollama_vision_ocr(images_b64, model, _OCR_PROMPT)
-        logger.info("pdf_ocr_done", document_id=str(doc.id), model=model, text_len=len(text))
+        logger.info(
+            "pdf_ocr_start",
+            document_id=str(doc.id),
+            pages=len(page_images),
+            candidates=len(chain),
+        )
+        parts: list[str] = []
+        for idx, image_bytes in enumerate(page_images, start=1):
+            page_text = _ocr_image_with_chain(image_bytes, chain)
+            if page_text.strip():
+                parts.append(f"[Страница {idx}]\n{page_text.strip()}")
+        text = "\n\n".join(parts)
+        logger.info("pdf_ocr_done", document_id=str(doc.id), text_len=len(text))
         return text
     except Exception as e:
         logger.warning("pdf_ocr_failed", document_id=str(doc.id), error=str(e))
@@ -1058,32 +1192,46 @@ def _upsert_party(db: Session, data: dict, role: str) -> uuid.UUID | None:
     except ValueError:
         party_role = PartyRole.supplier
 
-    party = None
-    if inn:
-        party = db.execute(
-            select(Party).where(Party.inn == inn)
-        ).scalar_one_or_none()
+    def _by_inn():
+        # Tolerate pre-existing duplicates: pick the oldest deterministically
+        # instead of crashing with MultipleResultsFound.
+        return db.execute(
+            select(Party).where(Party.inn == inn).order_by(Party.created_at.asc())
+        ).scalars().first()
+
+    party = _by_inn() if inn else None
 
     # Fall back to name match (covers suppliers without INN or OCR errors in INN)
     if party is None and name:
         normalized = name.strip().upper()
         party = db.execute(
-            select(Party).where(
+            select(Party)
+            .where(
                 func.upper(func.trim(Party.name)) == normalized,
                 Party.role.in_([PartyRole.supplier, PartyRole.both, party_role]),
             )
-        ).first()
-        if party is not None:
-            party = party[0]
+            .order_by(Party.created_at.asc())
+        ).scalars().first()
 
     if party is None:
-        party = Party(
-            name=name or inn,
-            inn=inn,
-            role=party_role,
-        )
-        db.add(party)
-        db.flush()
+        from sqlalchemy.exc import IntegrityError
+
+        new_party = Party(name=name or inn, inn=inn, role=party_role)
+        try:
+            # SAVEPOINT so a unique-violation from a concurrent worker doesn't
+            # poison the surrounding transaction. ``add`` must be INSIDE the
+            # nested block so a rollback discards the pending INSERT — otherwise
+            # the orphaned object is re-flushed later and crashes the txn.
+            with db.begin_nested():
+                db.add(new_party)
+                db.flush()
+            party = new_party
+        except IntegrityError:
+            # The SAVEPOINT rollback already discarded the pending INSERT
+            # (``add`` was inside it), so just re-select the row that won.
+            party = _by_inn() if inn else None
+            if party is None:
+                raise
 
     # Update fields only if extracted value is non-empty and current value is null
     def _set_if_better(attr: str, value):
@@ -1101,6 +1249,33 @@ def _upsert_party(db: Session, data: dict, role: str) -> uuid.UUID | None:
     _set_if_better("contact_email", data.get("email"))
     db.flush()
     return party.id
+
+
+def _checksum_issues(extracted: dict) -> list[str]:
+    """Checksummable fields that are PRESENT but FAIL their control-digit check.
+
+    A non-empty result means the invoice must not be auto-approved — wrong digits
+    in an ИНН or bank account could route a payment to the wrong recipient, so it
+    is held for mandatory human review (draft-first safety gate).
+    """
+    from app.ai import ru_validators as rv
+
+    issues: list[str] = []
+    supplier = extracted.get("supplier") or {}
+    buyer = extracted.get("buyer") or {}
+    bik = supplier.get("bank_bik")
+
+    if supplier.get("inn") and not rv.inn_valid(supplier["inn"]):
+        issues.append("supplier.inn")
+    if buyer.get("inn") and not rv.inn_valid(buyer["inn"]):
+        issues.append("buyer.inn")
+    if bik and not rv.bik_valid(bik):
+        issues.append("supplier.bank_bik")
+    if supplier.get("bank_account") and bik and not rv.account_valid(supplier["bank_account"], bik):
+        issues.append("supplier.bank_account")
+    if supplier.get("corr_account") and bik and not rv.corr_account_valid(supplier["corr_account"], bik):
+        issues.append("supplier.corr_account")
+    return issues
 
 
 @celery_app.task(name="app.tasks.extraction.auto_verify_document", bind=True, max_retries=1)
@@ -1174,6 +1349,26 @@ def auto_verify_document(self, document_id: str) -> dict:
                 "mandatory_issues": low_conf_mandatory,
             }
 
+        # ── Checksum safety gate ─────────────────────────────────────────────
+        # Never auto-approve when an ИНН / bank account fails its control digit —
+        # hold for mandatory human review.
+        checksum_problems = _checksum_issues(main_data)
+        if checksum_problems:
+            logger.info(
+                "auto_verify_reject_checksum",
+                document_id=document_id,
+                checksum_issues=checksum_problems,
+            )
+            doc.metadata_ = {**(doc.metadata_ or {}), "checksum_issues": checksum_problems}
+            db.commit()
+            return {
+                "document_id": document_id,
+                "consensus": 0.0,
+                "auto_approved": False,
+                "reject_reason": "checksum_validation_failed",
+                "checksum_issues": checksum_problems,
+            }
+
         # Run verify extraction with the configured verify model
         verify_extractions: list[dict] = []
         models_used: list[str] = []
@@ -1219,6 +1414,34 @@ def auto_verify_document(self, document_id: str) -> dict:
             "models_used": models_used,
             "verify_count": len(verify_extractions),
         }
+
+
+def _invoice_memory_text(extracted: dict) -> str:
+    """Compact text for graph/memory built from already-extracted invoice data
+    (parties, ИНН, products, amounts) — avoids an expensive re-OCR."""
+    if not extracted:
+        return ""
+    parts: list[str] = []
+    if extracted.get("invoice_number"):
+        parts.append(f"Счёт № {extracted['invoice_number']}")
+    if extracted.get("invoice_date"):
+        parts.append(f"от {extracted['invoice_date']}")
+    for role, label in (("supplier", "Поставщик"), ("buyer", "Покупатель")):
+        p = extracted.get(role) or {}
+        if p.get("name"):
+            line = f"{label}: {p['name']}"
+            if p.get("inn"):
+                line += f", ИНН {p['inn']}"
+            parts.append(line)
+    for li in extracted.get("lines") or []:
+        desc = (li.get("description") or li.get("sku") or "").strip()
+        if desc:
+            parts.append(desc)
+    if extracted.get("total_amount") is not None:
+        parts.append(
+            f"Итого: {extracted['total_amount']} {extracted.get('currency', 'RUB')}"
+        )
+    return ". ".join(parts)
 
 
 @celery_app.task(name="app.tasks.extraction.process_approved_document", bind=True, max_retries=1)
@@ -1372,11 +1595,23 @@ def process_approved_document(self, document_id: str) -> dict:
             if invoice.total_amount:
                 profile.total_amount = (profile.total_amount or 0.0) + float(invoice.total_amount)
             if invoice.invoice_date:
-                if not profile.last_invoice_date or invoice.invoice_date > profile.last_invoice_date:
+                # Compare tz-safely: a stored date read back without tzinfo (e.g.
+                # from a backend that drops it) must not raise against the
+                # tz-aware parsed invoice_date.
+                _inv_dt = invoice.invoice_date
+                _last_dt = profile.last_invoice_date
+                if _inv_dt.tzinfo is None:
+                    _inv_dt = _inv_dt.replace(tzinfo=UTC)
+                if _last_dt is not None and _last_dt.tzinfo is None:
+                    _last_dt = _last_dt.replace(tzinfo=UTC)
+                if _last_dt is None or _inv_dt > _last_dt:
                     profile.last_invoice_date = invoice.invoice_date
 
         # ── Step: memory_graph ───────────────────────────────────────────────
-        text = _get_document_text(doc)
+        # Build the graph from the already-extracted data — do NOT re-OCR here
+        # (re-running the vision model under concurrent approvals starves the GPU
+        # and trips the Celery soft time limit).
+        text = _invoice_memory_text(extracted) or (doc.file_name or "")
         try:
             from app.domain.memory_builder import build_document_memory_sync
             _set_job_step(job, "memory_graph", "running")
@@ -1642,7 +1877,16 @@ def auto_supplier_task(self, document_id: str) -> dict:
             if invoice.total_amount:
                 profile.total_amount = (profile.total_amount or 0.0) + float(invoice.total_amount)
             if invoice.invoice_date:
-                if not profile.last_invoice_date or invoice.invoice_date > profile.last_invoice_date:
+                # Compare tz-safely: a stored date read back without tzinfo (e.g.
+                # from a backend that drops it) must not raise against the
+                # tz-aware parsed invoice_date.
+                _inv_dt = invoice.invoice_date
+                _last_dt = profile.last_invoice_date
+                if _inv_dt.tzinfo is None:
+                    _inv_dt = _inv_dt.replace(tzinfo=UTC)
+                if _last_dt is not None and _last_dt.tzinfo is None:
+                    _last_dt = _last_dt.replace(tzinfo=UTC)
+                if _last_dt is None or _inv_dt > _last_dt:
                     profile.last_invoice_date = invoice.invoice_date
 
             db.commit()

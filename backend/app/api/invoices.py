@@ -17,6 +17,8 @@ from app.domain.invoices import (
     InvoiceApproveRequest,
     InvoiceDeleteRequest,
     InvoiceFieldUpdate,
+    InvoiceLineOut,
+    InvoiceLineUpdate,
     InvoiceListResponse,
     InvoiceOut,
     InvoiceRejectRequest,
@@ -258,6 +260,51 @@ async def update_invoice(
     await db.commit()
     await db.refresh(invoice)
     return invoice
+
+
+@router.patch("/{invoice_id}/lines/{line_id}", response_model=InvoiceLineOut)
+async def update_invoice_line(
+    invoice_id: uuid.UUID,
+    line_id: uuid.UUID,
+    payload: InvoiceLineUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: invoice.line.update — Correct a single invoice line after review.
+
+    When quantity and unit_price are present but amount was not explicitly set,
+    the line amount is recomputed (quantity × unit_price) to keep totals honest.
+    """
+    result = await db.execute(
+        select(InvoiceLine).where(
+            InvoiceLine.id == line_id, InvoiceLine.invoice_id == invoice_id
+        )
+    )
+    line = result.scalar_one_or_none()
+    if not line:
+        raise HTTPException(status_code=404, detail="Invoice line not found")
+
+    update_data = payload.model_dump(exclude_unset=True)
+    for field_name, value in update_data.items():
+        setattr(line, field_name, value)
+
+    # Recompute amount if qty/price changed and amount wasn't explicitly provided.
+    if "amount" not in update_data and ("quantity" in update_data or "unit_price" in update_data):
+        if line.quantity is not None and line.unit_price is not None:
+            line.amount = round(line.quantity * line.unit_price, 2)
+
+    # Mark this line as human-corrected (high confidence).
+    line.confidence = 1.0
+
+    await log_action(
+        db,
+        action="invoice.line.update",
+        entity_type="invoice",
+        entity_id=invoice_id,
+        details={"line_id": str(line_id), **update_data},
+    )
+    await db.commit()
+    await db.refresh(line)
+    return line
 
 
 # ── invoice.approve ─────────────────────────────────────────────────────────
