@@ -328,12 +328,16 @@ async def publish_invoice_items_by_supplier_table(
     await _publish_workspace_status("Готовлю шаблон: товары сгруппированы по поставщикам")
     await _publish_workspace_status("Загружаю поставщиков, счета и строки товаров из БД")
 
+    # Fetch ALL line items (safety-capped) — the grouping must cover every
+    # supplier. payload.limit bounds the number of OUTPUT supplier rows, NOT the
+    # pre-grouping line fetch: limiting lines here (ordered by invoice recency)
+    # silently dropped whole suppliers whose invoices weren't the most recent.
     result = await db.execute(
         select(InvoiceLine, Invoice)
         .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
         .options(selectinload(Invoice.supplier))
         .order_by(Invoice.created_at.desc(), InvoiceLine.line_number.asc())
-        .limit(min(max(payload.limit, 1), 10000))
+        .limit(10000)
     )
     groups: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -354,12 +358,12 @@ async def publish_invoice_items_by_supplier_table(
         if line.amount is not None:
             group["total"] += Decimal(str(line.amount))
 
+    ordered_groups = sorted(
+        groups.values(), key=lambda item: str(item["supplier"]).lower()
+    )[: max(payload.limit, 1)]
     rows = [
         _invoice_items_by_supplier_workspace_row(group, index)
-        for index, group in enumerate(
-            sorted(groups.values(), key=lambda item: str(item["supplier"]).lower()),
-            start=1,
-        )
+        for index, group in enumerate(ordered_groups, start=1)
     ]
 
     await _publish_workspace_status("Публикую таблицу товаров по поставщикам на Рабочий стол")
