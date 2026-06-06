@@ -26,6 +26,11 @@ from app.formatting import format_money, format_number
 
 router = APIRouter()
 
+# Agent-published tables must show the FULL data set — the user asked for "all".
+# `limit` on these tools is a safety cap only (protects against a runaway query),
+# never a page size, so a small limit the model might pass can't drop rows.
+_WORKSPACE_MAX_ROWS = 10000
+
 
 class WorkspaceBlockResponse(BaseModel):
     items: list[dict[str, Any]]
@@ -148,7 +153,7 @@ async def publish_invoice_table(
         select(Invoice)
         .options(selectinload(Invoice.supplier))
         .order_by(Invoice.created_at.desc())
-        .limit(min(max(payload.limit, 1), 5000))
+        .limit(_WORKSPACE_MAX_ROWS)
     )
     invoices = result.scalars().all()
     rows = [
@@ -200,7 +205,7 @@ async def publish_invoice_items_table(
         .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
         .options(selectinload(Invoice.supplier))
         .order_by(Invoice.created_at.desc(), InvoiceLine.line_number.asc())
-        .limit(min(max(payload.limit, 1), 10000))
+        .limit(_WORKSPACE_MAX_ROWS)
     )
     if supplier_filter:
         pattern = f"%{supplier_filter}%"
@@ -277,7 +282,7 @@ async def publish_invoice_items_grouped_table(
         select(Invoice)
         .options(selectinload(Invoice.lines), selectinload(Invoice.supplier))
         .order_by(Invoice.created_at.desc())
-        .limit(min(max(payload.limit, 1), 5000))
+        .limit(_WORKSPACE_MAX_ROWS)
     )
     invoices = result.scalars().all()
     rows = [
@@ -337,7 +342,7 @@ async def publish_invoice_items_by_supplier_table(
         .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
         .options(selectinload(Invoice.supplier))
         .order_by(Invoice.created_at.desc(), InvoiceLine.line_number.asc())
-        .limit(10000)
+        .limit(_WORKSPACE_MAX_ROWS)
     )
     groups: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -358,9 +363,10 @@ async def publish_invoice_items_by_supplier_table(
         if line.amount is not None:
             group["total"] += Decimal(str(line.amount))
 
+    # Show ALL suppliers — never drop groups (the user asked for "all").
     ordered_groups = sorted(
         groups.values(), key=lambda item: str(item["supplier"]).lower()
-    )[: max(payload.limit, 1)]
+    )
     rows = [
         _invoice_items_by_supplier_workspace_row(group, index)
         for index, group in enumerate(ordered_groups, start=1)

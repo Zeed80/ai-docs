@@ -44,6 +44,10 @@ from app.formatting import format_money, format_number, is_money_key, to_decimal
 router = APIRouter()
 logger = structlog.get_logger()
 
+# Safety bound for full-table exports. High enough to never truncate real data
+# sets, low enough to protect memory against a runaway query.
+_EXPORT_MAX_ROWS = 100_000
+
 
 # ── Column definitions ─────────────────────────────────────────────────────
 
@@ -266,12 +270,13 @@ async def export_excel(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: table.export_excel — Export table to Excel/CSV."""
-    # Fetch data using table.query logic
+    # Exports must be COMPLETE — never cap to a small page. Use a high safety
+    # bound only (a 500-row cap silently truncated exports of large tables).
     query_req = TableQueryRequest(
         table=payload.table,
         filters=payload.filters,
         columns=payload.columns,
-        limit=500,
+        limit=_EXPORT_MAX_ROWS,
     )
 
     if payload.table == "invoices":
@@ -471,7 +476,7 @@ async def export_1c(
     for f in payload.filters:
         query = _apply_invoice_filter(query, f)
 
-    result = await db.execute(query.order_by(Invoice.created_at.desc()).limit(500))
+    result = await db.execute(query.order_by(Invoice.created_at.desc()).limit(_EXPORT_MAX_ROWS))
     invoices = result.scalars().all()
 
     if not invoices:
