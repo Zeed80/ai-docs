@@ -180,10 +180,13 @@ seed:
 # Tests
 # ──────────────────────────────────────────────────────────────────────────────
 test:
-	python3 -m pytest backend/tests -v --tb=short
+	python3 -m pytest backend/tests -m "not live and not llamacpp and not vllm" --tb=short
+
+test-live:  ## Live tests (need Ollama/llama.cpp/vLLM + the running stack)
+	python3 -m pytest backend/tests -m "live or llamacpp or vllm" -s --tb=short
 
 test-cov:
-	python3 -m pytest backend/tests -v --cov=backend/app --cov-report=html
+	python3 -m pytest backend/tests -m "not live and not llamacpp and not vllm" --cov=backend/app --cov-report=html
 
 e2e:
 	cd frontend && npx playwright test

@@ -405,6 +405,10 @@ async def _search_vector_memory(
             query_vector,
             limit=limit,
             collection_name=profile.collection_name,
+            # Only fragment-level points — document-level vectors would crowd out
+            # chunks/evidence in the shared collection (memory.search keeps only
+            # chunk/evidence hits anyway).
+            content_types=["document_chunk", "evidence_span"],
             score_threshold=_VECTOR_SCORE_THRESHOLD,
         )
     except Exception:

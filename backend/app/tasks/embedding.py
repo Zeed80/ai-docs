@@ -146,6 +146,44 @@ async def _embed_document(document_id: str) -> dict:
                 await db.commit()
             raise
 
+        # Index document CHUNKS into the vector store so memory.search's
+        # vector-over-chunks path works (it looks up Qdrant points with
+        # content_type="document_chunk", content_id=chunk.id). The pipeline
+        # builds chunks in process_approved_document but previously only the
+        # document-level vector was upserted, leaving chunk semantic recall
+        # empty until a manual memory.reindex. Best-effort: a chunk failure must
+        # not fail the document embedding. point_id matches memory.py
+        # (_embedding_record_for_chunk) so reindex/index-active stay idempotent.
+        try:
+            from app.db.models import DocumentChunk
+            from app.vector.qdrant_store import upsert_memory_embedding
+
+            chunks = (
+                await db.execute(
+                    select(DocumentChunk).where(DocumentChunk.document_id == doc.id)
+                )
+            ).scalars().all()
+            for chunk in chunks:
+                if not (chunk.text or "").strip():
+                    continue
+                cvec = await embed_text(chunk.text, profile)
+                upsert_memory_embedding(
+                    point_id=f"chunk:{chunk.id}",
+                    vector=cvec,
+                    collection_name=profile.collection_name,
+                    payload={
+                        "content_type": "document_chunk",
+                        "content_id": str(chunk.id),
+                        "document_id": str(doc.id),
+                        "embedding_model": profile.model_key,
+                        "text_preview": chunk.text[:500],
+                    },
+                )
+            if chunks:
+                logger.info("embed_chunks_indexed", doc_id=document_id, chunks=len(chunks))
+        except Exception as _ce:  # noqa: BLE001
+            logger.warning("embed_chunks_failed", doc_id=document_id, error=str(_ce))
+
         if job:
             await db.refresh(job)
             job.pipeline_steps = [

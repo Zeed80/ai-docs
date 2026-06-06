@@ -2054,6 +2054,11 @@ class AgentSession:
                     await self._execute_tools_parallel(tool_calls, iteration)
                 else:
                     await self._execute_tools_sequential(tool_calls, iteration)
+            else:
+                # max_steps exhausted while the model was still calling tools:
+                # force a final textual answer from the gathered results instead
+                # of ending the turn silently (which left the user with no reply).
+                await self._force_final_answer()
 
         except Exception as e:
             logger.error(
@@ -2120,6 +2125,54 @@ class AgentSession:
 
         await self._send({"type": "text", "content": text})
         return text
+
+    async def _force_final_answer(self) -> None:
+        """Produce a final user-facing reply when the step budget is exhausted.
+
+        Makes one tool-less LLM call so the model summarises the results it has
+        already gathered (instead of the turn ending silently). Falls back to a
+        plain message if even that yields nothing — the turn must never go quiet.
+        """
+        self.messages.append({
+            "role": "system",
+            "content": (
+                "Достигнут лимит шагов. Сформулируй краткий финальный ответ "
+                "пользователю на основе уже полученных результатов инструментов. "
+                "НЕ вызывай инструменты — только текст."
+            ),
+        })
+        acc: list[str] = []
+
+        async def _on_token(token: str) -> None:
+            acc.append(token)
+
+        msg: dict = {}
+        try:
+            msg = await _call_provider_streaming(
+                self.messages,
+                [],  # no tools → forces a textual answer
+                self._system,
+                self._config,
+                _on_token,
+                disable_thinking_override=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("force_final_answer_failed", error=str(e), session_id=self._session_id)
+
+        text = "".join(acc).strip()
+        if not text and isinstance(msg, dict):
+            text = str(msg.get("content") or "").strip()
+        if text:
+            await self._deliver_final_content(text)
+            self._remember_latest_turn(text)
+        else:
+            await self._send({
+                "type": "text",
+                "content": (
+                    "Не удалось полностью завершить задачу за отведённое число шагов. "
+                    "Уточните запрос или разбейте его на части."
+                ),
+            })
 
     async def _execute_single_tool(
         self, tc: dict, iteration: int

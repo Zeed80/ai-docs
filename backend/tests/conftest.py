@@ -22,6 +22,13 @@ from sqlalchemy.pool import NullPool
 
 from app.db.base import Base
 
+# Force test-mode config. Never inherit a production / auth-enabled environment
+# (e.g. when the suite is run inside the prod container): that flips API auth on
+# and trips the fail-closed production guard, breaking unrelated tests with
+# 401/403 and collection RuntimeErrors. Tests always run in test mode.
+os.environ["APP_ENV"] = "test"
+os.environ["AUTH_ENABLED"] = "false"
+
 # Disable rate limiting; run Celery tasks synchronously (no broker needed)
 os.environ["RATE_LIMIT_API_PER_MINUTE"] = "0"
 os.environ["RATE_LIMIT_LOGIN_PER_MINUTE"] = "0"

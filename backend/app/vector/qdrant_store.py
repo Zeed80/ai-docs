@@ -360,10 +360,19 @@ def search_similar(
     limit: int = 20,
     doc_type: str | None = None,
     status: str | None = None,
+    content_types: list[str] | None = None,
     score_threshold: float = 0.0,
     collection_name: str = COLLECTION,
 ) -> list[dict]:
-    """Search Qdrant for similar documents. Returns list of {doc_id, score, payload}."""
+    """Search Qdrant for similar points. Returns list of {doc_id, score, payload}.
+
+    ``content_types`` restricts the search to points of those payload
+    content_type values (e.g. ["document_chunk", "evidence_span"]) — without it,
+    document-level vectors crowd out chunk/evidence points in the shared
+    collection, starving memory.search of fragment-level hits.
+    """
+    from qdrant_client.models import MatchAny
+
     client = get_client()
 
     must = []
@@ -371,6 +380,8 @@ def search_similar(
         must.append(FieldCondition(key="doc_type", match=MatchValue(value=doc_type)))
     if status:
         must.append(FieldCondition(key="status", match=MatchValue(value=status)))
+    if content_types:
+        must.append(FieldCondition(key="content_type", match=MatchAny(any=content_types)))
 
     query_filter = Filter(must=must) if must else None
 
