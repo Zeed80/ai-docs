@@ -22,26 +22,31 @@ class BuiltinAgentConfig(BaseModel):
     department_enabled: bool = True
     orchestrator_model: str | None = None
     orchestrator_provider: str | None = None
-    orchestrator_disable_thinking: bool = False
+    # Thinking is disabled by default for the tool-calling roles: on reasoning
+    # models (qwen3.5:9b) it spends the token budget on hidden reasoning before
+    # every step — ~2× slower turns and more tool-call flailing — for no gain on
+    # structured routing. Re-enable per role if a deployment uses non-thinking
+    # models or needs deeper planning. Builder keeps thinking (capability design).
+    orchestrator_disable_thinking: bool = True
     worker_model: str | None = None
     worker_provider: str | None = None
-    worker_disable_thinking: bool = False
+    worker_disable_thinking: bool = True
     auditor_model: str | None = None
     auditor_provider: str | None = None
-    auditor_disable_thinking: bool = False
+    auditor_disable_thinking: bool = True
     builder_model: str | None = None
     builder_provider: str | None = None
     builder_disable_thinking: bool = False
     fast_model: str | None = None
     fast_provider: str | None = None
-    fast_disable_thinking: bool = False
+    fast_disable_thinking: bool = True
     # LLM provider: ollama, vllm, lmstudio, openai-compatible or supported cloud provider.
     provider: str = "ollama"
     # Ordered fallback chain tried when primary provider fails
     fallback_providers: list[str] = Field(default_factory=list)
     # Inject Anthropic prompt-cache headers (only effective with provider="anthropic")
     prompt_cache_enabled: bool = False
-    disable_thinking: bool = False
+    disable_thinking: bool = True
     ollama_url: str = "http://localhost:11434"
     llamacpp_url: str = "http://localhost:11436"
     vllm_url: str = "http://localhost:8001/v1"
