@@ -134,6 +134,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "invoice_items_table":       ("POST", "/api/workspace/agent/invoices/items-table",         []),
         "invoice_items_grouped":     ("POST", "/api/workspace/agent/invoices/items-grouped-table", []),
         "invoice_items_by_supplier": ("POST", "/api/workspace/agent/invoices/items-by-supplier-table", []),
+        "invoice_pivot":             ("POST", "/api/workspace/agent/invoices/pivot-table",            []),
         "general":                   ("POST", "/api/workspace/agent/generated/general",            []),
         "supplier_lookup":           ("POST", "/api/workspace/agent/generated/supplier_lookup",    []),
         "verify":                    ("POST", "/api/workspace/agent/verify-block",                 []),

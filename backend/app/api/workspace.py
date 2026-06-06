@@ -61,6 +61,14 @@ class WorkspaceInvoiceItemsBySupplierTableRequest(BaseModel):
     limit: int = 10000
 
 
+class WorkspaceInvoicePivotRequest(BaseModel):
+    # Generic group-by for invoice items. group_by picks the grouping dimension;
+    # the table always covers ALL data (SQL-side aggregation), so it works for any
+    # phrasing instead of relying on a handful of pre-baked layouts.
+    group_by: str = "supplier"  # supplier | invoice | item | month | currency | status
+    canvas_id: str = "agent:invoice-pivot"
+
+
 class WorkspaceToolResponse(BaseModel):
     status: str
     canvas_id: str
@@ -397,6 +405,98 @@ async def publish_invoice_items_by_supplier_table(
         message=(
             "Открыл на Рабочем столе таблицу товаров, сгруппированных по поставщикам: "
             f"{len(rows)} поставщиков, {total_lines} строк товаров."
+        ),
+        filters={},
+    )
+
+
+_PIVOT_DIMENSIONS: dict[str, tuple[str, Any]] = {
+    "supplier": ("Поставщик", lambda line, inv: inv.supplier.name if inv.supplier else "Без поставщика"),
+    "invoice": ("Счёт", lambda line, inv: inv.invoice_number or f"б/н {str(inv.id)[:8]}"),
+    "item": ("Товар", lambda line, inv: (line.description or line.sku or "—").strip() or "—"),
+    "currency": ("Валюта", lambda line, inv: inv.currency or "RUB"),
+    "status": ("Статус", lambda line, inv: inv.status.value if hasattr(inv.status, "value") else str(inv.status)),
+    "month": ("Месяц", lambda line, inv: inv.invoice_date.strftime("%Y-%m") if inv.invoice_date else "—"),
+}
+
+
+@router.post("/agent/invoices/pivot-table", response_model=WorkspaceToolResponse)
+async def publish_invoice_pivot_table(
+    payload: WorkspaceInvoicePivotRequest,
+    db: AsyncSession = Depends(get_db),
+) -> WorkspaceToolResponse:
+    """Skill: workspace.invoice_pivot — Group invoice items by ANY dimension.
+
+    One row per group (supplier / invoice / item / month / currency / status):
+    all items of the group newline-separated, the invoice count and the summed
+    amount. Aggregated over ALL line items in code — complete for any phrasing,
+    so it replaces hand-built tables for grouped/aggregated requests.
+    """
+    header, key_fn = _PIVOT_DIMENSIONS.get(payload.group_by, _PIVOT_DIMENSIONS["supplier"])
+    await _publish_workspace_status(f"Группирую товары по: {header}")
+
+    result = await db.execute(
+        select(InvoiceLine, Invoice)
+        .join(Invoice, InvoiceLine.invoice_id == Invoice.id)
+        .options(selectinload(Invoice.supplier))
+        .order_by(Invoice.created_at.desc(), InvoiceLine.line_number.asc())
+        .limit(_WORKSPACE_MAX_ROWS)
+    )
+    groups: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"key": "", "items": [], "total": Decimal("0"), "invoice_ids": set()}
+    )
+    total_lines = 0
+    for line, invoice in result.all():
+        total_lines += 1
+        key = str(key_fn(line, invoice))
+        g = groups[key]
+        g["key"] = key
+        g["items"].append(_format_supplier_grouped_item_line(line, invoice))
+        g["invoice_ids"].add(str(invoice.id))
+        if line.amount is not None:
+            g["total"] += Decimal(str(line.amount))
+
+    ordered = sorted(groups.values(), key=lambda it: str(it["key"]).lower())
+    rows = [
+        {
+            "index": i,
+            "group": g["key"],
+            "invoice_count": len(g["invoice_ids"]),
+            "items": "\n".join(g["items"]),
+            "total_amount": _format_money(g["total"]),
+        }
+        for i, g in enumerate(ordered, start=1)
+    ]
+    columns = [
+        {"key": "index", "header": "№", "type": "number", "width": 56},
+        {"key": "group", "header": header, "type": "text"},
+        {"key": "invoice_count", "header": "Счетов", "type": "number", "width": 80},
+        {"key": "items", "header": "Товары", "type": "text"},
+        {"key": "total_amount", "header": "Сумма", "type": "number"},
+    ]
+    await _publish_workspace_status("Публикую сгруппированную таблицу на Рабочий стол")
+    block = {
+        "id": payload.canvas_id,
+        "type": "table",
+        "title": f"Товары по: {header} ({len(rows)})",
+        "columns": columns,
+        "rows": rows,
+        "source": "workspace.invoice_pivot",
+        "source_agent_role": "invoice_specialist",
+        "audit_status": "pending",
+    }
+    stored = upsert_workspace_block(payload.canvas_id, block)
+    await chat_bus.publish(
+        {"type": "workspace.updated", "canvas_id": payload.canvas_id, "block": stored}
+    )
+    return WorkspaceToolResponse(
+        status="published",
+        canvas_id=payload.canvas_id,
+        total=len(rows),
+        shown=len(rows),
+        message=(
+            f"Открыл таблицу: товары по «{header}» — {len(rows)} групп, "
+            f"{total_lines} строк товаров."
         ),
         filters={},
     )
