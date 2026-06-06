@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from decimal import Decimal
 from typing import Any
@@ -475,6 +476,29 @@ _PIVOT_COLUMN_ALIASES = {
 }
 
 
+def _normalize_pivot_expr(raw: str) -> str:
+    """Map a caller's column expression to a catalog key, tolerating catalog
+    keys, EN/RU synonyms, and SQL-ish forms like SUM(amount) / COUNT(item_id)."""
+    raw = (raw or "").strip().lower()
+    m = re.match(r"(count|sum|avg|average|min|max)\s*\(\s*([\w*]*)\s*\)", raw)
+    if m:
+        func, arg = m.group(1), m.group(2)
+        if func == "count":
+            if any(t in arg for t in ("invoice", "счет", "счёт")):
+                return "invoice_count"
+            return "item_count"
+        if func == "sum":
+            return "quantity_total" if any(t in arg for t in ("qty", "quantity", "кол")) else "total_amount"
+        if func in ("avg", "average"):
+            return "avg_amount"
+        if func == "min":
+            return "min_amount"
+        if func == "max":
+            return "max_amount"
+    norm = raw.replace(" ", "_").replace("-", "_")
+    return _PIVOT_COLUMN_ALIASES.get(norm, norm)
+
+
 def _resolve_pivot_columns(
     columns: list[dict[str, Any]] | None, dim_header: str
 ) -> list[tuple[str, str, Any, str]]:
@@ -488,8 +512,7 @@ def _resolve_pivot_columns(
     seen_exprs: set[str] = set()
     for col in columns or []:
         raw = str(col.get("expr") or col.get("key") or col.get("header") or "").strip().lower()
-        norm = raw.replace(" ", "_").replace("-", "_")
-        expr = _PIVOT_COLUMN_ALIASES.get(norm, norm)
+        expr = _normalize_pivot_expr(raw)
         entry = _PIVOT_COLUMN_CATALOG.get(expr)
         if not entry or expr in seen_exprs:
             continue
