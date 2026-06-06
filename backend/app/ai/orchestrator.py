@@ -317,7 +317,9 @@ class AgentOrchestrator:
                         confidential=False,
                         allow_cloud=True,
                         preferred_model=_registry_model_name(
-                            config.orchestrator_model or config.worker_model
+                            config.orchestrator_model
+                            or config.worker_model
+                            or config.model
                         ),
                     )
                 ),
