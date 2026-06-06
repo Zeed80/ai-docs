@@ -76,6 +76,14 @@ from app.domain.documents import (
 router = APIRouter()
 logger = structlog.get_logger()
 
+# Unambiguous vector/CAD formats that auto-route to the drawing-analysis pipeline
+# on ingest. Raster/PDF are deliberately EXCLUDED — they are ambiguous (usually
+# invoices/letters) and must be classified first; classify_document creates a
+# drawing only when it detects doc_type=drawing. (Auto-routing every raster/PDF
+# here funnelled all uploaded invoices into heavy VLM drawing analysis, which
+# monopolised the single-flight GPU lane and stalled OCR.)
+DRAWING_AUTO_ROUTE_EXTENSIONS = {"dwg", "dxf", "step", "stp", "iges", "igs", "svg"}
+
 # ── Fast type detection (no AI, instant) ─────────────────────────────────────
 
 _EXT_TO_DOC_TYPE: dict[str, str] = {
@@ -736,10 +744,10 @@ async def ingest_document(
             await db.rollback()
             logger.warning("eml_attachment_split_failed", doc_id=str(doc.id), error=str(exc))
 
-    # DWG / DXF / SVG → automatically route to drawing analysis pipeline
-    from app.services.drawing_service import DRAWING_EXTENSIONS
+    # Only unambiguous vector/CAD formats auto-route to drawing analysis (see
+    # DRAWING_AUTO_ROUTE_EXTENSIONS). Raster/PDF go through normal classification.
     fmt = file_ext_lower.lstrip(".")
-    if fmt in DRAWING_EXTENSIONS:
+    if fmt in DRAWING_AUTO_ROUTE_EXTENSIONS:
         try:
             from app.services.drawing_service import create_and_analyze_drawing
             from app.storage import download_file
