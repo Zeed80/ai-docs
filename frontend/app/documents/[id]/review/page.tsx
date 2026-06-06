@@ -656,6 +656,34 @@ export default function ReviewPage() {
         </div>
       )}
 
+      {/* Low-confidence significant fields — why this doc needs review */}
+      {(() => {
+        const low = (doc.metadata?.low_confidence_significant ?? []) as Array<{
+          field: string;
+          confidence?: number;
+        }>;
+        if (!Array.isArray(low) || low.length === 0) return null;
+        return (
+          <div className="px-4 py-2 bg-amber-950/40 border-b border-amber-800 text-sm text-amber-200">
+            <strong>Проверьте значимые поля (низкая уверенность):</strong>{" "}
+            {low.map((f, i) => (
+              <button
+                key={f.field}
+                onClick={() => setActiveField(f.field)}
+                className="underline decoration-dotted hover:text-amber-100"
+                title="Перейти к полю"
+              >
+                {f.field}
+                {f.confidence != null
+                  ? ` (${Math.round(f.confidence * 100)}%)`
+                  : ""}
+                {i < low.length - 1 ? ", " : ""}
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+
       {/* Split view */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: PDF */}

@@ -396,7 +396,12 @@ services:
     networks:
       - app
 
-  # === Celery Worker ===
+  # === Celery Worker — IO/CPU lane (parallel) ===
+  # Handles non-GPU work: IMAP polling, file storage, DB-only extraction tasks
+  # (process_approved_document, check_invoice_anomalies), scheduler/proactive,
+  # exports. Safe to parallelise — it never touches the GPU. Note: the ``gpu``
+  # queue is deliberately NOT listed here so GPU steps only ever run on the
+  # dedicated single-flight worker below.
   celery-worker:
     build:
       context: ../backend
@@ -409,6 +414,36 @@ services:
       - ../aiagent:/aiagent:ro
       # On-demand start of vLLM/llama.cpp servers when a document task routes to
       # them (see app/ai/server_lifecycle.py). Takes effect after a worker rebuild.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - app
+
+  # === Celery Worker — GPU lane (STRICTLY sequential) ===
+  # Serves only the ``gpu`` queue with concurrency 1, so every GPU-bound step
+  # (classify / OCR+extract / verify / embed / drawing VLM) runs one at a time
+  # and pipeline steps of different documents never overlap on the GPU. Do NOT
+  # raise -c above 1 and do NOT add replicas: that would reintroduce GPU
+  # contention. (A Redis single-flight lock in app/tasks/gpu_lock.py guards the
+  # invariant even if this is misconfigured.)
+  celery-worker-gpu:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_app worker -l info -c 1 -Q gpu -n gpu@%h
+    environment:
+      <<: *backend-env
+      SKIP_DB_MIGRATE: "1"
+    volumes:
+      - ../aiagent:/aiagent:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     extra_hosts:
       - "host-gateway:host-gateway"

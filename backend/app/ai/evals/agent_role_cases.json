@@ -27,6 +27,36 @@
         "шлифование",
         "контроль",
         "норма времени"
+      ],
+      "expected_dispatch": [
+        [
+          "memory",
+          "search"
+        ],
+        [
+          "tech",
+          "resource_list"
+        ],
+        [
+          "tech",
+          "operation_template_list"
+        ],
+        [
+          "tech",
+          "process_plan_draft_from_document"
+        ],
+        [
+          "tech",
+          "process_plan_validate"
+        ],
+        [
+          "tech",
+          "norm_estimate_suggest"
+        ],
+        [
+          "tech",
+          "process_plan_approve"
+        ]
       ]
     },
     {
@@ -48,6 +78,32 @@
         "допуск",
         "НТД",
         "вопросы заказчику"
+      ],
+      "expected_dispatch": [
+        [
+          "documents",
+          "get"
+        ],
+        [
+          "memory",
+          "search"
+        ],
+        [
+          "tech",
+          "ntd_findings"
+        ],
+        [
+          "tech",
+          "ntd_run_check"
+        ],
+        [
+          "search",
+          "similar"
+        ],
+        [
+          "email",
+          "draft"
+        ]
       ]
     },
     {
@@ -73,6 +129,40 @@
         "переход",
         "корректировка",
         "правило обучения"
+      ],
+      "expected_dispatch": [
+        [
+          "memory",
+          "search"
+        ],
+        [
+          "tech",
+          "process_plan_get"
+        ],
+        [
+          "tech",
+          "norm_estimate_suggest"
+        ],
+        [
+          "tech",
+          "norm_estimate_create"
+        ],
+        [
+          "tech",
+          "correction_record"
+        ],
+        [
+          "tech",
+          "learning_suggest"
+        ],
+        [
+          "tech",
+          "learning_rule_create"
+        ],
+        [
+          "tech",
+          "learning_rule_activate"
+        ]
       ]
     },
     {
@@ -96,6 +186,32 @@
         "приходный ордер",
         "партия",
         "ячейка хранения"
+      ],
+      "expected_dispatch": [
+        [
+          "tech",
+          "bom_get"
+        ],
+        [
+          "tech",
+          "bom_stock_check"
+        ],
+        [
+          "warehouse",
+          "list_inventory"
+        ],
+        [
+          "warehouse",
+          "low_stock"
+        ],
+        [
+          "warehouse",
+          "create_receipt"
+        ],
+        [
+          "warehouse",
+          "confirm_receipt"
+        ]
       ]
     },
     {
@@ -120,6 +236,32 @@
         "история цен",
         "срок поставки",
         "RFQ"
+      ],
+      "expected_dispatch": [
+        [
+          "tech",
+          "bom_purchase_request"
+        ],
+        [
+          "procurement",
+          "get_request"
+        ],
+        [
+          "suppliers",
+          "search"
+        ],
+        [
+          "suppliers",
+          "price_history"
+        ],
+        [
+          "procurement",
+          "send_rfq"
+        ],
+        [
+          "payments",
+          "create_schedule"
+        ]
       ]
     }
   ]

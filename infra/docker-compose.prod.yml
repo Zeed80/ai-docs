@@ -32,6 +32,9 @@ services:
   celery-worker:
     restart: unless-stopped
 
+  celery-worker-gpu:
+    restart: unless-stopped
+
   celery-beat:
     restart: unless-stopped
 
@@ -48,6 +51,9 @@ services:
     restart: unless-stopped
 
   minio:
+    restart: unless-stopped
+
+  authentik-db:
     restart: unless-stopped
 
   authentik-server:

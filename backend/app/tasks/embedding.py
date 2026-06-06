@@ -17,8 +17,10 @@ def embed_document(self, document_id: str) -> dict:
     Runs sequentially AFTER OCR/extraction — never in parallel with the vision model.
     If an active extraction job is still running (race condition), retries in 15 s.
     """
+    from app.tasks.gpu_lock import gpu_single_flight
     try:
-        result = asyncio.run(_embed_document(document_id))
+        with gpu_single_flight(f"embed:{document_id}"):
+            result = asyncio.run(_embed_document(document_id))
         if result.get("status") == "ocr_running":
             raise self.retry(countdown=15, max_retries=8)
         return result

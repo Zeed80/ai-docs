@@ -272,7 +272,9 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
 
             try:
                 from app.ai.router import ai_router
-                result = _run_async(ai_router.classify_document(text))
+                from app.tasks.gpu_lock import gpu_single_flight
+                with gpu_single_flight(f"classify:{document_id}"):
+                    result = _run_async(ai_router.classify_document(text))
                 doc_type = result.get("type", "other")
                 confidence = result.get("confidence", 0.5)
                 valid_types = {t.value for t in DocumentType}
@@ -393,8 +395,10 @@ def extract_invoice(self, document_id: str) -> dict:
 
         try:
             from app.ai.router import ai_router
+            from app.tasks.gpu_lock import gpu_single_flight
 
-            extracted = _run_async(ai_router.extract_invoice(text))
+            with gpu_single_flight(f"extract:{document_id}"):
+                extracted = _run_async(ai_router.extract_invoice(text))
 
             processing_time_ms = int((time.time() - start_time) * 1000)
 
@@ -478,22 +482,27 @@ def extract_invoice(self, document_id: str) -> dict:
                 "extract_checksum_issues", document_id=document_id, issues=_csum
             )
 
-        # Check if auto_verify is requested
+        # Queue auto-verification. A per-upload ``auto_verify`` flag wins; when
+        # absent, fall back to the global ``auto_verify_enabled`` config (on by
+        # default) so email-ingested and bulk-uploaded invoices are auto-approved
+        # when confident — minimal human intervention.
         doc_meta = doc.metadata_ or {}
-        if doc_meta.get("auto_verify"):
+        _auto_verify = doc_meta.get("auto_verify")
+        if _auto_verify is None:
+            from app.api.ai_settings import get_ai_config as _get_ai_cfg
+            _auto_verify = bool(_get_ai_cfg().get("auto_verify_enabled", True))
+        if _auto_verify:
             auto_verify_document.delay(document_id)
             logger.info("auto_verify_queued", document_id=document_id)
 
         db.commit()
 
-        # Queue embedding AFTER OCR/extraction finishes (sequential — no VRAM conflict).
-        # process_approved_document will re-embed with richer data after approval.
-        try:
-            from app.tasks.embedding import embed_document
-            embed_document.delay(document_id)
-            logger.info("embed_queued_after_extract", document_id=document_id)
-        except Exception as _e:
-            logger.warning("embed_queue_failed_post_extract", document_id=document_id, error=str(_e))
+        # NOTE: embedding is intentionally NOT queued here. It is built exactly
+        # once, on approval, by process_approved_document (with richer data:
+        # parties, ИНН, line items). Embedding pre-approval would (a) double the
+        # GPU work — it was re-embedded on approve anyway — and (b) vectorise
+        # data that may still change during human review. Documents that stay in
+        # needs_review get embedded when they are approved.
 
         logger.info(
             "extract_done",
@@ -744,24 +753,41 @@ def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) ->
                 "model": ollama_model,
                 "messages": [{"role": "user", "content": prompt, "images": images_b64}],
                 "stream": False,
-                "options": {"temperature": 0.0},
+                # Disable extended thinking: qwen3.5:9b (and other thinking models)
+                # otherwise spend the whole token budget on reasoning and return an
+                # EMPTY transcription — the cause of ~300 s "empty, try next" OCR
+                # stalls. OCR is pure transcription; no reasoning is needed.
+                "think": False,
+                "options": {
+                    "temperature": 0.0,
+                    # Bound generation so a misbehaving run can't burn the full
+                    # 300 s timeout; enough for a dense full-page invoice.
+                    "num_predict": 8192,
+                },
             },
             timeout=300.0,
         )
         resp.raise_for_status()
         return resp.json().get("message", {}).get("content", "")
 
-    try:
-        text = _call()
-        if not text.strip():
-            logger.warning("ollama_vision_ocr_empty_retry", model=ollama_model)
-            time.sleep(5)
+    # Retry on BOTH transient errors (e.g. a 400/503 while Ollama is loading the
+    # model, with OLLAMA_NUM_PARALLEL=1 + a queue) and cold-start empty output.
+    # Two attempts with a short backoff — enough to ride out a model load.
+    last_err: Exception | None = None
+    for attempt in range(2):
+        try:
             text = _call()
-        if text.strip():
-            return text
+            if text.strip():
+                return text
+            logger.warning("ollama_vision_ocr_empty_retry", model=ollama_model, attempt=attempt)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            logger.warning("ollama_vision_ocr_error_retry", model=ollama_model, attempt=attempt, error=str(e))
+        time.sleep(5)
+    if last_err is not None:
+        logger.warning("ollama_vision_ocr_failed", model=ollama_model, error=str(last_err))
+    else:
         logger.warning("ollama_vision_ocr_empty", model=ollama_model)
-    except Exception as e:
-        logger.warning("ollama_vision_ocr_failed", model=ollama_model, error=str(e))
     return ""
 
 
@@ -1081,14 +1107,17 @@ def _apply_normalization_rules(db: Session, field_confs: list) -> list:
     return field_confs
 
 
-def _compare_extractions(main: dict, others: list[dict]) -> tuple[bool, float]:
+def _compare_extractions(
+    main: dict, others: list[dict], threshold: float = 0.95
+) -> tuple[bool, float]:
     """Compare key invoice fields across all model extractions.
 
     Rules:
     - invoice_number and invoice_date are mandatory: if either is missing in
       main extraction → reject immediately (score=0).
     - For each key field present in main, check that ALL other extractions agree.
-    - Score = fraction of agreeing fields. threshold = 0.95.
+    - Score = fraction of agreeing fields. Approves when score >= ``threshold``
+      (the user-configured auto-approve confidence threshold).
     """
     MANDATORY = {"invoice_number", "invoice_date"}
     KEY_FIELDS = [
@@ -1130,7 +1159,7 @@ def _compare_extractions(main: dict, others: list[dict]) -> tuple[bool, float]:
     if total == 0:
         return False, 0.0
     score = agreements / total
-    return score >= 0.95, score
+    return score >= threshold, score
 
 
 def _extract_invoice_with_model(text: str, model_name: str) -> dict:
@@ -1314,105 +1343,120 @@ def auto_verify_document(self, document_id: str) -> dict:
         if not text:
             return {"error": "no_text"}
 
-        # Check mandatory field confidence from ExtractionField records
-        from app.db.models import ExtractionField as EF
-        MANDATORY_CONF_THRESHOLD = 0.95
-        MANDATORY_FIELDS_CHECK = ["invoice_number", "invoice_date"]
+        # ── Significant-field confidence gate (user-tunable threshold) ───────
+        # Auto-approve only when EVERY significant field (sums, line items,
+        # payment requisites) meets the threshold AND all control-digit checksums
+        # pass. Insignificant fields (address/phone/notes/free-text name) are
+        # excluded so they never hold up an otherwise-correct invoice. Any
+        # significant field below the threshold is surfaced for human review.
+        from app.ai.confidence import (
+            compute_field_confidences,
+            significant_fields_confidence,
+            validate_arithmetic,
+        )
 
-        low_conf_mandatory: list[str] = []
-        for field_name in MANDATORY_FIELDS_CHECK:
-            ef = db.execute(
-                select(EF)
-                .where(
-                    EF.extraction_id == main_extraction.id,
-                    EF.field_name == field_name,
-                )
-            ).scalar_one_or_none()
-            if ef is None or ef.field_value is None:
-                low_conf_mandatory.append(f"{field_name}:missing")
-            elif ef.confidence is not None and ef.confidence < MANDATORY_CONF_THRESHOLD:
-                low_conf_mandatory.append(
-                    f"{field_name}:{ef.confidence:.2f}"
-                )
+        threshold = float(cfg.get("auto_approve_confidence_threshold", 0.95) or 0.95)
+        threshold = min(max(threshold, 0.5), 0.99)
 
-        if low_conf_mandatory:
+        verrs = validate_arithmetic(main_data)
+        field_confs = compute_field_confidences(
+            main_data, main_data.get("field_confidences", {}) or {}, verrs
+        )
+        sig = significant_fields_confidence(field_confs, threshold)
+
+        present = {fc.field_name for fc in field_confs if fc.value is not None}
+        mandatory_missing = [
+            f for f in ("invoice_number", "invoice_date") if f not in present
+        ]
+
+        def _hold_for_review(reason: str, **extra) -> dict:
+            doc.metadata_ = {
+                **(doc.metadata_ or {}),
+                "low_confidence_significant": sig.low_fields,
+                "auto_verify_reason": reason,
+                "significant_confidence": sig.score,
+                "auto_approve_threshold": threshold,
+            }
+            db.commit()
             logger.info(
-                "auto_verify_reject_low_confidence",
+                "auto_verify_hold_for_review",
                 document_id=document_id,
-                mandatory_issues=low_conf_mandatory,
+                reason=reason,
+                significant_confidence=sig.score,
+                low_fields=[f["field"] for f in sig.low_fields],
             )
             return {
                 "document_id": document_id,
-                "consensus": 0.0,
+                "significant_confidence": sig.score,
+                "threshold": threshold,
                 "auto_approved": False,
-                "reject_reason": "mandatory_fields_low_confidence",
-                "mandatory_issues": low_conf_mandatory,
+                "reject_reason": reason,
+                "low_confidence_significant": sig.low_fields,
+                **extra,
             }
 
-        # ── Checksum safety gate ─────────────────────────────────────────────
-        # Never auto-approve when an ИНН / bank account fails its control digit —
-        # hold for mandatory human review.
+        if mandatory_missing:
+            return _hold_for_review("mandatory_fields_missing", mandatory_missing=mandatory_missing)
+
+        # ── Checksum safety gate (hard stop) ─────────────────────────────────
+        # Never auto-approve when an ИНН / bank account fails its control digit.
         checksum_problems = _checksum_issues(main_data)
         if checksum_problems:
-            logger.info(
-                "auto_verify_reject_checksum",
-                document_id=document_id,
-                checksum_issues=checksum_problems,
-            )
             doc.metadata_ = {**(doc.metadata_ or {}), "checksum_issues": checksum_problems}
-            db.commit()
-            return {
-                "document_id": document_id,
-                "consensus": 0.0,
-                "auto_approved": False,
-                "reject_reason": "checksum_validation_failed",
-                "checksum_issues": checksum_problems,
-            }
+            return _hold_for_review("checksum_validation_failed", checksum_issues=checksum_problems)
 
-        # Run verify extraction with the configured verify model
-        verify_extractions: list[dict] = []
+        # ── Confidence gate ──────────────────────────────────────────────────
+        if sig.low_fields:
+            return _hold_for_review("significant_fields_low_confidence")
+
+        # ── Optional consensus layer ─────────────────────────────────────────
+        # When a verify model is configured, re-extract and require key fields to
+        # agree at >= threshold — an extra safety net on top of the confidence +
+        # checksum gates. Skipped (and not required) when no verify model is set.
+        consensus = 1.0
         models_used: list[str] = []
-
         if verify_model_1 and verify_model_1.strip():
             logger.info("auto_verify_extracting", model=verify_model_1, document_id=document_id)
-            extracted = _extract_invoice_with_model(text, verify_model_1)
+            from app.tasks.gpu_lock import gpu_single_flight
+            with gpu_single_flight(f"verify:{document_id}"):
+                extracted = _extract_invoice_with_model(text, verify_model_1)
             if extracted:
-                verify_extractions.append(extracted)
                 models_used.append(verify_model_1)
+                agree, consensus = _compare_extractions(main_data, [extracted], threshold=threshold)
+                if not agree:
+                    return _hold_for_review("verify_model_disagreement", consensus=consensus)
             else:
                 logger.warning("auto_verify_model_failed", model=verify_model_1)
 
-        if not verify_extractions:
-            logger.warning("auto_verify_no_verify_models", document_id=document_id)
-            return {"error": "no_verify_models_configured"}
-
-        should_approve, consensus = _compare_extractions(main_data, verify_extractions)
-
+        # ── Approve ──────────────────────────────────────────────────────────
+        doc.status = DocumentStatus.approved
+        doc.metadata_ = {
+            **(doc.metadata_ or {}),
+            "low_confidence_significant": [],
+            "significant_confidence": sig.score,
+            "auto_approve_threshold": threshold,
+            "auto_verify_reason": "auto_approved",
+        }
+        job = _latest_processing_job(db, doc)
+        if job:
+            job.current_step = "auto_verified"
+        db.commit()
+        # Trigger post-approval pipeline (Invoice/Party/memory/embeddings)
+        process_approved_document.delay(document_id)
         logger.info(
-            "auto_verify_result",
+            "auto_verify_approved",
             document_id=document_id,
+            significant_confidence=sig.score,
             consensus=consensus,
-            should_approve=should_approve,
             models_used=models_used,
-            verify_count=len(verify_extractions),
         )
-
-        if should_approve:
-            doc.status = DocumentStatus.approved
-            job = _latest_processing_job(db, doc)
-            if job:
-                job.current_step = "auto_verified"
-            db.commit()
-            # Trigger post-approval pipeline (Invoice/Party/memory/embeddings)
-            process_approved_document.delay(document_id)
-            logger.info("auto_verify_approved", document_id=document_id, consensus=consensus)
-
         return {
             "document_id": document_id,
+            "significant_confidence": sig.score,
             "consensus": consensus,
-            "auto_approved": should_approve,
+            "threshold": threshold,
+            "auto_approved": True,
             "models_used": models_used,
-            "verify_count": len(verify_extractions),
         }
 
 
@@ -1453,6 +1497,7 @@ def process_approved_document(self, document_id: str) -> dict:
     """
     logger.info("post_approve_start", document_id=document_id)
     from sqlalchemy import delete as _sa_delete
+    from sqlalchemy import update as _sa_update
 
     with _get_sync_session() as db:
         doc = db.get(Document, uuid.UUID(document_id))
@@ -1496,11 +1541,47 @@ def process_approved_document(self, document_id: str) -> dict:
         supplier_party_id = _upsert_party(db, supplier_data, role="supplier")
         buyer_party_id = _upsert_party(db, buyer_data, role="buyer")
 
-        # Remove existing invoice if re-approved (e.g. re-uploaded)
+        # Remove existing invoice if re-approved (e.g. re-uploaded / re-processed)
         existing = db.execute(
             select(Invoice).where(Invoice.document_id == doc.id)
         ).scalar_one_or_none()
         if existing:
+            # Detach any warehouse-receipt lines that reference this invoice's
+            # lines BEFORE deleting them. Re-approval must be idempotent: it must
+            # not violate the warehouse_receipt_lines FK, and must not destroy a
+            # receipt the warehouse flow already created. The receipt keeps its
+            # quantities; only the now-stale invoice-line link is cleared.
+            line_ids = (
+                db.execute(
+                    select(InvoiceLine.id).where(InvoiceLine.invoice_id == existing.id)
+                )
+                .scalars()
+                .all()
+            )
+            if line_ids:
+                db.execute(
+                    _sa_update(WarehouseReceiptLine)
+                    .where(WarehouseReceiptLine.invoice_line_id.in_(line_ids))
+                    .values(invoice_line_id=None)
+                )
+            # Detach receipts that point at the invoice itself (warehouse_receipts
+            # .invoice_id FK) before deleting it — same idempotency guarantee.
+            db.execute(
+                _sa_update(WarehouseReceipt)
+                .where(WarehouseReceipt.invoice_id == existing.id)
+                .values(invoice_id=None)
+            )
+            # Detach price-history entries (nullable FK) and drop derived payment
+            # schedules (non-nullable FK) so the invoice row can be replaced.
+            from app.db.models import PaymentSchedule, PriceHistoryEntry
+            db.execute(
+                _sa_update(PriceHistoryEntry)
+                .where(PriceHistoryEntry.invoice_id == existing.id)
+                .values(invoice_id=None)
+            )
+            db.execute(
+                _sa_delete(PaymentSchedule).where(PaymentSchedule.invoice_id == existing.id)
+            )
             db.execute(_sa_delete(InvoiceLine).where(InvoiceLine.invoice_id == existing.id))
             db.delete(existing)
             db.flush()

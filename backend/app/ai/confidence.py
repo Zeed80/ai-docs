@@ -12,9 +12,14 @@ from app.db.models import ConfidenceReason
 # Confidence levels for objectively *verifiable* fields.
 _VERIFIED = 0.98   # checksum / arithmetic passed → near-certain
 _FAILED = 0.25     # checksum / arithmetic failed → almost certainly wrong
-# Prior for present fields we cannot verify objectively (names, free text).
-# High, because the extraction model is strong; it just can't be *proven*.
-_UNVERIFIABLE = 0.9
+# Prior for present fields we cannot verify objectively (names, free text, line
+# descriptions). High, because the extraction model is strong on Russian
+# invoices (qwen3.5:9b measures ~0.99 on the example set); it just can't be
+# *proven* by a checksum. Set at/above the default auto-approve threshold so a
+# cleanly-read but unprovable significant field (e.g. a product name) does not by
+# itself block auto-approval — only genuinely doubtful values (arithmetic /
+# checksum / format / ambiguity failures, all scored well below) do.
+_UNVERIFIABLE = 0.95
 
 _AMOUNT_FIELDS = {"subtotal", "tax_amount", "total_amount"}
 
@@ -74,7 +79,7 @@ def compute_field_confidences(
                 confidence = _VERIFIED
         elif field_name == "invoice_date":
             if _is_valid_date(str_value):
-                confidence = 0.92
+                confidence = 0.96
             else:
                 confidence, reason = 0.4, ConfidenceReason.format_mismatch
         else:
@@ -135,19 +140,114 @@ def compute_field_confidences(
         _add_party_field("buyer", buyer, "kpp", rv.kpp_valid)
         _add_party_field("buyer", buyer, "address")
 
-    # Line-level SKU fields (first few lines for ExtractionPanel display)
+    # Line-level fields — товары are *significant*: a wrong quantity/price/amount
+    # changes what is being paid for, so each present line field gets a grounded
+    # confidence. The per-line ``amount`` is verified arithmetically (qty×price);
+    # name/qty/price/sku get the present-but-unverifiable prior unless that line's
+    # arithmetic failed, which casts doubt on its numbers.
     for line in (extracted.get("lines") or [])[:20]:
         n = line.get("line_number", "?")
-        sku = line.get("sku")
-        if sku:
+        line_amount_failed = f"line_{n}.amount" in error_fields
+
+        def _line_field(key: str, *, numeric: bool):
+            val = line.get(key)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                return
+            if key == "amount":
+                conf = _FAILED if line_amount_failed else _VERIFIED
+                rsn = ConfidenceReason.arithmetic_error if line_amount_failed else ConfidenceReason.high_quality_ocr
+            elif numeric and line_amount_failed:
+                # qty / unit_price implicated by a broken line equation
+                conf, rsn = 0.6, ConfidenceReason.ambiguous_value
+            else:
+                conf, rsn = _UNVERIFIABLE, ConfidenceReason.high_quality_ocr
             results.append(FieldConfidence(
-                field_name=f"line_{n}.sku",
-                value=str(sku),
-                confidence=0.9,
-                reason=ConfidenceReason.high_quality_ocr,
+                field_name=f"line_{n}.{key}",
+                value=str(val),
+                confidence=round(conf, 2),
+                reason=rsn,
             ))
 
+        _line_field("name", numeric=False)
+        _line_field("sku", numeric=False)
+        _line_field("quantity", numeric=True)
+        _line_field("unit_price", numeric=True)
+        _line_field("amount", numeric=True)
+
     return results
+
+
+# Significant fields — those whose low confidence must block auto-approval and be
+# surfaced for human review: amounts, payment requisites (ИНН/КПП/БИК/счета) and
+# line items (товары). Insignificant fields (address, phone, email, notes, bank
+# name, free-text supplier/buyer name) are deliberately excluded from the gate so
+# a blurry phone number never holds up an otherwise-correct invoice.
+_SIGNIFICANT_TOP = {
+    "invoice_number", "invoice_date",
+    "subtotal", "tax_amount", "total_amount",
+}
+_SIGNIFICANT_PARTY_SUFFIXES = {"inn", "kpp", "bank_bik", "bank_account", "corr_account"}
+_SIGNIFICANT_LINE_SUFFIXES = {"name", "sku", "quantity", "unit_price", "amount"}
+
+
+def _is_significant(field_name: str) -> bool:
+    if field_name in _SIGNIFICANT_TOP:
+        return True
+    if field_name.startswith(("supplier.", "buyer.")):
+        return field_name.split(".", 1)[1] in _SIGNIFICANT_PARTY_SUFFIXES
+    if field_name.startswith("line_"):
+        suffix = field_name.split(".", 1)[1] if "." in field_name else ""
+        return suffix in _SIGNIFICANT_LINE_SUFFIXES
+    return False
+
+
+@dataclass
+class SignificantConfidence:
+    score: float                       # weighted confidence over significant fields
+    low_fields: list[dict]             # significant fields below the threshold
+    significant_count: int
+
+
+def significant_fields_confidence(
+    field_confidences: list[FieldConfidence],
+    threshold: float,
+) -> SignificantConfidence:
+    """Confidence over *significant* fields only, plus the list of significant
+    fields that fall below ``threshold`` (the ones a human should verify).
+
+    Critical fields (total/number/date/ИНН) are weighted 2× — consistent with
+    :func:`compute_overall_confidence` — so they dominate the gate decision.
+    Only present significant fields are counted; absent ones don't penalise.
+    """
+    critical = {"total_amount", "invoice_number", "invoice_date", "supplier.inn"}
+    significant = [
+        fc for fc in field_confidences
+        if fc.value is not None and _is_significant(fc.field_name)
+    ]
+    if not significant:
+        return SignificantConfidence(score=0.0, low_fields=[], significant_count=0)
+
+    weighted_sum = 0.0
+    weight_total = 0.0
+    low_fields: list[dict] = []
+    for fc in significant:
+        weight = 2.0 if fc.field_name in critical else 1.0
+        weighted_sum += fc.confidence * weight
+        weight_total += weight
+        if fc.confidence < threshold:
+            low_fields.append({
+                "field": fc.field_name,
+                "value": fc.value,
+                "confidence": fc.confidence,
+                "reason": fc.reason.value if hasattr(fc.reason, "value") else str(fc.reason),
+            })
+
+    score = round(weighted_sum / weight_total, 2) if weight_total else 0.0
+    return SignificantConfidence(
+        score=score,
+        low_fields=low_fields,
+        significant_count=len(significant),
+    )
 
 
 def compute_overall_confidence(field_confidences: list[FieldConfidence]) -> float:

@@ -31,6 +31,8 @@ interface AiConfig {
   reranker_model: string | null;
   verify_model_1: string;
   verify_model_1_provider: string;
+  auto_approve_confidence_threshold: number;
+  auto_verify_enabled: boolean;
   turboquant_enabled: boolean;
   turboquant_kv_cache_dtype: string;
   turboquant_max_model_len: number;
@@ -1113,7 +1115,6 @@ export default function SettingsPage() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-
   async function handleRebuildEmbeddings() {
     setRebuildingEmbeddings(true);
     setRebuildMessage(null);
@@ -1174,6 +1175,23 @@ export default function SettingsPage() {
       setTimeout(() => setNtdSaved(false), 2000);
     } catch {}
     setNtdSaving(false);
+  }
+
+  async function handleSaveAutoApprove(patch: Partial<AiConfig>) {
+    if (!config) return;
+    setConfigSaving(true);
+    try {
+      const r = await mutFetch(`${API}/api/ai/config`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      setConfig(await r.json());
+      setConfigSaved(true);
+      setTimeout(() => setConfigSaved(false), 2000);
+    } catch {}
+    setConfigSaving(false);
   }
 
   async function handleSaveAgentConfig() {
@@ -3343,6 +3361,83 @@ export default function SettingsPage() {
                 ? ` · обновлено ${new Date(ntdConfig.updated_at).toLocaleString("ru-RU")}`
                 : ""}
             </p>
+          </SectionCard>
+
+          {/* Auto-approval of invoices */}
+          <SectionCard
+            title="Авто-утверждение счетов"
+            subtitle="Счёт утверждается без участия человека, если достоверность значимых полей (суммы, товары, реквизиты) не ниже порога и контрольные суммы ИНН/счетов сходятся. Иначе — на проверку с подсветкой проблемных полей."
+            action={
+              configSaved ? (
+                <span className="pt-1 text-xs text-emerald-400">Сохранено</span>
+              ) : undefined
+            }
+          >
+            {config && (
+              <div className="space-y-5">
+                <label className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={config.auto_verify_enabled}
+                    disabled={configSaving}
+                    onChange={(e) =>
+                      handleSaveAutoApprove({
+                        auto_verify_enabled: e.target.checked,
+                      })
+                    }
+                    className="h-4 w-4"
+                  />
+                  <span className="text-sm text-slate-200">
+                    Включить авто-утверждение (минимум ручной работы)
+                  </span>
+                </label>
+
+                <div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-sm text-slate-200">
+                      Порог достоверности
+                    </span>
+                    <span className="font-mono text-sm text-blue-300">
+                      {Math.round(
+                        (config.auto_approve_confidence_threshold ?? 0.95) *
+                          100,
+                      )}
+                      %
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={50}
+                    max={99}
+                    step={1}
+                    value={Math.round(
+                      (config.auto_approve_confidence_threshold ?? 0.95) * 100,
+                    )}
+                    disabled={configSaving || !config.auto_verify_enabled}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        auto_approve_confidence_threshold:
+                          Number(e.target.value) / 100,
+                      })
+                    }
+                    onMouseUp={(e) =>
+                      handleSaveAutoApprove({
+                        auto_approve_confidence_threshold:
+                          Number((e.target as HTMLInputElement).value) / 100,
+                      })
+                    }
+                    className="w-full"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Выше порог — больше счетов уходит на ручную проверку
+                    (строже); ниже — больше утверждается автоматически.
+                    Незначительные поля (адрес, телефон, примечания) на порог не
+                    влияют.
+                  </p>
+                </div>
+              </div>
+            )}
           </SectionCard>
 
           {/* Links to sub-pages */}

@@ -48,6 +48,16 @@ _DEFAULT_CONFIG = {
     "reranker_model": "local_reranker_ollama",
     "verify_model_1": settings.ollama_model_ocr,
     "verify_model_1_provider": "ollama",
+    # Auto-approval gate: an invoice is auto-approved when the confidence of its
+    # *significant* fields (amounts, line items, payment requisites) is at least
+    # this threshold AND all control-digit checksums pass. Below it, the document
+    # is held for human review with the low-confidence fields highlighted.
+    # User-tunable from Settings → AI.
+    "auto_approve_confidence_threshold": 0.95,
+    # When on (default), every extracted invoice runs through auto-verification
+    # so high-confidence documents are approved with no human action (minimal
+    # intervention). A per-upload ``auto_verify`` flag overrides this default.
+    "auto_verify_enabled": True,
     "turboquant_enabled": False,
     "turboquant_kv_cache_dtype": "turboquant_k8v4",
     "turboquant_max_model_len": 131072,
@@ -299,6 +309,8 @@ class ConfigUpdate(BaseModel):
     reranker_model: str | None = None
     verify_model_1: str | None = None
     verify_model_1_provider: str | None = None
+    auto_approve_confidence_threshold: float | None = None
+    auto_verify_enabled: bool | None = None
     turboquant_enabled: bool | None = None
     turboquant_kv_cache_dtype: str | None = None
     turboquant_max_model_len: int | None = None

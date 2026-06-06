@@ -33,11 +33,26 @@ celery_app.conf.update(
     task_time_limit=360,       # 6 minutes — hard kill
     worker_concurrency=1,      # sequential processing (safe for GPU)
     task_routes={
+        # ── GPU lane (strictly sequential) ──────────────────────────────────
+        # Every step that loads an Ollama model (OCR / extraction / verify /
+        # embedding / drawing VLM) goes to the dedicated ``gpu`` queue, served
+        # by a single -c 1 worker so documents are processed strictly one at a
+        # time and pipeline steps never overlap on the GPU. These specific
+        # entries MUST precede the "app.tasks.extraction.*" glob below — Celery
+        # returns the first matching route in insertion order.
+        "app.tasks.extraction.classify_document": {"queue": "gpu"},
+        "app.tasks.extraction.extract_invoice": {"queue": "gpu"},
+        "app.tasks.extraction.extract_generic_fields": {"queue": "gpu"},
+        "app.tasks.extraction.auto_verify_document": {"queue": "gpu"},
+        "app.tasks.embedding.embed_document": {"queue": "gpu"},
+        # name= on @celery_app.task in drawing_analysis.py — VLM, GPU-bound
+        "drawing_analysis.*": {"queue": "gpu"},
+        # ── CPU / IO lanes (parallel is fine — no GPU) ──────────────────────
         "app.tasks.ingest.*": {"queue": "ingest"},
+        # Remaining extraction-module tasks are DB/CPU only
+        # (process_approved_document, check_invoice_anomalies, …).
         "app.tasks.extraction.*": {"queue": "extraction"},
         "app.tasks.scheduler.*": {"queue": "scheduler"},
-        # name= on @celery_app.task in drawing_analysis.py and tp_generation.py
-        "drawing_analysis.*": {"queue": "extraction"},
         "tp_generation.*": {"queue": "celery"},
     },
 )

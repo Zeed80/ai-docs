@@ -14,6 +14,12 @@ capabilities:
       суммаризировать, обновить, удалить, добавить зависимости или ссылки.
       Используй для любых операций с файлами, актами, накладными, чертежами,
       спецификациями, НТД, письмами как файлами.
+      Очередь и статус обработки: action=queue — что сейчас обрабатывается и
+      что в очереди (обработка строго последовательная, по одному документу);
+      action=processing_status — детальный статус шагов pipeline по документу
+      (классификация→OCR→извлечение→граф→вектор) и поля с низкой уверенностью
+      (low_confidence_significant), которые требуют проверки человеком;
+      action=reprocess — перезапустить обработку документа заново.
     path: /api/agent/cap/documents
     method: POST
     gate_actions: [delete, bulk_delete]
@@ -22,7 +28,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "list | get | search | ingest | classify | extract | summarize | update | delete | bulk_delete | link"
+          description: "list | get | search | ingest | classify | extract | summarize | update | delete | bulk_delete | link | queue | processing_status | reprocess"
         document_id:
           type: string
           description: "ID документа (для get, classify, extract, summarize, update, delete, link)"
@@ -461,16 +467,22 @@ capabilities:
       capabilities когда текущих не хватает, статус автономии и плагинов,
       проверка статуса approval-запросов. Используй когда запрос выходит
       за рамки существующих capabilities или нужна фоновая задача.
+      Настройки авто-обработки: action=ai_config_get — прочитать текущий порог
+      авто-утверждения (auto_approve_confidence_threshold, 0–1) и включено ли
+      авто-утверждение (auto_verify_enabled); action=ai_config_set [GATE] —
+      изменить их по инструкции пользователя, например body={"auto_approve_confidence_threshold":0.9}
+      («снизь порог до 90%») или body={"auto_verify_enabled":false}
+      («отключи авто-утверждение»). Выше порог → строже, больше ручной проверки.
     path: /api/agent/cap/agent_control
     method: POST
-    gate_actions: []
+    gate_actions: [ai_config_set]
     parameters:
       type: object
       properties:
         action:
           type: string
-          description: "task_create | capability_propose | capability_status | approval_list | approval_status | config_status"
+          description: "task_create | capability_propose | capability_status | approval_list | approval_status | config_status | ai_config_get | ai_config_set"
         body:
           type: object
-          description: "Данные для task_create: title, description, skills; для capability_propose: name, description, gap"
+          description: "Данные для task_create: title, description, skills; для capability_propose: name, description, gap; для ai_config_set: auto_approve_confidence_threshold (0–1) и/или auto_verify_enabled (bool)"
       required: [action]

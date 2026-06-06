@@ -28,6 +28,10 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "bulk_delete":  ("POST",   "/api/documents/bulk-delete",              []),
         "link":         ("POST",   "/api/documents/{document_id}/link",       ["document_id"]),
         "dependencies": ("GET",    "/api/documents/{document_id}/dependencies", ["document_id"]),
+        # Processing-queue visibility & control (sequential GPU pipeline)
+        "queue":           ("GET",  "/api/documents/workspace",                  []),
+        "processing_status": ("GET", "/api/documents/{document_id}/management",   ["document_id"]),
+        "reprocess":       ("POST", "/api/documents/{document_id}/classify",      ["document_id"]),
     },
     "invoices": {
         "list":           ("GET",    "/api/invoices",                               []),
@@ -221,6 +225,9 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "approval_list":       ("GET",  "/api/approvals/pending",              []),
         "approval_status":     ("GET",  "/api/approvals/{entity_id}",          ["entity_id"]),
         "config_status":       ("GET",  "/api/agent/control-plane/status",     []),
+        # AI / auto-approval settings: read freely; changing them is gated.
+        "ai_config_get":       ("GET",   "/api/ai/config",                     []),
+        "ai_config_set":       ("PATCH", "/api/ai/config",                     []),
     },
 }
 

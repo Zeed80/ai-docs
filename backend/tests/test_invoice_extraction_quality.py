@@ -209,7 +209,10 @@ def _extract_text(content: bytes, path: Path) -> tuple[str, str]:
         return "", parsed.parser_name
 
     if _MODEL_OVERRIDE:
-        # OCR with the pinned model (preprocess identically to the pipeline).
+        # OCR with the pinned model, preprocessing identically to the pipeline.
+        # PDFs MUST be rendered page-by-page (fitz → PNG) exactly like
+        # _ocr_pdf_content — feeding raw PDF bytes to _preprocess_ocr_page (an
+        # image preprocessor) yields an empty transcription.
         import base64
 
         from app.tasks.extraction import (
@@ -218,8 +221,19 @@ def _extract_text(content: bytes, path: Path) -> tuple[str, str]:
             _preprocess_ocr_page,
         )
 
-        enc = base64.b64encode(_preprocess_ocr_page(content)).decode()
-        return _ollama_vision_ocr([enc], _MODEL_OVERRIDE, _OCR_PROMPT), f"ocr:{_MODEL_OVERRIDE}"
+        if mime == "application/pdf":
+            import fitz
+
+            scale = getattr(__import__("app.config", fromlist=["settings"]).settings,
+                            "ocr_render_scale", 2.5)
+            encs: list[str] = []
+            with fitz.open(stream=content, filetype="pdf") as pdf:
+                for i in range(pdf.page_count):
+                    pixmap = pdf[i].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                    encs.append(base64.b64encode(_preprocess_ocr_page(pixmap.tobytes("png"))).decode())
+        else:
+            encs = [base64.b64encode(_preprocess_ocr_page(content)).decode()]
+        return _ollama_vision_ocr(encs, _MODEL_OVERRIDE, _OCR_PROMPT), f"ocr:{_MODEL_OVERRIDE}"
 
     stub = types.SimpleNamespace(id=uuid.uuid4(), mime_type=mime, file_name=path.name)
     if mime == "application/pdf":

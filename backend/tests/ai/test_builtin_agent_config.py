@@ -246,6 +246,8 @@ tools:
         model_override=None,
         provider_override=None,
         disable_thinking_override=None,
+        on_thinking=None,
+        **kwargs,
     ):
         nonlocal call_count
         call_count += 1

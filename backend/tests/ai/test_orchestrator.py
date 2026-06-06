@@ -315,7 +315,7 @@ async def test_orchestrator_directly_executes_expected_tool_when_retry_disabled(
         async def __aexit__(self, *args):
             return None
 
-        async def post(self, url: str, json: dict):
+        async def post(self, url: str, json: dict = None, headers=None, **kwargs):
             posted.append((url, json))
             upsert_workspace_block(
                 "agent:invoice-items-by-supplier",

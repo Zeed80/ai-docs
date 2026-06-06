@@ -156,10 +156,15 @@ _PSQL = ["docker", "exec", "infra-postgres-1", "psql", "-U", "aiworkspace", "-d"
 
 
 def _psql_exec(sql: str) -> str:
-    result = subprocess.run(
-        _PSQL + ["-c", sql, "-t", "-A"],
-        capture_output=True, text=True, timeout=10,
-    )
+    try:
+        result = subprocess.run(
+            _PSQL + ["-c", sql, "-t", "-A"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except FileNotFoundError:
+        # No ``docker`` CLI (e.g. running the suite inside a container) — this is
+        # a live host-only E2E; skip cleanly instead of erroring the session.
+        pytest.skip("e2e_drawing_to_tp needs the docker CLI + live stack on the host")
     if result.returncode != 0:
         raise RuntimeError(f"psql failed: {result.stderr.strip()}")
     return result.stdout.strip()
