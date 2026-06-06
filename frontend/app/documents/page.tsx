@@ -1654,6 +1654,17 @@ function QueuePanel({
   onBatchEmbeddings: () => void;
   onBatchMemory: () => void;
 }) {
+  // Single-flight GPU: at most ONE document is actually on the GPU at any moment.
+  // Job statuses can transiently show several "running" (chained re-enqueues,
+  // interrupted tasks), so derive the queue from the COUNT of active documents,
+  // not from how many jobs are labelled running.
+  const activeItems = items.filter(isPipelineActive);
+  const currentItem =
+    activeItems.find((i) => i.pipeline?.processing_status === "running") ??
+    activeItems[0] ??
+    null;
+  const currentId = currentItem?.document.id ?? null;
+  const queueCount = Math.max(activeItems.length - (currentItem ? 1 : 0), 0);
   return (
     <section className="mt-5 space-y-4">
       <div className="flex flex-wrap gap-2">
@@ -1673,25 +1684,17 @@ function QueuePanel({
           </button>
         ))}
       </div>
-      {(() => {
-        const running = items.filter(
-          (i) => i.pipeline?.processing_status === "running",
-        );
-        const waiting = items.filter(isPipelineActive).length - running.length;
-        return (
-          <div className="rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-400">
-            Обработка строго последовательная — один документ за раз (GPU).{" "}
-            {running.length > 0 ? (
-              <span className="text-blue-300">
-                Сейчас: {running[0].document.file_name}
-              </span>
-            ) : (
-              <span className="text-slate-500">Сейчас: простаивает</span>
-            )}{" "}
-            · В очереди: {waiting > 0 ? waiting : 0}
-          </div>
-        );
-      })()}
+      <div className="rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-400">
+        Обработка строго последовательная — один документ за раз (GPU).{" "}
+        {currentItem ? (
+          <span className="text-blue-300">
+            Сейчас: {currentItem.document.file_name}
+          </span>
+        ) : (
+          <span className="text-slate-500">Сейчас: простаивает</span>
+        )}{" "}
+        · В очереди: {queueCount}
+      </div>
       <div className="overflow-hidden rounded-md border border-slate-800">
         <div className="grid grid-cols-[minmax(220px,1.1fr)_minmax(360px,2fr)_90px] border-b border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-500">
           <span>Документ</span>
@@ -1712,11 +1715,12 @@ function QueuePanel({
               </span>
               <span className="text-xs text-slate-500">
                 {statusLabel(item.document.status)}
-                {item.pipeline?.processing_status === "running" && (
+                {item.document.id === currentId ? (
                   <span className="ml-2 text-blue-300">● идёт</span>
-                )}
-                {item.pipeline?.processing_status === "queued" && (
-                  <span className="ml-2 text-amber-300">ожидает</span>
+                ) : (
+                  isPipelineActive(item) && (
+                    <span className="ml-2 text-amber-300">ожидает</span>
+                  )
                 )}
               </span>
               {item.pipeline?.processing_error && (
