@@ -2051,9 +2051,18 @@ class AgentSession:
 
                 from app.ai.tool_parallelism import should_parallelize
                 if should_parallelize(tool_calls):
-                    await self._execute_tools_parallel(tool_calls, iteration)
+                    results = await self._execute_tools_parallel(tool_calls, iteration)
                 else:
-                    await self._execute_tools_sequential(tool_calls, iteration)
+                    results = await self._execute_tools_sequential(tool_calls, iteration)
+
+                # Fast path: a single Workspace-publish tool already produced the
+                # table AND a ready user message — deliver it directly instead of
+                # burning another ~8 s LLM call just to say "таблица готова".
+                publish_reply = self._terminal_publish_reply(results)
+                if publish_reply:
+                    await self._deliver_final_content(publish_reply)
+                    self._remember_latest_turn(publish_reply)
+                    break
             else:
                 # max_steps exhausted while the model was still calling tools:
                 # force a final textual answer from the gathered results instead
@@ -2274,18 +2283,21 @@ class AgentSession:
 
     async def _execute_tools_sequential(
         self, tool_calls: list[dict], iteration: int
-    ) -> None:
+    ) -> list[tuple[str, dict]]:
+        results: list[tuple[str, dict]] = []
         for tc in tool_calls:
             fn_name, result = await self._execute_single_tool(tc, iteration)
+            results.append((fn_name, result))
             self.messages.append({
                 "role": "tool",
                 "content": _trim_tool_result(json.dumps(result, ensure_ascii=False)),
             })
             self._trim_history()
+        return results
 
     async def _execute_tools_parallel(
         self, tool_calls: list[dict], iteration: int
-    ) -> None:
+    ) -> list[tuple[str, dict]]:
         results = await asyncio.gather(
             *[self._execute_single_tool(tc, iteration) for tc in tool_calls],
             return_exceptions=False,
@@ -2296,6 +2308,26 @@ class AgentSession:
                 "content": _trim_tool_result(json.dumps(result, ensure_ascii=False)),
             })
         self._trim_history()
+        return list(results)
+
+    @staticmethod
+    def _terminal_publish_reply(results: list[tuple[str, dict]]) -> str | None:
+        """If a single tool published a Workspace block and returned a ready
+        user-facing message, that message IS the answer — no second LLM round
+        trip needed (it just paraphrases "table published"). Returns the message
+        for that fast-path, else None.
+        """
+        if len(results) != 1:
+            return None
+        _fn, res = results[0]
+        if (
+            isinstance(res, dict)
+            and res.get("status") == "published"
+            and res.get("canvas_id")
+            and res.get("message")
+        ):
+            return str(res["message"])
+        return None
 
     async def _request_approval(self, skill_name: str, args: dict) -> bool:
         preview = json.dumps(args, ensure_ascii=False, indent=2)
