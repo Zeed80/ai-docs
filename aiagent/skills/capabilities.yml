@@ -285,15 +285,20 @@ capabilities:
       invoice_* действия: они строят ПОЛНУЮ таблицу прямо из БД. НЕ собирай такую
       таблицу вручную через invoices:list + general — при ручной сборке модель
       теряет строки и целые группы (например, показывает 2 поставщика из 5).
-      ★ Товары/позиции, СГРУППИРОВАННЫЕ по чему-либо (по поставщику, по счёту,
-      по товару, по месяцу, по валюте, по статусу) → invoice_pivot, body =
-      {group_by: "supplier"|"invoice"|"item"|"month"|"currency"|"status"}.
-      Это ОБЩИЙ инструмент для ЛЮБОЙ группировки товаров — агрегирует из БД
-      полностью, не подгоняется под формулировку.
+      ★ ЛЮБАЯ таблица товаров/счетов, СГРУППИРОВАННАЯ (по поставщику, счёту,
+      товару, месяцу, валюте, статусу) ИЛИ с агрегатами/выбором колонок →
+      ТОЛЬКО invoice_pivot. Это единственный инструмент группировок — он
+      агрегирует из БД полностью и сам строит нужные колонки. НЕ существует
+      отдельных «по поставщикам»/«с товарами» инструментов; всё это invoice_pivot
+      с соответствующими group_by и columns.
+      ★ Если пользователь назвал колонки или просит ДОПОЛНИТЕЛЬНОЕ поле (ИНН,
+      КПП, кол-во позиций, средняя сумма и т.п.) — ОБЯЗАТЕЛЬНО передай columns с
+      нужными expr (см. список в invoice_pivot). Без columns будет стандартный
+      набор — этого мало, если просили конкретные/доп. колонки.
       ★ "все счета", "список счетов" → invoice_table.
       ★ "построчный список товаров" (1 строка = позиция) → invoice_items_table.
       ★ general — ТОЛЬКО для данных БЕЗ выделенного скилла (склад, платежи,
-      справочник поставщиков без товаров, произвольные колонки).
+      справочник поставщиков без товаров, произвольные НЕ-счётные таблицы).
 
       Действия:
       - general: произвольная таблица — сам строишь columns и rows и публикуешь.
@@ -306,17 +311,27 @@ capabilities:
       - invoice_table: готовый шаблон счетов (1 строка = 1 счёт).
         Колонки фиксированы: №, Номер счета, Дата, Поставщик, Сумма, Валюта, Статус.
         ТОЛЬКО для "покажи все счета", "список счетов".
-      - invoice_items_grouped: таблица счетов С ТОВАРАМИ (1 строка = 1 счёт,
-        перечень товаров через перенос строки).
-        ТОЛЬКО когда просят "таблицу счетов с товарами/позициями/перечнем".
       - invoice_items_table: 1 строка = 1 товарная позиция. Только для детального анализа строк.
-      - invoice_pivot: ОБЩАЯ группировка товаров по любой размерности. body =
-        {group_by: supplier|invoice|item|month|currency|status}. 1 строка =
-        группа: все её товары через перенос строки, число счетов, сумма. Полная
-        выборка из БД — бери для ЛЮБОГО "сгруппируй/выведи товары по <чему-то>"
-        (по поставщику → group_by=supplier, по счёту → invoice, по товару → item,
-        по месяцу → month, и т.д.).
-      - invoice_items_by_supplier: частный случай invoice_pivot (group_by=supplier).
+      - invoice_pivot: ОБЩАЯ группировка товаров по любой размерности С ВЫБОРОМ
+        КОЛОНОК. body = {group_by: supplier|invoice|item|month|currency|status,
+        columns: [{header, expr}, ...]}. Полная выборка из БД (никогда не теряет
+        строки/группы). Бери для ЛЮБОГО "сгруппируй/выведи товары по <чему-то>"
+        и когда нужны конкретные/дополнительные колонки.
+        group_by: по поставщику→supplier, по счёту→invoice, по товару→item,
+        по месяцу→month, по валюте→currency, по статусу→status.
+        columns — выбери и НАЗОВИ нужные (header — твоё название, expr — из набора):
+        group (значение группы), supplier, supplier_inn (ИНН), supplier_kpp,
+        items (все товары через перенос строки), item_names, item_count (позиций),
+        invoice_count (счетов), invoice_numbers, total_amount (сумма), avg_amount,
+        min_amount, max_amount, quantity_total (кол-во), currencies, statuses,
+        first_date, last_date. Если columns не задан — стандартный набор
+        (группа, счетов, товары, сумма). Пример: "товары по поставщикам, добавь
+        ИНН" → group_by=supplier, columns=[{header:"Поставщик",expr:"supplier"},
+        {header:"ИНН",expr:"supplier_inn"},{header:"Товары",expr:"items"},
+        {header:"Сумма",expr:"total_amount"}].
+        «товары по поставщикам, сумма и сколько позиций» → group_by=supplier,
+        columns=[{header:"Поставщик",expr:"supplier"},{header:"Сумма",expr:"total_amount"},
+        {header:"Позиций",expr:"item_count"}].
       - supplier_lookup: специальный блок-поиск по поставщикам (не таблица).
       - verify: проверить что блок существует.
 
@@ -337,7 +352,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "invoice_pivot (body.group_by: supplier|invoice|item|month|currency|status) | invoice_table | invoice_items_grouped | invoice_items_table | invoice_items_by_supplier | general | get_block | supplier_lookup | verify"
+          description: "invoice_pivot (ЛЮБАЯ группировка товаров/счетов; body.group_by + body.columns:[{header,expr}]) | invoice_table (список счетов) | invoice_items_table (построчно) | general (не-счётные таблицы) | get_block | supplier_lookup | verify"
         canvas_id:
           type: string
           description: "ID canvas-блока. Для get_block и general (редактирование) — указывай явно. По умолчанию 'agent:custom'."

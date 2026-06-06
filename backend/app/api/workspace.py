@@ -66,6 +66,10 @@ class WorkspaceInvoicePivotRequest(BaseModel):
     # the table always covers ALL data (SQL-side aggregation), so it works for any
     # phrasing instead of relying on a handful of pre-baked layouts.
     group_by: str = "supplier"  # supplier | invoice | item | month | currency | status
+    # Optional column spec: [{"header": "...", "expr": "<catalog key>"}]. Lets the
+    # caller choose AND name columns (e.g. add an ИНН column) while the data stays
+    # complete. When omitted, a sensible default set is used.
+    columns: list[dict[str, Any]] | None = None
     canvas_id: str = "agent:invoice-pivot"
 
 
@@ -420,19 +424,119 @@ _PIVOT_DIMENSIONS: dict[str, tuple[str, Any]] = {
 }
 
 
+def _avg_money(amounts: list[float]) -> Any:
+    return _format_money(sum(amounts) / len(amounts)) if amounts else ""
+
+
+# Column catalog: expr → (default header, cell type, value function over the
+# per-group context). Lets the caller pick AND name any subset of columns while
+# the data stays complete. Add an entry here to expose a new column.
+_PIVOT_COLUMN_CATALOG: dict[str, tuple[str, str, Any]] = {
+    "group": ("Группа", "text", lambda g: g["key"]),
+    "supplier": ("Поставщик", "text", lambda g: g["supplier"].name if g["supplier"] else ""),
+    "supplier_inn": ("ИНН", "text", lambda g: (g["supplier"].inn or "") if g["supplier"] else ""),
+    "supplier_kpp": ("КПП", "text", lambda g: (g["supplier"].kpp or "") if g["supplier"] else ""),
+    "items": ("Товары", "text", lambda g: "\n".join(g["items"])),
+    "item_names": ("Наименования", "text", lambda g: "\n".join(dict.fromkeys(g["item_names"]))),
+    "item_count": ("Позиций", "number", lambda g: len(g["items"])),
+    "invoice_count": ("Счетов", "number", lambda g: len(g["invoice_ids"])),
+    "invoice_numbers": ("Счета", "text", lambda g: ", ".join(dict.fromkeys(g["invoice_numbers"]))),
+    "total_amount": ("Сумма", "number", lambda g: _format_money(g["total"])),
+    "avg_amount": ("Средняя сумма", "number", lambda g: _avg_money(g["amounts"])),
+    "min_amount": ("Мин. сумма", "number", lambda g: _format_money(min(g["amounts"])) if g["amounts"] else ""),
+    "max_amount": ("Макс. сумма", "number", lambda g: _format_money(max(g["amounts"])) if g["amounts"] else ""),
+    "quantity_total": ("Кол-во", "number", lambda g: _format_number(g["quantity"])),
+    "currencies": ("Валюта", "text", lambda g: ", ".join(sorted(g["currencies"]))),
+    "statuses": ("Статус", "text", lambda g: ", ".join(sorted(g["statuses"]))),
+    "first_date": ("Первый счёт", "date", lambda g: _format_date(min(g["dates"])) if g["dates"] else ""),
+    "last_date": ("Последний счёт", "date", lambda g: _format_date(max(g["dates"])) if g["dates"] else ""),
+}
+# Generous synonym map (EN + RU) so the model never has to guess exact keys.
+_PIVOT_COLUMN_ALIASES = {
+    "sum": "total_amount", "amount": "total_amount", "total": "total_amount",
+    "сумма": "total_amount", "итого": "total_amount", "стоимость": "total_amount",
+    "inn": "supplier_inn", "инн": "supplier_inn",
+    "kpp": "supplier_kpp", "кпп": "supplier_kpp",
+    "supplier_name": "supplier", "поставщик": "supplier", "контрагент": "supplier",
+    "vendor": "supplier",
+    "currency": "currencies", "валюта": "currencies",
+    "status": "statuses", "статус": "statuses",
+    "count": "invoice_count", "invoices": "invoice_numbers",
+    "счета": "invoice_numbers", "счетов": "invoice_count", "кол_во_счетов": "invoice_count",
+    "quantity": "quantity_total", "qty": "quantity_total", "количество": "quantity_total",
+    "кол_во": "quantity_total", "колво": "quantity_total",
+    "name": "item_names", "names": "item_names", "item": "items", "item_name": "items",
+    "product": "items", "products": "items", "товар": "items", "товары": "items",
+    "наименование": "items", "наименования": "items", "позиции": "items",
+    "price": "avg_amount", "цена": "avg_amount", "unit_price": "avg_amount",
+    "средняя": "avg_amount", "avg": "avg_amount",
+    "positions": "item_count", "item_count": "item_count", "позиций": "item_count",
+    "date": "last_date", "дата": "last_date",
+}
+
+
+def _resolve_pivot_columns(
+    columns: list[dict[str, Any]] | None, dim_header: str
+) -> list[tuple[str, str, Any, str]]:
+    """Return [(header, type, value_fn, expr)] for the requested spec.
+
+    Tolerant of imperfect keys from the model (normalise + synonyms) and ALWAYS
+    keeps the grouping dimension as the first column so a row is never anonymous,
+    even if the caller forgot it. Unknown exprs are dropped, not fatal.
+    """
+    resolved: list[tuple[str, str, Any, str]] = []
+    seen_exprs: set[str] = set()
+    for col in columns or []:
+        raw = str(col.get("expr") or col.get("key") or col.get("header") or "").strip().lower()
+        norm = raw.replace(" ", "_").replace("-", "_")
+        expr = _PIVOT_COLUMN_ALIASES.get(norm, norm)
+        entry = _PIVOT_COLUMN_CATALOG.get(expr)
+        if not entry or expr in seen_exprs:
+            continue
+        header = str(col.get("header") or "").strip() or (dim_header if expr == "group" else entry[0])
+        resolved.append((header, entry[1], entry[2], expr))
+        seen_exprs.add(expr)
+
+    g = _PIVOT_COLUMN_CATALOG
+    if not resolved:
+        # No usable spec → sensible default set.
+        return [
+            (dim_header, "text", g["group"][2], "group"),
+            ("Счетов", "number", g["invoice_count"][2], "invoice_count"),
+            ("Товары", "text", g["items"][2], "items"),
+            ("Сумма", "number", g["total_amount"][2], "total_amount"),
+        ]
+    # Guarantee the grouping dimension is present (as the leading column) so the
+    # table always shows WHAT each row is, regardless of the caller's columns.
+    if not ({"group", "supplier"} & seen_exprs):
+        resolved.insert(0, (dim_header, "text", g["group"][2], "group"))
+    return resolved
+
+
 @router.post("/agent/invoices/pivot-table", response_model=WorkspaceToolResponse)
 async def publish_invoice_pivot_table(
     payload: WorkspaceInvoicePivotRequest,
     db: AsyncSession = Depends(get_db),
 ) -> WorkspaceToolResponse:
-    """Skill: workspace.invoice_pivot — Group invoice items by ANY dimension.
+    """Skill: workspace.invoice_pivot — Group invoice items by ANY dimension,
+    with a CHOSEN set of columns.
 
-    One row per group (supplier / invoice / item / month / currency / status):
-    all items of the group newline-separated, the invoice count and the summed
-    amount. Aggregated over ALL line items in code — complete for any phrasing,
-    so it replaces hand-built tables for grouped/aggregated requests.
+    group_by selects the grouping dimension; `columns` (optional) selects and
+    names the output columns from a catalog (supplier, supplier_inn, items,
+    item_count, invoice_count, total_amount, avg_amount, currencies, …). Always
+    aggregated over ALL line items in SQL/code — complete and flexible, so it
+    replaces LLM-hand-built tables for any grouped/aggregated request.
     """
-    header, key_fn = _PIVOT_DIMENSIONS.get(payload.group_by, _PIVOT_DIMENSIONS["supplier"])
+    _dim_aliases = {
+        "supplier_name": "supplier", "поставщик": "supplier", "контрагент": "supplier",
+        "vendor": "supplier", "invoice_number": "invoice", "счёт": "invoice", "счет": "invoice",
+        "item_name": "item", "товар": "item", "product": "item",
+        "месяц": "month", "валюта": "currency", "статус": "status",
+    }
+    gb = str(payload.group_by or "supplier").strip().lower().replace(" ", "_")
+    gb = _dim_aliases.get(gb, gb)
+    header, key_fn = _PIVOT_DIMENSIONS.get(gb, _PIVOT_DIMENSIONS["supplier"])
+    col_specs = _resolve_pivot_columns(payload.columns, header)
     await _publish_workspace_status(f"Группирую товары по: {header}")
 
     result = await db.execute(
@@ -442,9 +546,16 @@ async def publish_invoice_pivot_table(
         .order_by(Invoice.created_at.desc(), InvoiceLine.line_number.asc())
         .limit(_WORKSPACE_MAX_ROWS)
     )
-    groups: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"key": "", "items": [], "total": Decimal("0"), "invoice_ids": set()}
-    )
+
+    def _new_group() -> dict[str, Any]:
+        return {
+            "key": "", "items": [], "item_names": [], "invoice_ids": set(),
+            "invoice_numbers": [], "total": Decimal("0"), "amounts": [],
+            "quantity": Decimal("0"), "currencies": set(), "statuses": set(),
+            "dates": [], "supplier": None,
+        }
+
+    groups: dict[str, dict[str, Any]] = defaultdict(_new_group)
     total_lines = 0
     for line, invoice in result.all():
         total_lines += 1
@@ -452,28 +563,33 @@ async def publish_invoice_pivot_table(
         g = groups[key]
         g["key"] = key
         g["items"].append(_format_supplier_grouped_item_line(line, invoice))
+        g["item_names"].append((line.description or line.sku or "—").strip() or "—")
         g["invoice_ids"].add(str(invoice.id))
+        g["invoice_numbers"].append(invoice.invoice_number or f"б/н {str(invoice.id)[:8]}")
         if line.amount is not None:
-            g["total"] += Decimal(str(line.amount))
+            amt = Decimal(str(line.amount))
+            g["total"] += amt
+            g["amounts"].append(float(line.amount))
+        if line.quantity is not None:
+            g["quantity"] += Decimal(str(line.quantity))
+        g["currencies"].add(invoice.currency or "RUB")
+        g["statuses"].add(invoice.status.value if hasattr(invoice.status, "value") else str(invoice.status))
+        if invoice.invoice_date:
+            g["dates"].append(invoice.invoice_date)
+        if g["supplier"] is None and invoice.supplier is not None:
+            g["supplier"] = invoice.supplier
 
     ordered = sorted(groups.values(), key=lambda it: str(it["key"]).lower())
-    rows = [
-        {
-            "index": i,
-            "group": g["key"],
-            "invoice_count": len(g["invoice_ids"]),
-            "items": "\n".join(g["items"]),
-            "total_amount": _format_money(g["total"]),
-        }
-        for i, g in enumerate(ordered, start=1)
-    ]
-    columns = [
-        {"key": "index", "header": "№", "type": "number", "width": 56},
-        {"key": "group", "header": header, "type": "text"},
-        {"key": "invoice_count", "header": "Счетов", "type": "number", "width": 80},
-        {"key": "items", "header": "Товары", "type": "text"},
-        {"key": "total_amount", "header": "Сумма", "type": "number"},
-    ]
+    columns = [{"key": "index", "header": "№", "type": "number", "width": 56}]
+    for i, (col_header, col_type, _fn, _expr) in enumerate(col_specs):
+        columns.append({"key": f"c{i}", "header": col_header, "type": col_type})
+    rows = []
+    for idx, g in enumerate(ordered, start=1):
+        row: dict[str, Any] = {"index": idx}
+        for i, (_h, _t, fn, _expr) in enumerate(col_specs):
+            row[f"c{i}"] = fn(g)
+        rows.append(row)
+
     await _publish_workspace_status("Публикую сгруппированную таблицу на Рабочий стол")
     block = {
         "id": payload.canvas_id,
@@ -496,7 +612,7 @@ async def publish_invoice_pivot_table(
         shown=len(rows),
         message=(
             f"Открыл таблицу: товары по «{header}» — {len(rows)} групп, "
-            f"{total_lines} строк товаров."
+            f"{total_lines} строк товаров, колонок: {len(col_specs)}."
         ),
         filters={},
     )
