@@ -1,6 +1,6 @@
 .PHONY: help \
         dev dev-build dev-bg dev-llamacpp down restart \
-        prod prod-build prod-down \
+        prod prod-bg prod-build prod-down \
         clean rebuild nuke \
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
@@ -14,7 +14,7 @@
 # Docker Compose file sets
 # ──────────────────────────────────────────────────────────────────────────────
 COMPOSE_DEV      := -f infra/docker-compose.yml -f infra/docker-compose.dev.yml
-COMPOSE_PROD     := -f infra/docker-compose.yml -f infra/docker-compose.prod.yml
+COMPOSE_PROD     := -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --env-file infra/.env
 COMPOSE_LLAMACPP := -f infra/docker-compose.yml --profile embedded-llamacpp
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -34,7 +34,8 @@ help:
 	@echo ""
 	@echo "  PRODUCTION"
 	@echo "    make prod             — production stack (fg)"
-	@echo "    make prod-build       — production stack + build"
+	@echo "    make prod-bg          — production stack (bg, detached)"
+	@echo "    make prod-build       — production stack + build (detached)"
 	@echo "    make prod-down        — stop production stack"
 	@echo ""
 	@echo "  CLEAN / REBUILD"
@@ -93,8 +94,11 @@ restart:
 prod:
 	docker compose $(COMPOSE_PROD) up
 
+prod-bg:
+	docker compose $(COMPOSE_PROD) up -d
+
 prod-build:
-	docker compose $(COMPOSE_PROD) up --build
+	docker compose $(COMPOSE_PROD) up -d --build
 
 prod-down:
 	docker compose $(COMPOSE_PROD) down
