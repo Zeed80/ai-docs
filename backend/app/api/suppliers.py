@@ -647,7 +647,10 @@ async def update_supplier(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: supplier.update — Update supplier details."""
-    party = (await db.execute(select(Party).where(Party.id == supplier_id))).scalar_one_or_none()
+    from sqlalchemy.orm import joinedload as _jl
+    party = (await db.execute(
+        select(Party).where(Party.id == supplier_id).options(_jl(Party.profile))
+    )).scalar_one_or_none()
     if not party:
         raise HTTPException(404, "Supplier not found")
 
