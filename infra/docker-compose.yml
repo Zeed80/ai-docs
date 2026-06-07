@@ -406,6 +406,7 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile
+    restart: unless-stopped
     command: celery -A app.tasks.celery_app worker -l info -c 4 -Q celery,extraction,ingest,scheduler
     environment:
       <<: *backend-env
@@ -438,6 +439,7 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile
+    restart: unless-stopped
     command: celery -A app.tasks.celery_app worker -l info -c 1 -Q gpu -n gpu@%h
     environment:
       <<: *backend-env
@@ -462,6 +464,7 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile
+    restart: unless-stopped
     command: celery -A app.tasks.celery_app beat -l info
     environment:
       <<: *backend-env
