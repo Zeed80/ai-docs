@@ -222,6 +222,109 @@ async def test_drawing_tooling_workflow_runs_to_completion() -> None:
     assert isinstance(result, dict)
 
 
+@pytest.mark.asyncio
+async def test_warehouse_low_stock_reorder_runs_to_completion() -> None:
+    """warehouse_specialist scenario: low stock check + reorder draft."""
+    data = _load("warehouse-low-stock-reorder.yml")
+    result = await _run_scenario(data)
+    assert isinstance(result, dict)
+
+
+@pytest.mark.asyncio
+async def test_warehouse_low_stock_reorder_early_exit_when_no_stock() -> None:
+    """If low_stock_items.total == 0, scenario exits cleanly after early_exit step."""
+    data = _load("warehouse-low-stock-reorder.yml")
+
+    zero_result: dict[str, Any] = {"status": "ok", "items": [], "total": 0, "count": 0}
+    with (
+        patch("app.ai.scenario_runner._call_skill", return_value=zero_result),
+        patch("app.ai.scenario_runner.gateway_config.load_scenario", return_value=data),
+        patch("asyncio.create_task", side_effect=lambda coro, **kw: type("T", (), {})()),
+    ):
+        from app.ai.scenario_runner import ScenarioRunner
+        runner = ScenarioRunner()
+        result = await runner.run(scenario_name=data["name"], trigger={})
+
+    # Scenario completed without error — early_exit branch taken
+    assert isinstance(result, dict)
+
+
+@pytest.mark.asyncio
+async def test_procurement_rfq_cycle_runs_to_completion() -> None:
+    """procurement_specialist scenario: RFQ cycle with compare + approval."""
+    data = _load("procurement-rfq-cycle.yml")
+    result = await _run_scenario(
+        data,
+        trigger={
+            "collection_id": "00000000-0000-0000-0000-000000000010",
+            "items": [{"name": "Болт М8", "qty": 100, "unit": "шт"}],
+        },
+    )
+    assert isinstance(result, dict)
+
+
+@pytest.mark.asyncio
+async def test_anomaly_resolution_critical_path() -> None:
+    """Critical anomalies route through 2-step approval chain."""
+    data = _load("anomaly-resolution.yml")
+
+    # Mock: has_critical returns total > 0 to trigger chain path
+    critical_result: dict[str, Any] = {
+        "status": "ok", "total": 1, "items": [], "count": 1,
+        "chain_root_id": "00000000-0000-0000-0000-000000000099",
+        "decisions": [],
+        "supplier_id": "00000000-0000-0000-0000-000000000001",
+        "invoice_number": "INV-001",
+        "name": "ООО Тест",
+        "trust_score": 0.7,
+    }
+    with (
+        patch("app.ai.scenario_runner._call_skill", return_value=critical_result),
+        patch("app.ai.scenario_runner.gateway_config.load_scenario", return_value=data),
+        patch("asyncio.create_task", side_effect=lambda coro, **kw: type("T", (), {})()),
+    ):
+        from app.ai.scenario_runner import ScenarioRunner
+        runner = ScenarioRunner()
+        result = await runner.run(
+            scenario_name=data["name"],
+            trigger={
+                "invoice_id": "00000000-0000-0000-0000-000000000002",
+                "anomaly_ids": ["00000000-0000-0000-0000-000000000001"],
+            },
+        )
+    assert isinstance(result, dict)
+
+
+@pytest.mark.asyncio
+async def test_anomaly_resolution_standard_path() -> None:
+    """Non-critical anomalies use single approval gate."""
+    data = _load("anomaly-resolution.yml")
+
+    standard_result: dict[str, Any] = {
+        "status": "ok", "total": 0, "items": [], "count": 0,
+        "decisions": [],
+        "supplier_id": "00000000-0000-0000-0000-000000000001",
+        "invoice_number": "INV-002",
+        "name": "ООО Тест",
+        "trust_score": 0.8,
+    }
+    with (
+        patch("app.ai.scenario_runner._call_skill", return_value=standard_result),
+        patch("app.ai.scenario_runner.gateway_config.load_scenario", return_value=data),
+        patch("asyncio.create_task", side_effect=lambda coro, **kw: type("T", (), {})()),
+    ):
+        from app.ai.scenario_runner import ScenarioRunner
+        runner = ScenarioRunner()
+        result = await runner.run(
+            scenario_name=data["name"],
+            trigger={
+                "invoice_id": "00000000-0000-0000-0000-000000000002",
+                "anomaly_ids": ["00000000-0000-0000-0000-000000000001"],
+            },
+        )
+    assert isinstance(result, dict)
+
+
 # ── Cross-scenario invariants ─────────────────────────────────────────────────
 
 

@@ -139,6 +139,10 @@ async def _call_skill(skill_name: str, params: dict) -> dict:
 
 # ── Step executor ─────────────────────────────────────────────────────────────
 
+class _StopScenario(Exception):
+    """Raised by a step with action: complete to halt the scenario early."""
+
+
 async def _run_step(step: dict, ctx: _Context) -> Any:
     """Execute one scenario step and return its result."""
     skill_name: str = step.get("skill", "")
@@ -146,9 +150,14 @@ async def _run_step(step: dict, ctx: _Context) -> Any:
     condition: str | None = step.get("condition")
     for_each: str | None = step.get("for_each")
     params: dict = step.get("params", {})
+    action: str | None = step.get("action")
 
     if condition and not ctx.evaluate(condition):
         return {"skipped": True, "reason": "condition_false"}
+
+    # action: complete — stop scenario execution immediately (clean exit)
+    if action == "complete":
+        raise _StopScenario("early_exit")
 
     resolved_params = ctx.resolve_dict(params)
 
@@ -231,6 +240,12 @@ class ScenarioRunner:
                             scenario=scenario_name,
                             step=step_id,
                         )
+                    except _StopScenario:
+                        # action: complete — clean early exit, not an error
+                        step_status = "ok"
+                        ctx.set(step_id, {"skipped": True, "reason": "action_complete"})
+                        logger.info("scenario_early_exit", scenario=scenario_name, step=step_id)
+                        break
                     except Exception as exc:
                         step_status = "error"
                         step_error = str(exc)

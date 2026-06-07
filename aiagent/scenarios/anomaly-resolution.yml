@@ -112,15 +112,29 @@ steps:
       prompt: "Критическая аномалия ожидает цепочки согласований (менеджер → директор)"
     description: Ожидание завершения цепочки согласований
 
+  # Apply resolution from standard gate (non-critical path)
   - id: apply_resolution
     skill: anomaly.resolve
-    loop: "{{ (wait_chain_decision or wait_decision).decisions }}"
+    condition: "{{ has_critical.total == 0 }}"
+    loop: "{{ wait_decision.decisions }}"
     params:
       anomaly_id: "{{ item.anomaly_id }}"
       resolution: "{{ item.resolution }}"
       comment: "{{ item.comment }}"
     on_error: continue
-    description: Применить решение пользователя
+    description: Применить решение — стандартный gate
+
+  # Apply resolution from approval chain (critical path)
+  - id: apply_resolution_chain
+    skill: anomaly.resolve
+    condition: "{{ has_critical.total > 0 }}"
+    loop: "{{ wait_chain_decision.decisions }}"
+    params:
+      anomaly_id: "{{ item.anomaly_id }}"
+      resolution: "{{ item.resolution }}"
+      comment: "{{ item.comment }}"
+    on_error: continue
+    description: Применить решение — цепочка согласований
 
 completion:
   summary: |
