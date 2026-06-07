@@ -253,6 +253,20 @@ def get_builtin_agent_config() -> BuiltinAgentConfig:
     # Environment always wins for connection URLs
     merged.update(_env_overrides())
 
+    # Model override from env: OLLAMA_MODEL_REASONING always overrides saved model
+    # to prevent stale model names breaking the agent after Ollama model changes.
+    env_reasoning_model = os.environ.get("OLLAMA_MODEL_REASONING", "").strip()
+    if env_reasoning_model and merged.get("model") not in (None, "", env_reasoning_model):
+        # Only override if saved model differs AND env is explicitly set
+        # This avoids overwriting cloud model configurations (e.g., claude-*)
+        saved_model = str(merged.get("model", ""))
+        is_ollama_model = not any(
+            saved_model.startswith(p)
+            for p in ("claude-", "gpt-", "openai/", "anthropic/", "openrouter/")
+        )
+        if is_ollama_model:
+            merged["model"] = env_reasoning_model
+
     return BuiltinAgentConfig(**merged)
 
 

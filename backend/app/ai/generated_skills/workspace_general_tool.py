@@ -1,5 +1,5 @@
 """
-general. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.; Использован неправильный workspace-блок: ожидался agent:invoice-items-by-supplier, опубликовано ['agent:invoice-l
+general. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.. Запрошенный артефакт: workspace_template.
 Auto-generated fallback stub — replace execute() with real logic.
 """
 
@@ -8,8 +8,8 @@ from typing import Any
 
 SKILL_META = {
     "name": "workspace_general_tool",
-    "description": "general. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.; Использован неправильный workspac",
-    "created_at": "2026-06-03T03:35:29.472632+00:00",
+    "description": "general. Причина: Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.. Запрошенный артефакт: workspace_t",
+    "created_at": "2026-06-07T09:15:15.043029+00:00",
     "source": "agent_generated_stub",
 }
 
