@@ -7,11 +7,11 @@ from typing import Literal
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import exists, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.db.models import Approval, ApprovalStatus, ApprovalActionType
+from app.db.models import Approval, ApprovalStatus, ApprovalActionType, Document, Invoice
 from app.domain.approvals import (
     ApprovalChainCreate,
     ApprovalChainOut,
@@ -168,13 +168,19 @@ async def list_pending_approvals(
     current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: approval.list_pending — List pending approvals (excludes dormant chain steps)."""
-    # Exclude dormant chain steps only (chain step with no assigned_to = not yet active)
+    # Exclude dormant chain steps and orphaned approvals (entity deleted)
     from sqlalchemy import or_ as sql_or
     query = select(Approval).where(
         Approval.status == ApprovalStatus.pending,
         sql_or(
             Approval.assigned_to.isnot(None),
             Approval.chain_root_id.is_(None),
+        ),
+        # Skip approvals whose referenced document/invoice no longer exists
+        sql_or(
+            (Approval.entity_type == "document") & exists().where(Document.id == Approval.entity_id),
+            (Approval.entity_type == "invoice") & exists().where(Invoice.id == Approval.entity_id),
+            ~Approval.entity_type.in_(["document", "invoice"]),
         ),
     )
 

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import or_, select, func
+from sqlalchemy import exists, or_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -345,8 +345,15 @@ async def list_anomalies(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: anomaly.list — List anomaly cards."""
-    query = select(AnomalyCard)
+    """Skill: anomaly.list — List anomaly cards. Orphaned cards (entity deleted) are excluded."""
+    query = select(AnomalyCard).where(
+        # Skip anomalies whose referenced document/invoice no longer exists
+        or_(
+            (AnomalyCard.entity_type == "document") & exists().where(Document.id == AnomalyCard.entity_id),
+            (AnomalyCard.entity_type == "invoice") & exists().where(Invoice.id == AnomalyCard.entity_id),
+            ~AnomalyCard.entity_type.in_(["document", "invoice"]),
+        )
+    )
     if status:
         try:
             query = query.where(AnomalyCard.status == AnomalyStatus(status))

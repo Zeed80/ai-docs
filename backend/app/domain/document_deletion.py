@@ -9,12 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     BOM,
+    Approval,
     AnomalyCard,
     AuditLog,
     AuditTimelineEvent,
     BOMLine,
     CollectionItem,
     Document,
+    DraftAction,
     DocumentArtifact,
     DocumentChunk,
     DocumentExtraction,
@@ -471,7 +473,7 @@ async def _delete_cross_entity_records(
     entity_pairs.extend(("bom", bom_id) for bom_id in bom_ids)
 
     for entity_type, entity_id in entity_pairs:
-        for model in (CollectionItem, AnomalyCard, AuditLog, AuditTimelineEvent):
+        for model in (CollectionItem, AnomalyCard, Approval, DraftAction, AuditLog, AuditTimelineEvent):
             column_type = getattr(model, "entity_type", None)
             column_id = getattr(model, "entity_id", None)
             if column_type is None or column_id is None:
@@ -481,6 +483,24 @@ async def _delete_cross_entity_records(
             )
             key = model.__tablename__
             counts[key] = int(counts.get(key, 0) or 0) + int(result.rowcount or 0)
+
+    # Approval chain root references — delete child approvals whose chain_root
+    # was already deleted above (self-referencing FK), then orphaned roots.
+    # Two-pass avoids FK constraint violations.
+    deleted_approval_ids: set[uuid.UUID] = set()
+    for entity_type, entity_id in entity_pairs:
+        rows = (await db.execute(
+            select(Approval.id).where(
+                Approval.entity_type == entity_type,
+                Approval.entity_id == entity_id,
+            )
+        )).scalars().all()
+        deleted_approval_ids.update(rows)
+    if deleted_approval_ids:
+        # Also delete any chain children pointing at these roots
+        await db.execute(
+            delete(Approval).where(Approval.chain_root_id.in_(deleted_approval_ids))
+        )
 
 
 def _delete_storage_paths(storage_paths: Iterable[str]) -> int:

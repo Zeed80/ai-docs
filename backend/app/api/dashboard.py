@@ -10,11 +10,14 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from sqlalchemy import exists
+
 from app.db.models import (
     Approval, ApprovalStatus,
     AnomalyCard, AnomalyStatus, AnomalySeverity,
     Document, DocumentStatus,
     EmailMessage,
+    Invoice,
     QuarantineEntry,
     AuditTimelineEvent,
 )
@@ -53,10 +56,22 @@ async def decision_feed(db: AsyncSession = Depends(get_db)):
     """Unified queue of items requiring human decision."""
     items: list[FeedItem] = []
 
-    # Pending approvals
+    # Pending approvals — skip orphans (entity document/invoice no longer exists)
     approvals = (await db.execute(
         select(Approval)
-        .where(Approval.status == ApprovalStatus.pending)
+        .where(
+            Approval.status == ApprovalStatus.pending,
+            # Keep only if the referenced entity still exists
+            (
+                (Approval.entity_type == "document") &
+                exists().where(Document.id == Approval.entity_id)
+            ) | (
+                (Approval.entity_type == "invoice") &
+                exists().where(Invoice.id == Approval.entity_id)
+            ) | (
+                ~Approval.entity_type.in_(["document", "invoice"])
+            ),
+        )
         .order_by(Approval.created_at.desc())
         .limit(50)
     )).scalars().all()
@@ -73,10 +88,21 @@ async def decision_feed(db: AsyncSession = Depends(get_db)):
             meta={"action_type": a.action_type.value, "requested_by": a.requested_by},
         ))
 
-    # Open anomalies
+    # Open anomalies — skip orphans
     anomalies = (await db.execute(
         select(AnomalyCard)
-        .where(AnomalyCard.status == AnomalyStatus.open)
+        .where(
+            AnomalyCard.status == AnomalyStatus.open,
+            (
+                (AnomalyCard.entity_type == "document") &
+                exists().where(Document.id == AnomalyCard.entity_id)
+            ) | (
+                (AnomalyCard.entity_type == "invoice") &
+                exists().where(Invoice.id == AnomalyCard.entity_id)
+            ) | (
+                ~AnomalyCard.entity_type.in_(["document", "invoice"])
+            ),
+        )
         .order_by(AnomalyCard.created_at.desc())
         .limit(50)
     )).scalars().all()
