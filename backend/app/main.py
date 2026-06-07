@@ -38,6 +38,7 @@ from app.api import (
     ai_settings,
     anomalies,
     approvals,
+    audit,
     auth,
     auto_approval,
     boms,
@@ -300,6 +301,7 @@ def create_app() -> FastAPI:
     app.include_router(invoices.router, prefix="/api/invoices", tags=["invoices"], dependencies=_auth)
     app.include_router(email.router, prefix="/api/email", tags=["email"], dependencies=_auth)
     app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"], dependencies=_auth)
+    app.include_router(audit.router, prefix="/api/audit", tags=["audit"], dependencies=_auth)
     app.include_router(auto_approval.router, prefix="/api/auto-approval-rules", tags=["auto-approval"], dependencies=_auth)
     app.include_router(search.router, prefix="/api/search", tags=["search"], dependencies=_auth)
     app.include_router(normalization.router, prefix="/api/normalization", tags=["normalization"], dependencies=_auth)

@@ -40,6 +40,8 @@ DESTRUCTIVE_SKILL_MARKERS = (
     ".mark_paid",
     ".activate_rule",
     ".confirm_receipt",
+    ".resolve",
+    ".apply_diff",
 )
 
 

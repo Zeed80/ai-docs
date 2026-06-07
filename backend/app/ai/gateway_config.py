@@ -13,7 +13,11 @@ from pathlib import Path
 import yaml
 
 _AIAGENT_ROOT = Path(
-    os.environ.get("AIAGENT_ROOT", str(Path(__file__).parent.parent.parent / "aiagent"))
+    os.environ.get(
+        "AIAGENT_ROOT",
+        # backend/app/ai/ → backend/app/ → backend/ → project_root/ → aiagent/
+        str(Path(__file__).parent.parent.parent.parent / "aiagent"),
+    )
 )
 _GATEWAY_PATH = _AIAGENT_ROOT / "config" / "gateway.yml"
 _REGISTRY_PATH = _AIAGENT_ROOT / "skills" / "_registry.yml"

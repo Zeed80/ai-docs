@@ -311,6 +311,13 @@ def _parse_dwg(content: bytes) -> ParsedDocument:
     return ParsedDocument(
         text=f"Технический чертёж DWG. Размер файла: {len(content)} байт. Требуется конвертация.",
         parser_name="dwg_stub",
+        meta={
+            "warning": (
+                "Утилита dwg2dxf (libredwg) не найдена — автоматическое извлечение текста "
+                "из DWG невозможно. Пожалуйста, конвертируйте файл в DXF или PDF вручную "
+                "перед загрузкой, либо установите libredwg: https://savannah.gnu.org/projects/libredwg/"
+            )
+        },
     )
 
 

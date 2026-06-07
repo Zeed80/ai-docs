@@ -291,6 +291,11 @@ prompts:
     engineer: ./prompts/role-engineer.md
     accountant: ./prompts/role-accountant.md
     buyer: ./prompts/role-buyer.md
+    warehouse_specialist: ./prompts/role-warehouse.md
+    procurement_specialist: ./prompts/role-procurement.md
+    technologist: ./prompts/role-technologist.md
+    data_analyst: ./prompts/role-data-analyst.md
+    memory_researcher: ./prompts/role-memory-researcher.md
 channels:
   websocket:
     enabled: true

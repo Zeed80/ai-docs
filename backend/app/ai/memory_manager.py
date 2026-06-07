@@ -68,6 +68,17 @@ class MemoryManager:
         if not hits:
             return ""
 
+        # Deduplicate: auto_hybrid may return the same fact from SQL and vector paths.
+        # Keep first occurrence by canonical_key, falling back to (title, source) pair.
+        seen: set[str] = set()
+        deduped: list[dict] = []
+        for hit in hits:
+            key = str(hit.get("canonical_key") or f"{hit.get('title','')}\x00{hit.get('source','')}")
+            if key not in seen:
+                seen.add(key)
+                deduped.append(hit)
+        hits = deduped
+
         lines: list[str] = []
         total_chars = 0
         for hit in hits:

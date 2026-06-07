@@ -4148,3 +4148,27 @@ tools:
   method: POST
   path: /api/email-templates/{template_id}/render
   approval_required: false
+- name: audit.list
+  description: 'Skill: audit.list — List audit log entries with optional filters (action, entity_type, user_id, date range).'
+  category: audit
+  method: GET
+  path: /api/audit
+  approval_required: false
+- name: audit.timeline
+  description: 'Skill: audit.timeline — Entity-level timeline events (what happened to a document/invoice/approval).'
+  category: audit
+  method: GET
+  path: /api/audit/timeline
+  approval_required: false
+- name: audit.filter
+  description: 'Skill: audit.filter — Batch-filter audit logs by multiple actions, entity_types, or users.'
+  category: audit
+  method: GET
+  path: /api/audit/filter
+  approval_required: false
+- name: audit.export
+  description: 'Skill: audit.export — Export audit log for compliance (CSV or JSON, admin only).'
+  category: audit
+  method: GET
+  path: /api/audit/export
+  approval_required: false

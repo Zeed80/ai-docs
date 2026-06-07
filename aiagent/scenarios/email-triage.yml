@@ -75,8 +75,14 @@ steps:
     on_error: continue
     description: Связать документ с письмом
 
-  # Step 8: anomaly.check_all — stub for now
-  # Will be implemented in Epic 4
+  - id: check_anomalies
+    skill: anomaly.check_all
+    for_each: "{{ extract.results }}"
+    condition: "{{ item.document_id != null }}"
+    params:
+      document_id: "{{ item.document_id }}"
+    on_error: continue
+    description: Проверить на аномалии (дубликат, новый поставщик, скачок цены, смена реквизитов)
 
 completion:
   summary: |
