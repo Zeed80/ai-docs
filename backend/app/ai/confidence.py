@@ -312,27 +312,86 @@ def validate_arithmetic(extracted: dict) -> list[dict]:
             and abs(line_sum - total_amount) <= max(1.0, 0.01 * abs(total_amount))
         )
         if not matches_subtotal and not matches_total:
-            errors.append({
-                "field": "subtotal",
-                "error_type": "arithmetic",
-                "message": f"Sum of lines ({line_sum}) ≠ subtotal ({subtotal})",
-                "expected": str(line_sum),
-                "actual": str(subtotal),
-                "severity": "error",
-            })
+            # Discount-invoice pattern: lines > subtotal but subtotal/tax/total
+            # are self-consistent.  This means the LLM read the pre-discount
+            # "Сумма без скидки" column instead of the final "Сумма" column.
+            # Totals are still reliable; line amounts need human verification.
+            # Flag as warning (not error) so subtotal confidence stays high.
+            _totals_ok = (
+                tax_amount is not None
+                and total_amount is not None
+                and line_sum > float(subtotal)
+                and rv.arith_total_ok(subtotal, tax_amount, total_amount)
+            )
+            if _totals_ok:
+                errors.append({
+                    "field": "subtotal",
+                    "error_type": "arithmetic",
+                    "message": (
+                        f"Sum of line amounts ({line_sum}) > subtotal ({subtotal}): "
+                        "line amounts may be from pre-discount 'Сумма без скидки' column; "
+                        "please verify individual line amounts"
+                    ),
+                    "expected": str(subtotal),
+                    "actual": str(line_sum),
+                    "severity": "warning",
+                })
+            else:
+                errors.append({
+                    "field": "subtotal",
+                    "error_type": "arithmetic",
+                    "message": f"Sum of lines ({line_sum}) ≠ subtotal ({subtotal})",
+                    "expected": str(line_sum),
+                    "actual": str(subtotal),
+                    "severity": "error",
+                })
 
     # Check subtotal / tax / total reconcile under either VAT convention
     # (НДС сверху OR НДС в том числе) — see ru_validators.arith_total_ok.
     if subtotal is not None and tax_amount is not None and total_amount is not None:
         if not rv.arith_total_ok(subtotal, tax_amount, total_amount):
-            errors.append({
-                "field": "total_amount",
-                "error_type": "arithmetic",
-                "message": f"subtotal ({subtotal}) + tax ({tax_amount}) ≠ total ({total_amount})",
-                "expected": "consistent VAT total",
-                "actual": str(total_amount),
-                "severity": "error",
-            })
+            # Discount-invoice pattern: subtotal > total_amount because the LLM
+            # picked the pre-discount column ("Сумма без скидки") instead of the
+            # final post-discount column ("Сумма"). Detect by checking whether
+            # total_amount is self-consistent under a VAT-included convention
+            # (total_amount is the gross and tax is embedded in it). When that
+            # check passes, the subtotal — not the total — is the wrong field.
+            try:
+                s = float(subtotal)
+                t = float(tax_amount)
+                g = float(total_amount)
+                total_self_consistent = (
+                    s > g and (
+                        rv.arith_total_ok(g, t, g)           # В т.ч. НДС: gross == total
+                        or rv.arith_total_ok(g - t, t, g)    # НДС сверху: net + tax = total
+                    )
+                )
+            except (TypeError, ValueError):
+                total_self_consistent = False
+
+            if total_self_consistent:
+                # Flag subtotal (the pre-discount gross): total_amount is correct.
+                errors.append({
+                    "field": "subtotal",
+                    "error_type": "arithmetic",
+                    "message": (
+                        f"subtotal ({subtotal}) > total ({total_amount}): likely the "
+                        "pre-discount 'Сумма без скидки' column was used instead of "
+                        "the final post-discount 'Сумма' column"
+                    ),
+                    "expected": "post-discount net or gross consistent with total",
+                    "actual": str(subtotal),
+                    "severity": "error",
+                })
+            else:
+                errors.append({
+                    "field": "total_amount",
+                    "error_type": "arithmetic",
+                    "message": f"subtotal ({subtotal}) + tax ({tax_amount}) ≠ total ({total_amount})",
+                    "expected": "consistent VAT total",
+                    "actual": str(total_amount),
+                    "severity": "error",
+                })
 
     return errors
 

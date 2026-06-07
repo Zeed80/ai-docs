@@ -416,15 +416,12 @@ def extract_invoice(self, document_id: str) -> dict:
 
             processing_time_ms = int((time.time() - start_time) * 1000)
 
-            # Filename-based fallback for mandatory fields the LLM missed.
-            # Patterns: "№ KA-15203", "от 04.10.2024", "от 2024-10-04".
-            if not extracted.get("invoice_number") or not extracted.get("invoice_date"):
-                _fallback_from_filename(doc.file_name, extracted)
-
-            # Autocorrect impossible total (total_amount < subtotal is physically
-            # impossible — most likely the LLM picked a wrong number). Silently
-            # replace with subtotal + tax_amount and mark for review.
-            _autocorrect_impossible_total(extracted)
+            # Regex-based recovery for fields the LLM missed.  We read directly
+            # from the OCR/parsed document text — NOT from the filename — so this
+            # is document-data extraction, just rule-based rather than LLM-based.
+            # Applied only when the LLM returned null; never overrides a value the
+            # LLM already found.
+            _recover_mandatory_fields_from_text(text, extracted)
 
         except Exception as e:
             logger.error("extract_error", document_id=document_id, error=str(e))
@@ -443,6 +440,62 @@ def extract_invoice(self, document_id: str) -> dict:
         )
 
         validation_errors = validate_arithmetic(extracted)
+
+        # ── Vision fallback ──────────────────────────────────────────────────
+        # When text-based extraction produced arithmetic errors or left mandatory
+        # fields empty, re-extract directly from page images.  The vision model
+        # can read the visual table layout (column positions) which resolves
+        # discount-column confusion and other layout-dependent errors.
+        _arith_errors = [e for e in validation_errors if e.get("error_type") == "arithmetic"]
+        _mandatory_missing = (
+            not extracted.get("invoice_number")
+            or not extracted.get("invoice_date")
+        )
+        _is_visual = (
+            (doc.mime_type or "").startswith(("image/", "application/pdf"))
+            or (doc.file_name or "").lower().endswith((".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"))
+        )
+
+        if (_arith_errors or _mandatory_missing) and _is_visual:
+            logger.info(
+                "extract_vision_fallback_triggered",
+                document_id=document_id,
+                arith_errors=len(_arith_errors),
+                mandatory_missing=_mandatory_missing,
+            )
+            _doc_content = _download_document(doc)
+            if _doc_content:
+                vision_result = _vision_extract_invoice(_doc_content)
+                if vision_result:
+                    vision_errors = validate_arithmetic(vision_result)
+                    _vision_arith_errors = [
+                        e for e in vision_errors if e.get("error_type") == "arithmetic"
+                    ]
+                    _vision_mandatory_ok = bool(
+                        vision_result.get("invoice_number")
+                        and vision_result.get("invoice_date")
+                    )
+                    _use_vision = (
+                        len(_vision_arith_errors) < len(_arith_errors)
+                        or (_vision_mandatory_ok and _mandatory_missing)
+                    )
+                    if _use_vision:
+                        extracted = vision_result
+                        validation_errors = vision_errors
+                        logger.info(
+                            "extract_vision_fallback_used",
+                            document_id=document_id,
+                            arith_before=len(_arith_errors),
+                            arith_after=len(_vision_arith_errors),
+                            mandatory_ok=_vision_mandatory_ok,
+                        )
+                    else:
+                        logger.info(
+                            "extract_vision_fallback_not_better",
+                            document_id=document_id,
+                            vision_arith_errors=len(_vision_arith_errors),
+                        )
+
         ai_confidences = extracted.get("field_confidences", {})
         field_confs = compute_field_confidences(extracted, ai_confidences, validation_errors)
         overall_confidence = compute_overall_confidence(field_confs)
@@ -1048,6 +1101,79 @@ def _ocr_pdf_content(content: bytes, doc: Document) -> str:
         logger.warning("pdf_ocr_failed", document_id=str(doc.id), error=str(e))
         return ""
 
+
+
+def _vision_extract_invoice(content: bytes) -> dict | None:
+    """Extract invoice fields directly from page images using vision model.
+
+    Converts the PDF (or image) to rendered page images and sends them to the
+    configured vision model with a structured JSON extraction prompt.  Used as a
+    fallback when text-based extraction produced arithmetic errors or failed to
+    find mandatory fields (invoice_number / invoice_date).
+
+    Returns parsed dict on success, None on any failure.
+    """
+    import json as _json
+    import re as _re
+
+    chain = _resolve_ocr_model_chain()
+    if not chain:
+        logger.warning("vision_extract_no_model_configured")
+        return None
+
+    from app.ai.extraction_prompts import EXTRACT_INVOICE_VISION_PROMPT
+
+    # Render up to 4 pages — enough for a multi-page invoice with a cover and items.
+    max_pages = min(getattr(settings, "ocr_max_pages", 15), 4)
+    scale = getattr(settings, "ocr_render_scale", 2.0)
+    images_b64: list[str] = []
+
+    try:
+        import fitz
+
+        with fitz.open(stream=content, filetype="pdf") as pdf:
+            for i in range(min(len(pdf), max_pages)):
+                pixmap = pdf[i].get_pixmap(
+                    matrix=fitz.Matrix(scale, scale), alpha=False
+                )
+                image_bytes = _preprocess_ocr_page(pixmap.tobytes("png"))
+                images_b64.append(base64.b64encode(image_bytes).decode("ascii"))
+    except Exception as exc:
+        # Maybe it is already an image, not a PDF.
+        try:
+            preprocessed = _preprocess_ocr_page(content)
+            images_b64 = [base64.b64encode(preprocessed).decode("ascii")]
+        except Exception:
+            logger.warning("vision_extract_render_failed", error=str(exc))
+            return None
+
+    if not images_b64:
+        return None
+
+    logger.info("vision_extract_start", pages=len(images_b64), candidates=len(chain))
+
+    for model, provider in chain:
+        if provider == "llamacpp":
+            raw = _llamacpp_vision_ocr(images_b64, EXTRACT_INVOICE_VISION_PROMPT)
+        else:
+            raw = _ollama_vision_ocr(images_b64, model, EXTRACT_INVOICE_VISION_PROMPT)
+
+        if not raw.strip():
+            logger.info("vision_extract_empty", model=model, provider=provider)
+            continue
+
+        m = _re.search(r'\{.*\}', raw, _re.DOTALL)
+        if m:
+            try:
+                result = _json.loads(m.group())
+                logger.info("vision_extract_done", model=model, provider=provider)
+                return result
+            except _json.JSONDecodeError:
+                pass
+
+        logger.info("vision_extract_no_json", model=model, provider=provider, raw_len=len(raw))
+
+    return None
 
 
 def _normalize_ocr_text(text: str) -> str:
@@ -2013,72 +2139,71 @@ def _parse_date(value: str | None) -> datetime | None:
         return None
 
 
-def _fallback_from_filename(filename: str, extracted: dict) -> None:
-    """Fill missing invoice_number / invoice_date from the file name.
+# Russian month names → month number (used in date parsing below).
+_RU_MONTHS = {
+    "января": "01", "февраля": "02", "марта": "03", "апреля": "04",
+    "мая": "05", "июня": "06", "июля": "07", "августа": "08",
+    "сентября": "09", "октября": "10", "ноября": "11", "декабря": "12",
+}
 
-    Handles patterns common in Russian invoice filenames:
-      "ВЕКПРОМ № KA-15203 от 04.10.2024(1).pdf"
-      "Счёт №1234 от 2024-01-15.pdf"
-    Mutates *extracted* in place; only fills null/absent fields.
+
+def _recover_mandatory_fields_from_text(text: str, extracted: dict) -> None:
+    """Recover invoice_number and invoice_date from document text when LLM missed them.
+
+    Searches for standard Russian invoice title patterns like:
+      "Счёт на оплату № KA-15203 от 4 октября 2024 г."
+      "Счёт-фактура № 1019 от 19.11.2024"
+    Only fills fields that are null/absent in *extracted*; never overwrites values
+    the LLM already found. Data comes from the document text, not from the filename.
     """
     import re
 
-    if not filename:
-        return
+    if extracted.get("invoice_number") and extracted.get("invoice_date"):
+        return  # LLM got both — nothing to do
 
-    stem = filename.rsplit(".", 1)[0]
+    # Pattern: "Счёт|Счет" (with or without ё) followed by optional sub-type,
+    # then "№ NUMBER от DATE" where DATE is DD.MM.YYYY or "D русский_месяц YYYY"
+    # The "Сч. №" abbreviation (bank account) is deliberately excluded — it lacks
+    # a date phrase and uses the abbreviated "Сч." prefix.
+    _INV_TITLE = re.compile(
+        r"Сч[её]т"                                    # Счёт / Счет
+        r"(?:\s*[-–]\s*|\s+)?"                        # optional separator
+        r"(?:фактура|договор|на\s+оплату)?"           # optional sub-type
+        r"\s*[№#]\s*"                                 # № or #
+        r"([A-Za-zА-Яа-я0-9\-/]+)"                   # NUMBER
+        r"(?:\s+от\s+"                                # " от "
+        r"(?:"
+        r"(\d{1,2})[./\-](\d{1,2})[./\-](\d{4})"   # DD.MM.YYYY
+        r"|"
+        r"(\d{1,2})\s+([а-яёА-ЯЁ]+)\s+(\d{4})"     # D месяца YYYY
+        r"))?",
+        re.IGNORECASE,
+    )
 
-    if not extracted.get("invoice_number"):
-        # "№ KA-15203", "№1234", "N 5678"
-        m = re.search(r"[№N]\s*([A-Za-zА-Яа-я0-9\-/]+)", stem)
-        if m:
-            extracted["invoice_number"] = m.group(1)
-            logger.info("fallback_invoice_number_from_filename", value=m.group(1))
+    for m in _INV_TITLE.finditer(text):
+        number = m.group(1)
+        iso_date: str | None = None
 
-    if not extracted.get("invoice_date"):
-        # "от 04.10.2024" → ISO "2024-10-04"
-        m = re.search(r"от\s+(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})", stem)
-        if m:
-            d, mo, y = m.group(1).zfill(2), m.group(2).zfill(2), m.group(3)
-            extracted["invoice_date"] = f"{y}-{mo}-{d}"
-            logger.info("fallback_invoice_date_from_filename", value=extracted["invoice_date"])
-            return
-        # ISO in filename: "2024-10-04"
-        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", stem)
-        if m:
-            extracted["invoice_date"] = m.group(0)
-            logger.info("fallback_invoice_date_from_filename", value=m.group(0))
+        if m.group(2):  # DD.MM.YYYY groups
+            d, mo, y = m.group(2).zfill(2), m.group(3).zfill(2), m.group(4)
+            iso_date = f"{y}-{mo}-{d}"
+        elif m.group(5):  # D месяца YYYY groups
+            d = m.group(5).zfill(2)
+            mon = _RU_MONTHS.get(m.group(6).lower())
+            y = m.group(7)
+            if mon:
+                iso_date = f"{y}-{mon}-{d}"
 
+        if not extracted.get("invoice_number") and number:
+            extracted["invoice_number"] = number
+            logger.info("recovered_invoice_number_from_text", value=number)
 
-def _autocorrect_impossible_total(extracted: dict) -> None:
-    """When total_amount < subtotal (physically impossible), recompute from subtotal + tax.
+        if not extracted.get("invoice_date") and iso_date:
+            extracted["invoice_date"] = iso_date
+            logger.info("recovered_invoice_date_from_text", value=iso_date)
 
-    Mutates *extracted* in place. The validator will still flag total_amount as
-    arithmetic_error (it can't know we corrected it), but confidence scoring uses
-    the corrected value, which satisfies the VAT formula and passes validation.
-    """
-    subtotal = extracted.get("subtotal")
-    tax_amount = extracted.get("tax_amount")
-    total = extracted.get("total_amount")
-
-    if subtotal is None or total is None:
-        return
-
-    try:
-        s, g = float(subtotal), float(total)
-    except (TypeError, ValueError):
-        return
-
-    if g < s:
-        corrected = round(s + (float(tax_amount) if tax_amount is not None else 0.0), 2)
-        logger.warning(
-            "autocorrect_impossible_total",
-            original=g,
-            corrected=corrected,
-            subtotal=s,
-        )
-        extracted["total_amount"] = corrected
-        extracted["_total_autocorrected"] = True
+        if extracted.get("invoice_number") and extracted.get("invoice_date"):
+            break  # found both
 
 
 @celery_app.task(name="app.tasks.extraction.check_invoice_anomalies", bind=True, max_retries=1)

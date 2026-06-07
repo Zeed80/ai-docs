@@ -27,9 +27,7 @@ Respond with JSON:
 
 EXTRACT_INVOICE_SYSTEM = """You are an invoice data extraction system for a Russian manufacturing company.
 Extract ALL structured data from invoice text. All monetary values in the original currency.
-Respond in valid JSON only. If a field is not found, use null. Never truncate line items.
-CRITICAL: total_amount must ALWAYS be >= subtotal. If the document shows both "без НДС" and "с НДС" totals,
-total_amount = the LARGER number (с НДС / Всего к оплате). Never pick a number smaller than subtotal."""
+Respond in valid JSON only. If a field is not found, use null. Never truncate line items."""
 
 EXTRACT_INVOICE_PROMPT = """Extract ALL fields from this Russian invoice (счёт / счёт-фактура).
 
@@ -38,7 +36,17 @@ Document text:
 {text}
 ---
 
-=== CRITICAL: Russian Payment Order Format ===
+=== STEP 1 — FIRST: Find the invoice title line ===
+Before anything else, scan the ENTIRE text for a line like:
+  "Счёт на оплату № KA-15203 от 4 октября 2024 г."
+  "Счёт-фактура № 1019 от 19.11.2024"
+  "Счёт № 42 от 01.02.2024"
+This is the INVOICE TITLE — it gives invoice_number and invoice_date.
+DO NOT confuse with "Сч. №" (abbreviated bank account number in the payment slip block).
+Russian months: января=01 февраля=02 марта=03 апреля=04 мая=05 июня=06
+                июля=07 августа=08 сентября=09 октября=10 ноября=11 декабря=12
+
+=== STEP 2 — THEN: Russian Payment Order Format ===
 Russian invoices contain a payment slip ("Образец заполнения платёжного поручения").
 Read this section carefully to extract SUPPLIER bank details:
 
@@ -60,6 +68,19 @@ The SECOND "Сч. №" after ИНН/КПП = bank_account (расчётный с
 CRITICAL — NEVER use bank account numbers as monetary amounts:
 Any number that starts with 301, 407, 408 and is 20 digits long is a bank account (расчётный счёт or корреспондентский счёт).
 It is NOT a price, subtotal, tax or total amount. Monetary amounts are at most 10 digits before the decimal point.
+
+CRITICAL — Invoice number vs bank account "Сч. №":
+"Сч. №" in the payment slip = abbreviated "счёт №" = BANK ACCOUNT NUMBER (20 digits), NOT the invoice number.
+The INVOICE NUMBER appears in the TITLE line like:
+  "Счёт на оплату № KA-15203 от 4 октября 2024 г."   → invoice_number="KA-15203"
+  "Счёт-фактура № 1019 от 19.11.2024"                 → invoice_number="1019"
+  "Счёт № 42 от 01.02.2024"                           → invoice_number="42"
+This title line usually appears AFTER the payment slip block. Scan the FULL text for it.
+
+CRITICAL — Russian month names in dates (convert to YYYY-MM-DD):
+января=01, февраля=02, марта=03, апреля=04, мая=05, июня=06,
+июля=07, августа=08, сентября=09, октября=10, ноября=11, декабря=12
+Examples: "4 октября 2024 г." → "2024-10-04";  "19 ноября 2024 г." → "2024-11-19"
 
 CRITICAL: The line "ИНН XXXXXXXXXX" that appears AFTER "Банк получателя" label
 and BEFORE the supplier company name IS the supplier's INN — extract it as supplier.inn.
@@ -114,9 +135,9 @@ Do NOT mix up supplier INN/KPP with buyer INN/KPP.
     }}
   ],
 
-  "subtotal": <float Итого without НДС / Итого без НДС, or null>,
+  "subtotal": <float — see VAT rules below, or null>,
   "tax_amount": <float total НДС / В т.ч. НДС, or null>,
-  "total_amount": <float Всего к оплате / Итого с НДС — MUST be >= subtotal, or null>,
+  "total_amount": <float Всего к оплате / Итого с НДС, or null>,
 
   "field_confidences": {{
     "invoice_number": <0.0-1.0>,
@@ -131,18 +152,107 @@ Do NOT mix up supplier INN/KPP with buyer INN/KPP.
 
 === PARSING RULES ===
 - Amount format: "1 500,00" or "1500.00" → 1500.0; "29 920" → 29920.0
-- "Итого" or "Итого без НДС" = subtotal (before tax)
-- "В т.ч. НДС" or "В том числе НДС" = tax_amount
-- "Всего к оплате" or "Итого с НДС" = total_amount
+- invoice_number: look for "Счёт на оплату №", "Счёт-фактура №", "Счёт №", or just "№" near document header
+- invoice_date: look for "от DD.MM.YYYY", "от D месяца YYYY г." near the invoice number
+- Extract ALL line items without exception — scan the ENTIRE document, never stop early
+
+=== LINE ITEM AMOUNTS — DISCOUNT INVOICES ===
+Some Russian invoices have a "Скидка" (discount) column. The table may be:
+  № | Товар | Кол-во | Цена | Сумма без скидки | Скидка | Ставка НДС | Сумма НДС | Сумма
+In this case:
+- "amount" for each line = the FINAL "Сумма" column (post-discount), NOT "Сумма без скидки"
+- The "Итого" row also has multiple columns — use the final "Сумма" total, NOT the "Сумма без скидки" total
+
+=== VAT CONVENTIONS ===
+Two Russian invoice formats exist:
+1. "НДС сверху" (VAT added on top):
+   "Итого без НДС: X" → subtotal = X
+   "НДС Y%: T" → tax_amount = T
+   "Итого с НДС: Z" → total_amount = Z  (Z = X + T)
+
+2. "В т.ч. НДС" (VAT included / gross pricing):
+   "Итого: X" → subtotal = X (gross amount, tax is inside)
+   "В т.ч. НДС Y%: T" → tax_amount = T
+   "Всего к оплате: X" → total_amount = X  (same as subtotal)
+
+When the invoice shows only ONE total row like "Итого: 27 340,00" and "В т.ч. НДС: 4 556,67":
+  → subtotal = 27340.0, tax_amount = 4556.67, total_amount = 27340.0
+
+=== OTHER RULES ===
 - "Резерв до" or "Срок действия счёта" → validity_date
-- Extract ALL line items without exception — never stop at first few, scan the ENTIRE document
-- invoice_number: look for "Счёт №", "Счёт-фактура №", "№" near the document title; also check page headers
-- invoice_date: look for "от DD.MM.YYYY" or "DD.MM.YYYY" near the invoice number
-- total_amount MUST be >= subtotal (it includes НДС); if you see two totals pick the LARGER one
 - If article/SKU is in a separate column ("Артикул", "Код"), put it in "sku"
 - Supplier phone may appear in address string after "тел" or "тел/факс"
 - Supplier email appears after "E-mail:" or "email:"
 - payment_id: look for "Идентификатор платежа", "Назначение платежа", invoice payment reference code"""
+
+
+EXTRACT_INVOICE_VISION_PROMPT = """You are extracting structured data from a Russian invoice image.
+
+LOOK AT THE FULL IMAGE carefully before answering.
+
+=== STEP 1: Find the Invoice Title ===
+Scan the ENTIRE image for a title line like:
+  "Счёт на оплату № KA-15203 от 4 октября 2024 г."
+  "Счёт-фактура № 1019 от 19.11.2024"
+  "Счёт № 42 от 01.02.2024"
+→ invoice_number = the alphanumeric after "№"
+→ invoice_date = the date after "от" in YYYY-MM-DD
+Russian months: января=01, февраля=02, марта=03, апреля=04, мая=05, июня=06,
+                июля=07, августа=08, сентября=09, октября=10, ноября=11, декабря=12
+DO NOT confuse "Сч. №" (bank account, 20 digits) with the invoice number.
+
+=== STEP 2: Read the Table ===
+If the table has: № | Товар | Кол-во | Цена | Сумма без скидки | Скидка | Сумма НДС | Сумма
+→ "amount" per line = the LAST "Сумма" column (post-discount), NOT "Сумма без скидки"
+
+=== STEP 3: Find Totals ===
+- "Итого без НДС" → subtotal
+- "НДС 20%" or "В т.ч. НДС" → tax_amount
+- "Итого с НДС" or "Всего к оплате" → total_amount
+If only "Итого: X" and "В т.ч. НДС: Y" → subtotal=X, total_amount=X, tax_amount=Y
+
+=== Bank Accounts ≠ Money ===
+20-digit numbers starting with 301, 407, 408 = bank account numbers, NOT monetary amounts.
+
+Return ONLY valid JSON:
+{{
+  "invoice_number": "<string or null>",
+  "invoice_date": "<YYYY-MM-DD or null>",
+  "currency": "RUB",
+  "supplier": {{
+    "name": "<string or null>",
+    "inn": "<10-12 digits or null>",
+    "kpp": "<9 digits or null>",
+    "bank_bik": "<9 digits or null>",
+    "bank_account": "<20 digits or null>",
+    "corr_account": "<20 digits or null>"
+  }},
+  "buyer": {{"name": "<string or null>", "inn": "<10-12 digits or null>"}},
+  "lines": [
+    {{
+      "line_number": 1,
+      "description": "<string>",
+      "quantity": 0.0,
+      "unit": "<string>",
+      "unit_price": 0.0,
+      "amount": 0.0,
+      "tax_rate": 0.2,
+      "tax_amount": 0.0
+    }}
+  ],
+  "subtotal": 0.0,
+  "tax_amount": 0.0,
+  "total_amount": 0.0,
+  "field_confidences": {{
+    "invoice_number": 0.9,
+    "invoice_date": 0.9,
+    "supplier_inn": 0.9,
+    "supplier_bank": 0.9,
+    "buyer_inn": 0.9,
+    "lines": 0.9,
+    "total_amount": 0.9
+  }}
+}}"""
 
 
 SUMMARIZE_SYSTEM = """You are a document summarization system for a Russian manufacturing company.
