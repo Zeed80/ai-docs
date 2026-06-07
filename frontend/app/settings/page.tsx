@@ -11,14 +11,6 @@ const API = getApiBaseUrl();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface OllamaModel {
-  name: string;
-  size: number;
-  parameter_size: string;
-  family: string;
-  modified_at: string;
-}
-
 interface AiConfig {
   model_agent: string;
   model_ocr: string;
@@ -36,27 +28,6 @@ interface AiConfig {
   turboquant_enabled: boolean;
   turboquant_kv_cache_dtype: string;
   turboquant_max_model_len: number;
-}
-
-interface GgufModel {
-  name: string;
-  path: string;
-  size_bytes: number;
-  size_human: string;
-  active: boolean;
-}
-
-interface RegistryModel {
-  name: string;
-  provider: string;
-  provider_model: string;
-  modalities: string[];
-  embedding_dimension: number | null;
-  distance_metric: string;
-  normalize_embeddings: boolean;
-  max_input_tokens: number | null;
-  supports_batching: boolean;
-  capability_source: string;
 }
 
 interface EmbeddingProfile {
@@ -300,114 +271,6 @@ interface AgentPlugin {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const PROVIDERS = [
-  { value: "ollama", label: "Ollama (локально)" },
-  { value: "llamacpp", label: "llama.cpp GGUF (локально)" },
-  { value: "vllm", label: "vLLM (локально)" },
-  { value: "lmstudio", label: "LM Studio (локально)" },
-  { value: "openai_compatible", label: "OpenAI-compatible" },
-  { value: "openrouter", label: "OpenRouter (200+ моделей)" },
-  { value: "openai", label: "OpenAI" },
-  { value: "anthropic", label: "Anthropic (Claude)" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "gemini", label: "Google Gemini" },
-  { value: "mistral", label: "Mistral AI" },
-  { value: "groq", label: "Groq" },
-  { value: "together", label: "Together AI" },
-  { value: "fireworks", label: "Fireworks AI" },
-  { value: "xai", label: "xAI" },
-  { value: "cohere", label: "Cohere" },
-  { value: "perplexity", label: "Perplexity" },
-  { value: "minimax", label: "MiniMax" },
-  { value: "kimi", label: "Kimi / Moonshot" },
-  { value: "qwen", label: "Qwen / DashScope" },
-] as const;
-
-const PROVIDER_ENV: Record<string, string> = {
-  vllm: "VLLM_API_KEY",
-  lmstudio: "LMSTUDIO_API_KEY",
-  openai_compatible: "OPENAI_COMPATIBLE_API_KEY",
-  openrouter: "OPENROUTER_API_KEY",
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-  deepseek: "DEEPSEEK_API_KEY",
-  gemini: "GEMINI_API_KEY",
-  mistral: "MISTRAL_API_KEY",
-  groq: "GROQ_API_KEY",
-  together: "TOGETHER_API_KEY",
-  fireworks: "FIREWORKS_API_KEY",
-  xai: "XAI_API_KEY",
-  cohere: "COHERE_API_KEY",
-  perplexity: "PERPLEXITY_API_KEY",
-  minimax: "MINIMAX_API_KEY",
-  kimi: "MOONSHOT_API_KEY",
-  qwen: "DASHSCOPE_API_KEY",
-};
-
-const PROVIDER_MODEL_PLACEHOLDER: Record<string, string> = {
-  ollama: "qwen3.5:9b",
-  llamacpp: "/llamacpp-models/model.gguf",
-  vllm: "Qwen/Qwen3-32B-AWQ",
-  lmstudio: "local-model",
-  openai_compatible: "model-name",
-  openrouter: "deepseek/deepseek-r1  или  qwen/qwen3-235b-a22b",
-  openai: "gpt-4.1  или  gpt-4.1-mini",
-  anthropic: "claude-sonnet-4-6  или  claude-haiku-4-5",
-  deepseek: "deepseek-chat  или  deepseek-reasoner",
-  gemini: "gemini-2.5-pro  или  gemini-2.5-flash",
-  mistral: "mistral-large-latest",
-  groq: "llama-3.3-70b-versatile",
-  together: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-  fireworks: "accounts/fireworks/models/llama-v3p1-70b-instruct",
-  xai: "grok-3  или  grok-3-mini",
-  cohere: "command-r-plus",
-  perplexity: "sonar-pro",
-  minimax: "MiniMax-M1",
-  kimi: "moonshot-v1-128k",
-  qwen: "qwen-plus  или  qwen-max",
-};
-
-const PROVIDER_COMMON_MODELS: Record<string, string[]> = {
-  vllm: [
-    "Qwen/Qwen3-32B-AWQ",
-    "Qwen/Qwen3-235B-A22B",
-    "deepseek-ai/DeepSeek-R1",
-  ],
-  lmstudio: ["local-model", "qwen3-30b-a3b", "llama-3.3-70b-instruct"],
-  openrouter: [
-    "deepseek/deepseek-r1",
-    "qwen/qwen3-235b-a22b",
-    "anthropic/claude-sonnet-4.5",
-  ],
-  openai: ["gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini"],
-  anthropic: ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-1"],
-  deepseek: ["deepseek-chat", "deepseek-reasoner"],
-  gemini: ["gemini-2.5-pro", "gemini-2.5-flash"],
-  mistral: ["mistral-large-latest", "ministral-8b-latest"],
-  groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"],
-  together: [
-    "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    "Qwen/Qwen3-235B-A22B-fp8-tput",
-  ],
-  fireworks: [
-    "accounts/fireworks/models/llama-v3p1-70b-instruct",
-    "accounts/fireworks/models/qwen3-235b-a22b",
-  ],
-  xai: ["grok-3", "grok-3-mini", "grok-4"],
-  cohere: ["command-r-plus", "command-r"],
-  perplexity: ["sonar-pro", "sonar-reasoning-pro"],
-  minimax: ["MiniMax-M1", "MiniMax-Text-01"],
-  kimi: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
-  qwen: ["qwen-plus", "qwen-max", "qwen-turbo"],
-};
-
-const LOCAL_PROVIDER_URL_LABEL: Record<string, keyof AgentConfig> = {
-  ollama: "ollama_url",
-  vllm: "vllm_url",
-  lmstudio: "lmstudio_url",
-  openai_compatible: "openai_compatible_url",
-};
-
 type TabId = "agent" | "memory" | "data" | "system" | "email";
 
 const TABS: { id: TabId; label: string }[] = [
@@ -529,223 +392,6 @@ function SaveRow({
   );
 }
 
-function modelOptionsForProvider(
-  provider: string,
-  models: OllamaModel[],
-  registryModels: RegistryModel[],
-) {
-  const base =
-    provider === "ollama"
-      ? models.map((m) => m.name)
-      : registryModels
-          .filter((model) => model.provider === provider)
-          .map((model) => model.name);
-  return Array.from(
-    new Set(
-      [
-        ...base,
-        ...(PROVIDER_COMMON_MODELS[provider] ?? []),
-        PROVIDER_MODEL_PLACEHOLDER[provider],
-      ].filter(Boolean),
-    ),
-  );
-}
-
-function DefaultModelField({
-  provider,
-  model,
-  ollamaModels,
-  ggufModels,
-  registryModels,
-  onChange,
-}: {
-  provider: string;
-  model: string;
-  ollamaModels: OllamaModel[];
-  ggufModels: GgufModel[];
-  registryModels: RegistryModel[];
-  onChange: (model: string) => void;
-}) {
-  const isOllama = provider === "ollama";
-  const isLlamacpp = provider === "llamacpp";
-
-  const options: { value: string; label: string }[] = isOllama
-    ? ollamaModels.map((m) => ({
-        value: m.name,
-        label: m.parameter_size ? `${m.name} — ${m.parameter_size}` : m.name,
-      }))
-    : isLlamacpp
-      ? ggufModels.map((m) => ({
-          value: m.path,
-          label: `${m.name} (${m.size_human})`,
-        }))
-      : modelOptionsForProvider(provider, ollamaModels, registryModels).map(
-          (o) => ({ value: o, label: o }),
-        );
-
-  const useSelect = isOllama || isLlamacpp || options.length > 0;
-  const hint = isLlamacpp
-    ? "GGUF-модель из локального хранилища"
-    : isOllama
-      ? "Fallback-модель для диалога и инструментов"
-      : `Пример: ${PROVIDER_MODEL_PLACEHOLDER[provider] ?? "model-name"}`;
-
-  return (
-    <Field label="Модель по умолчанию" hint={hint}>
-      {useSelect ? (
-        <select
-          value={model}
-          onChange={(e) => onChange(e.target.value)}
-          className={selectCls}
-        >
-          {isLlamacpp && ggufModels.length === 0 && (
-            <option value="" disabled>
-              — нет GGUF-моделей —
-            </option>
-          )}
-          {!options.find((o) => o.value === model) && model && (
-            <option value={model}>{model}</option>
-          )}
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <>
-          <input
-            className={inputCls}
-            list="default-model-datalist"
-            value={model}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={PROVIDER_MODEL_PLACEHOLDER[provider] ?? "model-name"}
-          />
-          <datalist id="default-model-datalist">
-            {options.map((o) => (
-              <option key={o.value} value={o.value} />
-            ))}
-          </datalist>
-        </>
-      )}
-      {isLlamacpp && ggufModels.length === 0 && (
-        <p className="mt-1 text-xs text-amber-400">
-          Нет локальных GGUF-моделей.{" "}
-          <a href="/settings/models" className="underline hover:text-amber-300">
-            Загрузите модель →
-          </a>
-        </p>
-      )}
-    </Field>
-  );
-}
-
-function AgentModelProviderSelector({
-  label,
-  provider,
-  model,
-  disableThinking,
-  fallbackProvider,
-  fallbackModel,
-  models,
-  registryModels,
-  onChange,
-}: {
-  label: string;
-  provider: string | null;
-  model: string | null;
-  disableThinking: boolean;
-  fallbackProvider: string;
-  fallbackModel: string;
-  models: OllamaModel[];
-  registryModels: RegistryModel[];
-  onChange: (next: {
-    provider: string | null;
-    model: string | null;
-    disableThinking: boolean;
-  }) => void;
-}) {
-  const effectiveProvider = provider || fallbackProvider;
-  const options = modelOptionsForProvider(
-    effectiveProvider,
-    models,
-    registryModels,
-  );
-
-  return (
-    <div className="rounded-md border border-slate-700 bg-slate-900/40 p-3">
-      <div className="mb-3 text-sm font-medium text-slate-200">{label}</div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Провайдер" hint="Пусто = как у основного агента">
-          <select
-            value={provider ?? ""}
-            onChange={(e) =>
-              onChange({
-                provider: e.target.value || null,
-                model,
-                disableThinking,
-              })
-            }
-            className={selectCls}
-          >
-            <option value="">
-              Как у основного агента ({fallbackProvider})
-            </option>
-            {PROVIDERS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field
-          label="Модель"
-          hint="Пусто = модель основного агента или роль по умолчанию"
-        >
-          <select
-            className={selectCls}
-            value={model ?? ""}
-            onChange={(e) =>
-              onChange({
-                provider,
-                model: e.target.value || null,
-                disableThinking,
-              })
-            }
-          >
-            <option value="">Как у основного агента ({fallbackModel})</option>
-            {model && !options.includes(model) && (
-              <option value={model}>{model} (текущее значение)</option>
-            )}
-            {options.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-      <label className="mt-3 flex items-start gap-3 rounded-md border border-slate-700 bg-slate-950/40 p-3">
-        <input
-          type="checkbox"
-          className="mt-0.5"
-          checked={disableThinking}
-          onChange={(e) =>
-            onChange({
-              provider,
-              model,
-              disableThinking: e.target.checked,
-            })
-          }
-        />
-        <span className="text-sm text-slate-200">
-          Отключить размышления для этой роли
-        </span>
-      </label>
-    </div>
-  );
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 interface ApprovalPolicy {
@@ -792,28 +438,11 @@ export default function SettingsPage() {
     }
   }
 
-  // AI Config (models tab)
-  const [models, setModels] = useState<OllamaModel[]>([]);
-  const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
-  const [ollamaError, setOllamaError] = useState<string | null>(null);
-  const [ollamaGpuInfo, setOllamaGpuInfo] = useState<{
-    has_gpu: boolean;
-    running_models: { name: string; size_vram: number }[];
-  } | null>(null);
+  // AI Config
   const [config, setConfig] = useState<AiConfig | null>(null);
-  const [registryModels, setRegistryModels] = useState<RegistryModel[]>([]);
   const [configStatus, setConfigStatus] = useState<AiConfigStatus | null>(null);
-  const [ggufModels, setGgufModels] = useState<GgufModel[]>([]);
-  const [loadingModels, setLoadingModels] = useState(true);
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
-
-  // Model pull
-  const [pullName, setPullName] = useState("");
-  const [pulling, setPulling] = useState(false);
-  const [pullLog, setPullLog] = useState<string[]>([]);
-  const [deletingModel, setDeletingModel] = useState<string | null>(null);
-  const pullLogRef = useRef<HTMLDivElement>(null);
 
   // Memory / embeddings
   const [embeddingProfile, setEmbeddingProfile] =
@@ -893,24 +522,6 @@ export default function SettingsPage() {
 
   // ── Data loaders ─────────────────────────────────────────────────────────
 
-  async function loadModels() {
-    setLoadingModels(true);
-    try {
-      const r = await fetch(`${API}/api/ai/models`);
-      const d = await r.json();
-      setModels(d.models ?? []);
-      setOllamaAvailable(d.ollama_available ?? false);
-      setOllamaError(d.ollama_error ?? null);
-      setOllamaGpuInfo(d.gpu_info ?? null);
-    } catch {
-      setModels([]);
-      setOllamaAvailable(false);
-      setOllamaError("Не удалось подключиться к backend");
-    } finally {
-      setLoadingModels(false);
-    }
-  }
-
   async function loadConfig() {
     try {
       const r = await fetch(`${API}/api/ai/config`);
@@ -925,27 +536,6 @@ export default function SettingsPage() {
       setConfigStatus(await r.json());
     } catch {
       setConfigStatus(null);
-    }
-  }
-
-  async function loadGgufModels() {
-    try {
-      const r = await fetch(`${API}/api/local-models/llamacpp/models`);
-      const d = await r.json();
-      const list = Array.isArray(d) ? d : d?.models;
-      setGgufModels(Array.isArray(list) ? list : []);
-    } catch {
-      setGgufModels([]);
-    }
-  }
-
-  async function loadCapabilities() {
-    try {
-      const r = await fetch(`${API}/api/ai/models/capabilities`);
-      const d = await r.json();
-      setRegistryModels(d.models ?? []);
-    } catch {
-      setRegistryModels([]);
     }
   }
 
@@ -1093,9 +683,6 @@ export default function SettingsPage() {
         loadAgentConfigProposals();
         loadCapabilityProposals();
         loadAgentWorkRegistry();
-        loadModels();
-        loadCapabilities();
-        loadGgufModels();
       } else if (tab === "memory") {
         loadEmbeddingProfile();
         loadEmbeddingStats();
@@ -1108,10 +695,6 @@ export default function SettingsPage() {
     }
     loadTab(activeTab);
   }, [activeTab]);
-
-  useEffect(() => {
-    pullLogRef.current?.scrollTo(0, pullLogRef.current.scrollHeight);
-  }, [pullLog]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -1289,38 +872,6 @@ export default function SettingsPage() {
       setAgentSaved(true);
       setTimeout(() => setAgentSaved(false), 2000);
     } catch {}
-    setAgentSaving(false);
-  }
-
-  async function handleApplyStableLocalPreset() {
-    setAgentSaving(true);
-    setAgentError(null);
-    try {
-      const response = await mutFetch(
-        `${API}/api/ai/agent-config/presets/stable-local`,
-        { method: "POST" },
-      );
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.detail || `HTTP ${response.status}`);
-      }
-      const data = await response.json();
-      setAgentConfig(data);
-      setAgentConfigBaseline(data);
-      await loadConfig();
-      await loadAgentSkills();
-      await loadAgentControlPlane();
-      await loadAgentRuntime();
-      await loadAgentConfigProposals();
-      setAgentSaved(true);
-      setTimeout(() => setAgentSaved(false), 2000);
-    } catch (error) {
-      setAgentError(
-        error instanceof Error
-          ? error.message
-          : "Не удалось применить стабильный локальный режим",
-      );
-    }
     setAgentSaving(false);
   }
 
@@ -2345,378 +1896,17 @@ export default function SettingsPage() {
                     </label>
                   </div>
 
-                  <div className="rounded-md border border-emerald-800/50 bg-emerald-950/20 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-emerald-200">
-                          Стабильный локальный режим
-                        </div>
-                        <div className="mt-1 text-xs text-emerald-100/70">
-                          3 модели: малая для оркестратора, основная для
-                          исполнителей и аудитора, большая только для builder и
-                          сложных задач.
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={agentSaving}
-                        onClick={handleApplyStableLocalPreset}
-                        className="rounded bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
-                      >
-                        Применить режим
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Ollama diagnostics */}
-                  {ollamaAvailable === false && ollamaError && (
-                    <div className="rounded-md border border-red-800/60 bg-red-950/20 p-3 text-xs text-red-300">
-                      <span className="font-medium">Ollama недоступен</span>
-                      {" — "}
-                      {ollamaError}. Списки локальных моделей пусты.
-                    </div>
-                  )}
-                  {ollamaAvailable && ollamaGpuInfo !== null && (
-                    <div
-                      className={`rounded-md border p-3 text-xs ${ollamaGpuInfo.has_gpu ? "border-emerald-800/50 bg-emerald-950/20 text-emerald-300" : "border-amber-800/50 bg-amber-950/20 text-amber-300"}`}
+                  {/* Models moved to /settings/models → Агент tab */}
+                  <div className="rounded-md border border-slate-700 bg-slate-900/40 px-4 py-3 text-sm text-slate-400">
+                    Выбор моделей агента (провайдер, роли, параметры генерации)
+                    →{" "}
+                    <a
+                      href="/settings/models"
+                      className="text-blue-400 hover:underline"
                     >
-                      {ollamaGpuInfo.has_gpu ? (
-                        <>
-                          GPU активен. Запущено моделей:{" "}
-                          {ollamaGpuInfo.running_models.length}
-                          {ollamaGpuInfo.running_models.length > 0 && (
-                            <span className="ml-2 text-emerald-200">
-                              {ollamaGpuInfo.running_models
-                                .map((m) => m.name)
-                                .join(", ")}
-                            </span>
-                          )}
-                        </>
-                      ) : (
-                        "GPU не обнаружен в Ollama — модели работают на CPU. Проверьте NVIDIA-драйверы и nvidia-container-toolkit на хосте."
-                      )}
-                    </div>
-                  )}
-                  {ollamaAvailable &&
-                    ollamaGpuInfo === null &&
-                    models.length === 0 && (
-                      <div className="rounded-md border border-amber-800/50 bg-amber-950/20 p-3 text-xs text-amber-300">
-                        Ollama доступен, но модели не загружены. Перейдите на
-                        вкладку «Модели» чтобы скачать модель.
-                      </div>
-                    )}
-
-                  {/* Default provider & model — used as fallback when per-role is not configured */}
-                  <div className="rounded-md border border-slate-700 bg-slate-950/30 p-4">
-                    <div className="mb-3 text-sm font-medium text-slate-300">
-                      Провайдер по умолчанию
-                      <span className="ml-2 text-xs font-normal text-slate-500">
-                        — используется когда для роли не задан отдельный
-                        провайдер/модель
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <Field
-                        label="Провайдер"
-                        hint="Ollama (локально) рекомендуется"
-                      >
-                        <select
-                          value={agentConfig.provider}
-                          onChange={(e) =>
-                            setAgentConfig({
-                              ...agentConfig,
-                              provider: e.target.value,
-                            })
-                          }
-                          className={selectCls}
-                        >
-                          {PROVIDERS.map((p) => (
-                            <option key={p.value} value={p.value}>
-                              {p.label}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-
-                      <DefaultModelField
-                        provider={agentConfig.provider}
-                        model={agentConfig.model}
-                        ollamaModels={models}
-                        ggufModels={ggufModels}
-                        registryModels={registryModels}
-                        onChange={(model) =>
-                          setAgentConfig({ ...agentConfig, model })
-                        }
-                      />
-                    </div>
-
-                    {/* Local endpoint URL */}
-                    {LOCAL_PROVIDER_URL_LABEL[agentConfig.provider] && (
-                      <div className="mt-3">
-                        <Field
-                          label={`${PROVIDERS.find((p) => p.value === agentConfig.provider)?.label ?? "Provider"} URL`}
-                          hint="Адрес локального endpoint"
-                        >
-                          <input
-                            className={inputCls}
-                            value={String(
-                              agentConfig[
-                                LOCAL_PROVIDER_URL_LABEL[agentConfig.provider]
-                              ] ?? "",
-                            )}
-                            onChange={(e) =>
-                              setAgentConfig({
-                                ...agentConfig,
-                                [LOCAL_PROVIDER_URL_LABEL[
-                                  agentConfig.provider
-                                ]]: e.target.value,
-                              })
-                            }
-                          />
-                        </Field>
-                      </div>
-                    )}
-
-                    {/* llamacpp info */}
-                    {agentConfig.provider === "llamacpp" && (
-                      <div className="mt-3 flex items-start gap-2 rounded-md bg-blue-950/30 border border-blue-800/40 px-3 py-2 text-xs text-blue-300">
-                        <span>⚡</span>
-                        <span>
-                          llama.cpp сервер: настройки и загрузка моделей в{" "}
-                          <a href="/settings/models" className="underline">
-                            Настройки / llama.cpp
-                          </a>
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Cloud API key hint */}
-                    {agentConfig.provider !== "ollama" &&
-                      agentConfig.provider !== "llamacpp" &&
-                      !LOCAL_PROVIDER_URL_LABEL[agentConfig.provider] && (
-                        <div className="mt-3 flex items-start gap-2 rounded-md bg-amber-950/30 border border-amber-800/40 px-3 py-2 text-xs text-amber-300">
-                          <span>🔑</span>
-                          <span>
-                            Установите{" "}
-                            <code className="font-mono bg-amber-900/40 px-1 rounded">
-                              {PROVIDER_ENV[agentConfig.provider] ?? "API_KEY"}
-                            </code>{" "}
-                            в{" "}
-                            <code className="font-mono bg-amber-900/40 px-1 rounded">
-                              .env
-                            </code>
-                          </span>
-                        </div>
-                      )}
-
-                    {/* Anthropic prompt caching */}
-                    {agentConfig.provider === "anthropic" && (
-                      <label className="mt-3 flex items-start gap-3 rounded-md border border-slate-700 bg-slate-900/50 p-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5"
-                          checked={agentConfig.prompt_cache_enabled}
-                          onChange={(e) =>
-                            setAgentConfig({
-                              ...agentConfig,
-                              prompt_cache_enabled: e.target.checked,
-                            })
-                          }
-                        />
-                        <div>
-                          <span className="text-sm text-slate-200">
-                            Prompt Caching (beta)
-                          </span>
-                          <p className="mt-0.5 text-xs text-slate-400">
-                            Ускоряет повторные запросы, снижает стоимость при
-                            длинных сессиях.
-                          </p>
-                        </div>
-                      </label>
-                    )}
+                      Настройки / Модели / Агент
+                    </a>
                   </div>
-
-                  <div className="grid grid-cols-1 gap-4">
-                    {(
-                      [
-                        [
-                          "orchestrator",
-                          "Оркестратор",
-                          "orchestrator_provider",
-                          "orchestrator_model",
-                          "orchestrator_disable_thinking",
-                          agentConfig.provider,
-                          agentConfig.model,
-                        ],
-                        [
-                          "worker",
-                          "Исполнители",
-                          "worker_provider",
-                          "worker_model",
-                          "worker_disable_thinking",
-                          agentConfig.provider,
-                          agentConfig.model,
-                        ],
-                        [
-                          "auditor",
-                          "Аудитор",
-                          "auditor_provider",
-                          "auditor_model",
-                          "auditor_disable_thinking",
-                          agentConfig.provider,
-                          agentConfig.model,
-                        ],
-                        [
-                          "builder",
-                          "Большая builder-модель",
-                          "builder_provider",
-                          "builder_model",
-                          "builder_disable_thinking",
-                          agentConfig.orchestrator_provider ||
-                            agentConfig.provider,
-                          agentConfig.orchestrator_model || agentConfig.model,
-                        ],
-                        [
-                          "fast",
-                          "Быстрая модель",
-                          "fast_provider",
-                          "fast_model",
-                          "fast_disable_thinking",
-                          agentConfig.provider,
-                          agentConfig.model,
-                        ],
-                      ] as const
-                    ).map(
-                      ([
-                        ,
-                        label,
-                        providerKey,
-                        modelKey,
-                        thinkingKey,
-                        fallbackProvider,
-                        fallbackModel,
-                      ]) => (
-                        <AgentModelProviderSelector
-                          key={providerKey}
-                          label={label}
-                          provider={agentConfig[providerKey]}
-                          model={agentConfig[modelKey]}
-                          disableThinking={agentConfig[thinkingKey]}
-                          fallbackProvider={fallbackProvider}
-                          fallbackModel={fallbackModel}
-                          models={models}
-                          registryModels={registryModels}
-                          onChange={(next) =>
-                            setAgentConfig({
-                              ...agentConfig,
-                              [providerKey]: next.provider,
-                              [modelKey]: next.model,
-                              [thinkingKey]: next.disableThinking,
-                            })
-                          }
-                        />
-                      ),
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <Field
-                      label="Max worker steps"
-                      hint="Сколько шагов может сделать назначенный исполнитель"
-                    >
-                      <input
-                        className={`${inputCls} max-w-xs`}
-                        type="number"
-                        min={1}
-                        max={60}
-                        value={agentConfig.max_worker_steps}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            max_worker_steps: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field
-                      label="Audit retries"
-                      hint="Сколько раз оркестратор может пытаться исправить провал аудита"
-                    >
-                      <input
-                        className={`${inputCls} max-w-xs`}
-                        type="number"
-                        min={0}
-                        max={5}
-                        value={agentConfig.max_audit_retries}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            max_audit_retries: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </Field>
-                  </div>
-                </div>
-              </SectionCard>
-
-              {/* Generation params */}
-              <SectionCard title="Параметры генерации">
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  {(
-                    [
-                      {
-                        key: "temperature",
-                        label: "Temperature",
-                        min: 0,
-                        max: 2,
-                        step: 0.05,
-                      },
-                      {
-                        key: "max_steps",
-                        label: "Max steps",
-                        min: 1,
-                        max: 30,
-                        step: 1,
-                      },
-                      {
-                        key: "llm_timeout_seconds",
-                        label: "LLM timeout (с)",
-                        min: 10,
-                        max: 1800,
-                        step: 1,
-                      },
-                      {
-                        key: "approval_timeout_seconds",
-                        label: "Approval timeout (с)",
-                        min: 10,
-                        max: 1800,
-                        step: 1,
-                      },
-                    ] as const
-                  ).map(({ key, label, min, max, step }) => (
-                    <label key={key} className="text-xs text-slate-400">
-                      {label}
-                      <input
-                        className={`mt-1 ${inputCls}`}
-                        type="number"
-                        min={min}
-                        max={max}
-                        step={step}
-                        value={
-                          (agentConfig as unknown as Record<string, unknown>)[
-                            key
-                          ] as number
-                        }
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            [key]: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </label>
-                  ))}
                 </div>
               </SectionCard>
 

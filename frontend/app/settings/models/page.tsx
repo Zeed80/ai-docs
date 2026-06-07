@@ -31,7 +31,8 @@ type Tab =
   | "library"
   | "routing"
   | "parameters"
-  | "gpu";
+  | "gpu"
+  | "agent";
 type Source = "local" | "huggingface" | "modelscope";
 
 interface CatalogEntry {
@@ -2145,7 +2146,418 @@ function GPUTab({ status }: { status: AllStatus | null }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-// ── Assignment Tab (simplified: 2 groups) ──────────────────────────────────────
+// ── Agent Tab ─────────────────────────────────────────────────────────────────
+
+interface AgentRoleConfig {
+  model: string | null;
+  provider: string | null;
+}
+
+interface AgentFullConfig {
+  provider: string;
+  model: string;
+  orchestrator_provider: string | null;
+  orchestrator_model: string | null;
+  worker_provider: string | null;
+  worker_model: string | null;
+  auditor_provider: string | null;
+  auditor_model: string | null;
+  builder_provider: string | null;
+  builder_model: string | null;
+  fast_provider: string | null;
+  fast_model: string | null;
+  prompt_cache_enabled: boolean;
+  ollama_url: string;
+  vllm_url: string;
+  lmstudio_url: string;
+  openai_compatible_url: string;
+  temperature: number;
+  max_steps: number;
+  llm_timeout_seconds: number;
+  max_worker_steps: number;
+  max_audit_retries: number;
+  [key: string]: unknown;
+}
+
+const LOCAL_URL_LABELS: Record<string, string> = {
+  ollama: "ollama_url",
+  vllm: "vllm_url",
+  lmstudio: "lmstudio_url",
+  openai_compatible: "openai_compatible_url",
+};
+
+function AgentTab() {
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
+  const [cfg, setCfg] = useState<AgentFullConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [running, setRunning] = useState<Record<string, boolean>>({});
+
+  const load = useCallback(async () => {
+    try {
+      const [catRes, cfgRes, stRes] = await Promise.all([
+        fetch(`${API}/api/local-models/assignment`, { credentials: "include" }),
+        fetch(`${API}/api/ai/agent-config`, { credentials: "include" }),
+        fetch(`${API}/api/local-models/status`, { credentials: "include" }),
+      ]);
+      if (catRes.ok) {
+        const d = await catRes.json();
+        setCatalog(d.catalog || []);
+      }
+      if (cfgRes.ok) setCfg(await cfgRes.json());
+      if (stRes.ok) {
+        const st = await stRes.json();
+        const provs = st.providers || {};
+        setRunning({
+          ollama: !!provs.ollama?.running,
+          llamacpp: !!provs.llamacpp?.running,
+          vllm: !!provs.vllm?.running,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const isLocal = (c: CatalogEntry) => LOCAL_PROVIDERS.includes(c.provider);
+  const allText = [
+    ...catalog.filter((c) => c.modalities.includes("text")),
+  ].sort((a, b) => Number(isLocal(b)) - Number(isLocal(a)));
+
+  const toKey = (model?: string | null, provider?: string | null) =>
+    catalog.find((c) => c.provider_model === model && c.provider === provider)
+      ?.key ?? "";
+  const fromKey = (key: string) => {
+    const c = catalog.find((e) => e.key === key);
+    return c
+      ? { model: c.provider_model, provider: c.provider }
+      : { model: "", provider: "" };
+  };
+
+  const dot = (p: string) => {
+    if (!(p in running)) return "";
+    return running[p] ? " ●" : " ○";
+  };
+
+  const setRole = (
+    provKey: keyof AgentFullConfig,
+    modelKey: keyof AgentFullConfig,
+    catalogKey: string,
+  ) => {
+    if (!cfg) return;
+    const { model, provider } = fromKey(catalogKey);
+    setCfg({ ...cfg, [provKey]: provider || null, [modelKey]: model || null });
+  };
+
+  const save = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    setSavedMsg(null);
+    try {
+      const r = await fetch(`${API}/api/ai/agent-config`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await csrfHeaders()),
+        },
+        credentials: "include",
+        body: JSON.stringify(cfg),
+      });
+      const data = await r.json();
+      if (!r.ok) alert(`Ошибка: ${data.detail || JSON.stringify(data)}`);
+      else {
+        setCfg(data);
+        setSavedMsg("Сохранено");
+        setTimeout(() => setSavedMsg(null), 3000);
+      }
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    }
+    setSaving(false);
+  };
+
+  const applyStableLocal = async () => {
+    try {
+      const r = await fetch(`${API}/api/ai/agent-config/presets/stable-local`, {
+        method: "POST",
+        headers: { ...(await csrfHeaders()) },
+        credentials: "include",
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setCfg(d);
+        setSavedMsg("Режим применён");
+      } else alert("Не удалось применить preset");
+    } catch {
+      alert("Ошибка при применении preset");
+    }
+  };
+
+  if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
+  if (!cfg)
+    return (
+      <div className="text-sm text-slate-400">
+        Конфигурация агента недоступна
+      </div>
+    );
+
+  const roles: Array<{
+    label: string;
+    provKey: keyof AgentFullConfig;
+    modelKey: keyof AgentFullConfig;
+    hint: string;
+  }> = [
+    {
+      label: "Оркестратор",
+      provKey: "orchestrator_provider",
+      modelKey: "orchestrator_model",
+      hint: "Планирование, назначение ролей",
+    },
+    {
+      label: "Исполнители (Workers)",
+      provKey: "worker_provider",
+      modelKey: "worker_model",
+      hint: "Выполнение задач, вызов инструментов",
+    },
+    {
+      label: "Аудитор",
+      provKey: "auditor_provider",
+      modelKey: "auditor_model",
+      hint: "Проверка результата перед выводом",
+    },
+    {
+      label: "Builder (тяжёлые задачи)",
+      provKey: "builder_provider",
+      modelKey: "builder_model",
+      hint: "Генерация кода, новые skills",
+    },
+    {
+      label: "Быстрая модель",
+      provKey: "fast_provider",
+      modelKey: "fast_model",
+      hint: "Краткие ответы, заголовки чата",
+    },
+  ];
+
+  const genParams: Array<{
+    key: keyof AgentFullConfig;
+    label: string;
+    min: number;
+    max: number;
+    step: number;
+  }> = [
+    { key: "temperature", label: "Temperature", min: 0, max: 2, step: 0.05 },
+    { key: "max_steps", label: "Max steps", min: 1, max: 30, step: 1 },
+    {
+      key: "llm_timeout_seconds",
+      label: "LLM timeout (с)",
+      min: 10,
+      max: 1800,
+      step: 1,
+    },
+    {
+      key: "max_worker_steps",
+      label: "Max worker steps",
+      min: 1,
+      max: 60,
+      step: 1,
+    },
+    {
+      key: "max_audit_retries",
+      label: "Audit retries",
+      min: 0,
+      max: 5,
+      step: 1,
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-slate-400">
+        Модели агента «Света» для каждой роли. Все изменения применяются
+        немедленно — без перезапуска сервера.
+      </p>
+
+      {/* Stable Local preset */}
+      <div className="rounded-md border border-emerald-800/50 bg-emerald-950/20 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-emerald-200">
+              Стабильный локальный режим
+            </div>
+            <div className="mt-1 text-xs text-emerald-100/70">
+              3 модели: малая для оркестратора, основная для исполнителей и
+              аудитора, большая только для builder.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={applyStableLocal}
+            className="rounded bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+          >
+            Применить режим
+          </button>
+        </div>
+      </div>
+
+      {/* Default provider & model */}
+      <div className={card}>
+        <div className={cardH}>
+          <span className="text-sm font-semibold text-slate-100">
+            Провайдер по умолчанию
+          </span>
+          <span className="text-xs text-slate-500">
+            используется когда для роли не задан отдельный провайдер
+          </span>
+        </div>
+        <div className="p-4 space-y-3">
+          <ProviderModelSelect
+            value={toKey(cfg.model, cfg.provider)}
+            options={allText}
+            statuses={running}
+            onChange={(key) => {
+              const { model, provider } = fromKey(key);
+              setCfg({ ...cfg, model, provider: provider || "ollama" });
+            }}
+          />
+          {LOCAL_URL_LABELS[cfg.provider] && (
+            <label className="block space-y-1">
+              <span className="text-xs text-slate-400">{cfg.provider} URL</span>
+              <input
+                className={`${input} text-sm`}
+                value={String(cfg[LOCAL_URL_LABELS[cfg.provider]] ?? "")}
+                onChange={(e) =>
+                  setCfg({
+                    ...cfg,
+                    [LOCAL_URL_LABELS[cfg.provider]]: e.target.value,
+                  })
+                }
+              />
+            </label>
+          )}
+          {cfg.provider === "anthropic" && (
+            <label className="flex items-start gap-3 rounded-md border border-slate-700 bg-slate-900/50 p-3 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={cfg.prompt_cache_enabled}
+                onChange={(e) =>
+                  setCfg({ ...cfg, prompt_cache_enabled: e.target.checked })
+                }
+              />
+              <div>
+                <span className="text-sm text-slate-200">
+                  Prompt Caching (beta)
+                </span>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Ускоряет повторные запросы, снижает стоимость при длинных
+                  сессиях.
+                </p>
+              </div>
+            </label>
+          )}
+        </div>
+      </div>
+
+      {/* Per-role selectors */}
+      <div className={card}>
+        <div className={cardH}>
+          <span className="text-sm font-semibold text-slate-100">
+            Модели по ролям
+          </span>
+          <span className="text-xs text-slate-500">
+            пусто = использует провайдер по умолчанию
+          </span>
+        </div>
+        <div className="p-4 space-y-4">
+          {roles.map(({ label, provKey, modelKey, hint }) => (
+            <label key={String(modelKey)} className="block space-y-1">
+              <div className="flex items-baseline gap-2">
+                <span className="text-xs font-medium text-slate-300">
+                  {label}
+                </span>
+                <span className="text-xs text-slate-600">{hint}</span>
+              </div>
+              <ProviderModelSelect
+                value={toKey(
+                  cfg[modelKey] as string | null,
+                  cfg[provKey] as string | null,
+                )}
+                options={allText}
+                statuses={running}
+                allowEmpty
+                placeholder={`— как по умолчанию (${cfg.provider}) —`}
+                onChange={(key) => {
+                  const pk = provKey as string;
+                  const mk = modelKey as string;
+                  if (!key) {
+                    setCfg({ ...cfg, [pk]: null, [mk]: null });
+                    return;
+                  }
+                  const { model, provider } = fromKey(key);
+                  setCfg({ ...cfg, [pk]: provider, [mk]: model });
+                }}
+              />
+            </label>
+          ))}
+          <p className="text-xs text-slate-600">
+            <span className="text-emerald-400">●</span> запущен ·{" "}
+            <span className="text-slate-500">○</span> остановлен
+            {Object.values(running).some(Boolean)
+              ? ""
+              : " — ни один локальный провайдер не запущен"}
+          </p>
+        </div>
+      </div>
+
+      {/* Generation params */}
+      <div className={card}>
+        <div className={cardH}>
+          <span className="text-sm font-semibold text-slate-100">
+            Параметры генерации
+          </span>
+        </div>
+        <div className="p-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            {genParams.map(({ key, label, min, max, step }) => (
+              <label key={String(key)} className="block space-y-1">
+                <span className="text-xs text-slate-400">{label}</span>
+                <input
+                  className={`${input} text-sm`}
+                  type="number"
+                  min={min}
+                  max={max}
+                  step={step}
+                  value={(cfg[key] as number) ?? 0}
+                  onChange={(e) =>
+                    setCfg({ ...cfg, [key]: Number(e.target.value) })
+                  }
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button className={btnPrimary} onClick={save} disabled={saving}>
+          {saving ? "Сохранение…" : "Сохранить"}
+        </button>
+        {savedMsg && (
+          <span className="text-xs text-emerald-400">{savedMsg}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Assignment Tab (simplified: documents only) ─────────────────────────────
 
 interface DocGroup {
   vision_model?: string | null;
@@ -2153,13 +2565,6 @@ interface DocGroup {
   embedding_model?: string | null;
   rerank_model?: string | null;
 }
-interface AgentGroup {
-  agent_model?: string | null;
-  agent_provider?: string | null;
-  large_model?: string | null;
-  large_provider?: string | null;
-}
-
 const PROVIDER_DISPLAY: Record<string, string> = {
   ollama: "Ollama",
   llamacpp: "llama.cpp",
@@ -2256,10 +2661,8 @@ function ProviderModelSelect({
 function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [docs, setDocs] = useState<DocGroup>({});
-  const [agent, setAgent] = useState<AgentGroup>({});
   const [loading, setLoading] = useState(true);
   const [savingDocs, setSavingDocs] = useState(false);
-  const [savingAgent, setSavingAgent] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<string, boolean>>({});
 
@@ -2273,7 +2676,6 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
         const d = await a.json();
         setCatalog(d.catalog || []);
         setDocs(d.documents || {});
-        setAgent(d.agent || {});
       }
       if (s.ok) {
         const st = await s.json();
@@ -2299,25 +2701,10 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
       (c) => c.modalities.includes(m) && (!localOnly || isLocal(c)),
     );
 
-  const visionModels = byMod("vision", true);
-  const textModels = byMod("text", true);
+  const visionModels = byMod("vision", true); // OCR — конфиденциально, только локально
+  const textModels = byMod("text"); // текстовые задачи — включая облачные
   const embedModels = byMod("embedding");
   const rerankModels = byMod("rerank");
-  // Agent reasoning models — text-capable, local first.
-  const agentModels = [...byMod("text")].sort(
-    (a, b) => Number(isLocal(b)) - Number(isLocal(a)),
-  );
-
-  // Agent group works with raw provider_model + provider; map to/from a catalog key.
-  const agentKey = (model?: string | null, provider?: string | null) =>
-    catalog.find((c) => c.provider_model === model && c.provider === provider)
-      ?.key ?? "";
-  const keyToNameProvider = (key: string) => {
-    const c = catalog.find((e) => e.key === key);
-    return c
-      ? { model: c.provider_model, provider: c.provider }
-      : { model: "", provider: "" };
-  };
 
   const saveDocs = async () => {
     setSavingDocs(true);
@@ -2342,31 +2729,6 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
       alert(`Ошибка: ${e}`);
     }
     setSavingDocs(false);
-  };
-
-  const saveAgent = async () => {
-    setSavingAgent(true);
-    setSavedMsg(null);
-    try {
-      const r = await fetch(`${API}/api/local-models/assignment/agent`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(await csrfHeaders()),
-        },
-        credentials: "include",
-        body: JSON.stringify(agent),
-      });
-      const data = await r.json();
-      if (!r.ok) alert(`Ошибка: ${data.detail || JSON.stringify(data)}`);
-      else {
-        setAgent(data);
-        setSavedMsg("Сохранено");
-      }
-    } catch (e) {
-      alert(`Ошибка: ${e}`);
-    }
-    setSavingAgent(false);
   };
 
   if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
@@ -2399,7 +2761,9 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
           <span className="text-sm font-semibold text-slate-100">
             Обработка документов
           </span>
-          <span className="text-xs text-slate-500">🔒 только локально</span>
+          <span className="text-xs text-slate-500">
+            🔒 OCR только локально · текст и реранкинг — можно облачные
+          </span>
         </div>
         <div className="p-4 space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2459,83 +2823,15 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
         </div>
       </div>
 
-      {/* Agent */}
-      <div className={card}>
-        <div className={cardH}>
-          <span className="text-sm font-semibold text-slate-100">
-            Агент «Света»
-          </span>
-          <span className="text-xs text-slate-500">
-            оркестратор · исполнитель · аудитор
-          </span>
-        </div>
-        <div className="p-4 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="space-y-1 min-w-0">
-              <span className="text-xs text-slate-400">
-                Модель агента (основная)
-              </span>
-              <ProviderModelSelect
-                value={agentKey(agent.agent_model, agent.agent_provider)}
-                options={agentModels}
-                statuses={running}
-                onChange={(key) => {
-                  const { model, provider } = keyToNameProvider(key);
-                  setAgent((a) => ({
-                    ...a,
-                    agent_model: model,
-                    agent_provider: provider,
-                  }));
-                }}
-              />
-            </label>
-            <label className="space-y-1 min-w-0">
-              <span className="text-xs text-slate-400">
-                Большая модель (опционально) — сложные задачи
-              </span>
-              <ProviderModelSelect
-                value={agentKey(agent.large_model, agent.large_provider)}
-                options={agentModels}
-                statuses={running}
-                allowEmpty
-                placeholder="— как основная —"
-                onChange={(key) => {
-                  if (!key) {
-                    setAgent((a) => ({
-                      ...a,
-                      large_model: null,
-                      large_provider: null,
-                    }));
-                    return;
-                  }
-                  const { model, provider } = keyToNameProvider(key);
-                  setAgent((a) => ({
-                    ...a,
-                    large_model: model,
-                    large_provider: provider,
-                  }));
-                }}
-              />
-            </label>
-          </div>
-          <p className="text-xs text-slate-600">
-            Основная модель используется для планирования, исполнения и аудита.
-            Большая модель — для тяжёлых задач (например, генерация новых
-            возможностей).
-          </p>
-          <div className="flex items-center gap-3">
-            <button
-              className={btnPrimary}
-              onClick={saveAgent}
-              disabled={savingAgent}
-            >
-              {savingAgent ? "Сохранение…" : "Сохранить"}
-            </button>
-            {savedMsg && (
-              <span className="text-xs text-emerald-400">{savedMsg}</span>
-            )}
-          </div>
-        </div>
+      {/* Agent hint */}
+      <div className="rounded-md border border-slate-700 bg-slate-900/40 px-4 py-3 text-sm text-slate-400">
+        Настройка моделей агента →{" "}
+        <button
+          className="text-blue-400 hover:underline"
+          onClick={() => onTabChange("agent")}
+        >
+          вкладка «Агент»
+        </button>
       </div>
     </div>
   );
@@ -2566,6 +2862,7 @@ export default function ModelsPage() {
 
   const TABS: { id: Tab; label: string }[] = [
     { id: "assignment", label: "Назначение" },
+    { id: "agent", label: "Агент" },
     { id: "overview", label: "Провайдеры" },
     { id: "library", label: "Библиотека" },
     { id: "routing", label: "Маршрутизация" },
@@ -2615,6 +2912,7 @@ export default function ModelsPage() {
         {/* Tab content */}
         <div>
           {tab === "assignment" && <AssignmentTab onTabChange={setTab} />}
+          {tab === "agent" && <AgentTab />}
           {tab === "overview" && (
             <OverviewTab status={status} onTabChange={setTab} />
           )}
