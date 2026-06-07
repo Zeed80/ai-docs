@@ -27,7 +27,9 @@ Respond with JSON:
 
 EXTRACT_INVOICE_SYSTEM = """You are an invoice data extraction system for a Russian manufacturing company.
 Extract ALL structured data from invoice text. All monetary values in the original currency.
-Respond in valid JSON only. If a field is not found, use null. Never truncate line items."""
+Respond in valid JSON only. If a field is not found, use null. Never truncate line items.
+CRITICAL: total_amount must ALWAYS be >= subtotal. If the document shows both "без НДС" and "с НДС" totals,
+total_amount = the LARGER number (с НДС / Всего к оплате). Never pick a number smaller than subtotal."""
 
 EXTRACT_INVOICE_PROMPT = """Extract ALL fields from this Russian invoice (счёт / счёт-фактура).
 
@@ -54,6 +56,10 @@ Layout in the payment slip:
 The FIRST "Сч. №" after the bank name = corr_account (starts with 301...).
 The SECOND "Сч. №" after ИНН/КПП = bank_account (расчётный счёт, starts with 407...).
 БИК is always 9 digits. ИНН is 10 or 12 digits. КПП is 9 digits.
+
+CRITICAL — NEVER use bank account numbers as monetary amounts:
+Any number that starts with 301, 407, 408 and is 20 digits long is a bank account (расчётный счёт or корреспондентский счёт).
+It is NOT a price, subtotal, tax or total amount. Monetary amounts are at most 10 digits before the decimal point.
 
 CRITICAL: The line "ИНН XXXXXXXXXX" that appears AFTER "Банк получателя" label
 and BEFORE the supplier company name IS the supplier's INN — extract it as supplier.inn.
@@ -108,9 +114,9 @@ Do NOT mix up supplier INN/KPP with buyer INN/KPP.
     }}
   ],
 
-  "subtotal": <float Итого without НДС, or null>,
-  "tax_amount": <float total НДС, or null>,
-  "total_amount": <float Всего к оплате / Итого с НДС, or null>,
+  "subtotal": <float Итого without НДС / Итого без НДС, or null>,
+  "tax_amount": <float total НДС / В т.ч. НДС, or null>,
+  "total_amount": <float Всего к оплате / Итого с НДС — MUST be >= subtotal, or null>,
 
   "field_confidences": {{
     "invoice_number": <0.0-1.0>,
@@ -129,7 +135,10 @@ Do NOT mix up supplier INN/KPP with buyer INN/KPP.
 - "В т.ч. НДС" or "В том числе НДС" = tax_amount
 - "Всего к оплате" or "Итого с НДС" = total_amount
 - "Резерв до" or "Срок действия счёта" → validity_date
-- Extract ALL line items without exception — never stop at first few
+- Extract ALL line items without exception — never stop at first few, scan the ENTIRE document
+- invoice_number: look for "Счёт №", "Счёт-фактура №", "№" near the document title; also check page headers
+- invoice_date: look for "от DD.MM.YYYY" or "DD.MM.YYYY" near the invoice number
+- total_amount MUST be >= subtotal (it includes НДС); if you see two totals pick the LARGER one
 - If article/SKU is in a separate column ("Артикул", "Код"), put it in "sku"
 - Supplier phone may appear in address string after "тел" or "тел/факс"
 - Supplier email appears after "E-mail:" or "email:"

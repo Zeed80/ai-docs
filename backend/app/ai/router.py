@@ -374,7 +374,7 @@ class AIRouter:
     async def extract_invoice(self, text: str) -> dict:
         model, provider = self._ocr_model_and_provider()
         logger.info("extract_invoice_model", model=model, provider=provider)
-        prompt = EXTRACT_INVOICE_PROMPT.format(text=text[:8000])
+        prompt = EXTRACT_INVOICE_PROMPT.format(text=text[:24000])
         return await generate_json(
             prompt,
             model=model,
@@ -382,7 +382,7 @@ class AIRouter:
             system=EXTRACT_INVOICE_SYSTEM,
             temperature=self._ocr_temperature(AITask.INVOICE_OCR),
             max_tokens=8192,
-            timeout_seconds=180.0,
+            timeout_seconds=240.0,
         )
 
     async def extract_document_fields(self, text: str, doc_type: str) -> dict:

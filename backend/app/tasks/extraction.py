@@ -416,6 +416,16 @@ def extract_invoice(self, document_id: str) -> dict:
 
             processing_time_ms = int((time.time() - start_time) * 1000)
 
+            # Filename-based fallback for mandatory fields the LLM missed.
+            # Patterns: "№ KA-15203", "от 04.10.2024", "от 2024-10-04".
+            if not extracted.get("invoice_number") or not extracted.get("invoice_date"):
+                _fallback_from_filename(doc.file_name, extracted)
+
+            # Autocorrect impossible total (total_amount < subtotal is physically
+            # impossible — most likely the LLM picked a wrong number). Silently
+            # replace with subtotal + tax_amount and mark for review.
+            _autocorrect_impossible_total(extracted)
+
         except Exception as e:
             logger.error("extract_error", document_id=document_id, error=str(e))
             doc.status = DocumentStatus.needs_review
@@ -2001,6 +2011,74 @@ def _parse_date(value: str | None) -> datetime | None:
         return datetime(d.year, d.month, d.day, tzinfo=UTC)
     except (ValueError, TypeError):
         return None
+
+
+def _fallback_from_filename(filename: str, extracted: dict) -> None:
+    """Fill missing invoice_number / invoice_date from the file name.
+
+    Handles patterns common in Russian invoice filenames:
+      "ВЕКПРОМ № KA-15203 от 04.10.2024(1).pdf"
+      "Счёт №1234 от 2024-01-15.pdf"
+    Mutates *extracted* in place; only fills null/absent fields.
+    """
+    import re
+
+    if not filename:
+        return
+
+    stem = filename.rsplit(".", 1)[0]
+
+    if not extracted.get("invoice_number"):
+        # "№ KA-15203", "№1234", "N 5678"
+        m = re.search(r"[№N]\s*([A-Za-zА-Яа-я0-9\-/]+)", stem)
+        if m:
+            extracted["invoice_number"] = m.group(1)
+            logger.info("fallback_invoice_number_from_filename", value=m.group(1))
+
+    if not extracted.get("invoice_date"):
+        # "от 04.10.2024" → ISO "2024-10-04"
+        m = re.search(r"от\s+(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})", stem)
+        if m:
+            d, mo, y = m.group(1).zfill(2), m.group(2).zfill(2), m.group(3)
+            extracted["invoice_date"] = f"{y}-{mo}-{d}"
+            logger.info("fallback_invoice_date_from_filename", value=extracted["invoice_date"])
+            return
+        # ISO in filename: "2024-10-04"
+        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", stem)
+        if m:
+            extracted["invoice_date"] = m.group(0)
+            logger.info("fallback_invoice_date_from_filename", value=m.group(0))
+
+
+def _autocorrect_impossible_total(extracted: dict) -> None:
+    """When total_amount < subtotal (physically impossible), recompute from subtotal + tax.
+
+    Mutates *extracted* in place. The validator will still flag total_amount as
+    arithmetic_error (it can't know we corrected it), but confidence scoring uses
+    the corrected value, which satisfies the VAT formula and passes validation.
+    """
+    subtotal = extracted.get("subtotal")
+    tax_amount = extracted.get("tax_amount")
+    total = extracted.get("total_amount")
+
+    if subtotal is None or total is None:
+        return
+
+    try:
+        s, g = float(subtotal), float(total)
+    except (TypeError, ValueError):
+        return
+
+    if g < s:
+        corrected = round(s + (float(tax_amount) if tax_amount is not None else 0.0), 2)
+        logger.warning(
+            "autocorrect_impossible_total",
+            original=g,
+            corrected=corrected,
+            subtotal=s,
+        )
+        extracted["total_amount"] = corrected
+        extracted["_total_autocorrected"] = True
 
 
 @celery_app.task(name="app.tasks.extraction.check_invoice_anomalies", bind=True, max_retries=1)

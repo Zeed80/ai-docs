@@ -2261,7 +2261,7 @@ function AgentTab() {
     setSavedMsg(null);
     try {
       const r = await fetch(`${API}/api/ai/agent-config`, {
-        method: "PUT",
+        method: "PATCH",
         headers: {
           "Content-Type": "application/json",
           ...(await csrfHeaders()),
