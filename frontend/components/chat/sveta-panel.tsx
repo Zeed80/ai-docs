@@ -378,10 +378,10 @@ export function SvetaPanel() {
   }, [messages]);
 
   useEffect(() => {
-    if (!isStreaming && !isDegraded) {
+    if (!isStreaming && !effectivelyOffline) {
       inputRef.current?.focus();
     }
-  }, [isStreaming, isDegraded]);
+  }, [isStreaming, isDegraded, isConnected]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1012,8 +1012,9 @@ export function SvetaPanel() {
   }
 
   const isUploading = attachedFiles.some((f) => f.status === "uploading");
+  const effectivelyOffline = isDegraded && !isConnected;
   const canSend =
-    !isDegraded &&
+    !effectivelyOffline &&
     !isStreaming &&
     !isUploading &&
     (input.trim().length > 0 ||
@@ -1469,7 +1470,7 @@ export function SvetaPanel() {
           {/* Paperclip button */}
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={isDegraded || isStreaming}
+            disabled={effectivelyOffline || isStreaming}
             aria-label="Прикрепить файл"
             title="Прикрепить файл"
             className="px-2 py-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
@@ -1525,7 +1526,7 @@ export function SvetaPanel() {
               }
             }}
             placeholder={
-              isDegraded
+              effectivelyOffline
                 ? "Света офлайн"
                 : isUploading
                   ? "Загружаю файлы…"
@@ -1534,7 +1535,7 @@ export function SvetaPanel() {
                     : "Спросите Свету…"
             }
             aria-label="Сообщение Свете"
-            disabled={isDegraded || isStreaming}
+            disabled={effectivelyOffline || isStreaming}
             className="flex-1 px-3 py-2 text-sm bg-slate-700 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
           />
           {isStreaming && (
