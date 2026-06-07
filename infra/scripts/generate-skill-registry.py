@@ -73,9 +73,13 @@ def extract_skills() -> list[dict]:
         # Map skill_id → dot-notation name (e.g. invoice__list → invoice.list)
         skill_name = skill_id.replace("__", ".")
 
+        # Derive category from dot-notation prefix (invoice.list → invoice)
+        category = skill_name.split(".")[0] if "." in skill_name else skill_name
+
         skill: dict = {
             "id": skill_id,
             "name": skill_name,
+            "category": category,
             "method": method,
             "path": route.path,
             "description": (route.description or route.name or "").strip().split("\n")[0],
@@ -115,24 +119,18 @@ def extract_skills() -> list[dict]:
 
 
 def generate_yaml(skills: list[dict]) -> str:
-    """Generate YAML skill registry v2."""
+    """Generate YAML skill registry v1 (list format — expected by AiAgent gateway and tests)."""
     import yaml
 
-    registry: dict = {
-        "version": "2",
-        "gateway_url": "http://backend:8000",
-        "policy": {
-            "unknown_tools": "deny",
-            "approval_gate_required": True,
-        },
-        "skills": {},
-    }
-
+    tools = []
     for skill in skills:
         entry: dict = {
+            "name": skill["name"],
+            "category": skill.get("category", ""),
             "method": skill["method"],
             "path": skill["path"],
             "description": skill["description"],
+            "approval_required": bool(skill.get("approval_gate")),
         }
         if skill.get("path_params"):
             entry["path_params"] = skill["path_params"]
@@ -140,10 +138,16 @@ def generate_yaml(skills: list[dict]) -> str:
             entry["input_schema"] = skill["input_schema"]
         if "output_schema" in skill:
             entry["output_schema"] = skill["output_schema"]
-        if skill.get("approval_gate"):
-            entry["approval_gate"] = True
+        tools.append(entry)
 
-        registry["skills"][skill["id"]] = entry
+    registry: dict = {
+        "version": 1,
+        "gateway_url": "http://backend:8000",
+        "policy": {
+            "unknown_tools": "deny",
+        },
+        "tools": tools,
+    }
 
     return yaml.dump(registry, allow_unicode=True, default_flow_style=False, sort_keys=False)
 

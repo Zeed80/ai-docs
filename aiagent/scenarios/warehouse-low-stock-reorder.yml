@@ -1,0 +1,126 @@
+# AiAgent Scenario — Warehouse Low-Stock Reorder
+# Role: warehouse_specialist
+# Trigger: daily cron at 09:00 OR manual dispatch by warehouse_specialist
+#
+# Flow: check low-stock positions → find active suppliers for each item
+#       → suggest reorder quantities → create purchase request draft
+#       → wait approval → notify procurement team
+
+name: warehouse_low_stock_reorder
+description: |
+  Ежедневный мониторинг складских остатков. Для каждой позиции ниже минимума
+  Света находит поставщика, рассчитывает оптимальное количество заказа
+  и создаёт черновик заявки на закупку. Требует подтверждения кладовщика.
+trigger:
+  type: schedule
+  cron: "0 9 * * 1-5"  # Weekdays at 09:00
+  allow_manual: true    # warehouse_specialist может запустить вручную
+
+steps:
+  - id: low_stock_items
+    skill: warehouse.low_stock
+    params: {}
+    on_error: abort
+    description: Получить список позиций ниже минимального запаса
+
+  - id: early_exit
+    condition: "{{ low_stock_items.total == 0 }}"
+    action: complete
+    description: Нет позиций ниже минимума — завершить
+
+  - id: enrich_with_suppliers
+    skill: supplier.list
+    params:
+      limit: 100
+      with_price_history: true
+    on_error: continue
+    description: Загрузить поставщиков с историей цен для подбора
+
+  - id: check_open_invoices
+    skill: invoice.list
+    params:
+      status: pending
+      limit: 50
+    on_error: continue
+    description: Проверить открытые счета — не заказывать уже заказанное
+
+  - id: build_reorder_list
+    skill: workspace.sql_table
+    params:
+      title: "Заявка на пополнение склада"
+      canvas_id: "agent:reorder-draft"
+      sql: |
+        SELECT
+          wi.item_code,
+          wi.name,
+          wi.unit,
+          wi.quantity AS current_qty,
+          wi.min_quantity,
+          (wi.min_quantity * 3 - wi.quantity) AS suggested_order_qty,
+          wi.last_supplier_id
+        FROM warehouse_items wi
+        WHERE wi.quantity < wi.min_quantity
+        ORDER BY (wi.quantity::float / NULLIF(wi.min_quantity, 0)) ASC
+        LIMIT 50
+    on_error: continue
+    description: Сформировать список позиций для дозаказа с рекомендуемыми количествами
+
+  - id: present_reorder_panel
+    skill: ui.show_workspace
+    params:
+      title: "Требуется пополнение склада"
+      canvas_id: "agent:reorder-draft"
+      message: |
+        Обнаружено {{ low_stock_items.total }} позиций ниже минимума.
+        Проверьте рекомендуемые количества и подтвердите заявку на закупку.
+    description: Показать сводку пользователю
+
+  - id: wait_reorder_approval
+    skill: approval.wait
+    gate: warehouse.create_receipt
+    timeout: 28800  # 8 hours — рабочий день
+    params:
+      prompt: |
+        Подтвердите заявку на закупку {{ low_stock_items.total }} позиций.
+        Скорректируйте количества при необходимости и нажмите «Создать заявку».
+      context:
+        items: "{{ low_stock_items.items }}"
+        suggested_orders: "{{ build_reorder_list }}"
+    description: Ожидание подтверждения кладовщика
+
+  - id: create_purchase_collection
+    skill: collection.create
+    condition: "{{ wait_reorder_approval.status == 'approved' }}"
+    params:
+      name: "Заявка на закупку {{ now | date('%d.%m.%Y') }}"
+      type: purchase_request
+      context:
+        items: "{{ wait_reorder_approval.approved_items or low_stock_items.items }}"
+        created_by: warehouse_specialist
+        source: low_stock_reorder
+    on_error: continue
+    description: Создать заявку на закупку в системе
+
+  - id: notify_procurement
+    skill: collection.add
+    condition: "{{ create_purchase_collection.id is defined }}"
+    params:
+      collection_id: "{{ create_purchase_collection.id }}"
+      note: "Сформирована кладовщиком по результатам ежедневной проверки остатков"
+    on_error: continue
+    description: Добавить заметку и уведомить снабженца
+
+completion:
+  summary: |
+    Проверено {{ low_stock_items.total }} позиций ниже минимума.
+    {% if create_purchase_collection.id is defined %}
+    Создана заявка на закупку: {{ create_purchase_collection.name }}.
+    {% else %}
+    Заявка отклонена или ожидает подтверждения.
+    {% endif %}
+  notify:
+    channel: procurement
+    event: reorder_request_created
+    message: "Кладовщик создал заявку на пополнение {{ low_stock_items.total }} позиций"
+
+timeout: 36000  # 10 hours

@@ -1091,6 +1091,27 @@ def _build_orchestrator_prompt(
     return "\n\n".join(parts)
 
 
+def _invalidate_skill_hints_if_changed(registry_path: "Path") -> None:
+    """Flush orchestrator:skill:* Redis keys when registry file hash changes."""
+    try:
+        import hashlib
+        current_hash = hashlib.md5(registry_path.read_bytes()).hexdigest()
+        from app.ai.orchestrator_memory import _redis
+        r = _redis()
+        if r is None:
+            return
+        stored_hash = r.get("orchestrator:registry_hash")
+        if stored_hash and stored_hash.decode() == current_hash:
+            return
+        # Hash changed — flush stale skill hint cache
+        keys = r.keys("orchestrator:skill:*")
+        if keys:
+            r.delete(*keys)
+        r.setex("orchestrator:registry_hash", 86400, current_hash)
+    except Exception:
+        pass
+
+
 def _build_skill_registry_context(user_text: str) -> str:
     """Return skills grouped by domain, with top relevant ones highlighted."""
     try:
@@ -1098,6 +1119,7 @@ def _build_skill_registry_context(user_text: str) -> str:
         registry_path = _gw_cfg.registry_path
         if not registry_path.exists():
             return ""
+        _invalidate_skill_hints_if_changed(registry_path)
         import yaml as _yaml
         data = _yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
         skills: list[dict] = data.get("tools") or data.get("skills") or []

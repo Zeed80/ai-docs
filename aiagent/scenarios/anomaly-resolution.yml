@@ -3,12 +3,16 @@
 #
 # Chain: anomaly.check_all → anomaly.explain → supplier.get
 #        → present context → wait for user decision → anomaly.resolve
+#
+# Critical severity: requires 2-step approval chain (manager → director)
+# High/medium/low severity: single approval gate
 
 name: anomaly_resolution
 description: |
   Когда обнаружена аномалия, Света объясняет суть проблемы,
   собирает контекст (профиль поставщика, историю) и предлагает
   варианты действий. Ждёт решения пользователя (approval gate).
+  Критические аномалии требуют цепочку согласований: менеджер → директор.
 trigger:
   type: event
   event: invoice.anomaly_detected
@@ -56,18 +60,61 @@ steps:
       trust_score: "{{ trust_score }}"
     description: Показать панель аномалий пользователю
 
+  # Determine if any anomaly is critical severity
+  - id: has_critical
+    skill: anomaly.filter
+    params:
+      anomaly_ids: "{{ trigger.anomaly_ids }}"
+      severity: critical
+    on_error: continue
+    description: Проверить наличие критических аномалий
+
+  # Critical path: create 2-step approval chain (manager → director)
+  - id: critical_approval_chain
+    skill: approval.create_chain
+    condition: "{{ has_critical.total > 0 }}"
+    params:
+      action_type: anomaly.resolve
+      entity_type: invoice
+      entity_id: "{{ trigger.invoice_id }}"
+      requested_by: sveta
+      context:
+        anomaly_ids: "{{ trigger.anomaly_ids }}"
+        critical_count: "{{ has_critical.total }}"
+        invoice_number: "{{ get_invoice.invoice_number }}"
+        supplier_name: "{{ get_supplier.name }}"
+        trust_score: "{{ trust_score.trust_score }}"
+      steps:
+        - assigned_to: department_manager
+          comment: "Критическая аномалия по счёту {{ get_invoice.invoice_number }}: требуется решение руководителя отдела"
+        - assigned_to: director
+          comment: "Аномалия утверждена менеджером, требуется подтверждение директора"
+    description: Запустить цепочку согласований менеджер → директор
+
+  # Standard path: single approval gate for non-critical anomalies
   - id: wait_decision
     skill: approval.wait
     gate: anomaly.resolve
+    condition: "{{ has_critical.total == 0 or has_critical is not defined }}"
     timeout: 86400  # 24 hours
     params:
       prompt: "Решите по каждой аномалии: подтвердить / ложное срабатывание"
       anomaly_ids: "{{ trigger.anomaly_ids }}"
-    description: Ожидание решения пользователя (approval gate)
+    description: Ожидание решения пользователя (одиночный approval gate)
+
+  # Wait for chain completion (critical path)
+  - id: wait_chain_decision
+    skill: approval.wait_chain
+    condition: "{{ has_critical.total > 0 and critical_approval_chain.chain_root_id is defined }}"
+    timeout: 172800  # 48 hours for 2-step chain
+    params:
+      chain_root_id: "{{ critical_approval_chain.chain_root_id }}"
+      prompt: "Критическая аномалия ожидает цепочки согласований (менеджер → директор)"
+    description: Ожидание завершения цепочки согласований
 
   - id: apply_resolution
     skill: anomaly.resolve
-    loop: "{{ wait_decision.decisions }}"
+    loop: "{{ (wait_chain_decision or wait_decision).decisions }}"
     params:
       anomaly_id: "{{ item.anomaly_id }}"
       resolution: "{{ item.resolution }}"
@@ -79,8 +126,9 @@ completion:
   summary: |
     Обработано {{ trigger.anomaly_ids | length }} аномалий для счёта
     {{ get_invoice.invoice_number }} от {{ get_supplier.name }}.
+    {% if has_critical.total > 0 %}Критические аномалии прошли цепочку согласований.{% endif %}
   notify:
     channel: review_panel
     event: anomalies_resolved
 
-timeout: 90000  # 25 hours (approval gate + processing)
+timeout: 180000  # 50 hours (2-step chain + processing)

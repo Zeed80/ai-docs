@@ -1,0 +1,164 @@
+# AiAgent Scenario — Procurement RFQ Cycle
+# Role: procurement_specialist
+# Trigger: purchase request received OR manual start by снабженец
+#
+# Flow: receive purchase request → find candidate suppliers (trust_score)
+#       → create КП comparison → align columns → wait manager decision
+#       → decide winner → notify warehouse
+
+name: procurement_rfq_cycle
+description: |
+  Цикл запроса коммерческих предложений (КП). Снабженец получает заявку,
+  Света находит поставщиков с высоким trust score, создаёт таблицу сравнения КП,
+  ожидает решения менеджера и фиксирует победителя.
+trigger:
+  type: event
+  event: purchase_request.created
+  params:
+    collection_id: "{{ event.collection_id }}"
+    items: "{{ event.items }}"
+  allow_manual: true
+
+steps:
+  - id: get_request
+    skill: collection.get
+    params:
+      collection_id: "{{ trigger.collection_id }}"
+    on_error: abort
+    description: Загрузить заявку на закупку
+
+  - id: find_suppliers
+    skill: supplier.list
+    params:
+      limit: 20
+      min_trust_score: 0.5
+    on_error: continue
+    description: Найти поставщиков с trust score ≥ 0.5
+
+  - id: check_requisites
+    skill: supplier.check_requisites
+    loop: "{{ find_suppliers.items[:5] }}"
+    params:
+      supplier_id: "{{ item.id }}"
+    on_error: continue
+    description: Проверить реквизиты топ-5 поставщиков
+
+  - id: price_history_top
+    skill: supplier.price_history
+    loop: "{{ find_suppliers.items[:3] }}"
+    params:
+      supplier_id: "{{ item.id }}"
+      limit: 10
+    on_error: continue
+    description: Получить историю цен для топ-3 кандидатов
+
+  - id: create_comparison
+    skill: compare.create
+    params:
+      name: "КП {{ now | date('%d.%m.%Y') }} — {{ get_request.name }}"
+      request_context:
+        collection_id: "{{ trigger.collection_id }}"
+        items: "{{ trigger.items }}"
+      candidate_suppliers: "{{ find_suppliers.items[:5] | map(attribute='id') | list }}"
+    on_error: continue
+    description: Создать таблицу сравнения КП
+
+  - id: align_comparison
+    skill: compare.align
+    condition: "{{ create_comparison.id is defined }}"
+    params:
+      comparison_id: "{{ create_comparison.id }}"
+      reference_items: "{{ trigger.items }}"
+    on_error: continue
+    description: Привести КП к единым позициям (нормализация наименований)
+
+  - id: show_comparison_summary
+    skill: compare.summary
+    condition: "{{ create_comparison.id is defined }}"
+    params:
+      comparison_id: "{{ create_comparison.id }}"
+    on_error: continue
+    description: Сформировать сводку сравнения КП
+
+  - id: present_rfq_panel
+    skill: workspace.sql_table
+    params:
+      title: "Сравнение КП: {{ get_request.name }}"
+      canvas_id: "agent:rfq-comparison"
+      sql: |
+        SELECT
+          s.name AS supplier,
+          s.inn,
+          COALESCE(sp.trust_score, 0)::numeric(4,2) AS trust_score,
+          sp.total_invoices,
+          sp.price_spike_threshold_pct
+        FROM parties s
+        LEFT JOIN supplier_profiles sp ON sp.party_id = s.id
+        WHERE s.id = ANY(ARRAY[{{ find_suppliers.items[:5] | map(attribute='id') | join("','", attribute=none) }}]::uuid[])
+        ORDER BY trust_score DESC
+    on_error: continue
+    description: Показать таблицу поставщиков с метриками на рабочем столе
+
+  - id: wait_decision
+    skill: approval.wait
+    gate: compare.decide
+    timeout: 86400  # 24 hours
+    params:
+      prompt: |
+        Выберите поставщика-победителя по заявке "{{ get_request.name }}".
+        Сравнение КП: {{ create_comparison.id }}.
+        Укажите supplier_id победителя и причину выбора.
+      context:
+        comparison_id: "{{ create_comparison.id }}"
+        comparison_summary: "{{ show_comparison_summary }}"
+        candidates: "{{ find_suppliers.items[:5] }}"
+    description: Ожидание решения менеджера по выбору поставщика
+
+  - id: record_decision
+    skill: compare.decide
+    condition: "{{ wait_decision.status == 'approved' and wait_decision.winner_supplier_id is defined }}"
+    params:
+      comparison_id: "{{ create_comparison.id }}"
+      winner_supplier_id: "{{ wait_decision.winner_supplier_id }}"
+      reason: "{{ wait_decision.reason }}"
+      decided_by: "{{ wait_decision.decided_by }}"
+    on_error: continue
+    description: Зафиксировать победителя КП
+
+  - id: update_collection
+    skill: collection.add
+    condition: "{{ record_decision.winner is defined }}"
+    params:
+      collection_id: "{{ trigger.collection_id }}"
+      note: |
+        Победитель КП: {{ record_decision.winner.name }}.
+        Причина: {{ wait_decision.reason }}.
+        Следующий шаг: выставить счёт и передать на склад.
+    on_error: continue
+    description: Обновить заявку на закупку результатом КП
+
+  - id: notify_warehouse
+    skill: ui.show_workspace
+    condition: "{{ record_decision.winner is defined }}"
+    params:
+      title: "КП завершён — ожидается счёт от {{ record_decision.winner.name }}"
+      message: |
+        Снабженец выбрал поставщика: {{ record_decision.winner.name }} (ИНН {{ record_decision.winner.inn }}).
+        Ожидайте счёт по заявке {{ get_request.name }}.
+      channel: warehouse
+    description: Уведомить склад о результате КП
+
+completion:
+  summary: |
+    Цикл КП завершён по заявке {{ get_request.name }}.
+    {% if record_decision.winner is defined %}
+    Победитель: {{ record_decision.winner.name }} (trust score: {{ record_decision.winner.trust_score }}).
+    {% else %}
+    Решение не принято или запрос отклонён.
+    {% endif %}
+  notify:
+    channel: procurement
+    event: rfq_decided
+    message: "КП завершён: {{ get_request.name }}"
+
+timeout: 90000  # 25 hours
