@@ -377,12 +377,26 @@ def extract_invoice(self, document_id: str) -> dict:
 
         text = _get_document_text(doc)
         if not text:
-            if doc.mime_type.startswith("image/"):
-                error = (
-                    "Изображение требует модели с поддержкой vision. "
-                    "Настройте Ollama vision-модель или llamacpp-модель с vision=true "
-                    "в разделе Настройки → Модели."
-                )
+            needs_ocr = (
+                doc.mime_type.startswith("image/")
+                or doc.mime_type == "application/pdf"
+                or (doc.file_name or "").lower().endswith(".pdf")
+            )
+            if needs_ocr:
+                chain = _resolve_ocr_model_chain()
+                if chain:
+                    # Models are configured but none responded — likely Ollama is offline.
+                    error = (
+                        "OCR завершился без результата: все локальные vision-модели "
+                        f"({', '.join(m for m, _ in chain)}) не ответили или вернули пустой текст. "
+                        "Проверьте доступность Ollama/llamacpp и повторите позже."
+                    )
+                else:
+                    error = (
+                        "Документ требует OCR, но ни одна vision-модель не настроена. "
+                        "Настройте Ollama vision-модель или llamacpp-модель с vision=true "
+                        "в разделе Настройки → Модели."
+                    )
             else:
                 error = "No text extracted from document"
             doc.status = DocumentStatus.needs_review

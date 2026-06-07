@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
-from app.db.models import EmailThread, Invoice, InvoiceLine, InvoiceStatus, Party, PartyRole, SupplierProfile
+from app.db.models import EmailThread, Invoice, InvoiceLine, InvoiceStatus, Party, PartyRole, SupplierProfile, SupplierRequisiteHistory
 from app.domain.suppliers import (
     DuplicateCheckResult,
     DuplicateMatch,
@@ -653,22 +653,46 @@ async def update_supplier(
 
     update_data = payload.model_dump(exclude_unset=True)
 
-    # Notes go to profile
+    # Notes and profile-level fields go to SupplierProfile
     notes = update_data.pop("notes", None)
+    price_spike_threshold_pct = update_data.pop("price_spike_threshold_pct", None)
+
     # user_notes / user_rating stay on Party directly
     for field in ("user_notes", "user_rating"):
         if field in update_data:
             setattr(party, field, update_data.pop(field))
 
+    # Track changes to financial requisites before applying them
+    _REQUISITE_FIELDS = ("inn", "kpp", "bank_bik", "bank_account", "corr_account")
+    for field in _REQUISITE_FIELDS:
+        if field in update_data:
+            old_val = getattr(party, field, None)
+            new_val = update_data[field]
+            if old_val != new_val:
+                db.add(SupplierRequisiteHistory(
+                    party_id=party.id,
+                    field_name=field,
+                    old_value=str(old_val) if old_val is not None else None,
+                    new_value=str(new_val) if new_val is not None else None,
+                    source="manual",
+                ))
+
     for field, value in update_data.items():
         setattr(party, field, value)
 
-    if notes is not None:
+    if notes is not None or price_spike_threshold_pct is not None:
         if party.profile:
-            party.profile.notes = notes
+            if notes is not None:
+                party.profile.notes = notes
+            if price_spike_threshold_pct is not None:
+                party.profile.price_spike_threshold_pct = price_spike_threshold_pct
         else:
-            profile = SupplierProfile(party_id=party.id, notes=notes)
-            db.add(profile)
+            kwargs: dict = {"party_id": party.id}
+            if notes is not None:
+                kwargs["notes"] = notes
+            if price_spike_threshold_pct is not None:
+                kwargs["price_spike_threshold_pct"] = price_spike_threshold_pct
+            db.add(SupplierProfile(**kwargs))
 
     await log_action(
         db, action="supplier.update", entity_type="supplier",

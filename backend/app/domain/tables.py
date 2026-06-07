@@ -35,7 +35,7 @@ class TableQueryRequest(BaseModel):
     sort: list[TableSort] = []
     search: str | None = None
     offset: int = 0
-    limit: int = Field(50, le=500)
+    limit: int = Field(50, le=100_000)
 
 
 class TableRow(BaseModel):

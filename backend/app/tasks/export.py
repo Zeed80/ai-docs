@@ -212,40 +212,115 @@ def _build_excel(invoice: Invoice) -> BytesIO:
 
 
 def _build_1c_xml(invoice: Invoice) -> str:
-    """Build a simple 1C-compatible XML payload."""
-    supplier_name = invoice.supplier.name if invoice.supplier else ""
-    supplier_inn = invoice.supplier.inn if invoice.supplier else ""
-    lines_xml = ""
-    for line in invoice.lines:
-        lines_xml += f"""    <Строка>
-      <НомерСтроки>{line.line_number}</НомерСтроки>
-      <Наименование>{_xml_escape(line.description or '')}</Наименование>
-      <Количество>{line.quantity or 0}</Количество>
-      <ЕдиницаИзмерения>{_xml_escape(line.unit or '')}</ЕдиницаИзмерения>
-      <Цена>{line.unit_price or 0}</Цена>
-      <Сумма>{line.amount or 0}</Сумма>
-      <СтавкаНДС>{int((line.tax_rate or 0) * 100)}%</СтавкаНДС>
-      <СуммаНДС>{line.tax_amount or 0}</СуммаНДС>
-    </Строка>
+    """Build a CommerceML 2.08-compatible XML document for 1C import.
+
+    Structure: КоммерческаяИнформация / Документ / ТаблицаЧасти / Контрагент
+    following the standard used by 1C:Бухгалтерия exchange format.
+    """
+    from datetime import timezone as _tz
+
+    supplier = invoice.supplier
+    s_name = _xml_escape(supplier.name if supplier else "")
+    s_inn = _xml_escape(supplier.inn if supplier else "")
+    s_kpp = _xml_escape(supplier.kpp if supplier else "")
+    s_bank = _xml_escape(supplier.bank_name if supplier else "")
+    s_bik = _xml_escape(supplier.bank_bik if supplier else "")
+    s_account = _xml_escape(supplier.bank_account if supplier else "")
+    s_corr = _xml_escape(supplier.corr_account if supplier else "")
+
+    inv_number = _xml_escape(invoice.invoice_number or "")
+    inv_date = invoice.invoice_date.strftime("%Y%m%d") if invoice.invoice_date else ""
+    due_date = invoice.due_date.strftime("%Y%m%d") if invoice.due_date else ""
+    currency = _xml_escape(invoice.currency or "RUB")
+    created_at = (
+        invoice.created_at.astimezone(_tz.utc).strftime("%Y%m%dT%H%M%S")
+        if invoice.created_at else ""
+    )
+
+    # TabularSection rows — one <СтрокаТаблицыЧасти> per line item
+    rows_xml = ""
+    for idx, line in enumerate(invoice.lines, start=1):
+        tax_rate_str = f"НДС{int((line.tax_rate or 0) * 100)}" if line.tax_rate else "БезНДС"
+        rows_xml += f"""\
+        <СтрокаТаблицыЧасти>
+          <НомерСтроки>{line.line_number or idx}</НомерСтроки>
+          <Номенклатура>
+            <Наименование>{_xml_escape(line.description or '')}</Наименование>
+            <Артикул>{_xml_escape(str(line.canonical_item_id or ''))}</Артикул>
+          </Номенклатура>
+          <ЕдиницаИзмерения>
+            <НаименованиеПолное>{_xml_escape(line.unit or 'шт')}</НаименованиеПолное>
+          </ЕдиницаИзмерения>
+          <Количество>{line.quantity or 0}</Количество>
+          <Цена>{_fmt_amount(line.unit_price)}</Цена>
+          <Сумма>{_fmt_amount(line.amount)}</Сумма>
+          <СтавкаНДС>{tax_rate_str}</СтавкаНДС>
+          <СуммаНДС>{_fmt_amount(line.tax_amount)}</СуммаНДС>
+          <Всего>{_fmt_amount((line.amount or 0) + (line.tax_amount or 0))}</Всего>
+        </СтрокаТаблицыЧасти>
 """
 
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<СчетПоставщика xmlns="urn:1c:document:invoice">
-  <НомерСчета>{_xml_escape(invoice.invoice_number or '')}</НомерСчета>
-  <ДатаСчета>{invoice.invoice_date.strftime('%Y-%m-%d') if invoice.invoice_date else ''}</ДатаСчета>
-  <СрокОплаты>{invoice.due_date.strftime('%Y-%m-%d') if invoice.due_date else ''}</СрокОплаты>
-  <Валюта>{invoice.currency}</Валюта>
-  <Поставщик>
-    <Наименование>{_xml_escape(supplier_name)}</Наименование>
-    <ИНН>{_xml_escape(supplier_inn)}</ИНН>
-  </Поставщик>
-  <СтрокиСчета>
-{lines_xml}  </СтрокиСчета>
-  <СуммаБезНДС>{invoice.subtotal or 0}</СуммаБезНДС>
-  <СуммаНДС>{invoice.tax_amount or 0}</СуммаНДС>
-  <СуммаСНДС>{invoice.total_amount or 0}</СуммаСНДС>
-</СчетПоставщика>
+    return f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<КоммерческаяИнформация
+    xmlns="urn:1C.ru:commerceml_2"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    ВерсияСхемы="2.08"
+    ДатаФормирования="{created_at}">
+  <Документ>
+    <Ид>{invoice.id}</Ид>
+    <Номер>{inv_number}</Номер>
+    <Дата>{inv_date}</Дата>
+    <СрокПлатежа>{due_date}</СрокПлатежа>
+    <ХозяйственнаяОперация>СчетНаОплатуПоставщика</ХозяйственнаяОперация>
+    <Роль>Продавец</Роль>
+    <Валюта>{currency}</Валюта>
+    <Сумма>{_fmt_amount(invoice.total_amount)}</Сумма>
+    <СуммаНДС>{_fmt_amount(invoice.tax_amount)}</СуммаНДС>
+    <Контрагенты>
+      <Контрагент>
+        <Ид>{supplier.id if supplier else ''}</Ид>
+        <Наименование>{s_name}</Наименование>
+        <ИНН>{s_inn}</ИНН>
+        <КПП>{s_kpp}</КПП>
+        <Роль>Продавец</Роль>
+        <БанковскиеСчета>
+          <БанковскийСчет>
+            <Номер>{s_account}</Номер>
+            <Банк>
+              <Наименование>{s_bank}</Наименование>
+              <БИК>{s_bik}</БИК>
+              <КоррСчет>{s_corr}</КоррСчет>
+            </Банк>
+          </БанковскийСчет>
+        </БанковскиеСчета>
+      </Контрагент>
+    </Контрагенты>
+    <ТаблицаЧасти>
+      <НаименованиеТаблицыЧасти>Товары</НаименованиеТаблицыЧасти>
+{rows_xml}    </ТаблицаЧасти>
+    <ЗначенияРеквизитов>
+      <ЗначениеРеквизита>
+        <Наименование>СуммаДокумента</Наименование>
+        <Значение>{_fmt_amount(invoice.subtotal)}</Значение>
+      </ЗначениеРеквизита>
+      <ЗначениеРеквизита>
+        <Наименование>СуммаНДС</Наименование>
+        <Значение>{_fmt_amount(invoice.tax_amount)}</Значение>
+      </ЗначениеРеквизита>
+      <ЗначениеРеквизита>
+        <Наименование>СуммаСНДС</Наименование>
+        <Значение>{_fmt_amount(invoice.total_amount)}</Значение>
+      </ЗначениеРеквизита>
+    </ЗначенияРеквизитов>
+  </Документ>
+</КоммерческаяИнформация>
 """
+
+
+def _fmt_amount(value: float | None) -> str:
+    """Format monetary value with 2 decimal places for 1C XML."""
+    return f"{value:.2f}" if value is not None else "0.00"
 
 
 def _xml_escape(s: str) -> str:

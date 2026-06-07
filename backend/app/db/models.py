@@ -531,8 +531,30 @@ class SupplierProfile(UUIDPrimaryKey, TimestampMixin, Base):
     last_invoice_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     trust_score: Mapped[float | None] = mapped_column(Float)
     notes: Mapped[str | None] = mapped_column(Text)
+    # Per-supplier price spike alert threshold (percent). Overrides global 20%.
+    price_spike_threshold_pct: Mapped[float] = mapped_column(Float, default=20.0, nullable=False)
 
     party: Mapped["Party"] = relationship(back_populates="profile")
+
+
+class SupplierRequisiteHistory(UUIDPrimaryKey, Base):
+    """Append-only log of changes to a party's ИНН / КПП / bank_bik / bank_account."""
+
+    __tablename__ = "supplier_requisite_history"
+
+    party_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("parties.id"), nullable=False, index=True
+    )
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    changed_by: Mapped[str | None] = mapped_column(String(100))  # user sub or "sveta"
+    field_name: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g. "inn"
+    old_value: Mapped[str | None] = mapped_column(String(500))
+    new_value: Mapped[str | None] = mapped_column(String(500))
+    source: Mapped[str | None] = mapped_column(String(100))  # "invoice", "manual", "import"
+
+    party: Mapped["Party"] = relationship()
 
 
 # ── Email ────────────────────────────────────────────────────────────────────

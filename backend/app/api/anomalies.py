@@ -22,6 +22,8 @@ from app.db.models import (
     InvoiceLine,
     InvoiceStatus,
     Party,
+    SupplierProfile,
+    SupplierRequisiteHistory,
 )
 from app.domain.anomalies import (
     AnomalyCardOut,
@@ -211,9 +213,16 @@ async def _detect_requisite_change(db: AsyncSession, invoice: Invoice) -> Anomal
 
 
 async def _detect_price_spike(db: AsyncSession, invoice: Invoice) -> AnomalyCard | None:
-    """Detect >20% price increase on any line item."""
+    """Detect price increase above per-supplier threshold (default 20%) on any line item."""
     if not invoice.supplier_id or not invoice.lines:
         return None
+
+    # Read per-supplier threshold (falls back to global 20% if no profile).
+    profile_result = await db.execute(
+        select(SupplierProfile).where(SupplierProfile.party_id == invoice.supplier_id)
+    )
+    profile = profile_result.scalar_one_or_none()
+    threshold_pct = profile.price_spike_threshold_pct if profile is not None else 20.0
 
     # Get previous invoice lines
     prev_result = await db.execute(
@@ -239,7 +248,7 @@ async def _detect_price_spike(db: AsyncSession, invoice: Invoice) -> AnomalyCard
                 if key not in prev_prices:
                     prev_prices[key] = line.unit_price
 
-    # Check current lines
+    # Check current lines against per-supplier threshold
     spikes = []
     for line in invoice.lines:
         if not line.description or line.unit_price is None:
@@ -248,7 +257,7 @@ async def _detect_price_spike(db: AsyncSession, invoice: Invoice) -> AnomalyCard
         prev_price = prev_prices.get(key)
         if prev_price and prev_price > 0:
             change_pct = (line.unit_price - prev_price) / prev_price * 100
-            if change_pct > 20:
+            if change_pct > threshold_pct:
                 spikes.append({
                     "item": line.description,
                     "old_price": prev_price,
@@ -264,8 +273,8 @@ async def _detect_price_spike(db: AsyncSession, invoice: Invoice) -> AnomalyCard
             entity_type="invoice",
             entity_id=invoice.id,
             title=f"Скачок цены: {worst['item']} (+{worst['change_pct']}%)",
-            description=f"{len(spikes)} позиций с ростом >20%",
-            details={"spikes": spikes},
+            description=f"{len(spikes)} позиций с ростом >{threshold_pct:.0f}%",
+            details={"spikes": spikes, "threshold_pct": threshold_pct},
         )
     return None
 

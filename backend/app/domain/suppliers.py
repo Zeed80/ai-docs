@@ -40,6 +40,7 @@ class SupplierProfileOut(BaseModel):
     last_invoice_date: datetime | None = None
     trust_score: float | None = None
     notes: str | None = None
+    price_spike_threshold_pct: float = 20.0
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -176,6 +177,7 @@ class SupplierUpdate(BaseModel):
     notes: str | None = None
     user_notes: str | None = None
     user_rating: int | None = Field(default=None, ge=1, le=5)
+    price_spike_threshold_pct: float | None = Field(default=None, ge=0.0, le=200.0)
 
 
 class SupplierCreate(BaseModel):
