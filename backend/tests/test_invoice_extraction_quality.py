@@ -43,7 +43,6 @@ import pytest
 # ── File selection ───────────────────────────────────────────────────────────
 
 _INVOICES_DIR = Path(__file__).parent.parent.parent / "example-invoices"
-_MAX_PDFS = int(os.environ.get("QUALITY_MAX_PDFS", "20"))
 _REPORT_DIR = Path(__file__).parent / "reports"
 # Pin both OCR and extraction to a specific Ollama model for a reproducible run
 # that matches production (which uses qwen3.5:9b — far better Russian OCR than
@@ -59,18 +58,38 @@ _MIME = {
 }
 
 
+def _supplier_key(stem: str) -> str:
+    """Extract supplier name prefix: everything before the invoice number token.
+
+    Handles patterns like 'Supplier № 123', 'Supplier №123', 'Supplier N9 2032'.
+    """
+    import re
+    # Split on '№' (with optional surrounding spaces) or standalone 'N' followed by digits
+    m = re.search(r"\s*№\s*|\s+N\d", stem)
+    return stem[:m.start()].strip() if m else stem[:40].strip()
+
+
 def _select_files() -> list[Path]:
+    """All JPGs + one PDF per unique supplier (first alphabetically per group)."""
     if not _INVOICES_DIR.is_dir():
         return []
     jpgs = sorted(
         p for p in _INVOICES_DIR.iterdir()
         if p.suffix.lower() in (".jpg", ".jpeg") and not p.name.startswith(".")
     )
-    pdfs = sorted(
+    all_pdfs = sorted(
         p for p in _INVOICES_DIR.iterdir()
         if p.suffix.lower() == ".pdf" and not p.name.startswith(".")
-    )[:_MAX_PDFS]
-    return jpgs + pdfs
+    )
+    # One PDF per supplier — first file alphabetically within each supplier group
+    seen: set[str] = set()
+    selected_pdfs: list[Path] = []
+    for p in all_pdfs:
+        key = _supplier_key(p.stem)
+        if key not in seen:
+            seen.add(key)
+            selected_pdfs.append(p)
+    return jpgs + selected_pdfs
 
 
 def _ollama_up() -> bool:
@@ -105,7 +124,11 @@ def inn_valid(inn) -> bool:
 
 def bik_valid(bik) -> bool:
     d = _digits(bik)
-    return len(d) == 9 and d.startswith("04")
+    if len(d) != 9 or not d.startswith("04"):
+        return False
+    regional = int(d[2:5])
+    branch = int(d[5:])
+    return regional != 0 and (branch == 0 or branch >= 50)
 
 
 def kpp_valid(kpp) -> bool:
