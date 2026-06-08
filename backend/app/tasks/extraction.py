@@ -1533,6 +1533,122 @@ def _checksum_issues(extracted: dict) -> list[str]:
     return issues
 
 
+def _cr_fallback(
+    main_data: dict,
+    text: str,
+    sig,
+    checksum_problems: list,
+    cfg: dict,
+    threshold: float,
+    document_id: str,
+    main_extraction,
+    field_confs: list,
+    db,
+):
+    """Re-extract with the large CR-fallback reasoning model (Ollama, LOCAL).
+
+    Called when the primary extraction fails checksum or confidence gates.
+    Returns updated (main_data, sig, checksum_problems) so the caller can
+    decide whether to approve or hold for review.
+
+    Security: the CR fallback model MUST be a local Ollama model.
+    Cloud APIs are never used for invoice re-extraction (confidential docs).
+    """
+    from app.ai.confidence import (
+        compute_field_confidences,
+        significant_fields_confidence,
+        validate_arithmetic,
+    )
+    from app.ai.router import ai_router
+    from app.tasks.gpu_lock import gpu_single_flight
+
+    cr_model = cfg.get("model_reasoning", "")
+    cr_provider = cfg.get("model_reasoning_provider", "ollama")
+
+    # Only proceed if a local CR model is configured.
+    # Cloud providers are explicitly forbidden for invoice docs (security policy).
+    if not cr_model or cr_provider not in ("ollama", "llamacpp"):
+        logger.info(
+            "cr_fallback_skipped",
+            document_id=document_id,
+            reason="no_local_cr_model",
+            model=cr_model,
+            provider=cr_provider,
+        )
+        return main_data, sig, checksum_problems
+
+    logger.info(
+        "cr_fallback_start",
+        document_id=document_id,
+        model=cr_model,
+        provider=cr_provider,
+        checksum_issues=checksum_problems,
+        low_fields=[f["field"] for f in sig.low_fields],
+    )
+
+    try:
+        with gpu_single_flight(f"cr_fallback:{document_id}"):
+            cr_data = _run_async(
+                ai_router.extract_invoice_with_model(text, cr_model, cr_provider)
+            )
+    except Exception as exc:
+        logger.warning("cr_fallback_failed", document_id=document_id, error=str(exc))
+        return main_data, sig, checksum_problems
+
+    if not cr_data:
+        logger.warning("cr_fallback_empty", document_id=document_id)
+        return main_data, sig, checksum_problems
+
+    # Re-run validation + confidence on the CR result.
+    cr_verrs = validate_arithmetic(cr_data)
+    cr_field_confs = compute_field_confidences(
+        cr_data,
+        cr_data.get("field_confidences", {}) or {},
+        cr_verrs,
+        unverifiable_prior=threshold,
+    )
+    cr_sig = significant_fields_confidence(cr_field_confs, threshold)
+    cr_checksum = _checksum_issues(cr_data)
+
+    logger.info(
+        "cr_fallback_result",
+        document_id=document_id,
+        cr_sig_score=cr_sig.score,
+        cr_low_fields=[f["field"] for f in cr_sig.low_fields],
+        cr_checksum_issues=cr_checksum,
+    )
+
+    # Only accept CR result if it genuinely improves things.
+    # Do not blindly overwrite a good extraction with a bad one.
+    cr_better = (
+        len(cr_checksum) < len(checksum_problems)
+        or (not cr_checksum and len(cr_sig.low_fields) < len(sig.low_fields))
+        or (not cr_checksum and not cr_sig.low_fields)
+    )
+    if not cr_better:
+        logger.info("cr_fallback_no_improvement", document_id=document_id)
+        return main_data, sig, checksum_problems
+
+    # Persist the improved CR extraction so it becomes the authoritative record.
+    try:
+        cr_extraction = DocumentExtraction(
+            document_id=main_extraction.document_id,
+            model_name=f"cr_fallback/{cr_provider}/{cr_model}",
+            structured_data=cr_data,
+            raw_text=main_extraction.raw_text,
+            confidence_score=cr_sig.score,
+            field_confidences={fc.field_name: fc.confidence for fc in cr_field_confs},
+            validation_errors=cr_verrs,
+        )
+        db.add(cr_extraction)
+        db.flush()
+        logger.info("cr_fallback_extraction_saved", document_id=document_id)
+    except Exception as exc:
+        logger.warning("cr_fallback_save_failed", document_id=document_id, error=str(exc))
+
+    return cr_data, cr_sig, cr_checksum
+
+
 @celery_app.task(name="app.tasks.extraction.auto_verify_document", bind=True, max_retries=1)
 def auto_verify_document(self, document_id: str) -> dict:
     """Auto-verification: re-extract with verify models and compare.
@@ -1568,6 +1684,11 @@ def auto_verify_document(self, document_id: str) -> dict:
 
         if not text:
             return {"error": "no_text"}
+
+        # Apply Cyrillic look-alike sanitization to the stored extraction in-place.
+        # This fixes OCR errors like В→6 in ИНН without requiring a full re-extraction.
+        _sanitize_party_inn(main_data.get("supplier"))
+        _sanitize_party_inn(main_data.get("buyer"))
 
         # ── Significant-field confidence gate (user-tunable threshold) ───────
         # Auto-approve only when EVERY significant field (sums, line items,
@@ -1635,11 +1756,23 @@ def auto_verify_document(self, document_id: str) -> dict:
         checksum_problems = _checksum_issues(main_data)
         if checksum_problems:
             doc.metadata_ = {**(doc.metadata_ or {}), "checksum_issues": checksum_problems}
-            return _hold_for_review("checksum_validation_failed", checksum_issues=checksum_problems)
+            # Try CR fallback before sending to review
+            main_data, sig, checksum_problems = _cr_fallback(
+                main_data, text, sig, checksum_problems, cfg, threshold, document_id,
+                main_extraction, field_confs, db,
+            )
+            if checksum_problems or sig.low_fields:
+                return _hold_for_review("checksum_validation_failed", checksum_issues=checksum_problems)
 
         # ── Confidence gate ──────────────────────────────────────────────────
         if sig.low_fields:
-            return _hold_for_review("significant_fields_low_confidence")
+            # Try CR fallback before sending to review
+            main_data, sig, checksum_problems = _cr_fallback(
+                main_data, text, sig, [], cfg, threshold, document_id,
+                main_extraction, field_confs, db,
+            )
+            if sig.low_fields:
+                return _hold_for_review("significant_fields_low_confidence")
 
         # ── Optional consensus layer ─────────────────────────────────────────
         # When a verify model is configured, re-extract and require key fields to
@@ -2318,13 +2451,53 @@ def _sanitize_extracted_amounts(extracted: dict) -> None:
         pass
 
 
+_CYRILLIC_DIGIT_MAP = str.maketrans("ОоЗзВвБбСсАаЕеТтЬьИиРрУу", "003366000000000000000000")
+# Common Cyrillic letter ↔ digit OCR confusions in Russian financial documents:
+#   О/о → 0 (looks identical in many fonts)
+#   З/з → 3 (mirror shape)
+#   В/в → 6 (some bold/serif fonts)
+
+
+def _sanitize_numeric_field(value: str) -> str:
+    """Remove spaces/dashes and substitute Cyrillic look-alike characters for digits."""
+    cleaned = "".join(c for c in value if not c.isspace() and c != "-")
+    return cleaned.translate(_CYRILLIC_DIGIT_MAP)
+
+
+def _try_sanitize_inn(inn_raw: str) -> str:
+    """Return sanitized INN if it passes the checksum, else return original."""
+    from app.ai import ru_validators as rv
+    sanitized = _sanitize_numeric_field(inn_raw)
+    if sanitized != inn_raw and rv.inn_valid(sanitized):
+        logger.info("sanitize_inn_cyrillic", original=inn_raw, fixed=sanitized)
+        return sanitized
+    return inn_raw
+
+
+def _sanitize_party_inn(party: dict | None) -> None:
+    """In-place: replace Cyrillic look-alike characters in ИНН and КПП fields."""
+    if not isinstance(party, dict):
+        return
+    for field in ("inn", "kpp"):
+        raw = str(party.get(field) or "").strip()
+        if raw:
+            fixed = _sanitize_numeric_field(raw)
+            if fixed != raw:
+                party[field] = fixed
+                logger.info("sanitize_party_field_cyrillic", field=field, original=raw, fixed=fixed)
+
+
 def _sanitize_bank_requisites(extracted: dict) -> None:
-    """Correct BIK ↔ account number mix-ups in supplier requisites.
+    """Correct BIK ↔ account number mix-ups and Cyrillic omoglyphs in supplier requisites.
 
     BIK: exactly 9 digits, always starts with "04".
     Account / corr-account: exactly 20 digits.
     """
     from app.ai import ru_validators as rv
+
+    # Fix Cyrillic look-alike characters in all party INN/KPP fields first.
+    _sanitize_party_inn(extracted.get("supplier"))
+    _sanitize_party_inn(extracted.get("buyer"))
 
     supplier = extracted.get("supplier")
     if not isinstance(supplier, dict):
@@ -2431,3 +2604,62 @@ async def _run_anomaly_check(invoice_id: str) -> dict:
             await db.commit()
 
         return {"found": len(anomalies), "invoice_id": invoice_id}
+
+
+@celery_app.task(name="app.tasks.extraction.watchdog_stuck_documents")
+def watchdog_stuck_documents() -> dict:
+    """Periodic watchdog: detect documents stuck in 'extracting' status.
+
+    A document is 'stuck' when its processing job has been running in the
+    'extraction' step for more than STUCK_THRESHOLD_MINUTES with no update.
+    Stuck documents are reset to 'needs_review' so they can be handled by a
+    human or re-queued manually.
+    """
+    from datetime import timedelta
+
+    STUCK_THRESHOLD_MINUTES = 20
+
+    with _get_sync_session() as db:
+        cutoff = datetime.now(UTC) - timedelta(minutes=STUCK_THRESHOLD_MINUTES)
+
+        # Find documents in 'extracting' status whose processing job is stale.
+        stuck_docs = db.execute(
+            select(Document, DocumentProcessingJob)
+            .join(
+                DocumentProcessingJob,
+                DocumentProcessingJob.document_id == Document.id,
+            )
+            .where(
+                Document.status == DocumentStatus.extracting,
+                DocumentProcessingJob.status == "running",
+                DocumentProcessingJob.current_step == "extraction",
+                DocumentProcessingJob.updated_at < cutoff,
+            )
+        ).all()
+
+        if not stuck_docs:
+            return {"stuck": 0}
+
+        recovered = []
+        for doc, job in stuck_docs:
+            doc_id = str(doc.id)
+            logger.warning(
+                "watchdog_stuck_document",
+                document_id=doc_id,
+                stuck_since=job.updated_at.isoformat() if job.updated_at else None,
+            )
+            doc.status = DocumentStatus.needs_review
+            doc.metadata_ = {
+                **(doc.metadata_ or {}),
+                "watchdog_recovered": True,
+                "watchdog_reason": "stuck_in_extracting",
+                "watchdog_at": datetime.now(UTC).isoformat(),
+            }
+            job.status = "failed"
+            job.current_step = "watchdog_reset"
+            job.error = f"Stuck in extraction step for >{STUCK_THRESHOLD_MINUTES} min; reset to needs_review"
+            recovered.append(doc_id)
+
+        db.commit()
+        logger.info("watchdog_recovered_documents", count=len(recovered), document_ids=recovered)
+        return {"stuck": len(recovered), "document_ids": recovered}

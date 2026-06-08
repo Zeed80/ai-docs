@@ -75,7 +75,17 @@ def compute_field_confidences(
             if field_name in error_fields:
                 confidence, reason = _FAILED, ConfidenceReason.arithmetic_error
             elif field_name in warning_fields:
-                confidence, reason = 0.6, ConfidenceReason.ambiguous_value
+                # Warning on subtotal = discount-invoice pattern: the LINE amounts
+                # came from a pre-discount column, but subtotal/tax/total are
+                # self-consistent.  Subtotal is CORRECT — only the individual line
+                # amounts need human review.  Do not reduce subtotal confidence so
+                # the document can still auto-approve; the warning remains in
+                # validation_errors for the review UI.
+                if field_name == "subtotal":
+                    confidence = _VERIFIED
+                    # reason stays high_quality_ocr — subtotal value is verified
+                else:
+                    confidence, reason = 0.6, ConfidenceReason.ambiguous_value
             else:
                 confidence = _VERIFIED
         elif field_name == "invoice_date":
@@ -86,7 +96,7 @@ def compute_field_confidences(
         else:
             # Not objectively verifiable (number, currency, notes): trust the
             # model's reported confidence, but never below a sensible prior.
-            confidence = max(ai_confidences.get(field_name, 0.0), unverifiable_prior)
+            confidence = max(ai_confidences.get(field_name) or 0.0, unverifiable_prior)
             if field_name in error_fields:
                 confidence, reason = _FAILED, ConfidenceReason.arithmetic_error
             elif field_name in warning_fields:

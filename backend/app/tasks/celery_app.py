@@ -119,6 +119,11 @@ celery_app.conf.beat_schedule = {
         "task": "canonical.auto_cluster",
         "schedule": 14_400.0,
     },
+    # Watchdog: reset documents stuck in 'extracting' status every 5 minutes
+    "watchdog-stuck-documents": {
+        "task": "app.tasks.extraction.watchdog_stuck_documents",
+        "schedule": 300.0,
+    },
 }
 
 celery_app.autodiscover_tasks([
