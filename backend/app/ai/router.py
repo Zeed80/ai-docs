@@ -385,6 +385,20 @@ class AIRouter:
             timeout_seconds=240.0,
         )
 
+    async def extract_invoice_with_model(self, text: str, model: str, provider: str) -> dict:
+        """Re-extract invoice using a specific (usually larger) model."""
+        logger.info("extract_invoice_fallback_model", model=model, provider=provider)
+        prompt = EXTRACT_INVOICE_PROMPT.format(text=text[:24000])
+        return await generate_json(
+            prompt,
+            model=model,
+            provider=provider,
+            system=EXTRACT_INVOICE_SYSTEM,
+            temperature=0.0,
+            max_tokens=8192,
+            timeout_seconds=300.0,
+        )
+
     async def extract_document_fields(self, text: str, doc_type: str) -> dict:
         """Extract editable fields from a non-invoice document (letter/contract/etc.).
 
@@ -410,7 +424,7 @@ class AIRouter:
     async def classify_document(self, text: str) -> dict:
         model, provider = self._ocr_model_and_provider()
         logger.info("classify_document_model", model=model, provider=provider)
-        prompt = CLASSIFY_PROMPT.format(text=text[:3000])
+        prompt = CLASSIFY_PROMPT.format(text=text[:8000])
         return await generate_json(
             prompt,
             model=model,

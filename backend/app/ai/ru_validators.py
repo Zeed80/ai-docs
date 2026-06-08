@@ -30,8 +30,22 @@ def inn_valid(inn) -> bool:
 
 
 def bik_valid(bik) -> bool:
+    """Validate a Russian БИК by ЦБ РФ structure: 04 RRR CCC.
+
+    - Digits 0-1: "04" (Russia)
+    - Digits 2-4 (regional code): must be > 0
+    - Digits 5-8 (branch code): 000 (RCC head office) or >= 050 (standard branch)
+    """
     d = _digits(bik)
-    return len(d) == 9 and d.startswith("04")
+    if len(d) != 9 or not d.startswith("04"):
+        return False
+    regional = int(d[2:5])
+    branch = int(d[5:])
+    if regional == 0:
+        return False
+    if branch != 0 and branch < 50:
+        return False
+    return True
 
 
 def kpp_valid(kpp) -> bool:

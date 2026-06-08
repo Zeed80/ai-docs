@@ -8,11 +8,14 @@ import asyncio
 import base64
 import uuid
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
 import structlog
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
+
+from app.ai import ru_validators as rv
 
 from app.config import settings
 from app.db.models import (
@@ -43,9 +46,18 @@ PIPELINE_STEP_DEFINITIONS = [
 ]
 
 
+@lru_cache(maxsize=1)
+def _get_sync_engine():
+    return create_engine(
+        settings.database_url_sync,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=5,
+    )
+
+
 def _get_sync_session() -> Session:
-    engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
-    return Session(engine)
+    return Session(_get_sync_engine())
 
 
 def _run_async(coro):
@@ -441,16 +453,87 @@ def extract_invoice(self, document_id: str) -> dict:
 
         validation_errors = validate_arithmetic(extracted)
 
-        # ── Vision fallback ──────────────────────────────────────────────────
-        # When text-based extraction produced arithmetic errors or left mandatory
-        # fields empty, re-extract directly from page images.  The vision model
-        # can read the visual table layout (column positions) which resolves
-        # discount-column confusion and other layout-dependent errors.
+        # ── Large-model text fallback ────────────────────────────────────────
+        # When primary OCR model produced arithmetic errors or missed mandatory
+        # fields, retry with the user-configured OCR fallback model (typically
+        # a larger, more capable local model).  This is text-based, so it works
+        # for any document type and does not require re-rendering to images.
         _arith_errors = [e for e in validation_errors if e.get("error_type") == "arithmetic"]
         _mandatory_missing = (
             not extracted.get("invoice_number")
             or not extracted.get("invoice_date")
         )
+
+        if _arith_errors or _mandatory_missing:
+            _fb_model = _fb_provider = None
+            try:
+                from app.api.ai_settings import get_ai_config as _get_ai_cfg
+                from app.ai.model_registry import ModelRegistry
+                _fb_key = _get_ai_cfg().get("model_ocr_fallback")
+                if _fb_key:
+                    _reg = ModelRegistry.from_yaml(
+                        "backend/app/ai/config/model_registry.yaml"
+                    )
+                    _fb_cap = _reg.models.get(_fb_key)
+                    if _fb_cap:
+                        _fb_model = _fb_cap.provider_model
+                        _fb_provider = _fb_cap.provider.value
+            except Exception as _fb_resolve_exc:
+                logger.debug("ocr_fallback_resolve_failed", error=str(_fb_resolve_exc))
+
+            if _fb_model:
+                logger.info(
+                    "extract_large_model_fallback_triggered",
+                    document_id=document_id,
+                    fallback_model=_fb_model,
+                    arith_errors=len(_arith_errors),
+                    mandatory_missing=_mandatory_missing,
+                )
+                try:
+                    with gpu_single_flight(f"extract_fallback:{document_id}"):
+                        _fb_extracted = _run_async(
+                            ai_router.extract_invoice_with_model(text, _fb_model, _fb_provider)
+                        )
+                    _recover_mandatory_fields_from_text(text, _fb_extracted)
+                    _fb_errors = validate_arithmetic(_fb_extracted)
+                    _fb_arith = [e for e in _fb_errors if e.get("error_type") == "arithmetic"]
+                    _fb_mandatory_ok = bool(
+                        _fb_extracted.get("invoice_number") and _fb_extracted.get("invoice_date")
+                    )
+                    _use_fb = (
+                        len(_fb_arith) < len(_arith_errors)
+                        or (_fb_mandatory_ok and _mandatory_missing)
+                    )
+                    if _use_fb:
+                        extracted = _fb_extracted
+                        validation_errors = _fb_errors
+                        _arith_errors = _fb_arith
+                        _mandatory_missing = not _fb_mandatory_ok
+                        logger.info(
+                            "extract_large_model_fallback_used",
+                            document_id=document_id,
+                            arith_before=len(_arith_errors),
+                            arith_after=len(_fb_arith),
+                            mandatory_ok=_fb_mandatory_ok,
+                        )
+                    else:
+                        logger.info(
+                            "extract_large_model_fallback_not_better",
+                            document_id=document_id,
+                            fb_arith_errors=len(_fb_arith),
+                        )
+                except Exception as _fb_exc:
+                    logger.warning(
+                        "extract_large_model_fallback_failed",
+                        document_id=document_id,
+                        error=str(_fb_exc),
+                    )
+
+        # ── Vision fallback ──────────────────────────────────────────────────
+        # When text-based extraction (including large-model retry) still has
+        # arithmetic errors or missing fields, re-extract from page images.
+        # The vision model can read visual table layout (column positions) which
+        # resolves discount-column confusion and other layout-dependent errors.
         _is_visual = (
             (doc.mime_type or "").startswith(("image/", "application/pdf"))
             or (doc.file_name or "").lower().endswith((".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"))
@@ -496,6 +579,14 @@ def extract_invoice(self, document_id: str) -> dict:
                             vision_arith_errors=len(_vision_arith_errors),
                         )
 
+        # ── Post-extraction sanitization ─────────────────────────────────────
+        # Rule-based fixes applied after all LLM/vision attempts: derive missing
+        # subtotal from total-tax, and correct BIK ↔ account number swaps.
+        _sanitize_extracted_amounts(extracted)
+        _sanitize_bank_requisites(extracted)
+        # Re-validate after sanitization (sanitized fields may fix arith errors)
+        validation_errors = validate_arithmetic(extracted)
+
         ai_confidences = extracted.get("field_confidences", {})
         field_confs = compute_field_confidences(extracted, ai_confidences, validation_errors)
         overall_confidence = compute_overall_confidence(field_confs)
@@ -516,11 +607,16 @@ def extract_invoice(self, document_id: str) -> dict:
         field_confs = _apply_normalization_rules(db, field_confs)
 
         # Save DocumentExtraction
+        import hashlib as _hashlib
+        from app.ai.extraction_prompts import EXTRACT_INVOICE_PROMPT as _EXT_PROMPT
         from app.ai.model_resolver import get_ocr_model as _get_ocr
         _ocr_cfg = _get_ocr()
+        _prompt_hash = _hashlib.sha1(
+            (_EXT_PROMPT + _ocr_cfg.model).encode()
+        ).hexdigest()[:8]
         extraction = DocumentExtraction(
             document_id=doc.id,
-            model_name=f"{_ocr_cfg.provider}/{_ocr_cfg.model}",
+            model_name=f"{_ocr_cfg.provider}/{_ocr_cfg.model}@{_prompt_hash}",
             raw_output=extracted,
             structured_data=extracted,
             overall_confidence=overall_confidence,
@@ -1152,45 +1248,55 @@ def _vision_extract_invoice(content: bytes) -> dict | None:
 
     logger.info("vision_extract_start", pages=len(images_b64), candidates=len(chain))
 
-    for model, provider in chain:
-        if provider == "llamacpp":
-            raw = _llamacpp_vision_ocr(images_b64, EXTRACT_INVOICE_VISION_PROMPT)
-        else:
-            raw = _ollama_vision_ocr(images_b64, model, EXTRACT_INVOICE_VISION_PROMPT)
+    # Process pages sequentially, then merge — mirrors _ocr_pdf_content to avoid
+    # table/field mixing that occurs when many pages are sent in a single request.
+    merged: dict = {}
+    pages_processed = 0
 
-        if not raw.strip():
-            logger.info("vision_extract_empty", model=model, provider=provider)
+    for page_idx, page_b64 in enumerate(images_b64):
+        page_result: dict | None = None
+
+        for model, provider in chain:
+            if provider == "llamacpp":
+                raw = _llamacpp_vision_ocr([page_b64], EXTRACT_INVOICE_VISION_PROMPT)
+            else:
+                raw = _ollama_vision_ocr([page_b64], model, EXTRACT_INVOICE_VISION_PROMPT)
+
+            if not raw.strip():
+                logger.info("vision_extract_page_empty", page=page_idx + 1, model=model)
+                continue
+
+            m = _re.search(r'\{.*\}', raw, _re.DOTALL)
+            if m:
+                try:
+                    page_result = _json.loads(m.group())
+                    logger.info("vision_extract_page_done", page=page_idx + 1, model=model)
+                    break
+                except _json.JSONDecodeError:
+                    pass
+
+            logger.info("vision_extract_page_no_json", page=page_idx + 1, model=model, raw_len=len(raw))
+
+        if page_result is None:
             continue
 
-        m = _re.search(r'\{.*\}', raw, _re.DOTALL)
-        if m:
-            try:
-                result = _json.loads(m.group())
-                logger.info("vision_extract_done", model=model, provider=provider)
-                return result
-            except _json.JSONDecodeError:
-                pass
+        pages_processed += 1
+        if page_idx == 0:
+            # Header fields come from page 1; initialise merged with full result
+            merged = page_result
+        else:
+            # Subsequent pages: accumulate line items only; never overwrite
+            # header fields (invoice_number, supplier, totals) from page 1.
+            page_lines = page_result.get("lines") or []
+            if page_lines:
+                existing_lines = merged.setdefault("lines", [])
+                existing_lines.extend(page_lines)
 
-        logger.info("vision_extract_no_json", model=model, provider=provider, raw_len=len(raw))
+    if not merged:
+        return None
 
-    return None
-
-
-def _normalize_ocr_text(text: str) -> str:
-    return "\n".join(line.strip() for line in text.splitlines() if line.strip()).strip()
-
-
-def _looks_like_document_text(text: str) -> bool:
-    normalized = _normalize_ocr_text(text)
-    if len(normalized) < 30:
-        return False
-    alpha_num = sum(ch.isalnum() for ch in normalized)
-    if alpha_num / max(len(normalized), 1) < 0.35:
-        return False
-    words = [word.lower() for word in normalized.split()]
-    if len(words) >= 5 and len(set(words)) <= 2:
-        return False
-    return True
+    logger.info("vision_extract_done", pages_processed=pages_processed)
+    return merged
 
 
 def _download_document(doc: Document) -> bytes | None:
@@ -1253,8 +1359,20 @@ def _apply_normalization_rules(db: Session, field_confs: list) -> list:
                     rule_id=str(rule.id),
                 )
 
-    db.commit()
     return field_confs
+
+
+_NUMERIC_CMP_FIELDS = {"total_amount", "subtotal", "tax_amount"}
+
+
+def _values_agree(field: str, main_val, other_val) -> bool:
+    """Compare two extracted field values; use float tolerance for monetary amounts."""
+    if field in _NUMERIC_CMP_FIELDS:
+        try:
+            return rv._approx(float(main_val), float(other_val))
+        except (TypeError, ValueError):
+            pass
+    return str(main_val).strip() == str(other_val).strip()
 
 
 def _compare_extractions(
@@ -1295,12 +1413,11 @@ def _compare_extractions(
         if main_val is None:
             continue
         total += 1
-        main_str = str(main_val).strip()
         # Every verify extraction must have this field and agree
         all_match = True
         for o in others:
             other_val = o.get(field)
-            if other_val is None or str(other_val).strip() != main_str:
+            if other_val is None or not _values_agree(field, main_val, other_val):
                 all_match = False
                 break
         if all_match:
@@ -1312,47 +1429,6 @@ def _compare_extractions(
     return score >= threshold, score
 
 
-def _extract_invoice_with_model(text: str, model_name: str) -> dict:
-    """Re-extract invoice using a specific Ollama model for verification."""
-    import json as _json
-    import re
-
-    import httpx
-
-    from app.config import settings
-
-    if not model_name or not model_name.strip():
-        return {}
-
-    prompt = (
-        "Extract invoice fields as JSON object with these keys only: "
-        "invoice_number, invoice_date, due_date, currency, subtotal, tax_amount, total_amount, "
-        "supplier (object with name, inn), buyer (object with name, inn). "
-        "Use null for missing fields. Return ONLY the JSON object, no explanation.\n\n"
-        f"Document text:\n{text[:8000]}"
-    )
-
-    try:
-        response = httpx.post(
-            f"{str(settings.ollama_url).rstrip('/')}/api/chat",
-            json={
-                "model": model_name,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "options": {"temperature": 0.1},
-            },
-            timeout=180.0,
-        )
-        response.raise_for_status()
-        body = response.json()
-        content = body.get("message", {}).get("content", "")
-        match = re.search(r'\{.*\}', content, re.DOTALL)
-        if match:
-            return _json.loads(match.group())
-        return {}
-    except Exception as e:
-        logger.warning("verify_extract_failed", model=model_name, error=str(e))
-        return {}
 
 
 def _upsert_party(db: Session, data: dict, role: str) -> uuid.UUID | None:
@@ -1509,8 +1585,14 @@ def auto_verify_document(self, document_id: str) -> dict:
         threshold = min(max(threshold, 0.5), 0.99)
 
         verrs = validate_arithmetic(main_data)
+        # Pass the current threshold as the unverifiable prior so that when the
+        # operator raises the threshold, unverifiable fields (product names,
+        # supplier names) are also required to meet the new bar.
         field_confs = compute_field_confidences(
-            main_data, main_data.get("field_confidences", {}) or {}, verrs
+            main_data,
+            main_data.get("field_confidences", {}) or {},
+            verrs,
+            unverifiable_prior=threshold,
         )
         sig = significant_fields_confidence(field_confs, threshold)
 
@@ -1565,18 +1647,28 @@ def auto_verify_document(self, document_id: str) -> dict:
         # checksum gates. Skipped (and not required) when no verify model is set.
         consensus = 1.0
         models_used: list[str] = []
+        verify_model_1_provider = cfg.get("verify_model_1_provider", "ollama")
         if verify_model_1 and verify_model_1.strip():
             logger.info("auto_verify_extracting", model=verify_model_1, document_id=document_id)
+            from app.ai.router import ai_router
             from app.tasks.gpu_lock import gpu_single_flight
-            with gpu_single_flight(f"verify:{document_id}"):
-                extracted = _extract_invoice_with_model(text, verify_model_1)
+            try:
+                with gpu_single_flight(f"verify:{document_id}"):
+                    extracted = _run_async(
+                        ai_router.extract_invoice_with_model(
+                            text, verify_model_1, verify_model_1_provider
+                        )
+                    )
+            except Exception as _ve:
+                logger.warning("auto_verify_model_failed", model=verify_model_1, error=str(_ve))
+                extracted = {}
             if extracted:
                 models_used.append(verify_model_1)
                 agree, consensus = _compare_extractions(main_data, [extracted], threshold=threshold)
                 if not agree:
                     return _hold_for_review("verify_model_disagreement", consensus=consensus)
             else:
-                logger.warning("auto_verify_model_failed", model=verify_model_1)
+                logger.warning("auto_verify_model_empty", model=verify_model_1)
 
         # ── Approve ──────────────────────────────────────────────────────────
         doc.status = DocumentStatus.approved
@@ -1779,11 +1871,9 @@ def process_approved_document(self, document_id: str) -> dict:
                 select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id)
             ).scalars().all()
             if invoice_lines:
-                from sqlalchemy import func as _func
-                receipt_count = db.execute(
-                    select(_func.count()).select_from(WarehouseReceipt)
-                ).scalar() or 0
-                receipt_number = f"ПО-{receipt_count + 1:04d}"
+                from sqlalchemy import text as _text
+                next_val = db.execute(_text("SELECT nextval('receipt_seq')")).scalar()
+                receipt_number = f"ПО-{next_val:04d}"
                 pending_receipt = WarehouseReceipt(
                     invoice_id=invoice.id,
                     document_id=doc.id,
@@ -1966,7 +2056,11 @@ def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUI
 
 @celery_app.task(name="app.tasks.extraction.auto_supplier_task", bind=True, max_retries=1)
 def auto_supplier_task(self, document_id: str) -> dict:
-    """After document approval: match or create supplier Party, update SupplierProfile."""
+    """After document approval: match or create supplier Party.
+
+    SupplierProfile stats (total_invoices, total_amount) are updated exclusively
+    by process_approved_document to avoid double-counting.
+    """
     logger.info("auto_supplier_start", document_id=document_id)
 
     from app.db.models import Invoice, DocumentLink, SupplierProfile, Party, PartyRole
@@ -2095,31 +2189,9 @@ def auto_supplier_task(self, document_id: str) -> dict:
                     _fill("contact_phone", supplier_data.get("phone"))
                     _fill("contact_email", supplier_data.get("email"))
 
-        # Update SupplierProfile stats
+        # SupplierProfile stats are updated exclusively by process_approved_document.
+        # auto_supplier_task only handles party matching/creation.
         if party_id:
-            profile = db.execute(
-                select(SupplierProfile).where(SupplierProfile.party_id == party_id)
-            ).scalar_one_or_none()
-            if not profile:
-                profile = SupplierProfile(party_id=party_id, total_invoices=0, total_amount=0.0)
-                db.add(profile)
-
-            profile.total_invoices = (profile.total_invoices or 0) + 1
-            if invoice.total_amount:
-                profile.total_amount = (profile.total_amount or 0.0) + float(invoice.total_amount)
-            if invoice.invoice_date:
-                # Compare tz-safely: a stored date read back without tzinfo (e.g.
-                # from a backend that drops it) must not raise against the
-                # tz-aware parsed invoice_date.
-                _inv_dt = invoice.invoice_date
-                _last_dt = profile.last_invoice_date
-                if _inv_dt.tzinfo is None:
-                    _inv_dt = _inv_dt.replace(tzinfo=UTC)
-                if _last_dt is not None and _last_dt.tzinfo is None:
-                    _last_dt = _last_dt.replace(tzinfo=UTC)
-                if _last_dt is None or _inv_dt > _last_dt:
-                    profile.last_invoice_date = invoice.invoice_date
-
             db.commit()
             logger.info("auto_supplier_done", document_id=document_id, party_id=str(party_id))
             return {"party_id": str(party_id)}
@@ -2204,6 +2276,86 @@ def _recover_mandatory_fields_from_text(text: str, extracted: dict) -> None:
 
         if extracted.get("invoice_number") and extracted.get("invoice_date"):
             break  # found both
+
+
+def _sanitize_extracted_amounts(extracted: dict) -> None:
+    """Fix missing/wrong subtotal after all extraction attempts.
+
+    Russian invoices use two VAT conventions:
+    - НДС сверху:    subtotal + tax = total  (subtotal is net)
+    - В т.ч. НДС:   tax is embedded in total; subtotal is often absent
+
+    In both cases the correct "Сумма без НДС" is total - tax.
+    The model often copies total into subtotal when the field is absent.
+    We always derive subtotal = total - tax when:
+      (a) subtotal is null/missing, OR
+      (b) subtotal equals total and tax > 0 (copy error — both conventions
+          produce subtotal < total when tax > 0)
+    """
+    try:
+        subtotal = extracted.get("subtotal")
+        tax = extracted.get("tax_amount")
+        total = extracted.get("total_amount")
+        if tax is None or total is None:
+            return
+        t, g = float(tax), float(total)
+        if t <= 0:
+            return  # tax-free invoice — subtotal == total is correct
+        derived = round(g - t, 2)
+        if subtotal is None:
+            extracted["subtotal"] = derived
+            logger.info("sanitize_subtotal_derived", subtotal=derived, total=g, tax=t)
+        else:
+            s = float(subtotal)
+            if abs(s - g) < 0.01:
+                # subtotal was copied from total — replace with net amount
+                extracted["subtotal"] = derived
+                logger.info(
+                    "sanitize_subtotal_copy_fixed",
+                    was=s, derived=derived, total=g, tax=t,
+                )
+    except (TypeError, ValueError):
+        pass
+
+
+def _sanitize_bank_requisites(extracted: dict) -> None:
+    """Correct BIK ↔ account number mix-ups in supplier requisites.
+
+    BIK: exactly 9 digits, always starts with "04".
+    Account / corr-account: exactly 20 digits.
+    """
+    from app.ai import ru_validators as rv
+
+    supplier = extracted.get("supplier")
+    if not isinstance(supplier, dict):
+        return
+
+    bik = str(supplier.get("bank_bik") or "").strip()
+    account = str(supplier.get("bank_account") or "").strip()
+    bik_digits = "".join(c for c in bik if c.isdigit())
+    acc_digits = "".join(c for c in account if c.isdigit())
+
+    if rv.bik_valid(bik):
+        return  # already correct, nothing to do
+
+    if len(bik_digits) != 20:
+        return  # not an account-number-in-bik-field pattern we can auto-fix
+
+    # bank_bik contains a 20-digit account number
+    if len(acc_digits) == 9 and acc_digits.startswith("04"):
+        # bank_account holds what looks like a BIK → swap
+        supplier["bank_bik"] = account
+        supplier["bank_account"] = bik
+        logger.info("sanitize_bik_account_swapped", was_bik=bik, was_account=account)
+    elif len(acc_digits) == 20:
+        # Both fields have 20-digit values — we can't safely swap, clear the invalid BIK
+        supplier["bank_bik"] = None
+        logger.info("sanitize_bik_cleared_ambiguous", was_bik=bik)
+    else:
+        # bank_account is empty or unrecognised — move the account number to the right field
+        supplier["bank_account"] = bik
+        supplier["bank_bik"] = None
+        logger.info("sanitize_bik_moved_to_account", was_bik=bik)
 
 
 @celery_app.task(name="app.tasks.extraction.check_invoice_anomalies", bind=True, max_retries=1)

@@ -12,14 +12,13 @@ from app.db.models import ConfidenceReason
 # Confidence levels for objectively *verifiable* fields.
 _VERIFIED = 0.98   # checksum / arithmetic passed → near-certain
 _FAILED = 0.25     # checksum / arithmetic failed → almost certainly wrong
-# Prior for present fields we cannot verify objectively (names, free text, line
-# descriptions). High, because the extraction model is strong on Russian
-# invoices (qwen3.5:9b measures ~0.99 on the example set); it just can't be
-# *proven* by a checksum. Set at/above the default auto-approve threshold so a
-# cleanly-read but unprovable significant field (e.g. a product name) does not by
-# itself block auto-approval — only genuinely doubtful values (arithmetic /
-# checksum / format / ambiguity failures, all scored well below) do.
-_UNVERIFIABLE = 0.95
+# Default prior for present fields we cannot verify objectively (names, free text,
+# line descriptions). Matches the application default auto-approve threshold (0.95)
+# so unverifiable fields sit right at the gate: they auto-approve at default
+# threshold but are caught when the caller raises it above this value.
+# Callers that know the current threshold should pass it as unverifiable_prior so
+# the gate is meaningful at any operator-configured level.
+_UNVERIFIABLE_DEFAULT = 0.95
 
 _AMOUNT_FIELDS = {"subtotal", "tax_amount", "total_amount"}
 
@@ -36,6 +35,8 @@ def compute_field_confidences(
     extracted: dict,
     ai_confidences: dict[str, float],
     validation_errors: list[dict],
+    *,
+    unverifiable_prior: float = _UNVERIFIABLE_DEFAULT,
 ) -> list[FieldConfidence]:
     """Compute final confidence for each extracted field.
 
@@ -85,7 +86,7 @@ def compute_field_confidences(
         else:
             # Not objectively verifiable (number, currency, notes): trust the
             # model's reported confidence, but never below a sensible prior.
-            confidence = max(ai_confidences.get(field_name, 0.0), _UNVERIFIABLE)
+            confidence = max(ai_confidences.get(field_name, 0.0), unverifiable_prior)
             if field_name in error_fields:
                 confidence, reason = _FAILED, ConfidenceReason.arithmetic_error
             elif field_name in warning_fields:
@@ -109,7 +110,7 @@ def compute_field_confidences(
             conf = _VERIFIED if ok else _FAILED
             reason = ConfidenceReason.high_quality_ocr if ok else ConfidenceReason.format_mismatch
         else:
-            conf, reason = _UNVERIFIABLE, ConfidenceReason.high_quality_ocr
+            conf, reason = unverifiable_prior, ConfidenceReason.high_quality_ocr
         results.append(FieldConfidence(
             field_name=f"{prefix}.{key}",
             value=str(val),
@@ -160,7 +161,7 @@ def compute_field_confidences(
                 # qty / unit_price implicated by a broken line equation
                 conf, rsn = 0.6, ConfidenceReason.ambiguous_value
             else:
-                conf, rsn = _UNVERIFIABLE, ConfidenceReason.high_quality_ocr
+                conf, rsn = unverifiable_prior, ConfidenceReason.high_quality_ocr
             results.append(FieldConfidence(
                 field_name=f"line_{n}.{key}",
                 value=str(val),
@@ -168,7 +169,7 @@ def compute_field_confidences(
                 reason=rsn,
             ))
 
-        _line_field("name", numeric=False)
+        _line_field("description", numeric=False)
         _line_field("sku", numeric=False)
         _line_field("quantity", numeric=True)
         _line_field("unit_price", numeric=True)
@@ -187,7 +188,7 @@ _SIGNIFICANT_TOP = {
     "subtotal", "tax_amount", "total_amount",
 }
 _SIGNIFICANT_PARTY_SUFFIXES = {"inn", "kpp", "bank_bik", "bank_account", "corr_account"}
-_SIGNIFICANT_LINE_SUFFIXES = {"name", "sku", "quantity", "unit_price", "amount"}
+_SIGNIFICANT_LINE_SUFFIXES = {"description", "sku", "quantity", "unit_price", "amount"}
 
 
 def _is_significant(field_name: str) -> bool:

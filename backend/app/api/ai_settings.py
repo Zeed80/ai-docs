@@ -53,6 +53,10 @@ _DEFAULT_CONFIG = {
     # this threshold AND all control-digit checksums pass. Below it, the document
     # is held for human review with the low-confidence fields highlighted.
     # User-tunable from Settings → AI.
+    # Catalog key of the large fallback model for re-extraction when primary OCR
+    # produces arithmetic errors or misses mandatory fields.
+    # Set via Settings → Models → OCR fallback. Resolved to raw name at use time.
+    "model_ocr_fallback": None,
     "auto_approve_confidence_threshold": 0.95,
     # When on (default), every extracted invoice runs through auto-verification
     # so high-confidence documents are approved with no human action (minimal
@@ -309,6 +313,7 @@ class ConfigUpdate(BaseModel):
     reranker_model: str | None = None
     verify_model_1: str | None = None
     verify_model_1_provider: str | None = None
+    model_ocr_fallback: str | None = None
     auto_approve_confidence_threshold: float | None = None
     auto_verify_enabled: bool | None = None
     turboquant_enabled: bool | None = None
