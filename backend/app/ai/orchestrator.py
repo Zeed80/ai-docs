@@ -258,9 +258,10 @@ class AgentOrchestrator:
     ) -> None:
         config = get_builtin_agent_config()
         if not config.department_enabled:
-            # No department planning → clear any stale role context from a prior turn.
+            # No department planning → clear any stale per-turn overrides.
             self._executor.set_role_context("")
             self._executor.set_response_budget(2048)
+            self._executor.set_model_override(None)
             await self._executor.on_user_message(content)
             return
 
@@ -306,6 +307,11 @@ class AgentOrchestrator:
         # Size the response budget to the task: cheap/fast for short answers,
         # roomy for reports/tables. Avoids the old hardcoded 4096 on every turn.
         self._executor.set_response_budget(_response_budget_for(tier, plan))
+        # Tier-based model routing: simple turns → fast small model (if configured),
+        # complex turns → the configured worker/model. No fast_model → no change.
+        self._executor.set_model_override(
+            config.fast_model if (config.fast_model and tier < Tier.MEDIUM) else None
+        )
         await self._executor.on_user_message(content)
         audit = await self._audit_turn(plan, config)
         retry_count = 0

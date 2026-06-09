@@ -28,6 +28,9 @@ class FakeExecutor:
     def set_response_budget(self, max_tokens: int) -> None:
         return None
 
+    def set_model_override(self, model) -> None:
+        return None
+
     async def on_approval(self, approved: bool):
         return None
 
@@ -597,3 +600,39 @@ async def test_reactive_refine_revises_flagged_generative_answer(monkeypatch):
     assert revised is not None
     assert "12%" in revised["content"]
     assert sent[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_tier_based_model_routing(monkeypatch):
+    """Simple turns route to fast_model; complex turns use the default model."""
+    config = BuiltinAgentConfig(
+        department_enabled=True, audit_enabled=False,
+        model="qwen3.6:35b", fast_model="qwen3.5:9b",
+        backend_url="http://backend", ollama_url="http://ollama", exposed_skills=[],
+    )
+    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
+    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
+
+    overrides: list = []
+
+    class ModelRecordingExecutor(FakeExecutor):
+        def set_model_override(self, model) -> None:
+            overrides.append(model)
+
+    async def capture(msg):
+        pass
+
+    # Simple turn ("сколько счетов" → low tier) → fast_model.
+    session = AgentOrchestrator(capture)
+    session._executor = ModelRecordingExecutor(session._send_from_executor,
+                                               [{"type": "text", "content": "ok"}, {"type": "done"}])
+    await session.on_user_message("сколько счетов")
+    assert overrides[-1] == "qwen3.5:9b"
+
+    # Complex turn (high-complexity signal) → default model (None override).
+    overrides.clear()
+    session2 = AgentOrchestrator(capture)
+    session2._executor = ModelRecordingExecutor(session2._send_from_executor,
+                                                [{"type": "text", "content": "ok"}, {"type": "done"}])
+    await session2.on_user_message("проанализируй и сравни подробно динамику цен поставщиков")
+    assert overrides[-1] is None

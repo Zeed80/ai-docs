@@ -83,6 +83,9 @@ async def test_secretary_turn_injects_flow_context(monkeypatch):
         def set_response_budget(self, n):
             return None
 
+        def set_model_override(self, model):
+            return None
+
         async def on_approval(self, a):
             return None
 

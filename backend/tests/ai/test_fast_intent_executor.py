@@ -26,6 +26,12 @@ def _make_session(monkeypatch):
     async def send(msg: dict):
         sent.append(msg)
 
+    # Disable the result cache so these skill-path tests are deterministic
+    # regardless of a real Redis being available (avoids cross-test cache bleed).
+    from app.ai import result_cache
+    monkeypatch.setattr(result_cache, "cache_get", lambda key: None)
+    monkeypatch.setattr(result_cache, "cache_set", lambda key, value, ttl=15: None)
+
     session = agent_loop.AgentSession(send)
     session._config = config
     return session, sent

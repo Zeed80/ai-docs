@@ -1135,6 +1135,9 @@ class AgentSession:
         # Per-turn response token budget, set by the orchestrator from task tier.
         # Keeps simple answers cheap (fast on local models) and lets reports grow.
         self._response_budget: int = 2048
+        # Per-turn worker model override, set by the orchestrator from task tier
+        # (e.g. a small fast model for simple turns). None → use configured model.
+        self._turn_model_override: str | None = None
 
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
@@ -1294,6 +1297,14 @@ class AgentSession:
     def set_response_budget(self, max_tokens: int) -> None:
         """Set the per-turn max response tokens (clamped to a sane range)."""
         self._response_budget = max(256, min(int(max_tokens), 16384))
+
+    def set_model_override(self, model: str | None) -> None:
+        """Set a per-turn worker model (tier-based fast/strong routing).
+
+        Replaced each turn. None → fall back to the configured worker/model.
+        Does not affect builder turns (capability generation keeps builder_model).
+        """
+        self._turn_model_override = (model or "").strip() or None
 
     def _effective_system(self) -> str:
         """Base system prompt plus the per-turn role context (if any)."""
@@ -1484,6 +1495,16 @@ class AgentSession:
         if not skill:
             return False  # capability not exposed / registry mode → defer to LLM
 
+        from app.ai.result_cache import cache_get, cache_set
+        cache_key = f"{intent.capability}:{intent.action}:{intent.search_term or ''}"
+
+        # Cache hit → instant answer, no backend round-trip.
+        cached = cache_get(cache_key)
+        if cached is not None:
+            await self._send({"type": "text", "content": cached})
+            self._remember_latest_turn(cached)
+            return True
+
         await self._send({"type": "tool_call", "tool": intent.capability, "args": intent.args})
         result = await _execute_skill(skill, intent.args, self._config)
         await self._send({"type": "tool_result", "tool": intent.capability, "result": result})
@@ -1494,6 +1515,7 @@ class AgentSession:
             answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
         else:
             answer = f"Всего {intent.entity_label}: {total}."
+        cache_set(cache_key, answer)
         await self._send({"type": "text", "content": answer})
         self._remember_latest_turn(answer)
         return True
@@ -1562,6 +1584,10 @@ class AgentSession:
                     self._config,
                     self.messages,
                 )
+                # Tier-based override from the orchestrator (e.g. fast small model
+                # for simple turns) — applies to worker turns, not builder turns.
+                if self._turn_model_override and not _is_builder_turn(self.messages):
+                    model_override = self._turn_model_override
                 message = await _call_provider_streaming(
                     self.messages,
                     self._tools,
