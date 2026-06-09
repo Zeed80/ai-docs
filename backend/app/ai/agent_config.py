@@ -58,6 +58,9 @@ class BuiltinAgentConfig(BaseModel):
     llm_timeout_seconds: int = Field(600, ge=10, le=1800)
     backend_timeout_seconds: int = Field(30, ge=5, le=300)
     approval_timeout_seconds: int = Field(120, ge=10, le=1800)
+    # Orchestrator LLM planning timeout. On qwen3.5:9b under load the previous
+    # hardcoded 5s was too tight and silently dropped to the heuristic planner.
+    orchestrator_plan_timeout_seconds: float = Field(8.0, ge=2.0, le=30.0)
     max_worker_steps: int = Field(12, ge=1, le=60)
     max_audit_retries: int = Field(1, ge=0, le=5)
     memory_enabled: bool = True
@@ -112,6 +115,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     llm_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)
     backend_timeout_seconds: int | None = Field(default=None, ge=5, le=300)
     approval_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)
+    orchestrator_plan_timeout_seconds: float | None = Field(default=None, ge=2.0, le=30.0)
     max_worker_steps: int | None = Field(default=None, ge=1, le=60)
     max_audit_retries: int | None = Field(default=None, ge=0, le=5)
     memory_enabled: bool | None = None

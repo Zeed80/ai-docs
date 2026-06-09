@@ -38,6 +38,11 @@ if _PROMETHEUS_AVAILABLE:
         "Total agent tool calls",
         ["tool"],
     )
+    orchestrator_plan_fallback_total = Counter(
+        "aiworkspace_orchestrator_plan_fallback_total",
+        "Orchestrator LLM plan fallbacks to the heuristic planner",
+        ["reason"],
+    )
 
     # Extraction / processing
     extraction_duration_seconds = Histogram(
@@ -181,6 +186,7 @@ else:
     agent_turns_total = _noop
     agent_turn_duration_seconds = _noop
     agent_tool_calls_total = _noop
+    orchestrator_plan_fallback_total = _noop
     extraction_duration_seconds = _noop
     extraction_errors_total = _noop
     celery_task_duration_seconds = _noop
