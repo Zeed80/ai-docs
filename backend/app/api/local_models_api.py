@@ -669,6 +669,7 @@ class DocumentGroupUpdate(BaseModel):
     text_model: str | None = None
     embedding_model: str | None = None
     rerank_model: str | None = None
+    ocr_fallback_model: str | None = None
 
 
 class AgentGroupUpdate(BaseModel):

@@ -74,6 +74,9 @@ class DocumentGroup(BaseModel):
     text_model: str | None = None
     embedding_model: str | None = None
     rerank_model: str | None = None
+    # Large model used for re-extraction when primary OCR produces low-confidence
+    # or arithmetic errors (e.g. discount column confusion). Local only — confidential.
+    ocr_fallback_model: str | None = None
 
 
 class AgentGroup(BaseModel):
@@ -94,11 +97,17 @@ def _primary_for(task: AITask) -> str | None:
 
 
 def get_document_group() -> DocumentGroup:
+    try:
+        from app.api.ai_settings import get_ai_config
+        _fallback_name = get_ai_config().get("model_ocr_fallback")
+    except Exception:
+        _fallback_name = None
     return DocumentGroup(
         vision_model=_primary_for(AITask.INVOICE_OCR),
         text_model=_primary_for(AITask.ENGINEERING_REASONING),
         embedding_model=_primary_for(AITask.EMBEDDING),
         rerank_model=_primary_for(AITask.RERANKING),
+        ocr_fallback_model=_fallback_name,
     )
 
 
@@ -186,6 +195,14 @@ def _mirror_ai_config(group: DocumentGroup) -> None:
     if group.rerank_model:
         cfg["reranker_model"] = group.rerank_model
         changed = True
+    if group.ocr_fallback_model is not None:
+        # Store the catalog key so the UI can round-trip it correctly.
+        # Extraction resolves the key to raw name+provider via model_registry at use time.
+        if group.ocr_fallback_model == "":
+            cfg.pop("model_ocr_fallback", None)
+        else:
+            cfg["model_ocr_fallback"] = group.ocr_fallback_model  # catalog key
+        changed = True
     if changed:
         save_ai_config(cfg)
 
@@ -210,6 +227,7 @@ def set_document_group(group: DocumentGroup) -> DocumentGroup:
         text=group.text_model,
         embedding=group.embedding_model,
         rerank=group.rerank_model,
+        ocr_fallback=group.ocr_fallback_model,
     )
     return get_document_group()
 

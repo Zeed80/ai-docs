@@ -2564,6 +2564,7 @@ interface DocGroup {
   text_model?: string | null;
   embedding_model?: string | null;
   rerank_model?: string | null;
+  ocr_fallback_model?: string | null;
 }
 const PROVIDER_DISPLAY: Record<string, string> = {
   ollama: "Ollama",
@@ -2805,6 +2806,24 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
                 options={rerankModels}
                 statuses={running}
                 onChange={(v) => setDocs((d) => ({ ...d, rerank_model: v }))}
+              />
+            </label>
+            <label className="space-y-1 min-w-0 sm:col-span-2">
+              <span className="text-xs text-slate-400">
+                OCR fallback — большая модель для спорных счетов{" "}
+                <span className="text-slate-600">
+                  (арифм. ошибки, отсутствующие поля)
+                </span>
+              </span>
+              <ProviderModelSelect
+                value={docs.ocr_fallback_model ?? ""}
+                options={visionModels}
+                statuses={running}
+                allowEmpty
+                placeholder="— не задано —"
+                onChange={(v) =>
+                  setDocs((d) => ({ ...d, ocr_fallback_model: v || null }))
+                }
               />
             </label>
           </div>

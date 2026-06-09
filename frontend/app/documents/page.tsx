@@ -1659,9 +1659,11 @@ function QueuePanel({
   // interrupted tasks), so derive the queue from the COUNT of active documents,
   // not from how many jobs are labelled running.
   const activeItems = items.filter(isPipelineActive);
+  // GPU processes from the END of the upload queue (last-in-first-processed),
+  // so show the last running item, falling back to the last queued item.
   const currentItem =
-    activeItems.find((i) => i.pipeline?.processing_status === "running") ??
-    activeItems[0] ??
+    activeItems.findLast((i) => i.pipeline?.processing_status === "running") ??
+    activeItems[activeItems.length - 1] ??
     null;
   const currentId = currentItem?.document.id ?? null;
   const queueCount = Math.max(activeItems.length - (currentItem ? 1 : 0), 0);
