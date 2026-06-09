@@ -20,6 +20,7 @@ x-backend-env: &backend-env
   CSRF_SECRET: ${CSRF_SECRET:-dev-csrf-secret}
   CSP_ENABLED: ${CSP_ENABLED:-false}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
   AUTH_ENABLED: ${AUTH_ENABLED:-false}
   AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-agent-internal-key-2026}
   TRUSTED_PROXY: ${TRUSTED_PROXY:-true}
