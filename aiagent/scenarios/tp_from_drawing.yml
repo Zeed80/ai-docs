@@ -2,6 +2,9 @@
 # Trigger: drawing_analyzed event | user says "создай техпроцесс для чертежа X"
 # Full chain: drawing.get → (drawing.analyze if needed) → tech.process_plan_create →
 #   tech.generate_tp_from_drawing → APPROVAL GATE → tech.normcontrol_check → report
+# NOTE: drawing.get / drawing.analyze are a not-yet-implemented skill surface,
+# declared as a gap in backend/tests/test_scenario_skill_refs.py. The tech.* steps
+# are real; the drawing.* steps no-op until the backend drawing skills land.
 
 name: tp-from-drawing
 description: "Полный агентный цикл создания технологического процесса по чертежу детали/сборки"

@@ -1,3 +1,7 @@
+# NOTE: references a not-yet-implemented drawing/tooling skill surface
+# (drawing.get, drawing.link_tool, tool_catalog.suggest) — declared as a gap in
+# backend/tests/test_scenario_skill_refs.py (UNIMPLEMENTED_SKILLS). Executable
+# spec; those steps no-op until the backend skills land.
 name: drawing_tooling_workflow
 version: "1.0"
 description: |

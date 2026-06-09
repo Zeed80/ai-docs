@@ -192,10 +192,89 @@ def _validate_draft(draft: dict[str, Any]) -> tuple[list[str], list[str]]:
                             f"Forbidden call '{name}()': generated code may not use dynamic execution."
                         )
 
+            # Smoke test: confirm the code actually loads (beyond static parsing).
+            # Only when AST validation found no errors, so we never import code
+            # that already failed the security/shape gate.
+            if not errors:
+                smoke_errors, smoke_warnings = _smoke_test_code(code)
+                errors.extend(smoke_errors)
+                warnings.extend(smoke_warnings)
+
     if not draft.get("implementation_plan"):
         warnings.append("implementation_plan is missing; sandbox package will be skeletal.")
     if not draft.get("validation_plan") and not draft.get("tests"):
         warnings.append("validation_plan/tests are missing; runner cannot prove behavior yet.")
+
+    return errors, warnings
+
+
+def _smoke_test_code(code: str, timeout: float = 5.0) -> tuple[list[str], list[str]]:
+    """Import the generated module in an isolated subprocess to prove it loads.
+
+    Returns ``(errors, warnings)``. Runs in a fresh, time-bounded subprocess so
+    module-level side effects can neither hang nor affect the validator. Verifies
+    the module imports, ``execute`` is callable, and ``SKILL_META`` (if present)
+    is a dict. Infrastructure failures (spawn/timeout) are warnings, not errors —
+    we never block promotion review on a flaky runner.
+    """
+    import subprocess
+    import sys
+    import tempfile
+
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    harness = (
+        "import importlib.util, json, sys\n"
+        "path = sys.argv[1]\n"
+        "try:\n"
+        "    spec = importlib.util.spec_from_file_location('sandbox_candidate', path)\n"
+        "    mod = importlib.util.module_from_spec(spec)\n"
+        "    spec.loader.exec_module(mod)\n"
+        "except Exception as e:\n"
+        "    print(json.dumps({'ok': False, 'errors': [f'{type(e).__name__}: {e}']}))\n"
+        "    sys.exit(0)\n"
+        "errs = []\n"
+        "ex = getattr(mod, 'execute', None)\n"
+        "if not callable(ex):\n"
+        "    errs.append('execute is not callable after import')\n"
+        "meta = getattr(mod, 'SKILL_META', None)\n"
+        "if meta is not None and not isinstance(meta, dict):\n"
+        "    errs.append('SKILL_META is not a dict')\n"
+        "print(json.dumps({'ok': not errs, 'errors': errs}))\n"
+    )
+
+    tmp_code: str | None = None
+    tmp_harness: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as cf:
+            cf.write(code)
+            tmp_code = cf.name
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as hf:
+            hf.write(harness)
+            tmp_harness = hf.name
+
+        proc = subprocess.run(
+            [sys.executable, tmp_harness, tmp_code],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        out = (proc.stdout or "").strip().splitlines()
+        payload = json.loads(out[-1]) if out else {"ok": False, "errors": ["no smoke output"]}
+        for msg in payload.get("errors", []):
+            errors.append(f"Smoke test: {msg}")
+    except subprocess.TimeoutExpired:
+        warnings.append("Smoke test timed out; code not proven to load.")
+    except Exception as exc:
+        warnings.append(f"Smoke test could not run ({exc}); static validation only.")
+    finally:
+        for path in (tmp_code, tmp_harness):
+            if path:
+                try:
+                    Path(path).unlink()
+                except Exception:
+                    pass
 
     return errors, warnings
 

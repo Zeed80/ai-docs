@@ -6,6 +6,10 @@
 #
 # Critical severity: requires 2-step approval chain (manager → director)
 # High/medium/low severity: single approval gate
+# NOTE: approval.wait / approval.create_chain / approval.wait_chain / ui.show_anomaly_panel
+# are runner control-flow directives (gates/UI), not backend skills. anomaly.filter is a
+# declared gap (see backend/tests/test_scenario_skill_refs.py) — use anomaly.list to filter
+# by severity once wired.
 
 name: anomaly_resolution
 description: |
