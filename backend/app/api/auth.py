@@ -64,6 +64,15 @@ async def login(
     next: str = Query(default="/inbox"),
 ) -> RedirectResponse:
     """Redirect to Authentik OIDC authorization endpoint."""
+    # Validate redirect_uri origin against allowed frontends to prevent open-redirect
+    # token theft (especially in dev mode where a dev-token cookie is issued directly).
+    if settings.auth_enabled:
+        from urllib.parse import urlparse as _up
+        _req_netloc = _up(redirect_uri).netloc
+        _allowed = {_up(settings.frontend_url).netloc}
+        if _req_netloc and _req_netloc not in _allowed:
+            raise HTTPException(status_code=400, detail="redirect_uri origin is not allowed")
+
     if not settings.auth_enabled:
         # Dev mode: set cookie and redirect back to caller's origin + next path
         base = _frontend_base_from_uri(redirect_uri)

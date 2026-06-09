@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     rate_limit_login_per_minute: int = 30  # 30/min = 1 request per 2s; plenty for dev, still safe
     rate_limit_api_per_minute: int = 600   # 10 req/s per IP — generous for rich SPA polling
     csp_enabled: bool = False              # enable in production
+    # Set to true only when the backend sits behind a trusted reverse proxy (Traefik/nginx)
+    # that sets X-Forwarded-For. False by default to prevent IP spoofing via that header.
+    trusted_proxy: bool = False
+    # Qdrant vector store API key — required when QDRANT__SERVICE__API_KEY is set on the container
+    qdrant_api_key: str = ""
 
     # Admin bootstrap — email of the first admin user (auto-promoted on first login if no admin exists)
     initial_admin_email: str = ""

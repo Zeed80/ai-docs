@@ -23,13 +23,16 @@ async def get_user_key(user: UserInfo | None = Depends(get_current_user_optional
     return to_user_key(user)
 
 
-async def get_ws_user_key(ws: WebSocket) -> str:
+async def get_ws_user_key(ws: WebSocket) -> str | None:
     """Resolve user key for a WebSocket connection.
 
     Mirrors get_current_user_optional logic:
     Priority: X-API-Key header → httpOnly cookie → Bearer header.
     Browsers send cookies automatically with same-origin WS, so this
     correctly identifies the same authenticated user as REST endpoints.
+
+    Returns None when auth is enabled but no valid token was presented —
+    the caller must close the WebSocket with code 4001 (Unauthorized).
     """
     if not settings.auth_enabled:
         return "dev-user"
@@ -52,10 +55,10 @@ async def get_ws_user_key(ws: WebSocket) -> str:
     token = cookie_token or bearer
 
     if not token:
-        return "anonymous"
+        return None
 
     try:
         user = await _verify_token(token)
         return to_user_key(user)
     except Exception:
-        return "anonymous"
+        return None

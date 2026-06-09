@@ -7,7 +7,9 @@ Service accounts can authenticate via X-API-Key header.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import time
 
 import structlog
 from fastapi import Cookie, Depends, HTTPException, status
@@ -17,6 +19,37 @@ from app.auth.models import UserInfo, UserRole
 from app.config import settings
 
 logger = structlog.get_logger()
+
+# JWKS cache — Authentik keys rotate rarely; re-fetching per-request adds
+# unnecessary latency and hammers Authentik under load.
+_jwks_cache: dict | None = None
+_jwks_fetched_at: float = 0.0
+_jwks_lock = asyncio.Lock()
+_JWKS_TTL = 600.0  # 10 minutes
+
+
+async def _get_jwks() -> dict:
+    """Return cached JWKS, refreshing when the TTL has expired."""
+    global _jwks_cache, _jwks_fetched_at
+    now = time.monotonic()
+    if _jwks_cache is not None and (now - _jwks_fetched_at) < _JWKS_TTL:
+        return _jwks_cache
+    async with _jwks_lock:
+        # Double-check after acquiring the lock to avoid thundering herd
+        now = time.monotonic()
+        if _jwks_cache is not None and (now - _jwks_fetched_at) < _JWKS_TTL:
+            return _jwks_cache
+        import httpx
+        jwks_uri = (
+            f"{settings.authentik_url}/application/o"
+            f"/{settings.authentik_slug}/jwks/"
+        )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(jwks_uri)
+            resp.raise_for_status()
+            _jwks_cache = resp.json()
+            _jwks_fetched_at = time.monotonic()
+        return _jwks_cache
 
 _DEV_USER = UserInfo(
     sub="dev-user",
@@ -90,18 +123,7 @@ async def _verify_token(token: str) -> UserInfo:
     try:
         from jose import jwt
 
-        # Authentik 2024.12+: JWKS endpoint is /application/o/{slug}/jwks/
-        jwks_uri = (
-            f"{settings.authentik_url}/application/o"
-            f"/{settings.authentik_slug}/jwks/"
-        )
-
-        import httpx
-
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(jwks_uri)
-            resp.raise_for_status()
-            jwks = resp.json()
+        jwks = await _get_jwks()
 
         claims = jwt.decode(
             token,

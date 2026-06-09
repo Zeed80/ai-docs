@@ -19,6 +19,12 @@ import yaml
 
 from app.db.models import CapabilityProposal
 
+# Module names whose import in generated code is forbidden — each grants OS/system access.
+_DANGEROUS_IMPORTS = frozenset({
+    "os", "sys", "subprocess", "socket", "shutil", "importlib",
+    "ctypes", "pickle", "builtins", "pty", "resource", "signal",
+})
+
 _ROOT = Path(__file__).resolve().parents[2] / "data" / "agent_sandbox"
 
 
@@ -157,6 +163,34 @@ def _validate_draft(draft: dict[str, Any]) -> tuple[list[str], list[str]]:
             ]
             if "SKILL_META" not in top_assigns:
                 warnings.append("Generated code is missing SKILL_META dict; registry entry may be incomplete.")
+
+            # Security: reject dangerous imports and dynamic execution builtins
+            import ast as _ast
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.Import):
+                    for alias in node.names:
+                        top = alias.name.split(".")[0]
+                        if top in _DANGEROUS_IMPORTS:
+                            errors.append(
+                                f"Forbidden import '{alias.name}': generated code may not import system modules."
+                            )
+                elif isinstance(node, _ast.ImportFrom):
+                    mod = (node.module or "").split(".")[0]
+                    if mod in _DANGEROUS_IMPORTS:
+                        errors.append(
+                            f"Forbidden import from '{node.module}': generated code may not import system modules."
+                        )
+                elif isinstance(node, _ast.Call):
+                    func_node = node.func
+                    name = ""
+                    if isinstance(func_node, _ast.Name):
+                        name = func_node.id
+                    elif isinstance(func_node, _ast.Attribute):
+                        name = func_node.attr
+                    if name in {"eval", "exec", "__import__", "compile", "execfile"}:
+                        errors.append(
+                            f"Forbidden call '{name}()': generated code may not use dynamic execution."
+                        )
 
     if not draft.get("implementation_plan"):
         warnings.append("implementation_plan is missing; sandbox package will be skeletal.")

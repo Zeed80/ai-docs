@@ -23,6 +23,11 @@ PROTECTED_SETTINGS = {
     "llm_timeout_seconds",
     "backend_timeout_seconds",
     "autonomy_mode",
+    # RCE vector: StdioMCPClient executes `command` from this config via subprocess
+    "mcp_servers",
+    # Prevent silent model-provider switching or skill surface expansion
+    "provider",
+    "exposed_skills",
 }
 
 EXTERNAL_SKILL_PREFIXES = ("email.", "telegram.", "export.", "procurement.")

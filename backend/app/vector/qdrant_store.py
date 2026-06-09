@@ -30,7 +30,10 @@ VECTOR_SIZE = 4096
 
 
 def get_client() -> QdrantClient:
-    return QdrantClient(url=settings.qdrant_url, timeout=10)
+    kwargs: dict = {"url": settings.qdrant_url, "timeout": 10}
+    if getattr(settings, "qdrant_api_key", ""):
+        kwargs["api_key"] = settings.qdrant_api_key
+    return QdrantClient(**kwargs)
 
 
 def ensure_collection(

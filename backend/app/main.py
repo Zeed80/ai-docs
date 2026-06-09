@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Sentry — optional; gracefully skipped when DSN is not set
@@ -84,6 +84,7 @@ from app.api import handovers, notifications, rooms
 from app.api import setup as setup_api
 from app.api.capability_router import router as capability_router
 from app.api import local_models_api
+from app.auth.jwt import get_current_user as _get_current_user
 from app.config import settings
 from app.db.session import engine  # lazy proxy
 import app.core.metrics  # noqa: F401 — registers Prometheus metrics at startup
@@ -364,7 +365,8 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-@app.get("/metrics", include_in_schema=False)
+@app.get("/metrics", include_in_schema=False,
+         dependencies=[Depends(_get_current_user)])
 async def metrics_endpoint():
     """Prometheus metrics endpoint."""
     try:
@@ -388,8 +390,8 @@ async def health_ai() -> dict:
     return await check_health()
 
 
-@app.get("/api/tasks/{task_id}")
-@app.get("/api/tasks/{task_id}/status")
+@app.get("/api/tasks/{task_id}", dependencies=[Depends(_get_current_user)])
+@app.get("/api/tasks/{task_id}/status", dependencies=[Depends(_get_current_user)])
 async def get_task_status(task_id: str) -> dict:
     """Check Celery task status."""
     from app.tasks.celery_app import celery_app as celery

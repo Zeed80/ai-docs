@@ -332,8 +332,13 @@ export function SvetaPanel() {
             appendAssistant(String(event.data));
           }
         };
-        ws.onclose = () => {
+        ws.onclose = (event) => {
           setIsConnected(false);
+          // 4001 = Unauthorized — session expired, redirect to login
+          if (event.code === 4001) {
+            window.location.href = `/api/auth/login?redirect_uri=${encodeURIComponent(window.location.href)}`;
+            return;
+          }
           setTimeout(connect, 5000);
         };
         ws.onerror = () => setIsConnected(false);

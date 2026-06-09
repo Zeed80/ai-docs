@@ -41,6 +41,8 @@ from app.db.models import (
     MemoryEmbeddingRecord,
     MemoryFact,
 )
+from app.auth.jwt import require_role
+from app.auth.models import UserInfo, UserRole
 from app.db.session import get_db
 
 router = APIRouter()
@@ -671,6 +673,7 @@ async def runtime_status(db: AsyncSession = Depends(get_db)) -> AgentRuntimeStat
 async def create_config_proposal(
     payload: ConfigProposalCreate,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> AgentConfigProposal:
     return await _create_config_proposal(payload, db)
 
@@ -679,6 +682,7 @@ async def create_config_proposal(
 async def propose_config_change(
     payload: ConfigProposalCreate,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> AgentConfigProposal:
     """Skill: config.propose — Propose an agent configuration change."""
     return await _create_config_proposal(payload, db)
@@ -701,6 +705,7 @@ async def decide_config_proposal(
     proposal_id: uuid.UUID,
     payload: ProposalDecision,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> AgentConfigProposal:
     proposal = await db.get(AgentConfigProposal, proposal_id)
     if not proposal:
@@ -755,6 +760,7 @@ async def list_skills() -> dict:
 async def create_agent_task(
     payload: AgentTaskCreate,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> AgentTask:
     return await _create_agent_task(payload, db)
 
@@ -763,6 +769,7 @@ async def create_agent_task(
 async def create_agent_task_tool(
     payload: AgentTaskCreate,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> AgentTask:
     """Skill: task.create — Create an agent work item."""
     return await _create_agent_task(payload, db)
@@ -778,6 +785,7 @@ async def list_agent_tasks(db: AsyncSession = Depends(get_db)) -> list[AgentTask
 async def create_agent_team(
     payload: AgentTeamCreate,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> AgentTeam:
     team = AgentTeam(name=payload.name, purpose=payload.purpose, metadata_=payload.metadata)
     db.add(team)
@@ -796,6 +804,7 @@ async def list_agent_teams(db: AsyncSession = Depends(get_db)) -> list[AgentTeam
 async def create_agent_cron(
     payload: AgentCronCreate,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> AgentCron:
     cron = AgentCron(
         schedule=payload.schedule,
@@ -825,6 +834,7 @@ async def patch_agent_cron(
     cron_id: uuid.UUID,
     payload: AgentCronPatch,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> AgentCron:
     cron = await db.get(AgentCron, cron_id)
     if not cron:
@@ -842,6 +852,7 @@ async def patch_agent_cron(
 async def install_plugin_draft(
     payload: PluginManifestIn,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> AgentPlugin:
     existing = await db.scalar(
         select(AgentPlugin).where(AgentPlugin.plugin_key == payload.plugin_key)
@@ -876,7 +887,11 @@ async def list_plugins(db: AsyncSession = Depends(get_db)) -> list[AgentPlugin]:
 
 
 @router.post("/plugins/{plugin_key}/enable", response_model=AgentPluginOut)
-async def enable_plugin(plugin_key: str, db: AsyncSession = Depends(get_db)) -> AgentPlugin:
+async def enable_plugin(
+    plugin_key: str,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
+) -> AgentPlugin:
     plugin = await db.scalar(select(AgentPlugin).where(AgentPlugin.plugin_key == plugin_key))
     if not plugin:
         raise HTTPException(status_code=404, detail="Plugin not found")
@@ -887,7 +902,11 @@ async def enable_plugin(plugin_key: str, db: AsyncSession = Depends(get_db)) -> 
 
 
 @router.post("/plugins/{plugin_key}/disable", response_model=AgentPluginOut)
-async def disable_plugin(plugin_key: str, db: AsyncSession = Depends(get_db)) -> AgentPlugin:
+async def disable_plugin(
+    plugin_key: str,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
+) -> AgentPlugin:
     plugin = await db.scalar(select(AgentPlugin).where(AgentPlugin.plugin_key == plugin_key))
     if not plugin:
         raise HTTPException(status_code=404, detail="Plugin not found")
@@ -901,6 +920,7 @@ async def disable_plugin(plugin_key: str, db: AsyncSession = Depends(get_db)) ->
 async def create_capability_proposal(
     payload: CapabilityProposalCreate,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> CapabilityProposal:
     return await _create_capability_proposal(payload, db)
 
@@ -909,6 +929,7 @@ async def create_capability_proposal(
 async def propose_capability(
     payload: CapabilityProposalCreate,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> CapabilityProposal:
     """Skill: capability.propose — Propose a missing capability draft."""
     return await _create_capability_proposal(payload, db)
@@ -942,6 +963,7 @@ async def get_capability_status(
 async def sandbox_apply_capability(
     proposal_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> CapabilityProposal:
     """Skill: capability.sandbox_apply — Prepare sandbox validation for a draft capability."""
     proposal = await db.get(CapabilityProposal, proposal_id)
@@ -1068,6 +1090,7 @@ async def decide_capability_proposal(
     proposal_id: uuid.UUID,
     payload: CapabilityDecision,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> CapabilityProposal:
     proposal = await db.get(CapabilityProposal, proposal_id)
     if not proposal:
@@ -1119,6 +1142,7 @@ async def promote_capability_proposal(
     proposal_id: uuid.UUID,
     decided_by: str = "user",
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> CapabilityProposal:
     """Skill: capability.promote — Promote an approved capability to staging and expose in gateway."""
     proposal = await db.get(CapabilityProposal, proposal_id)

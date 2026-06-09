@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from app.auth.jwt import require_role
+from app.auth.models import UserInfo, UserRole
 
 logger = structlog.get_logger()
 
@@ -53,6 +55,7 @@ def _load_skill_module(skill_name: str):
 async def run_generated_skill(
     skill_name: str,
     args: dict[str, Any] = Body(default_factory=dict),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> dict[str, Any]:
     """Execute an agent-generated skill module."""
     try:
@@ -137,7 +140,10 @@ async def skill_evolution_audit(limit: int = 50) -> dict[str, Any]:
 
 
 @router.post("/api/agent/skill-evolution/evolve/{skill_name}", tags=["agent-generated"])
-async def trigger_evolution(skill_name: str) -> dict[str, Any]:
+async def trigger_evolution(
+    skill_name: str,
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
+) -> dict[str, Any]:
     """Manually trigger evolution for a specific skill."""
     from app.ai.skill_evolver import evolve_skill
     deployed = await evolve_skill(skill_name)

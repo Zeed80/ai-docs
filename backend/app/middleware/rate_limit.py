@@ -33,10 +33,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if limit == 0:
             return await call_next(request)
 
-        client_ip = (
-            request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-            or (request.client.host if request.client else "unknown")
-        )
+        # Only trust X-Forwarded-For when behind a known trusted proxy (Traefik/nginx).
+        # Without this guard, clients can spoof arbitrary IPs and bypass rate limiting.
+        _xff = request.headers.get("X-Forwarded-For", "")
+        if _xff and settings.trusted_proxy:
+            client_ip = _xff.split(",")[0].strip() or "unknown"
+        else:
+            client_ip = request.client.host if request.client else "unknown"
 
         try:
             from app.utils.redis_client import get_async_redis

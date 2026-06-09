@@ -45,6 +45,10 @@ async def chat_ws(ws: WebSocket) -> None:
     await ws.accept()
     logger.info("ws_chat_connected", client=ws.client)
     user_key = await get_ws_user_key(ws)
+    if user_key is None:
+        # Auth is enabled but no valid token — reject with 4001 (Unauthorized)
+        await ws.close(code=4001, reason="Unauthorized")
+        return
     db_factory = _get_session_factory()
     active_session_id: uuid.UUID | None = None
     assistant_buffer: list[str] = []

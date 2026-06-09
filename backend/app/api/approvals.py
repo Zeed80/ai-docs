@@ -11,7 +11,7 @@ from sqlalchemy import exists, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.db.models import Approval, ApprovalStatus, ApprovalActionType, Document, Invoice
+from app.db.models import Approval, ApprovalStatus, ApprovalActionType, Document, Invoice, User
 from app.domain.approvals import (
     ApprovalChainCreate,
     ApprovalChainOut,
@@ -64,7 +64,10 @@ async def get_approval_policy():
 
 
 @router.patch("/policy", response_model=ApprovalPolicyOut)
-async def update_approval_policy(payload: ApprovalPolicyIn):
+async def update_approval_policy(
+    payload: ApprovalPolicyIn,
+    _user: UserInfo = Depends(require_role(UserRole.manager)),
+):
     """Update trust-score auto-approval policy."""
     import json
     policy = ApprovalPolicyOut(
@@ -392,6 +395,15 @@ async def delegate_approval(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Only the assigned user or admin can delegate",
         )
+
+    # Verify delegate exists and is active before creating the new approval
+    delegate_active = await db.scalar(
+        select(User.is_active).where(User.sub == payload.delegate_to)
+    )
+    if delegate_active is None:
+        raise HTTPException(status_code=404, detail=f"Delegate user not found")
+    if not delegate_active:
+        raise HTTPException(status_code=400, detail=f"Delegate user is deactivated")
 
     approval.status = ApprovalStatus.delegated
     approval.delegated_to = payload.delegate_to

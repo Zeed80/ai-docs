@@ -12,8 +12,25 @@ async function handler(req: NextRequest): Promise<NextResponse> {
   const search = req.nextUrl.search;
   const upstream = `${BACKEND}${path}${search}`;
 
-  const headers = new Headers(req.headers);
-  headers.delete("host");
+  // Explicit allowlist prevents browser JS from injecting privileged headers
+  // (e.g. X-API-Key, X-Internal-Agent) to escalate privileges on the backend.
+  const ALLOWED_HEADERS = new Set([
+    "authorization",
+    "content-type",
+    "accept",
+    "cookie",
+    "x-csrf-token",
+    "x-request-id",
+    "accept-language",
+    "content-length",
+    "range",
+  ]);
+  const headers = new Headers();
+  req.headers.forEach((value, key) => {
+    if (ALLOWED_HEADERS.has(key.toLowerCase())) {
+      headers.set(key, value);
+    }
+  });
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
 

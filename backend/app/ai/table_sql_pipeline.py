@@ -81,7 +81,9 @@ def _get_schema_context() -> str:
 
 # Dangerous patterns that must not appear in generated SQL
 _INJECTION_PATTERNS = re.compile(
-    r"\b(DROP|DELETE|UPDATE|INSERT|ALTER|CREATE|TRUNCATE|EXEC|EXECUTE|GRANT|REVOKE)\b",
+    r"\b(DROP|DELETE|UPDATE|INSERT|ALTER|CREATE|TRUNCATE|EXEC|EXECUTE|GRANT|REVOKE"
+    r"|COPY|pg_read_file|pg_write_file|pg_sleep|pg_ls_dir|pg_stat_file"
+    r"|lo_import|lo_export|dblink|pg_reload_conf|current_setting|set_config)\b",
     re.IGNORECASE,
 )
 

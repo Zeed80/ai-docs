@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import add_timeline_event, log_action
-from app.auth.jwt import get_current_user
-from app.auth.models import UserInfo
+from app.auth.jwt import get_current_user, require_role
+from app.auth.models import UserInfo, UserRole
 from app.chat.store import append_chat_attachment
 from app.domain.access import apply_visibility
 from app.db.models import (
@@ -1069,6 +1069,7 @@ async def get_document(
 async def bulk_delete_documents(
     payload: DocumentBulkDeleteRequest,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.manager)),
 ):
     """Skill: doc.bulk_delete — Hard-delete selected documents and derived records."""
     result = await hard_delete_documents(
@@ -1265,8 +1266,11 @@ async def batch_run_ntd_checks(
 async def purge_all_documents_for_development(
     payload: DevelopmentPurgeRequest,
     db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
 ):
     """Dev-only hard purge of documents and all derived DB records."""
+    if settings.app_env == "production":
+        raise HTTPException(status_code=403, detail="This endpoint is disabled in production")
     if payload.confirm != "DELETE ALL DOCUMENT DATA":
         raise HTTPException(
             status_code=400,

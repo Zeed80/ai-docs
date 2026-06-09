@@ -4,12 +4,13 @@ x-backend-env: &backend-env
   POSTGRES_USER: ${POSTGRES_USER:-aiworkspace}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
   POSTGRES_DB: ${POSTGRES_DB:-aiworkspace}
-  REDIS_URL: redis://redis:6379/0
+  REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
   MINIO_ENDPOINT: minio:9000
   MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-changeme}
   MINIO_BUCKET: ${MINIO_BUCKET:-documents}
   QDRANT_URL: http://qdrant:6333
+  QDRANT_API_KEY: ${QDRANT_API_KEY:-}
   OLLAMA_URL: ${OLLAMA_URL:-http://host-gateway:11434}
   OLLAMA_MODEL_REASONING: ${OLLAMA_MODEL_REASONING:-qwen3.5:9b}
   OLLAMA_MODEL_OCR: ${OLLAMA_MODEL_OCR:-gemma4:e4b}
@@ -21,6 +22,7 @@ x-backend-env: &backend-env
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
   AUTH_ENABLED: ${AUTH_ENABLED:-false}
   AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-agent-internal-key-2026}
+  TRUSTED_PROXY: ${TRUSTED_PROXY:-true}
   AUTHENTIK_URL: ${AUTHENTIK_URL:-http://authentik-server:9000}
   AUTHENTIK_EXTERNAL_URL: ${AUTHENTIK_EXTERNAL_URL:-}
   AUTHENTIK_SLUG: ${AUTHENTIK_SLUG:-ai-workspace}
@@ -98,10 +100,15 @@ services:
   # === Cache & Broker ===
   redis:
     image: redis:7-alpine
+    command: >
+      sh -c "redis-server ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: >
+        ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -147,6 +154,8 @@ services:
   # === Vector Store ===
   qdrant:
     image: qdrant/qdrant:latest
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
