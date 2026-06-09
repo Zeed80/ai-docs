@@ -45,11 +45,13 @@ async def test_get_approval(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_list_pending(client: AsyncClient):
     """approval.list_pending — returns pending approvals."""
+    # Use entity_type that is not subject to the orphan-exists filter
+    # (filter only applies to 'document' and 'invoice' entity types)
     await client.post(
         "/api/approvals",
         json={
-            "action_type": "invoice.approve",
-            "entity_type": "invoice",
+            "action_type": "email.send",
+            "entity_type": "email_draft",
             "entity_id": "00000000-0000-0000-0000-000000000003",
         },
     )
@@ -62,7 +64,7 @@ async def test_list_pending(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_decide_approval(client: AsyncClient):
-    """Decide on approval — approve it."""
+    """Decide on approval — approve it. decided_by must come from the auth session."""
     create = await client.post(
         "/api/approvals",
         json={
@@ -75,12 +77,13 @@ async def test_decide_approval(client: AsyncClient):
 
     resp = await client.post(
         f"/api/approvals/{approval_id}/decide",
-        json={"status": "approved", "comment": "Looks good", "decided_by": "user1"},
+        json={"status": "approved", "comment": "Looks good"},
     )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "approved"
-    assert data["decided_by"] == "user1"
+    # decided_by must reflect the authenticated user (dev-user in tests), not a client-supplied value
+    assert data["decided_by"] == "dev-user"
 
 
 @pytest.mark.asyncio

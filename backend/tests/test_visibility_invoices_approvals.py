@@ -86,9 +86,11 @@ async def test_invoice_admin_sees_all(client: AsyncClient, invoices_setup):
 # ── Approvals ─────────────────────────────────────────────────────────────────
 
 def _approval(**kw) -> Approval:
+    # Use entity_type that is not subject to the orphan-exists filter
+    # (filter only applies to 'document' and 'invoice' entity types)
     return Approval(
         action_type=ApprovalActionType("invoice.approve"),
-        entity_type="invoice",
+        entity_type="email_draft",
         entity_id=uuid.uuid4(),
         status=ApprovalStatus.pending,
         **kw,

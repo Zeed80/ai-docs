@@ -304,7 +304,7 @@ async def decide_approval(
     approval_id: uuid.UUID,
     payload: ApprovalDecision,
     db: AsyncSession = Depends(get_db),
-    _user: UserInfo = Depends(require_role(UserRole.manager)),
+    user: UserInfo = Depends(require_role(UserRole.manager)),
 ):
     """Decide on an approval (approve/reject)."""
     result = await db.execute(select(Approval).where(Approval.id == approval_id))
@@ -315,9 +315,15 @@ async def decide_approval(
     if approval.status != ApprovalStatus.pending:
         raise HTTPException(status_code=400, detail=f"Approval already {approval.status.value}")
 
+    # Only the assigned approver or an admin may decide
+    is_assigned = approval.assigned_to is None or approval.assigned_to == user.sub
+    is_admin = UserRole.admin in (user.roles or [])
+    if not is_assigned and not is_admin:
+        raise HTTPException(status_code=403, detail="Not assigned to this approval")
+
     approval.status = payload.status
     approval.decision_comment = payload.comment
-    approval.decided_by = payload.decided_by
+    approval.decided_by = user.sub
     approval.decided_at = datetime.now(timezone.utc)
 
     await log_action(
@@ -325,7 +331,7 @@ async def decide_approval(
         action=f"approval.{payload.status.value}",
         entity_type="approval",
         entity_id=approval.id,
-        user_id=payload.decided_by,
+        user_id=user.sub,
         details={"comment": payload.comment},
     )
     # Notify the requester about the decision

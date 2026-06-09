@@ -42,7 +42,6 @@ class ApprovalOut(BaseModel):
 class ApprovalDecision(BaseModel):
     status: ApprovalStatus = Field(..., description="approved or rejected")
     comment: str | None = None
-    decided_by: str = "user"
 
 
 class ApprovalListParams(BaseModel):
