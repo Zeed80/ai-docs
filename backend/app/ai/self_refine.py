@@ -194,6 +194,24 @@ async def refine_code(
     )
 
 
+async def revise_with_issues(
+    response: str,
+    task: str,
+    issues: list[str],
+    generate_fn: Callable[[str, str | None], Coroutine[Any, Any, str]],
+) -> str:
+    """Single revise pass driven by already-known issues (no critique step).
+
+    Use when an external check (e.g. the semantic auditor) has already identified
+    what is wrong — this skips the critique LLM call and only revises, which keeps
+    the cost to one inference on local models.
+    """
+    issues_text = "\n".join(f"- {issue}" for issue in issues if issue) or "- ответ неполный"
+    prompt = _REVISE_PROMPT.format(task=task, issues=issues_text)
+    revised = await generate_fn(prompt, None)
+    return revised.strip() or response
+
+
 # ── Critique helper ────────────────────────────────────────────────────────────
 
 async def _critique(

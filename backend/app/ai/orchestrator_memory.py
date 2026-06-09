@@ -23,6 +23,7 @@ logger = structlog.get_logger()
 _TTL_SECONDS = 30 * 24 * 3600  # 30 days
 _SKILL_KEY_PREFIX = "orchestrator:skill:"
 _INTENT_KEY_PREFIX = "orchestrator:intent:"
+_RECIPE_KEY_PREFIX = "orchestrator:recipe:"   # last successful skill sequence per intent
 _USER_RATING_KEY_PREFIX = "user:skill_rating:"
 _MAX_INTENT_ENTRIES = 30
 
@@ -50,6 +51,13 @@ class TurnFeedback:
     retries: int = 0
     duration_ms: int = 0
     errors: list[str] = field(default_factory=list)
+    # Semantic audit verdict — a turn counts as a learning "success" only when
+    # both the mechanical audit AND the semantic check pass.
+    semantic_passed: bool = True
+
+    @property
+    def is_success(self) -> bool:
+        return self.audit_passed and self.semantic_passed
 
 
 def record_turn_feedback(feedback: TurnFeedback) -> None:
@@ -68,7 +76,7 @@ def record_turn_feedback(feedback: TurnFeedback) -> None:
                 "success": 0, "fail": 0,
                 "total_ms": 0, "count_ms": 0, "last_at": 0,
             }
-            if feedback.audit_passed:
+            if feedback.is_success:
                 stats["success"] += 1
             else:
                 stats["fail"] += 1
@@ -86,7 +94,7 @@ def record_turn_feedback(feedback: TurnFeedback) -> None:
         for skill in feedback.skills_used:
             entries.append({
                 "skill": skill,
-                "outcome": "success" if feedback.audit_passed else "fail",
+                "outcome": "success" if feedback.is_success else "fail",
                 "ms": feedback.duration_ms,
                 "ts": now,
                 "retries": feedback.retries,
@@ -94,6 +102,15 @@ def record_turn_feedback(feedback: TurnFeedback) -> None:
         # Keep last N entries
         entries = entries[-_MAX_INTENT_ENTRIES:]
         r.setex(key, _TTL_SECONDS, json.dumps(entries))
+
+        # Store the winning skill sequence of a successful turn as a few-shot
+        # recipe the planner can reuse for similar intents.
+        if feedback.is_success and feedback.skills_used:
+            r.setex(
+                _RECIPE_KEY_PREFIX + intent_hash,
+                _TTL_SECONDS,
+                json.dumps(feedback.skills_used[:6]),
+            )
 
         logger.info(
             "orchestrator_feedback_recorded",
@@ -166,6 +183,18 @@ def get_intent_history(intent_text: str, intent_category: str) -> list[dict]:
         return []
 
 
+def _get_recipe(intent_text: str, intent_category: str) -> list[str]:
+    """Return the last successful skill sequence for this intent, or []."""
+    try:
+        r = _redis()
+        if r is None:
+            return []
+        raw = r.get(_RECIPE_KEY_PREFIX + _hash_intent(intent_text, intent_category))
+        return json.loads(raw) if raw else []
+    except Exception:
+        return []
+
+
 def build_tool_preference_hint(
     intent_text: str,
     intent_category: str,
@@ -217,6 +246,11 @@ def build_tool_preference_hint(
             lines.append(f"  Предпочтительные (высокий процент успеха): {', '.join(preferred)}")
         if avoid:
             lines.append(f"  Избегать (частые сбои): {', '.join(avoid)}")
+
+        # Few-shot: the skill sequence that last solved a similar task.
+        recipe = _get_recipe(intent_text, intent_category)
+        if recipe:
+            lines.append(f"  Похожая задача успешно решена так: {' → '.join(recipe)}")
 
         # 3. Global skill stats for additional context (if candidate_skills given)
         if candidate_skills:

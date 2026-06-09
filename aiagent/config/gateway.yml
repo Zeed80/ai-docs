@@ -296,6 +296,7 @@ prompts:
     technologist: ./prompts/role-technologist.md
     data_analyst: ./prompts/role-data-analyst.md
     memory_researcher: ./prompts/role-memory-researcher.md
+    secretary: ./prompts/role-secretary.md
 channels:
   websocket:
     enabled: true

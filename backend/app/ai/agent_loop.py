@@ -19,7 +19,6 @@ from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.gateway_config import gateway_config
 from app.ai.streaming_scrubber import StreamingContextScrubber
 from app.config import settings as _settings
-from app.formatting import format_money
 
 logger = structlog.get_logger()
 
@@ -126,9 +125,6 @@ def _normalize_ru_yo(text: str) -> str:
     return text.replace("ё", "е").replace("Ё", "Е")
 
 
-_FREZ_SUBSTRINGS = ("фрез", "endmill", "фреза")
-
-
 def _agent_canvas_id(kind: str) -> str:
     return f"agent:{kind}"
 
@@ -145,172 +141,6 @@ def _is_workspace_output_request(text: str) -> bool:
             "отсортируй", "сортировк",
         )
     )
-
-
-def _mentions_invoice_entity(text: str) -> bool:
-    t = _normalize_ru_yo((text or "").lower())
-    return any(marker in t for marker in ("счет", "счёт", "invoice", "инвойс"))
-
-
-def _is_invoice_table_request(text: str, prior_user: str | None = None) -> bool:
-    t = _normalize_ru_yo((text or "").lower())
-    if _mentions_invoice_entity(t) and _is_workspace_output_request(t):
-        return True
-    if not prior_user or not _mentions_invoice_entity(prior_user):
-        return False
-    return _is_workspace_output_request(t) and any(
-        marker in t
-        for marker in ("их", "они", "полный", "таблиц", "список", "все", "всё")
-    )
-
-
-def _is_invoice_items_table_request(text: str, prior_user: str | None = None) -> bool:
-    t = _normalize_ru_yo((text or "").lower())
-    mentions_items = any(
-        marker in t
-        for marker in (
-            "товар", "товары", "позици", "строк", "номенклатур", "материал",
-            "тмц", "что куп", "состав счет",
-        )
-    )
-    mentions_invoice_scope = _mentions_invoice_entity(t) or (
-        prior_user is not None and _mentions_invoice_entity(prior_user)
-    )
-    return mentions_items and mentions_invoice_scope and _is_workspace_output_request(t)
-
-
-def _is_invoice_items_grouped_table_request(text: str, prior_user: str | None = None) -> bool:
-    t = _normalize_ru_yo((text or "").lower())
-    grouped = any(marker in t for marker in ("сгрупп", "по счет", "по счёт"))
-    one_cell = any(marker in t for marker in ("одной ячей", "в одной ячей", "перенос"))
-    return _is_invoice_items_table_request(text, prior_user) and (grouped or one_cell)
-
-
-def _is_invoice_items_by_supplier_table_request(
-    text: str,
-    prior_user: str | None = None,
-) -> bool:
-    t = _normalize_ru_yo((text or "").lower())
-    supplier_group = any(
-        marker in t
-        for marker in ("по поставщик", "по поставщикам", "по поставщиках", "поставщикам")
-    )
-    if not supplier_group:
-        return False
-    mentions_items = any(
-        marker in t
-        for marker in ("товар", "товары", "позици", "строк", "номенклатур", "материал", "тмц")
-    )
-    return mentions_items and (
-        _is_workspace_output_request(t)
-        or (prior_user is not None and _mentions_invoice_entity(prior_user))
-    )
-
-
-def _is_table_edit_request(text: str) -> bool:
-    t = _normalize_ru_yo((text or "").lower())
-    return any(
-        marker in t
-        for marker in (
-            "добавь столб", "добавить столб", "добавь колон", "добавить колон",
-            "убери столб", "убрать столб", "убери колон", "убрать колон",
-            "перед номер", "после номер", "перестав", "отсортируй",
-            "оставь только", "оставить только", "только от",
-        )
-    )
-
-
-def _wants_supplier_column(text: str) -> bool:
-    t = _normalize_ru_yo((text or "").lower())
-    return "поставщик" in t or "поставщика" in t
-
-
-def _extract_supplier_filter(text: str) -> str | None:
-    normalized = _normalize_ru_yo((text or '').strip())
-    # 1. Quoted supplier name — ASCII double-quote, guillemets, curly quotes
-    # Using character codes to avoid editor mangling of Unicode quote chars
-    _OPEN_Q = ''.join(chr(c) for c in (0x22, 0xAB, 0x201E, 0x201C))   # “ « „ “
-    _CLOSE_Q = ''.join(chr(c) for c in (0x22, 0xBB, 0x201D))           # “ » “
-    quoted = re.search(
-        '[' + re.escape(_OPEN_Q) + '](.+?)[' + re.escape(_CLOSE_Q) + ']',
-        normalized,
-    )
-    if quoted:
-        return quoted.group(1).strip()
-    # 2. “только от X” / “оставь только от X”
-    match = re.search(
-        r'(?:оставь\s+только\s+от|оставить\s+только\s+от|только\s+от)\s+(.+)$',
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match:
-        supplier = re.sub(r'[.!?]+$', '', match.group(1)).strip()
-        return supplier or None
-    # 3. “товары поставщика X” / “от поставщика X” / “по поставщику X”
-    match = re.search(
-        r'(?:товары?|позиции|материалы|номенклатур\w+)?\s*'
-        r'(?:поставщика|от\s+поставщика|по\s+поставщику|от)\s+'
-        r'(.{3,60}?)(?:\s*[.!?]|\s*$)',
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match:
-        supplier = match.group(1).strip()
-        stop_words = ('все', 'всех', 'всем', 'каждого', 'любого')
-        if supplier and not any(s in supplier.lower() for s in stop_words):
-            return supplier
-    return None
-
-
-def _mentions_frez_intent(text: str) -> bool:
-    t = _normalize_ru_yo(text.lower())
-    return any(s in t for s in _FREZ_SUBSTRINGS)
-
-
-_SHORT_SCOPE_ACK = frozenset({
-    "все", "всё", "все.", "всё.", "да", "да.", "ок", "ок.", "ладно", "давай",
-    "хорошо", "угу", "ага", "yes", "all",
-})
-
-
-def _is_short_scope_followup(text: str) -> bool:
-    t = _normalize_ru_yo(text.strip().lower().rstrip(".!"))
-    if not t:
-        return False
-    if t in _SHORT_SCOPE_ACK:
-        return True
-    if len(t) <= 4 and t in {"все", "всё", "да", "ок"}:
-        return True
-    return False
-
-
-def _frez_inventory_intent(text: str) -> str | None:
-    """Return 'count', 'list', or None for the current message (frez-related)."""
-    t = _normalize_ru_yo(text.strip().lower())
-    if not _mentions_frez_intent(t):
-        return None
-    list_markers = (
-        "перечисли", "перечислить", "список", "покажи", "назови", "выведи",
-        "дай список", "выведи список",
-        "какие", "какая", "какой", "какое",
-    )
-    count_markers = ("сколько", "количество", "число", "всего")
-    if any(m in t for m in list_markers):
-        return "list"
-    if any(m in t for m in count_markers):
-        return "count"
-    if "все" in t or "всё" in t:
-        return "list"
-    return None
-
-
-def _frez_followup_intent_from_prior_user_message(prior_user: str) -> str:
-    p = _normalize_ru_yo(prior_user.strip().lower())
-    if any(m in p for m in ("перечисли", "список", "покажи", "назови", "выведи")):
-        return "list"
-    if any(m in p for m in ("сколько", "количество", "число")):
-        return "count"
-    return "count"
 
 
 def _get_agent_model(
@@ -492,7 +322,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
             "type": "function",
             "function": {
                 "name": fn_name,
-                "description": description[:500],
+                "description": description[:1500],
                 "parameters": {
                     "type": "object",
                     "properties": properties,
@@ -712,16 +542,20 @@ async def _call_ollama_streaming(
     on_token: Callable[[str], Awaitable[None]],
     model_override: str | None = None,
     disable_thinking: bool | None = None,
+    max_tokens: int | None = None,
 ) -> dict:
     """Stream Ollama response; calls on_token for each text chunk."""
     model = _get_agent_model(config, model_override=model_override)
     ollama_url = config.ollama_url.rstrip("/")
+    options: dict[str, Any] = {"temperature": config.temperature}
+    if max_tokens:
+        options["num_predict"] = int(max_tokens)
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system_prompt}] + messages,
         "tools": tools,
         "stream": True,
-        "options": {"temperature": config.temperature},
+        "options": options,
     }
     if _thinking_disabled(config, disable_thinking):
         payload["think"] = False
@@ -835,6 +669,7 @@ async def _call_openai_streaming(
     model_override: str | None = None,
     disable_thinking: bool | None = None,
     on_thinking: Callable[[str], Awaitable[None]] | None = None,
+    max_tokens: int | None = None,
 ) -> dict:
     """Stream an OpenAI-compatible SSE endpoint (OpenRouter, DeepSeek).
 
@@ -859,6 +694,8 @@ async def _call_openai_streaming(
         "stream": True,
         "temperature": config.temperature,
     }
+    if max_tokens:
+        payload["max_tokens"] = int(max_tokens)
     if tools:
         payload["tools"] = tools
     if _thinking_disabled(config, disable_thinking):
@@ -1036,6 +873,7 @@ async def _call_anthropic_streaming(
     system_prompt: str,
     config: BuiltinAgentConfig,
     on_token: Callable[[str], Awaitable[None]],
+    max_tokens: int | None = None,
 ) -> dict:
     """Stream Anthropic Messages API response; normalises output to Ollama format."""
     from app.config import settings
@@ -1057,7 +895,7 @@ async def _call_anthropic_streaming(
     payload: dict[str, Any] = {
         "model": model,
         "messages": anthropic_msgs,
-        "max_tokens": 4096,
+        "max_tokens": int(max_tokens) if max_tokens else 4096,
         "stream": True,
     }
     if system_text:
@@ -1177,6 +1015,7 @@ async def _call_provider_streaming(
     provider_override: str | None = None,
     disable_thinking_override: bool | None = None,
     on_thinking: Callable[[str], Awaitable[None]] | None = None,
+    max_tokens: int | None = None,
 ) -> dict:
     """Dispatch to the configured LLM provider with optional fallback chain."""
     primary_provider = _get_agent_provider(config, provider_override=provider_override)
@@ -1206,6 +1045,7 @@ async def _call_provider_streaming(
                         on_token,
                         model_override=model_override,
                         disable_thinking=disable_thinking_override,
+                        max_tokens=max_tokens,
                     )
                 elif p in _OPENAI_COMPATIBLE_PROVIDERS:
                     return await _call_openai_streaming(
@@ -1218,10 +1058,12 @@ async def _call_provider_streaming(
                         model_override=model_override,
                         disable_thinking=disable_thinking_override,
                         on_thinking=on_thinking,
+                        max_tokens=max_tokens,
                     )
                 elif p == "anthropic":
                     return await _call_anthropic_streaming(
-                        messages, tools, system_prompt, config, on_token
+                        messages, tools, system_prompt, config, on_token,
+                        max_tokens=max_tokens,
                     )
                 else:
                     logger.warning("unknown_provider_falling_back", provider=p)
@@ -1233,6 +1075,7 @@ async def _call_provider_streaming(
                         on_token,
                         model_override=model_override,
                         disable_thinking=disable_thinking_override,
+                        max_tokens=max_tokens,
                     )
             except transient_errors as exc:
                 last_exc = exc
@@ -1286,6 +1129,12 @@ class AgentSession:
         self._approval_future: asyncio.Future[bool] | None = None
         self._session_id = str(uuid.uuid4())
         self._iteration = 0
+        # Role-specific system prompt fragment, set per turn by the orchestrator.
+        # Replaced (not accumulated) each turn so it never bloats history.
+        self._role_context: str = ""
+        # Per-turn response token budget, set by the orchestrator from task tier.
+        # Keeps simple answers cheap (fast on local models) and lets reports grow.
+        self._response_budget: int = 2048
 
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
@@ -1416,9 +1265,41 @@ class AgentSession:
         ]
         self._trim_history()
 
+    def recent_dialogue(self, limit: int = 20) -> list[dict[str, str]]:
+        """Recent user/assistant turns from the compression-aware message history.
+
+        Single source of truth for dialogue context — the orchestrator planner
+        uses this instead of its own list so both stay in sync as the executor
+        compresses long conversations.
+        """
+        turns = [
+            {"role": str(m.get("role")), "content": str(m.get("content") or "")}
+            for m in self.messages
+            if m.get("role") in {"user", "assistant"} and m.get("content")
+        ]
+        return turns[-limit:]
+
     def inject_orchestrator_hint(self, hint: str) -> None:
         """Inject an orchestrator plan hint as a system message before the next user turn."""
         self.messages.append({"role": "system", "content": hint})
+
+    def set_role_context(self, role_prompt: str | None) -> None:
+        """Set the role-specific system prompt fragment for the next turn.
+
+        Replaces the previous value rather than accumulating, so switching roles
+        between turns never leaves stale role guidance in the system prompt.
+        """
+        self._role_context = (role_prompt or "").strip()
+
+    def set_response_budget(self, max_tokens: int) -> None:
+        """Set the per-turn max response tokens (clamped to a sane range)."""
+        self._response_budget = max(256, min(int(max_tokens), 16384))
+
+    def _effective_system(self) -> str:
+        """Base system prompt plus the per-turn role context (if any)."""
+        if self._role_context:
+            return f"{self._system}\n\n## Роль в этой задаче\n{self._role_context}"
+        return self._system
 
     async def on_user_message(self, content: str) -> None:
         self._refresh_runtime_config()
@@ -1426,83 +1307,6 @@ class AgentSession:
         self.messages.append({"role": "user", "content": content})
         self._trim_history()
         await self._run()
-
-    async def _try_handle_workspace_table_edit_query(self, content: str) -> bool:
-        if not _is_table_edit_request(content):
-            return False
-        prior_users = [
-            str(m.get("content", ""))
-            for m in self.messages[:-1]
-            if m.get("role") == "user"
-        ]
-        prior_text = "\n".join(prior_users[-4:])
-        if (
-            _wants_supplier_column(content)
-            and _is_invoice_items_grouped_table_request(prior_text)
-        ):
-            return await self._publish_invoice_items_grouped_table(include_supplier=True)
-        supplier_filter = _extract_supplier_filter(content)
-        if supplier_filter and _is_invoice_items_table_request(prior_text):
-            return await self._publish_invoice_items_table_for_supplier(supplier_filter)
-        return False
-
-    async def _try_handle_simple_count_query(self, content: str) -> bool:
-        text = (content or "").strip().lower()
-        if not text:
-            return False
-        if _is_workspace_output_request(text):
-            return False
-
-        is_count_intent = bool(re.search(r"\b(сколько|всего)\b", text))
-        is_invoices_only = any(token in text for token in ("счет", "счёт", "invoice"))
-        force_invoices = "только счет" in text or "только счёт" in text
-        if not ((is_count_intent and is_invoices_only) or force_invoices):
-            return False
-
-        # Prefer invoice.list for invoice count questions.
-        invoice_skill = self._skill_map.get("invoice__list")
-        if invoice_skill:
-            args: dict[str, Any] = {}
-            await self._send({"type": "tool_call", "tool": "invoice__list", "args": args})
-            result = await _execute_skill(invoice_skill, args, self._config)
-            await self._send({"type": "tool_result", "tool": "invoice__list", "result": result})
-            total = _extract_list_count(result)
-            await self._send({
-                "type": "text",
-                "content": f"Всего загружено счетов: {total}.",
-            })
-            self._remember_latest_turn(f"Всего загружено счетов: {total}.")
-            await self._send({"type": "done"})
-            return True
-
-        # Hard fallback: direct backend API call when invoice.list skill is not exposed.
-        total = await _fetch_invoice_count_direct(self._config)
-        if total is not None:
-            await self._send({
-                "type": "text",
-                "content": f"Всего загружено счетов: {total}.",
-            })
-            self._remember_latest_turn(f"Всего загружено счетов: {total}.")
-            await self._send({"type": "done"})
-            return True
-
-        # Fallback: count documents if invoice.list is unavailable.
-        doc_skill = self._skill_map.get("doc__list")
-        if doc_skill:
-            args = {}
-            await self._send({"type": "tool_call", "tool": "doc__list", "args": args})
-            result = await _execute_skill(doc_skill, args, self._config)
-            await self._send({"type": "tool_result", "tool": "doc__list", "result": result})
-            total = _extract_list_count(result)
-            await self._send({
-                "type": "text",
-                "content": f"Сейчас в системе документов: {total}.",
-            })
-            self._remember_latest_turn(f"Сейчас в системе документов: {total}.")
-            await self._send({"type": "done"})
-            return True
-
-        return False
 
     async def _publish_canvas(
         self,
@@ -1528,326 +1332,6 @@ class AgentSession:
             "block": block,
             "append": append,
         })
-
-    async def _try_handle_invoice_table_query(self, content: str) -> bool:
-        prior_users = [
-            str(m.get("content", ""))
-            for m in self.messages[:-1]
-            if m.get("role") == "user"
-        ]
-        prior_user = prior_users[-1] if prior_users else None
-        if not _is_invoice_table_request(content, prior_user):
-            return False
-
-        skill_name = "workspace__invoice_table"
-        args = {
-            "canvas_id": _agent_canvas_id("invoice-list"),
-            "limit": 5000,
-            "include_delete_actions": True,
-        }
-        await self._send({
-            "type": "tool_call",
-            "tool": skill_name,
-            "args": args,
-        })
-        skill = self._skill_map.get(skill_name)
-        if skill:
-            data = await _execute_skill(skill, args, self._config)
-        else:
-            data = await _publish_invoice_table_direct(self._config, args)
-            if data is None:
-                return False
-        await self._send({"type": "tool_result", "tool": skill_name, "result": data})
-        total = int(data.get("total") or 0) if isinstance(data, dict) else 0
-        shown = int(data.get("shown") or total) if isinstance(data, dict) else total
-        message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        delivered = message or f"Открыл на Рабочем столе таблицу со счетами: {shown} из {total}."
-        await self._send({"type": "text", "content": delivered})
-        self._remember_latest_turn(delivered)
-        await self._send({"type": "done"})
-        return True
-
-    async def _try_handle_invoice_items_table_query(self, content: str) -> bool:
-        prior_users = [
-            str(m.get("content", ""))
-            for m in self.messages[:-1]
-            if m.get("role") == "user"
-        ]
-        prior_user = prior_users[-1] if prior_users else None
-
-        # Fast-path: "покажи товары поставщика X" → filtered table, no LLM needed
-        supplier_filter = _extract_supplier_filter(content)
-        if supplier_filter:
-            t = _normalize_ru_yo(content.lower())
-            if any(m in t for m in ("товар", "позици", "материал", "номенклатур", "продукт",
-                                     "покажи", "выведи", "открой", "посмотр")):
-                return await self._publish_invoice_items_table_for_supplier(supplier_filter)
-
-        if _is_invoice_items_by_supplier_table_request(content, prior_user):
-            return await self._publish_invoice_items_by_supplier_table()
-
-        if not _is_invoice_items_table_request(content, prior_user):
-            return False
-
-        if _is_invoice_items_grouped_table_request(content, prior_user):
-            return await self._publish_invoice_items_grouped_table()
-
-        await self._send({
-            "type": "status",
-            "content": "Оркестратор: выбираю шаблон таблицы товаров по счетам",
-        })
-        skill_name = "workspace__invoice_items_table"
-        args = {
-            "canvas_id": _agent_canvas_id("invoice-items"),
-            "limit": 10000,
-            "include_invoice_actions": True,
-        }
-        await self._send({
-            "type": "tool_call",
-            "tool": skill_name,
-            "args": args,
-        })
-        await self._send({
-            "type": "status",
-            "content": "Инструмент: заполняю таблицу строками счетов из БД",
-        })
-        skill = self._skill_map.get(skill_name)
-        if skill:
-            data = await _execute_skill(skill, args, self._config)
-        else:
-            data = await _publish_invoice_items_table_direct(self._config, args)
-            if data is None:
-                return False
-        await self._send({"type": "tool_result", "tool": skill_name, "result": data})
-        message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        delivered = message or "Открыл на Рабочем столе таблицу товаров по счетам."
-        await self._send({"type": "text", "content": delivered})
-        self._remember_latest_turn(delivered)
-        await self._send({"type": "done"})
-        return True
-
-    async def _publish_invoice_items_table_for_supplier(self, supplier_filter: str) -> bool:
-        await self._send({
-            "type": "status",
-            "content": f"Оркестратор: фильтрую таблицу товаров по поставщику {supplier_filter}",
-        })
-        skill_name = "workspace__invoice_items_table"
-        args = {
-            "canvas_id": _agent_canvas_id("invoice-items"),
-            "limit": 10000,
-            "include_invoice_actions": True,
-            "supplier_query": supplier_filter,
-        }
-        await self._send({"type": "tool_call", "tool": skill_name, "args": args})
-        data = await _publish_invoice_items_table_direct(self._config, args)
-        if data is None:
-            return False
-        await self._send({"type": "tool_result", "tool": skill_name, "result": data})
-        message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        delivered = message or f"Оставил на Рабочем столе товары поставщика {supplier_filter}."
-        await self._send({"type": "text", "content": delivered})
-        self._remember_latest_turn(delivered)
-        await self._send({"type": "done"})
-        return True
-
-    async def _publish_invoice_items_grouped_table(
-        self,
-        *,
-        include_supplier: bool = False,
-    ) -> bool:
-        await self._send({
-            "type": "status",
-            "content": (
-                "Оркестратор: обновляю шаблон группировки товаров по счетам"
-                if include_supplier
-                else "Оркестратор: выбираю шаблон группировки товаров по счетам"
-            ),
-        })
-        skill_name = "workspace__invoice_items_grouped_table"
-        args = {
-            "canvas_id": _agent_canvas_id("invoice-items-grouped"),
-            "limit": 5000,
-            "include_supplier": include_supplier,
-        }
-        await self._send({
-            "type": "tool_call",
-            "tool": skill_name,
-            "args": args,
-        })
-        await self._send({
-            "type": "status",
-            "content": "Инструмент: собираю товары в одну ячейку по каждому счету",
-        })
-        skill = self._skill_map.get(skill_name)
-        if skill:
-            data = await _execute_skill(skill, args, self._config)
-        else:
-            data = await _publish_invoice_items_grouped_table_direct(self._config, args)
-            if data is None:
-                return False
-        await self._send({"type": "tool_result", "tool": skill_name, "result": data})
-        message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        delivered = (
-            "Обновил на Рабочем столе сгруппированную таблицу товаров: "
-            "добавил колонку поставщика перед номером счета."
-            if include_supplier
-            else message
-            or "Открыл на Рабочем столе таблицу товаров, сгруппированных по счетам."
-        )
-        await self._send({"type": "text", "content": delivered})
-        self._remember_latest_turn(delivered)
-        await self._send({"type": "done"})
-        return True
-
-    async def _publish_invoice_items_by_supplier_table(self) -> bool:
-        await self._send({
-            "type": "status",
-            "content": "Оркестратор: выбираю шаблон группировки товаров по поставщикам",
-        })
-        skill_name = "workspace__invoice_items_by_supplier_table"
-        args = {
-            "canvas_id": _agent_canvas_id("invoice-items-by-supplier"),
-            "limit": 10000,
-        }
-        await self._send({
-            "type": "tool_call",
-            "tool": skill_name,
-            "args": args,
-        })
-        await self._send({
-            "type": "status",
-            "content": "Инструмент: собираю товары в одну ячейку по каждому поставщику",
-        })
-        skill = self._skill_map.get(skill_name)
-        if skill:
-            data = await _execute_skill(skill, args, self._config)
-        else:
-            data = await _publish_invoice_items_by_supplier_table_direct(self._config, args)
-            if data is None:
-                return False
-        await self._send({"type": "tool_result", "tool": skill_name, "result": data})
-        message = str(data.get("message") or "") if isinstance(data, dict) else ""
-        delivered = (
-            message
-            or "Открыл на Рабочем столе таблицу товаров, сгруппированных по поставщикам."
-        )
-        await self._send({"type": "text", "content": delivered})
-        self._remember_latest_turn(delivered)
-        await self._send({"type": "done"})
-        return True
-
-    async def _try_handle_frez_inventory_query(self, content: str) -> bool:
-        """Fast-path for warehouse cutter/mill (фреза) queries — avoids clarification loops."""
-        raw = (content or "").strip()
-        if not raw:
-            return False
-
-        tl = _normalize_ru_yo(raw.lower())
-        intent = _frez_inventory_intent(raw)
-
-        if intent is None and _is_short_scope_followup(tl):
-            prior_users = [
-                str(m.get("content", ""))
-                for m in self.messages[:-1]
-                if m.get("role") == "user"
-            ]
-            if not prior_users:
-                return False
-            prev_u = prior_users[-1]
-            if not _mentions_frez_intent(prev_u):
-                return False
-            intent = _frez_followup_intent_from_prior_user_message(prev_u)
-
-        if intent is None:
-            return False
-
-        search_q = "фрез"
-        skill = self._skill_map.get("warehouse__list_inventory")
-        page_size = 200
-        max_items = 1000
-        total = 0
-        items: list[Any] = []
-        offset = 0
-        while offset < max_items:
-            args: dict[str, Any] = {"search": search_q, "limit": page_size, "offset": offset}
-            if skill:
-                await self._send({
-                    "type": "tool_call",
-                    "tool": "warehouse__list_inventory",
-                    "args": args,
-                })
-                result = await _execute_skill(skill, args, self._config)
-                await self._send({
-                    "type": "tool_result",
-                    "tool": "warehouse__list_inventory",
-                    "result": result,
-                })
-            else:
-                result = await _fetch_inventory_search_direct(
-                    self._config,
-                    search=search_q,
-                    limit=page_size,
-                    offset=offset,
-                )
-                if result is None:
-                    return False
-            if offset == 0:
-                total = _extract_list_count(result)
-            page_items: list[Any] = []
-            if isinstance(result, dict) and isinstance(result.get("items"), list):
-                page_items = result["items"]
-            items.extend(page_items)
-            if not page_items or len(items) >= total or len(page_items) < page_size:
-                break
-            offset += page_size
-
-        if intent == "count":
-            await self._send({
-                "type": "text",
-                "content": f"Позиций на складе с «{search_q}» в наименовании "
-                f"(поиск по названию): **{total}**.",
-            })
-            await self._send({"type": "done"})
-            return True
-
-        rows = []
-        for idx, it in enumerate(items[:max_items], start=1):
-            if not isinstance(it, dict):
-                continue
-            rows.append({
-                "index": idx,
-                "name": it.get("name"),
-                "sku": it.get("sku"),
-                "current_qty": it.get("current_qty"),
-                "unit": it.get("unit"),
-                "min_qty": it.get("min_qty"),
-                "location": it.get("location"),
-            })
-
-        await self._publish_canvas(
-            {
-                "type": "table",
-                "title": f"Склад: позиции по запросу «{search_q}» ({total})",
-                "columns": [
-                    {"key": "index", "header": "№", "type": "number", "width": 56},
-                    {"key": "name", "header": "Наименование", "type": "text"},
-                    {"key": "sku", "header": "SKU", "type": "text"},
-                    {"key": "current_qty", "header": "Количество", "type": "number"},
-                    {"key": "unit", "header": "Ед.", "type": "text", "width": 64},
-                    {"key": "min_qty", "header": "Минимум", "type": "number"},
-                    {"key": "location", "header": "Место", "type": "text"},
-                ],
-                "rows": rows,
-            },
-            canvas_id=_agent_canvas_id("warehouse-frez"),
-            append=False,
-        )
-        await self._send({
-            "type": "text",
-            "content": f"Открыл на Рабочем столе таблицу позиций склада: {len(rows)} из {total}.",
-        })
-        await self._send({"type": "done"})
-        return True
 
     async def on_approval(self, approved: bool) -> None:
         if self._approval_future and not self._approval_future.done():
@@ -1898,35 +1382,121 @@ class AgentSession:
             pass
 
     async def _inject_learning_rules(self) -> None:
-        """Load active learning rules from DB (via backend API) and append to system message."""
+        """Inject active learned rules into the system prompt.
+
+        Two kinds of active ``TechnologyLearningRule`` are consumed:
+        - nomenclature rules (default) — domain field guidance, injected globally;
+        - behavioural rules (``rule_type == "behavior"``) — corrections to how the
+          agent should act, injected ONLY when relevant to the current request
+          (matched on field_name / metadata.trigger_keywords) so the system
+          prompt is not flooded with every rule on every turn.
+        """
         try:
             async with httpx.AsyncClient(timeout=4.0) as client:
                 resp = await client.get(
                     f"{self._config.backend_url.rstrip('/')}/api/technology/learning-rules",
-                    params={"status": "active", "limit": 30},
+                    params={"status": "active", "limit": 50},
                 )
                 if resp.status_code != 200:
                     return
-                data = resp.json()
-                rules: list[dict] = data.get("items") or []
-                if not rules:
-                    return
-                lines: list[str] = []
-                for r in rules:
-                    obs = (r.get("replacement_value") or "").strip()
+                rules: list[dict] = (resp.json() or {}).get("items") or []
+            if not rules:
+                return
+
+            user_text = _normalize_ru_yo(
+                next(
+                    (str(m.get("content") or "") for m in reversed(self.messages)
+                     if m.get("role") == "user"),
+                    "",
+                ).lower()
+            )
+
+            def _behavior_is_relevant(rule: dict) -> bool:
+                # Triggers come from metadata.trigger_keywords. field_name is a
+                # label/category, not a trigger. No triggers → global guidance.
+                meta = rule.get("metadata") or rule.get("metadata_") or {}
+                triggers = (
+                    [str(t) for t in (meta.get("trigger_keywords") or [])]
+                    if isinstance(meta, dict) else []
+                )
+                if not triggers:
+                    return True
+                return any(_normalize_ru_yo(t.lower()) in user_text for t in triggers if t)
+
+            nomenclature: list[str] = []
+            behavioural: list[str] = []
+            for r in rules:
+                obs = (r.get("replacement_value") or "").strip()
+                if not obs:
+                    continue
+                if str(r.get("rule_type") or "") == "behavior":
+                    if _behavior_is_relevant(r):
+                        behavioural.append(f"- {obs}")
+                else:
                     tool = (r.get("field_name") or "").strip()
-                    if obs:
-                        lines.append(f"- При использовании [{tool}]: {obs}")
-                if not lines:
+                    nomenclature.append(f"- При использовании [{tool}]: {obs}")
+
+            sections: list[str] = []
+            if behavioural:
+                sections.append(
+                    "## Усвоенные поправки поведения (применимы к этому запросу):\n"
+                    + "\n".join(behavioural[:10])
+                )
+            if nomenclature:
+                sections.append(
+                    "## Усвоенные правила номенклатуры:\n" + "\n".join(nomenclature[:20])
+                )
+            if not sections:
+                return
+            block = "\n\n".join(sections)
+            for msg in self.messages:
+                if msg.get("role") == "system":
+                    if block not in str(msg.get("content", "")):
+                        msg["content"] = str(msg.get("content", "")) + f"\n\n{block}"
                     return
-                block = "## Усвоенные правила (активированные):\n" + "\n".join(lines)
-                for msg in self.messages:
-                    if msg.get("role") == "system":
-                        if block not in str(msg.get("content", "")):
-                            msg["content"] = str(msg.get("content", "")) + f"\n\n{block}"
-                        return
         except Exception:
             pass
+
+    async def _try_fast_intent(self) -> bool:
+        """Deterministic fast-path for high-confidence count questions.
+
+        Skips the whole LLM tool-calling loop (and memory/hint injections) for
+        unambiguous "сколько X" queries — a pure speed win on weak local models.
+        Returns True when the turn was fully handled. Generic: no hardcoded
+        product categories (see ``fast_intent_router``).
+        """
+        from app.ai.fast_intent_router import match_fast_intent
+
+        content = next(
+            (
+                str(m.get("content") or "")
+                for m in reversed(self.messages)
+                if m.get("role") == "user"
+            ),
+            "",
+        )
+        if not content:
+            return False
+        intent = match_fast_intent(content)
+        if intent is None:
+            return False
+        skill = self._skill_map.get(intent.capability)
+        if not skill:
+            return False  # capability not exposed / registry mode → defer to LLM
+
+        await self._send({"type": "tool_call", "tool": intent.capability, "args": intent.args})
+        result = await _execute_skill(skill, intent.args, self._config)
+        await self._send({"type": "tool_result", "tool": intent.capability, "result": result})
+        if isinstance(result, dict) and result.get("error"):
+            return False  # never answer with a wrong count on error — let the LLM try
+        total = _extract_list_count(result)
+        if intent.capability == "warehouse":
+            answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
+        else:
+            answer = f"Всего {intent.entity_label}: {total}."
+        await self._send({"type": "text", "content": answer})
+        self._remember_latest_turn(answer)
+        return True
 
     async def _run(self) -> None:
         try:
@@ -1935,6 +1505,10 @@ class AgentSession:
                     "type": "error",
                     "content": "Встроенный агент отключен в настройках.",
                 })
+                return
+
+            # Deterministic fast-path: skip the LLM for high-confidence count questions.
+            if await self._try_fast_intent():
                 return
 
             await self._append_memory_context()
@@ -1991,13 +1565,14 @@ class AgentSession:
                 message = await _call_provider_streaming(
                     self.messages,
                     self._tools,
-                    self._system,
+                    self._effective_system(),
                     self._config,
                     on_token,
                     model_override=model_override,
                     provider_override=provider_override,
                     disable_thinking_override=disable_thinking,
                     on_thinking=_on_thinking,
+                    max_tokens=self._response_budget,
                 )
                 duration_ms = int((time.time() - t_start) * 1000)
                 tool_calls = message.get("tool_calls") or []
@@ -2160,10 +1735,11 @@ class AgentSession:
             msg = await _call_provider_streaming(
                 self.messages,
                 [],  # no tools → forces a textual answer
-                self._system,
+                self._effective_system(),
                 self._config,
                 _on_token,
                 disable_thinking_override=True,
+                max_tokens=self._response_budget,
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("force_final_answer_failed", error=str(e), session_id=self._session_id)
@@ -2298,6 +1874,8 @@ class AgentSession:
     async def _execute_tools_parallel(
         self, tool_calls: list[dict], iteration: int
     ) -> list[tuple[str, dict]]:
+        # Observability marker — lets the orchestrator log parallel_used per turn.
+        await self._send({"type": "tools.parallel", "count": len(tool_calls)})
         results = await asyncio.gather(
             *[self._execute_single_tool(tc, iteration) for tc in tool_calls],
             return_exceptions=False,
@@ -2482,167 +2060,6 @@ def _extract_list_count(payload: Any) -> int:
     return 0
 
 
-async def _fetch_invoice_count_direct(config: BuiltinAgentConfig) -> int | None:
-    url = f"{config.backend_url.rstrip('/')}/api/invoices"
-    try:
-        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.get(url)
-        if resp.status_code >= 400:
-            return None
-        data = resp.json()
-        return _extract_list_count(data)
-    except Exception:
-        return None
-
-
-async def _publish_invoice_table_direct(
-    config: BuiltinAgentConfig,
-    args: dict[str, Any],
-) -> dict[str, Any] | None:
-    url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/table"
-    try:
-        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.post(url, json=args, headers=_internal_headers())
-        if resp.status_code >= 400:
-            return None
-        data = resp.json()
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
-
-
-async def _publish_invoice_items_table_direct(
-    config: BuiltinAgentConfig,
-    args: dict[str, Any],
-) -> dict[str, Any] | None:
-    url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/items-table"
-    try:
-        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.post(url, json=args, headers=_internal_headers())
-        if resp.status_code >= 400:
-            return None
-        data = resp.json()
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
-
-
-async def _publish_invoice_items_grouped_table_direct(
-    config: BuiltinAgentConfig,
-    args: dict[str, Any],
-) -> dict[str, Any] | None:
-    url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/items-grouped-table"
-    try:
-        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.post(url, json=args, headers=_internal_headers())
-        if resp.status_code >= 400:
-            return None
-        data = resp.json()
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
-
-
-async def _publish_invoice_items_by_supplier_table_direct(
-    config: BuiltinAgentConfig,
-    args: dict[str, Any],
-) -> dict[str, Any] | None:
-    url = f"{config.backend_url.rstrip('/')}/api/workspace/agent/invoices/items-by-supplier-table"
-    try:
-        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.post(url, json=args, headers=_internal_headers())
-        if resp.status_code >= 400:
-            return None
-        data = resp.json()
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
-
-
-async def _fetch_invoices_direct(
-    config: BuiltinAgentConfig,
-    *,
-    limit: int = 200,
-    max_items: int = 5000,
-) -> dict[str, Any] | None:
-    url = f"{config.backend_url.rstrip('/')}/api/invoices"
-    items: list[dict[str, Any]] = []
-    total = 0
-    offset = 0
-    try:
-        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            while offset < max_items:
-                resp = await client.get(url, params={"limit": limit, "offset": offset})
-                if resp.status_code >= 400:
-                    return None
-                data = resp.json()
-                if not isinstance(data, dict):
-                    return None
-                if offset == 0:
-                    total = _extract_list_count(data)
-                page_items = data.get("items")
-                if not isinstance(page_items, list):
-                    page_items = []
-                items.extend([item for item in page_items if isinstance(item, dict)])
-                if not page_items or len(items) >= total or len(page_items) < limit:
-                    break
-                offset += limit
-    except Exception:
-        return None
-    return {"items": items, "total": total or len(items), "offset": 0, "limit": len(items)}
-
-
-def _format_date(value: Any) -> str:
-    if not value:
-        return ""
-    text = str(value)
-    if "T" in text:
-        text = text.split("T", 1)[0]
-    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
-        return f"{text[8:10]}.{text[5:7]}.{text[0:4]}"
-    return text
-
-
-def _format_money(value: Any) -> str:
-    return format_money(value)
-
-
-def _invoice_canvas_row(item: dict[str, Any], index: int) -> dict[str, Any]:
-    invoice_id = str(item.get("id") or "")
-    document_id = str(item.get("document_id") or "")
-    supplier = item.get("supplier")
-    supplier_name = ""
-    if isinstance(supplier, dict):
-        supplier_name = str(supplier.get("name") or "")
-    return {
-        "index": index,
-        "id": invoice_id,
-        "document_id": document_id,
-        "invoice_number": item.get("invoice_number") or "",
-        "invoice_date": _format_date(item.get("invoice_date")),
-        "supplier": supplier_name,
-        "total_amount": _format_money(item.get("total_amount")),
-        "currency": item.get("currency") or "RUB",
-        "status": item.get("status") or "",
-        "document_download": {
-            "href": f"/api/documents/{document_id}/download",
-            "label": "Скачать",
-        } if document_id else None,
-        "invoice_delete": {
-            "href": f"/api/invoices/{invoice_id}",
-            "label": "Удалить",
-            "confirm": f"Удалить счет {item.get('invoice_number') or invoice_id}?",
-            "method": "DELETE",
-        } if invoice_id else None,
-        "document_delete": {
-            "href": f"/api/documents/{document_id}",
-            "label": "Удалить",
-            "confirm": f"Удалить документ счета {item.get('invoice_number') or invoice_id}?",
-            "method": "DELETE",
-        } if document_id else None,
-    }
-
-
 def _parse_markdown_table(
     text: str,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]] | None:
@@ -2689,28 +2106,6 @@ def _parse_markdown_table(
             title = clean[:120]
             break
     return title, columns, rows
-
-
-async def _fetch_inventory_search_direct(
-    config: BuiltinAgentConfig,
-    *,
-    search: str,
-    limit: int,
-    offset: int,
-) -> dict[str, Any] | None:
-    url = f"{config.backend_url.rstrip('/')}/api/warehouse/inventory"
-    try:
-        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.get(
-                url,
-                params={"search": search, "limit": limit, "offset": offset},
-            )
-        if resp.status_code >= 400:
-            return None
-        data = resp.json()
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
 
 
 # ── DB approval helpers ───────────────────────────────────────────────────────

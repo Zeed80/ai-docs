@@ -123,13 +123,19 @@ class GatewayConfig:
         rel = self._raw.get("prompts", {}).get("base", "./prompts/base.md")
         return _AIAGENT_ROOT / rel.lstrip("./")
 
-    def role_prompt(self, role: str) -> str | None:
-        """Return text of a role-specific prompt, or None if not found."""
+    def role_prompt_path(self, role: str) -> Path | None:
+        """Return the filesystem path of a role-specific prompt, or None."""
         roles = self._raw.get("prompts", {}).get("roles", {})
         rel = roles.get(role)
         if not rel:
             return None
-        path = _AIAGENT_ROOT / rel.lstrip("./")
+        return _AIAGENT_ROOT / rel.lstrip("./")
+
+    def role_prompt(self, role: str) -> str | None:
+        """Return text of a role-specific prompt, or None if not found."""
+        path = self.role_prompt_path(role)
+        if not path:
+            return None
         return path.read_text() if path.exists() else None
 
     # ── Scenarios ─────────────────────────────────────────────────────────────

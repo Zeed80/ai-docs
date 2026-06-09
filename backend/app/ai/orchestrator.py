@@ -32,6 +32,7 @@ def _agent_headers() -> dict:
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession
+from app.ai.flow_awareness import get_flow_context
 from app.ai.model_tier import Tier, inject_chain_of_draft, score_complexity, should_use_cod
 from app.ai.orchestrator_memory import TurnFeedback, build_tool_preference_hint, record_turn_feedback
 from app.ai.policy_engine import check_tool_execution
@@ -66,6 +67,50 @@ def _canvas_map() -> dict[str, Any]:
             _canvas_map_cache = {}
     return _canvas_map_cache
 
+
+def _response_budget_for(tier: "Tier", plan: "OrchestratorPlan") -> int:
+    """Per-turn response token budget from task complexity and output shape.
+
+    Short chat answers stay cheap (fast on local models); reports/tables/documents
+    and complex reasoning get more room. Replaces the old hardcoded 4096.
+    """
+    output_type = plan.workspace.output_type
+    if output_type in ("table", "document", "chart"):
+        return 8192
+    if tier >= Tier.LARGE:
+        return 8192
+    if tier >= Tier.MEDIUM:
+        return 4096
+    if tier <= Tier.MICRO:
+        return 1024
+    return 2048
+
+
+# role → (mtime, text) — avoids re-reading role-*.md from disk on every turn.
+_role_prompt_cache: dict[str, tuple[float, str]] = {}
+
+
+def _load_role_prompt(role: str) -> str:
+    """Return the role-specific prompt text with mtime-based caching.
+
+    Returns "" when the role has no prompt file (e.g. builder roles not defined
+    in gateway.yml) — the executor then runs with the base system prompt only.
+    """
+    from app.ai.gateway_config import gateway_config
+    try:
+        path = gateway_config.role_prompt_path(role)
+        if not path or not path.exists():
+            return ""
+        mtime = path.stat().st_mtime
+        cached = _role_prompt_cache.get(role)
+        if cached is None or cached[0] != mtime:
+            text = path.read_text(encoding="utf-8").strip()
+            _role_prompt_cache[role] = (mtime, text)
+            return text
+        return cached[1]
+    except Exception:
+        return ""
+
 WorkerRole = Literal[
     "data_analyst",
     "invoice_specialist",
@@ -77,6 +122,7 @@ WorkerRole = Literal[
     "memory_researcher",
     "document_builder",
     "script_builder",
+    "secretary",
 ]
 
 OutputChannel = Literal["chat", "workspace"]
@@ -102,6 +148,14 @@ _ORCHESTRATOR_SYSTEM = """Ты оркестратор отдела ИИ-сотр
   ГОСТ 3.1118, ГОСТ 3.1404, ЕСТД, техкарта.
   Основные skills: tech.generate_tp_from_drawing, tech.normcontrol_check, tech.process_plan_list,
   tech.process_plan_get, tech.export_gost_forms.
+
+Секретарь документооборота (роль "secretary"):
+  Вопросы об общем состоянии потока документов и приоритетах: «что требует внимания»,
+  «что у нас по документам», «статус потока», «что висит/застряло», «дай сводку»,
+  «что просрочено», «что на проверке/согласовании». Агент получает актуальный
+  снимок потока (approval, needs_review, аномалии, карантин, письма, просрочки).
+  Основные skills: analytics.dashboard_today, approvals.approval_list, anomalies.list,
+  payments.overdue, documents (queue).
 """
 
 
@@ -134,6 +188,10 @@ class AuditReport(BaseModel):
     issues: list[str] = Field(default_factory=list)
     workspace_verified: bool = False
     final_channel: OutputChannel = "chat"
+    # Semantic correctness signal — advisory, does not flip `passed`. Consumed by
+    # the learning loop and surfaced to the user as a soft quality warning.
+    semantic_passed: bool = True
+    semantic_reason: str = ""
 
 
 class CapabilityGapRequest(BaseModel):
@@ -166,6 +224,7 @@ class _TurnTrace:
     text_chunks: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     saw_done: bool = False
+    parallel_used: bool = False
 
     @property
     def final_text(self) -> str:
@@ -179,12 +238,17 @@ class AgentOrchestrator:
         self._outer_send = send
         self._trace = _TurnTrace()
         self._workspace_before: dict[str, str] = {}
-        self._history: list[dict[str, str]] = []
+        self._plan_source: str = "heuristic"
+        self._tier: Tier = Tier.NANO
         self._executor = AgentSession(self._send_from_executor)
 
     def hydrate_history(self, messages: list[dict[str, str]]) -> None:
-        self._history = list(messages[-20:])
+        # The executor owns the dialogue history (compression-aware); the planner
+        # reads it back via recent_dialogue() so the two never drift apart.
         self._executor.hydrate_history(messages)
+
+    def _recent_dialogue(self) -> list[dict[str, str]]:
+        return self._executor.recent_dialogue(limit=20)
 
     async def on_approval(self, approved: bool) -> None:
         await self._executor.on_approval(approved)
@@ -194,6 +258,9 @@ class AgentOrchestrator:
     ) -> None:
         config = get_builtin_agent_config()
         if not config.department_enabled:
+            # No department planning → clear any stale role context from a prior turn.
+            self._executor.set_role_context("")
+            self._executor.set_response_budget(2048)
             await self._executor.on_user_message(content)
             return
 
@@ -201,13 +268,17 @@ class AgentOrchestrator:
         self._trace = _TurnTrace()
 
         # Score complexity → determines planning timeout and CoD injection
-        context_tokens = sum(len(m.get("content", "")) // 4 for m in self._history)
+        history = self._recent_dialogue()
+        context_tokens = sum(len(m.get("content", "")) // 4 for m in history)
         tier = score_complexity(content, context_tokens=context_tokens)
+        self._tier = tier
 
         # strict reasoning_mode forces LLM planning regardless of tier
         if reasoning_mode == "strict" or tier >= Tier.MEDIUM:
+            self._plan_source = "model"
             plan = await self._plan_turn_with_model(content, config)
         else:
+            self._plan_source = "heuristic"
             plan = self._plan_turn(content)
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
@@ -218,6 +289,23 @@ class AgentOrchestrator:
         if reasoning_mode == "strict" or should_use_cod(tier, worker_model):
             hint = inject_chain_of_draft(hint)
         self._executor.inject_orchestrator_hint(hint)
+        # Load the role-specific system prompt so the worker actually adopts the
+        # assigned role (accountant vs technologist vs secretary, ...). Replaced
+        # per turn — never accumulated in history.
+        role_context = _load_role_prompt(plan.worker.role)
+        # Secretary turns get a live document-flow snapshot so the agent answers
+        # "what needs attention?" from real state, not guesses.
+        if plan.worker.role == "secretary":
+            try:
+                flow = await get_flow_context(config)
+            except Exception:
+                flow = ""
+            if flow:
+                role_context = f"{role_context}\n\n{flow}" if role_context else flow
+        self._executor.set_role_context(role_context)
+        # Size the response budget to the task: cheap/fast for short answers,
+        # roomy for reports/tables. Avoids the old hardcoded 4096 on every turn.
+        self._executor.set_response_budget(_response_budget_for(tier, plan))
         await self._executor.on_user_message(content)
         audit = await self._audit_turn(plan, config)
         retry_count = 0
@@ -240,6 +328,10 @@ class AgentOrchestrator:
             repaired = await self._try_execute_planned_workspace_tool(plan, audit, config)
             if repaired:
                 audit = await self._audit_turn(plan, config)
+        # Semantic correctness check on the settled answer (advisory; runs once).
+        await self._run_semantic_audit(plan, config, audit)
+        # Reactive self-refine: only when the auditor flagged a generative answer.
+        await self._maybe_refine_answer(plan, config, audit)
         await self._publish_audit(audit)
         if not audit.passed and self._should_report_capability_gap(plan, audit, config):
             await self._publish_capability_gap(plan, audit, config)
@@ -260,11 +352,14 @@ class AgentOrchestrator:
             "agent_turn_complete",
             intent=plan.intent,
             reasoning_mode=reasoning_mode,
+            plan_source=self._plan_source,
             tools_called=self._trace.tool_calls,
             tool_count=len(self._trace.tool_calls),
+            parallel_used=self._trace.parallel_used,
             errors=self._trace.errors,
             workspace_required=plan.workspace.required,
             audit_passed=audit.passed,
+            audit_issues=audit.issues,
             retries=retry_count,
             duration_ms=duration_ms,
         )
@@ -278,8 +373,8 @@ class AgentOrchestrator:
         except Exception:
             pass
 
-        self._history.append({"role": "user", "content": content})
-        self._history = self._history[-20:]
+        # No separate history to maintain — the executor records this turn in its
+        # own (compression-aware) message list, which _recent_dialogue() reads back.
         chips = self._derive_action_chips(plan, content)
         await self._outer_send({"type": "done", "action_chips": chips})
 
@@ -299,12 +394,13 @@ class AgentOrchestrator:
         prompt = _build_orchestrator_prompt(
             content=content,
             heuristic_hint=heuristic_plan,
-            history=self._history,
+            history=self._recent_dialogue(),
             preference_hint=preference_hint,
             skill_context=skill_context,
         )
+        _plan_timeout = float(config.orchestrator_plan_timeout_seconds)
+        fallback_reason = "invalid_schema"
         try:
-            _plan_timeout = 5.0  # fast models plan in < 5s; slow ones fall to heuristic
             response = await asyncio.wait_for(
                 ai_router.run(
                     AIRequest(
@@ -337,17 +433,27 @@ class AgentOrchestrator:
                 )
                 return plan
         except asyncio.TimeoutError:
+            fallback_reason = "timeout"
             logger.warning(
                 "orchestrator_plan_model_timeout",
                 timeout=_plan_timeout,
                 model=config.orchestrator_model or config.worker_model,
             )
         except Exception as exc:
+            fallback_reason = "error"
             logger.warning(
                 "orchestrator_plan_model_failed",
                 model=config.orchestrator_model or config.worker_model,
                 error=str(exc),
             )
+
+        # Reached only on timeout / error / invalid schema — degrade to heuristic.
+        self._plan_source = "heuristic"
+        try:
+            from app.core.metrics import orchestrator_plan_fallback_total
+            orchestrator_plan_fallback_total.labels(reason=fallback_reason).inc()
+        except Exception:
+            pass
         return heuristic_plan
 
     async def _background_refine_plan(
@@ -395,6 +501,9 @@ class AgentOrchestrator:
                 })
         elif msg_type == "error":
             self._trace.errors.append(str(data.get("content") or ""))
+        elif msg_type == "tools.parallel":
+            self._trace.parallel_used = True
+            return  # internal observability marker — don't forward to the client
         await self._outer_send(data)
 
     def _derive_action_chips(
@@ -432,6 +541,7 @@ class AgentOrchestrator:
         # Broad domain detection for role hint only — not binding
         role: WorkerRole = "data_analyst"
         intent = "general"
+        is_secretary = _is_secretary_query(text)
         matched_route = _match_intent_route(text)
         if matched_route:
             role = matched_route.get("role", role)
@@ -442,6 +552,11 @@ class AgentOrchestrator:
             if matched_route.get("workspace_required") or canvas_id:
                 workspace_required = True
                 output_type = "table"
+        # Secretary (flow-status) intent wins the role even if a route matched —
+        # it is a cross-cutting situational-awareness question, not a table.
+        if is_secretary:
+            role = "secretary"
+            intent = "flow_status"
 
         # References to an already open table take priority over grouping
         if not canvas_id and _references_existing_table(text):
@@ -494,10 +609,18 @@ class AgentOrchestrator:
         )
 
     async def _announce_plan(self, plan: OrchestratorPlan) -> None:
+        degraded = self._plan_source != "model"
+        status_text = (
+            f"Оркестратор: понял задачу, назначаю роль {plan.worker.role}."
+            if not degraded
+            else f"Оркестратор (упрощённый режим): назначаю роль {plan.worker.role}."
+        )
         await self._outer_send({
             "type": "orchestrator.status",
-            "content": f"Оркестратор: понял задачу, назначаю роль {plan.worker.role}.",
+            "content": status_text,
             "plan": plan.model_dump(mode="json"),
+            "plan_source": self._plan_source,
+            "degraded": degraded,
         })
         await self._outer_send({
             "type": "worker.assigned",
@@ -631,6 +754,155 @@ class AgentOrchestrator:
             workspace_verified=workspace_verified,
             final_channel=plan.workspace.channel,
         )
+
+    async def _run_semantic_audit(
+        self,
+        plan: OrchestratorPlan,
+        config: BuiltinAgentConfig,
+        audit: AuditReport,
+    ) -> None:
+        """Advisory check that the final answer actually addresses the request.
+
+        Cheap and gated: only for non-trivial turns (Tier>=MEDIUM) that produced
+        a textual answer. Never flips ``audit.passed`` — it emits a soft warning
+        and records ``semantic_passed``/``semantic_reason`` for the learning loop.
+        Any infra failure is treated as "ok" so we never penalise on flakiness.
+        """
+        if not config.audit_enabled or self._tier < Tier.MEDIUM:
+            return
+        final_text = self._trace.final_text
+        if not final_text:
+            return
+
+        # Deterministic short-circuit: every tool call errored → clear failure.
+        results = [
+            r.get("result") for r in self._trace.tool_results
+            if isinstance(r.get("result"), dict)
+        ]
+        if results and all(str(r.get("error") or "") for r in results):
+            audit.semantic_passed = False
+            audit.semantic_reason = "Все вызовы инструментов завершились ошибкой."
+            await self._emit_semantic_audit(audit)
+            return
+
+        tools_used = ", ".join(sorted(set(self._trace.tool_calls))) or "нет"
+        prompt = (
+            f"Задача пользователя: {plan.goal[:400]}\n"
+            f"Использованные инструменты: {tools_used}\n"
+            f"Ответ агента:\n{final_text[:1500]}\n\n"
+            "Ответ по существу решает задачу пользователя? "
+            'Верни строго JSON: {"ok": true|false, "reason": "<кратко на русском>"}'
+        )
+        try:
+            response = await asyncio.wait_for(
+                ai_router.run(
+                    AIRequest(
+                        task=AITask.CLASSIFICATION,
+                        messages=[
+                            ChatMessage(
+                                role="system",
+                                content="Ты аудитор качества ответов AI. Отвечай только JSON.",
+                            ),
+                            ChatMessage(role="user", content=prompt),
+                        ],
+                        confidential=False,
+                        allow_cloud=False,
+                        preferred_model=_registry_model_name(
+                            config.auditor_model
+                            or config.worker_model
+                            or config.model
+                        ),
+                    )
+                ),
+                timeout=float(config.orchestrator_plan_timeout_seconds),
+            )
+        except Exception:
+            return  # infra failure → stay silent, assume ok
+
+        from app.ai.structured_output import parse_json_output
+        parsed = parse_json_output(getattr(response, "text", "") or "", default={})
+        if not isinstance(parsed, dict) or "ok" not in parsed:
+            return
+        audit.semantic_passed = bool(parsed.get("ok"))
+        audit.semantic_reason = str(parsed.get("reason") or "").strip()
+        if not audit.semantic_passed:
+            await self._emit_semantic_audit(audit)
+
+    async def _maybe_refine_answer(
+        self,
+        plan: OrchestratorPlan,
+        config: BuiltinAgentConfig,
+        audit: AuditReport,
+    ) -> None:
+        """Revise a generative chat answer once when the auditor flagged it.
+
+        Gated tightly so it never slows down the common (good-answer) path:
+        only generative text/document turns at Tier>=MEDIUM whose semantic audit
+        failed. Reuses the known failure reason — a single revise inference, no
+        extra critique call. The revised answer is streamed as a follow-up.
+        """
+        if audit.semantic_passed or not audit.semantic_reason:
+            return
+        if self._tier < Tier.MEDIUM:
+            return
+        if plan.workspace.output_type not in ("text", "document"):
+            return
+        original = self._trace.final_text
+        if not original:
+            return
+
+        async def _generate(prompt: str, system_prompt: str | None) -> str:
+            messages = []
+            if system_prompt:
+                messages.append(ChatMessage(role="system", content=system_prompt))
+            messages.append(ChatMessage(role="user", content=prompt))
+            try:
+                resp = await asyncio.wait_for(
+                    ai_router.run(
+                        AIRequest(
+                            task=AITask.EMAIL_DRAFTING,
+                            messages=messages,
+                            confidential=True,   # generative answers may cite data → stay local
+                            allow_cloud=False,
+                            preferred_model=_registry_model_name(
+                                config.worker_model or config.model
+                            ),
+                        )
+                    ),
+                    timeout=float(config.llm_timeout_seconds),
+                )
+                return getattr(resp, "text", "") or ""
+            except Exception:
+                return ""
+
+        try:
+            from app.ai.self_refine import revise_with_issues
+            revised = await revise_with_issues(
+                original, plan.goal, [audit.semantic_reason], _generate
+            )
+        except Exception:
+            return
+        if revised and revised.strip() and revised.strip() != original.strip():
+            await self._outer_send({
+                "type": "answer.revised",
+                "content": revised.strip(),
+                "reason": audit.semantic_reason,
+            })
+            # The revised answer is now the effective final text.
+            self._trace.text_chunks = [revised.strip()]
+
+    async def _emit_semantic_audit(self, audit: AuditReport) -> None:
+        await self._outer_send({
+            "type": "audit.semantic",
+            "content": (
+                "Аудит качества: ответ может не полностью соответствовать запросу — "
+                f"{audit.semantic_reason}"
+                if not audit.semantic_passed
+                else "Аудит качества: ответ соответствует запросу."
+            ),
+            "semantic_passed": audit.semantic_passed,
+            "semantic_reason": audit.semantic_reason,
+        })
 
     async def _verify_workspace(self, plan: OrchestratorPlan) -> bool:
         for event in self._trace.workspace_events:
@@ -1027,6 +1299,22 @@ def _norm(text: str) -> str:
     return (text or "").lower().replace("ё", "е")
 
 
+_SECRETARY_MARKERS = (
+    "что требует внимания", "требует внимания", "что у нас по документ",
+    "статус потока", "статус документооборот", "что висит", "что застряло",
+    "что зависло", "дай сводку", "сводку по документ", "общая сводка",
+    "что просрочено", "что на проверке", "что на согласовании",
+    "что нужно сделать", "что в работе", "состояние документооборот",
+    "что по делам", "обзор дня", "что нового по документ",
+)
+
+
+def _is_secretary_query(text: str) -> bool:
+    """True for cross-cutting document-flow status questions (secretary role)."""
+    t = _norm(text)
+    return any(marker in t for marker in _SECRETARY_MARKERS)
+
+
 def _build_orchestrator_prompt(
     *,
     content: str,
@@ -1359,6 +1647,12 @@ def _build_worker_hint(plan: OrchestratorPlan) -> str:
         f"[ОРКЕСТРАТОР] Роль: {plan.worker.role}. Задача: {plan.goal[:200]}",
         f"Рекомендуемые инструменты: {', '.join(plan.worker.recommended_skills[:5]) or 'любые подходящие'}.",
     ]
+    if len(plan.worker.recommended_skills) >= 2:
+        lines.append(
+            "Если нужно несколько НЕЗАВИСИМЫХ справочных данных (list/get/search) — "
+            "запроси все нужные инструменты ОДНИМ сообщением (несколько tool_calls сразу), "
+            "а не по очереди: они выполнятся параллельно и ответ будет быстрее."
+        )
     if plan.workspace.required and plan.workspace.canvas_id:
         lines.append(
             f"Результат ОБЯЗАТЕЛЬНО опубликовать на Рабочий стол (canvas_id={plan.workspace.canvas_id}). "
@@ -1507,6 +1801,7 @@ def _record_feedback_async(
         skills_planned=list(plan.worker.recommended_skills),
         skills_used=skills_used,
         audit_passed=audit.passed,
+        semantic_passed=audit.semantic_passed,
         retries=retries,
         duration_ms=duration_ms,
         errors=list(audit.issues),
