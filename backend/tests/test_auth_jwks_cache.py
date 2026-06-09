@@ -40,7 +40,7 @@ async def test_jwks_fetched_only_once_for_multiple_calls():
     mock_client.__aexit__ = AsyncMock(return_value=None)
     mock_client.get = AsyncMock(return_value=mock_response)
 
-    with patch("app.auth.jwt.httpx.AsyncClient", return_value=mock_client):
+    with patch("httpx.AsyncClient", return_value=mock_client):
         from app.auth.jwt import _get_jwks
         results = await asyncio.gather(*[_get_jwks() for _ in range(10)])
 
@@ -82,7 +82,7 @@ async def test_jwks_refreshed_after_ttl_expiry():
     mock_client.__aexit__ = AsyncMock(return_value=None)
     mock_client.get = AsyncMock(side_effect=lambda *a, **kw: next(response_iter))
 
-    with patch("app.auth.jwt.httpx.AsyncClient", return_value=mock_client):
+    with patch("httpx.AsyncClient", return_value=mock_client):
         from app.auth.jwt import _get_jwks
 
         # First call — should fetch
@@ -115,7 +115,7 @@ async def test_jwks_warm_cache_no_additional_fetch():
     mock_client.__aexit__ = AsyncMock(return_value=None)
     mock_client.get = AsyncMock()
 
-    with patch("app.auth.jwt.httpx.AsyncClient", return_value=mock_client):
+    with patch("httpx.AsyncClient", return_value=mock_client):
         from app.auth.jwt import _get_jwks
         result = await _get_jwks()
 
