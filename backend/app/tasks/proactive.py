@@ -49,6 +49,18 @@ def check_stale_approvals() -> dict:
     return asyncio.run(_check_stale_approvals())
 
 
+@celery_app.task(name="proactive.morning_briefing")
+def morning_briefing() -> dict:
+    """Push the secretary's prioritised daily document-flow digest."""
+    return asyncio.run(_build_morning_briefing())
+
+
+@celery_app.task(name="proactive.alert_duplicate_invoices")
+def alert_duplicate_invoices() -> dict:
+    """Draft-first alert on freshly-ingested invoices flagged as duplicates."""
+    return asyncio.run(_alert_duplicate_invoices())
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -402,4 +414,259 @@ async def _check_stale_approvals() -> dict:
         await db.commit()
 
     logger.info("proactive_stale_approvals_alerted", count=alerted)
+    return {"alerted": alerted}
+
+
+# ── Morning briefing (secretary daily digest) ─────────────────────────────────
+
+def _format_briefing(stats: dict, *, opener: str | None = None) -> str:
+    """Render a prioritised daily digest from flow stats. Pure — unit-tested.
+
+    Groups items by urgency: 🔴 needs action now, 🟡 today, 🟢 informational.
+    Returns "" when there is genuinely nothing to report.
+    """
+    overdue = int(stats.get("overdue_payments", 0))
+    pending_approvals = int(stats.get("pending_approvals", 0))
+    open_anomalies = int(stats.get("open_anomalies", 0))
+    due_soon = int(stats.get("payments_due_soon", 0))
+    needs_review = int(stats.get("documents_needs_review", 0))
+    quarantine = int(stats.get("quarantine_count", 0))
+    unread = int(stats.get("unread_emails", 0))
+
+    red: list[str] = []
+    if overdue:
+        red.append(f"просроченные платежи: {overdue}")
+    if pending_approvals:
+        red.append(f"ждут согласования: {pending_approvals}")
+    if open_anomalies:
+        red.append(f"открытые аномалии: {open_anomalies}")
+
+    yellow: list[str] = []
+    if due_soon:
+        yellow.append(f"оплаты в ближайшие 3 дня: {due_soon}")
+    if needs_review:
+        yellow.append(f"документы на проверке: {needs_review}")
+    if quarantine:
+        yellow.append(f"в карантине: {quarantine}")
+
+    green: list[str] = []
+    if unread:
+        green.append(f"непрочитанные письма: {unread}")
+
+    if not (red or yellow or green):
+        return ""
+
+    lines = [opener or "🗂 Доброе утро! Сводка по документообороту:"]
+    if red:
+        lines.append("🔴 Требует внимания: " + "; ".join(red) + ".")
+    if yellow:
+        lines.append("🟡 На сегодня: " + "; ".join(yellow) + ".")
+    if green:
+        lines.append("🟢 К сведению: " + "; ".join(green) + ".")
+    return "\n".join(lines)
+
+
+async def _gather_briefing_stats() -> dict:
+    """Collect document-flow counts directly from the DB (Celery-safe)."""
+    from sqlalchemy import and_, func, select
+
+    from app.db.models import (
+        AnomalyCard,
+        AnomalyStatus,
+        Approval,
+        ApprovalStatus,
+        Document,
+        DocumentStatus,
+        EmailMessage,
+        PaymentSchedule,
+        QuarantineEntry,
+    )
+    from app.db.session import _get_session_factory
+
+    now = datetime.now(timezone.utc)
+    soon = now + timedelta(days=3)
+
+    async def _count(db, stmt) -> int:
+        return int((await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0)
+
+    async with _get_session_factory()() as db:
+        pending_approvals = await _count(
+            db, select(Approval).where(Approval.status == ApprovalStatus.pending)
+        )
+        open_anomalies = await _count(
+            db, select(AnomalyCard).where(AnomalyCard.status == AnomalyStatus.open)
+        )
+        needs_review = await _count(
+            db, select(Document).where(Document.status == DocumentStatus.needs_review)
+        )
+        quarantine = await _count(
+            db, select(QuarantineEntry).where(QuarantineEntry.decision.is_(None))
+        )
+        unread = await _count(
+            db, select(EmailMessage).where(EmailMessage.is_inbound == True)  # noqa: E712
+        )
+        overdue_payments = await _count(
+            db,
+            select(PaymentSchedule).where(
+                and_(
+                    PaymentSchedule.status.in_(("scheduled", "overdue", "partial")),
+                    PaymentSchedule.due_date < now,
+                )
+            ),
+        )
+        payments_due_soon = await _count(
+            db,
+            select(PaymentSchedule).where(
+                and_(
+                    PaymentSchedule.status.in_(("scheduled", "partial")),
+                    PaymentSchedule.due_date >= now,
+                    PaymentSchedule.due_date <= soon,
+                )
+            ),
+        )
+
+    return {
+        "pending_approvals": pending_approvals,
+        "open_anomalies": open_anomalies,
+        "documents_needs_review": needs_review,
+        "quarantine_count": quarantine,
+        "unread_emails": unread,
+        "overdue_payments": overdue_payments,
+        "payments_due_soon": payments_due_soon,
+    }
+
+
+async def _build_morning_briefing() -> dict:
+    from app.config import settings
+
+    if not getattr(settings, "morning_briefing_enabled", True):
+        return {"sent": False, "reason": "disabled"}
+
+    stats = await _gather_briefing_stats()
+    base = _format_briefing(stats)
+    if not base:
+        logger.info("morning_briefing_skipped_empty")
+        return {"sent": False, "reason": "nothing_to_report", "stats": stats}
+
+    # Optional: a friendlier opener via the local model (best-effort).
+    opener = await _llm_enrich(
+        context=f"Утренняя сводка документооборота: {stats}",
+        fallback="🗂 Доброе утро! Сводка по документообороту:",
+    )
+    message = _format_briefing(stats, opener=opener.splitlines()[0] if opener else None)
+
+    # In-app push (mirrors to WS + Telegram chats subscribed to the bus).
+    try:
+        from app.core.chat_bus import chat_bus
+        await chat_bus.publish({
+            "type": "proactive.briefing",
+            "content": message,
+            "stats": stats,
+        })
+    except Exception as exc:
+        logger.warning("morning_briefing_bus_failed", error=str(exc))
+
+    # Direct Telegram notification (if configured).
+    notifier = await _get_notifier()
+    if notifier:
+        try:
+            await notifier.notify_text(message)
+        except Exception as exc:
+            logger.warning("morning_briefing_tg_failed", error=str(exc))
+
+    logger.info("morning_briefing_sent", stats=stats)
+    return {"sent": True, "stats": stats, "message": message}
+
+
+# ── Duplicate-invoice proactive alert (draft-first) ───────────────────────────
+
+_DUP_LABELS = {
+    "duplicate_hash": "точная копия уже загруженного файла",
+    "duplicate_supplier_number": "тот же поставщик и номер счёта",
+    "duplicate_hash_and_number": "совпадает и файл, и номер счёта",
+}
+
+
+def _format_duplicate_alert(
+    invoice_number: str, amount: float | None, currency: str, dup_status: str
+) -> str:
+    """Pure, unit-tested draft-first alert text for a duplicate invoice."""
+    reason = _DUP_LABELS.get(dup_status, "признаки дубликата")
+    amount_str = f" на {amount:,.2f} {currency}".replace(",", " ") if amount else ""
+    return (
+        f"🔁 Возможный дубль счёта №{invoice_number}{amount_str}: {reason}. "
+        "Проверьте — отклонить как дубль или оставить?"
+    )
+
+
+async def _alert_duplicate_invoices(window_days: int = 2) -> dict:
+    from sqlalchemy import and_, or_, select
+
+    from app.db.session import _get_session_factory
+    from app.domain.models import Invoice
+
+    try:
+        from app.utils.redis_client import get_sync_redis
+        redis = get_sync_redis()
+    except Exception:
+        redis = None
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=window_days)
+    alerted = 0
+
+    async with _get_session_factory()() as db:
+        result = await db.execute(
+            select(Invoice).where(
+                and_(
+                    Invoice.created_at >= window_start,
+                    or_(
+                        Invoice.duplicate_status == "duplicate_hash",
+                        Invoice.duplicate_status == "duplicate_supplier_number",
+                        Invoice.duplicate_status == "duplicate_hash_and_number",
+                    ),
+                )
+            )
+        )
+        invoices = result.scalars().all()
+
+        for inv in invoices:
+            dedup_key = f"proactive:dup_alerted:{inv.id}"
+            if redis is not None:
+                try:
+                    if redis.get(dedup_key):
+                        continue
+                except Exception:
+                    pass
+
+            num = inv.invoice_number or str(inv.id)[:8]
+            message = _format_duplicate_alert(
+                num, inv.total_amount, inv.currency or "RUB", inv.duplicate_status
+            )
+            try:
+                from app.core.chat_bus import chat_bus
+                await chat_bus.publish({
+                    "type": "proactive.duplicate_invoice",
+                    "content": message,
+                    "invoice_id": str(inv.id),
+                    "action_url": f"/invoices/{inv.id}",
+                })
+            except Exception as exc:
+                logger.warning("dup_alert_bus_failed", invoice_id=str(inv.id), error=str(exc))
+
+            notifier = await _get_notifier()
+            if notifier:
+                try:
+                    await notifier.notify_text(message)
+                except Exception as exc:
+                    logger.warning("dup_alert_tg_failed", invoice_id=str(inv.id), error=str(exc))
+
+            if redis is not None:
+                try:
+                    redis.setex(dedup_key, 30 * 24 * 3600, "1")
+                except Exception:
+                    pass
+            alerted += 1
+
+    logger.info("proactive_duplicate_invoices_alerted", count=alerted)
     return {"alerted": alerted}

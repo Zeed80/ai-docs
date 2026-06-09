@@ -109,6 +109,16 @@ celery_app.conf.beat_schedule = {
         "task": "proactive.check_stale_approvals",
         "schedule": 7_200.0,
     },
+    # Secretary morning briefing — once a day at the configured hour
+    "proactive-morning-briefing": {
+        "task": "proactive.morning_briefing",
+        "schedule": crontab(hour=settings.morning_briefing_hour, minute=0),
+    },
+    # Draft-first alert on freshly-ingested duplicate invoices — hourly
+    "proactive-duplicate-invoices": {
+        "task": "proactive.alert_duplicate_invoices",
+        "schedule": 3_600.0,
+    },
     # Check saved-query alerts every hour
     "check-saved-query-alerts": {
         "task": "search.check_saved_query_alerts",

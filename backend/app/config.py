@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     frontend_url: str = "http://localhost:3000"
 
+    # Proactive: hour (0–23, server tz) for the secretary morning briefing
+    morning_briefing_hour: int = 8
+    morning_briefing_enabled: bool = True
+
     # Security
     csrf_secret: str = "dev-csrf-secret"   # set to secrets.token_hex(32) in production
     rate_limit_login_per_minute: int = 30  # 30/min = 1 request per 2s; plenty for dev, still safe
