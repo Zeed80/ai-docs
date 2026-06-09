@@ -60,6 +60,9 @@ x-authentik-env: &authentik-env
   AUTHENTIK_REDIS__HOST: redis
   AUTHENTIK_REDIS__PORT: "6379"
   AUTHENTIK_REDIS__DB: "1"
+  # Redis runs with --requirepass when REDIS_PASSWORD is set; Authentik must
+  # send it too or its flow engine/sessions fail ("Authentication required").
+  AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD:-}
   AUTHENTIK_POSTGRESQL__HOST: authentik-db
   AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_DB_USER:-authentik}
   AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_DB_PASSWORD:-authentik}
