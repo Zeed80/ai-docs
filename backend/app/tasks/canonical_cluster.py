@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import structlog
 
+from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
@@ -14,15 +13,15 @@ logger = structlog.get_logger()
 @celery_app.task(name="canonical.auto_cluster")
 def auto_cluster_canonical_items() -> dict:
     """Suggest canonical item merges by grouping similar unconfirmed items."""
-    return asyncio.get_event_loop().run_until_complete(_run())
+    return run_async(_run())
 
 
 async def _run() -> dict:
     from sqlalchemy import select
 
+    from app.core.chat_bus import chat_bus
     from app.db.models import CanonicalItem
     from app.db.session import _get_session_factory
-    from app.core.chat_bus import chat_bus
 
     merged = 0
 

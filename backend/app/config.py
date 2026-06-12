@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     # Must be set to the same value in all services that need to call the backend API.
     agent_service_key: str = ""
 
+    # Isolated executor for agent-generated skills (infra/skill-runner).
+    # Generated code never runs inside the backend process.
+    skill_runner_url: str = "http://skill-runner:8077"
+
     # Auth (Authentik SSO)
     auth_enabled: bool = False          # set True in production
     authentik_url: str = "http://authentik-server:9000"   # internal Docker URL for JWKS/token

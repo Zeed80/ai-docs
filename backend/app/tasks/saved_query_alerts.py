@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import structlog
 
+from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
@@ -14,15 +13,15 @@ logger = structlog.get_logger()
 @celery_app.task(name="search.check_saved_query_alerts")
 def check_saved_query_alerts() -> dict:
     """Re-run saved queries with alert_cron set and notify if results changed."""
-    return asyncio.get_event_loop().run_until_complete(_check_alerts())
+    return run_async(_check_alerts())
 
 
 async def _check_alerts() -> dict:
     from sqlalchemy import select
 
+    from app.core.chat_bus import chat_bus
     from app.db.models import SavedQuery
     from app.db.session import _get_session_factory
-    from app.core.chat_bus import chat_bus
 
     fired = 0
 
@@ -65,9 +64,9 @@ async def _check_alerts() -> dict:
 
 async def _run_query_count(db, nl_text: str) -> int:
     """Run a simple text count of matching invoices/documents."""
-    from sqlalchemy import select, or_, func
+    from sqlalchemy import func, select
 
-    from app.db.models import Invoice, Document
+    from app.db.models import Document, Invoice
 
     q = nl_text.lower()
 

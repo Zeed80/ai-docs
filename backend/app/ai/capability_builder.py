@@ -1,22 +1,22 @@
-"""CapabilityBuilder — agent that writes new skills and registers them live.
+"""CapabilityBuilder — agent that drafts new skill modules for human review.
 
 Flow:
   1. Orchestrator detects a missing capability (task X can't be done with existing skills)
   2. build_capability(gap) is called
-  3. CapabilityBuilder sends gap + code templates to Claude API (code_generation route)
-  4. Claude writes a real Python skill module
-  5. Module is saved to backend/app/ai/generated_skills/{skill_name}.py
-  6. Skill entry is appended to aiagent/skills/_registry.yml
-  7. agent_loop is signalled to reload its skill map
-  8. Returns the new skill name for immediate use by orchestrator
+  3. CapabilityBuilder sends gap + code templates to the builder model (code_generation route)
+  4. The model writes a Python skill module
+  5. Module is saved to backend/app/ai/generated_skills/{skill_name}.py as a DRAFT
+
+Drafts are never registered or imported here: activation goes exclusively
+through the capability-proposal flow (sandbox validation → human decision →
+promote). Generated code must not run inside the backend process without an
+explicit approval — see policy_engine PROTECTED_SETTINGS and the agent
+security model.
 """
 
 from __future__ import annotations
 
-import importlib
-import json
 import re
-import sys
 import textwrap
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -24,15 +24,10 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-import yaml
 
 logger = structlog.get_logger()
 
 _GENERATED_ROOT = Path(__file__).resolve().parent / "generated_skills"
-_REGISTRY_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "aiagent" / "skills" / "_registry.yml"
-)
 
 # Template shown to the code-generation model so it knows the conventions.
 _CODE_TEMPLATE = '''"""
@@ -201,30 +196,13 @@ async def build_capability(
     except Exception as exc:
         errors.append(f"Failed to write skill file: {exc}")
 
-    # Register in _registry.yml
-    registry_updated = False
-    if not errors:
-        try:
-            registry_updated = _register_skill(skill_name, gap_description)
-        except Exception as exc:
-            errors.append(f"Failed to register skill: {exc}")
-
-    # Hot-reload skill module
-    if skill_path and not errors:
-        try:
-            _hot_reload_module(skill_name)
-        except Exception as exc:
-            logger.warning("capability_builder_hot_reload_failed", skill=skill_name, error=str(exc))
-
-    # Signal agent_loop instances to reload their skill maps
-    if registry_updated:
-        _signal_agent_loop_reload()
-        _publish_skill_reload(skill_name)
-
+    # The draft stops here. Registration and module import are owned by the
+    # capability-proposal flow (sandbox → human decide → promote); importing
+    # agent-written code into this process without approval is an RCE vector.
     return CapabilityBuildResult(
         skill_name=skill_name,
         skill_path=skill_path,
-        registry_updated=registry_updated,
+        registry_updated=False,
         errors=errors,
         code=code,
     )
@@ -329,74 +307,6 @@ def _sanitize_skill_filename(skill_name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", skill_name).strip("_")
 
 
-def _register_skill(skill_name: str, description: str) -> bool:
-    """Append skill entry to _registry.yml and gateway.yml exposed list."""
-    if not _REGISTRY_PATH.exists():
-        logger.warning("capability_builder_registry_missing", path=str(_REGISTRY_PATH))
-        return False
-
-    data = yaml.safe_load(_REGISTRY_PATH.read_text(encoding="utf-8")) or {}
-    skills: list[dict] = data.get("skills") or []
-
-    # Check duplicate
-    if any(s.get("name") == skill_name for s in skills):
-        logger.info("capability_builder_skill_already_registered", skill=skill_name)
-        return True
-
-    safe_name = _sanitize_skill_filename(skill_name)
-    entry: dict[str, Any] = {
-        "name": skill_name,
-        "description": f"Agent-generated: {description[:120]}",
-        "category": "agent_generated",
-        "method": "POST",
-        "path": f"/api/agent/generated-skill/{safe_name}",
-        "approval_required": False,
-        "body_params": [
-            {"name": "args", "type": "object", "required": False,
-             "description": "Skill-specific arguments"},
-        ],
-    }
-    skills.append(entry)
-    data["skills"] = skills
-    _REGISTRY_PATH.write_text(
-        yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
-        encoding="utf-8",
-    )
-    logger.info("capability_builder_skill_registered", skill=skill_name)
-    return True
-
-
-def _hot_reload_module(skill_name: str) -> None:
-    import importlib.util
-    from pathlib import Path
-
-    safe = _sanitize_skill_filename(skill_name)
-    module_name = f"app.ai.generated_skills.{safe}"
-    module_path = Path(__file__).parent / "generated_skills" / f"{safe}.py"
-
-    if module_name in sys.modules:
-        importlib.reload(sys.modules[module_name])
-    elif module_path.exists():
-        spec = importlib.util.spec_from_file_location(module_name, module_path)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
-
-
-def _signal_agent_loop_reload() -> None:
-    """Notify all active AgentSession instances to reload their skill maps."""
-    try:
-        from app.ai.agent_loop import reload_all_sessions
-        reload_all_sessions()
-    except Exception as exc:
-        logger.warning("capability_builder_agent_loop_signal_failed", error=str(exc))
-
-
-def _publish_skill_reload(skill_name: str) -> None:
-    """Publish skill_reload event to Redis so all workers invalidate their canvas map cache."""
-    try:
-        from app.utils.redis_client import get_sync_redis
-        get_sync_redis().publish("sveta:bus:skill_reload", json.dumps({"skill": skill_name}))
-    except Exception as exc:
-        logger.warning("capability_builder_redis_publish_failed", error=str(exc))
+# NOTE: legacy `_register_skill` (append to _registry.yml), `_hot_reload_module`
+# and the reload-signal helpers were removed: the legacy registry is frozen
+# (read-only) and generated code is only activated through the proposal flow.

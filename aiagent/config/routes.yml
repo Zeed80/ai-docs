@@ -1,0 +1,319 @@
+# Единая декларативная таблица маршрутизации запросов агента.
+#
+# ЕДИНСТВЕННЫЙ источник правды для keyword-роутинга. Его потребители:
+#   - эвристический планировщик оркестратора (route_table.match_route и маркеры),
+#   - fast-path (детерминированные count-вопросы без LLM),
+#   - секции системного промпта оркестратора (prompt_sections),
+#   - action chips после завершения хода.
+# Не добавляйте ключевые слова в код — только сюда.
+#
+# Все ключевые слова сравниваются с нормализованным текстом: lower(), ё→е.
+
+version: 1
+
+# ── Маркеры типа запроса (для эвристики оркестратора) ─────────────────────────
+
+# Запрос требует rich-вывод на Рабочий стол (таблица/файл/график/документ).
+workspace_request_markers:
+  - "таблиц"
+  - "полный список"
+  - "все списком"
+  - "выведи список"
+  - "покажи список"
+  - "список всех"
+  - "список счет"
+  - "список поставщик"
+  - "список товар"
+  - "ссылк"
+  - "документ"
+  - "чертеж"
+  - "график"
+  - "диаграм"
+  - "excel"
+  - "csv"
+  - "скача"
+  - "файл"
+  - "сравн"
+  - "отчет"
+  - "столбец"
+  - "столбц"
+  - "колонк"
+  - "добавь поле"
+  - "убери поле"
+  - "отсортируй"
+
+# Правка уже открытой таблицы.
+table_edit_markers:
+  - "добавь столб"
+  - "добавить столб"
+  - "добавь колон"
+  - "добавить колон"
+  - "убери столб"
+  - "убрать столб"
+  - "убери колон"
+  - "убрать колон"
+  - "перед номер"
+  - "после номер"
+  - "отсортируй"
+
+# Ссылка на уже открытую таблицу.
+existing_table_markers:
+  - "уже открыт"
+  - "открытую таблиц"
+  - "открытой таблиц"
+  - "эту таблиц"
+  - "текущую таблиц"
+  - "в таблицу"
+  - "в нее"
+
+# Сквозные вопросы о состоянии документооборота (секретарь / flow-status).
+flow_status_markers:
+  - "что требует внимания"
+  - "требует внимания"
+  - "что у нас по документ"
+  - "статус потока"
+  - "статус документооборот"
+  - "что висит"
+  - "что застряло"
+  - "что зависло"
+  - "дай сводку"
+  - "сводку по документ"
+  - "общая сводка"
+  - "что просрочено"
+  - "что на проверке"
+  - "что на согласовании"
+  - "что нужно сделать"
+  - "что в работе"
+  - "состояние документооборот"
+  - "что по делам"
+  - "обзор дня"
+  - "что нового по документ"
+
+# ── Fast-path: детерминированные count-вопросы (0 LLM) ────────────────────────
+
+fast_paths:
+  # Обязательный маркер count-вопроса.
+  count_markers: ["сколько", "кол-во", "количество", "число ", "всего "]
+  # При этих маркерах fast-path НЕ срабатывает (нужен rich-вывод → LLM-поток).
+  rich_output_markers:
+    - "таблиц"
+    - "список"
+    - "перечисл"
+    - "выведи"
+    - "покажи все"
+    - "построй"
+    - "график"
+    - "диаграм"
+    - "excel"
+    - "экспорт"
+    - "выгруз"
+    - "по поставщик"
+    - "по месяц"
+    - "сгруппир"
+    - "детал"
+    - "построчн"
+  # Складской контекст для инвентарного подсчёта.
+  stock_markers: ["склад", "остатк", "на складе", "в наличии", "запас"]
+  # Вопросы о цене/сумме — это не count-вопросы.
+  price_markers:
+    - "сколько стоит"
+    - "сколько сто"
+    - "стоит"
+    - "сколько денег"
+    - "сколько рубл"
+    - "на какую сумму"
+    - "на сумму"
+    - "сумма счет"
+    - "сумму счет"
+  # Подсчёт сущностей верхнего уровня: keyword → capability + подпись.
+  entity_counts:
+    - { keyword: "счет",       capability: invoices,  label: "счетов" }
+    - { keyword: "инвойс",     capability: invoices,  label: "счетов" }
+    - { keyword: "поставщик",  capability: suppliers, label: "поставщиков" }
+    - { keyword: "контрагент", capability: suppliers, label: "поставщиков" }
+    - { keyword: "аномали",    capability: anomalies, label: "аномалий" }
+    - { keyword: "документ",   capability: documents, label: "документов" }
+
+# ── Группировка по поставщикам ────────────────────────────────────────────────
+
+supplier_grouping:
+  trigger_keywords:
+    - "сгруппируй по поставщик"
+    - "группировк по поставщик"
+    - "по поставщикам"
+    - "по поставщику"
+    - "group by supplier"
+    - "by supplier"
+  item_keywords: ["товар", "счет", "invoice", "строк", "позиц", "таблиц"]
+  canvas_id: "agent:invoice-items-by-supplier"
+  skill: "workspace.invoice_items_by_supplier_table"
+
+# ── Маршруты интентов ─────────────────────────────────────────────────────────
+# Первое совпадение по keywords выигрывает (порядок имеет значение).
+
+routes:
+  - intent: table_edit
+    role: invoice_specialist
+    keywords:
+      - "добавь столб"
+      - "добавить столб"
+      - "добавь колон"
+      - "добавить колон"
+      - "убери столб"
+      - "убрать столб"
+      - "убери колон"
+      - "убрать колон"
+      - "перед номер"
+      - "после номер"
+    workspace_required: true
+    default_canvas: "agent:invoice-items-grouped"
+    canvas_rules:
+      - require_any: ["счет", "invoice", "поставщик", "товар", "строк"]
+        canvas_id: "agent:invoice-items-grouped"
+    skills: ["table.apply_diff", "invoice.list"]
+
+  - intent: invoice_list
+    role: invoice_specialist
+    keywords: ["выведи счет", "список счет", "все счет"]
+    workspace_required: true
+    default_canvas: "agent:invoices"
+    skills: ["invoice.list", "workspace.invoice_table"]
+
+  - intent: tech_process
+    role: technologist
+    keywords:
+      - "техпроцесс"
+      - "технологический процесс"
+      - "маршрутная карта"
+      - "операционная карта"
+      - "нормоконтроль"
+    workspace_required: false
+    skills: ["tech.generate_tp_from_drawing", "tech.process_plan_list"]
+
+# ── Fallback-правила выбора canvas (когда маршрут не дал canvas_id) ──────────
+
+fallback_canvas_rules:
+  - require_any: ["счет", "invoice"]
+    require_table_edit: true
+    canvas_id: "agent:invoice-items-grouped"
+  - require_any: ["товар", "строк", "позиц"]
+    canvas_id: "agent:invoice-items"
+    sub_rules:
+      - require_any: ["по поставщик"]
+        canvas_id: "agent:invoice-items-by-supplier"
+      - require_any: ["по счет", "сгруппир"]
+        canvas_id: "agent:invoice-items-grouped"
+  - require_any: ["счет", "invoice"]
+    canvas_id: "agent:invoices"
+  - require_any: ["поставщик"]
+    canvas_id: "agent:suppliers"
+  - require_any: ["документ"]
+    canvas_id: "agent:documents"
+
+# ── Сопоставление canvas ↔ workspace-skill (для аудита и прямого ремонта) ────
+
+canvas_to_skill:
+  "agent:spec-table": "workspace.spec_table"
+  "agent:invoice-items-by-supplier": "workspace.invoice_items_by_supplier_table"
+  "agent:invoice-items-grouped": "workspace.invoice_items_grouped_table"
+  "agent:invoice-items": "workspace.invoice_items_table"
+  "agent:invoices": "workspace.invoice_table"
+  "agent:suppliers": "workspace.supplier_table"
+  "agent:documents": "workspace.document_table"
+
+skill_to_spec:
+  "workspace.spec_table":
+    path: "/api/workspace/agent/spec-table"
+    default_args: {}
+  "workspace.invoice_items_by_supplier_table":
+    path: "/api/workspace/agent/invoices/items-by-supplier-table"
+    default_args: {}
+  "workspace.invoice_items_grouped_table":
+    path: "/api/workspace/agent/invoices/items-grouped-table"
+    default_args: {}
+  "workspace.invoice_items_table":
+    path: "/api/workspace/agent/invoices/items-table"
+    default_args: {}
+  "workspace.invoice_table":
+    path: "/api/workspace/agent/invoices/table"
+    default_args: {}
+  "workspace.supplier_table":
+    path: "/api/workspace/agent/suppliers/table"
+    default_args: {}
+  "workspace.document_table":
+    path: "/api/workspace/agent/documents/table"
+    default_args: {}
+
+# Тип rich-вывода по умолчанию для каждой capability.
+capability_output_types:
+  invoices: table
+  documents: document
+  suppliers: table
+  warehouse: table
+  procurement: table
+  payments: table
+  anomalies: table
+  normalization: table
+  workspace: table
+  search: document
+  analytics: chart
+  tech: table
+  memory: markdown
+  email: markdown
+  agent_control: markdown
+
+# ── Action chips (контекстные кнопки после завершения хода) ───────────────────
+
+chips:
+  - intents: [invoice_list, invoice_detail]
+    keywords: ["счет"]
+    items:
+      - { label: "Открыть счета", action: navigate, target: "/invoices" }
+      - { label: "Экспорт в Excel", action: cap, cap: invoices, act: export_excel }
+  - intents: [supplier_profile, supplier_search]
+    keywords: ["поставщик"]
+    items:
+      - { label: "Профиль поставщика", action: navigate, target: "/suppliers" }
+  - intents: [anomaly_check]
+    keywords: ["аномали"]
+    items:
+      - { label: "Открыть аномалии", action: navigate, target: "/anomalies" }
+  - intents: [draft_email, email_triage]
+    keywords: ["письм"]
+    items:
+      - { label: "Черновики", action: navigate, target: "/drafts" }
+  - intents: [compare]
+    keywords: ["сравни"]
+    items:
+      - { label: "Сравнение КП", action: navigate, target: "/compare" }
+  - intents: [calendar]
+    keywords: ["напомни", "срок"]
+    items:
+      - { label: "Календарь", action: navigate, target: "/calendar" }
+  - intents: [flow_status]
+    keywords: []
+    items:
+      - { label: "Согласования", action: navigate, target: "/approvals" }
+      - { label: "Открыть аномалии", action: navigate, target: "/anomalies" }
+
+# ── Доменные секции системного промпта оркестратора ───────────────────────────
+# Рендерятся в _ORCHESTRATOR_SYSTEM; ключевые слова здесь — подсказка модели,
+# машинная маршрутизация использует routes/markers выше.
+
+prompt_sections:
+  - role: technologist
+    title: "Технологическая предметная область (роль \"technologist\")"
+    text: |
+      Ключевые слова: техпроцесс, технологический процесс, тп, маршрутная карта, операционная карта,
+      нормоконтроль, нормирование, режимы резания, заготовка, токарная, фрезерная, шлифовальная,
+      ГОСТ 3.1118, ГОСТ 3.1404, ЕСТД, техкарта.
+      Основные skills: tech.generate_tp_from_drawing, tech.normcontrol_check, tech.process_plan_list,
+      tech.process_plan_get, tech.export_gost_forms.
+  - role: orchestrator
+    title: "Заметка для тебя (секретарь-оркестратор)"
+    text: |
+      Сквозные вопросы о состоянии документооборота («что требует внимания», «дай сводку»,
+      «что просрочено») ты обрабатываешь сам по живому снимку потока — они не доходят
+      до планирования. Если такой вопрос всё же дошёл сюда (снимок недоступен), назначь
+      data_analyst со skills: analytics.dashboard_today, approvals.approval_list,
+      anomalies.list, payments.overdue.

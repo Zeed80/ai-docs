@@ -280,26 +280,54 @@ capabilities:
     description: >
       Рабочий стол: публикация таблиц, списков, документов, графиков.
 
-      Выбор action для счетов/товаров (строятся из БД целиком — не собирай
-      вручную через invoices:list + general, иначе теряются строки и группы):
-      - invoice_table — «все счета»/«список счетов» (1 строка = счёт).
-      - invoice_items_table — построчный список товаров (1 строка = позиция).
-      - invoice_pivot — любая группировка счетов/товаров (по поставщику, счёту,
-        товару, месяцу, валюте, статусу) и/или выбор колонок. Единственный
-        инструмент группировок. body={group_by, columns:[{header, expr}]}.
-        group_by: supplier|invoice|item|month|currency|status.
-        expr: group, supplier, supplier_inn, supplier_kpp, items, item_names,
-        item_count, invoice_count, invoice_numbers, total_amount, avg_amount,
-        min_amount, max_amount, quantity_total, currencies, statuses,
-        first_date, last_date. Без columns — стандартный набор.
-      - general — произвольные НЕ-счётные таблицы (склад, платежи, поставщики).
-        body={title, columns:[{key,header,type}], rows:[{key:value}], canvas_id}.
-      - get_block — прочитать блок перед редактированием.
-      - supplier_lookup — поиск поставщиков. verify — проверить блок.
+      ГЛАВНЫЙ инструмент таблиц — spec_table: передай ТОЛЬКО спецификацию
+      (какие колонки из какого источника), данные придут из SQL целиком
+      (всегда полный total — никогда не собирай строки вручную).
+      - spec_table — построить таблицу. Передай spec:
+        {source, columns: [{field, header?}], filters: [{field, op, value}],
+         sort: [{field, dir: asc|desc}], title?}.
+        Источники и их поля:
+        invoices: supplier_name, invoice_number, invoice_date, due_date,
+          supplier_inn, subtotal, tax_amount (НДС), total_amount, currency,
+          status, items_list (перечень товаров в одной ячейке через перенос
+          строки), items_count.
+        invoice_items: description, sku, quantity, unit, unit_price, amount,
+          tax_rate, tax_amount, invoice_number, invoice_date, supplier_name.
+        suppliers: name, inn, kpp, address, bank_name, bank_bik.
+        warehouse (остатки): name, sku, current_qty, unit, min_qty, location,
+          below_min («Да»/«Нет»; фильтр {field: below_min, op: eq, value:
+          "Да"} = дефицит).
+        documents (все документы: акты, накладные, договоры, КП…): file_name,
+          doc_type (invoice|letter|contract|drawing|commercial_offer|act|
+          waybill|other), status, created_at, source_channel, page_count,
+          doc_type_confidence.
+        payments (график платежей): supplier_name, invoice_number, due_date,
+          amount, currency, status (scheduled|paid|overdue|partial|cancelled),
+          paid_at, paid_amount, reference.
+        anomalies: title, anomaly_type, severity, status, created_at,
+          resolved_by, resolved_at, description.
+        emails: subject, from_address, mailbox, received_at, attachment_count,
+          has_attachments («Да»/«Нет»), direction (Входящее/Исходящее).
+        drawings (чертежи): drawing_number, filename, title, material,
+          revision, format, drawing_type, part_class, status, created_at.
+        Фильтр op: eq|ne|contains|gte|lte|between|in|smart
+        (smart — умный поиск по содержимому: «фрезы диаметра 5»).
+        Полный справочник: action=spec_table_catalog.
+      - spec_table_patch — править существующую spec-таблицу: canvas_id +
+        ops:[{op: add_column|remove_column|move_column|set_sort|add_filter|
+        clear_filters, field, before?, after?, dir?, filter?}] ИЛИ
+        command: "<русская команда>" («добавь столбец с НДС перед суммой»).
+      - spec_table_catalog — справочник источников и полей.
 
-      Редактирование таблицы (добавить/убрать/переименовать колонку):
-      get_block по canvas_id → измени columns/rows → general с тем же canvas_id.
-      canvas_id по умолчанию "agent:custom"; один и тот же id обновляет ту же таблицу.
+      Прочие actions (legacy-таблицы фиксированной формы):
+      - invoice_pivot — группировки счетов/товаров: body={group_by, columns:
+        [{header, expr}]}. group_by: supplier|invoice|item|month|currency|status.
+      - invoice_table, invoice_items_table — фиксированные таблицы счетов.
+      - general — произвольные блоки с данными НЕ из БД.
+        body={title, columns:[{key,header,type}], rows:[{key:value}], canvas_id}.
+      - get_block — прочитать блок. supplier_lookup — поиск поставщиков.
+        verify — проверить блок.
+      canvas_id по умолчанию "agent:spec-table"; тот же id обновляет ту же таблицу.
     path: /api/agent/cap/workspace
     method: POST
     gate_actions: []
@@ -308,13 +336,22 @@ capabilities:
       properties:
         action:
           type: string
-          description: "invoice_pivot (ЛЮБАЯ группировка товаров/счетов; body.group_by + body.columns:[{header,expr}]) | invoice_table (список счетов) | invoice_items_table (построчно) | general (не-счётные таблицы) | get_block | supplier_lookup | verify"
+          description: "spec_table (ГЛАВНЫЙ: таблица по спецификации, полные данные из SQL) | spec_table_patch (правка spec-таблицы: ops или command) | spec_table_catalog | invoice_pivot (группировки) | invoice_table | invoice_items_table | general (данные не из БД) | get_block | supplier_lookup | verify"
         canvas_id:
           type: string
-          description: "ID canvas-блока. Для get_block и general (редактирование) — указывай явно. По умолчанию 'agent:custom'."
+          description: "ID canvas-блока. По умолчанию 'agent:spec-table'; тот же id обновляет ту же таблицу."
+        spec:
+          type: object
+          description: "Для spec_table: {source, columns:[{field,header?}], filters:[{field,op,value}], sort:[{field,dir}], title?}"
+        ops:
+          type: array
+          description: "Для spec_table_patch: [{op: add_column|remove_column|move_column|set_sort|add_filter|clear_filters, field, before?, after?, dir?, filter?}]"
+        command:
+          type: string
+          description: "Для spec_table_patch: русская команда правки («добавь столбец с НДС перед суммой»)"
         filters:
           type: object
-          description: "Фильтры для таблиц: supplier_id, status, date_from, date_to, limit"
+          description: "Фильтры для legacy-таблиц: supplier_id, status, date_from, date_to, limit"
         body:
           type: object
           description: "Данные для general: {title, columns:[{key,header,type}], rows:[{key:val}], canvas_id, block_type}"

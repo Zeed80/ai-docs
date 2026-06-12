@@ -1,7 +1,10 @@
-"""Dynamic skill runner — executes agent-generated skills without uvicorn restart.
+"""Dynamic skill runner — proxies agent-generated skills to the isolated runner.
 
-Generated skills live in backend/app/ai/generated_skills/{skill_name}.py.
-Each module must expose: async def execute(args: dict) -> dict
+Generated skills live in backend/app/ai/generated_skills/{skill_name}.py and
+EXECUTE ONLY in the dedicated ``skill-runner`` container (non-root, read-only
+fs, no credentials — see infra/skill-runner). This module never imports or
+executes generated code in the backend process: it forwards the call over HTTP
+and post-processes the result (cache, shadow A/B routing for the evolver).
 
 The skill registry points generated skills to:
   POST /api/agent/generated-skill/{skill_name}
@@ -9,46 +12,44 @@ The skill registry points generated skills to:
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import sys
+import ast
 from pathlib import Path
 from typing import Any
 
+import httpx
 import structlog
 from fastapi import APIRouter, Body, Depends, HTTPException
+
 from app.auth.jwt import require_role
 from app.auth.models import UserInfo, UserRole
+from app.config import settings
 
 logger = structlog.get_logger()
 
 router = APIRouter()
 
 _GENERATED_ROOT = Path(__file__).resolve().parents[1] / "ai" / "generated_skills"
+_RUNNER_TIMEOUT_S = 45.0
 
 
-def _load_skill_module(skill_name: str):
-    """Import (or reload) a generated skill module by name."""
-    safe = skill_name.replace("-", "_").replace(".", "_")
-    module_name = f"app.ai.generated_skills.{safe}"
-    module_path = _GENERATED_ROOT / f"{safe}.py"
+def _safe_name(skill_name: str) -> str:
+    return skill_name.replace("-", "_").replace(".", "_")
 
-    if not module_path.exists():
-        raise FileNotFoundError(f"Generated skill file not found: {module_path}")
 
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load spec for {module_path}")
-
-    if module_name in sys.modules:
-        module = sys.modules[module_name]
-        importlib.reload(module)
-    else:
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-
-    return module
+async def _run_in_runner(skill_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Execute a generated skill in the isolated runner over HTTP."""
+    url = f"{settings.skill_runner_url.rstrip('/')}/run/{_safe_name(skill_name)}"
+    async with httpx.AsyncClient(timeout=_RUNNER_TIMEOUT_S) as client:
+        resp = await client.post(url, json={"args": args})
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"Generated skill '{skill_name}' not found")
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Skill runner error: HTTP {resp.status_code}: {resp.text[:300]}",
+        )
+    result = resp.json()
+    return result if isinstance(result, dict) else {"status": "ok", "data": result}
 
 
 @router.post("/api/agent/generated-skill/{skill_name}", tags=["agent-generated"])
@@ -57,24 +58,10 @@ async def run_generated_skill(
     args: dict[str, Any] = Body(default_factory=dict),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> dict[str, Any]:
-    """Execute an agent-generated skill module."""
-    try:
-        module = _load_skill_module(skill_name)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Generated skill '{skill_name}' not found")
-    except Exception as exc:
-        logger.error("generated_skill_load_failed", skill=skill_name, error=str(exc))
-        raise HTTPException(status_code=500, detail=f"Failed to load skill: {exc}")
-
-    if not hasattr(module, "execute"):
-        raise HTTPException(
-            status_code=500,
-            detail=f"Skill module '{skill_name}' has no execute() function",
-        )
-
+    """Execute an agent-generated skill in the isolated runner."""
     # Check cache first (read-only skills only)
     try:
-        from app.ai.skill_cache import get_cached, set_cached
+        from app.ai.skill_cache import get_cached
         cached = await get_cached(skill_name, args)
         if cached is not None:
             logger.debug("generated_skill_cache_hit", skill=skill_name)
@@ -82,53 +69,52 @@ async def run_generated_skill(
     except Exception:
         pass  # cache miss is fine
 
-    is_v2 = False
     try:
-        # Check shadow routing for A/B testing
+        # Shadow routing for A/B testing (skill evolver)
         from app.ai.skill_evolver import maybe_route_to_shadow, record_shadow_outcome
         shadow_name = await maybe_route_to_shadow(skill_name, args)
         if shadow_name:
             try:
-                shadow_module = _load_skill_module(shadow_name)
-                if hasattr(shadow_module, "execute"):
-                    result = await shadow_module.execute(args)
-                    await record_shadow_outcome(skill_name, is_v2=True, success=result.get("status") == "ok")
-                    return result
+                result = await _run_in_runner(shadow_name, args)
+                await record_shadow_outcome(
+                    skill_name, is_v2=True, success=result.get("status") == "ok"
+                )
+                return result
             except Exception:
                 pass  # shadow failed → fall through to v1
     except Exception:
         pass
 
     try:
-        result = await module.execute(args)
-        logger.info("generated_skill_executed", skill=skill_name)
-
-        # Cache successful read results
-        try:
-            await set_cached(skill_name, args, result)
-        except Exception:
-            pass
-
-        # Record outcome for skill evolver
-        try:
-            from app.ai.skill_evolver import record_shadow_outcome
-            await record_shadow_outcome(skill_name, is_v2=False, success=result.get("status") == "ok")
-        except Exception:
-            pass
-
-        return result
-    except NotImplementedError:
-        logger.warning("generated_skill_not_implemented", skill=skill_name)
-        return {"status": "error", "skill": skill_name, "message": "Skill is a stub and not yet implemented"}
+        result = await _run_in_runner(skill_name, args)
+    except HTTPException:
+        raise
     except Exception as exc:
-        import traceback
-        logger.error(
-            "generated_skill_execution_failed",
-            skill=skill_name,
-            error=str(exc),
-            traceback=traceback.format_exc(),
+        logger.error("generated_skill_runner_unreachable", skill=skill_name, error=str(exc))
+        raise HTTPException(
+            status_code=503,
+            detail="Skill runner is unavailable; generated skills never run in-process.",
         )
-        return {"status": "error", "skill": skill_name, "message": str(exc)}
+
+    logger.info("generated_skill_executed", skill=skill_name)
+
+    # Cache successful read results
+    try:
+        from app.ai.skill_cache import set_cached
+        await set_cached(skill_name, args, result)
+    except Exception:
+        pass
+
+    # Record outcome for skill evolver
+    try:
+        from app.ai.skill_evolver import record_shadow_outcome
+        await record_shadow_outcome(
+            skill_name, is_v2=False, success=result.get("status") == "ok"
+        )
+    except Exception:
+        pass
+
+    return result
 
 
 @router.get("/api/agent/skill-evolution/audit", tags=["agent-generated"])
@@ -157,24 +143,42 @@ async def skill_cache_stats() -> dict[str, Any]:
     return await get_cache_stats()
 
 
+def _static_skill_meta(path: Path) -> dict[str, Any]:
+    """Read name/description from the file WITHOUT importing it (no code exec)."""
+    info: dict[str, Any] = {"name": path.stem, "source": "agent_generated"}
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        info["error"] = f"unparseable: {exc}"
+        return info
+    doc = ast.get_docstring(tree) or ""
+    description = doc.strip().split("\n")[0][:120]
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "SKILL_META"
+            and isinstance(node.value, ast.Dict)
+        ):
+            try:
+                meta = ast.literal_eval(node.value)
+                if isinstance(meta, dict):
+                    description = str(meta.get("description") or description)[:120]
+                    info["created_at"] = meta.get("created_at")
+            except Exception:
+                pass
+    info["description"] = description
+    return info
+
+
 @router.get("/api/agent/generated-skills", tags=["agent-generated"])
 async def list_generated_skills() -> dict[str, Any]:
-    """List all available generated skills."""
+    """List all available generated skills (static metadata, no import)."""
     skills = []
     if _GENERATED_ROOT.exists():
         for path in sorted(_GENERATED_ROOT.glob("*.py")):
             if path.name.startswith("_"):
                 continue
-            try:
-                module = _load_skill_module(path.stem)
-                doc = getattr(module, "__doc__", "") or ""
-                meta = getattr(module, "SKILL_META", {})
-                skills.append({
-                    "name": path.stem,
-                    "description": meta.get("description") or doc.strip().split("\n")[0][:120],
-                    "created_at": meta.get("created_at"),
-                    "source": "agent_generated",
-                })
-            except Exception as exc:
-                skills.append({"name": path.stem, "error": str(exc)})
+            skills.append(_static_skill_meta(path))
     return {"skills": skills, "count": len(skills)}

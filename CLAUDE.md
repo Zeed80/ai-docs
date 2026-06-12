@@ -14,7 +14,7 @@ AI-сотрудник **Света** (AiAgent agent) обрабатывает с
 - `PLAN.md` — краткий стек и ToDo
 
 ## Стек
-- **Agent**: AiAgent Gateway v2026.4.x (TS) — AI-сотрудник «Света»
+- **Agent**: встроенный Python-агент в `backend/app/ai/` (orchestrator + AgentSession) — AI-сотрудник «Света»; `aiagent/` содержит только конфиги, промпты, реестры skills и сценарии
 - **Backend**: Python / FastAPI + Celery + Redis
 - **Frontend**: Next.js (PWA) + next-intl (RU по умолчанию)
 - **DB**: PostgreSQL, Qdrant (vector), MinIO (files)
@@ -23,7 +23,7 @@ AI-сотрудник **Света** (AiAgent agent) обрабатывает с
 - **Infra**: Docker Compose, Traefik
 
 ## Архитектурные принципы
-- AiAgent = мозг (planning, reasoning), FastAPI = руки (CRUD, data, async tasks)
+- Агент (`backend/app/ai/`) = мозг (planning, reasoning), FastAPI endpoints = руки (CRUD, data, async tasks)
 - **Agent Control Plane**: настройки, политики, skills/plugins, task/team/cron и память управляются через typed API + GUI, а не через ручное редактирование промптов
 - **Degraded mode**: UI работает через REST без AiAgent
 - **Draft-first**: внешние действия только через approval gates
@@ -37,7 +37,8 @@ AI-сотрудник **Света** (AiAgent agent) обрабатывает с
 backend/app/       — FastAPI (api/, domain/, tasks/, ai/, db/)
 frontend/app/      — Next.js pages
 frontend/components/ — React компоненты
-aiagent/          — config, prompts, skills, scenarios
+backend/app/ai/    — агент: orchestrator, agent_loop, capabilities, память
+aiagent/          — config, prompts, skills (реестры), scenarios — данные, не код
 infra/             — docker-compose, traefik, scripts
 ```
 
@@ -71,6 +72,17 @@ make agent-test   # AiAgent scenarios на mock skills
 
 - **gemma4:e4b** (Ollama, локально) — OCR, классификация, извлечение счетов. Только локально: документы конфиденциальны.
 - **gemma4:26b или Claude API** — reasoning, генерация писем, NL-query. Настраиваемо per-task (on-prem или внешний API).
+- **Облако для planner/auditor**: `orchestrator_model`/`auditor_model` могут указывать на cloud-модели из `model_registry.yaml` (например `claude_sonnet_anthropic`); по умолчанию всё локально. `auditor_allow_cloud` — protected setting. AI router жёстко блокирует confidential-контент от облачных маршрутов.
+
+## Агент: архитектура хода (после рефакторинга 2026-06)
+
+- **Секретарь = оркестратор** (front-agent «Света», `backend/app/ai/orchestrator.py`): flow-status вопросы и детерминированные count-вопросы отвечает сам (0 LLM); остальное диспетчеризует специалистам (роли в `gateway.yml`: prompt + capability-allowlist).
+- **Маршрутизация**: единая декларативная таблица `aiagent/config/routes.yml` (`backend/app/ai/route_table.py`) — keywords, fast-paths, canvas-правила, chips, prompt-секции. Не добавлять ключевые слова в код.
+- **Аудит**: типизированные коды (`backend/app/ai/audit.py`, `AuditCode`); retry/repair/gap управляются кодами, не текстом сообщений. Бюджет вспомогательных LLM-вызовов на ход: `aux_quality_budget(tier)`.
+- **Spec-таблицы**: «таблица = спецификация, данные = SQL». LLM передаёт только TableSpec (источник/колонки/фильтры/сортировка из whitelisted-каталога `backend/app/domain/table_spec.py`), движок отдаёт ПОЛНЫЙ датасет (true total, cap 5000). Spec хранится в workspace-блоке; правки («добавь столбец с НДС перед суммой», «отсортируй…», «покажи только…») — детерминированные патчи через fast-path оркестратора, 0 LLM. API: `/api/workspace/agent/spec-table(+/patch,/catalog)`; capability `workspace`, actions `spec_table*`. Smart-фильтр: стемминг + точные числа + canonical items.
+- **Рецепты (self-learning)**: успешный многошаговый ход → draft `RecipeSkill` (Postgres + Qdrant `recipe_triggers`); активный рецепт с похожим триггером выполняется replay'ем без LLM-планирования (`backend/app/ai/recipes.py`, UI: /settings/recipes). Approval-gated действия в рецепты не попадают.
+- **Кодоген под замком**: сгенерированный Python исполняется ТОЛЬКО в изолированном контейнере `skill-runner` (infra/skill-runner; non-root, read-only, без секретов); активация только через proposal → human decide → promote. Реестр promoted-скиллов: `aiagent/skills/capabilities.generated.yml`.
+- **AgentCron**: beat-задача `agent.cron_dispatch` ежеминутно выполняет due-расписания headless-ходом агента, результат — в `AgentTask`. `AgentTeam` — stored-only (исполнителя нет, осознанно).
 
 ## Skills и endpoints
 

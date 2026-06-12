@@ -1077,6 +1077,40 @@ class CapabilityProposal(UUIDPrimaryKey, TimestampMixin, Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
 
+class RecipeSkill(UUIDPrimaryKey, TimestampMixin, Base):
+    """A learned declarative macro: a successful tool sequence recorded from a turn.
+
+    Self-learning without code generation — steps are compositions of existing
+    capabilities with parameter slots (``{{user.supplier_name}}``), so a recipe
+    can never do anything the capability registry does not already allow.
+    Lifecycle: draft → active (N successful replays or manual approve) → retired
+    (fail-rate demotion or capability schema drift).
+    """
+
+    __tablename__ = "recipe_skills"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(80), default="data_analyst", nullable=False)
+    # Texts that triggered this recipe; embedded into the recipe_triggers
+    # Qdrant collection for similarity retrieval at plan time.
+    trigger_examples: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # [{"capability": str, "action": str, "args_template": dict}]
+    steps: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # slot name → {"source": "supplier_name"|"date"|"number", "example": str}
+    param_slots: Mapped[dict | None] = mapped_column(JSON)
+    source_session_id: Mapped[str | None] = mapped_column(String(64))
+    # Hash of capabilities.yml at record time — mismatch → auto-retire.
+    capability_schema_hash: Mapped[str | None] = mapped_column(String(64))
+    success_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(
+        String(20), default="draft", nullable=False, index=True
+    )  # draft | active | retired
+    created_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
+
+
 class MemoryFact(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "memory_facts"
 

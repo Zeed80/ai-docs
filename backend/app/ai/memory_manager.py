@@ -3,8 +3,6 @@
 Wraps the existing /api/memory endpoints so the agent loop doesn't
 need to know the HTTP details.  All calls are async (httpx) and
 fire-and-forget where appropriate.
-
-Pattern adapted from hermes-agent/agent/memory_manager.py.
 """
 
 from __future__ import annotations

@@ -4,8 +4,6 @@ When the running token estimate approaches the model's context limit the
 compressor calls a cheap auxiliary model to summarise the "middle" turns,
 protecting the first exchange (system + user intent) and the most recent
 tail of messages.
-
-Pattern adapted from hermes-agent/agent/context_compressor.py.
 """
 
 from __future__ import annotations

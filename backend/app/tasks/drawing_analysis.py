@@ -11,10 +11,12 @@ import io
 import json
 import re
 import uuid
-import structlog
 from pathlib import Path
 from typing import Any
 
+import structlog
+
+from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
@@ -57,7 +59,7 @@ def analyze_drawing(
     7. Build graph nodes
     8. Notify via WebSocket
     """
-    return asyncio.get_event_loop().run_until_complete(
+    return run_async(
         _analyze_drawing_async(drawing_id, model, allow_cloud, max_views, force_drawing_type)
     )
 
@@ -69,18 +71,25 @@ async def _analyze_drawing_async(
     max_views: int = 6,
     force_drawing_type: str | None = None,
 ) -> dict:
-    from app.db.session import _get_session_factory
-    from app.db.models import Drawing, DrawingStatus, DrawingFeature, FeatureContour, FeatureDimension, FeatureSurface, FeatureGDT
+
     from app.ai.drawing_extractor import extract_drawing_features, extract_features_from_image
-    from app.domain.drawing_graph import ingest_drawing_graph
     from app.ai.embeddings import embed_text as get_text_embedding
+    from app.db.models import (
+        Drawing,
+        DrawingFeature,
+        DrawingStatus,
+        FeatureContour,
+        FeatureDimension,
+        FeatureGDT,
+        FeatureSurface,
+    )
+    from app.db.session import _get_session_factory
+    from app.domain.drawing_graph import ingest_drawing_graph
     from app.vector.qdrant_store import (
         ensure_drawing_collections,
         upsert_drawing,
         upsert_drawing_feature,
-        VECTOR_SIZE,
     )
-    from sqlalchemy import select
 
     # AIRouter for policy-aware VLM dispatch (confidential = local only)
     router = None
@@ -113,8 +122,8 @@ async def _analyze_drawing_async(
     try:
         # VLM model is resolved by AIRouter from task_routing at dispatch time;
         # resolve a display name here only for logging.
-        from app.ai.task_routing import resolve_model
         from app.ai.schemas import AITask as _AITask
+        from app.ai.task_routing import resolve_model
         _routed_model, _ = resolve_model(_AITask.DRAWING_ANALYSIS_VLM)
         vlm_model = model or _routed_model or "auto"
 
@@ -180,7 +189,7 @@ async def _analyze_drawing_async(
             # Primary path: pythonocc-core for real 3D geometry + orthographic views
             step_geometry = None
             try:
-                from app.ai.step_extractor import extract_step_geometry, StepGeometryResult
+                from app.ai.step_extractor import extract_step_geometry
                 step_geometry = await asyncio.get_event_loop().run_in_executor(
                     None,
                     functools.partial(extract_step_geometry, file_bytes, drawing.filename,
@@ -272,7 +281,7 @@ async def _analyze_drawing_async(
         classification = None
         if vlm_images is not None:
             try:
-                from app.ai.drawing_extractor import classify_drawing_image, DrawingClassification
+                from app.ai.drawing_extractor import classify_drawing_image
                 _classify_img = vlm_images[0] if isinstance(vlm_images, list) else vlm_images
                 classification = await classify_drawing_image(
                     _classify_img,
@@ -380,7 +389,7 @@ async def _analyze_drawing_async(
         # Validates extracted features; auto-fixes Ra/tolerance artifacts in-place.
         validation_report_dict: dict = {}
         try:
-            from app.ai.drawing_validator import validate_drawing_extraction, report_to_dict
+            from app.ai.drawing_validator import report_to_dict, validate_drawing_extraction
             val_report = validate_drawing_extraction(
                 drawing_id=drawing_uuid,
                 features_data=features_data,
@@ -609,7 +618,7 @@ def _create_drawing_from_doc_sync(
             except Exception as exc:
                 logger.warning("drawing_from_doc_enqueue_failed", error=str(exc))
 
-    asyncio.get_event_loop().run_until_complete(_inner())
+    run_async(_inner())
 
 
 # ── Supplier Catalog Ingestion Task ───────────────────────────────────────────
@@ -621,7 +630,7 @@ def ingest_supplier_catalog(self, supplier_id: str, file_path: str, filename: st
     Parse supplier tool catalog file and ingest into DB + Qdrant + Graph.
     Supports: PDF (table extraction), Excel (.xlsx), CSV, JSON.
     """
-    return asyncio.get_event_loop().run_until_complete(
+    return run_async(
         _ingest_catalog_async(supplier_id, file_path, filename)
     )
 
@@ -629,10 +638,10 @@ def ingest_supplier_catalog(self, supplier_id: str, file_path: str, filename: st
 async def _ingest_catalog_async(
     supplier_id: str, file_path: str, filename: str
 ) -> dict:
-    from app.db.session import _get_session_factory
-    from app.db.models import ToolCatalogEntry, ToolSupplier
-    from app.domain.drawing_graph import ingest_tool_catalog_graph
     from app.ai.embeddings import embed_text as get_text_embedding
+    from app.db.models import ToolCatalogEntry, ToolSupplier
+    from app.db.session import _get_session_factory
+    from app.domain.drawing_graph import ingest_tool_catalog_graph
     from app.vector.qdrant_store import ensure_drawing_collections, upsert_tool_catalog_entry
 
     supplier_uuid = uuid.UUID(supplier_id)
@@ -794,7 +803,7 @@ async def _convert_dwg_to_dxf(file_bytes: bytes) -> bytes | None:
                         returncode=proc.returncode,
                         stderr=(stderr or b"").decode(errors="replace")[:300],
                     )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("dwg2dxf_timeout")
             except Exception as exc:
                 logger.warning("dwg2dxf_exception", error=str(exc))
@@ -828,7 +837,6 @@ def _extract_dxf_entities(msp: Any, doc: Any) -> tuple[list[dict], list[dict]]:
 
     Returns (entities_list, texts_list).
     """
-    import ezdxf
 
     entities: list[dict] = []
     texts: list[dict] = []
@@ -1121,8 +1129,8 @@ async def _parse_dxf(
 
     NOTE: For DWG files, convert to DXF first using _convert_dwg_to_dxf().
     """
-    import tempfile
     import os
+    import tempfile
 
     try:
         import ezdxf
@@ -1161,9 +1169,9 @@ async def _parse_dxf(
         # Generate SVG for viewer
         svg_content: str | None = None
         try:
-            from ezdxf.addons.drawing import RenderContext, Frontend
-            from ezdxf.addons.drawing.svg import SVGBackend
+            from ezdxf.addons.drawing import Frontend, RenderContext
             from ezdxf.addons.drawing.layout import Page, Units
+            from ezdxf.addons.drawing.svg import SVGBackend
 
             ctx = RenderContext(doc)
             backend = SVGBackend()
@@ -1234,10 +1242,12 @@ async def _svg_to_png_bytes(svg_content: str, width: int = 2048) -> bytes | None
         pass
     try:
         # Fallback: use Pillow + svglib if cairosvg unavailable
-        from svglib.svglib import svg2rlg  # type: ignore
-        from reportlab.graphics import renderPM  # type: ignore
         import io
-        import tempfile, os
+        import os
+        import tempfile
+
+        from reportlab.graphics import renderPM  # type: ignore
+        from svglib.svglib import svg2rlg  # type: ignore
         with tempfile.NamedTemporaryFile(suffix=".svg", delete=False) as f:
             f.write(svg_content.encode("utf-8"))
             tmp = f.name
@@ -1257,8 +1267,8 @@ async def _svg_to_png_bytes(svg_content: str, width: int = 2048) -> bytes | None
 async def _pdf_to_png_bytes(file_bytes: bytes, page_index: int = 0, dpi: int = 200) -> bytes | None:
     """Render PDF page to PNG bytes for VLM analysis using PyMuPDF."""
     try:
+
         import fitz
-        import io
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if doc.page_count > page_index:
             page = doc[page_index]
@@ -1277,6 +1287,7 @@ async def _normalize_raster_to_png(file_bytes: bytes, fmt: str) -> bytes | None:
     """Convert any raster image format to PNG bytes for VLM."""
     try:
         import io
+
         from PIL import Image
         img = Image.open(io.BytesIO(file_bytes))
         # Convert to RGB if needed (VLM doesn't handle CMYK, palette modes well)
@@ -1309,8 +1320,8 @@ def _parse_step_to_info_svg(file_bytes: bytes, filename: str) -> tuple[str | Non
     Generates an SVG info card with product names and entity statistics.
     Falls back to (None, plain_text) if the file is not parseable.
     """
-    from collections import Counter
     import html
+    from collections import Counter
 
     text = file_bytes.decode("utf-8", errors="replace")
 
@@ -1509,8 +1520,9 @@ async def _load_drawing_file(drawing: Any) -> bytes:
     3. drawings/{id}/{filename} — canonical drawing bucket path
     """
     try:
-        from app.config import settings
         from minio import Minio
+
+        from app.config import settings
 
         client = Minio(
             settings.minio_endpoint,
@@ -1555,8 +1567,9 @@ async def _load_drawing_file(drawing: Any) -> bytes:
 async def _load_catalog_file(file_path: str) -> bytes | None:
     """Load catalog file from MinIO path."""
     try:
-        from app.config import settings
         from minio import Minio
+
+        from app.config import settings
 
         client = Minio(
             settings.minio_endpoint,
@@ -1582,8 +1595,9 @@ async def _save_svg_artifacts(
 ) -> tuple[str | None, str | None]:
     """Save SVG and thumbnail to MinIO, return (svg_path, thumbnail_path)."""
     try:
-        from app.config import settings
         from minio import Minio
+
+        from app.config import settings
 
         client = Minio(
             settings.minio_endpoint,
@@ -1760,6 +1774,7 @@ def _build_feature_embed_text(feature: Any, feat_data: dict) -> str:
 async def _load_few_shot_corrections(db: Any, *, drawing_type: str, limit: int = 10) -> list[dict]:
     """Load recent user corrections for use as few-shot examples in VLM prompts."""
     from sqlalchemy import select as sa_select
+
     from app.db.models import DrawingFeatureCorrection
 
     result = await db.execute(

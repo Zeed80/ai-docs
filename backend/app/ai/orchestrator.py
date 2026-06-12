@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -32,40 +31,38 @@ def _agent_headers() -> dict:
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession
-from app.ai.flow_awareness import get_flow_context
-from app.ai.model_tier import Tier, inject_chain_of_draft, score_complexity, should_use_cod
+from app.ai.audit import (
+    CAPABILITY_GAP_CODES,
+    AuditCode,
+    AuditIssue,
+    blocking as _blocking_issues,
+    codes as _issue_codes,
+    has_code as _has_code,
+    messages as _issue_messages,
+    retryable as _issues_retryable,
+)
+from app.ai.degradation import log_degraded
+from app.ai.flow_awareness import format_flow_summary_human, get_flow_snapshot
+from app.ai.model_tier import (
+    Tier,
+    aux_quality_budget,
+    inject_chain_of_draft,
+    score_complexity,
+    should_use_cod,
+)
 from app.ai.orchestrator_memory import TurnFeedback, build_tool_preference_hint, record_turn_feedback
 from app.ai.policy_engine import check_tool_execution
+from app.ai import route_table
 from app.ai.router import ai_router
 from app.ai.schemas import AIRequest, AITask, ChatMessage
 from app.domain.workspace import get_workspace_block, list_workspace_blocks, upsert_workspace_block
 
 SendFn = Callable[[dict], Awaitable[None]]
 
-_CANVAS_MAP_PATH = Path(__file__).parent.parent.parent / "data" / "canvas_skill_map.json"
-_canvas_map_cache: dict[str, Any] | None = None
-_canvas_map_mtime: float = 0.0
-
 
 def invalidate_canvas_map_cache() -> None:
-    """Force reload of canvas_skill_map.json on next access (called on Redis skill_reload event)."""
-    global _canvas_map_cache, _canvas_map_mtime
-    _canvas_map_cache = None
-    _canvas_map_mtime = 0.0
-
-
-def _canvas_map() -> dict[str, Any]:
-    """Load canvas_skill_map.json with mtime-based refresh."""
-    global _canvas_map_cache, _canvas_map_mtime
-    try:
-        mtime = _CANVAS_MAP_PATH.stat().st_mtime
-        if _canvas_map_cache is None or mtime != _canvas_map_mtime:
-            _canvas_map_cache = json.loads(_CANVAS_MAP_PATH.read_text(encoding="utf-8"))
-            _canvas_map_mtime = mtime
-    except Exception:
-        if _canvas_map_cache is None:
-            _canvas_map_cache = {}
-    return _canvas_map_cache
+    """Force reload of routes.yml on next access (called on Redis skill_reload event)."""
+    route_table.invalidate_cache()
 
 
 def _response_budget_for(tier: "Tier", plan: "OrchestratorPlan") -> int:
@@ -108,9 +105,15 @@ def _load_role_prompt(role: str) -> str:
             _role_prompt_cache[role] = (mtime, text)
             return text
         return cached[1]
-    except Exception:
+    except Exception as exc:
+        log_degraded("orchestrator.role_prompt", exc, role=role)
         return ""
 
+# Specialist workers the secretary front-agent can dispatch to. Each role is
+# declared in gateway.yml (prompt + capability allowlist). The secretary itself
+# is NOT a worker: flow-status questions are answered by the orchestrator
+# directly (see _answer_flow_status_directly). Builder is not a chat role —
+# capability drafting runs through the proposal flow with builder_model.
 WorkerRole = Literal[
     "data_analyst",
     "invoice_specialist",
@@ -120,15 +123,13 @@ WorkerRole = Literal[
     "engineer",
     "technologist",
     "memory_researcher",
-    "document_builder",
-    "script_builder",
-    "secretary",
 ]
 
 OutputChannel = Literal["chat", "workspace"]
 OutputType = Literal["text", "table", "document", "links", "chart", "drawing", "script"]
 
-_ORCHESTRATOR_SYSTEM = """Ты оркестратор отдела ИИ-сотрудников.
+_ORCHESTRATOR_SYSTEM_BASE = """Ты — Света, секретарь-оркестратор отдела ИИ-сотрудников.
+Ты держишь документооборот под контролем и распределяешь задачи специалистам.
 Верни только JSON по заданной схеме. Не отвечай пользователю текстом.
 
 Задача: понять цель пользователя, выбрать подходящие инструменты и исполнителя.
@@ -141,22 +142,15 @@ _ORCHESTRATOR_SYSTEM = """Ты оркестратор отдела ИИ-сотр
   точку; исполнитель может вызвать дополнительные сам.
 - Если НИ ОДИН skill не подходит: intent="capability_gap".
 - Роли только из enum схемы.
-
-Технологическая предметная область (роль "technologist"):
-  Ключевые слова: техпроцесс, технологический процесс, тп, маршрутная карта, операционная карта,
-  нормоконтроль, нормирование, режимы резания, заготовка, токарная, фрезерная, шлифовальная,
-  ГОСТ 3.1118, ГОСТ 3.1404, ЕСТД, техкарта.
-  Основные skills: tech.generate_tp_from_drawing, tech.normcontrol_check, tech.process_plan_list,
-  tech.process_plan_get, tech.export_gost_forms.
-
-Секретарь документооборота (роль "secretary"):
-  Вопросы об общем состоянии потока документов и приоритетах: «что требует внимания»,
-  «что у нас по документам», «статус потока», «что висит/застряло», «дай сводку»,
-  «что просрочено», «что на проверке/согласовании». Агент получает актуальный
-  снимок потока (approval, needs_review, аномалии, карантин, письма, просрочки).
-  Основные skills: analytics.dashboard_today, approvals.approval_list, anomalies.list,
-  payments.overdue, documents (queue).
 """
+
+
+def _orchestrator_system() -> str:
+    """System prompt for the planner: static base + domain sections from routes.yml."""
+    sections = route_table.prompt_sections()
+    if sections:
+        return f"{_ORCHESTRATOR_SYSTEM_BASE}\n{sections}\n"
+    return _ORCHESTRATOR_SYSTEM_BASE
 
 
 class WorkspaceOutputSpec(BaseModel):
@@ -185,13 +179,23 @@ class OrchestratorPlan(BaseModel):
 
 class AuditReport(BaseModel):
     passed: bool
-    issues: list[str] = Field(default_factory=list)
+    issues: list[AuditIssue] = Field(default_factory=list)
     workspace_verified: bool = False
     final_channel: OutputChannel = "chat"
     # Semantic correctness signal — advisory, does not flip `passed`. Consumed by
     # the learning loop and surfaced to the user as a soft quality warning.
-    semantic_passed: bool = True
+    # None = no verdict (audit not run or infra failure) — distinct from True so
+    # the learning loop is not success-biased by flaky infrastructure.
+    semantic_passed: bool | None = None
     semantic_reason: str = ""
+
+    @property
+    def issue_messages(self) -> list[str]:
+        return _issue_messages(self.issues)
+
+    @property
+    def issue_codes(self) -> list[str]:
+        return _issue_codes(self.issues)
 
 
 class CapabilityGapRequest(BaseModel):
@@ -218,6 +222,9 @@ class CapabilityBuildDraft(BaseModel):
 class _TurnTrace:
     workspace_events: list[dict[str, Any]] = field(default_factory=list)
     tool_calls: list[str] = field(default_factory=list)
+    # Ordered (tool, args) pairs — preserves repeated calls for recipe recording
+    # and per-step credit assignment.
+    tool_call_seq: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     # Maps sanitized tool name → kwargs passed by the executor (for filter audit)
     tool_call_args: dict[str, dict[str, Any]] = field(default_factory=dict)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
@@ -240,6 +247,12 @@ class AgentOrchestrator:
         self._workspace_before: dict[str, str] = {}
         self._plan_source: str = "heuristic"
         self._tier: Tier = Tier.NANO
+        # Per-turn LLM call accounting. Lives on the instance (not the trace)
+        # because the trace is reset on every retry/repair within a turn.
+        # _llm_calls — telemetry of all orchestrator-visible LLM calls;
+        # _aux_llm_calls — budgeted quality calls (semantic audit, refine).
+        self._llm_calls: int = 0
+        self._aux_llm_calls: int = 0
         self._executor = AgentSession(self._send_from_executor)
 
     def hydrate_history(self, messages: list[dict[str, str]]) -> None:
@@ -262,17 +275,62 @@ class AgentOrchestrator:
             self._executor.set_role_context("")
             self._executor.set_response_budget(2048)
             self._executor.set_model_override(None)
+            self._executor.set_active_role(None)
             await self._executor.on_user_message(content)
             return
 
         turn_started_at = time.time()
         self._trace = _TurnTrace()
+        self._llm_calls = 0
+        self._aux_llm_calls = 0
 
         # Score complexity → determines planning timeout and CoD injection
         history = self._recent_dialogue()
         context_tokens = sum(len(m.get("content", "")) // 4 for m in history)
         tier = score_complexity(content, context_tokens=context_tokens)
         self._tier = tier
+
+        # Secretary direct path: flow-status questions are answered by the
+        # front-agent itself from live data — no planning, no dispatch, 0 LLM.
+        if _is_secretary_query(content):
+            handled = await self._answer_flow_status_directly(content, config, turn_started_at)
+            if handled:
+                return
+
+        # Spec-table edits: a recognised Russian edit command on an existing
+        # spec table («добавь столбец с НДС перед суммой», «отсортируй по…»,
+        # «покажи только…») is applied deterministically — 0 LLM, мгновенно.
+        if await self._try_spec_table_patch_directly(content, config, turn_started_at):
+            return
+
+        # Learned recipes: a high-similarity ACTIVE recipe with resolvable slots
+        # is replayed deterministically (0 planner LLM calls); a weaker match
+        # becomes a planner/worker hint. Gated to tool-shaped turns so smalltalk
+        # never pays the embedding round-trip.
+        recipe_hint = ""
+        if route_table.is_workspace_request(content) or tier >= Tier.SMALL:
+            from app.ai import recipes as recipes_module
+            recipe_hit = await recipes_module.find_recipe(content)
+            if recipe_hit is not None:
+                recipe, score = recipe_hit
+                if (
+                    score >= recipes_module.REPLAY_SCORE
+                    and recipe.status == "active"
+                ):
+                    slots = recipes_module.resolve_slots(recipe.param_slots, content)
+                    if slots is not None and await self._replay_recipe(
+                        recipe, slots, content, config, turn_started_at
+                    ):
+                        return
+                if score >= recipes_module.HINT_SCORE:
+                    steps_text = " → ".join(
+                        f"{s.get('capability')}.{s.get('action') or 'call'}"
+                        for s in (recipe.steps or [])
+                    )
+                    recipe_hint = (
+                        f"Похожая задача уже решалась успешно шагами: {steps_text}. "
+                        "Используй эту последовательность как отправную точку."
+                    )
 
         # strict reasoning_mode forces LLM planning regardless of tier
         if reasoning_mode == "strict" or tier >= Tier.MEDIUM:
@@ -286,24 +344,19 @@ class AgentOrchestrator:
 
         # Inject Chain-of-Draft hint for medium/complex tasks on local models
         hint = _build_worker_hint(plan)
+        if recipe_hint:
+            hint = f"{hint}\n{recipe_hint}"
         worker_model = config.worker_model or ""
         if reasoning_mode == "strict" or should_use_cod(tier, worker_model):
             hint = inject_chain_of_draft(hint)
         self._executor.inject_orchestrator_hint(hint)
         # Load the role-specific system prompt so the worker actually adopts the
-        # assigned role (accountant vs technologist vs secretary, ...). Replaced
-        # per turn — never accumulated in history.
+        # assigned role (accountant vs technologist, ...). Replaced per turn —
+        # never accumulated in history.
         role_context = _load_role_prompt(plan.worker.role)
-        # Secretary turns get a live document-flow snapshot so the agent answers
-        # "what needs attention?" from real state, not guesses.
-        if plan.worker.role == "secretary":
-            try:
-                flow = await get_flow_context(config)
-            except Exception:
-                flow = ""
-            if flow:
-                role_context = f"{role_context}\n\n{flow}" if role_context else flow
         self._executor.set_role_context(role_context)
+        # Scope the visible tool set to the role's capability allowlist.
+        self._executor.set_active_role(plan.worker.role)
         # Size the response budget to the task: cheap/fast for short answers,
         # roomy for reports/tables. Avoids the old hardcoded 4096 on every turn.
         self._executor.set_response_budget(_response_budget_for(tier, plan))
@@ -312,6 +365,7 @@ class AgentOrchestrator:
         self._executor.set_model_override(
             config.fast_model if (config.fast_model and tier < Tier.MEDIUM) else None
         )
+        self._llm_calls += 1
         await self._executor.on_user_message(content)
         audit = await self._audit_turn(plan, config)
         retry_count = 0
@@ -325,9 +379,11 @@ class AgentOrchestrator:
                 "type": "audit.retry_started",
                 "content": "Аудит: инструмент/вывод не соответствуют задаче, запускаю исправление.",
                 "audit": audit.model_dump(mode="json"),
+                "issue_codes": audit.issue_codes,
             })
             self._trace = _TurnTrace()
             self._workspace_before = _workspace_updated_at_snapshot()
+            self._llm_calls += 1
             await self._executor.on_user_message(_build_correction_request(plan, audit))
             audit = await self._audit_turn(plan, config)
         if not audit.passed:
@@ -351,6 +407,8 @@ class AgentOrchestrator:
             retries=retry_count,
             duration_ms=int((time.time() - turn_started_at) * 1000),
         )
+        # Self-learning: a clean multi-step turn becomes a draft recipe.
+        self._maybe_record_recipe(content, plan, audit)
 
         # Structured agent trace log — every turn execution logged with full detail
         duration_ms = int((time.time() - turn_started_at) * 1000)
@@ -365,8 +423,10 @@ class AgentOrchestrator:
             errors=self._trace.errors,
             workspace_required=plan.workspace.required,
             audit_passed=audit.passed,
-            audit_issues=audit.issues,
+            audit_issues=audit.issue_codes,
             retries=retry_count,
+            llm_calls=self._llm_calls,
+            aux_llm_calls=self._aux_llm_calls,
             duration_ms=duration_ms,
         )
         try:
@@ -383,6 +443,292 @@ class AgentOrchestrator:
         # own (compression-aware) message list, which _recent_dialogue() reads back.
         chips = self._derive_action_chips(plan, content)
         await self._outer_send({"type": "done", "action_chips": chips})
+
+    async def _answer_flow_status_directly(
+        self,
+        content: str,
+        config: BuiltinAgentConfig,
+        turn_started_at: float,
+    ) -> bool:
+        """Secretary front-agent: answer a flow-status question from live data.
+
+        Deterministic (0 LLM calls): fetches the cached dashboard snapshot and
+        formats a prioritised summary. Returns False when the snapshot is
+        unavailable — the turn then falls through to normal dispatch so a
+        specialist can fetch the data with tools.
+        """
+        try:
+            snapshot = await get_flow_snapshot(config)
+        except Exception as exc:
+            log_degraded("orchestrator.flow_snapshot", exc)
+            snapshot = None
+        if not snapshot:
+            return False
+
+        await self._outer_send({
+            "type": "orchestrator.status",
+            "content": "Секретарь: отвечаю по состоянию документооборота.",
+            "plan_source": "direct",
+            "degraded": False,
+        })
+        # UI continuity: the frontend renders worker.assigned as a status line.
+        await self._outer_send({
+            "type": "worker.assigned",
+            "content": "Исполнитель: secretary (прямой ответ, без LLM).",
+            "role": "secretary",
+            "skills": [],
+        })
+        answer = format_flow_summary_human(snapshot)
+        await self._outer_send({"type": "text", "content": answer})
+        # Keep dialogue history and episodic memory coherent.
+        try:
+            self._executor.record_external_turn(content, answer)
+        except Exception as exc:
+            log_degraded("orchestrator.flow_record_turn", exc)
+
+        duration_ms = int((time.time() - turn_started_at) * 1000)
+        logger.info(
+            "agent_turn_complete",
+            intent="flow_status",
+            plan_source="direct",
+            tools_called=[],
+            tool_count=0,
+            audit_passed=True,
+            retries=0,
+            llm_calls=0,
+            aux_llm_calls=0,
+            duration_ms=duration_ms,
+        )
+        try:
+            from app.core.metrics import agent_turn_duration_seconds, agent_turns_total
+            agent_turns_total.labels(outcome="success").inc()
+            agent_turn_duration_seconds.observe(duration_ms / 1000)
+        except Exception:
+            pass
+        chips = route_table.chips_for("flow_status", content)
+        await self._outer_send({"type": "done", "action_chips": chips})
+        return True
+
+    async def _try_spec_table_patch_directly(
+        self,
+        content: str,
+        config: BuiltinAgentConfig,
+        turn_started_at: float,
+    ) -> bool:
+        """Apply a recognised table-edit command to the latest spec table (0 LLM).
+
+        Returns False when there is no spec table on the workspace or the
+        command is not deterministically recognisable — the turn then goes
+        through normal dispatch (the worker LLM can still build patch ops).
+        """
+        from app.domain.table_spec import TableSpec, parse_patch_command
+
+        blocks = [
+            b for b in list_workspace_blocks()
+            if isinstance(b, dict) and isinstance(b.get("spec"), dict)
+        ]
+        if not blocks:
+            return False
+        block = max(blocks, key=lambda b: str(b.get("updated_at") or ""))
+        canvas_id = str(block.get("id") or "")
+        try:
+            spec = TableSpec.model_validate(block["spec"])
+        except Exception:
+            return False
+        parsed = parse_patch_command(content, spec)
+        if parsed is None:
+            return False
+
+        self._workspace_before = _workspace_updated_at_snapshot()
+        await self._outer_send({
+            "type": "orchestrator.status",
+            "content": "Секретарь: правка таблицы распознана — применяю мгновенно (без LLM).",
+            "plan_source": "table_patch",
+            "degraded": False,
+        })
+        args = {
+            "canvas_id": canvas_id,
+            "ops": [op.model_dump(mode="json", exclude_none=True) for op in parsed.ops],
+        }
+        await self._record_orchestrator_tool_event({
+            "type": "tool_call", "tool": "workspace", "args": args,
+        })
+        try:
+            async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                resp = await client.post(
+                    f"{config.backend_url.rstrip('/')}/api/workspace/agent/spec-table/patch",
+                    json=args,
+                    headers=_agent_headers(),
+                )
+            result = resp.json() if resp.content else {}
+        except Exception as exc:
+            log_degraded("orchestrator.spec_table_patch", exc)
+            return False
+        if resp.status_code >= 400 or result.get("status") not in ("published",):
+            await self._record_orchestrator_tool_event({
+                "type": "tool_result", "tool": "workspace",
+                "result": {"error": result.get("message") or f"HTTP {resp.status_code}"},
+            })
+            return False  # fall through to normal dispatch
+
+        await self._record_orchestrator_tool_event({
+            "type": "tool_result", "tool": "workspace", "result": result,
+        })
+        answer = str(result.get("message") or "Готово.")
+        await self._outer_send({"type": "text", "content": answer})
+        try:
+            self._executor.record_external_turn(content, answer)
+        except Exception as exc:
+            log_degraded("orchestrator.table_patch_record_turn", exc)
+
+        duration_ms = int((time.time() - turn_started_at) * 1000)
+        logger.info(
+            "agent_turn_complete",
+            intent="table_patch",
+            plan_source="table_patch",
+            tools_called=["workspace"],
+            tool_count=1,
+            audit_passed=True,
+            retries=0,
+            llm_calls=0,
+            aux_llm_calls=0,
+            duration_ms=duration_ms,
+        )
+        try:
+            from app.core.metrics import agent_turn_duration_seconds, agent_turns_total
+            agent_turns_total.labels(outcome="success").inc()
+            agent_turn_duration_seconds.observe(duration_ms / 1000)
+        except Exception:
+            pass
+        chips = route_table.chips_for("table_patch", content, workspace_required=True)
+        await self._outer_send({"type": "done", "action_chips": chips})
+        return True
+
+    async def _replay_recipe(
+        self,
+        recipe: Any,
+        slots: dict[str, str],
+        content: str,
+        config: BuiltinAgentConfig,
+        turn_started_at: float,
+    ) -> bool:
+        """Deterministically replay a learned recipe (0 planner LLM calls).
+
+        Returns False on any step failure — the turn then falls through to
+        normal dispatch, and the recipe's fail counter is already updated.
+        """
+        from app.ai import recipes as recipes_module
+
+        self._workspace_before = _workspace_updated_at_snapshot()
+        await self._outer_send({
+            "type": "orchestrator.status",
+            "content": f"Секретарь: задача знакома — выполняю выученный рецепт «{recipe.name}».",
+            "plan_source": "recipe",
+            "degraded": False,
+            "recipe_id": str(recipe.id),
+        })
+        await self._outer_send({
+            "type": "worker.assigned",
+            "content": f"Исполнитель: {recipe.role} (replay рецепта, без LLM-планирования).",
+            "role": recipe.role,
+            "skills": [
+                f"{s.get('capability')}" for s in (recipe.steps or [])
+            ][:5],
+        })
+
+        ok = await recipes_module.replay(
+            recipe, slots, config, on_event=self._send_from_executor
+        )
+        if not ok:
+            await self._outer_send({
+                "type": "orchestrator.status",
+                "content": "Секретарь: рецепт не сработал, решаю задачу обычным путём.",
+                "plan_source": "recipe_fallback",
+                "degraded": True,
+            })
+            return False
+
+        answer = "Готово — выполнено по выученному рецепту."
+        last_result = next(
+            (
+                item.get("result")
+                for item in reversed(self._trace.tool_results)
+                if isinstance(item.get("result"), dict)
+            ),
+            None,
+        )
+        if isinstance(last_result, dict) and last_result.get("message"):
+            answer = str(last_result["message"])
+        await self._outer_send({"type": "text", "content": answer})
+        try:
+            self._executor.record_external_turn(content, answer)
+        except Exception as exc:
+            log_degraded("orchestrator.recipe_record_turn", exc)
+
+        duration_ms = int((time.time() - turn_started_at) * 1000)
+        logger.info(
+            "agent_turn_complete",
+            intent="recipe_replay",
+            plan_source="recipe",
+            recipe_id=str(recipe.id),
+            tools_called=self._trace.tool_calls,
+            tool_count=len(self._trace.tool_calls),
+            audit_passed=True,
+            retries=0,
+            llm_calls=0,
+            aux_llm_calls=0,
+            duration_ms=duration_ms,
+        )
+        try:
+            from app.core.metrics import agent_turn_duration_seconds, agent_turns_total
+            agent_turns_total.labels(outcome="success").inc()
+            agent_turn_duration_seconds.observe(duration_ms / 1000)
+        except Exception:
+            pass
+        chips = route_table.chips_for("recipe_replay", content, workspace_required=True)
+        await self._outer_send({"type": "done", "action_chips": chips})
+        return True
+
+    def _maybe_record_recipe(self, content: str, plan: OrchestratorPlan, audit: AuditReport) -> None:
+        """Schedule recording of a successful turn as a draft recipe.
+
+        Criteria: mechanical audit passed, no explicit semantic failure,
+        2–6 tool calls, all from the capability dispatcher (plain names),
+        no approval-gated actions (checked inside the recorder).
+        """
+        if not audit.passed or audit.semantic_passed is False:
+            return
+        seq = list(self._trace.tool_call_seq)
+        if not (2 <= len(seq) <= 6):
+            return
+        # Only plain capability-dispatcher calls compose into recipes.
+        if any("__" in name or "." in name for name, _ in seq):
+            return
+        steps = [
+            {
+                "capability": name,
+                "action": str(args.get("action") or ""),
+                "args_template": dict(args),
+            }
+            for name, args in seq
+        ]
+        from app.ai import recipes as recipes_module
+
+        async def _record() -> None:
+            try:
+                await recipes_module.record_candidate(
+                    user_text=content,
+                    role=plan.worker.role,
+                    intent=plan.intent,
+                    steps=steps,
+                )
+            except Exception as exc:
+                log_degraded("orchestrator.recipe_record", exc)
+
+        try:
+            asyncio.get_event_loop().create_task(_record())
+        except Exception as exc:
+            log_degraded("orchestrator.recipe_record", exc)
 
     async def _plan_turn_with_model(
         self,
@@ -406,13 +752,14 @@ class AgentOrchestrator:
         )
         _plan_timeout = float(config.orchestrator_plan_timeout_seconds)
         fallback_reason = "invalid_schema"
+        self._llm_calls += 1
         try:
             response = await asyncio.wait_for(
                 ai_router.run(
                     AIRequest(
                         task=AITask.ORCHESTRATOR_PLANNING,
                         messages=[
-                            ChatMessage(role="system", content=_ORCHESTRATOR_SYSTEM),
+                            ChatMessage(role="system", content=_orchestrator_system()),
                             ChatMessage(role="user", content=prompt),
                         ],
                         response_schema=OrchestratorPlan,
@@ -473,8 +820,8 @@ class AgentOrchestrator:
                 intent=plan.intent,
                 skills=plan.worker.recommended_skills,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log_degraded("orchestrator.background_plan", exc)
 
     async def _send_from_executor(self, data: dict) -> None:
         msg_type = str(data.get("type") or "")
@@ -497,6 +844,7 @@ class AgentOrchestrator:
                 except Exception:
                     raw_args = {}
             self._trace.tool_call_args[tool_name] = dict(raw_args)
+            self._trace.tool_call_seq.append((tool_name, dict(raw_args)))
         elif msg_type == "tool_result":
             self._trace.tool_results.append(data)
             result = data.get("result")
@@ -516,26 +864,9 @@ class AgentOrchestrator:
         self, plan: OrchestratorPlan, content: str
     ) -> list[dict]:
         """Return contextual action chips based on the completed turn's plan."""
-        chips: list[dict] = []
-        intent = plan.intent
-        text = _norm(content)
-
-        if intent in ("invoice_list", "invoice_detail") or "счёт" in text:
-            chips.append({"label": "Открыть счета", "action": "navigate", "target": "/invoices"})
-            chips.append({"label": "Экспорт в Excel", "action": "cap", "cap": "invoices", "act": "export_excel"})
-        if intent in ("supplier_profile", "supplier_search") or "поставщик" in text:
-            chips.append({"label": "Профиль поставщика", "action": "navigate", "target": "/suppliers"})
-        if intent == "anomaly_check" or "аномали" in text:
-            chips.append({"label": "Открыть аномалии", "action": "navigate", "target": "/anomalies"})
-        if intent in ("draft_email", "email_triage") or "письм" in text:
-            chips.append({"label": "Черновики", "action": "navigate", "target": "/drafts"})
-        if intent == "compare" or "сравни" in text:
-            chips.append({"label": "Сравнение КП", "action": "navigate", "target": "/compare"})
-        if intent == "calendar" or "напомни" in text or "срок" in text:
-            chips.append({"label": "Календарь", "action": "navigate", "target": "/calendar"})
-        if plan.workspace.required:
-            chips.append({"label": "Рабочий стол", "action": "navigate", "target": "/"})
-        return chips[:4]
+        return route_table.chips_for(
+            plan.intent, content, workspace_required=plan.workspace.required
+        )
 
     def _plan_turn(self, content: str) -> OrchestratorPlan:
         """Lightweight heuristic plan — used only as a soft hint for the LLM planner."""
@@ -544,10 +875,11 @@ class AgentOrchestrator:
         output_type: OutputType = "table" if workspace_required else "text"
         canvas_id: str | None = None
 
-        # Broad domain detection for role hint only — not binding
+        # Broad domain detection for role hint only — not binding.
+        # Flow-status (secretary) questions never reach this point: the
+        # front-agent answers them directly in on_user_message.
         role: WorkerRole = "data_analyst"
         intent = "general"
-        is_secretary = _is_secretary_query(text)
         matched_route = _match_intent_route(text)
         if matched_route:
             role = matched_route.get("role", role)
@@ -558,11 +890,6 @@ class AgentOrchestrator:
             if matched_route.get("workspace_required") or canvas_id:
                 workspace_required = True
                 output_type = "table"
-        # Secretary (flow-status) intent wins the role even if a route matched —
-        # it is a cross-cutting situational-awareness question, not a table.
-        if is_secretary:
-            role = "secretary"
-            intent = "flow_status"
 
         # References to an already open table take priority over grouping
         if not canvas_id and _references_existing_table(text):
@@ -570,7 +897,7 @@ class AgentOrchestrator:
 
         # Supplier grouping: "сгруппируй по поставщикам" → dedicated canvas
         if not canvas_id and _is_supplier_grouping_request(text):
-            sg = _canvas_map().get("supplier_grouping", {})
+            sg = route_table.supplier_grouping()
             workspace_required = True
             output_type = "table"
             canvas_id = sg.get("canvas_id", "agent:invoice-items-by-supplier")
@@ -657,14 +984,20 @@ class AgentOrchestrator:
                 final_channel=plan.workspace.channel,
             )
 
-        issues: list[str] = []
+        issues: list[AuditIssue] = []
         workspace_verified = False
         if plan.workspace.required:
             workspace_verified = await self._verify_workspace(plan)
             if not workspace_verified:
-                issues.append("Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.")
+                issues.append(AuditIssue(
+                    code=AuditCode.WORKSPACE_NOT_PUBLISHED,
+                    message="Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.",
+                ))
             if _looks_like_chat_table(self._trace.final_text):
-                issues.append("Табличный результат попал в чат вместо Рабочего стола.")
+                issues.append(AuditIssue(
+                    code=AuditCode.CHAT_TABLE_LEAK,
+                    message="Табличный результат попал в чат вместо Рабочего стола.",
+                ))
             expected_canvas = plan.workspace.canvas_id
             published_canvas_ids = {
                 str(canvas_id)
@@ -676,10 +1009,17 @@ class AgentOrchestrator:
                 and published_canvas_ids
                 and expected_canvas not in published_canvas_ids
             ):
-                issues.append(
-                    "Использован неправильный workspace-блок: "
-                    f"ожидался {expected_canvas}, опубликовано {sorted(published_canvas_ids)}."
-                )
+                issues.append(AuditIssue(
+                    code=AuditCode.WRONG_CANVAS,
+                    message=(
+                        "Использован неправильный workspace-блок: "
+                        f"ожидался {expected_canvas}, опубликовано {sorted(published_canvas_ids)}."
+                    ),
+                    context={
+                        "expected": expected_canvas,
+                        "published": sorted(published_canvas_ids),
+                    },
+                ))
 
         expected_from_canvas = _expected_workspace_skill_for_canvas(plan.workspace.canvas_id)
         expected_workspace_skills = (
@@ -699,11 +1039,22 @@ class AgentOrchestrator:
             and used_workspace_skills
             and not expected_workspace_skills.intersection(used_workspace_skills)
         ):
-            issues.append(
-                "Исполнитель выбрал инструмент вне плана: "
-                f"ожидались {sorted(expected_workspace_skills)}, "
-                f"использованы {sorted(used_workspace_skills)}."
-            )
+            # Advisory: the plan is a hint, not ground truth — a semantically
+            # equivalent tool choice must not fail the turn by itself. The
+            # workspace/filter checks above catch actually-wrong results.
+            issues.append(AuditIssue(
+                code=AuditCode.TOOL_OFF_PLAN,
+                severity="advisory",
+                message=(
+                    "Исполнитель выбрал инструмент вне плана: "
+                    f"ожидались {sorted(expected_workspace_skills)}, "
+                    f"использованы {sorted(used_workspace_skills)}."
+                ),
+                context={
+                    "expected": sorted(expected_workspace_skills),
+                    "used": sorted(used_workspace_skills),
+                },
+            ))
 
         # ── Filter compliance check ────────────────────────────────────────────
         # Only enforce filter compliance when:
@@ -712,39 +1063,63 @@ class AgentOrchestrator:
         #      as the plan (so we don't penalise the executor for choosing a
         #      semantically-equivalent but differently-shaped tool)
         if plan.workspace.filters and plan.workspace.canvas_id:
-            # Find the first workspace tool result that targets the planned canvas
-            matched_tool_args: dict[str, Any] = {}
+            # Audit the LAST tool result that targets the planned canvas — that
+            # publish defines what the user sees. (The old code checked only the
+            # FIRST match, so a turn that started wrong and self-corrected was
+            # punished, and one that started right and then overwrote the canvas
+            # with unfiltered data passed.)
+            last_match: dict[str, Any] | None = None
             for item in self._trace.tool_results:
                 result = item.get("result")
-                if not isinstance(result, dict):
-                    continue
-                if result.get("canvas_id") == plan.workspace.canvas_id:
-                    matched_tool_args = (
-                        self._trace.tool_call_args.get(item.get("tool", "")) or {}
-                    )
-                    # Check filter presence in the result itself
-                    result_filters: dict[str, Any] = result.get("filters") or {}
-                    for fk, fv in plan.workspace.filters.items():
-                        # Check args that were passed to the tool
-                        actual = matched_tool_args.get(fk)
-                        if actual is None and result_filters.get(fk) is None:
-                            issues.append(
+                if isinstance(result, dict) and result.get("canvas_id") == plan.workspace.canvas_id:
+                    last_match = item
+            if last_match is not None:
+                result = last_match["result"]
+                matched_tool_args = (
+                    self._trace.tool_call_args.get(last_match.get("tool", "")) or {}
+                )
+                result_filters: dict[str, Any] = result.get("filters") or {}
+                for fk, fv in plan.workspace.filters.items():
+                    actual = matched_tool_args.get(fk)
+                    if actual is None and result_filters.get(fk) is None:
+                        issues.append(AuditIssue(
+                            code=AuditCode.FILTER_MISSING,
+                            message=(
                                 f"фильтр не применён: исполнитель не передал {fk}={fv!r} "
                                 "в инструмент. Повтори вызов с правильными аргументами."
-                            )
-                        elif actual is not None and str(actual).strip().lower() != str(fv).strip().lower():
-                            issues.append(
+                            ),
+                            context={"filter": fk, "expected": str(fv)},
+                        ))
+                    elif actual is not None and str(actual).strip().lower() != str(fv).strip().lower():
+                        issues.append(AuditIssue(
+                            code=AuditCode.FILTER_MISMATCH,
+                            message=(
                                 f"неверный фильтр: ожидалось {fk}={fv!r}, "
                                 f"передано {fk}={actual!r}. Повтори с правильным значением."
-                            )
-                        # Cross-check reported filters in the result
-                        rf = result_filters.get(fk)
-                        if rf is not None and str(rf).strip().lower() != str(fv).strip().lower():
-                            issues.append(
+                            ),
+                            context={
+                                "filter": fk,
+                                "expected": str(fv),
+                                "actual": str(actual),
+                                "source": "args",
+                            },
+                        ))
+                    # Cross-check reported filters in the result
+                    rf = result_filters.get(fk)
+                    if rf is not None and str(rf).strip().lower() != str(fv).strip().lower():
+                        issues.append(AuditIssue(
+                            code=AuditCode.FILTER_MISMATCH,
+                            message=(
                                 f"Рабочий стол показывает {fk}={rf!r} вместо {fv!r}: "
                                 "показаны данные от другого запроса. Требуется перезапрос."
-                            )
-                    break  # only check the first matching result
+                            ),
+                            context={
+                                "filter": fk,
+                                "expected": str(fv),
+                                "actual": str(rf),
+                                "source": "result",
+                            },
+                        ))
 
         for item in self._trace.tool_results:
             result = item.get("result")
@@ -752,10 +1127,14 @@ class AgentOrchestrator:
                 isinstance(result, dict)
                 and str(result.get("error") or "").startswith("Unknown skill")
             ):
-                issues.append(str(result["error"]))
+                issues.append(AuditIssue(
+                    code=AuditCode.UNKNOWN_SKILL,
+                    message=str(result["error"]),
+                    context={"tool": str(item.get("tool") or "")},
+                ))
 
         return AuditReport(
-            passed=not issues,
+            passed=not _blocking_issues(issues),
             issues=issues,
             workspace_verified=workspace_verified,
             final_channel=plan.workspace.channel,
@@ -769,12 +1148,16 @@ class AgentOrchestrator:
     ) -> None:
         """Advisory check that the final answer actually addresses the request.
 
-        Cheap and gated: only for non-trivial turns (Tier>=MEDIUM) that produced
-        a textual answer. Never flips ``audit.passed`` — it emits a soft warning
-        and records ``semantic_passed``/``semantic_reason`` for the learning loop.
-        Any infra failure is treated as "ok" so we never penalise on flakiness.
+        Gated: runs for complex turns (Tier>=LARGE) or as a diagnostic when the
+        mechanical audit failed, within the per-turn aux-LLM budget. Never flips
+        ``audit.passed`` — it emits a soft warning and records
+        ``semantic_passed``/``semantic_reason`` for the learning loop. On infra
+        failure the verdict stays ``None`` (unknown), not ``True``, so flaky
+        infrastructure does not feed false successes to the learning loop.
         """
-        if not config.audit_enabled or self._tier < Tier.MEDIUM:
+        if not config.audit_enabled:
+            return
+        if self._tier < Tier.LARGE and audit.passed:
             return
         final_text = self._trace.final_text
         if not final_text:
@@ -790,6 +1173,11 @@ class AgentOrchestrator:
             audit.semantic_reason = "Все вызовы инструментов завершились ошибкой."
             await self._emit_semantic_audit(audit)
             return
+
+        if self._aux_llm_calls >= aux_quality_budget(self._tier):
+            return
+        self._aux_llm_calls += 1
+        self._llm_calls += 1
 
         tools_used = ", ".join(sorted(set(self._trace.tool_calls))) or "нет"
         prompt = (
@@ -812,7 +1200,9 @@ class AgentOrchestrator:
                             ChatMessage(role="user", content=prompt),
                         ],
                         confidential=False,
-                        allow_cloud=False,
+                        # Cloud auditor is opt-in (protected setting); the AI
+                        # router still blocks confidential content from cloud.
+                        allow_cloud=bool(config.auditor_allow_cloud),
                         preferred_model=_registry_model_name(
                             config.auditor_model
                             or config.worker_model
@@ -822,13 +1212,14 @@ class AgentOrchestrator:
                 ),
                 timeout=float(config.orchestrator_plan_timeout_seconds),
             )
-        except Exception:
-            return  # infra failure → stay silent, assume ok
+        except Exception as exc:
+            log_degraded("orchestrator.semantic_audit", exc)
+            return  # infra failure → verdict stays None (unknown)
 
         from app.ai.structured_output import parse_json_output
         parsed = parse_json_output(getattr(response, "text", "") or "", default={})
         if not isinstance(parsed, dict) or "ok" not in parsed:
-            return
+            return  # unparseable verdict → stays None (unknown)
         audit.semantic_passed = bool(parsed.get("ok"))
         audit.semantic_reason = str(parsed.get("reason") or "").strip()
         if not audit.semantic_passed:
@@ -843,19 +1234,22 @@ class AgentOrchestrator:
         """Revise a generative chat answer once when the auditor flagged it.
 
         Gated tightly so it never slows down the common (good-answer) path:
-        only generative text/document turns at Tier>=MEDIUM whose semantic audit
-        failed. Reuses the known failure reason — a single revise inference, no
-        extra critique call. The revised answer is streamed as a follow-up.
+        only generative text/document turns whose semantic audit returned an
+        explicit failure, within the per-turn aux-LLM budget. Reuses the known
+        failure reason — a single revise inference, no extra critique call.
+        The revised answer is streamed as a follow-up.
         """
-        if audit.semantic_passed or not audit.semantic_reason:
-            return
-        if self._tier < Tier.MEDIUM:
+        if audit.semantic_passed is not False or not audit.semantic_reason:
             return
         if plan.workspace.output_type not in ("text", "document"):
             return
         original = self._trace.final_text
         if not original:
             return
+        if self._aux_llm_calls >= aux_quality_budget(self._tier):
+            return
+        self._aux_llm_calls += 1
+        self._llm_calls += 1
 
         async def _generate(prompt: str, system_prompt: str | None) -> str:
             messages = []
@@ -878,7 +1272,8 @@ class AgentOrchestrator:
                     timeout=float(config.llm_timeout_seconds),
                 )
                 return getattr(resp, "text", "") or ""
-            except Exception:
+            except Exception as exc:
+                log_degraded("orchestrator.refine_generate", exc)
                 return ""
 
         try:
@@ -886,7 +1281,8 @@ class AgentOrchestrator:
             revised = await revise_with_issues(
                 original, plan.goal, [audit.semantic_reason], _generate
             )
-        except Exception:
+        except Exception as exc:
+            log_degraded("orchestrator.self_refine", exc)
             return
         if revised and revised.strip() and revised.strip() != original.strip():
             await self._outer_send({
@@ -937,12 +1333,14 @@ class AgentOrchestrator:
                 "type": "audit.passed",
                 "content": "Аудит: результат проверен, канал вывода корректный.",
                 "audit": audit.model_dump(mode="json"),
+                "issue_codes": audit.issue_codes,
             })
         else:
             await self._outer_send({
                 "type": "audit.failed",
                 "content": "Аудит: требуется исправление результата.",
                 "audit": audit.model_dump(mode="json"),
+                "issue_codes": audit.issue_codes,
             })
 
     def _should_report_capability_gap(
@@ -953,11 +1351,7 @@ class AgentOrchestrator:
     ) -> bool:
         if not config.allow_capability_builder:
             return False
-        if any("Unknown skill" in issue for issue in audit.issues):
-            return True
-        if any("неправильный workspace-блок" in issue for issue in audit.issues):
-            return True
-        if any("инструмент вне плана" in issue for issue in audit.issues):
+        if _has_code(audit.issues, *CAPABILITY_GAP_CODES):
             return True
         return plan.workspace.required and not audit.workspace_verified
 
@@ -966,21 +1360,9 @@ class AgentOrchestrator:
             return False
         if not plan.worker.recommended_skills:
             return False
-        if any("Unknown skill" in issue for issue in audit.issues):
-            return False
-        return any(
-            marker in issue
-            for issue in audit.issues
-            for marker in (
-                "не подтверждена",
-                "неправильный workspace-блок",
-                "инструмент вне плана",
-                "фильтр не применён",
-                "неверный фильтр",
-                "не отфильтрованы",
-                "показывает",
-            )
-        )
+        if _has_code(audit.issues, AuditCode.UNKNOWN_SKILL):
+            return False  # retrying cannot invent a missing tool
+        return _issues_retryable(audit.issues)
 
     async def _try_execute_planned_workspace_tool(
         self,
@@ -990,19 +1372,7 @@ class AgentOrchestrator:
     ) -> bool:
         if not plan.workspace.required:
             return False
-        if not any(
-            marker in issue
-            for issue in audit.issues
-            for marker in (
-                "не подтверждена",
-                "неправильный workspace-блок",
-                "инструмент вне плана",
-                "фильтр не применён",
-                "неверный фильтр",
-                "не отфильтрованы",
-                "показывает",
-            )
-        ):
+        if not _issues_retryable(audit.issues):
             return False
         spec = _workspace_tool_spec_for_plan(plan)
         if not spec:
@@ -1100,7 +1470,7 @@ class AgentOrchestrator:
     ) -> None:
         gap = CapabilityGapRequest(
             missing_capability=plan.workspace.description or plan.intent,
-            reason="; ".join(audit.issues) or "Недостаточно существующих инструментов.",
+            reason="; ".join(audit.issue_messages) or "Недостаточно существующих инструментов.",
             suggested_artifact="workspace_template" if plan.workspace.required else "tool",
             builder_model=(
                 config.builder_model
@@ -1125,7 +1495,8 @@ class AgentOrchestrator:
             "proposal_id": proposal_id,
         })
 
-        # Invoke real CapabilityBuilder to write working code immediately
+        # Draft real code for the proposal package; activation stays behind
+        # the human-approval flow.
         if config.allow_capability_builder:
             await self._invoke_capability_builder(gap, draft, plan, config)
         upsert_workspace_block(
@@ -1228,7 +1599,8 @@ class AgentOrchestrator:
             }:
                 await self._sandbox_capability_proposal(str(proposal_id), config)
             return str(proposal_id) if proposal_id else None
-        except Exception:
+        except Exception as exc:
+            log_degraded("orchestrator.capability_proposal", exc)
             return None
 
     async def _sandbox_capability_proposal(
@@ -1243,8 +1615,8 @@ class AgentOrchestrator:
                     f"{proposal_id}/sandbox-apply",
                     headers=_agent_headers(),
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            log_degraded("orchestrator.sandbox_apply", exc)
 
     async def _invoke_capability_builder(
         self,
@@ -1253,7 +1625,12 @@ class AgentOrchestrator:
         plan: OrchestratorPlan,
         config: BuiltinAgentConfig,
     ) -> None:
-        """Invoke real CapabilityBuilder to write working code and register the skill live."""
+        """Invoke CapabilityBuilder to draft skill code for the pending proposal.
+
+        The draft is written to generated_skills/ but is NOT registered or
+        imported: activation requires the proposal flow (sandbox → human
+        decision → promote).
+        """
         from app.ai.capability_builder import build_capability
 
         gap_text = (
@@ -1276,8 +1653,9 @@ class AgentOrchestrator:
                 await self._outer_send({
                     "type": "capability_gap.built",
                     "content": (
-                        f"AgentDeveloper: скилл **{result.skill_name}** создан и зарегистрирован. "
-                        "Попробую выполнить исходный запрос с новым инструментом."
+                        f"AgentDeveloper: черновик скилла **{result.skill_name}** готов. "
+                        "Он станет доступен после проверки и подтверждения человеком "
+                        "(предложение уже в очереди согласования)."
                     ),
                     "skill_name": result.skill_name,
                     "skill_path": result.skill_path,
@@ -1301,24 +1679,17 @@ class AgentOrchestrator:
             })
 
 
-def _norm(text: str) -> str:
-    return (text or "").lower().replace("ё", "е")
-
-
-_SECRETARY_MARKERS = (
-    "что требует внимания", "требует внимания", "что у нас по документ",
-    "статус потока", "статус документооборот", "что висит", "что застряло",
-    "что зависло", "дай сводку", "сводку по документ", "общая сводка",
-    "что просрочено", "что на проверке", "что на согласовании",
-    "что нужно сделать", "что в работе", "состояние документооборот",
-    "что по делам", "обзор дня", "что нового по документ",
-)
-
-
-def _is_secretary_query(text: str) -> bool:
-    """True for cross-cutting document-flow status questions (secretary role)."""
-    t = _norm(text)
-    return any(marker in t for marker in _SECRETARY_MARKERS)
+# Keyword heuristics are delegated to the declarative table in
+# aiagent/config/routes.yml (see app.ai.route_table) — do not add markers here.
+_norm = route_table.normalize
+_is_secretary_query = route_table.is_flow_status_query
+_is_workspace_request = route_table.is_workspace_request
+_is_table_edit_request = route_table.is_table_edit_request
+_references_existing_table = route_table.references_existing_table
+_match_intent_route = route_table.match_route
+_resolve_canvas_from_route = route_table.resolve_canvas_from_route
+_extract_supplier_name = route_table.extract_supplier_name
+_is_supplier_grouping_request = route_table.is_supplier_grouping_request
 
 
 def _build_orchestrator_prompt(
@@ -1402,8 +1773,8 @@ def _invalidate_skill_hints_if_changed(registry_path: "Path") -> None:
         if keys:
             r.delete(*keys)
         r.setex("orchestrator:registry_hash", 86400, current_hash)
-    except Exception:
-        pass
+    except Exception as exc:
+        log_degraded("orchestrator.registry_hash_flush", exc)
 
 
 def _build_skill_registry_context(user_text: str) -> str:
@@ -1495,7 +1866,7 @@ def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorP
             s for s in recommended_skills if s != "workspace.invoice_items_by_supplier_table"
         ]
     elif _is_supplier_grouping_request(text):
-        sg = _canvas_map().get("supplier_grouping", {})
+        sg = route_table.supplier_grouping()
         workspace_required = True
         output_type = "table"
         canvas_id = sg.get("canvas_id", "agent:invoice-items-by-supplier")
@@ -1539,100 +1910,22 @@ def _registry_model_name(model_name: str | None) -> str | None:
 
 
 def _fallback_canvas_id(content: str) -> str | None:
-    text = _norm(content)
-    if _references_existing_table(text):
+    if _references_existing_table(content):
         latest_table = _latest_workspace_table_id()
         if latest_table:
             return latest_table
-    for rule in _canvas_map().get("fallback_canvas_rules", []):
-        if not any(kw in text for kw in rule.get("require_any", [])):
-            continue
-        if rule.get("require_table_edit") and not _is_table_edit_request(text):
-            continue
-        if rule.get("require_extra_any") and not any(
-            kw in text for kw in rule["require_extra_any"]
-        ):
-            continue
-        for sub in rule.get("sub_rules", []):
-            if any(kw in text for kw in sub.get("require_any", [])):
-                return sub["canvas_id"]
-        return rule["canvas_id"]
-    return None
-
-
-def _match_intent_route(text: str) -> dict[str, Any] | None:
-    """Return first matching intent_routing entry from canvas_skill_map.json."""
-    for route in _canvas_map().get("intent_routing", []):
-        if any(kw in text for kw in route.get("keywords", [])):
-            return route
-    return None
-
-
-def _resolve_canvas_from_route(route: dict[str, Any], text: str) -> str | None:
-    """Walk canvas_rules in the route to determine canvas_id for the given text."""
-    for rule in route.get("canvas_rules", []):
-        if any(kw in text for kw in rule.get("require_any", [])):
-            for sub in rule.get("sub_rules", []):
-                if any(kw in text for kw in sub.get("require_any", [])):
-                    return sub["canvas_id"]
-            return rule["canvas_id"]
-    return route.get("default_canvas")
-
-
-_SUPPLIER_NAME_STOPWORDS = frozenset({
-    # Russian stopwords
-    "всех", "всем", "всеми", "всё", "все", "другим", "другие", "другого",
-    "любой", "каждый", "каждого", "одного", "один", "без", "только",
-    "кроме", "нескольких", "нескольким", "поставщикам", "поставщиках",
-    "лучший", "лучшего", "лучшем", "худший", "первый", "последний",
-    # Short prepositions / function words (frequently mismatched)
-    "по", "из", "от", "до", "за", "на", "об", "во", "ко", "со", "из", "для",
-    "при", "над", "под", "про", "как", "что", "или", "это", "тот", "тем",
-    # English words that may appear after "поставщик"
-    "trust", "score", "rating", "list", "profile", "top", "best",
-})
-
-
-def _extract_supplier_name(text: str) -> str | None:
-    """Extract a specific named supplier from user text.
-
-    Only matches proper noun patterns (quoted, ALL-CAPS, or title-case words
-    of meaningful length). Returns None for generic attribute requests like
-    "поставщик по trust score" or "лучший поставщик".
-    """
-    m = re.search(
-        r"поставщик[аиу]?\s+([«»\"']?[а-яёa-zА-ЯЁA-Z][а-яёa-z0-9А-ЯЁA-Z«»\"'\-\.]{2,}(?:\s+[а-яёa-z0-9А-ЯЁA-Z«»\"'\-\.]{2,}){0,3}[«»\"']?)",
-        text,
-        re.IGNORECASE,
-    )
-    if m:
-        name = m.group(1).strip().strip("«»\"'.,;:!?")
-        if name.lower() not in _SUPPLIER_NAME_STOPWORDS and len(name) >= 3:
-            return name
-    return None
-
-
-def _is_supplier_grouping_request(text: str) -> bool:
-    sg = _canvas_map().get("supplier_grouping", {})
-    has_trigger = any(kw in text for kw in sg.get("trigger_keywords", []))
-    has_items = any(kw in text for kw in sg.get("item_keywords", []))
-    if not (has_trigger and has_items):
-        return False
-    # A specific supplier name makes this a filter request, not a group-by
-    if _extract_supplier_name(text):
-        return False
-    return True
+    return route_table.fallback_canvas(content)
 
 
 def _expected_workspace_skill_for_canvas(canvas_id: str | None) -> str | None:
-    return _canvas_map().get("canvas_to_skill", {}).get(canvas_id or "")
+    return route_table.canvas_to_skill(canvas_id)
 
 
 def _workspace_tool_spec_for_plan(plan: OrchestratorPlan) -> dict[str, Any] | None:
     skill = _expected_workspace_skill_for_canvas(plan.workspace.canvas_id)
     if not skill:
         return None
-    spec_entry = _canvas_map().get("skill_to_spec", {}).get(skill)
+    spec_entry = route_table.skill_spec(skill)
     if not spec_entry:
         return None
     tool = skill.replace(".", "__")
@@ -1744,7 +2037,7 @@ def _fallback_capability_draft(
 
 
 def _capability_risk_level(gap: CapabilityGapRequest, audit: AuditReport) -> str:
-    text = f"{gap.reason} {' '.join(audit.issues)}".lower()
+    text = f"{gap.reason} {' '.join(audit.issue_messages)}".lower()
     if any(marker in text for marker in ("external", "email.send", "delete", "approval")):
         return "high"
     if gap.suggested_artifact in {"script", "tool"}:
@@ -1801,24 +2094,39 @@ def _record_feedback_async(
         if not t.startswith("_")
     ]
 
+    # Per-step verdicts from tool results: an errored call is a fail for that
+    # skill, a clean call is a success — independent of the whole-turn outcome.
+    skill_outcomes: dict[str, bool] = {}
+    for item in trace.tool_results:
+        tool = str(item.get("tool") or "").replace("__", ".")
+        result = item.get("result")
+        if not tool or not isinstance(result, dict):
+            continue
+        step_ok = not str(result.get("error") or "")
+        # Any failure for a skill dominates earlier successes in the same turn.
+        skill_outcomes[tool] = skill_outcomes.get(tool, True) and step_ok
+
     feedback = TurnFeedback(
         intent_text=content[:300],
         intent_category=plan.worker.role,
         skills_planned=list(plan.worker.recommended_skills),
         skills_used=skills_used,
         audit_passed=audit.passed,
-        semantic_passed=audit.semantic_passed,
+        # None (no verdict / infra failure) must not count as a confirmed
+        # failure for skill stats; only an explicit False does.
+        semantic_passed=audit.semantic_passed is not False,
         retries=retries,
         duration_ms=duration_ms,
-        errors=list(audit.issues),
+        errors=audit.issue_messages,
+        skill_outcomes=skill_outcomes,
     )
 
     try:
         loop = asyncio.get_event_loop()
         loop.run_in_executor(None, record_turn_feedback, feedback)
-    except Exception:
+    except Exception as exc:
         # Best-effort: don't block the main turn
-        pass
+        log_degraded("orchestrator.feedback_record", exc)
 
 
 def _event_canvas_id(event: dict[str, Any]) -> str | None:
@@ -1829,42 +2137,6 @@ def _event_canvas_id(event: dict[str, Any]) -> str | None:
     if isinstance(block, dict) and block.get("id"):
         return str(block["id"])
     return None
-
-
-def _is_workspace_request(text: str) -> bool:
-    return any(
-        token in text
-        for token in (
-            "таблиц", "полный список", "все списком", "выведи список",
-            "покажи список", "список всех", "список счет", "список счёт",
-            "список поставщик", "список товар",
-            "ссылк", "документ", "чертеж", "чертёж",
-            "график", "диаграм", "excel", "csv", "скача", "файл",
-            "сравн", "отчет", "отчёт", "столбец", "столбц", "колонк",
-            "добавь поле", "убери поле", "отсортируй",
-        )
-    )
-
-
-def _is_table_edit_request(text: str) -> bool:
-    return any(
-        token in text
-        for token in (
-            "добавь столб", "добавить столб", "добавь колон", "добавить колон",
-            "убери столб", "убрать столб", "убери колон", "убрать колон",
-            "перед номер", "после номер", "отсортируй",
-        )
-    )
-
-
-def _references_existing_table(text: str) -> bool:
-    return any(
-        token in text
-        for token in (
-            "уже открыт", "открытую таблиц", "открытой таблиц", "эту таблиц",
-            "текущую таблиц", "в таблицу", "в нее", "в неё",
-        )
-    )
 
 
 def _looks_like_chat_table(text: str) -> bool:

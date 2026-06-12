@@ -14,9 +14,8 @@ Pipeline (9 steps):
 
 from __future__ import annotations
 
-import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -24,6 +23,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
@@ -81,7 +81,9 @@ def generate_tp_from_drawing(
     Runs synchronously inside Celery worker.
     """
     try:
-        return asyncio.get_event_loop().run_until_complete(
+        # Persistent per-process loop: keeps the async engine's pooled
+        # connections valid across tasks (see app.tasks.async_runner).
+        return run_async(
             _generate_tp_async(
                 plan_id=plan_id,
                 drawing_id=drawing_id,
@@ -102,14 +104,7 @@ async def _generate_tp_async(
     auto_normcontrol: bool,
     created_by: str,
 ) -> dict[str, Any]:
-    from app.db.models import (
-        Drawing,
-        DrawingStatus,
-        ManufacturingOperation,
-        ManufacturingProcessPlan,
-        ManufacturingResource,
-        SurfaceMachiningSpec,
-    )
+    from app.ai.normcontrol_agent import run_normcontrol
     from app.ai.tp_generator import (
         calculate_cutting_parameters,
         calculate_time_norms,
@@ -120,7 +115,12 @@ async def _generate_tp_async(
         save_surface_specs,
         select_equipment,
     )
-    from app.ai.normcontrol_agent import run_normcontrol
+    from app.db.models import (
+        Drawing,
+        DrawingStatus,
+        ManufacturingProcessPlan,
+        SurfaceMachiningSpec,
+    )
 
     plan_uuid = uuid.UUID(plan_id)
     drawing_uuid = uuid.UUID(drawing_id)
@@ -325,7 +325,7 @@ async def _generate_tp_async(
         _save_steps()
 
         # Final commit
-        plan.metadata_ = {**(plan.metadata_ or {}), "tp_pipeline_steps": steps, "tp_completed_at": datetime.now(timezone.utc).isoformat()}
+        plan.metadata_ = {**(plan.metadata_ or {}), "tp_pipeline_steps": steps, "tp_completed_at": datetime.now(UTC).isoformat()}
         db.commit()
 
         result = {

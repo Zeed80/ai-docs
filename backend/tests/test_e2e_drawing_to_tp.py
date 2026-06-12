@@ -299,12 +299,18 @@ def e2e_api_key():
 
 @pytest.fixture(scope="session")
 def live_client(e2e_api_key: str):
-    """httpx.Client pointing at live Traefik stack with API key auth."""
+    """httpx.Client pointing at live Traefik stack with API key auth.
+
+    Prod Traefik 301-redirects HTTP→HTTPS; on localhost the cert is the
+    self-signed Traefik default (the ACME cert is bound to the real domain),
+    so certificate verification is disabled for this host-only test client.
+    """
     with httpx.Client(
         base_url=BASE_URL,
         headers={"X-Api-Key": e2e_api_key},
         timeout=30.0,
         follow_redirects=True,
+        verify=False,
     ) as c:
         yield c
 

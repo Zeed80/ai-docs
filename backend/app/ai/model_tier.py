@@ -120,6 +120,18 @@ def score_complexity(
     return Tier.MICRO
 
 
+def aux_quality_budget(tier: Tier) -> int:
+    """Max auxiliary quality LLM calls per turn (semantic audit, self-refine).
+
+    Planner and executor calls are structural (already tier-gated); retries are
+    capped by ``max_audit_retries``. This budget bounds the *extra* checking
+    layers, which dominate latency on local models: below LARGE only one
+    diagnostic call is allowed (semantic audit after a failed mechanical
+    audit), at LARGE+ there is room for semantic audit plus one refine pass.
+    """
+    return 2 if tier >= Tier.LARGE else 1
+
+
 # ── Model tier table ───────────────────────────────────────────────────────────
 
 # Ordered from cheapest/fastest to most capable.

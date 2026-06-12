@@ -1,0 +1,224 @@
+"""Spec-driven workspace tables: build from a declarative spec, edit by patch.
+
+The agent (or a deterministic command parser) supplies a :class:`TableSpec`;
+data always flows SQL → workspace block directly, never through an LLM, so
+tables are complete (true ``total``) and instant. The spec is stored inside
+the block, which makes edits idempotent patch operations.
+
+Skills:
+- ``workspace.spec_table``        — POST /api/workspace/agent/spec-table
+- ``workspace.spec_table_patch``  — POST /api/workspace/agent/spec-table/patch
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import structlog
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.chat_bus import chat_bus
+from app.db.session import get_db
+from app.domain.table_spec import (
+    SOURCES,
+    PatchOp,
+    TableSpec,
+    apply_patch,
+    execute_spec,
+    parse_patch_command,
+    validate_spec,
+)
+from app.domain.workspace import get_workspace_block, upsert_workspace_block
+
+logger = structlog.get_logger()
+
+router = APIRouter()
+
+DEFAULT_CANVAS = "agent:spec-table"
+
+
+class SpecTableRequest(BaseModel):
+    canvas_id: str = DEFAULT_CANVAS
+    # Raw dict: LLM-built specs are validated manually so the agent receives a
+    # structured, actionable error (not a bare 422) and can self-correct.
+    spec: dict[str, Any]
+    title: str | None = None
+
+
+class SpecTablePatchRequest(BaseModel):
+    canvas_id: str = DEFAULT_CANVAS
+    # Either explicit ops, or a natural-language command (deterministic parser).
+    ops: list[PatchOp] | None = None
+    command: str | None = None
+
+
+class SpecTableResponse(BaseModel):
+    status: str
+    canvas_id: str
+    total: int
+    shown: int
+    message: str
+    truncated: bool = False
+    spec: dict[str, Any] | None = None
+    filters: dict[str, Any] = {}
+
+
+async def _render_and_publish(
+    db: AsyncSession, canvas_id: str, spec: TableSpec, *, note: str = ""
+) -> SpecTableResponse:
+    try:
+        result = await execute_spec(db, spec)
+    except ValueError as exc:
+        return SpecTableResponse(
+            status="error", canvas_id=canvas_id, total=0, shown=0,
+            message=f"Неверная спецификация: {exc}",
+        )
+
+    title = spec.title or SOURCES[spec.source].title
+    block = {
+        "id": canvas_id,
+        "type": "table",
+        "title": title,
+        "columns": result.columns,
+        "rows": result.rows,
+        "total_rows": result.total,
+        "truncated": result.truncated,
+        "spec": spec.model_dump(mode="json"),
+        "source": "workspace.spec_table",
+    }
+    stored = upsert_workspace_block(canvas_id, block)
+    await chat_bus.publish({
+        "type": "workspace.updated",
+        "canvas_id": canvas_id,
+        "block": stored,
+    })
+    suffix = f" (показаны первые {len(result.rows)})" if result.truncated else ""
+    note_part = f"{note}. " if note else ""
+    return SpecTableResponse(
+        status="published",
+        canvas_id=canvas_id,
+        total=result.total,
+        shown=len(result.rows),
+        message=(
+            f"{note_part}Таблица «{title}»: {result.total} строк — полные данные из БД{suffix}."
+        ),
+        truncated=result.truncated,
+        spec=spec.model_dump(mode="json"),
+    )
+
+
+@router.post("/agent/spec-table", response_model=SpecTableResponse)
+async def publish_spec_table(
+    payload: SpecTableRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SpecTableResponse:
+    """Skill: workspace.spec_table — Build a table from a declarative spec.
+
+    Spec format: {source: invoices|invoice_items|suppliers, columns:
+    [{field, header?}], filters: [{field, op, value}], sort: [{field, dir}]}.
+    Allowed fields per source — see /api/workspace/agent/spec-table/catalog.
+    The result ALWAYS contains the full dataset (true total, hard cap 5000).
+    """
+    try:
+        spec = TableSpec.model_validate(payload.spec)
+    except Exception as exc:
+        sources = ", ".join(sorted(SOURCES))
+        return SpecTableResponse(
+            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            message=(
+                f"Спецификация не разобрана: {str(exc)[:300]}. "
+                f"Формат: {{source: {sources}, columns: [{{field, header?}}], "
+                "filters: [{field, op, value}], sort: [{field, dir}]}. "
+                "Справочник полей: action=spec_table_catalog."
+            ),
+        )
+    if payload.title:
+        spec = spec.model_copy(update={"title": payload.title})
+    problems = validate_spec(spec)
+    if problems:
+        return SpecTableResponse(
+            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            message=(
+                "Неверная спецификация: " + "; ".join(problems)
+                + ". Справочник полей: action=spec_table_catalog."
+            ),
+        )
+    return await _render_and_publish(db, payload.canvas_id, spec)
+
+
+@router.post("/agent/spec-table/patch", response_model=SpecTableResponse)
+async def patch_spec_table(
+    payload: SpecTablePatchRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SpecTableResponse:
+    """Skill: workspace.spec_table_patch — Edit an existing spec table.
+
+    Accepts explicit patch ops (add_column/remove_column/move_column/set_sort/
+    add_filter/clear_filters) or a Russian command («добавь столбец с НДС перед
+    суммой», «отсортируй по сумме по убыванию», «покажи только фрезы …»).
+    """
+    block = get_workspace_block(payload.canvas_id)
+    if not block or not isinstance(block.get("spec"), dict):
+        return SpecTableResponse(
+            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            message=(
+                "Блок не найден или не является spec-таблицей — "
+                "сначала постройте таблицу через workspace.spec_table."
+            ),
+        )
+    spec = TableSpec.model_validate(block["spec"])
+
+    ops = list(payload.ops or [])
+    note = ""
+    if not ops and payload.command:
+        parsed = parse_patch_command(payload.command, spec)
+        if parsed is None:
+            return SpecTableResponse(
+                status="unrecognized", canvas_id=payload.canvas_id,
+                total=0, shown=0,
+                message=(
+                    "Команда не распознана детерминированно — сформируйте ops "
+                    "явно (add_column/remove_column/set_sort/add_filter)."
+                ),
+                spec=spec.model_dump(mode="json"),
+            )
+        ops = parsed.ops
+        note = parsed.description
+    if not ops:
+        return SpecTableResponse(
+            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            message="Не передано ни ops, ни command.",
+        )
+
+    try:
+        new_spec = apply_patch(spec, ops)
+    except ValueError as exc:
+        return SpecTableResponse(
+            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            message=f"Невозможно применить правку: {exc}",
+            spec=spec.model_dump(mode="json"),
+        )
+    return await _render_and_publish(db, payload.canvas_id, new_spec, note=note)
+
+
+@router.get("/agent/spec-table/catalog")
+async def spec_table_catalog() -> dict[str, Any]:
+    """Field catalog: sources and their allowed fields (for the agent/UI)."""
+    return {
+        source.key: {
+            "title": source.title,
+            "default_columns": list(source.default_columns),
+            "fields": [
+                {
+                    "key": fd.key,
+                    "header": fd.header,
+                    "type": fd.type,
+                    "synonyms": list(fd.synonyms),
+                }
+                for fd in source.fields.values()
+            ],
+        }
+        for source in SOURCES.values()
+    }

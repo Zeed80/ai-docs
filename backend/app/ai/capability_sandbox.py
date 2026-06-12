@@ -208,73 +208,37 @@ def _validate_draft(draft: dict[str, Any]) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def _smoke_test_code(code: str, timeout: float = 5.0) -> tuple[list[str], list[str]]:
-    """Import the generated module in an isolated subprocess to prove it loads.
+def _smoke_test_code(code: str, timeout: float = 10.0) -> tuple[list[str], list[str]]:
+    """Import-check the generated module in the ISOLATED skill-runner container.
 
-    Returns ``(errors, warnings)``. Runs in a fresh, time-bounded subprocess so
-    module-level side effects can neither hang nor affect the validator. Verifies
-    the module imports, ``execute`` is callable, and ``SKILL_META`` (if present)
-    is a dict. Infrastructure failures (spawn/timeout) are warnings, not errors —
-    we never block promotion review on a flaky runner.
+    Returns ``(errors, warnings)``. Candidate code is never imported on the
+    backend host — module-level side effects execute only inside the runner
+    (non-root, read-only fs, no credentials). Infrastructure failures (runner
+    down/timeout) are warnings, not errors — we never block promotion review
+    on a flaky runner, but the code is then "not proven to load".
     """
-    import subprocess
-    import sys
-    import tempfile
+    import httpx
+
+    from app.config import settings
 
     errors: list[str] = []
     warnings: list[str] = []
-
-    harness = (
-        "import importlib.util, json, sys\n"
-        "path = sys.argv[1]\n"
-        "try:\n"
-        "    spec = importlib.util.spec_from_file_location('sandbox_candidate', path)\n"
-        "    mod = importlib.util.module_from_spec(spec)\n"
-        "    spec.loader.exec_module(mod)\n"
-        "except Exception as e:\n"
-        "    print(json.dumps({'ok': False, 'errors': [f'{type(e).__name__}: {e}']}))\n"
-        "    sys.exit(0)\n"
-        "errs = []\n"
-        "ex = getattr(mod, 'execute', None)\n"
-        "if not callable(ex):\n"
-        "    errs.append('execute is not callable after import')\n"
-        "meta = getattr(mod, 'SKILL_META', None)\n"
-        "if meta is not None and not isinstance(meta, dict):\n"
-        "    errs.append('SKILL_META is not a dict')\n"
-        "print(json.dumps({'ok': not errs, 'errors': errs}))\n"
-    )
-
-    tmp_code: str | None = None
-    tmp_harness: str | None = None
     try:
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as cf:
-            cf.write(code)
-            tmp_code = cf.name
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as hf:
-            hf.write(harness)
-            tmp_harness = hf.name
-
-        proc = subprocess.run(
-            [sys.executable, tmp_harness, tmp_code],
-            capture_output=True,
-            text=True,
+        resp = httpx.post(
+            f"{settings.skill_runner_url.rstrip('/')}/smoke",
+            json={"code": code},
             timeout=timeout,
         )
-        out = (proc.stdout or "").strip().splitlines()
-        payload = json.loads(out[-1]) if out else {"ok": False, "errors": ["no smoke output"]}
+        if resp.status_code >= 400:
+            warnings.append(
+                f"Smoke test runner returned HTTP {resp.status_code}; static validation only."
+            )
+            return errors, warnings
+        payload = resp.json() if resp.content else {"ok": False, "errors": ["no smoke output"]}
         for msg in payload.get("errors", []):
             errors.append(f"Smoke test: {msg}")
-    except subprocess.TimeoutExpired:
-        warnings.append("Smoke test timed out; code not proven to load.")
     except Exception as exc:
         warnings.append(f"Smoke test could not run ({exc}); static validation only.")
-    finally:
-        for path in (tmp_code, tmp_harness):
-            if path:
-                try:
-                    Path(path).unlink()
-                except Exception:
-                    pass
 
     return errors, warnings
 
@@ -455,12 +419,23 @@ def promote_capability(proposal: CapabilityProposal) -> CapabilityPromoteResult:
     if skill_entry:
         skill_name = skill_entry.get("name") or str(draft.get("tool_name") or "")
 
-    # Register in gateway.yml exposed list
+    # Register in gateway.yml exposed list (registry mode) and in the
+    # `generated` section of capabilities.yml (capabilities mode), so the
+    # promoted skill is callable in both skill-loading modes.
     if skill_name and not errors:
         try:
             gateway_updated = _add_skill_to_gateway(skill_name)
         except Exception as exc:
             errors.append(f"Failed to update gateway.yml: {exc}")
+        try:
+            description = str(
+                draft.get("title")
+                or (skill_entry or {}).get("description")
+                or proposal.title
+            )
+            _add_generated_capability(skill_name, description)
+        except Exception as exc:
+            errors.append(f"Failed to update capabilities.yml: {exc}")
 
     # Write promotion manifest to staging
     manifest = {
@@ -484,6 +459,40 @@ def promote_capability(proposal: CapabilityProposal) -> CapabilityPromoteResult:
         gateway_updated=gateway_updated,
         errors=errors,
     )
+
+
+def _add_generated_capability(skill_name: str, description: str) -> bool:
+    """Register a promoted generated skill as a capabilities-mode tool.
+
+    Entries live in a SEPARATE file (capabilities.generated.yml next to the
+    hand-written capabilities.yml, which is never rewritten programmatically).
+    The tool routes to /api/agent/generated-skill/{name}, which executes the
+    code in the isolated skill-runner — never in the backend process.
+    """
+    from app.ai.gateway_config import gateway_config
+
+    gen_path = gateway_config.capabilities_path.with_name("capabilities.generated.yml")
+    safe = re.sub(r"[^a-zA-Z0-9_]", "_", skill_name).strip("_")
+    data: dict = {}
+    if gen_path.exists():
+        data = yaml.safe_load(gen_path.read_text(encoding="utf-8")) or {}
+    generated: list[dict] = data.get("generated") or []
+    if any(entry.get("name") == safe for entry in generated):
+        return True
+    generated.append({
+        "name": safe,
+        "description": f"[generated] {description[:300]}",
+        "path": f"/api/agent/generated-skill/{safe}",
+        "method": "POST",
+    })
+    data["generated"] = generated
+    gen_path.write_text(
+        "# Auto-managed: promoted agent-generated skills (capabilities mode).\n"
+        "# Execution happens in the isolated skill-runner container.\n"
+        + yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+    return True
 
 
 def _add_skill_to_gateway(skill_name: str) -> bool:

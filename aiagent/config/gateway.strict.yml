@@ -292,10 +292,12 @@ scenarios:
 prompts:
   base: ./prompts/base.md
   roles:
-    manager: ./prompts/role-manager.md
-    engineer: ./prompts/role-engineer.md
-    accountant: ./prompts/role-accountant.md
-    buyer: ./prompts/role-buyer.md
+    engineer:
+      prompt: ./prompts/role-engineer.md
+      capabilities: [documents, tech, analytics]
+    accountant:
+      prompt: ./prompts/role-accountant.md
+      capabilities: [invoices, payments, documents, suppliers, normalization, analytics]
 channels:
   websocket:
     enabled: true

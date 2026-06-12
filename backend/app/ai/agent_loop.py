@@ -16,6 +16,7 @@ import structlog
 import yaml
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
+from app.ai.degradation import log_degraded
 from app.ai.gateway_config import gateway_config
 from app.ai.streaming_scrubber import StreamingContextScrubber
 from app.config import settings as _settings
@@ -166,8 +167,8 @@ def _get_agent_model(
         override = get_ai_config().get("model_agent")
         if override and str(override).strip():
             return str(override).strip()
-    except Exception:
-        pass
+    except Exception as exc:
+        log_degraded("agent_loop.model_override", exc)
     return gateway_config.reasoning_model
 
 
@@ -339,6 +340,46 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
         skill_map[fn_name] = skill_entry
         if cap.get("gate_actions"):
             gate_actions[name] = set(cap["gate_actions"])
+
+    # Promoted agent-generated skills (separate auto-managed file; the
+    # hand-written capabilities.yml is never rewritten programmatically).
+    # They execute in the isolated skill-runner via their registered path.
+    gen_path = cap_path.with_name("capabilities.generated.yml")
+    if gen_path.exists():
+        try:
+            gen_data = yaml.safe_load(gen_path.read_text()) or {}
+            for entry in gen_data.get("generated") or []:
+                gen_name = str(entry.get("name") or "")
+                fn_name = _sanitize_name(gen_name)
+                if not gen_name or fn_name in skill_map:
+                    continue
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": fn_name,
+                        "description": str(entry.get("description") or gen_name)[:1500],
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "args": {
+                                    "type": "object",
+                                    "description": "Skill-specific arguments",
+                                },
+                            },
+                            "required": [],
+                        },
+                    },
+                })
+                skill_map[fn_name] = {
+                    "name": gen_name,
+                    "method": str(entry.get("method") or "POST"),
+                    "path": str(
+                        entry.get("path") or f"/api/agent/generated-skill/{gen_name}"
+                    ),
+                    "gate_actions": entry.get("gate_actions") or [],
+                }
+        except Exception as exc:
+            log_degraded("agent_loop.generated_capabilities", exc)
 
     _CAPABILITY_GATE_ACTIONS = gate_actions
     logger.info("capabilities_loaded", count=len(tools))
@@ -1138,6 +1179,9 @@ class AgentSession:
         # Per-turn worker model override, set by the orchestrator from task tier
         # (e.g. a small fast model for simple turns). None → use configured model.
         self._turn_model_override: str | None = None
+        # Worker role for the current turn — scopes the visible tool set to the
+        # role's capability allowlist from gateway.yml. None → no scoping.
+        self._active_role: str | None = None
 
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
@@ -1191,8 +1235,8 @@ class AgentSession:
                     json={"session_id": self._session_id, **kwargs},
                     headers=_internal_headers(),
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            log_degraded("agent_loop.action_log", exc)
 
     async def _init_mcp(self) -> None:
         """Lazy-init MCP tools on first message (async-safe)."""
@@ -1282,6 +1326,17 @@ class AgentSession:
         ]
         return turns[-limit:]
 
+    def record_external_turn(self, user_text: str, assistant_text: str) -> None:
+        """Record a turn answered outside the executor (secretary direct path).
+
+        Keeps the dialogue history coherent for future planning and feeds the
+        episodic memory exactly like a normal executor turn.
+        """
+        self.messages.append({"role": "user", "content": user_text})
+        self.messages.append({"role": "assistant", "content": assistant_text})
+        self._trim_history()
+        self._remember_latest_turn(assistant_text)
+
     def inject_orchestrator_hint(self, hint: str) -> None:
         """Inject an orchestrator plan hint as a system message before the next user turn."""
         self.messages.append({"role": "system", "content": hint})
@@ -1294,6 +1349,15 @@ class AgentSession:
         """
         self._role_context = (role_prompt or "").strip()
 
+    def set_active_role(self, role: str | None) -> None:
+        """Set the worker role for the next turn — scopes the visible tool set.
+
+        Tools are filtered to the role's capability allowlist from gateway.yml
+        (plus the always-available core: workspace, memory, search). A role
+        without a declared allowlist sees every tool (back-compat).
+        """
+        self._active_role = (role or "").strip() or None
+
     def set_response_budget(self, max_tokens: int) -> None:
         """Set the per-turn max response tokens (clamped to a sane range)."""
         self._response_budget = max(256, min(int(max_tokens), 16384))
@@ -1305,6 +1369,36 @@ class AgentSession:
         Does not affect builder turns (capability generation keeps builder_model).
         """
         self._turn_model_override = (model or "").strip() or None
+
+    # Capabilities every role can always use, regardless of its allowlist.
+    _CORE_CAPABILITIES = frozenset({"workspace", "memory", "search"})
+
+    def _tools_for_turn(self) -> list[dict]:
+        """Visible tools for the current turn, scoped by the active role.
+
+        Only applies in capabilities mode (tool name == capability name).
+        MCP tools and tools outside the capability registry pass through.
+        A role with no declared allowlist sees the full set.
+        """
+        role = self._active_role
+        if not role or gateway_config.skills_mode != "capabilities":
+            return self._tools
+        allowed = gateway_config.role_capabilities(role)
+        if not allowed:
+            return self._tools
+        # Names of registry capabilities (excludes MCP tools, which pass through).
+        capability_names = set(_load_capabilities()[1].keys())
+        visible = set(allowed) | self._CORE_CAPABILITIES
+
+        def _tool_name(tool: dict) -> str:
+            fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+            return str(fn.get("name") or "")
+
+        return [
+            tool
+            for tool in self._tools
+            if _tool_name(tool) not in capability_names or _tool_name(tool) in visible
+        ]
 
     def _effective_system(self) -> str:
         """Base system prompt plus the per-turn role context (if any)."""
@@ -1335,8 +1429,8 @@ class AgentSession:
                     json={"canvas_id": canvas_id, "block": block, "append": append},
                     headers=_internal_headers(),
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            log_degraded("agent_loop.canvas_publish", exc)
         await self._send({
             "type": "canvas",
             "canvas_id": canvas_id,
@@ -1389,8 +1483,8 @@ class AgentSession:
                     if hint not in str(msg.get("content", "")):
                         msg["content"] = str(msg.get("content", "")) + f"\n\n{hint}"
                     return
-        except Exception:
-            pass
+        except Exception as exc:
+            log_degraded("agent_loop.rating_hint", exc)
 
     async def _inject_learning_rules(self) -> None:
         """Inject active learned rules into the system prompt.
@@ -1465,8 +1559,8 @@ class AgentSession:
                     if block not in str(msg.get("content", "")):
                         msg["content"] = str(msg.get("content", "")) + f"\n\n{block}"
                     return
-        except Exception:
-            pass
+        except Exception as exc:
+            log_degraded("agent_loop.learning_rules", exc)
 
     async def _try_fast_intent(self) -> bool:
         """Deterministic fast-path for high-confidence count questions.
@@ -1590,7 +1684,7 @@ class AgentSession:
                     model_override = self._turn_model_override
                 message = await _call_provider_streaming(
                     self.messages,
-                    self._tools,
+                    self._tools_for_turn(),
                     self._effective_system(),
                     self._config,
                     on_token,
@@ -1939,8 +2033,8 @@ class AgentSession:
         db_id: str | None = None
         try:
             db_id = await _create_db_approval(skill_name, args)
-        except Exception:
-            pass
+        except Exception as exc:
+            log_degraded("agent_loop.approval_create", exc, skill=skill_name)
 
         approved = False
         max_attempts = 2
@@ -1988,8 +2082,8 @@ class AgentSession:
         if db_id:
             try:
                 await _decide_db_approval(db_id, approved)
-            except Exception:
-                pass
+            except Exception as exc:
+                log_degraded("agent_loop.approval_decide", exc)
 
         return approved
 
@@ -2053,7 +2147,8 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
         if resp.status_code >= 400:
             return ""
         hits = resp.json().get("hits") or []
-    except Exception:
+    except Exception as exc:
+        log_degraded("agent_loop.memory_search", exc)
         return ""
 
     lines: list[str] = []

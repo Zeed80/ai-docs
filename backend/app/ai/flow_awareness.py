@@ -53,18 +53,64 @@ def _format_snapshot(today: dict, overdue: int | None) -> str:
     return "\n".join(lines)
 
 
-async def get_flow_context(config, *, use_cache: bool = True) -> str:
-    """Return a compact ``<flow-context>`` block, or "" if unavailable.
+def format_flow_summary_human(snapshot: dict) -> str:
+    """User-facing prioritised summary of the document flow (markdown).
 
-    Cached in Redis for ``_CACHE_TTL`` seconds. Any failure is non-fatal and
-    yields an empty string (the agent then runs without the snapshot).
+    Deterministic — the secretary front-agent answers flow-status questions
+    from real numbers without an LLM call. Ordered by urgency: what blocks or
+    burns first, then the rest.
+    """
+    overdue = int(snapshot.get("overdue_payments") or 0)
+    pending = int(snapshot.get("pending_approvals") or 0)
+    anomalies = int(snapshot.get("open_anomalies") or 0)
+    needs_review = int(snapshot.get("documents_needs_review") or 0)
+    quarantine = int(snapshot.get("quarantine_count") or 0)
+    unread = int(snapshot.get("unread_emails") or 0)
+
+    urgent: list[str] = []
+    if overdue:
+        urgent.append(f"- **Просроченные платежи: {overdue}** — требуют немедленного решения")
+    if pending:
+        urgent.append(f"- **Ожидают согласования: {pending}** — блокируют дальнейшую обработку")
+    if anomalies:
+        urgent.append(f"- **Открытые аномалии: {anomalies}** — нужна проверка руководителем")
+
+    regular: list[str] = []
+    if needs_review:
+        regular.append(f"- Документы на проверке: {needs_review}")
+    if quarantine:
+        regular.append(f"- В карантине: {quarantine}")
+    if unread:
+        regular.append(f"- Непрочитанные письма: {unread}")
+
+    if not urgent and not regular:
+        return (
+            "Всё спокойно: нет ожидающих согласований, просрочек, аномалий "
+            "и документов на проверке."
+        )
+
+    parts: list[str] = ["**Состояние документооборота:**"]
+    if urgent:
+        parts.append("\n🔴 Требует внимания в первую очередь:\n" + "\n".join(urgent))
+    if regular:
+        parts.append("\n🟡 В работе:\n" + "\n".join(regular))
+    return "\n".join(parts)
+
+
+async def get_flow_snapshot(config, *, use_cache: bool = True) -> dict | None:
+    """Return raw flow numbers as a dict, or None if unavailable.
+
+    Keys: pending_approvals, documents_needs_review, open_anomalies,
+    quarantine_count, unread_emails, overdue_payments (may be absent).
+    Cached in Redis for ``_CACHE_TTL`` seconds; failures are non-fatal.
     """
     r = _redis() if use_cache else None
     if r is not None:
         try:
             cached = r.get(_CACHE_KEY)
             if cached:
-                return cached if isinstance(cached, str) else cached.decode("utf-8")
+                raw = cached if isinstance(cached, str) else cached.decode("utf-8")
+                return json.loads(raw)
         except Exception:
             pass
 
@@ -94,15 +140,32 @@ async def get_flow_context(config, *, use_cache: bool = True) -> str:
                 overdue = None
     except Exception as exc:
         logger.debug("flow_context_fetch_failed", error=str(exc))
-        return ""
+        return None
 
     if not today:
-        return ""
+        return None
 
-    snapshot = _format_snapshot(today, overdue)
+    snapshot = {
+        "pending_approvals": today.get("pending_approvals", 0),
+        "documents_needs_review": today.get("documents_needs_review", 0),
+        "open_anomalies": today.get("open_anomalies", 0),
+        "quarantine_count": today.get("quarantine_count", 0),
+        "unread_emails": today.get("unread_emails", 0),
+    }
+    if overdue is not None:
+        snapshot["overdue_payments"] = overdue
     if r is not None:
         try:
-            r.setex(_CACHE_KEY, _CACHE_TTL, snapshot)
+            r.setex(_CACHE_KEY, _CACHE_TTL, json.dumps(snapshot, ensure_ascii=False))
         except Exception:
             pass
     return snapshot
+
+
+async def get_flow_context(config, *, use_cache: bool = True) -> str:
+    """Return a compact ``<flow-context>`` block, or "" if unavailable."""
+    snapshot = await get_flow_snapshot(config, use_cache=use_cache)
+    if not snapshot:
+        return ""
+    overdue = snapshot.get("overdue_payments")
+    return _format_snapshot(snapshot, int(overdue) if overdue is not None else None)

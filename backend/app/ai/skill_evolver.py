@@ -166,7 +166,22 @@ async def _build_evolution_context(skill_name: str) -> str:
 # ── Evolution orchestration ────────────────────────────────────────────────────
 
 async def evolve_skill(skill_name: str) -> bool:
-    """Attempt to improve a skill. Returns True if a new version was deployed."""
+    """Attempt to improve a skill. Returns True if a new version was deployed.
+
+    Gated by the protected setting `capability_builder_requires_approval`
+    (default True): autonomous evolution generates and shadow-executes new
+    code, so it may only run when an admin has explicitly waived approval.
+    """
+    from app.ai.agent_config import get_builtin_agent_config
+
+    if get_builtin_agent_config().capability_builder_requires_approval:
+        logger.info(
+            "skill_evolver_skipped_approval_required",
+            skill=skill_name,
+            reason="capability_builder_requires_approval is enabled",
+        )
+        return False
+
     logger.info("skill_evolver_start", skill=skill_name)
 
     try:

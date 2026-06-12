@@ -70,6 +70,7 @@ markers = [
     "llamacpp: requires llama.cpp at llama-server:8080",
     "vllm: requires vLLM at vllm-server:8000",
     "slow: takes >10s per test",
+    "recipes: opts a test in to real recipe retrieval (no autouse stub)",
 ]
 
 [tool.mypy]

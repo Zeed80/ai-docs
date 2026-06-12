@@ -31,6 +31,12 @@ class FakeExecutor:
     def set_model_override(self, model) -> None:
         return None
 
+    def set_active_role(self, role) -> None:
+        return None
+
+    def record_external_turn(self, user_text: str, assistant_text: str) -> None:
+        return None
+
     async def on_approval(self, approved: bool):
         return None
 

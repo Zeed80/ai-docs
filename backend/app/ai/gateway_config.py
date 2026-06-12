@@ -123,13 +123,28 @@ class GatewayConfig:
         rel = self._raw.get("prompts", {}).get("base", "./prompts/base.md")
         return _AIAGENT_ROOT / rel.lstrip("./")
 
+    def _role_entry(self, role: str) -> dict | None:
+        """Role entry from prompts.roles — supports both legacy string form
+        (``role: ./prompts/role-x.md``) and the object form
+        (``role: {prompt: ..., capabilities: [...], default_canvases: [...]}``).
+        """
+        roles = self._raw.get("prompts", {}).get("roles", {})
+        entry = roles.get(role)
+        if entry is None:
+            return None
+        if isinstance(entry, str):
+            return {"prompt": entry}
+        if isinstance(entry, dict):
+            return entry
+        return None
+
     def role_prompt_path(self, role: str) -> Path | None:
         """Return the filesystem path of a role-specific prompt, or None."""
-        roles = self._raw.get("prompts", {}).get("roles", {})
-        rel = roles.get(role)
+        entry = self._role_entry(role)
+        rel = (entry or {}).get("prompt")
         if not rel:
             return None
-        return _AIAGENT_ROOT / rel.lstrip("./")
+        return _AIAGENT_ROOT / str(rel).lstrip("./")
 
     def role_prompt(self, role: str) -> str | None:
         """Return text of a role-specific prompt, or None if not found."""
@@ -137,6 +152,17 @@ class GatewayConfig:
         if not path:
             return None
         return path.read_text() if path.exists() else None
+
+    def role_capabilities(self, role: str) -> list[str]:
+        """Capability allowlist for the role ([] = no scoping declared)."""
+        entry = self._role_entry(role)
+        caps = (entry or {}).get("capabilities") or []
+        return [str(cap) for cap in caps]
+
+    def role_default_canvases(self, role: str) -> list[str]:
+        entry = self._role_entry(role)
+        canvases = (entry or {}).get("default_canvases") or []
+        return [str(c) for c in canvases]
 
     # ── Scenarios ─────────────────────────────────────────────────────────────
 

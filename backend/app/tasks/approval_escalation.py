@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 
+from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
@@ -20,7 +20,7 @@ def escalate_expired_approvals() -> dict:
     Marks them as 'expired' and creates a new approval assigned to the first
     active admin or manager found in the users table.
     """
-    return asyncio.get_event_loop().run_until_complete(_run_escalation())
+    return run_async(_run_escalation())
 
 
 async def _run_escalation() -> dict:
@@ -31,7 +31,7 @@ async def _run_escalation() -> dict:
 
     escalated = 0
     errors = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async with _get_session_factory()() as db:
         # Find first active admin or manager for reassignment

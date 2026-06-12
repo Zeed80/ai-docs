@@ -34,6 +34,11 @@ class BuiltinAgentConfig(BaseModel):
     auditor_model: str | None = None
     auditor_provider: str | None = None
     auditor_disable_thinking: bool = True
+    # Allow the semantic auditor to use a cloud model (e.g. claude_*_anthropic
+    # from the registry). Default False — quality checks stay local; the AI
+    # router still hard-blocks any confidential content from cloud routes.
+    # Protected setting: changing it requires an explicit human decision.
+    auditor_allow_cloud: bool = False
     builder_model: str | None = None
     builder_provider: str | None = None
     builder_disable_thinking: bool = False
@@ -94,6 +99,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     auditor_model: str | None = None
     auditor_provider: str | None = None
     auditor_disable_thinking: bool | None = None
+    auditor_allow_cloud: bool | None = None
     builder_model: str | None = None
     builder_provider: str | None = None
     builder_disable_thinking: bool | None = None

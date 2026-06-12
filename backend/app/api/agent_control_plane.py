@@ -40,6 +40,7 @@ from app.db.models import (
     KnowledgeNode,
     MemoryEmbeddingRecord,
     MemoryFact,
+    RecipeSkill,
 )
 from app.auth.jwt import require_role
 from app.auth.models import UserInfo, UserRole
@@ -341,11 +342,35 @@ def _contains_destructive_marker(value: str) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _draft_contains_executable_code(draft: dict) -> bool:
+    """True when the proposal ships runnable code (not just a registry entry).
+
+    Code can arrive as inline `code`/`implementation_code` strings or as a
+    `files`/`tests` payload that the promote step would write to disk.
+    """
+    for key in ("code", "implementation_code"):
+        value = draft.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    for key in ("files", "tests"):
+        value = draft.get(key)
+        if isinstance(value, dict) and value:
+            return True
+        if isinstance(value, list) and any(
+            isinstance(item, dict) and (item.get("content") or item.get("code"))
+            for item in value
+        ):
+            return True
+    return False
+
+
 def _safe_auto_approval_reason(proposal: CapabilityProposal) -> str | None:
     """Return an auto-approval reason for safe capabilities.
 
     Auto-approves low/medium risk GET/POST tools that have no destructive markers
     and no explicit approval_required flag.  Critical risk is always manual.
+    Anything that ships executable code is always manual: the runner offers no
+    real isolation, so no policy scan can make agent-written code "safe".
     """
     if proposal.risk_level == "critical":
         return None
@@ -353,6 +378,8 @@ def _safe_auto_approval_reason(proposal: CapabilityProposal) -> str | None:
         return None
 
     draft = proposal.draft or {}
+    if _draft_contains_executable_code(draft):
+        return None
     tool_name = _draft_value(draft, "tool_name") or _draft_value(
         draft, "skill_registry_entry", "name"
     ) or ""
@@ -1184,6 +1211,101 @@ async def promote_capability_proposal(
     await db.commit()
     await db.refresh(proposal)
     return proposal
+
+
+# ── Recipe skills (learned declarative macros) ────────────────────────────────
+
+
+class RecipeSkillOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None = None
+    role: str
+    trigger_examples: list
+    steps: list
+    param_slots: dict | None = None
+    capability_schema_hash: str | None = None
+    success_count: int
+    fail_count: int
+    last_used_at: datetime | None = None
+    status: str
+    created_by: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RecipeDecision(BaseModel):
+    decided_by: str = "user"
+
+
+@router.get("/recipes", response_model=list[RecipeSkillOut])
+async def list_recipes(
+    status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> list[RecipeSkill]:
+    """Learned recipes (draft/active/retired)."""
+    stmt = select(RecipeSkill).order_by(RecipeSkill.created_at.desc()).limit(200)
+    if status:
+        stmt = stmt.where(RecipeSkill.status == status)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+@router.get("/recipes/{recipe_id}", response_model=RecipeSkillOut)
+async def get_recipe(
+    recipe_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> RecipeSkill:
+    recipe = await db.get(RecipeSkill, recipe_id)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    return recipe
+
+
+@router.post("/recipes/{recipe_id}/activate", response_model=RecipeSkillOut)
+async def activate_recipe(
+    recipe_id: uuid.UUID,
+    payload: RecipeDecision | None = None,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
+) -> RecipeSkill:
+    """Manually promote a draft recipe to active (replayable)."""
+    recipe = await db.get(RecipeSkill, recipe_id)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    recipe.status = "active"
+    recipe.created_by = (payload.decided_by if payload else None) or recipe.created_by
+    await db.commit()
+    await db.refresh(recipe)
+    return recipe
+
+
+@router.post("/recipes/{recipe_id}/retire", response_model=RecipeSkillOut)
+async def retire_recipe(
+    recipe_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
+) -> RecipeSkill:
+    recipe = await db.get(RecipeSkill, recipe_id)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    recipe.status = "retired"
+    await db.commit()
+    await db.refresh(recipe)
+    return recipe
+
+
+@router.delete("/recipes/{recipe_id}")
+async def delete_recipe(
+    recipe_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
+) -> dict:
+    recipe = await db.get(RecipeSkill, recipe_id)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    await db.delete(recipe)
+    await db.commit()
+    return {"status": "deleted", "id": str(recipe_id)}
 
 
 # ── Diagnostics ───────────────────────────────────────────────────────────────

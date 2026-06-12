@@ -54,10 +54,22 @@ class TurnFeedback:
     # Semantic audit verdict — a turn counts as a learning "success" only when
     # both the mechanical audit AND the semantic check pass.
     semantic_passed: bool = True
+    # Per-skill outcomes derived from tool_result errors — fixes credit
+    # assignment: one failing tool no longer smears "fail" over every skill
+    # used in the turn (and vice versa). Falls back to the whole-turn outcome
+    # for skills not present in the map.
+    skill_outcomes: dict[str, bool] = field(default_factory=dict)
 
     @property
     def is_success(self) -> bool:
         return self.audit_passed and self.semantic_passed
+
+    def skill_success(self, skill: str) -> bool:
+        # An explicit per-step verdict wins: a clean step inside a failed turn
+        # is still a success for the skill, an errored step is a fail even in
+        # a passed turn. No verdict → fall back to the whole-turn outcome.
+        outcome = self.skill_outcomes.get(skill)
+        return self.is_success if outcome is None else bool(outcome)
 
 
 def record_turn_feedback(feedback: TurnFeedback) -> None:
@@ -68,7 +80,7 @@ def record_turn_feedback(feedback: TurnFeedback) -> None:
             return
         now = time.time()
 
-        # Update per-skill stats
+        # Update per-skill stats (per-step credit, not whole-turn smear)
         for skill in feedback.skills_used:
             key = _SKILL_KEY_PREFIX + skill
             raw = r.get(key)
@@ -76,7 +88,7 @@ def record_turn_feedback(feedback: TurnFeedback) -> None:
                 "success": 0, "fail": 0,
                 "total_ms": 0, "count_ms": 0, "last_at": 0,
             }
-            if feedback.is_success:
+            if feedback.skill_success(skill):
                 stats["success"] += 1
             else:
                 stats["fail"] += 1
@@ -94,7 +106,7 @@ def record_turn_feedback(feedback: TurnFeedback) -> None:
         for skill in feedback.skills_used:
             entries.append({
                 "skill": skill,
-                "outcome": "success" if feedback.is_success else "fail",
+                "outcome": "success" if feedback.skill_success(skill) else "fail",
                 "ms": feedback.duration_ms,
                 "ts": now,
                 "retries": feedback.retries,

@@ -9,7 +9,6 @@ Each test wraps its work in a transaction that is rolled back on teardown,
 so tests are fully isolated without dropping/recreating tables between runs.
 """
 
-import asyncio
 import os
 from collections.abc import AsyncIterator
 

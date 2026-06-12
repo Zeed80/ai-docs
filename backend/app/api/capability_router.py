@@ -130,6 +130,10 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "update_canonical_item": ("PATCH", "/api/normalization/canonical/{item_id}",      ["item_id"]),
     },
     "workspace": {
+        # Spec-driven tables: LLM supplies only the spec, data flows SQL→table.
+        "spec_table":         ("POST", "/api/workspace/agent/spec-table",         []),
+        "spec_table_patch":   ("POST", "/api/workspace/agent/spec-table/patch",   []),
+        "spec_table_catalog": ("GET",  "/api/workspace/agent/spec-table/catalog", []),
         "invoice_table":             ("POST", "/api/workspace/agent/invoices/table",               []),
         "invoice_items_table":       ("POST", "/api/workspace/agent/invoices/items-table",         []),
         "invoice_items_grouped":     ("POST", "/api/workspace/agent/invoices/items-grouped-table", []),

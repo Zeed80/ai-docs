@@ -28,6 +28,9 @@ PROTECTED_SETTINGS = {
     # Prevent silent model-provider switching or skill surface expansion
     "provider",
     "exposed_skills",
+    # Data-flow boundary: quality checks may only go to cloud after an
+    # explicit human decision (Dual AI principle).
+    "auditor_allow_cloud",
 }
 
 EXTERNAL_SKILL_PREFIXES = ("email.", "telegram.", "export.", "procurement.")

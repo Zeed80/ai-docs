@@ -3,7 +3,7 @@
 import pytest
 from httpx import AsyncClient
 
-from app.db.models import AgentCron, AgentPlugin, AgentTask, AgentTeam
+from app.db.models import AgentCron, AgentTask, AgentTeam
 
 
 @pytest.fixture

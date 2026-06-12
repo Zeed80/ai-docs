@@ -134,6 +134,11 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.extraction.watchdog_stuck_documents",
         "schedule": 300.0,
     },
+    # AgentCron executor: run due scheduled agent prompts (headless turns)
+    "agent-cron-dispatch": {
+        "task": "agent.cron_dispatch",
+        "schedule": 60.0,
+    },
 }
 
 celery_app.autodiscover_tasks([
@@ -152,3 +157,4 @@ from app.tasks import proactive as _proactive  # noqa: F401
 from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
 from app.tasks import canonical_cluster as _canonical_cluster  # noqa: F401
 from app.tasks import tp_generation as _tp_generation  # noqa: F401
+from app.tasks import agent_cron as _agent_cron  # noqa: F401

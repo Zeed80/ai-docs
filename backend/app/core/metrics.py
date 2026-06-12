@@ -38,6 +38,11 @@ if _PROMETHEUS_AVAILABLE:
         "Total agent tool calls",
         ["tool"],
     )
+    agent_degraded_total = Counter(
+        "aiworkspace_agent_degraded_total",
+        "Suppressed agent-component failures (feature degraded, not off)",
+        ["component"],
+    )
     orchestrator_plan_fallback_total = Counter(
         "aiworkspace_orchestrator_plan_fallback_total",
         "Orchestrator LLM plan fallbacks to the heuristic planner",
@@ -186,6 +191,7 @@ else:
     agent_turns_total = _noop
     agent_turn_duration_seconds = _noop
     agent_tool_calls_total = _noop
+    agent_degraded_total = _noop
     orchestrator_plan_fallback_total = _noop
     extraction_duration_seconds = _noop
     extraction_errors_total = _noop

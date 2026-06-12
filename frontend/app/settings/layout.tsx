@@ -12,6 +12,7 @@ const TABS = [
   { href: "/settings/ntd", label: "НТД" },
   { href: "/settings/notifications", label: "Уведомления" },
   { href: "/settings/auto-approval", label: "Авто-утверждение" },
+  { href: "/settings/recipes", label: "Рецепты" },
   { href: "/settings/models", label: "Модели" },
 ] as const;
 
