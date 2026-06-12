@@ -231,7 +231,7 @@ skills:
 	cd backend && python3 -m app.scripts.generate_skill_registry
 
 aiagent-contract:
-	python3 scripts/check_aiagent_contract.py
+	python3 scripts/check_aiagent_contract.py --strict
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Monitoring

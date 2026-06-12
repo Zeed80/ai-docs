@@ -241,9 +241,23 @@ skills:
   - ntd.document_create_from_source
   - ntd.document_index
   - ntd.norm_control_run_payload
-  - workspace.invoice_data_tool
-  - workspace.general_tool
-  - workspace.supplier_lookup_tool
+  - calendar.generate_followup
+  - collection.search
+  - invoice.line.update
+  - memory.prune
+  - search.similar
+  - tech.analyze_surfaces
+  - tech.blank_spec_set
+  - tech.calculate_cutting_params
+  - tech.export_gost_forms
+  - tech.generate_tp_from_drawing
+  - tech.normcontrol_check
+  - tech.normcontrol_resolve
+  - tech.select_equipment_for_op
+  - tech.surface_specs_list
+  - workspace.general
+  - workspace.invoice_pivot
+  - workspace.sql_table
   approval_gates:
   - invoice.approve
   - invoice.reject
@@ -254,6 +268,28 @@ skills:
   - procurement.send_rfq
   - warehouse.confirm_receipt
   - norm.activate_rule
+  - bom.approve
+  - bom.create_purchase_request
+  - compare.decide
+  - doc.batch_ntd_check
+  - doc.bulk_delete
+  - email.templates.delete
+  - invoice.bulk_delete
+  - invoice.delete
+  - mailbox.create
+  - mailbox.delete
+  - mailbox.test
+  - norm.apply_rules
+  - ntd.control_settings_update
+  - ntd.finding_decide
+  - ntd.norm_control_run
+  - ntd.norm_control_run_payload
+  - table.import_excel
+  - tech.learning_rule_activate
+  - tech.norm_estimate_approve
+  - tech.process_plan_approve
+  - warehouse.delete_item
+  - warehouse.issue_stock
 scenarios:
 - name: email_triage
   path: ./scenarios/email-triage.yml

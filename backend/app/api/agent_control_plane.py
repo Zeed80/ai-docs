@@ -1171,7 +1171,11 @@ async def promote_capability_proposal(
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> CapabilityProposal:
-    """Skill: capability.promote — Promote an approved capability to staging and expose in gateway."""
+    """Promote an approved capability to staging and expose in gateway.
+
+    Deliberately NOT a `Skill:` — promotion is the human decide step of the
+    capability lifecycle and must never be callable by the agent itself.
+    """
     proposal = await db.get(CapabilityProposal, proposal_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="Capability proposal not found")

@@ -167,11 +167,9 @@ def check_capability_contract(
             if classify_capability_action_risk(action) != "high"
         )
         if gated_low_risk:
-            message = f"{cap_name} gates low-risk actions manually: {gated_low_risk}"
-            if strict:
-                warnings.append(message)
-            else:
-                warnings.append(message)
+            warnings.append(
+                f"{cap_name} gates low-risk actions manually: {gated_low_risk}"
+            )
 
     return errors, warnings, {
         "capabilities": len(yaml_caps),

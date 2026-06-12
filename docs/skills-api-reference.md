@@ -1,11 +1,12 @@
 # AiAgent Skills API Reference
 
-*Auto-generated from FastAPI Pydantic schemas. Version 2. Total: 229 skills.*
+*Auto-generated from FastAPI Pydantic schemas. Version 2. Total: 236 skills.*
 
 > **Usage**: agent calls `POST /api/agent/cap/{capability}` with `{"action": "..."}`. See [ADR 001](adrs/001-capability-routing.md).
 
 ## Table of Contents
 
+- [Agent Control Plane (5)](#agent-control-plane)
 - [Anomalies (5)](#anomalies)
 - [Approvals (3)](#approvals)
 - [BOMs (7)](#boms)
@@ -18,7 +19,7 @@
 - [Email (11)](#email)
 - [Email Templates (7)](#email-templates)
 - [Graph (10)](#graph)
-- [Invoices (11)](#invoices)
+- [Invoices (12)](#invoices)
 - [Mailboxes (6)](#mailboxes)
 - [Memory (8)](#memory)
 - [Normalization (11)](#normalization)
@@ -31,7 +32,40 @@
 - [Tables & Export (10)](#tables--export)
 - [Technology Cards (28)](#technology-cards)
 - [Warehouse (15)](#warehouse)
-- [Workspace (7)](#workspace)
+- [Workspace (8)](#workspace)
+
+## Agent Control Plane
+
+### `capability.propose`
+
+capability.propose
+
+**`POST /api/agent/capabilities/propose`**
+
+### `capability.sandbox_apply`
+
+capability.sandbox_apply
+
+**`POST /api/agent/capabilities/{proposal_id}/sandbox-apply`**
+
+### `capability.status`
+
+capability.status
+
+**`GET /api/agent/capabilities/{proposal_id}/status`**
+
+### `config.propose`
+
+config.propose
+
+**`POST /api/agent/config/propose`**
+
+### `task.create`
+
+task.create
+
+**`POST /api/agent/tasks/create`**
+
 
 ## Anomalies
 
@@ -99,6 +133,17 @@ anomaly.resolve
 approval.list_pending
 
 **`GET /api/approvals/pending`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `sub` | `string` | ✓ | Sub |
 
 ### `approval.request`
 
@@ -553,6 +598,17 @@ doc.list
 
 **`GET /api/documents`**
 
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `sub` | `string` | ✓ | Sub |
+
 ### `doc.management`
 
 doc.management
@@ -952,11 +1008,41 @@ invoice.get
 
 **`GET /api/invoices/{invoice_id}`**
 
+### `invoice.line.update`
+
+invoice.line.update
+
+**`PATCH /api/invoices/{invoice_id}/lines/{line_id}`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `amount` | `number` |  | Amount |
+| `description` | `string` |  | Description |
+| `quantity` | `number` |  | Quantity |
+| `sku` | `string` |  | Sku |
+| `tax_amount` | `number` |  | Tax Amount |
+| `tax_rate` | `number` |  | Tax Rate |
+| `unit` | `string` |  | Unit |
+| `unit_price` | `number` |  | Unit Price |
+
 ### `invoice.list`
 
 invoice.list
 
 **`GET /api/invoices`**
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `email` | `string` | ✓ | Email |
+| `groups` | `array` |  | Groups |
+| `name` | `string` | ✓ | Name |
+| `preferred_username` | `string` | ✓ | Preferred Username |
+| `roles` | `array` |  | Roles |
+| `sub` | `string` | ✓ | Sub |
 
 ### `invoice.receive`
 
@@ -1628,6 +1714,7 @@ supplier.update
 | `name` | `string` |  | Name |
 | `notes` | `string` |  | Notes |
 | `ogrn` | `string` |  | Ogrn |
+| `price_spike_threshold_pct` | `number` |  | Price Spike Threshold Pct |
 | `user_notes` | `string` |  | User Notes |
 | `user_rating` | `integer` |  | User Rating |
 
@@ -2202,6 +2289,12 @@ workspace.invoice_items_grouped_table
 workspace.invoice_items_table
 
 **`POST /api/workspace/agent/invoices/items-table`**
+
+### `workspace.invoice_pivot`
+
+workspace.invoice_pivot
+
+**`POST /api/workspace/agent/invoices/pivot-table`**
 
 ### `workspace.invoice_table`
 

@@ -75,6 +75,9 @@ RISKY_CAPABILITY_ACTIONS = {
     "process_plan_approve",
     "norm_estimate_approve",
     "learning_rule_activate",
+    "table_apply_diff",
+    "table_import_excel",
+    "ai_config_set",
 }
 
 

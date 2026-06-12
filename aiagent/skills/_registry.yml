@@ -18,6 +18,51 @@ tools:
   method: GET
   path: /api/documents
   approval_required: false
+  parameters:
+    $defs:
+      UserRole:
+        enum:
+        - admin
+        - manager
+        - accountant
+        - buyer
+        - engineer
+        - technologist
+        - viewer
+        title: UserRole
+        type: string
+    properties:
+      sub:
+        title: Sub
+        type: string
+      email:
+        title: Email
+        type: string
+      name:
+        title: Name
+        type: string
+      preferred_username:
+        title: Preferred Username
+        type: string
+      roles:
+        default: []
+        items:
+          $ref: '#/$defs/UserRole'
+        title: Roles
+        type: array
+      groups:
+        default: []
+        items:
+          type: string
+        title: Groups
+        type: array
+    required:
+    - sub
+    - email
+    - name
+    - preferred_username
+    title: UserInfo
+    type: object
 - name: doc.workspace
   description: 'Skill: doc.workspace — List documents with compact pipeline summaries.'
   category: documents
@@ -406,6 +451,51 @@ tools:
   method: GET
   path: /api/invoices
   approval_required: false
+  parameters:
+    $defs:
+      UserRole:
+        enum:
+        - admin
+        - manager
+        - accountant
+        - buyer
+        - engineer
+        - technologist
+        - viewer
+        title: UserRole
+        type: string
+    properties:
+      sub:
+        title: Sub
+        type: string
+      email:
+        title: Email
+        type: string
+      name:
+        title: Name
+        type: string
+      preferred_username:
+        title: Preferred Username
+        type: string
+      roles:
+        default: []
+        items:
+          $ref: '#/$defs/UserRole'
+        title: Roles
+        type: array
+      groups:
+        default: []
+        items:
+          type: string
+        title: Groups
+        type: array
+    required:
+    - sub
+    - email
+    - name
+    - preferred_username
+    title: UserInfo
+    type: object
 - name: invoice.get
   description: 'Skill: invoice.get — Get invoice with lines.'
   category: invoices
@@ -498,6 +588,65 @@ tools:
         default: null
         title: Notes
     title: InvoiceFieldUpdate
+    type: object
+- name: invoice.line.update
+  description: 'Skill: invoice.line.update — Correct a single invoice line after review.'
+  category: invoices
+  method: PATCH
+  path: /api/invoices/{invoice_id}/lines/{line_id}
+  approval_required: false
+  parameters:
+    description: Editable fields of a single invoice line (human review correction).
+    properties:
+      description:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Description
+      sku:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Sku
+      quantity:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Quantity
+      unit:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Unit
+      unit_price:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Unit Price
+      amount:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Amount
+      tax_rate:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Tax Rate
+      tax_amount:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        title: Tax Amount
+    title: InvoiceLineUpdate
     type: object
 - name: invoice.approve
   description: 'Skill: invoice.approve — Approve invoice (approval gate).'
@@ -820,6 +969,7 @@ tools:
         - invoice.reject
         - invoice.bulk_delete
         - email.send
+        - email.send.request_approval
         - anomaly.resolve
         - table.apply_diff
         - norm.activate_rule
@@ -832,6 +982,7 @@ tools:
         - tech.process_plan_approve
         - tech.norm_estimate_approve
         - tech.learning_rule_activate
+        - tech.process_plan_from_drawing
         - agent.tool_call
         title: ApprovalActionType
         type: string
@@ -882,6 +1033,51 @@ tools:
   method: GET
   path: /api/approvals/pending
   approval_required: false
+  parameters:
+    $defs:
+      UserRole:
+        enum:
+        - admin
+        - manager
+        - accountant
+        - buyer
+        - engineer
+        - technologist
+        - viewer
+        title: UserRole
+        type: string
+    properties:
+      sub:
+        title: Sub
+        type: string
+      email:
+        title: Email
+        type: string
+      name:
+        title: Name
+        type: string
+      preferred_username:
+        title: Preferred Username
+        type: string
+      roles:
+        default: []
+        items:
+          $ref: '#/$defs/UserRole'
+        title: Roles
+        type: array
+      groups:
+        default: []
+        items:
+          type: string
+        title: Groups
+        type: array
+    required:
+    - sub
+    - email
+    - name
+    - preferred_username
+    title: UserInfo
+    type: object
 - name: approval.status
   description: 'Skill: approval.status — Check approval status.'
   category: approvals
@@ -1285,7 +1481,7 @@ tools:
         type: integer
       limit:
         default: 50
-        maximum: 500
+        maximum: 100000
         title: Limit
         type: integer
     title: TableQueryRequest
@@ -1743,6 +1939,14 @@ tools:
         - type: 'null'
         default: null
         title: User Rating
+      price_spike_threshold_pct:
+        anyOf:
+        - maximum: 200.0
+          minimum: 0.0
+          type: number
+        - type: 'null'
+        default: null
+        title: Price Spike Threshold Pct
     title: SupplierUpdate
     type: object
 - name: supplier.list
@@ -1898,7 +2102,8 @@ tools:
     title: AnomalyCreateRequest
     type: object
 - name: anomaly.list
-  description: 'Skill: anomaly.list — List anomaly cards.'
+  description: 'Skill: anomaly.list — List anomaly cards. Orphaned cards (entity deleted)
+    are excluded.'
   category: anomalies
   method: GET
   path: /api/anomalies
@@ -4055,6 +4260,12 @@ tools:
   method: POST
   path: /api/workspace/agent/invoices/items-by-supplier-table
   approval_required: false
+- name: workspace.invoice_pivot
+  description: 'Skill: workspace.invoice_pivot — Group invoice items by ANY dimension,'
+  category: workspace
+  method: POST
+  path: /api/workspace/agent/invoices/pivot-table
+  approval_required: false
 - name: workspace.sql_table
   description: 'Skill: workspace.sql_table — Build and publish a table using SQL-first
     pipeline.'
@@ -4148,27 +4359,34 @@ tools:
   method: POST
   path: /api/email-templates/{template_id}/render
   approval_required: false
-- name: audit.list
-  description: 'Skill: audit.list — List audit log entries with optional filters (action, entity_type, user_id, date range).'
-  category: audit
-  method: GET
-  path: /api/audit
+- name: config.propose
+  description: 'Skill: config.propose — Propose an agent configuration change.'
+  category: agent_control
+  method: POST
+  path: /api/agent/config/propose
   approval_required: false
-- name: audit.timeline
-  description: 'Skill: audit.timeline — Entity-level timeline events (what happened to a document/invoice/approval).'
-  category: audit
-  method: GET
-  path: /api/audit/timeline
+- name: task.create
+  description: 'Skill: task.create — Create an agent work item.'
+  category: agent_control
+  method: POST
+  path: /api/agent/tasks/create
   approval_required: false
-- name: audit.filter
-  description: 'Skill: audit.filter — Batch-filter audit logs by multiple actions, entity_types, or users.'
-  category: audit
-  method: GET
-  path: /api/audit/filter
+- name: capability.propose
+  description: 'Skill: capability.propose — Propose a missing capability draft.'
+  category: agent_control
+  method: POST
+  path: /api/agent/capabilities/propose
   approval_required: false
-- name: audit.export
-  description: 'Skill: audit.export — Export audit log for compliance (CSV or JSON, admin only).'
-  category: audit
+- name: capability.status
+  description: 'Skill: capability.status — Read capability proposal lifecycle state.'
+  category: agent_control
   method: GET
-  path: /api/audit/export
+  path: /api/agent/capabilities/{proposal_id}/status
+  approval_required: false
+- name: capability.sandbox_apply
+  description: 'Skill: capability.sandbox_apply — Prepare sandbox validation for a
+    draft capability.'
+  category: agent_control
+  method: POST
+  path: /api/agent/capabilities/{proposal_id}/sandbox-apply
   approval_required: false

@@ -45,6 +45,7 @@ ROUTERS = {
     "workspace": ("app.api.workspace", "/api/workspace"),
     "mailbox": ("app.api.mailbox", "/api/mailbox"),
     "email_templates": ("app.api.email_templates", "/api/email-templates"),
+    "agent_control": ("app.api.agent_control_plane", "/api/agent"),
 }
 
 APPROVAL_GATES = {
@@ -197,6 +198,7 @@ def generate_markdown(registry: dict) -> str:
         "canvas": "Canvas",
         "collections": "Collections",
         "compare": "Compare (КП)",
+        "agent_control": "Agent Control Plane",
         "dashboard": "Dashboard",
         "documents": "Documents",
         "email": "Email",
