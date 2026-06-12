@@ -306,6 +306,22 @@ models:
     quality_score: 0.89
     speed_score: 0.55
     notes: "Qwen3.6 35B. Released April 2026. Hybrid multimodal (text+image+video), 262K ctx. Primary reasoning + VLM fallback."
+  qwen3_6_35b_apex_ollama:
+    provider: "ollama"
+    provider_model: "fredrezones55/Qwen3.6-35B-A3B-APEX:Compact"
+    status: "production"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 32768
+    supports_structured_output: true
+    supports_tool_calling: true
+    local_only: true
+    vram_gb_estimate: 17.5
+    quality_score: 0.90
+    speed_score: 0.95
+    notes: >
+      Qwen3.6-35B-A3B (MoE, 3B active) в кванте APEX Compact с vision (mmproj).
+      Бенч на RTX 3090: 135 tok/s — быстрее qwen3.5:9b при качестве класса 30B+.
+      Основная модель отдела ИИ: worker/orchestrator/builder.
   qwen3_5_9b_ollama:
     provider: "ollama"
     provider_model: "qwen3.5:9b"
@@ -533,9 +549,9 @@ routes:
   orchestrator_planning:
     required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["qwen3_5_9b_ollama", "qwen3_6_35b_ollama", "gemma4_26b_ollama"]
+    fallback_chain: ["qwen3_6_35b_apex_ollama", "qwen3_5_9b_ollama", "gemma4_26b_ollama"]
     manual_review_fallback: false
-    notes: "Orchestrator planning. Primary: qwen3.5:9b (fast local). Fallback: qwen3.6:35b (large), gemma4:26b if installed."
+    notes: "Orchestrator planning. Primary: Qwen3.6-35B-A3B APEX (быстрый MoE, та же модель что worker — без свопов). Fallback: qwen3.5:9b, gemma4:26b."
   code_generation:
     required_modalities: ["text"]
     local_only: false
