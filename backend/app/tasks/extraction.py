@@ -2004,8 +2004,16 @@ def process_approved_document(self, document_id: str) -> dict:
                 select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id)
             ).scalars().all()
             if invoice_lines:
-                from sqlalchemy import text as _text
-                next_val = db.execute(_text("SELECT nextval('receipt_seq')")).scalar()
+                if db.get_bind().dialect.name == "postgresql":
+                    from sqlalchemy import text as _text
+                    next_val = db.execute(_text("SELECT nextval('receipt_seq')")).scalar()
+                else:
+                    # SQLite (tests) has no sequences — count-based fallback.
+                    next_val = (
+                        db.execute(
+                            select(func.count()).select_from(WarehouseReceipt)
+                        ).scalar() or 0
+                    ) + 1
                 receipt_number = f"ПО-{next_val:04d}"
                 pending_receipt = WarehouseReceipt(
                     invoice_id=invoice.id,

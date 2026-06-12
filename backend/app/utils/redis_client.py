@@ -42,11 +42,25 @@ def get_sync_redis() -> redis.Redis:
     return redis.Redis(connection_pool=_sync_pool)
 
 
+def _dispose_pool_on_its_loop(
+    pool: AsyncConnectionPool, loop: asyncio.AbstractEventLoop | None
+) -> None:
+    """Best-effort close of a pool bound to another (possibly dead) event loop."""
+    if loop is None or loop.is_closed():
+        return
+    try:
+        loop.call_soon_threadsafe(lambda: asyncio.ensure_future(pool.aclose()))
+    except RuntimeError:
+        pass  # loop closed between the check and the call
+
+
 def get_async_redis() -> aioredis.Redis:
     """Return an async Redis client backed by a pool bound to the current loop."""
     global _async_pool, _async_pool_loop
     current_loop = asyncio.get_running_loop()
     if _async_pool is None or _async_pool_loop is not current_loop:
+        if _async_pool is not None:
+            _dispose_pool_on_its_loop(_async_pool, _async_pool_loop)
         from app.config import settings
         _async_pool = AsyncConnectionPool.from_url(
             settings.redis_url,
