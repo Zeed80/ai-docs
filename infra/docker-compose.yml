@@ -208,6 +208,9 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: utility
+    volumes:
+      # Saved power limit — re-applied on every start (NVML resets on reboot).
+      - gpu_temp_state:/data
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9966/health', timeout=3).status==200 else 1)\""]
       interval: 30s
@@ -635,6 +638,7 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  gpu_temp_state:
   minio_data:
   qdrant_data:
   ollama_data:

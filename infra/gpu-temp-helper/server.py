@@ -31,6 +31,9 @@ except Exception:  # pragma: no cover - library missing or broken
 
 PORT = int(os.environ.get("PORT", "9966"))
 CACHE_TTL_S = float(os.environ.get("CACHE_TTL_S", "2.0"))
+# Saved power limits live on a named volume so the chosen limit survives
+# container restarts and host reboots (NVML limits reset on reboot).
+STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
 
 # PCI device id -> BAR0 register offset of the VRAM junction temperature.
 # Table from gddr6.c (github.com/olealgoritme/gddr6).
@@ -260,7 +263,26 @@ def collect_telemetry() -> dict[str, Any]:
     }
 
 
-def set_power_limit(index: int, watts: float) -> dict[str, Any]:
+def _load_state() -> dict[str, Any]:
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_state(state: dict[str, Any]) -> None:
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, STATE_FILE)
+    except OSError as exc:
+        print(f"state save failed: {exc}", flush=True)
+
+
+def set_power_limit(index: int, watts: float, persist: bool = True) -> dict[str, Any]:
     """Set the GPU power limit (clamped to NVML constraints)."""
     if pynvml is None:
         raise RuntimeError("pynvml not importable")
@@ -272,17 +294,42 @@ def set_power_limit(index: int, watts: float) -> dict[str, Any]:
         target_mw = max(min_mw, min(max_mw, requested_mw))
         pynvml.nvmlDeviceSetPowerManagementLimit(h, target_mw)
         applied_mw = pynvml.nvmlDeviceGetEnforcedPowerLimit(h)
+        applied_w = round(applied_mw / 1000, 1)
+        if persist:
+            state = _load_state()
+            state.setdefault("power_limits", {})[str(index)] = applied_w
+            _save_state(state)
         return {
             "ok": True,
             "index": index,
             "requested_w": round(requested_mw / 1000, 1),
-            "power_limit_w": round(applied_mw / 1000, 1),
+            "power_limit_w": applied_w,
             "clamped": target_mw != requested_mw,
             "min_w": round(min_mw / 1000, 1),
             "max_w": round(max_mw / 1000, 1),
         }
     finally:
         pynvml.nvmlShutdown()
+
+
+def restore_saved_limits(retries: int = 10, delay_s: float = 3.0) -> None:
+    """Re-apply persisted power limits on startup (driver may need a moment)."""
+    limits = _load_state().get("power_limits") or {}
+    if not limits:
+        return
+    for attempt in range(1, retries + 1):
+        try:
+            for index, watts in limits.items():
+                result = set_power_limit(int(index), float(watts), persist=False)
+                print(
+                    f"restored power limit: gpu {index} -> "
+                    f"{result['power_limit_w']} W",
+                    flush=True,
+                )
+            return
+        except Exception as exc:
+            print(f"restore attempt {attempt}/{retries} failed: {exc}", flush=True)
+            time.sleep(delay_s)
 
 
 _cache_lock = threading.Lock()
@@ -350,6 +397,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    threading.Thread(target=restore_saved_limits, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"gpu-temp-helper listening on :{PORT}", flush=True)
     server.serve_forever()
