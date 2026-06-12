@@ -22,7 +22,6 @@ Retrieval is vector similarity over trigger examples (Qdrant collection scoped
 
 from __future__ import annotations
 
-import hashlib
 import re
 import uuid as uuid_module
 from datetime import UTC, datetime
@@ -56,8 +55,9 @@ _VECTOR_SCOPE = "recipe_triggers"
 def capabilities_schema_hash() -> str:
     """Hash of capabilities.yml — recipes recorded against another schema retire."""
     try:
-        from app.ai.gateway_config import gateway_config
-        return hashlib.md5(gateway_config.capabilities_path.read_bytes()).hexdigest()
+        from app.ai.capability_manifest import capability_schema_hash
+
+        return capability_schema_hash()
     except Exception as exc:
         log_degraded("recipes.schema_hash", exc)
         return ""
@@ -66,13 +66,9 @@ def capabilities_schema_hash() -> str:
 def _gate_actions_map() -> dict[str, set[str]]:
     """capability name → set of approval-gated actions."""
     try:
-        from app.ai.agent_loop import _load_capabilities
-        _, skill_map = _load_capabilities()
-        return {
-            name: set(entry.get("gate_actions") or [])
-            for name, entry in skill_map.items()
-            if isinstance(entry, dict)
-        }
+        from app.ai.capability_manifest import load_capability_manifest
+
+        return load_capability_manifest().gate_actions
     except Exception as exc:
         log_degraded("recipes.gate_map", exc)
         return {}

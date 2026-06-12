@@ -24,6 +24,7 @@ x-backend-env: &backend-env
   AUTH_ENABLED: ${AUTH_ENABLED:-false}
   AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-agent-internal-key-2026}
   SKILL_RUNNER_URL: http://skill-runner:8077
+  GPU_TEMP_HELPER_URL: http://gpu-temp-helper:9966
   TRUSTED_PROXY: ${TRUSTED_PROXY:-true}
   AUTHENTIK_URL: ${AUTHENTIK_URL:-http://authentik-server:9000}
   AUTHENTIK_EXTERNAL_URL: ${AUTHENTIK_EXTERNAL_URL:-}
@@ -191,6 +192,27 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    networks:
+      - app
+
+  # === GPU Telemetry Helper ===
+  # Privileged sidecar: NVML telemetry + GDDR6/GDDR6X memory junction temp
+  # via PCIe BAR0 mmap (gddr6 method) — NVML does not expose it on GeForce.
+  # Internal-only (no published ports); backend reads http://gpu-temp-helper:9966.
+  gpu-temp-helper:
+    build:
+      context: ./gpu-temp-helper
+      dockerfile: Dockerfile
+    runtime: nvidia
+    privileged: true   # /dev/mem + PCIe BAR mmap for memory junction temp
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9966/health', timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - app
 

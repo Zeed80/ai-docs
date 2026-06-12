@@ -52,6 +52,31 @@ DESTRUCTIVE_SKILL_MARKERS = (
     ".apply_diff",
 )
 
+RISKY_CAPABILITY_ACTIONS = {
+    "approve",
+    "reject",
+    "delete",
+    "bulk_delete",
+    "bulk_approve",
+    "bulk_reject",
+    "send",
+    "send_rfq",
+    "mark_paid",
+    "activate_rule",
+    "apply_rules",
+    "confirm_receipt",
+    "bulk_confirm",
+    "issue_stock",
+    "resolve",
+    "apply_diff",
+    "decide",
+    "export_1c",
+    "create_contract",
+    "process_plan_approve",
+    "norm_estimate_approve",
+    "learning_rule_activate",
+}
+
 
 @dataclass(frozen=True)
 class PolicyDecision:
@@ -77,6 +102,25 @@ def classify_skill_risk(skill_name: str) -> str:
     return "low"
 
 
+def classify_capability_action_risk(action: str | None) -> str:
+    """Risk class for broad capability-mode actions.
+
+    Broad tools such as ``invoices`` or ``documents`` hide the specific action
+    from the tool name, so dotted-name marker checks cannot protect them. This
+    conservative marker list makes missing ``gate_actions`` fail closed.
+    """
+    normalized = str(action or "").strip()
+    if not normalized:
+        return "low"
+    if normalized in RISKY_CAPABILITY_ACTIONS:
+        return "high"
+    if normalized.startswith(("delete_", "bulk_", "approve_", "reject_", "send_")):
+        return "high"
+    if normalized.endswith(("_approve", "_reject", "_delete", "_send", "_export_1c")):
+        return "high"
+    return "low"
+
+
 def check_tool_execution(
     *,
     skill_name: str,
@@ -86,6 +130,14 @@ def check_tool_execution(
 ) -> PolicyDecision:
     """Return a policy decision before a skill/tool is executed."""
     risk = classify_skill_risk(skill_name)
+    action = args.get("action")
+    action_risk = (
+        classify_capability_action_risk(str(action))
+        if "." not in skill_name
+        else "low"
+    )
+    if action_risk == "high":
+        risk = "high"
     mode = (config.permission_mode or "workspace_write").lower()
     local_only = bool(args.get("local_only") is True or args.get("confidential") is True)
 
@@ -108,10 +160,13 @@ def check_tool_execution(
     if risk == "high" and skill_name not in approval_gates:
         return PolicyDecision(
             allowed=False,
-            reason=f"{skill_name} is high-risk and must be listed in approval_gates",
+            reason=(
+                f"{skill_name}"
+                + (f".{action}" if action and "." not in skill_name else "")
+                + " is high-risk and must be listed in approval_gates"
+            ),
             required_approval=True,
             risk_level=risk,
         )
 
     return PolicyDecision(allowed=True, risk_level=risk)
-

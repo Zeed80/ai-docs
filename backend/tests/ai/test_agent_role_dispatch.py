@@ -40,12 +40,9 @@ def _load_roles() -> list[dict]:
 
 def _gate_actions() -> dict[str, set[str]]:
     """capability → set(gate actions), read from the live capabilities.yml."""
-    import yaml
+    from app.ai.capability_manifest import load_capability_manifest
 
-    from app.ai.gateway_config import gateway_config
-
-    data = yaml.safe_load(gateway_config.capabilities_path.read_text(encoding="utf-8"))
-    return {c["name"]: set(c.get("gate_actions") or []) for c in data.get("capabilities", [])}
+    return load_capability_manifest().gate_actions
 
 
 @pytest.mark.asyncio

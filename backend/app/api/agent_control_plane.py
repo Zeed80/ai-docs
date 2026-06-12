@@ -53,9 +53,9 @@ def _count_active_skills(config: BuiltinAgentConfig) -> int:
     """Return count of skills actually visible to the chat agent."""
     if gateway_config.skills_mode == "capabilities":
         try:
-            import yaml
-            data = yaml.safe_load(gateway_config.capabilities_path.read_text())
-            return len(data.get("capabilities") or [])
+            from app.ai.capability_manifest import load_capability_manifest
+
+            return len(load_capability_manifest().capabilities)
         except Exception:
             pass
     return len(config.exposed_skills)

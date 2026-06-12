@@ -1,9 +1,6 @@
 "use client";
 
 import { getWsUrl } from "@/lib/ws-url";
-import { getAiAgentWebSocketUrl } from "@/lib/api-base";
-
-export type AgentWsMode = "legacy" | "aiagent";
 
 export interface AgentWsMessage extends Record<string, unknown> {
   type: string;
@@ -16,72 +13,25 @@ export interface AgentWsMessage extends Record<string, unknown> {
 }
 
 export interface AgentWsResolvedConfig {
-  mode: AgentWsMode;
   endpoint: string;
   healthCheckEndpoints: string[];
 }
 
-function getLegacyWsEndpoint(): string {
+function getBuiltinWsEndpoint(): string {
   return `${getWsUrl()}/ws/chat`;
 }
 
-function getConfiguredAgentWsMode(): AgentWsMode {
-  return process.env.NEXT_PUBLIC_AGENT_WS_MODE === "aiagent"
-    ? "aiagent"
-    : "legacy";
-}
-
-function getFallbackMode(): AgentWsMode | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.sessionStorage?.getItem("agent_ws_fallback_mode") === "legacy"
-      ? "legacy"
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-export function getAgentWsMode(): AgentWsMode {
-  return getFallbackMode() ?? getConfiguredAgentWsMode();
-}
-
-export function setLegacyAgentWsFallback(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage?.setItem("agent_ws_fallback_mode", "legacy");
-  } catch {
-    // sessionStorage can be unavailable in privacy-restricted browsers.
-  }
-}
-
-export function clearAgentWsFallback(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage?.removeItem("agent_ws_fallback_mode");
-  } catch {
-    // sessionStorage can be unavailable in privacy-restricted browsers.
-  }
-}
-
 export function getAgentWsEndpoint(): string {
-  return getAgentWsMode() === "aiagent"
-    ? getAiAgentWebSocketUrl()
-    : getLegacyWsEndpoint();
+  return getBuiltinWsEndpoint();
 }
 
 export function getAgentWsHealthCheckEndpoints(): string[] {
-  if (getConfiguredAgentWsMode() !== "aiagent") {
-    return [getLegacyWsEndpoint()];
-  }
-  return [getAiAgentWebSocketUrl(), getLegacyWsEndpoint()];
+  return [getBuiltinWsEndpoint()];
 }
 
 export async function resolveAgentWsConfig(): Promise<AgentWsResolvedConfig> {
-  const mode = getAgentWsMode();
   const endpoint = getAgentWsEndpoint();
   return {
-    mode,
     endpoint,
     healthCheckEndpoints: getAgentWsHealthCheckEndpoints(),
   };
@@ -96,21 +46,8 @@ export function buildAgentUserMessage(
     mime_type?: string;
     size_bytes?: number;
   }>,
-  mode: AgentWsMode = getAgentWsMode(),
   reasoningMode?: "normal" | "strict",
 ): Record<string, unknown> {
-  if (mode === "aiagent") {
-    return {
-      type: "chat",
-      payload: {
-        text: content,
-        session_id: sessionId ?? undefined,
-        attachments:
-          attachments && attachments.length > 0 ? attachments : undefined,
-        reasoning_mode: reasoningMode ?? "normal",
-      },
-    };
-  }
   return {
     type: "message",
     content,
@@ -121,16 +58,7 @@ export function buildAgentUserMessage(
   };
 }
 
-export function buildAgentApprovalMessage(
-  approved: boolean,
-  mode: AgentWsMode = getAgentWsMode(),
-): Record<string, unknown> {
-  if (mode === "aiagent") {
-    return {
-      type: "approval",
-      payload: { approved },
-    };
-  }
+export function buildAgentApprovalMessage(approved: boolean): Record<string, unknown> {
   return { type: approved ? "approve" : "reject" };
 }
 

@@ -472,21 +472,18 @@ async def list_agent_skills() -> dict:
 
     # Capabilities mode: return capabilities, not raw registry endpoints
     if gateway_config.skills_mode == "capabilities":
-        cap_path = gateway_config.capabilities_path
-        if not cap_path.exists():
+        if not gateway_config.capabilities_path.exists():
             return {"skills": [], "mode": "capabilities"}
-        data = yaml.safe_load(cap_path.read_text(encoding="utf-8")) or {}
+        from app.ai.capability_manifest import load_capability_manifest
+
         skills = []
-        for cap in data.get("capabilities") or []:
-            name = cap.get("name")
-            if not name:
-                continue
-            gate_actions = cap.get("gate_actions") or []
+        for cap in load_capability_manifest().capabilities:
+            gate_actions = cap.gate_actions
             skills.append({
-                "name": name,
-                "description": (cap.get("description") or "").strip()[:200],
-                "method": cap.get("method", "POST"),
-                "path": cap.get("path", f"/api/agent/cap/{name}"),
+                "name": cap.name,
+                "description": cap.description.strip()[:200],
+                "method": cap.method,
+                "path": cap.path or f"/api/agent/cap/{cap.name}",
                 "enabled": True,
                 "approval_required": bool(gate_actions),
                 "gate_actions": gate_actions,

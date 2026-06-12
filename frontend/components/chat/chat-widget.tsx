@@ -7,11 +7,11 @@ import {
   buildAgentUserMessage,
   normalizeAgentMessages,
   resolveAgentWsConfig,
-  type AgentWsMode,
 } from "@/lib/agent-ws";
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { genId } from "@/lib/ws-url";
 import { mutFetch } from "@/lib/auth";
+import { GpuStatusBar } from "@/components/gpu-status-bar";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -49,7 +49,6 @@ export function ChatWidget() {
   const [ratings, setRatings] = useState<Record<string, 1 | -1>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const agentWsModeRef = useRef<AgentWsMode>("legacy");
   const streamingIdRef = useRef<string | null>(null);
   // Tools used in the current streaming turn (reset on each user message)
   const currentTurnToolsRef = useRef<string[]>([]);
@@ -63,7 +62,6 @@ export function ChatWidget() {
     void (async () => {
       try {
         const config = await resolveAgentWsConfig();
-        agentWsModeRef.current = config.mode;
         const ws = new WebSocket(config.endpoint);
 
         ws.onopen = () => setIsConnected(true);
@@ -243,7 +241,6 @@ export function ChatWidget() {
           content,
           undefined,
           undefined,
-          agentWsModeRef.current,
         ),
       ),
     );
@@ -313,7 +310,6 @@ export function ChatWidget() {
               `Capability "${title}" одобрена и добавлена в систему. Продолжи выполнение исходной задачи, используя новый инструмент.`,
               undefined,
               undefined,
-              agentWsModeRef.current,
             ),
           ),
         );
@@ -325,7 +321,7 @@ export function ChatWidget() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(
       JSON.stringify(
-        buildAgentApprovalMessage(approved, agentWsModeRef.current),
+        buildAgentApprovalMessage(approved),
       ),
     );
     setMessages((prev) =>
@@ -370,6 +366,7 @@ export function ChatWidget() {
     <div className="fixed bottom-6 right-6 w-96 h-[520px] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col z-50">
       {/* Header */}
       <div className="border-b border-slate-200 bg-slate-50 rounded-t-xl">
+        <GpuStatusBar variant="light" />
         {/* Top row: name + status + model + close */}
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2 min-w-0">

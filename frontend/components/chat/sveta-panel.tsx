@@ -7,11 +7,11 @@ import {
   buildAgentUserMessage,
   normalizeAgentMessages,
   resolveAgentWsConfig,
-  type AgentWsMode,
 } from "@/lib/agent-ws";
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { mutFetch } from "@/lib/auth";
 import { genId } from "@/lib/ws-url";
+import { GpuStatusBar } from "@/components/gpu-status-bar";
 import {
   createChatSession,
   deleteChatSession,
@@ -197,7 +197,6 @@ export function SvetaPanel() {
   const tgStreamingIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const agentWsModeRef = useRef<AgentWsMode>("legacy");
   const dragCounterRef = useRef(0);
   const autoApproveRef = useRef(false);
   const activeHistoryLoadRef = useRef<string | null>(null);
@@ -319,7 +318,6 @@ export function SvetaPanel() {
     void (async () => {
       try {
         const config = await resolveAgentWsConfig();
-        agentWsModeRef.current = config.mode;
         const ws = new WebSocket(config.endpoint);
         ws.onopen = () => setIsConnected(true);
         ws.onmessage = (event) => {
@@ -654,7 +652,7 @@ export function SvetaPanel() {
       ) {
         wsRef.current.send(
           JSON.stringify(
-            buildAgentApprovalMessage(true, agentWsModeRef.current),
+            buildAgentApprovalMessage(true),
           ),
         );
         setMessages((prev) => [
@@ -836,7 +834,6 @@ export function SvetaPanel() {
             mime_type: item.mimeType,
             size_bytes: item.sizeBytes,
           })),
-          agentWsModeRef.current,
           reasoningMode,
         ),
       ),
@@ -890,7 +887,6 @@ export function SvetaPanel() {
               `Capability "${title}" одобрена и добавлена в систему. Продолжи выполнение исходной задачи, используя новый инструмент.`,
               currentSessionId,
               undefined,
-              agentWsModeRef.current,
               reasoningMode,
             ),
           ),
@@ -903,7 +899,7 @@ export function SvetaPanel() {
     if (!approved) autoApproveRef.current = false;
     wsRef.current.send(
       JSON.stringify(
-        buildAgentApprovalMessage(approved, agentWsModeRef.current),
+        buildAgentApprovalMessage(approved),
       ),
     );
     setMessages((prev) =>
@@ -1049,6 +1045,7 @@ export function SvetaPanel() {
     >
       {/* Header */}
       <div className="border-b border-slate-700">
+        <GpuStatusBar variant="dark" />
         <div className="px-4 py-2.5 flex min-w-0 items-center gap-2">
           <span
             className={`w-2 h-2 rounded-full shrink-0 ${isConnected ? "bg-green-400" : "bg-slate-500"}`}

@@ -29,6 +29,9 @@ services:
   backend:
     restart: unless-stopped
 
+  gpu-temp-helper:
+    restart: unless-stopped
+
   celery-worker:
     restart: unless-stopped
 

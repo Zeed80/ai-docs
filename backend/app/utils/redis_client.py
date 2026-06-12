@@ -17,6 +17,8 @@ Usage:
 """
 from __future__ import annotations
 
+import asyncio
+
 import redis
 import redis.asyncio as aioredis
 from redis.connection import ConnectionPool
@@ -24,6 +26,7 @@ from redis.asyncio.connection import ConnectionPool as AsyncConnectionPool
 
 _sync_pool: ConnectionPool | None = None
 _async_pool: AsyncConnectionPool | None = None
+_async_pool_loop: asyncio.AbstractEventLoop | None = None
 
 
 def get_sync_redis() -> redis.Redis:
@@ -40,24 +43,27 @@ def get_sync_redis() -> redis.Redis:
 
 
 def get_async_redis() -> aioredis.Redis:
-    """Return an async Redis client backed by a shared async connection pool."""
-    global _async_pool
-    if _async_pool is None:
+    """Return an async Redis client backed by a pool bound to the current loop."""
+    global _async_pool, _async_pool_loop
+    current_loop = asyncio.get_running_loop()
+    if _async_pool is None or _async_pool_loop is not current_loop:
         from app.config import settings
         _async_pool = AsyncConnectionPool.from_url(
             settings.redis_url,
             decode_responses=True,
             max_connections=20,
         )
+        _async_pool_loop = current_loop
     return aioredis.Redis(connection_pool=_async_pool)
 
 
 async def close_pools() -> None:
     """Gracefully close both pools. Call from FastAPI lifespan shutdown."""
-    global _sync_pool, _async_pool
+    global _sync_pool, _async_pool, _async_pool_loop
     if _async_pool is not None:
         await _async_pool.aclose()
         _async_pool = None
+        _async_pool_loop = None
     if _sync_pool is not None:
         _sync_pool.disconnect()
         _sync_pool = None

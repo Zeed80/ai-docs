@@ -85,19 +85,13 @@
 - [x] Разделить learning loop на предложения и правила, требующие approval для активации.
 - [x] Добавить regression-набор документов/чертежей/техпроцессов для контроля качества.
 
-### P2. Переход на официальный AiAgent
+### P2. Усиление собственного агента
 
-- [x] Поднять официальный AiAgent Gateway параллельно текущему agent loop.
-- [x] Подключить generated registry и проверить deny unknown tools на уровне локального контракта.
-- [x] Добавить `make aiagent-contract` для сверки `gateway.yml`, registry, scenarios и approval gates.
-- [x] Добавить generated `aiagent/config/gateway.strict.yml` для запуска официального Gateway только с реализованными tools.
-- [x] Добавить `aiagent/config/aiagent.official.sample.json` с allowlist в формате официального AiAgent config.
-- [x] Реализовать FastAPI pause/resume callbacks для approval-gated tool calls официального AiAgent.
-- [x] Добавить параллельный Docker Compose overlay и Make targets для официального AiAgent Gateway на портах `18789/18790`.
-- [x] Проверить официальный Gateway в Docker: контейнер `healthy`, `/healthz` возвращает `{"ok":true,"status":"live"}`, dashboard доступен на `http://127.0.0.1:18789/`.
-- [ ] Проверить pause/resume на реально запущенном официальном AiAgent Gateway. Блокер на 2026-04-28: `aiagent agent --json` через живой Gateway не завершился за 45 секунд в текущем окружении после установки runtime-зависимостей провайдеров, поэтому approval-flow нельзя валидировать без рабочего model/provider runtime.
-- [x] Перенести WebSocket chat на переключаемый адаптер: legacy FastAPI `/ws/chat` по умолчанию, официальный AiAgent Gateway через `NEXT_PUBLIC_AGENT_WS_MODE=aiagent`.
-- [x] Добавить smoke-тест WebSocket-адаптера official/legacy и fallback-переключения.
+- [x] Оставить собственный FastAPI agent loop единственным runtime.
+- [x] Добавить `make aiagent-contract` для сверки `gateway.yml`, registry, scenarios, capability manifest и approval gates.
+- [x] Проверять deny unknown tools и опасные broad capability actions.
+- [x] Оставить единый WebSocket chat через FastAPI `/ws/chat`.
+- [x] Добавить smoke-тест WebSocket-контракта встроенного агента.
 - [x] Оставить FastAPI полностью самодостаточным для degraded mode.
 
 ### P2. Документная память следующего уровня

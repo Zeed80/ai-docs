@@ -11,7 +11,15 @@ from sqlalchemy import exists, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.db.models import Approval, ApprovalStatus, ApprovalActionType, Document, Invoice, User
+from app.db.models import (
+    AgentAction,
+    Approval,
+    ApprovalActionType,
+    ApprovalStatus,
+    Document,
+    Invoice,
+    User,
+)
 from app.domain.approvals import (
     ApprovalChainCreate,
     ApprovalChainOut,
@@ -337,6 +345,21 @@ async def decide_approval(
         user_id=user.sub,
         details={"comment": payload.comment},
     )
+    if approval.action_type == ApprovalActionType.agent_tool_call:
+        context = approval.context or {}
+        db.add(AgentAction(
+            session_id=str(context.get("session_id") or "builtin-agent"),
+            iteration=int(context.get("iteration") or 0),
+            action_type="approval_decision",
+            tool_name=str(context.get("tool_name") or "") or None,
+            tool_args=context.get("tool_args") or {},
+            tool_result={
+                "approval_id": str(approval.id),
+                "status": payload.status.value,
+                "comment": payload.comment,
+                "decided_by": user.sub,
+            },
+        ))
     # Notify the requester about the decision
     if approval.requested_by and approval.requested_by != "sveta":
         from app.services.notifications import create_notification

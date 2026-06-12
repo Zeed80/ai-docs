@@ -111,6 +111,31 @@ if _PROMETHEUS_AVAILABLE:
         ["model"],
     )
 
+    # GPU telemetry (sidecar gpu-temp-helper / nvidia-smi fallback)
+    gpu_utilization_percent = Gauge(
+        "aiworkspace_gpu_utilization_percent",
+        "GPU utilization percent",
+    )
+    gpu_temperature_celsius = Gauge(
+        "aiworkspace_gpu_temperature_celsius",
+        "GPU temperature in Celsius",
+        ["sensor"],  # gpu | mem_junction
+    )
+    gpu_power_watts = Gauge(
+        "aiworkspace_gpu_power_watts",
+        "GPU power in watts",
+        ["kind"],  # draw | limit
+    )
+    gpu_vram_bytes = Gauge(
+        "aiworkspace_gpu_vram_bytes",
+        "GPU VRAM in bytes",
+        ["kind"],  # used | total
+    )
+    gpu_fan_percent = Gauge(
+        "aiworkspace_gpu_fan_percent",
+        "GPU fan speed percent",
+    )
+
     # Agent step counter
     agent_steps_total = Counter(
         "aiworkspace_agent_steps_total",
@@ -204,6 +229,11 @@ else:
     celery_queue_depth = _noop
     ollama_vram_used_bytes = _noop
     ollama_model_loaded = _noop
+    gpu_utilization_percent = _noop
+    gpu_temperature_celsius = _noop
+    gpu_power_watts = _noop
+    gpu_vram_bytes = _noop
+    gpu_fan_percent = _noop
     agent_steps_total = _noop
     llm_tokens_total = _noop
     llm_request_duration_seconds = _noop

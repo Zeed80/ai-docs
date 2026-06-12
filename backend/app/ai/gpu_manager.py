@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -47,6 +48,31 @@ class GPUStats:
     used_gb: float
     free_gb: float
     driver_version: str | None = None
+
+
+@dataclass
+class GPUTelemetry:
+    """Live GPU telemetry for the UI status bar (all fields optional)."""
+
+    name: str | None = None
+    driver_version: str | None = None
+    utilization_pct: float | None = None
+    temp_gpu_c: float | None = None
+    temp_mem_c: float | None = None            # nvidia-smi temperature.memory (N/A on GeForce)
+    temp_mem_junction_c: float | None = None   # gpu-temp-helper sidecar (gddr6 BAR read)
+    power_draw_w: float | None = None
+    power_limit_w: float | None = None
+    power_limit_min_w: float | None = None     # NVML constraints (sidecar only)
+    power_limit_max_w: float | None = None
+    power_limit_default_w: float | None = None
+    fan_pct: float | None = None
+    vram_total_gb: float | None = None
+    vram_used_gb: float | None = None
+    vram_free_gb: float | None = None
+    clock_sm_mhz: float | None = None
+    clock_mem_mhz: float | None = None
+    ts: float = 0.0
+    source: str = "none"                       # sidecar | docker-exec | local
 
 
 # ---------------------------------------------------------------------------
@@ -103,8 +129,8 @@ def _query_nvidia_smi_local() -> GPUStats | None:
         return None
 
 
-async def _query_nvidia_smi_via_docker() -> GPUStats | None:
-    """Run nvidia-smi inside a GPU-enabled container via Docker Engine API exec."""
+async def _docker_exec_in_gpu_container(cmd: list[str]) -> str | None:
+    """Run a command inside a GPU-enabled container via Docker Engine API exec."""
     if not os.path.exists(_DOCKER_SOCK):
         return None
     try:
@@ -127,7 +153,7 @@ async def _query_nvidia_smi_via_docker() -> GPUStats | None:
             exec_body = {
                 "AttachStdout": True,
                 "AttachStderr": True,
-                "Cmd": _NVIDIA_SMI_CMD,
+                "Cmd": cmd,
             }
             ec = await client.post(f"/containers/{container_id}/exec", json=exec_body)
             if ec.status_code != 201:
@@ -155,15 +181,215 @@ async def _query_nvidia_smi_via_docker() -> GPUStats | None:
                     output += chunk
                 i += 8 + size
 
-            return _parse_nvidia_smi_output(output) if output.strip() else None
+            return output if output.strip() else None
     except Exception as exc:
-        logger.debug("nvidia_smi_docker_exec_failed", error=str(exc))
+        logger.debug("docker_exec_in_gpu_container_failed", error=str(exc))
         return None
+
+
+async def _query_nvidia_smi_via_docker() -> GPUStats | None:
+    """Run nvidia-smi inside a GPU-enabled container via Docker Engine API exec."""
+    output = await _docker_exec_in_gpu_container(_NVIDIA_SMI_CMD)
+    return _parse_nvidia_smi_output(output) if output else None
 
 
 def _query_nvidia_smi() -> GPUStats | None:
     """Local subprocess nvidia-smi (run_in_executor path)."""
     return _query_nvidia_smi_local()
+
+
+# ---------------------------------------------------------------------------
+# GPU telemetry for the UI status bar.
+# Primary source: gpu-temp-helper sidecar (NVML + GDDR6X junction temp).
+# Fallback: extended nvidia-smi query (local or docker exec) without junction.
+# ---------------------------------------------------------------------------
+
+GPU_TEMP_HELPER_URL = os.environ.get("GPU_TEMP_HELPER_URL", "")
+GPU_TELEMETRY_TTL_S = float(os.environ.get("GPU_TELEMETRY_TTL_S", "3.0"))
+
+_NVIDIA_SMI_TELEMETRY_CMD = [
+    "nvidia-smi",
+    "--query-gpu=name,driver_version,utilization.gpu,temperature.gpu,"
+    "temperature.memory,power.draw,power.limit,fan.speed,"
+    "memory.total,memory.used,memory.free,clocks.sm,clocks.mem",
+    "--format=csv,noheader,nounits",
+]
+
+
+def _opt_float(value: object) -> float | None:
+    """Parse an nvidia-smi/sidecar value; '[N/A]' / 'N/A' / '' -> None."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or "N/A" in text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _mb_to_gb(value: float | None) -> float | None:
+    return round(value / 1024, 2) if value is not None else None
+
+
+def _parse_nvidia_smi_telemetry(output: str, source: str) -> GPUTelemetry | None:
+    line = output.strip().split("\n")[0]
+    parts = [p.strip() for p in line.split(",")]
+    if len(parts) < 13:
+        return None
+    return GPUTelemetry(
+        name=parts[0] or None,
+        driver_version=parts[1] or None,
+        utilization_pct=_opt_float(parts[2]),
+        temp_gpu_c=_opt_float(parts[3]),
+        temp_mem_c=_opt_float(parts[4]),
+        power_draw_w=_opt_float(parts[5]),
+        power_limit_w=_opt_float(parts[6]),
+        fan_pct=_opt_float(parts[7]),
+        vram_total_gb=_mb_to_gb(_opt_float(parts[8])),
+        vram_used_gb=_mb_to_gb(_opt_float(parts[9])),
+        vram_free_gb=_mb_to_gb(_opt_float(parts[10])),
+        clock_sm_mhz=_opt_float(parts[11]),
+        clock_mem_mhz=_opt_float(parts[12]),
+        ts=time.time(),
+        source=source,
+    )
+
+
+async def _query_sidecar_telemetry() -> GPUTelemetry | None:
+    if not GPU_TEMP_HELPER_URL:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            r = await client.get(f"{GPU_TEMP_HELPER_URL.rstrip('/')}/telemetry")
+            if r.status_code != 200:
+                return None
+            data = r.json()
+    except Exception as exc:
+        logger.debug("gpu_temp_helper_unreachable", error=str(exc))
+        return None
+    gpus = data.get("gpus") or []
+    if not gpus:
+        return None
+    g = gpus[0]
+    return GPUTelemetry(
+        name=g.get("name"),
+        driver_version=g.get("driver_version"),
+        utilization_pct=_opt_float(g.get("utilization_pct")),
+        temp_gpu_c=_opt_float(g.get("temp_gpu_c")),
+        temp_mem_junction_c=_opt_float(g.get("temp_mem_junction_c")),
+        power_draw_w=_opt_float(g.get("power_draw_w")),
+        power_limit_w=_opt_float(g.get("power_limit_w")),
+        power_limit_min_w=_opt_float(g.get("power_limit_min_w")),
+        power_limit_max_w=_opt_float(g.get("power_limit_max_w")),
+        power_limit_default_w=_opt_float(g.get("power_limit_default_w")),
+        fan_pct=_opt_float(g.get("fan_pct")),
+        vram_total_gb=_mb_to_gb(_opt_float(g.get("vram_total_mb"))),
+        vram_used_gb=_mb_to_gb(_opt_float(g.get("vram_used_mb"))),
+        vram_free_gb=_mb_to_gb(_opt_float(g.get("vram_free_mb"))),
+        clock_sm_mhz=_opt_float(g.get("clock_sm_mhz")),
+        clock_mem_mhz=_opt_float(g.get("clock_mem_mhz")),
+        ts=time.time(),
+        source="sidecar",
+    )
+
+
+def _update_gpu_prometheus(t: GPUTelemetry) -> None:
+    try:
+        from app.core import metrics
+
+        if t.utilization_pct is not None:
+            metrics.gpu_utilization_percent.set(t.utilization_pct)
+        if t.temp_gpu_c is not None:
+            metrics.gpu_temperature_celsius.labels(sensor="gpu").set(t.temp_gpu_c)
+        mem_temp = t.temp_mem_junction_c if t.temp_mem_junction_c is not None else t.temp_mem_c
+        if mem_temp is not None:
+            metrics.gpu_temperature_celsius.labels(sensor="mem_junction").set(mem_temp)
+        if t.power_draw_w is not None:
+            metrics.gpu_power_watts.labels(kind="draw").set(t.power_draw_w)
+        if t.power_limit_w is not None:
+            metrics.gpu_power_watts.labels(kind="limit").set(t.power_limit_w)
+        if t.vram_used_gb is not None:
+            metrics.gpu_vram_bytes.labels(kind="used").set(t.vram_used_gb * 1024**3)
+        if t.vram_total_gb is not None:
+            metrics.gpu_vram_bytes.labels(kind="total").set(t.vram_total_gb * 1024**3)
+        if t.fan_pct is not None:
+            metrics.gpu_fan_percent.set(t.fan_pct)
+    except Exception:
+        pass
+
+
+_telemetry_cache: tuple[float, GPUTelemetry | None] | None = None
+_telemetry_lock = asyncio.Lock()
+
+
+async def get_gpu_telemetry() -> GPUTelemetry | None:
+    """Cached, single-flight GPU telemetry: sidecar first, nvidia-smi fallback."""
+    global _telemetry_cache
+    async with _telemetry_lock:
+        now = time.monotonic()
+        if _telemetry_cache is not None and now - _telemetry_cache[0] < GPU_TELEMETRY_TTL_S:
+            return _telemetry_cache[1]
+
+        telemetry = await _query_sidecar_telemetry()
+        if telemetry is None:
+            loop = asyncio.get_running_loop()
+            output = await loop.run_in_executor(
+                None, _run_nvidia_smi_local_raw, _NVIDIA_SMI_TELEMETRY_CMD
+            )
+            if output:
+                telemetry = _parse_nvidia_smi_telemetry(output, source="local")
+        if telemetry is None:
+            output = await _docker_exec_in_gpu_container(_NVIDIA_SMI_TELEMETRY_CMD)
+            if output:
+                telemetry = _parse_nvidia_smi_telemetry(output, source="docker-exec")
+
+        if telemetry is not None:
+            _update_gpu_prometheus(telemetry)
+        _telemetry_cache = (now, telemetry)
+        return telemetry
+
+
+def _run_nvidia_smi_local_raw(cmd: list[str]) -> str | None:
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return None
+        return result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+
+
+async def set_gpu_power_limit(watts: float) -> dict:
+    """Set the GPU power limit via the gpu-temp-helper sidecar.
+
+    Returns the sidecar response ({ok, power_limit_w, clamped, min_w, max_w}).
+    Raises RuntimeError when the sidecar is unavailable or refuses.
+    """
+    global _telemetry_cache
+    if not GPU_TEMP_HELPER_URL:
+        raise RuntimeError("GPU_TEMP_HELPER_URL is not configured")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.post(
+                f"{GPU_TEMP_HELPER_URL.rstrip('/')}/power-limit",
+                json={"watts": watts},
+            )
+            data = r.json()
+    except Exception as exc:
+        raise RuntimeError(f"gpu-temp-helper unreachable: {exc}") from exc
+    if r.status_code != 200 or not data.get("ok"):
+        raise RuntimeError(str(data.get("error") or f"helper returned {r.status_code}"))
+    logger.info(
+        "gpu_power_limit_set",
+        requested_w=watts,
+        applied_w=data.get("power_limit_w"),
+        clamped=data.get("clamped"),
+    )
+    async with _telemetry_lock:
+        _telemetry_cache = None  # force fresh telemetry with the new limit
+    return data
 
 
 # ---------------------------------------------------------------------------

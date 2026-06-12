@@ -1465,7 +1465,7 @@ document-invoices-ai/
 │   ├── lib/
 │   │   ├── keyboard-context.tsx
 │   │   ├── api-client.ts                 # REST → FastAPI
-│   │   ├── aiagent-ws.ts                # WebSocket → AiAgent
+│   │   ├── agent-ws.ts                  # WebSocket → встроенный агент
 │   │   └── degraded-mode.ts              # fallback when AiAgent down
 │   └── tests/
 ├── aiagent/

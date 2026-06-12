@@ -16,6 +16,7 @@ import structlog
 import yaml
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
+from app.ai.capability_manifest import load_capability_manifest
 from app.ai.degradation import log_degraded
 from app.ai.gateway_config import gateway_config
 from app.ai.streaming_scrubber import StreamingContextScrubber
@@ -294,15 +295,15 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
         logger.warning("capabilities_not_found", path=str(cap_path))
         return [], {}
 
-    data = yaml.safe_load(cap_path.read_text())
-    caps: list[dict] = data.get("capabilities") or []
+    manifest = load_capability_manifest(cap_path)
 
     tools: list[dict] = []
     skill_map: dict[str, dict] = {}
     gate_actions: dict[str, set[str]] = {}
 
-    for cap in caps:
-        name = cap.get("name", "")
+    for definition in manifest.capabilities:
+        cap = definition.model_dump(mode="python")
+        name = definition.name
         if not name:
             continue
 

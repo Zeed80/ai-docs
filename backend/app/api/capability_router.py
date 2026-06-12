@@ -10,6 +10,9 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.ai.capability_manifest import load_capability_manifest
+from app.ai.policy_engine import classify_capability_action_risk
+
 router = APIRouter(tags=["capabilities"])
 
 # Maps capability → action → (method, path_template, path_params)
@@ -293,6 +296,52 @@ async def _proxy(
         return {"error": str(exc)}
 
 
+def _validate_capability_contract(
+    capability_name: str,
+    action: str,
+    path_params: list[str],
+    body: dict,
+) -> None:
+    """Fail closed when dispatcher and the reviewed capability contract drift."""
+    try:
+        manifest = load_capability_manifest()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Capability contract unavailable: {exc}",
+        ) from exc
+
+    capability = manifest.by_name.get(capability_name)
+    if capability is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Capability '{capability_name}' is not declared in the active manifest",
+        )
+
+    if (
+        classify_capability_action_risk(action) == "high"
+        and action not in capability.gate_actions
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Risky action '{capability_name}.{action}' is blocked because "
+                "it is missing from gate_actions"
+            ),
+        )
+
+    missing = [
+        name
+        for name in path_params
+        if name not in body or body[name] is None or str(body[name]).strip() == ""
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Missing required path parameters: {missing}",
+        )
+
+
 @router.post("/cap/{capability_name}")
 async def dispatch_capability(capability_name: str, request: Request) -> JSONResponse:
     """Route a capability call to the appropriate backend endpoint."""
@@ -319,6 +368,7 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
         )
 
     method, path_tpl, path_params = route
+    _validate_capability_contract(capability_name, action, path_params, body)
     from app.ai.gateway_config import gateway_config
     base_url = gateway_config.backend_url
 

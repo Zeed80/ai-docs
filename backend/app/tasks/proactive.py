@@ -10,13 +10,13 @@ Each task:
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
 
 from app.tasks.celery_app import celery_app
+from app.tasks.async_runner import run_async
 
 logger = structlog.get_logger()
 
@@ -28,37 +28,37 @@ NIL_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 @celery_app.task(name="proactive.check_due_dates")
 def check_due_dates() -> dict:
     """Create reminders for invoices with due dates approaching in the next 3 days."""
-    return asyncio.run(_check_due_dates())
+    return run_async(_check_due_dates())
 
 
 @celery_app.task(name="proactive.alert_critical_anomalies")
 def alert_critical_anomalies() -> dict:
     """Notify on critical unresolved anomalies older than 1 hour."""
-    return asyncio.run(_alert_critical_anomalies())
+    return run_async(_alert_critical_anomalies())
 
 
 @celery_app.task(name="proactive.dispatch_due_reminders")
 def dispatch_due_reminders() -> dict:
     """Send notifications for reminders whose remind_at time has passed."""
-    return asyncio.run(_dispatch_due_reminders())
+    return run_async(_dispatch_due_reminders())
 
 
 @celery_app.task(name="proactive.check_stale_approvals")
 def check_stale_approvals() -> dict:
     """Notify assignees about approval requests that have been pending too long."""
-    return asyncio.run(_check_stale_approvals())
+    return run_async(_check_stale_approvals())
 
 
 @celery_app.task(name="proactive.morning_briefing")
 def morning_briefing() -> dict:
     """Push the secretary's prioritised daily document-flow digest."""
-    return asyncio.run(_build_morning_briefing())
+    return run_async(_build_morning_briefing())
 
 
 @celery_app.task(name="proactive.alert_duplicate_invoices")
 def alert_duplicate_invoices() -> dict:
     """Draft-first alert on freshly-ingested invoices flagged as duplicates."""
-    return asyncio.run(_alert_duplicate_invoices())
+    return run_async(_alert_duplicate_invoices())
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

@@ -54,7 +54,7 @@ capabilities:
       Счёт можно утвердить только если его статус needs_review.
     path: /api/agent/cap/invoices
     method: POST
-    gate_actions: [approve, reject, export_1c, bulk_delete, bulk_approve, bulk_reject]
+    gate_actions: [approve, reject, export_1c, delete, bulk_delete, bulk_approve, bulk_reject]
     parameters:
       type: object
       properties:
@@ -457,7 +457,7 @@ capabilities:
       фильтрами, а не table_query (который работает с кастомными таблицами).
     path: /api/agent/cap/analytics
     method: POST
-    gate_actions: [table_apply_diff, table_import_excel, export_1c]
+    gate_actions: [table_apply_diff, table_import_excel, table_export_1c]
     parameters:
       type: object
       properties:

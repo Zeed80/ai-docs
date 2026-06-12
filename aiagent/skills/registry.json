@@ -9,6 +9,46 @@
   },
   "tools": [
     {
+      "name": "capability.propose",
+      "approval_required": false,
+      "description": "Propose a missing capability draft.",
+      "method": "POST",
+      "path": "/api/agent/capabilities/propose",
+      "operation_id": "propose_capability_api_agent_capabilities_propose_post",
+      "request_schema": "#/components/schemas/CapabilityProposalCreate",
+      "response_schema": "#/components/schemas/CapabilityProposalOut"
+    },
+    {
+      "name": "capability.sandbox_apply",
+      "approval_required": false,
+      "description": "Prepare sandbox validation for a draft capability.",
+      "method": "POST",
+      "path": "/api/agent/capabilities/{proposal_id}/sandbox-apply",
+      "operation_id": "sandbox_apply_capability_api_agent_capabilities__proposal_id__sandbox_apply_post",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/CapabilityProposalOut"
+    },
+    {
+      "name": "capability.status",
+      "approval_required": false,
+      "description": "Read capability proposal lifecycle state.",
+      "method": "GET",
+      "path": "/api/agent/capabilities/{proposal_id}/status",
+      "operation_id": "get_capability_status_api_agent_capabilities__proposal_id__status_get",
+      "request_schema": null,
+      "response_schema": "#/components/schemas/CapabilityProposalOut"
+    },
+    {
+      "name": "config.propose",
+      "approval_required": false,
+      "description": "Propose an agent configuration change for review.",
+      "method": "POST",
+      "path": "/api/agent/config/propose",
+      "operation_id": "propose_config_change_api_agent_config_propose_post",
+      "request_schema": "#/components/schemas/ConfigProposalCreate",
+      "response_schema": "#/components/schemas/ConfigProposalOut"
+    },
+    {
       "name": "doc.classify",
       "approval_required": false,
       "description": "Classify document type through the AI router.",
@@ -86,7 +126,7 @@
       "path": "/api/email/drafts/{draft_id}/risk-check",
       "operation_id": "risk_check_api_email_drafts__draft_id__risk_check_post",
       "request_schema": null,
-      "response_schema": "#/components/schemas/RiskCheckResponse"
+      "response_schema": "#/components/schemas/app__domain__email__RiskCheckResponse"
     },
     {
       "name": "email.send",
@@ -467,6 +507,16 @@
       "operation_id": "search_requirements_api_ntd_requirements_search_get",
       "request_schema": null,
       "response_schema": "#/components/schemas/NTDRequirementSearchResponse"
+    },
+    {
+      "name": "task.create",
+      "approval_required": false,
+      "description": "Create an agent work item.",
+      "method": "POST",
+      "path": "/api/agent/tasks/create",
+      "operation_id": "create_agent_task_tool_api_agent_tasks_create_post",
+      "request_schema": "#/components/schemas/AgentTaskCreate",
+      "response_schema": "#/components/schemas/AgentTaskOut"
     },
     {
       "name": "tech.correction_record",

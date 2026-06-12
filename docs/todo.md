@@ -209,8 +209,8 @@
 
 ## Текущий следующий шаг
 
-Следующий технический шаг: усилить встроенного агента как основной рабочий
-контур до возврата к official AiAgent: сценарии многошагового выполнения,
+Следующий технический шаг: усилить встроенного агента как единственный рабочий
+контур: сценарии многошагового выполнения,
 расширенные approval gates, проверка качества памяти и регрессионные E2E.
 
 ## Этап 10. SQL-first память, НТД и нормоконтроль
@@ -265,31 +265,22 @@
 - [x] Добавить создание НТД из загруженного документа с автоопределением кода/версии.
 - [x] Добавить прямой upload НТД PDF/DOCX/TXT без ручного ввода document id.
 - [x] Добавить optional semantic AI-assisted нормоконтроль с evidence spans.
-- [x] Добавить параллельный compose/Make-контур для официального AiAgent Gateway без отключения FastAPI degraded mode.
-- [x] Поднять официальный AiAgent Gateway в Docker и проверить `healthy`/`healthz`.
-- [x] Добавить переключаемый WebSocket-адаптер для legacy FastAPI и официального AiAgent Gateway.
-- [x] Оставить legacy FastAPI WebSocket дефолтным самодостаточным degraded mode.
+- [x] Оставить FastAPI WebSocket самодостаточным контуром встроенного агента.
 - [x] Добавить optional TurboQuant profile для vLLM long-context reasoning.
 - [x] Добавить TurboQuant benchmark command/report.
 - [x] Добавить TurboQuant quality benchmark на инженерных regression cases с term recall/missing terms.
 
-## Этап 11. Завершение перехода на официальный AiAgent
+## Этап 11. Надёжность собственного agent runtime
 
-- [ ] Проверить официальный pause/resume flow на живом Gateway:
-  - [ ] запустить сценарий с approval-gated tool call;
-  - [ ] получить pause/approval request;
-  - [ ] подтвердить через FastAPI callback;
-  - [ ] убедиться, что выполнение корректно продолжается;
-  - [ ] проверить audit событий pause, approve/reject, resume.
-- [x] Переключить безопасный UI-контур чата на `NEXT_PUBLIC_AGENT_WS_MODE=aiagent` через WebSocket-адаптер без удаления legacy режима.
-- [x] Добавить smoke-тест WebSocket-адаптера official/legacy.
-- [x] Зафиксировать fallback-процедуру в коде: при недоступности Gateway браузерная сессия возвращается к legacy FastAPI agent loop.
-
-Блокер live-проверки: 2026-04-28 `aiagent agent --session-id codex-smoke --message "Reply with OK only" --json --timeout 30` через живой Gateway не вернул JSON за 45 секунд. Gateway health при этом OK, значит следующий шаг требует рабочего provider/model runtime для официального agent turn.
+- [x] Оставить единый UI-контур чата через FastAPI `/ws/chat`.
+- [x] Добавить smoke-тест WebSocket-контракта встроенного агента.
+- [x] Сохранить degraded mode при недоступности agent runtime.
+- [x] Исправить event-loop lifecycle proactive Celery-задач и async Redis pool.
+- [ ] Расширить live-regression собственного агента на длинные многошаговые сценарии.
 
 ## Этап 12. Встроенный AI-сотрудник как основной контур
 
-- [x] Отложить official AiAgent как optional integration, не блокирующую работу UI.
+- [x] Зафиксировать встроенного агента как единственный production runtime.
 - [x] Добавить отдельный runtime config встроенного агента:
   - [x] включение/отключение агента;
   - [x] имя сотрудника;
@@ -335,3 +326,13 @@
 - [x] Добавить сценарный regression набор: технолог, конструктор, нормировщик, кладовщик, закупщик.
 - [x] Подключить role regression к реальному multi-step agent runner с mock Ollama на уровне WebSocket.
 - [ ] Добавить live smoke встроенного агента против реальной локальной Ollama модели с коротким безопасным сценарием без внешних действий.
+
+## Этап 13. Контрактная безопасность собственного агента
+
+- [x] Ввести типизированный canonical contract `capabilities.yml` с проверкой дублей и hash версии.
+- [x] Закрыть fail-open риск broad capability actions: опасные действия без gate блокируются policy engine и runtime dispatcher.
+- [x] Расширить `make aiagent-contract`: проверять capability manifest, dispatcher, risk classification и approval gates.
+- [x] Оставить `_registry.yml`, `registry.json` и `capabilities.yml` контрактами собственного агента.
+- [x] Записывать решение по `agent.tool_call` в audit trail.
+- [x] Покрыть capability contract и runtime guard unit/integration тестами.
+- [x] Удалить внешний Gateway-контур и альтернативный WebSocket-протокол.

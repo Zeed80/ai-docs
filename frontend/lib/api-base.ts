@@ -71,17 +71,3 @@ export function getWebSocketBaseUrl(): string {
   const apiUrl = new URL(apiBase);
   return `${proto}//${apiUrl.host}`;
 }
-
-export function getAiAgentWebSocketUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_AIAGENT_WS_URL;
-  if (configured) return configured;
-
-  if (typeof window === "undefined") {
-    // SSR — Node.js direct connection to AiAgent service (not browser-facing)
-    return process.env.INTERNAL_AIAGENT_WS_URL ?? "ws://aiagent:18789";
-  }
-
-  // Browser: always use same-origin path through Traefik (no hardcoded ports)
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/aiagent-ws`;
-}

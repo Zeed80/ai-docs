@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from httpx import AsyncClient
 
 
@@ -84,6 +85,35 @@ async def test_dispatch_with_path_params(client: AsyncClient):
         )
     assert r.status_code == 200
     assert r.json()["id"] == doc_id
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_missing_path_params(client: AsyncClient):
+    r = await client.post("/api/agent/cap/documents", json={"action": "get"})
+
+    assert r.status_code == 422
+    assert "document_id" in r.json()["detail"]
+
+
+def test_runtime_contract_blocks_risky_action_without_gate(monkeypatch):
+    from app.ai.capability_manifest import CapabilityDefinition, CapabilityManifest
+    from app.api import capability_router
+
+    manifest = CapabilityManifest(
+        capabilities=[CapabilityDefinition(name="invoices", gate_actions=[])]
+    )
+    monkeypatch.setattr(capability_router, "load_capability_manifest", lambda: manifest)
+
+    with pytest.raises(HTTPException) as exc:
+        capability_router._validate_capability_contract(
+            "invoices",
+            "approve",
+            ["invoice_id"],
+            {"invoice_id": "invoice-1"},
+        )
+
+    assert getattr(exc.value, "status_code", None) == 503
+    assert "missing from gate_actions" in str(getattr(exc.value, "detail", ""))
 
 
 @pytest.mark.asyncio

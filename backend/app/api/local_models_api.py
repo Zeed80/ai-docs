@@ -3,6 +3,8 @@
 Endpoints:
   GET  /api/local-models/status                    — all providers + GPU
   GET  /api/local-models/gpu-budget                — VRAM allocations
+  GET  /api/local-models/gpu-telemetry             — live GPU telemetry (UI status bar)
+  POST /api/local-models/gpu-power-limit           — set GPU power limit (watts)
   POST /api/local-models/gpu-budget                — set VRAM soft limits
   GET  /api/local-models/search                    — HF/ModelScope unified search
   GET  /api/local-models/{provider}/models         — local models for provider
@@ -26,7 +28,7 @@ from typing import Any, Literal
 import structlog
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.ai import gpu_manager
 from app.ai.parameter_profiles import (
@@ -55,6 +57,45 @@ class VRAMLimitsUpdate(BaseModel):
     ollama: float | None = None
     llamacpp: float | None = None
     vllm: float | None = None
+
+
+class GpuTelemetryGPU(BaseModel):
+    name: str | None = None
+    driver_version: str | None = None
+    utilization_pct: float | None = None
+    temp_gpu_c: float | None = None
+    temp_mem_c: float | None = None
+    temp_mem_junction_c: float | None = None
+    power_draw_w: float | None = None
+    power_limit_w: float | None = None
+    power_limit_min_w: float | None = None
+    power_limit_max_w: float | None = None
+    power_limit_default_w: float | None = None
+    fan_pct: float | None = None
+    vram_total_gb: float | None = None
+    vram_used_gb: float | None = None
+    vram_free_gb: float | None = None
+    clock_sm_mhz: float | None = None
+    clock_mem_mhz: float | None = None
+    source: str = "none"
+
+
+class GpuTelemetryResponse(BaseModel):
+    available: bool
+    ts: float
+    gpu: GpuTelemetryGPU | None = None
+
+
+class PowerLimitUpdate(BaseModel):
+    watts: float = Field(..., ge=50, le=1000)
+
+
+class PowerLimitResult(BaseModel):
+    ok: bool
+    power_limit_w: float
+    clamped: bool = False
+    min_w: float | None = None
+    max_w: float | None = None
 
 
 class ActivateRequest(BaseModel):
@@ -144,6 +185,38 @@ async def get_all_providers_status() -> dict:
         },
         "total_vram_gb": gpu_manager.TOTAL_VRAM_GB,
     }
+
+
+@router.get("/gpu-telemetry", response_model=GpuTelemetryResponse)
+async def get_gpu_telemetry() -> GpuTelemetryResponse:
+    """Live GPU telemetry for the UI status bar (cached ~3s on the backend)."""
+    import time as _time
+
+    telemetry = await gpu_manager.get_gpu_telemetry()
+    if telemetry is None:
+        return GpuTelemetryResponse(available=False, ts=_time.time())
+    fields = {k: v for k, v in telemetry.__dict__.items() if k != "ts"}
+    return GpuTelemetryResponse(
+        available=True,
+        ts=telemetry.ts,
+        gpu=GpuTelemetryGPU(**fields),
+    )
+
+
+@router.post("/gpu-power-limit", response_model=PowerLimitResult)
+async def set_gpu_power_limit(payload: PowerLimitUpdate) -> PowerLimitResult:
+    """Set the GPU power limit (watts) via the gpu-temp-helper sidecar."""
+    try:
+        result = await gpu_manager.set_gpu_power_limit(payload.watts)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return PowerLimitResult(
+        ok=True,
+        power_limit_w=float(result.get("power_limit_w") or payload.watts),
+        clamped=bool(result.get("clamped")),
+        min_w=result.get("min_w"),
+        max_w=result.get("max_w"),
+    )
 
 
 @router.get("/gpu-budget")

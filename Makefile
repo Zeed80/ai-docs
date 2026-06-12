@@ -7,7 +7,7 @@
         test test-cov e2e regression agent-regression agent-test agent-ws-smoke \
         turboquant-benchmark turboquant-quality \
         lint lint-fix \
-        skills aiagent-contract aiagent-strict \
+        skills aiagent-contract \
         monitoring monitoring-down
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -231,11 +231,7 @@ skills:
 	cd backend && python3 -m app.scripts.generate_skill_registry
 
 aiagent-contract:
-	python3 scripts/check_aiagent_contract.py --strict
-
-aiagent-strict:
-	python3 scripts/generate_aiagent_strict_gateway.py
-	python3 scripts/generate_aiagent_official_sample.py
+	python3 scripts/check_aiagent_contract.py
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Monitoring

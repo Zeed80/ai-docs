@@ -4,9 +4,9 @@
 
 ## Краткий вывод
 
-Проект уже вышел за рамки планового workspace: есть FastAPI backend, Next.js UI, Celery, модели документов/счетов/поставщиков, quarantine, approvals, audit, email, export, warehouse/procurement/payment и собственный AiAgent-like agent loop.
+Проект уже вышел за рамки планового workspace: есть FastAPI backend, Next.js UI, Celery, модели документов/счетов/поставщиков, quarantine, approvals, audit, email, export, warehouse/procurement/payment и собственный agent loop.
 
-Главный разрыв с `refact.md`: продукт всё ещё частично выглядит как широкий AI Manufacturing Workspace и содержит собственную реализацию агентного слоя. Целевое состояние — узкий, надёжный AI-сотрудник документооборота по счетам/закупкам/складу/финконтролю, где официальный open-source AiAgent является control plane, а FastAPI остаётся источником истины и единственным исполнителем доменных действий.
+Главный разрыв с `refact.md`: продукт всё ещё частично выглядит как широкий AI Manufacturing Workspace. Целевое состояние — надёжный собственный AI-сотрудник документооборота и производства, где FastAPI остаётся источником истины и единственным исполнителем доменных действий.
 
 ## Что уже есть
 
@@ -20,7 +20,7 @@
 
 ## Критичные разрывы
 
-- `backend/app/ai/agent_loop.py` остаётся кастомным control plane. Его нужно заменить официальным AiAgent Gateway поэтапно, сохранив whitelist, approval gates, audit и step limits.
+- Собственный `backend/app/ai/agent_loop.py` требует дальнейшего усиления: whitelist, approval gates, audit, step limits, устойчивость и live-regression.
 - Email send пока является stub-flow: risk-check есть, но production SMTP и hard approval execution нужно довести до безопасного состояния.
 - `AnomalyCard` и invoice checks есть, но structured check results не стали отдельной полной сущностью с историей всех сигналов.
 - Price history работает частично: хорошая автономность требует canonical item mapping, supplier alternatives и сравнение КП на ежедневном workflow.
@@ -31,7 +31,7 @@
 ## Приоритеты
 
 - P0: зелёный test harness, единый AI-router, запрет прямых AI-вызовов из business/API кода, production guard против silent schema create.
-- P0: официальный AiAgent migration spike с реальным Gateway, generated tools, deny unknown tools, approval pause/resume и audit каждого tool call.
+- P0: усилить собственный agent runtime: deny unknown tools, approval pause/resume и audit каждого tool call.
 - P1: нормализовать email workspace, export prepare/send, structured invoice check results и anomaly lifecycle.
 - P1: привести UI cockpit к backend contracts и закрыть Playwright сценарии keyboard-first review/approval/email/export.
 - P1: развить `tech.*` skills до полноценного инженера-технолога: шаблоны ЕСТД, операции, нормы, оборудование, инструмент, оснастка, контроль качества.

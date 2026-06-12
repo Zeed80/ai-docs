@@ -19,33 +19,20 @@ const compiled = ts.transpileModule(source, {
   fileName: sourcePath,
 }).outputText;
 
-function loadAdapter(env = {}, windowValue = undefined) {
+function loadAdapter() {
   const module = { exports: {} };
   const sandbox = {
     module,
     exports: module.exports,
     process: {
       env: {
-        ...env,
       },
     },
-    window: windowValue,
+    window: undefined,
     require(request) {
       if (request === "@/lib/ws-url") {
         return {
           getWsUrl: () => "ws://api.local",
-        };
-      }
-      if (request === "@/lib/api-base") {
-        return {
-          getApiBaseUrl: () => "http://api.local",
-          getAiAgentWebSocketUrl: () => {
-            const configured = env.NEXT_PUBLIC_AIAGENT_WS_URL;
-            if (configured) return configured;
-            const proto = windowValue?.location?.protocol === "https:" ? "wss:" : "ws:";
-            const host = windowValue?.location?.hostname ?? "localhost";
-            return `${proto}//${host}:18789`;
-          },
         };
       }
       return require(request);
@@ -61,7 +48,6 @@ function plain(value) {
 
 {
   const adapter = loadAdapter();
-  assert.equal(adapter.getAgentWsMode(), "legacy");
   assert.equal(adapter.getAgentWsEndpoint(), "ws://api.local/ws/chat");
   assert.deepEqual(plain(adapter.getAgentWsHealthCheckEndpoints()), [
     "ws://api.local/ws/chat",
@@ -69,58 +55,10 @@ function plain(value) {
   assert.deepEqual(plain(adapter.buildAgentUserMessage("ping")), {
     type: "message",
     content: "ping",
+    reasoning_mode: "normal",
   });
   assert.deepEqual(plain(adapter.buildAgentApprovalMessage(true)), { type: "approve" });
   assert.deepEqual(plain(adapter.buildAgentApprovalMessage(false)), { type: "reject" });
-}
-
-{
-  const adapter = loadAdapter(
-    { NEXT_PUBLIC_AGENT_WS_MODE: "aiagent" },
-    { location: { protocol: "http:", hostname: "workstation.local" } },
-  );
-  assert.equal(adapter.getAgentWsMode(), "aiagent");
-  assert.equal(adapter.getAgentWsEndpoint(), "ws://workstation.local:18789");
-  assert.deepEqual(plain(adapter.getAgentWsHealthCheckEndpoints()), [
-    "ws://workstation.local:18789",
-    "ws://api.local/ws/chat",
-  ]);
-  assert.deepEqual(plain(adapter.buildAgentUserMessage("status")), {
-    type: "chat",
-    payload: { text: "status" },
-  });
-  assert.deepEqual(plain(adapter.buildAgentApprovalMessage(true)), {
-    type: "approval",
-    payload: { approved: true },
-  });
-}
-
-{
-  const storage = new Map([["agent_ws_fallback_mode", "legacy"]]);
-  const adapter = loadAdapter(
-    { NEXT_PUBLIC_AGENT_WS_MODE: "aiagent" },
-    {
-      location: { protocol: "http:", hostname: "workstation.local" },
-      sessionStorage: {
-        getItem: (key) => storage.get(key) ?? null,
-        setItem: (key, value) => storage.set(key, value),
-        removeItem: (key) => storage.delete(key),
-      },
-    },
-  );
-  assert.equal(adapter.getAgentWsEndpoint(), "ws://api.local/ws/chat");
-  adapter.clearAgentWsFallback();
-  assert.equal(adapter.getAgentWsEndpoint(), "ws://workstation.local:18789");
-  adapter.setLegacyAgentWsFallback();
-  assert.equal(adapter.getAgentWsEndpoint(), "ws://api.local/ws/chat");
-}
-
-{
-  const adapter = loadAdapter({
-    NEXT_PUBLIC_AGENT_WS_MODE: "aiagent",
-    NEXT_PUBLIC_AIAGENT_WS_URL: "wss://gateway.example/ws",
-  });
-  assert.equal(adapter.getAgentWsEndpoint(), "wss://gateway.example/ws");
 }
 
 {

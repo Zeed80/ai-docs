@@ -6,6 +6,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders, mutFetch } from "@/lib/auth";
 import { MailboxSection } from "@/components/email/mailbox-settings";
 import { EmailTemplatesSection } from "@/components/email/email-templates";
+import { isGpuBarEnabled, setGpuBarEnabled } from "@/components/gpu-status-bar";
 
 const API = getApiBaseUrl();
 
@@ -362,6 +363,31 @@ function SectionCard({
       </div>
       {children}
     </section>
+  );
+}
+
+function GpuBarToggleCard() {
+  const [enabled, setEnabled] = useState(true);
+  useEffect(() => {
+    setEnabled(isGpuBarEnabled());
+  }, []);
+  return (
+    <SectionCard
+      title="Телеметрия GPU"
+      subtitle="Компактная строка с загрузкой, температурами (чип и память), VRAM и мощностью над окном агента «Света». Настройка хранится в этом браузере."
+    >
+      <label className="flex items-center gap-2 text-sm text-slate-200">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => {
+            setEnabled(e.target.checked);
+            setGpuBarEnabled(e.target.checked);
+          }}
+        />
+        Показывать строку GPU над окном агента
+      </label>
+    </SectionCard>
   );
 }
 
@@ -2706,6 +2732,9 @@ export default function SettingsPage() {
       {/* ── TAB: Система ─────────────────────────────────────────────────── */}
       {activeTab === "system" && (
         <div className="space-y-6">
+          {/* GPU telemetry status bar */}
+          <GpuBarToggleCard />
+
           {/* Telegram */}
           <SectionCard
             title="Telegram"

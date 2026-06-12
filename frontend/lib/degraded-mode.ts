@@ -1,11 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  clearAgentWsFallback,
-  resolveAgentWsConfig,
-  setLegacyAgentWsFallback,
-} from "@/lib/agent-ws";
+import { resolveAgentWsConfig } from "@/lib/agent-ws";
 
 export function useDegradedMode() {
   const [isAgentAvailable, setIsAgentAvailable] = useState(false);
@@ -37,23 +33,10 @@ export function useDegradedMode() {
 
     async function check() {
       const { healthCheckEndpoints } = await resolveAgentWsConfig();
-      const [primary, fallback] = healthCheckEndpoints;
+      const [primary] = healthCheckEndpoints;
       probe(primary, (primaryAvailable) => {
         if (cancelled) return;
-        if (primaryAvailable) {
-          clearAgentWsFallback();
-          setIsAgentAvailable(true);
-          return;
-        }
-        if (!fallback) {
-          setIsAgentAvailable(false);
-          return;
-        }
-        probe(fallback, (fallbackAvailable) => {
-          if (cancelled) return;
-          if (fallbackAvailable) setLegacyAgentWsFallback();
-          setIsAgentAvailable(fallbackAvailable);
-        });
+        setIsAgentAvailable(primaryAvailable);
       });
     }
 
