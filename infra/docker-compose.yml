@@ -208,6 +208,8 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: utility
+      # Same key the backend uses; gates POST /power-limit on the shared network.
+      POWER_LIMIT_TOKEN: ${AGENT_SERVICE_KEY:-agent-internal-key-2026}
     volumes:
       # Saved power limit — re-applied on every start (NVML resets on reboot).
       - gpu_temp_state:/data

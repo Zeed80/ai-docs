@@ -34,6 +34,10 @@ CACHE_TTL_S = float(os.environ.get("CACHE_TTL_S", "2.0"))
 # Saved power limits live on a named volume so the chosen limit survives
 # container restarts and host reboots (NVML limits reset on reboot).
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
+# When set, POST /power-limit requires the same value in X-Power-Limit-Token:
+# any container on the docker network can reach this port, but only the
+# backend (which knows the key) may change the GPU power limit.
+POWER_LIMIT_TOKEN = os.environ.get("POWER_LIMIT_TOKEN", "")
 
 # PCI device id -> BAR0 register offset of the VRAM junction temperature.
 # Table from gddr6.c (github.com/olealgoritme/gddr6).
@@ -368,6 +372,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - http.server API
         if self.path != "/power-limit":
             self._send(404, {"error": "not found"})
+            return
+        if POWER_LIMIT_TOKEN and self.headers.get("X-Power-Limit-Token") != POWER_LIMIT_TOKEN:
+            self._send(401, {"ok": False, "error": "invalid or missing X-Power-Limit-Token"})
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)

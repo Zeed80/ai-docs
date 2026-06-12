@@ -26,11 +26,13 @@ import os
 from typing import Any, Literal
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.ai import gpu_manager
+from app.auth.jwt import require_role
+from app.auth.models import UserRole
 from app.ai.parameter_profiles import (
     PROVIDER_HARDWARE_DEFAULTS,
     TASK_DEFAULT_PROFILE,
@@ -203,9 +205,13 @@ async def get_gpu_telemetry() -> GpuTelemetryResponse:
     )
 
 
-@router.post("/gpu-power-limit", response_model=PowerLimitResult)
+@router.post(
+    "/gpu-power-limit",
+    response_model=PowerLimitResult,
+    dependencies=[Depends(require_role(UserRole.admin))],
+)
 async def set_gpu_power_limit(payload: PowerLimitUpdate) -> PowerLimitResult:
-    """Set the GPU power limit (watts) via the gpu-temp-helper sidecar."""
+    """Set the GPU power limit (watts) via the gpu-temp-helper sidecar. Admin only."""
     try:
         result = await gpu_manager.set_gpu_power_limit(payload.watts)
     except RuntimeError as exc:

@@ -370,11 +370,19 @@ async def set_gpu_power_limit(watts: float) -> dict:
     global _telemetry_cache
     if not GPU_TEMP_HELPER_URL:
         raise RuntimeError("GPU_TEMP_HELPER_URL is not configured")
+    from app.config import settings
+
+    headers = (
+        {"X-Power-Limit-Token": settings.agent_service_key}
+        if settings.agent_service_key
+        else {}
+    )
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.post(
                 f"{GPU_TEMP_HELPER_URL.rstrip('/')}/power-limit",
                 json={"watts": watts},
+                headers=headers,
             )
             data = r.json()
     except Exception as exc:
