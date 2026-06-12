@@ -5,6 +5,7 @@ Endpoints:
   GET  /api/local-models/gpu-budget                — VRAM allocations
   GET  /api/local-models/gpu-telemetry             — live GPU telemetry (UI status bar)
   POST /api/local-models/gpu-power-limit           — set GPU power limit (watts)
+  POST /api/local-models/cpu-limit                 — cap CPU frequency / boost
   POST /api/local-models/gpu-budget                — set VRAM soft limits
   GET  /api/local-models/search                    — HF/ModelScope unified search
   GET  /api/local-models/{provider}/models         — local models for provider
@@ -82,10 +83,38 @@ class GpuTelemetryGPU(BaseModel):
     source: str = "none"
 
 
+class CpuTelemetryOut(BaseModel):
+    model: str | None = None
+    threads: int | None = None
+    utilization_pct: float | None = None
+    temp_c: float | None = None
+    power_draw_w: float | None = None
+    freq_mhz: float | None = None
+    freq_limit_mhz: float | None = None
+    freq_hw_min_mhz: float | None = None
+    freq_hw_max_mhz: float | None = None
+    boost: bool | None = None
+
+
 class GpuTelemetryResponse(BaseModel):
     available: bool
     ts: float
     gpu: GpuTelemetryGPU | None = None
+    cpu: CpuTelemetryOut | None = None
+
+
+class CpuLimitUpdate(BaseModel):
+    max_freq_mhz: float | None = Field(None, ge=400, le=10000)
+    boost: bool | None = None
+
+
+class CpuLimitResult(BaseModel):
+    ok: bool
+    max_freq_mhz: float | None = None
+    boost: bool | None = None
+    clamped: bool = False
+    hw_min_mhz: float | None = None
+    hw_max_mhz: float | None = None
 
 
 class PowerLimitUpdate(BaseModel):
@@ -194,14 +223,24 @@ async def get_gpu_telemetry() -> GpuTelemetryResponse:
     """Live GPU telemetry for the UI status bar (cached ~3s on the backend)."""
     import time as _time
 
-    telemetry = await gpu_manager.get_gpu_telemetry()
-    if telemetry is None:
+    gpu, cpu = await gpu_manager.get_hw_telemetry()
+    if gpu is None and cpu is None:
         return GpuTelemetryResponse(available=False, ts=_time.time())
-    fields = {k: v for k, v in telemetry.__dict__.items() if k != "ts"}
+    gpu_out = None
+    if gpu is not None:
+        gpu_out = GpuTelemetryGPU(
+            **{k: v for k, v in gpu.__dict__.items() if k != "ts"}
+        )
+    cpu_out = None
+    if cpu is not None:
+        cpu_out = CpuTelemetryOut(
+            **{k: v for k, v in cpu.__dict__.items() if k != "ts"}
+        )
     return GpuTelemetryResponse(
         available=True,
-        ts=telemetry.ts,
-        gpu=GpuTelemetryGPU(**fields),
+        ts=(gpu.ts if gpu else cpu.ts),
+        gpu=gpu_out,
+        cpu=cpu_out,
     )
 
 
@@ -222,6 +261,29 @@ async def set_gpu_power_limit(payload: PowerLimitUpdate) -> PowerLimitResult:
         clamped=bool(result.get("clamped")),
         min_w=result.get("min_w"),
         max_w=result.get("max_w"),
+    )
+
+
+@router.post(
+    "/cpu-limit",
+    response_model=CpuLimitResult,
+    dependencies=[Depends(require_role(UserRole.admin))],
+)
+async def set_cpu_limit(payload: CpuLimitUpdate) -> CpuLimitResult:
+    """Cap CPU frequency / toggle boost via the gpu-temp-helper sidecar. Admin only."""
+    if payload.max_freq_mhz is None and payload.boost is None:
+        raise HTTPException(status_code=422, detail="max_freq_mhz or boost required")
+    try:
+        result = await gpu_manager.set_cpu_limit(payload.max_freq_mhz, payload.boost)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return CpuLimitResult(
+        ok=True,
+        max_freq_mhz=result.get("max_freq_mhz"),
+        boost=result.get("boost"),
+        clamped=bool(result.get("clamped")),
+        hw_min_mhz=result.get("hw_min_mhz"),
+        hw_max_mhz=result.get("hw_max_mhz"),
     )
 
 

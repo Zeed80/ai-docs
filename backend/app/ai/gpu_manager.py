@@ -75,6 +75,23 @@ class GPUTelemetry:
     source: str = "none"                       # sidecar | docker-exec | local
 
 
+@dataclass
+class CPUTelemetry:
+    """Host CPU telemetry from the gpu-temp-helper sidecar (sysfs/procfs)."""
+
+    model: str | None = None
+    threads: int | None = None
+    utilization_pct: float | None = None
+    temp_c: float | None = None
+    power_draw_w: float | None = None          # RAPL package energy delta
+    freq_mhz: float | None = None              # average current frequency
+    freq_limit_mhz: float | None = None        # scaling_max_freq cap
+    freq_hw_min_mhz: float | None = None
+    freq_hw_max_mhz: float | None = None
+    boost: bool | None = None
+    ts: float = 0.0
+
+
 # ---------------------------------------------------------------------------
 # nvidia-smi helpers — three strategies in priority order:
 #   1. Local subprocess (works if backend has GPU device access)
@@ -257,23 +274,44 @@ def _parse_nvidia_smi_telemetry(output: str, source: str) -> GPUTelemetry | None
     )
 
 
-async def _query_sidecar_telemetry() -> GPUTelemetry | None:
-    if not GPU_TEMP_HELPER_URL:
+def _parse_sidecar_cpu(data: dict) -> CPUTelemetry | None:
+    c = data.get("cpu")
+    if not c:
         return None
+    threads = c.get("threads")
+    return CPUTelemetry(
+        model=c.get("model"),
+        threads=int(threads) if threads is not None else None,
+        utilization_pct=_opt_float(c.get("utilization_pct")),
+        temp_c=_opt_float(c.get("temp_c")),
+        power_draw_w=_opt_float(c.get("power_draw_w")),
+        freq_mhz=_opt_float(c.get("freq_mhz")),
+        freq_limit_mhz=_opt_float(c.get("freq_limit_mhz")),
+        freq_hw_min_mhz=_opt_float(c.get("freq_hw_min_mhz")),
+        freq_hw_max_mhz=_opt_float(c.get("freq_hw_max_mhz")),
+        boost=c.get("boost"),
+        ts=time.time(),
+    )
+
+
+async def _query_sidecar_telemetry() -> tuple[GPUTelemetry | None, CPUTelemetry | None]:
+    if not GPU_TEMP_HELPER_URL:
+        return None, None
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
             r = await client.get(f"{GPU_TEMP_HELPER_URL.rstrip('/')}/telemetry")
             if r.status_code != 200:
-                return None
+                return None, None
             data = r.json()
     except Exception as exc:
         logger.debug("gpu_temp_helper_unreachable", error=str(exc))
-        return None
+        return None, None
+    cpu = _parse_sidecar_cpu(data)
     gpus = data.get("gpus") or []
     if not gpus:
-        return None
+        return None, cpu
     g = gpus[0]
-    return GPUTelemetry(
+    gpu = GPUTelemetry(
         name=g.get("name"),
         driver_version=g.get("driver_version"),
         utilization_pct=_opt_float(g.get("utilization_pct")),
@@ -293,6 +331,7 @@ async def _query_sidecar_telemetry() -> GPUTelemetry | None:
         ts=time.time(),
         source="sidecar",
     )
+    return gpu, cpu
 
 
 def _update_gpu_prometheus(t: GPUTelemetry) -> None:
@@ -320,35 +359,61 @@ def _update_gpu_prometheus(t: GPUTelemetry) -> None:
         pass
 
 
-_telemetry_cache: tuple[float, GPUTelemetry | None] | None = None
+def _update_cpu_prometheus(c: CPUTelemetry) -> None:
+    try:
+        from app.core import metrics
+
+        if c.utilization_pct is not None:
+            metrics.cpu_utilization_percent.set(c.utilization_pct)
+        if c.temp_c is not None:
+            metrics.cpu_temperature_celsius.set(c.temp_c)
+        if c.power_draw_w is not None:
+            metrics.cpu_power_watts.set(c.power_draw_w)
+        if c.freq_mhz is not None:
+            metrics.cpu_frequency_mhz.labels(kind="current").set(c.freq_mhz)
+        if c.freq_limit_mhz is not None:
+            metrics.cpu_frequency_mhz.labels(kind="limit").set(c.freq_limit_mhz)
+    except Exception:
+        pass
+
+
+_telemetry_cache: tuple[float, GPUTelemetry | None, CPUTelemetry | None] | None = None
 _telemetry_lock = asyncio.Lock()
 
 
-async def get_gpu_telemetry() -> GPUTelemetry | None:
-    """Cached, single-flight GPU telemetry: sidecar first, nvidia-smi fallback."""
+async def get_hw_telemetry() -> tuple[GPUTelemetry | None, CPUTelemetry | None]:
+    """Cached, single-flight GPU+CPU telemetry: sidecar first, nvidia-smi fallback."""
     global _telemetry_cache
     async with _telemetry_lock:
         now = time.monotonic()
         if _telemetry_cache is not None and now - _telemetry_cache[0] < GPU_TELEMETRY_TTL_S:
-            return _telemetry_cache[1]
+            return _telemetry_cache[1], _telemetry_cache[2]
 
-        telemetry = await _query_sidecar_telemetry()
-        if telemetry is None:
+        gpu, cpu = await _query_sidecar_telemetry()
+        if gpu is None:
             loop = asyncio.get_running_loop()
             output = await loop.run_in_executor(
                 None, _run_nvidia_smi_local_raw, _NVIDIA_SMI_TELEMETRY_CMD
             )
             if output:
-                telemetry = _parse_nvidia_smi_telemetry(output, source="local")
-        if telemetry is None:
+                gpu = _parse_nvidia_smi_telemetry(output, source="local")
+        if gpu is None:
             output = await _docker_exec_in_gpu_container(_NVIDIA_SMI_TELEMETRY_CMD)
             if output:
-                telemetry = _parse_nvidia_smi_telemetry(output, source="docker-exec")
+                gpu = _parse_nvidia_smi_telemetry(output, source="docker-exec")
 
-        if telemetry is not None:
-            _update_gpu_prometheus(telemetry)
-        _telemetry_cache = (now, telemetry)
-        return telemetry
+        if gpu is not None:
+            _update_gpu_prometheus(gpu)
+        if cpu is not None:
+            _update_cpu_prometheus(cpu)
+        _telemetry_cache = (now, gpu, cpu)
+        return gpu, cpu
+
+
+async def get_gpu_telemetry() -> GPUTelemetry | None:
+    """Back-compat wrapper: GPU part of the combined telemetry."""
+    gpu, _cpu = await get_hw_telemetry()
+    return gpu
 
 
 def _run_nvidia_smi_local_raw(cmd: list[str]) -> str | None:
@@ -393,6 +458,52 @@ async def set_gpu_power_limit(watts: float) -> dict:
         "gpu_power_limit_set",
         requested_w=watts,
         applied_w=data.get("power_limit_w"),
+        clamped=data.get("clamped"),
+    )
+    async with _telemetry_lock:
+        _telemetry_cache = None  # force fresh telemetry with the new limit
+    return data
+
+
+async def set_cpu_limit(max_freq_mhz: float | None, boost: bool | None) -> dict:
+    """Cap the host CPU frequency / toggle boost via the gpu-temp-helper sidecar.
+
+    Desktop Ryzen exposes no userspace PPT limit, so frequency capping is the
+    supported way to bound CPU power draw. Returns the sidecar response
+    ({ok, max_freq_mhz, boost, clamped, hw_min_mhz, hw_max_mhz}).
+    """
+    global _telemetry_cache
+    if not GPU_TEMP_HELPER_URL:
+        raise RuntimeError("GPU_TEMP_HELPER_URL is not configured")
+    from app.config import settings
+
+    headers = (
+        {"X-Power-Limit-Token": settings.agent_service_key}
+        if settings.agent_service_key
+        else {}
+    )
+    payload: dict = {}
+    if max_freq_mhz is not None:
+        payload["max_freq_mhz"] = max_freq_mhz
+    if boost is not None:
+        payload["boost"] = boost
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.post(
+                f"{GPU_TEMP_HELPER_URL.rstrip('/')}/cpu-limit",
+                json=payload,
+                headers=headers,
+            )
+            data = r.json()
+    except Exception as exc:
+        raise RuntimeError(f"gpu-temp-helper unreachable: {exc}") from exc
+    if r.status_code != 200 or not data.get("ok"):
+        raise RuntimeError(str(data.get("error") or f"helper returned {r.status_code}"))
+    logger.info(
+        "cpu_limit_set",
+        requested_mhz=max_freq_mhz,
+        applied_mhz=data.get("max_freq_mhz"),
+        boost=data.get("boost"),
         clamped=data.get("clamped"),
     )
     async with _telemetry_lock:

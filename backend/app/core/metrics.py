@@ -136,6 +136,25 @@ if _PROMETHEUS_AVAILABLE:
         "GPU fan speed percent",
     )
 
+    # CPU telemetry (sidecar gpu-temp-helper)
+    cpu_utilization_percent = Gauge(
+        "aiworkspace_cpu_utilization_percent",
+        "CPU utilization percent",
+    )
+    cpu_temperature_celsius = Gauge(
+        "aiworkspace_cpu_temperature_celsius",
+        "CPU temperature in Celsius (Tctl/package)",
+    )
+    cpu_power_watts = Gauge(
+        "aiworkspace_cpu_power_watts",
+        "CPU package power draw in watts (RAPL)",
+    )
+    cpu_frequency_mhz = Gauge(
+        "aiworkspace_cpu_frequency_mhz",
+        "CPU frequency in MHz",
+        ["kind"],  # current | limit
+    )
+
     # Agent step counter
     agent_steps_total = Counter(
         "aiworkspace_agent_steps_total",
@@ -234,6 +253,10 @@ else:
     gpu_power_watts = _noop
     gpu_vram_bytes = _noop
     gpu_fan_percent = _noop
+    cpu_utilization_percent = _noop
+    cpu_temperature_celsius = _noop
+    cpu_power_watts = _noop
+    cpu_frequency_mhz = _noop
     agent_steps_total = _noop
     llm_tokens_total = _noop
     llm_request_duration_seconds = _noop

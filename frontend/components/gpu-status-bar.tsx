@@ -7,6 +7,7 @@ import { mutFetch } from "@/lib/auth";
 export const GPU_BAR_STORAGE_KEY = "gpu_status_bar_enabled";
 export const GPU_BAR_TOGGLE_EVENT = "gpu-statusbar-changed";
 const POWER_PRESETS_STORAGE_KEY = "gpu_power_presets";
+const CPU_PRESETS_STORAGE_KEY = "cpu_freq_presets";
 
 const POLL_INTERVAL_MS = 5000;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -33,10 +34,24 @@ interface GpuTelemetry {
   source: string;
 }
 
+interface CpuTelemetry {
+  model: string | null;
+  threads: number | null;
+  utilization_pct: number | null;
+  temp_c: number | null;
+  power_draw_w: number | null;
+  freq_mhz: number | null;
+  freq_limit_mhz: number | null;
+  freq_hw_min_mhz: number | null;
+  freq_hw_max_mhz: number | null;
+  boost: boolean | null;
+}
+
 interface GpuTelemetryResponse {
   available: boolean;
   ts: number;
   gpu: GpuTelemetry | null;
+  cpu: CpuTelemetry | null;
 }
 
 interface PowerPreset {
@@ -59,9 +74,9 @@ export function setGpuBarEnabled(enabled: boolean) {
   window.dispatchEvent(new Event(GPU_BAR_TOGGLE_EVENT));
 }
 
-function loadUserPresets(): PowerPreset[] {
+function loadUserPresets(storageKey: string): PowerPreset[] {
   try {
-    const raw = localStorage.getItem(POWER_PRESETS_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as PowerPreset[];
     return parsed.filter(
@@ -72,9 +87,9 @@ function loadUserPresets(): PowerPreset[] {
   }
 }
 
-function saveUserPresets(presets: PowerPreset[]) {
+function saveUserPresets(storageKey: string, presets: PowerPreset[]) {
   try {
-    localStorage.setItem(POWER_PRESETS_STORAGE_KEY, JSON.stringify(presets));
+    localStorage.setItem(storageKey, JSON.stringify(presets));
   } catch {}
 }
 
@@ -87,6 +102,11 @@ function tempGpuLevel(t: number): Level {
 function tempMemLevel(t: number): Level {
   // GDDR6X junction throttles around 100-104 °C
   return t >= 96 ? "crit" : t >= 86 ? "warn" : "ok";
+}
+
+function tempCpuLevel(t: number): Level {
+  // Ryzen Tctl throttles at ~95 °C
+  return t >= 90 ? "crit" : t >= 75 ? "warn" : "ok";
 }
 
 function utilLevel(u: number): Level {
@@ -109,7 +129,48 @@ const LEVEL_CLASS: Record<"dark" | "light", Record<Level, string>> = {
   light: { ok: "text-slate-500", warn: "text-amber-600", crit: "text-red-500" },
 };
 
-// ── Power limit popover ─────────────────────────────────────────────────────
+function popoverTheme(variant: "dark" | "light") {
+  const dark = variant === "dark";
+  return {
+    panel: dark
+      ? "bg-slate-800 border-slate-600 text-slate-200 shadow-xl"
+      : "bg-white border-slate-200 text-slate-700 shadow-xl",
+    chipBase: dark
+      ? "border-slate-600 hover:bg-slate-700 text-slate-300"
+      : "border-slate-300 hover:bg-slate-100 text-slate-600",
+    chipActive: dark
+      ? "bg-blue-900/60 border-blue-600 text-blue-200"
+      : "bg-blue-100 border-blue-400 text-blue-700",
+    inputCls: dark
+      ? "bg-slate-900 border-slate-600 text-slate-200"
+      : "bg-white border-slate-300 text-slate-700",
+    muted: dark ? "text-slate-400" : "text-slate-500",
+  };
+}
+
+function useCloseOnOutside(
+  rootRef: React.RefObject<HTMLDivElement | null>,
+  onClose: () => void,
+) {
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [rootRef, onClose]);
+}
+
+// ── GPU power limit popover ─────────────────────────────────────────────────
 
 function PowerLimitPopover({
   variant,
@@ -144,26 +205,10 @@ function PowerLimitPopover({
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setUserPresets(loadUserPresets());
+    setUserPresets(loadUserPresets(POWER_PRESETS_STORAGE_KEY));
   }, []);
 
-  // Close on outside click / Escape.
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
+  useCloseOnOutside(rootRef, onClose);
 
   const apply = useCallback(
     async (watts: number) => {
@@ -227,31 +272,18 @@ function PowerLimitPopover({
       { name, watts: target },
     ];
     setUserPresets(next);
-    saveUserPresets(next);
+    saveUserPresets(POWER_PRESETS_STORAGE_KEY, next);
     setPresetName("");
   };
 
   const removePreset = (name: string) => {
     const next = userPresets.filter((p) => p.name !== name);
     setUserPresets(next);
-    saveUserPresets(next);
+    saveUserPresets(POWER_PRESETS_STORAGE_KEY, next);
   };
 
-  const dark = variant === "dark";
-  const panel = dark
-    ? "bg-slate-800 border-slate-600 text-slate-200 shadow-xl"
-    : "bg-white border-slate-200 text-slate-700 shadow-xl";
-  const chipBase = dark
-    ? "border-slate-600 hover:bg-slate-700 text-slate-300"
-    : "border-slate-300 hover:bg-slate-100 text-slate-600";
-  const chipActive = dark
-    ? "bg-blue-900/60 border-blue-600 text-blue-200"
-    : "bg-blue-100 border-blue-400 text-blue-700";
-  const inputCls = dark
-    ? "bg-slate-900 border-slate-600 text-slate-200"
-    : "bg-white border-slate-300 text-slate-700";
-  const muted = dark ? "text-slate-400" : "text-slate-500";
-
+  const { panel, chipBase, chipActive, inputCls, muted } =
+    popoverTheme(variant);
   const isActive = (w: number) => Math.abs(w - target) < 3;
 
   return (
@@ -389,7 +421,289 @@ function PowerLimitPopover({
         )}
       </div>
       <p className={`mt-1 ${muted}`}>
-        Применяется сразу. Сбрасывается при перезагрузке сервера.
+        Применяется сразу и восстанавливается при старте стека.
+      </p>
+    </div>
+  );
+}
+
+// ── CPU frequency limit popover ─────────────────────────────────────────────
+
+function CpuLimitPopover({
+  variant,
+  cpu,
+  onApplied,
+  onClose,
+}: {
+  variant: "dark" | "light";
+  cpu: CpuTelemetry;
+  onApplied: () => void;
+  onClose: () => void;
+}) {
+  const min = cpu.freq_hw_min_mhz ?? 800;
+  const max = cpu.freq_hw_max_mhz ?? 6000;
+  const clamp = useCallback(
+    (mhz: number) => Math.min(max, Math.max(min, Math.round(mhz))),
+    [min, max],
+  );
+  const ghz = (mhz: number) => `${(mhz / 1000).toFixed(1)}ГГц`;
+
+  const [target, setTarget] = useState(clamp(cpu.freq_limit_mhz ?? max));
+  const [inputValue, setInputValue] = useState(String(target));
+  const [boost, setBoost] = useState(cpu.boost ?? true);
+  const [userPresets, setUserPresets] = useState<PowerPreset[]>([]);
+  const [presetName, setPresetName] = useState("");
+  const [status, setStatus] = useState<
+    | { kind: "idle" }
+    | { kind: "applying" }
+    | { kind: "ok"; mhz: number }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setUserPresets(loadUserPresets(CPU_PRESETS_STORAGE_KEY));
+  }, []);
+
+  useCloseOnOutside(rootRef, onClose);
+
+  const post = useCallback(
+    async (payload: { max_freq_mhz?: number; boost?: boolean }) => {
+      setStatus({ kind: "applying" });
+      try {
+        const r = await mutFetch("/api/local-models/cpu-limit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) {
+          const detail = (await r.json().catch(() => null)) as {
+            detail?: string;
+          } | null;
+          throw new Error(detail?.detail || `HTTP ${r.status}`);
+        }
+        const body = (await r.json()) as {
+          max_freq_mhz: number | null;
+          boost: boolean | null;
+        };
+        if (body.max_freq_mhz != null) {
+          setStatus({ kind: "ok", mhz: body.max_freq_mhz });
+          setTarget(clamp(body.max_freq_mhz));
+          setInputValue(String(Math.round(body.max_freq_mhz)));
+        } else {
+          setStatus({ kind: "ok", mhz: target });
+        }
+        if (body.boost != null) setBoost(body.boost);
+        onApplied();
+      } catch (e) {
+        setStatus({
+          kind: "error",
+          message: e instanceof Error ? e.message : "не удалось применить",
+        });
+      }
+    },
+    [clamp, onApplied, target],
+  );
+
+  const setAndApply = useCallback(
+    (mhz: number) => {
+      const m = clamp(mhz);
+      setTarget(m);
+      setInputValue(String(m));
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(
+        () => void post({ max_freq_mhz: m }),
+        APPLY_DEBOUNCE_MS,
+      );
+    },
+    [clamp, post],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  const round100 = (mhz: number) => clamp(Math.round(mhz / 100) * 100);
+  const builtinPresets: PowerPreset[] = [
+    { name: "Тихий", watts: round100(max * 0.6) },
+    { name: "Баланс", watts: round100(max * 0.8) },
+    { name: "Максимум", watts: max },
+  ];
+
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name) return;
+    const next = [
+      ...userPresets.filter((p) => p.name !== name),
+      { name, watts: target },
+    ];
+    setUserPresets(next);
+    saveUserPresets(CPU_PRESETS_STORAGE_KEY, next);
+    setPresetName("");
+  };
+
+  const removePreset = (name: string) => {
+    const next = userPresets.filter((p) => p.name !== name);
+    setUserPresets(next);
+    saveUserPresets(CPU_PRESETS_STORAGE_KEY, next);
+  };
+
+  const { panel, chipBase, chipActive, inputCls, muted } =
+    popoverTheme(variant);
+  const isActive = (mhz: number) => Math.abs(mhz - target) < 60;
+
+  return (
+    <div
+      ref={rootRef}
+      className={`absolute right-2 top-full mt-1 z-50 w-72 rounded-lg border p-3 text-xs font-sans whitespace-normal cursor-default ${panel}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <span className="font-semibold">Лимит CPU (частота)</span>
+        <button
+          onClick={onClose}
+          className={`${muted} hover:opacity-70 text-base leading-none`}
+          title="Закрыть"
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Built-in presets */}
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {builtinPresets.map((p) => (
+          <button
+            key={p.name}
+            onClick={() => setAndApply(p.watts)}
+            className={`px-2 py-1 rounded border transition-colors ${
+              isActive(p.watts) ? chipActive : chipBase
+            }`}
+            title={`${p.watts} МГц`}
+          >
+            {p.name} · {ghz(p.watts)}
+          </button>
+        ))}
+      </div>
+
+      {/* User presets */}
+      {userPresets.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {userPresets.map((p) => (
+            <span
+              key={p.name}
+              className={`flex items-center gap-1 px-2 py-1 rounded border ${
+                isActive(p.watts) ? chipActive : chipBase
+              }`}
+            >
+              <button
+                onClick={() => setAndApply(p.watts)}
+                title={`${p.watts} МГц`}
+              >
+                {p.name} · {ghz(p.watts)}
+              </button>
+              <button
+                onClick={() => removePreset(p.name)}
+                className={`${muted} hover:text-red-400`}
+                title="Удалить пресет"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Slider + numeric input (MHz, applies immediately, debounced) */}
+      <div className="flex items-center gap-2 mb-2">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={100}
+          value={target}
+          onChange={(e) => setAndApply(Number(e.target.value))}
+          className="flex-1 accent-blue-500"
+        />
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={100}
+          value={inputValue}
+          onChange={(e) => {
+            setInputValue(e.target.value);
+            const m = Number(e.target.value);
+            if (Number.isFinite(m) && m >= min && m <= max) setAndApply(m);
+          }}
+          onBlur={() => {
+            const m = Number(inputValue);
+            if (Number.isFinite(m)) setAndApply(m);
+            else setInputValue(String(target));
+          }}
+          className={`w-20 px-1.5 py-0.5 rounded border text-right font-mono ${inputCls}`}
+        />
+        <span className={muted}>МГц</span>
+      </div>
+      <div className={`flex justify-between mb-2 ${muted}`}>
+        <span>мин {ghz(min)}</span>
+        <span>макс {ghz(max)}</span>
+      </div>
+
+      {/* Boost toggle */}
+      <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={boost}
+          onChange={(e) => {
+            setBoost(e.target.checked);
+            void post({ boost: e.target.checked });
+          }}
+        />
+        Turbo Boost (авторазгон выше базовой частоты)
+      </label>
+
+      {/* Save current value as a user preset */}
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <input
+          type="text"
+          value={presetName}
+          onChange={(e) => setPresetName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") savePreset();
+          }}
+          placeholder="Имя пресета…"
+          className={`flex-1 px-1.5 py-0.5 rounded border ${inputCls}`}
+        />
+        <button
+          onClick={savePreset}
+          disabled={!presetName.trim()}
+          className={`px-2 py-0.5 rounded border disabled:opacity-40 ${chipBase}`}
+        >
+          Сохранить {ghz(target)}
+        </button>
+      </div>
+
+      {/* Status line */}
+      <div className="h-4">
+        {status.kind === "applying" && (
+          <span className="text-blue-400 animate-pulse">применяю…</span>
+        )}
+        {status.kind === "ok" && (
+          <span className="text-green-500">✓ лимит {ghz(status.mhz)}</span>
+        )}
+        {status.kind === "error" && (
+          <span className="text-red-400" title={status.message}>
+            ошибка: {status.message}
+          </span>
+        )}
+      </div>
+      <p className={`mt-1 ${muted}`}>
+        Прямой power limit на десктопных Ryzen недоступен из ОС — потребление
+        ограничивается частотой и бустом. Применяется сразу, восстанавливается
+        при старте стека.
       </p>
     </div>
   );
@@ -399,10 +713,12 @@ function PowerLimitPopover({
 
 export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
   const [enabled, setEnabled] = useState(true);
-  const [data, setData] = useState<GpuTelemetry | null>(null);
+  const [gpu, setGpu] = useState<GpuTelemetry | null>(null);
+  const [cpu, setCpu] = useState<CpuTelemetry | null>(null);
   const failuresRef = useRef(0);
   const [hidden, setHidden] = useState(false);
-  const [powerOpen, setPowerOpen] = useState(false);
+  const [gpuLimitOpen, setGpuLimitOpen] = useState(false);
+  const [cpuLimitOpen, setCpuLimitOpen] = useState(false);
 
   // Toggle state: localStorage + cross-tab "storage" + same-tab custom event.
   useEffect(() => {
@@ -424,9 +740,12 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
       });
       if (!r.ok) throw new Error(String(r.status));
       const body = (await r.json()) as GpuTelemetryResponse;
-      if (!body.available || !body.gpu) throw new Error("unavailable");
+      if (!body.available || (!body.gpu && !body.cpu)) {
+        throw new Error("unavailable");
+      }
       failuresRef.current = 0;
-      setData(body.gpu);
+      setGpu(body.gpu);
+      setCpu(body.cpu);
       setHidden(false);
     } catch {
       failuresRef.current += 1;
@@ -450,132 +769,232 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
     };
   }, [enabled, fetchTelemetry]);
 
-  if (!enabled || hidden || !data) return null;
+  if (!enabled || hidden || (!gpu && !cpu)) return null;
 
   const cls = LEVEL_CLASS[variant];
   const sep = variant === "dark" ? "text-slate-600" : "text-slate-300";
   const border = variant === "dark" ? "border-slate-700" : "border-slate-200";
+  const innerBorder =
+    variant === "dark" ? "border-slate-700/60" : "border-slate-100";
+  const rowCls =
+    "px-4 py-1 flex items-center gap-1.5 text-[10px] font-mono leading-none whitespace-nowrap overflow-hidden";
 
-  const memTemp = data.temp_mem_junction_c ?? data.temp_mem_c;
-  const canManagePower =
-    data.source === "sidecar" &&
-    data.power_limit_min_w != null &&
-    data.power_limit_max_w != null;
+  const joinSegments = (nodes: React.ReactNode[]) => {
+    const out: React.ReactNode[] = [];
+    nodes.forEach((node, i) => {
+      if (i > 0) {
+        out.push(
+          <span key={`sep-${i}`} className={sep}>
+            ·
+          </span>,
+        );
+      }
+      out.push(node);
+    });
+    return out;
+  };
 
-  const tooltip = [
-    data.name,
-    data.driver_version ? `драйвер ${data.driver_version}` : null,
-    data.fan_pct != null ? `вентилятор ${Math.round(data.fan_pct)}%` : null,
-    data.clock_sm_mhz != null
-      ? `GPU ${Math.round(data.clock_sm_mhz)} МГц`
-      : null,
-    data.clock_mem_mhz != null
-      ? `память ${Math.round(data.clock_mem_mhz)} МГц`
-      : null,
-    data.power_limit_w != null
-      ? `лимит ${Math.round(data.power_limit_w)} Вт`
-      : null,
-    data.temp_mem_junction_c != null
-      ? "T памяти: junction (gddr6)"
-      : data.temp_mem_c != null
-        ? "T памяти: nvidia-smi"
+  // ── GPU row ───────────────────────────────────────────────────────────────
+  let gpuRow: React.ReactNode = null;
+  if (gpu) {
+    const memTemp = gpu.temp_mem_junction_c ?? gpu.temp_mem_c;
+    const canManagePower =
+      gpu.source === "sidecar" &&
+      gpu.power_limit_min_w != null &&
+      gpu.power_limit_max_w != null;
+
+    const gpuTooltip = [
+      gpu.name,
+      gpu.driver_version ? `драйвер ${gpu.driver_version}` : null,
+      gpu.fan_pct != null ? `вентилятор ${Math.round(gpu.fan_pct)}%` : null,
+      gpu.clock_sm_mhz != null
+        ? `GPU ${Math.round(gpu.clock_sm_mhz)} МГц`
         : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+      gpu.clock_mem_mhz != null
+        ? `память ${Math.round(gpu.clock_mem_mhz)} МГц`
+        : null,
+      gpu.power_limit_w != null
+        ? `лимит ${Math.round(gpu.power_limit_w)} Вт`
+        : null,
+      gpu.temp_mem_junction_c != null
+        ? "T памяти: junction (gddr6)"
+        : gpu.temp_mem_c != null
+          ? "T памяти: nvidia-smi"
+          : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
 
-  const segments: React.ReactNode[] = [];
-  const push = (node: React.ReactNode, key: string) => {
-    if (segments.length > 0) {
-      segments.push(
-        <span key={`sep-${key}`} className={sep}>
-          ·
+    const nodes: React.ReactNode[] = [];
+    if (gpu.utilization_pct != null) {
+      nodes.push(
+        <span key="util" className={cls[utilLevel(gpu.utilization_pct)]}>
+          GPU {Math.round(gpu.utilization_pct)}%
         </span>,
       );
     }
-    segments.push(node);
-  };
-
-  if (data.utilization_pct != null) {
-    push(
-      <span key="util" className={cls[utilLevel(data.utilization_pct)]}>
-        GPU {Math.round(data.utilization_pct)}%
-      </span>,
-      "util",
-    );
-  }
-  if (data.temp_gpu_c != null) {
-    push(
-      <span key="temp" className={cls[tempGpuLevel(data.temp_gpu_c)]}>
-        {Math.round(data.temp_gpu_c)}°
-      </span>,
-      "temp",
-    );
-  }
-  if (memTemp != null) {
-    push(
-      <span
-        key="mem"
-        className={cls[tempMemLevel(memTemp)]}
-        title="Температура памяти (junction)"
-      >
-        M {Math.round(memTemp)}°
-      </span>,
-      "mem",
-    );
-  }
-  if (data.vram_used_gb != null && data.vram_total_gb != null) {
-    push(
-      <span
-        key="vram"
-        className={cls[vramLevel(data.vram_used_gb, data.vram_total_gb)]}
-        title="VRAM занято / всего"
-      >
-        {data.vram_used_gb.toFixed(1)}/{Math.round(data.vram_total_gb)}G
-      </span>,
-      "vram",
-    );
-  }
-  if (data.power_draw_w != null) {
-    const powerLabel = `${Math.round(data.power_draw_w)}W`;
-    push(
-      canManagePower ? (
-        <button
-          key="power"
-          onClick={() => setPowerOpen((v) => !v)}
-          className={`${cls[powerLevel(data.power_draw_w, data.power_limit_w)]} underline decoration-dotted underline-offset-2 hover:opacity-75 transition-opacity`}
-          title={`Потребление ${powerLabel}, лимит ${data.power_limit_w != null ? Math.round(data.power_limit_w) : "?"} Вт — нажмите для управления`}
-        >
-          {powerLabel}
-        </button>
-      ) : (
+    if (gpu.temp_gpu_c != null) {
+      nodes.push(
+        <span key="temp" className={cls[tempGpuLevel(gpu.temp_gpu_c)]}>
+          {Math.round(gpu.temp_gpu_c)}°
+        </span>,
+      );
+    }
+    if (memTemp != null) {
+      nodes.push(
         <span
-          key="power"
-          className={cls[powerLevel(data.power_draw_w, data.power_limit_w)]}
+          key="mem"
+          className={cls[tempMemLevel(memTemp)]}
+          title="Температура памяти (junction)"
         >
-          {powerLabel}
-        </span>
-      ),
-      "power",
-    );
+          M {Math.round(memTemp)}°
+        </span>,
+      );
+    }
+    if (gpu.vram_used_gb != null && gpu.vram_total_gb != null) {
+      nodes.push(
+        <span
+          key="vram"
+          className={cls[vramLevel(gpu.vram_used_gb, gpu.vram_total_gb)]}
+          title="VRAM занято / всего"
+        >
+          {gpu.vram_used_gb.toFixed(1)}/{Math.round(gpu.vram_total_gb)}G
+        </span>,
+      );
+    }
+    if (gpu.power_draw_w != null) {
+      const powerLabel = `${Math.round(gpu.power_draw_w)}W`;
+      nodes.push(
+        canManagePower ? (
+          <button
+            key="power"
+            onClick={() => {
+              setCpuLimitOpen(false);
+              setGpuLimitOpen((v) => !v);
+            }}
+            className={`${cls[powerLevel(gpu.power_draw_w, gpu.power_limit_w)]} underline decoration-dotted underline-offset-2 hover:opacity-75 transition-opacity`}
+            title={`Потребление ${powerLabel}, лимит ${gpu.power_limit_w != null ? Math.round(gpu.power_limit_w) : "?"} Вт — нажмите для управления`}
+          >
+            {powerLabel}
+          </button>
+        ) : (
+          <span
+            key="power"
+            className={cls[powerLevel(gpu.power_draw_w, gpu.power_limit_w)]}
+          >
+            {powerLabel}
+          </span>
+        ),
+      );
+    }
+    if (nodes.length > 0) {
+      gpuRow = (
+        <div className={rowCls} title={gpuTooltip || undefined}>
+          {joinSegments(nodes)}
+        </div>
+      );
+    }
   }
 
-  if (segments.length === 0) return null;
+  // ── CPU row ───────────────────────────────────────────────────────────────
+  let cpuRow: React.ReactNode = null;
+  if (cpu) {
+    const canManageCpu =
+      cpu.freq_hw_min_mhz != null && cpu.freq_hw_max_mhz != null;
+    const isCapped =
+      cpu.freq_limit_mhz != null &&
+      cpu.freq_hw_max_mhz != null &&
+      cpu.freq_limit_mhz < cpu.freq_hw_max_mhz * 0.98;
+
+    const cpuTooltip = [
+      cpu.model,
+      cpu.threads != null ? `${cpu.threads} потоков` : null,
+      cpu.freq_limit_mhz != null
+        ? `лимит ${(cpu.freq_limit_mhz / 1000).toFixed(1)} ГГц`
+        : null,
+      cpu.boost != null ? `буст ${cpu.boost ? "вкл" : "выкл"}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
+    const nodes: React.ReactNode[] = [];
+    if (cpu.utilization_pct != null) {
+      nodes.push(
+        <span key="util" className={cls[utilLevel(cpu.utilization_pct)]}>
+          CPU {Math.round(cpu.utilization_pct)}%
+        </span>,
+      );
+    }
+    if (cpu.temp_c != null) {
+      nodes.push(
+        <span key="temp" className={cls[tempCpuLevel(cpu.temp_c)]}>
+          {Math.round(cpu.temp_c)}°
+        </span>,
+      );
+    }
+    if (cpu.freq_mhz != null) {
+      const freqLabel = `${(cpu.freq_mhz / 1000).toFixed(1)}ГГц${isCapped ? "↓" : ""}`;
+      nodes.push(
+        canManageCpu ? (
+          <button
+            key="freq"
+            onClick={() => {
+              setGpuLimitOpen(false);
+              setCpuLimitOpen((v) => !v);
+            }}
+            className={`${cls[isCapped ? "warn" : "ok"]} underline decoration-dotted underline-offset-2 hover:opacity-75 transition-opacity`}
+            title={`Текущая частота, лимит ${cpu.freq_limit_mhz != null ? (cpu.freq_limit_mhz / 1000).toFixed(1) : "?"} ГГц — нажмите для управления`}
+          >
+            {freqLabel}
+          </button>
+        ) : (
+          <span key="freq" className={cls.ok}>
+            {freqLabel}
+          </span>
+        ),
+      );
+    }
+    if (cpu.power_draw_w != null) {
+      nodes.push(
+        <span key="power" className={cls.ok} title="Потребление CPU (RAPL)">
+          {Math.round(cpu.power_draw_w)}W
+        </span>,
+      );
+    }
+    if (nodes.length > 0) {
+      cpuRow = (
+        <div
+          className={`${rowCls} ${gpuRow ? `border-t ${innerBorder}` : ""}`}
+          title={cpuTooltip || undefined}
+        >
+          {joinSegments(nodes)}
+        </div>
+      );
+    }
+  }
+
+  if (!gpuRow && !cpuRow) return null;
 
   return (
     <div className="relative">
-      <div
-        className={`px-4 py-1 border-b ${border} flex items-center gap-1.5 text-[10px] font-mono leading-none whitespace-nowrap overflow-hidden`}
-        title={tooltip || undefined}
-      >
-        {segments}
+      <div className={`border-b ${border}`}>
+        {gpuRow}
+        {cpuRow}
       </div>
-      {powerOpen && canManagePower && (
+      {gpuLimitOpen && gpu && (
         <PowerLimitPopover
           variant={variant}
-          data={data}
+          data={gpu}
           onApplied={() => void fetchTelemetry()}
-          onClose={() => setPowerOpen(false)}
+          onClose={() => setGpuLimitOpen(false)}
+        />
+      )}
+      {cpuLimitOpen && cpu && (
+        <CpuLimitPopover
+          variant={variant}
+          cpu={cpu}
+          onApplied={() => void fetchTelemetry()}
+          onClose={() => setCpuLimitOpen(false)}
         />
       )}
     </div>

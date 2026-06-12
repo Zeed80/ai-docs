@@ -373,8 +373,8 @@ function GpuBarToggleCard() {
   }, []);
   return (
     <SectionCard
-      title="Телеметрия GPU"
-      subtitle="Компактная строка с загрузкой, температурами (чип и память), VRAM и мощностью над окном агента «Света». Настройка хранится в этом браузере."
+      title="Телеметрия GPU и CPU"
+      subtitle="Компактные строки с загрузкой, температурами, частотой, VRAM и мощностью над окном агента «Света»; клик по мощности GPU или частоте CPU открывает управление лимитами. Настройка хранится в этом браузере."
     >
       <label className="flex items-center gap-2 text-sm text-slate-200">
         <input
@@ -385,7 +385,7 @@ function GpuBarToggleCard() {
             setGpuBarEnabled(e.target.checked);
           }}
         />
-        Показывать строку GPU над окном агента
+        Показывать телеметрию GPU и CPU над окном агента
       </label>
     </SectionCard>
   );
