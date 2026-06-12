@@ -1009,11 +1009,16 @@ class AgentOrchestrator:
                 and published_canvas_ids
                 and expected_canvas not in published_canvas_ids
             ):
+                # Advisory: the planned canvas is a heuristic guess. A verified
+                # publication to another canvas is a fine answer — re-publishing
+                # the «правильный» блок duplicates the table the user already
+                # sees. Recorded for the learning loop only.
                 issues.append(AuditIssue(
                     code=AuditCode.WRONG_CANVAS,
+                    severity="advisory",
                     message=(
-                        "Использован неправильный workspace-блок: "
-                        f"ожидался {expected_canvas}, опубликовано {sorted(published_canvas_ids)}."
+                        "Опубликован другой workspace-блок: план предлагал "
+                        f"{expected_canvas}, опубликовано {sorted(published_canvas_ids)}."
                     ),
                     context={
                         "expected": expected_canvas,

@@ -83,9 +83,11 @@ def test_blocking_excludes_advisory():
 def test_retryable_set_contents():
     assert AuditCode.UNKNOWN_SKILL not in RETRYABLE
     assert AuditCode.TOOL_OFF_PLAN not in RETRYABLE
+    # The planned canvas is a heuristic guess — a verified publication to
+    # another canvas must NOT trigger a duplicate re-publish.
+    assert AuditCode.WRONG_CANVAS not in RETRYABLE
     for code in (
         AuditCode.WORKSPACE_NOT_PUBLISHED,
-        AuditCode.WRONG_CANVAS,
         AuditCode.CHAT_TABLE_LEAK,
         AuditCode.FILTER_MISSING,
         AuditCode.FILTER_MISMATCH,
@@ -100,13 +102,19 @@ def test_can_retry_with_executor_uses_codes():
     session = _orchestrator()
     plan = _plan()
 
-    report = AuditReport(passed=False, issues=[_issue(AuditCode.WRONG_CANVAS)])
+    report = AuditReport(passed=False, issues=[_issue(AuditCode.WORKSPACE_NOT_PUBLISHED)])
     assert session._can_retry_with_executor(plan, report) is True
 
     # UNKNOWN_SKILL blocks the retry even when paired with a retryable issue.
     report = AuditReport(
         passed=False,
-        issues=[_issue(AuditCode.WRONG_CANVAS), _issue(AuditCode.UNKNOWN_SKILL)],
+        issues=[_issue(AuditCode.WORKSPACE_NOT_PUBLISHED), _issue(AuditCode.UNKNOWN_SKILL)],
+    )
+    assert session._can_retry_with_executor(plan, report) is False
+
+    # A verified-but-different canvas must NOT cause a duplicate re-publish.
+    report = AuditReport(
+        passed=True, issues=[_issue(AuditCode.WRONG_CANVAS, severity="advisory")]
     )
     assert session._can_retry_with_executor(plan, report) is False
 

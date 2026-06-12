@@ -50,9 +50,11 @@ class AuditIssue(BaseModel):
 
 # Issues the executor can plausibly fix on a retry with a corrected request.
 # UNKNOWN_SKILL is deliberately absent: retrying cannot invent a missing tool.
+# WRONG_CANVAS is absent too: the planned canvas is a heuristic GUESS — when a
+# table was actually published and verified, re-doing it on another canvas
+# duplicates work the user already sees (the «делает по два раза» bug).
 RETRYABLE: frozenset[AuditCode] = frozenset({
     AuditCode.WORKSPACE_NOT_PUBLISHED,
-    AuditCode.WRONG_CANVAS,
     AuditCode.CHAT_TABLE_LEAK,
     AuditCode.FILTER_MISSING,
     AuditCode.FILTER_MISMATCH,

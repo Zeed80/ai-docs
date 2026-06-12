@@ -152,6 +152,26 @@ supplier_grouping:
 # Первое совпадение по keywords выигрывает (порядок имеет значение).
 
 routes:
+  # Построение таблицы с заданными колонками → spec_table (полные данные из SQL).
+  - intent: table_build
+    role: invoice_specialist
+    keywords:
+      - "таблицу счетов"
+      - "таблица счетов"
+      - "таблицу со счетами"
+      - "счета в таблиц"
+      - "таблицу документов"
+      - "таблицу платежей"
+      - "таблицу остатков"
+      - "таблицу товаров"
+      - "с колонками"
+      - "в виде таблицы"
+      - "в формате -"
+      - "в формате:"
+    workspace_required: true
+    default_canvas: "agent:spec-table"
+    skills: ["workspace.spec_table"]
+
   - intent: table_edit
     role: invoice_specialist
     keywords:
