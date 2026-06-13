@@ -1280,6 +1280,7 @@ class AgentSession:
         from app.ai.memory_manager import MemoryManager
         self._memory_mgr = MemoryManager(
             base_url=self._config.backend_url,
+            headers=_internal_headers(),
         )
         # Re-init MCP tools with updated server config on next message.
         self._mcp_initialised = False

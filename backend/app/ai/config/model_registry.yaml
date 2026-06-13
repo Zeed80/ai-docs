@@ -205,7 +205,7 @@ models:
     speed_score: 0.70
   local_reranker_ollama:
     provider: "ollama"
-    provider_model: "qllama/bge-reranker-v2-m3:f16"
+    provider_model: "Krakekai/qwen3-reranker-8b:latest"
     status: "production"
     modalities: ["rerank"]
     max_context_tokens: 8192
@@ -213,12 +213,12 @@ models:
     batch_size: 8
     supports_batching: true
     rerank_score_range: "0..1"
-    model_family: "bge-reranker"
+    model_family: "qwen3-reranker"
     capability_source: "manual"
     supports_structured_output: false
     supports_tool_calling: false
     local_only: true
-    vram_gb_estimate: 1.2
+    vram_gb_estimate: 5.0
     quality_score: 0.75
     speed_score: 0.70
     notes: "Cross-encoder reranker via Ollama generate. Compact (1.2 GB), reliable."

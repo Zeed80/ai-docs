@@ -1947,9 +1947,17 @@ def _workspace_tool_spec_for_plan(plan: OrchestratorPlan) -> dict[str, Any] | No
 
 def _build_worker_hint(plan: OrchestratorPlan) -> str:
     """Build a concise orchestrator hint injected into the worker's message history."""
+    skills = plan.worker.recommended_skills[:5]
+    # Fallback case: only memory.search — make the call mandatory so the model
+    # doesn't answer from parametric knowledge instead of real project data.
+    only_memory_fallback = skills == ["memory.search"]
+    if only_memory_fallback:
+        skill_directive = "ОБЯЗАТЕЛЬНО вызови memory.search перед ответом — не отвечай из памяти модели без проверки данных проекта."
+    else:
+        skill_directive = f"Используй инструменты: {', '.join(skills)}."
     lines = [
         f"[ОРКЕСТРАТОР] Роль: {plan.worker.role}. Задача: {plan.goal[:200]}",
-        f"Рекомендуемые инструменты: {', '.join(plan.worker.recommended_skills[:5]) or 'любые подходящие'}.",
+        skill_directive,
     ]
     if len(plan.worker.recommended_skills) >= 2:
         lines.append(

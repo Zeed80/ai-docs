@@ -28,7 +28,7 @@ class MemoryManager:
 
     Usage in AgentSession::
 
-        mgr = MemoryManager(base_url="http://localhost:8000")
+        mgr = MemoryManager(base_url="http://localhost:8000", headers={"X-API-Key": key})
         context_block = await mgr.prefetch(user_text)
         # inject context_block as a system-level user message before the LLM call
 
@@ -40,10 +40,12 @@ class MemoryManager:
         base_url: str,
         max_chars: int = _MAX_MEMORY_CHARS,
         timeout: float = 25.0,
+        headers: dict | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._max_chars = max_chars
         self._timeout = timeout
+        self._headers: dict = headers or {}
 
     async def prefetch(self, query: str, session_id: str = "") -> str:
         """Search memory for context relevant to *query*.
@@ -56,7 +58,7 @@ class MemoryManager:
         if not query.strip():
             return ""
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
                 data = await self._read_memory_pages(client, query, session_id=session_id)
         except Exception as exc:
             logger.debug("memory prefetch failed (non-fatal): %s", exc)
@@ -138,7 +140,7 @@ class MemoryManager:
         if not user_text.strip() and not assistant_text.strip():
             return
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
                 await client.post(
                     f"{self._base_url}/api/memory/chat-turn",
                     json={
