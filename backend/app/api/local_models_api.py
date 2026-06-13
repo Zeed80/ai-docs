@@ -94,6 +94,8 @@ class CpuTelemetryOut(BaseModel):
     freq_hw_min_mhz: float | None = None
     freq_hw_max_mhz: float | None = None
     boost: bool | None = None
+    fan_rpm: int | None = None
+    fan_pct: float | None = None
 
 
 class GpuTelemetryResponse(BaseModel):

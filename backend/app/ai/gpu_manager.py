@@ -89,6 +89,8 @@ class CPUTelemetry:
     freq_hw_min_mhz: float | None = None
     freq_hw_max_mhz: float | None = None
     boost: bool | None = None
+    fan_rpm: int | None = None
+    fan_pct: float | None = None
     ts: float = 0.0
 
 
@@ -290,6 +292,8 @@ def _parse_sidecar_cpu(data: dict) -> CPUTelemetry | None:
         freq_hw_min_mhz=_opt_float(c.get("freq_hw_min_mhz")),
         freq_hw_max_mhz=_opt_float(c.get("freq_hw_max_mhz")),
         boost=c.get("boost"),
+        fan_rpm=c.get("fan_rpm"),
+        fan_pct=_opt_float(c.get("fan_pct")),
         ts=time.time(),
     )
 

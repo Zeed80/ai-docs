@@ -45,6 +45,8 @@ interface CpuTelemetry {
   freq_hw_min_mhz: number | null;
   freq_hw_max_mhz: number | null;
   boost: boolean | null;
+  fan_rpm: number | null;
+  fan_pct: number | null;
 }
 
 interface GpuTelemetryResponse {
@@ -806,7 +808,6 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
     const gpuTooltip = [
       gpu.name,
       gpu.driver_version ? `драйвер ${gpu.driver_version}` : null,
-      gpu.fan_pct != null ? `вентилятор ${Math.round(gpu.fan_pct)}%` : null,
       gpu.clock_sm_mhz != null
         ? `GPU ${Math.round(gpu.clock_sm_mhz)} МГц`
         : null,
@@ -887,6 +888,13 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
         ),
       );
     }
+    if (gpu.fan_pct != null) {
+      nodes.push(
+        <span key="fan" className={cls.ok} title="Вентилятор GPU">
+          F {Math.round(gpu.fan_pct)}%
+        </span>,
+      );
+    }
     if (nodes.length > 0) {
       gpuRow = (
         <div className={rowCls} title={gpuTooltip || undefined}>
@@ -958,6 +966,23 @@ export function GpuStatusBar({ variant }: { variant: "dark" | "light" }) {
       nodes.push(
         <span key="power" className={cls.ok} title="Потребление CPU (RAPL)">
           {Math.round(cpu.power_draw_w)}W
+        </span>,
+      );
+    }
+    if (cpu.fan_pct != null) {
+      nodes.push(
+        <span
+          key="fan"
+          className={cls.ok}
+          title={`Вентилятор CPU${cpu.fan_rpm != null ? ` · ${cpu.fan_rpm} об/мин` : ""}`}
+        >
+          F {Math.round(cpu.fan_pct)}%
+        </span>,
+      );
+    } else if (cpu.fan_rpm != null) {
+      nodes.push(
+        <span key="fan" className={cls.ok} title="Вентилятор CPU (об/мин)">
+          F {cpu.fan_rpm}
         </span>,
       );
     }

@@ -284,6 +284,8 @@ _CPUFREQ_BOOST = "/sys/devices/system/cpu/cpufreq/boost"
 _RAPL_PKG_DIR = "/sys/class/powercap/intel-rapl:0"  # AMD Zen registers here too
 _CPU_TEMP_HWMON_NAMES = ("k10temp", "coretemp", "zenpower")
 _CPU_TEMP_PREFERRED_LABELS = ("tctl", "tdie", "package id 0")
+# hwmon drivers that are NOT motherboard fan controllers (skip when looking for fans)
+_CPU_FAN_HWMON_SKIP = frozenset({"k10temp", "coretemp", "zenpower", "amdgpu", "nouveau", "nvme"})
 
 # Previous /proc/stat + RAPL sample for utilization/power deltas.
 # Only touched from collect_telemetry(), which runs under _cache_lock.
@@ -375,6 +377,29 @@ def _cpu_model() -> str | None:
     return None
 
 
+def _cpu_fan() -> tuple[int | None, float | None]:
+    """Return (rpm, fan_pct) of the first active motherboard fan found in hwmon.
+
+    Skips thermal-sensor drivers. PWM (0-255) → % when the driver exposes it.
+    """
+    try:
+        base = "/sys/class/hwmon"
+        for hwmon in sorted(os.listdir(base)):
+            hwmon_path = os.path.join(base, hwmon)
+            name = (_read_text(os.path.join(hwmon_path, "name")) or "").strip()
+            if name in _CPU_FAN_HWMON_SKIP:
+                continue
+            for i in range(1, 9):
+                rpm = _read_int_file(os.path.join(hwmon_path, f"fan{i}_input"))
+                if rpm is not None and rpm > 100:
+                    pwm = _read_int_file(os.path.join(hwmon_path, f"pwm{i}"))
+                    pct = round(pwm / 255 * 100, 1) if pwm is not None else None
+                    return rpm, pct
+    except Exception:
+        pass
+    return None, None
+
+
 def collect_cpu() -> dict[str, Any] | None:
     """CPU telemetry; utilization and power are deltas between calls."""
     sample = _cpu_stat_sample()
@@ -415,6 +440,7 @@ def collect_cpu() -> dict[str, Any] | None:
     hw_min_khz = _read_int_file(os.path.join(cpu0, "cpuinfo_min_freq"))
     hw_max_khz = _read_int_file(os.path.join(cpu0, "cpuinfo_max_freq"))
     boost = _read_int_file(_CPUFREQ_BOOST)
+    fan_rpm, fan_pct = _cpu_fan()
     return {
         "model": _cpu_model(),
         "threads": len(freqs) or None,
@@ -426,6 +452,8 @@ def collect_cpu() -> dict[str, Any] | None:
         "freq_hw_min_mhz": round(hw_min_khz / 1000) if hw_min_khz else None,
         "freq_hw_max_mhz": round(hw_max_khz / 1000) if hw_max_khz else None,
         "boost": bool(boost) if boost is not None else None,
+        "fan_rpm": fan_rpm,
+        "fan_pct": fan_pct,
     }
 
 
