@@ -41,6 +41,20 @@ workspace_request_markers:
   - "добавь поле"
   - "убери поле"
   - "отсортируй"
+  - "популярн"
+  - "чаще всего"
+  - "больше всего"
+  - "топ товар"
+  - "топ поставщик"
+  - "расскажи о товар"
+  - "какие товар"
+  - "по товарам"
+  - "номенклатур"
+  - "сгруппируй"
+  - "группировк"
+  - "по месяц"
+  - "по валют"
+  - "по статус"
 
 # Правка уже открытой таблицы.
 table_edit_markers:
@@ -199,6 +213,34 @@ routes:
     default_canvas: "agent:invoices"
     skills: ["invoice.list", "workspace.invoice_table"]
 
+  # Аналитика товаров/номенклатуры в счетах: популярность, группировки.
+  - intent: invoice_items_analytics
+    role: data_analyst
+    keywords:
+      - "товар в счет"
+      - "товары в счет"
+      - "о товарах в"
+      - "расскажи о товар"
+      - "популярн"
+      - "чаще всего"
+      - "больше всего"
+      - "самые частые"
+      - "топ товар"
+      - "какие товар"
+      - "по товарам"
+      - "номенклатур"
+      - "частые позиц"
+      - "сгруппируй по товар"
+      - "сгруппируй по поставщик"
+      - "сгруппируй по месяц"
+      - "сгруппируй по валют"
+      - "сгруппируй по статус"
+      - "группировк"
+      - "по категори"
+    workspace_required: true
+    default_canvas: "agent:invoice-pivot"
+    skills: ["workspace.invoice_pivot"]
+
   - intent: tech_process
     role: technologist
     keywords:
@@ -234,6 +276,7 @@ fallback_canvas_rules:
 
 canvas_to_skill:
   "agent:spec-table": "workspace.spec_table"
+  "agent:invoice-pivot": "workspace.invoice_pivot"
   "agent:invoice-items-by-supplier": "workspace.invoice_items_by_supplier_table"
   "agent:invoice-items-grouped": "workspace.invoice_items_grouped_table"
   "agent:invoice-items": "workspace.invoice_items_table"

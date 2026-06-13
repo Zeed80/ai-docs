@@ -602,7 +602,11 @@ async def publish_invoice_pivot_table(
         if g["supplier"] is None and invoice.supplier is not None:
             g["supplier"] = invoice.supplier
 
-    ordered = sorted(groups.values(), key=lambda it: str(it["key"]).lower())
+    # For item grouping sort by occurrence count (popularity desc), others alphabetically.
+    if gb == "item":
+        ordered = sorted(groups.values(), key=lambda it: -len(it["items"]))
+    else:
+        ordered = sorted(groups.values(), key=lambda it: str(it["key"]).lower())
     columns = [{"key": "index", "header": "№", "type": "number", "width": 56}]
     for i, (col_header, col_type, _fn, _expr) in enumerate(col_specs):
         columns.append({"key": f"c{i}", "header": col_header, "type": col_type})
