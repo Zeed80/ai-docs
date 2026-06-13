@@ -48,18 +48,26 @@ _MEDIUM_COMPLEXITY_SIGNALS = frozenset({
     # Russian
     "таблица", "сводка", "сумма", "топ", "список всех", "отсортируй",
     "сгруппируй", "найди аномалии", "подготовь отчёт", "отчёт",
+    # Analytical / exploratory queries that need LLM planning
+    "расскажи", "расскажи о", "популярн", "больше всего", "чаще всего",
+    "самые", "какие", "почему", "как так", "что значит", "разбери",
+    "объясни", "покажи динамику", "за период", "тенденц", "тренд",
+    "статистик", "аналитик", "по месяц", "по поставщик", "сгруппир",
+    "группировк", "номенклатур", "какая", "каких", "насколько",
     # English
     "table", "summary", "total", "top", "list all", "sort", "group",
-    "find anomalies", "prepare report", "report",
+    "find anomalies", "prepare report", "report", "explain", "popular",
+    "most common", "trending", "analytics", "by month", "by supplier",
+    "breakdown", "distribution",
 })
 
 _LOW_COMPLEXITY_SIGNALS = frozenset({
-    # Russian
-    "покажи", "выведи", "статус", "сколько", "когда", "кто", "последний",
+    # Russian — только однозначно тривиальные навигационные запросы
+    "статус", "сколько", "когда", "кто", "последний",
     "один", "найди счёт", "проверь",
     # English
-    "show", "display", "status", "how many", "when", "who", "last", "find invoice",
-    "check",
+    "status", "how many", "when", "who", "last", "find invoice", "check",
+    # NOTE: "покажи" и "выведи" убраны — они могут вести к workspace-запросу (не тривиальны)
 })
 
 

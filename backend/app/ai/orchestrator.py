@@ -332,8 +332,10 @@ class AgentOrchestrator:
                         "Используй эту последовательность как отправную точку."
                     )
 
-        # strict reasoning_mode forces LLM planning regardless of tier
-        if reasoning_mode == "strict" or tier >= Tier.MEDIUM:
+        # LLM planning for anything beyond NANO/MICRO: SMALL+ uses the model.
+        # Heuristic is reserved for trivial look-ups only (count fast-paths
+        # are already handled above via on_user_message direct answers).
+        if reasoning_mode == "strict" or tier >= Tier.SMALL:
             self._plan_source = "model"
             plan = await self._plan_turn_with_model(content, config)
         else:
