@@ -288,6 +288,9 @@ skill_to_spec:
   "workspace.spec_table":
     path: "/api/workspace/agent/spec-table"
     default_args: {}
+  "workspace.invoice_pivot":
+    path: "/api/workspace/agent/invoices/pivot-table"
+    default_args: {group_by: "item"}
   "workspace.invoice_items_by_supplier_table":
     path: "/api/workspace/agent/invoices/items-by-supplier-table"
     default_args: {}
