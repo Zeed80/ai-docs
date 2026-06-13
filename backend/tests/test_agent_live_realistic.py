@@ -408,6 +408,9 @@ async def test_scenario_multi_turn_context():
         assert r1.error is None, f"Первый ход упал: {r1.error}"
         assert len(r1.tool_calls) > 0, "Первый ход не вызвал инструментов"
 
+        # Небольшая пауза: сервер снимает turn_in_progress чуть после отправки done
+        await asyncio.sleep(1.5)
+
         # Второй ход — уточнение в рамках той же сессии
         r2 = await ws.send("Покажи подробнее первый из них")
         assert r2.error is None, f"Второй ход упал: {r2.error}"
