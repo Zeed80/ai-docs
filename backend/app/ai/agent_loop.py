@@ -1185,6 +1185,10 @@ class AgentSession:
         # Worker role for the current turn — scopes the visible tool set to the
         # role's capability allowlist from gateway.yml. None → no scoping.
         self._active_role: str | None = None
+        # Per-turn hard tool exclusions (set by the orchestrator). Used to keep
+        # the worker off slow RAG tools (memory/search/documents) when the task
+        # is structured-data only (e.g. a spec_table). Reset each turn.
+        self._excluded_tools: set[str] = set()
 
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
@@ -1362,6 +1366,15 @@ class AgentSession:
         """
         self._active_role = (role or "").strip() or None
 
+    def set_excluded_tools(self, names: set[str] | None) -> None:
+        """Hard-hide these capabilities from the worker for the next turn.
+
+        Overrides even the always-available core set — used by the orchestrator
+        to keep structured-data turns (spec_table) off slow RAG tools. Reset
+        (passed empty) each turn by the orchestrator.
+        """
+        self._excluded_tools = set(names or ())
+
     def set_response_budget(self, max_tokens: int) -> None:
         """Set the per-turn max response tokens (clamped to a sane range)."""
         self._response_budget = max(256, min(int(max_tokens), 16384))
@@ -1384,25 +1397,30 @@ class AgentSession:
         MCP tools and tools outside the capability registry pass through.
         A role with no declared allowlist sees the full set.
         """
-        role = self._active_role
-        if not role or gateway_config.skills_mode != "capabilities":
-            return self._tools
-        allowed = gateway_config.role_capabilities(role)
-        if not allowed:
-            return self._tools
-        # Names of registry capabilities (excludes MCP tools, which pass through).
-        capability_names = set(_load_capabilities()[1].keys())
-        visible = set(allowed) | self._CORE_CAPABILITIES
-
         def _tool_name(tool: dict) -> str:
             fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
             return str(fn.get("name") or "")
 
-        return [
+        def _apply_exclusions(tools: list[dict]) -> list[dict]:
+            if not self._excluded_tools:
+                return tools
+            return [t for t in tools if _tool_name(t) not in self._excluded_tools]
+
+        role = self._active_role
+        if not role or gateway_config.skills_mode != "capabilities":
+            return _apply_exclusions(self._tools)
+        allowed = gateway_config.role_capabilities(role)
+        if not allowed:
+            return _apply_exclusions(self._tools)
+        # Names of registry capabilities (excludes MCP tools, which pass through).
+        capability_names = set(_load_capabilities()[1].keys())
+        visible = set(allowed) | self._CORE_CAPABILITIES
+
+        return _apply_exclusions([
             tool
             for tool in self._tools
             if _tool_name(tool) not in capability_names or _tool_name(tool) in visible
-        ]
+        ])
 
     def _effective_system(self) -> str:
         """Base system prompt plus the per-turn role context (if any)."""

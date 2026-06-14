@@ -38,6 +38,9 @@ class FakeExecutor:
     def set_active_role(self, role) -> None:
         return None
 
+    def set_excluded_tools(self, names) -> None:
+        return None
+
     def record_external_turn(self, user_text: str, assistant_text: str) -> None:
         return None
 

@@ -277,6 +277,7 @@ class AgentOrchestrator:
             self._executor.set_response_budget(2048)
             self._executor.set_model_override(None)
             self._executor.set_active_role(None)
+            self._executor.set_excluded_tools(set())
             await self._executor.on_user_message(content)
             return
 
@@ -398,15 +399,22 @@ class AgentOrchestrator:
                         "Используй эту последовательность как отправную точку."
                     )
 
-        # LLM planning for anything beyond NANO/MICRO: SMALL+ uses the model.
-        # Heuristic is reserved for trivial look-ups only (count fast-paths
-        # are already handled above via on_user_message direct answers).
-        if reasoning_mode == "strict" or tier >= Tier.SMALL:
+        # When the heuristic already matched an explicit route (intent != general),
+        # the canvas + recommended skills are known — LLM planning adds nothing but
+        # latency (and on a busy GPU the planner call can stall for minutes while
+        # the model is reloaded). Use the heuristic plan directly. Only fall back
+        # to the model planner for genuinely unrouted SMALL+ turns.
+        heuristic_plan = self._plan_turn(content)
+        route_matched = heuristic_plan.intent != "general"
+        if route_matched:
+            self._plan_source = "heuristic_route"
+            plan = heuristic_plan
+        elif reasoning_mode == "strict" or tier >= Tier.SMALL:
             self._plan_source = "model"
             plan = await self._plan_turn_with_model(content, config)
         else:
             self._plan_source = "heuristic"
-            plan = self._plan_turn(content)
+            plan = heuristic_plan
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
 
@@ -425,6 +433,13 @@ class AgentOrchestrator:
         self._executor.set_role_context(role_context)
         # Scope the visible tool set to the role's capability allowlist.
         self._executor.set_active_role(plan.worker.role)
+        # Structured-data turns (spec_table) must not touch slow RAG tools — the
+        # 35B worker otherwise "searches" for line items in documents (minutes).
+        # Hard-hide them so it has no choice but to build the table from SQL.
+        if plan.workspace.canvas_id == "agent:spec-table":
+            self._executor.set_excluded_tools({"memory", "search", "documents"})
+        else:
+            self._executor.set_excluded_tools(set())
         # Size the response budget to the task: cheap/fast for short answers,
         # roomy for reports/tables. Avoids the old hardcoded 4096 on every turn.
         self._executor.set_response_budget(_response_budget_for(tier, plan))
@@ -2159,6 +2174,18 @@ def _build_worker_hint(plan: OrchestratorPlan) -> str:
             f"Результат ОБЯЗАТЕЛЬНО опубликовать на Рабочий стол (canvas_id={plan.workspace.canvas_id}). "
             "Используй workspace.* инструмент. В чат — только краткое резюме."
         )
+        # Structured-data guard: spec_table builds the answer from SQL (columns,
+        # filters, sort over a whitelisted catalog). For price/amount comparisons
+        # the model is tempted to "search" for items in documents — that's slow
+        # RAG over unstructured text and the data isn't there. Forbid it.
+        if plan.workspace.canvas_id == "agent:spec-table":
+            lines.append(
+                "Данные счетов и позиций УЖЕ структурированы в БД. Реши задачу ОДНИМ "
+                "вызовом workspace.spec_table: выбери источник, колонки, фильтр (по "
+                "наименованию товара) и сортировку (по цене/сумме). КАТЕГОРИЧЕСКИ НЕ "
+                "вызывай memory, search, documents — там этих данных нет, это медленно "
+                "и не нужно."
+            )
         if plan.workspace.filters:
             f_str = ", ".join(f"{k}={v!r}" for k, v in plan.workspace.filters.items())
             lines.append(f"Обязательные фильтры: {f_str}.")
