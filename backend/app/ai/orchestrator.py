@@ -842,7 +842,11 @@ class AgentOrchestrator:
         if not audit.passed or audit.semantic_passed is False:
             return
         seq = list(self._trace.tool_call_seq)
-        if not (2 <= len(seq) <= 6):
+        # Length bounds live in recipes._MIN_STEPS/_MAX_STEPS; the reproducibility
+        # gate inside record_candidate is the real safety check (rejects chains
+        # with runtime data-flow regardless of length).
+        from app.ai import recipes as _recipes
+        if not (_recipes._MIN_STEPS <= len(seq) <= _recipes._MAX_STEPS):
             return
         # Only plain capability-dispatcher calls compose into recipes.
         if any("__" in name or "." in name for name, _ in seq):

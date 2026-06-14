@@ -44,7 +44,23 @@ _RETIRE_FAIL_RATE = 0.5   # retired when fail rate exceeds this (≥4 uses)
 _RETIRE_MIN_USES = 4
 _MAX_TRIGGER_EXAMPLES = 5
 _MIN_STEPS = 2
-_MAX_STEPS = 6
+# Длина сама по себе не вредит выигрышу от replay — вредит НЕвоспроизводимость
+# (см. is_reproducible). Лимит держит цепочку обозримой, но поднят: «плоские»
+# многошаговые ходы (все параметры из запроса) теперь тоже учатся.
+_MAX_STEPS = 10
+
+# Аргументы с этими ключами, заполненные литералом НЕ из запроса, — почти всегда
+# runtime-значения из вывода предыдущего шага (id, полученный из list/search).
+# Такой ход невоспроизводим: replay подставляет только слоты из текста запроса.
+_RUNTIME_ID_KEYS = frozenset({
+    "id", "invoice_id", "document_id", "supplier_id", "buyer_id", "item_id",
+    "receipt_id", "node_id", "chunk_id", "message_id", "case_id", "payment_id",
+    "anomaly_id", "draft_id", "thread_id", "order_id", "line_id", "contract_id",
+    "request_id", "proposal_id", "recipe_id", "event_id", "rule_id",
+})
+_UUID_RE = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
 
 # Component 1 — passive validation: worker independently reproduced the recipe's
 # exact steps this many times → draft becomes active (no shadow double-run).
@@ -156,6 +172,45 @@ def parameterize_steps(
         if slot in entities
     }
     return templated, param_slots
+
+
+def _arg_has_orphan_runtime_value(value: Any, text_low: str, key: str | None = None) -> bool:
+    """True when an arg looks like a runtime value (output of a previous step)
+    rather than something derivable from the user request.
+
+    Such values make a recipe non-reproducible: replay can only substitute slots
+    extracted from the request text, so a literal id captured from an earlier
+    step would be replayed stale. Slot placeholders ({{user.*}}) and values that
+    appear in the request are fine.
+    """
+    if isinstance(value, dict):
+        return any(_arg_has_orphan_runtime_value(v, text_low, k) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_arg_has_orphan_runtime_value(v, text_low) for v in value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s or "{{user." in s:
+            return False  # slot → reproducible
+        if _UUID_RE.search(s):
+            return True  # a UUID is never something the user typed
+        if key and key.lower() in _RUNTIME_ID_KEYS and s.lower() not in text_low:
+            return True  # an *_id literal not present in the request → runtime
+    return False
+
+
+def is_reproducible(templated_steps: list[dict], user_text: str) -> bool:
+    """A recipe is reproducible only if every step's args are derivable from the
+    request (slots / request-literals), with no orphan runtime values.
+
+    This replaces a hard step-count cap as the real safety criterion: a long but
+    "flat" chain (all params from the request) is fine; a short chain that feeds
+    one step's output into the next is not.
+    """
+    text_low = (user_text or "").lower()
+    for step in templated_steps:
+        if _arg_has_orphan_runtime_value(step.get("args_template") or {}, text_low):
+            return False
+    return True
 
 
 def resolve_slots(recipe_slots: dict | None, text: str) -> dict[str, str] | None:
@@ -380,6 +435,14 @@ async def record_candidate(
             return False  # approval-gated actions never enter recipes
 
     templated_steps, param_slots = parameterize_steps(steps, user_text)
+
+    # Reproducibility gate: skip chains whose steps depend on runtime output
+    # (orphan ids) — replay can only substitute request-derived slots, so such a
+    # recipe would replay stale values. Length is allowed up to _MAX_STEPS; this
+    # is the real safety criterion.
+    if not is_reproducible(templated_steps, user_text):
+        logger.info("recipe_skipped_nonreproducible", steps=len(templated_steps))
+        return False
 
     from app.db.models import RecipeSkill
     from app.db.session import _get_session_factory

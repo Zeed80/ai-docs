@@ -279,3 +279,68 @@ async def test_passive_confirmation_ignores_different_steps(recipes_db):
     async with recipes_db["factory"]() as db:
         recipe = await db.get(RecipeSkill, rid)
         assert recipe.status == "draft" and recipe.worker_confirmations == 0
+
+
+# ── Reproducibility gate (replaces hard step-count cap as the real criterion) ───
+
+def test_is_reproducible_flat_chain():
+    """All args derivable from the request (slots) → reproducible."""
+    steps = [
+        {"capability": "invoices", "args_template": {"action": "list",
+         "filters": {"supplier_query": "{{user.supplier_name}}"}}},
+        {"capability": "workspace", "args_template": {"action": "publish",
+         "canvas_id": "agent:invoices"}},
+    ]
+    assert recipes.is_reproducible(steps, "счета Ромашки")
+
+
+def test_is_reproducible_rejects_runtime_uuid():
+    """A UUID arg is never user-typed → runtime data-flow → not reproducible."""
+    steps = [
+        {"capability": "invoices", "args_template": {"action": "list"}},
+        {"capability": "invoices", "args_template": {"action": "get",
+         "invoice_id": "a1b2c3d4-1111-2222-3333-444455556666"}},
+    ]
+    assert not recipes.is_reproducible(steps, "покажи счета")
+
+
+def test_is_reproducible_rejects_orphan_id_literal():
+    """An *_id literal absent from the request → output of a previous step."""
+    steps = [
+        {"capability": "documents", "args_template": {"action": "get", "document_id": "777"}},
+        {"capability": "workspace", "args_template": {"action": "publish"}},
+    ]
+    assert not recipes.is_reproducible(steps, "покажи документ")
+
+
+def test_is_reproducible_allows_id_from_request():
+    """An id that the user actually typed is fine."""
+    steps = [
+        {"capability": "documents", "args_template": {"action": "get", "document_id": "777"}},
+        {"capability": "workspace", "args_template": {"action": "publish"}},
+    ]
+    assert recipes.is_reproducible(steps, "покажи документ 777")
+
+
+@pytest.mark.asyncio
+async def test_record_candidate_skips_nonreproducible(recipes_db):
+    """A chain with runtime data-flow is NOT recorded as a recipe."""
+    steps = [
+        {"capability": "invoices", "action": "list", "args_template": {"action": "list"}},
+        {"capability": "invoices", "action": "get",
+         "args_template": {"action": "get",
+                           "invoice_id": "a1b2c3d4-1111-2222-3333-444455556666"}},
+    ]
+    recorded = await recipes.record_candidate(
+        user_text="покажи счета", role="invoice_specialist",
+        intent="invoice_list", steps=steps,
+    )
+    assert recorded is False
+    async with recipes_db["factory"]() as db:
+        from sqlalchemy import select, func
+        count = (await db.execute(select(func.count()).select_from(RecipeSkill))).scalar()
+        assert count == 0
+
+
+def test_max_steps_raised_to_ten():
+    assert recipes._MAX_STEPS == 10
