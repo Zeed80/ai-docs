@@ -344,3 +344,77 @@ async def test_record_candidate_skips_nonreproducible(recipes_db):
 
 def test_max_steps_raised_to_ten():
     assert recipes._MAX_STEPS == 10
+
+
+# ── Step-reference slots (data-flow replay) ─────────────────────────────────────
+
+def test_resolve_path_nested():
+    obj = {"items": [{"id": "abc"}, {"id": "def"}], "total": 2}
+    assert recipes._resolve_path(obj, "items.0.id") == "abc"
+    assert recipes._resolve_path(obj, "items.1.id") == "def"
+    assert recipes._resolve_path(obj, "total") == 2
+    assert recipes._resolve_path(obj, "missing.x") is None
+
+
+def test_find_value_path():
+    obj = {"items": [{"id": "a1b2c3d4-1111-2222-3333-444455556666"}]}
+    assert recipes._find_value_path(obj, "a1b2c3d4-1111-2222-3333-444455556666") == "items.0.id"
+    assert recipes._find_value_path(obj, "nope") is None
+
+
+def test_parameterize_creates_step_reference():
+    """An arg equal to an earlier step's output becomes a {{step.N.path}} ref."""
+    steps = [
+        {"capability": "invoices", "action": "list", "args_template": {"action": "list"}},
+        {"capability": "invoices", "action": "get",
+         "args_template": {"action": "get",
+                           "invoice_id": "a1b2c3d4-1111-2222-3333-444455556666"}},
+    ]
+    results = [
+        {"items": [{"id": "a1b2c3d4-1111-2222-3333-444455556666"}], "total": 1},
+        {"id": "a1b2c3d4-1111-2222-3333-444455556666"},
+    ]
+    templated, _ = recipes.parameterize_steps(steps, "покажи счета", results)
+    assert templated[1]["args_template"]["invoice_id"] == "{{step.0.items.0.id}}"
+    # With the reference, the chain is now reproducible.
+    assert recipes.is_reproducible(templated, "покажи счета")
+
+
+def test_render_args_resolves_step_reference_whole_value():
+    """A whole-value step ref resolves from accumulated results, preserving type."""
+    tmpl = {"action": "get", "invoice_id": "{{step.0.items.0.id}}", "limit": 5}
+    results = [{"items": [{"id": "NEW-id-123"}]}]
+    out = render_args = recipes.render_args(tmpl, {}, results)
+    assert out["invoice_id"] == "NEW-id-123"
+    assert out["limit"] == 5
+
+
+def test_render_args_step_reference_missing_result_left_intact():
+    """If the referenced step hasn't run yet, the placeholder is left as-is."""
+    tmpl = {"invoice_id": "{{step.2.items.0.id}}"}
+    out = recipes.render_args(tmpl, {}, [])
+    assert out["invoice_id"] == "{{step.2.items.0.id}}"
+
+
+@pytest.mark.asyncio
+async def test_record_candidate_records_dataflow_with_references(recipes_db):
+    """A data-flow chain is now recorded (id captured as a step reference)."""
+    steps = [
+        {"capability": "invoices", "action": "list", "args_template": {"action": "list"}},
+        {"capability": "invoices", "action": "get",
+         "args_template": {"action": "get",
+                           "invoice_id": "a1b2c3d4-1111-2222-3333-444455556666"}},
+    ]
+    results = [
+        {"items": [{"id": "a1b2c3d4-1111-2222-3333-444455556666"}], "total": 1},
+        {"id": "a1b2c3d4-1111-2222-3333-444455556666"},
+    ]
+    recorded = await recipes.record_candidate(
+        user_text="покажи счета", role="invoice_specialist",
+        intent="invoice_list", steps=steps, step_results=results,
+    )
+    assert recorded is True
+    async with recipes_db["factory"]() as db:
+        from sqlalchemy import select
+        recipe = (await db.execute(select(RecipeSkill))).scalars().one()
+        assert recipe.steps[1]["args_template"]["invoice_id"] == "{{step.0.items.0.id}}"

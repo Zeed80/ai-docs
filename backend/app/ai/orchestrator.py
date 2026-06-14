@@ -859,6 +859,13 @@ class AgentOrchestrator:
             }
             for name, args in seq
         ]
+        # Per-step results (same order as the calls) so data-flow args can become
+        # {{step.N.path}} references — enables recording chains where a later step
+        # consumes an earlier step's output.
+        step_results = [
+            r.get("result") for r in self._trace.tool_results
+            if isinstance(r, dict)
+        ]
         from app.ai import recipes as recipes_module
 
         async def _record() -> None:
@@ -873,6 +880,7 @@ class AgentOrchestrator:
                     role=plan.worker.role,
                     intent=plan.intent,
                     steps=steps,
+                    step_results=step_results,
                 )
             except Exception as exc:
                 log_degraded("orchestrator.recipe_record", exc)

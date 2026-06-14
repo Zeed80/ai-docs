@@ -113,6 +113,53 @@ def _gate_actions_map() -> dict[str, set[str]]:
 _DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\b")
 _QUOTED_RE = re.compile(r"[«\"']([^«»\"']{3,60})[»\"']")
 _SLOT_RE = re.compile(r"\{\{user\.([a-z_0-9]+)\}\}")
+# Step reference slot: {{step.<index>.<dot.path>}} — at replay the value is read
+# from the result of an earlier step (data-flow chains: id from list → details).
+_STEP_REF_RE = re.compile(r"\{\{step\.(\d+)\.([a-zA-Z0-9_.]+)\}\}")
+# Minimum length of a literal worth tracing back to a previous step's output —
+# avoids matching trivial values ("1", "ok") that coincidentally appear.
+_STEP_REF_MIN_LEN = 3
+
+
+def _resolve_path(obj: Any, path: str) -> Any:
+    """Read a value from a nested result by dot-path ('items.0.id')."""
+    cur = obj
+    for part in path.split("."):
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        elif isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+    return cur
+
+
+def _find_value_path(obj: Any, target: str, _prefix: str = "") -> str | None:
+    """Find the dot-path to a scalar equal to ``target`` inside a result object.
+
+    Returns the shortest path found via depth-first scan, or None. Used at record
+    time to express a step arg as a reference into an earlier step's output.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            sub = f"{_prefix}{key}"
+            if isinstance(value, (str, int, float)) and str(value) == target:
+                return sub
+            found = _find_value_path(value, target, f"{sub}.")
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for idx, value in enumerate(obj):
+            sub = f"{_prefix}{idx}"
+            if isinstance(value, (str, int, float)) and str(value) == target:
+                return sub
+            found = _find_value_path(value, target, f"{sub}.")
+            if found:
+                return found
+    return None
 
 
 def extract_entities(text: str) -> dict[str, str]:
@@ -150,17 +197,53 @@ def _slotify_value(value: Any, entities: dict[str, str]) -> Any:
     return value
 
 
+def _refify_value(value: Any, prior_results: list[Any]) -> Any:
+    """Replace a literal that equals a value from an EARLIER step's result with a
+    ``{{step.<idx>.<path>}}`` reference, enabling data-flow replay.
+
+    Scanned earliest-first so a chain of N steps references the closest producer.
+    Only non-trivial scalars are traced (``_STEP_REF_MIN_LEN``) to avoid matching
+    coincidental small values.
+    """
+    if isinstance(value, dict):
+        return {k: _refify_value(v, prior_results) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_refify_value(v, prior_results) for v in value]
+    if isinstance(value, str):
+        s = value.strip()
+        if len(s) < _STEP_REF_MIN_LEN or "{{" in s:
+            return value
+        for idx, result in enumerate(prior_results):
+            path = _find_value_path(result, s)
+            if path:
+                return f"{{{{step.{idx}.{path}}}}}"
+    return value
+
+
 def parameterize_steps(
-    steps: list[dict], user_text: str
+    steps: list[dict],
+    user_text: str,
+    step_results: list[Any] | None = None,
 ) -> tuple[list[dict], dict[str, dict]]:
-    """Replace literal args matching user-text entities with ``{{user.*}}`` slots."""
+    """Parameterize a recorded chain for reproducible replay.
+
+    1. Literals matching user-text entities → ``{{user.*}}`` slots.
+    2. Literals equal to an EARLIER step's output → ``{{step.N.path}}`` refs
+       (data-flow), when ``step_results`` (the per-step results, same order as
+       ``steps``) is provided.
+    """
     entities = extract_entities(user_text)
-    if not entities:
-        return steps, {}
-    templated = [
-        {**step, "args_template": _slotify_value(step.get("args_template") or {}, entities)}
-        for step in steps
-    ]
+    results = step_results or []
+    templated: list[dict] = []
+    for i, step in enumerate(steps):
+        args = step.get("args_template") or {}
+        if entities:
+            args = _slotify_value(args, entities)
+        # Reference only outputs of steps BEFORE this one.
+        if i > 0 and results:
+            args = _refify_value(args, results[:i])
+        templated.append({**step, "args_template": args})
+
     used_slots = {
         slot
         for step in templated
@@ -189,8 +272,8 @@ def _arg_has_orphan_runtime_value(value: Any, text_low: str, key: str | None = N
         return any(_arg_has_orphan_runtime_value(v, text_low) for v in value)
     if isinstance(value, str):
         s = value.strip()
-        if not s or "{{user." in s:
-            return False  # slot → reproducible
+        if not s or "{{user." in s or "{{step." in s:
+            return False  # request slot or step-reference → reproducible
         if _UUID_RE.search(s):
             return True  # a UUID is never something the user typed
         if key and key.lower() in _RUNTIME_ID_KEYS and s.lower() not in text_low:
@@ -336,15 +419,49 @@ async def record_confirmed_replay(recipe_id) -> None:
         log_degraded("recipes.record_confirmed_replay", exc)
 
 
-def render_args(args_template: Any, slots: dict[str, str]) -> Any:
+def render_args(
+    args_template: Any,
+    slots: dict[str, str],
+    step_results: list[Any] | None = None,
+) -> Any:
+    """Render a step's args: substitute {{user.*}} slots and, when step_results
+    is given, {{step.N.path}} references from earlier steps' outputs.
+
+    A step reference can resolve to a non-string (id as int, nested object): if
+    the placeholder is the WHOLE value it's replaced in-place preserving type;
+    inside a larger string it's stringified.
+    """
+    results = step_results or []
+
     if isinstance(args_template, str):
-        def _sub(match: re.Match) -> str:
+        # Whole-value step reference → preserve the resolved type.
+        whole = _STEP_REF_RE.fullmatch(args_template.strip())
+        if whole:
+            idx, path = int(whole.group(1)), whole.group(2)
+            if idx < len(results):
+                resolved = _resolve_path(results[idx], path)
+                if resolved is not None:
+                    return resolved
+            return args_template
+
+        def _sub_user(match: re.Match) -> str:
             return slots.get(match.group(1), match.group(0))
-        return _SLOT_RE.sub(_sub, args_template)
+
+        def _sub_step(match: re.Match) -> str:
+            idx, path = int(match.group(1)), match.group(2)
+            if idx < len(results):
+                resolved = _resolve_path(results[idx], path)
+                if resolved is not None:
+                    return str(resolved)
+            return match.group(0)
+
+        rendered = _SLOT_RE.sub(_sub_user, args_template)
+        rendered = _STEP_REF_RE.sub(_sub_step, rendered)
+        return rendered
     if isinstance(args_template, dict):
-        return {k: render_args(v, slots) for k, v in args_template.items()}
+        return {k: render_args(v, slots, results) for k, v in args_template.items()}
     if isinstance(args_template, list):
-        return [render_args(v, slots) for v in args_template]
+        return [render_args(v, slots, results) for v in args_template]
     return args_template
 
 
@@ -416,12 +533,14 @@ async def record_candidate(
     role: str,
     intent: str,
     steps: list[dict],
+    step_results: list[Any] | None = None,
     session_id: str | None = None,
 ) -> bool:
     """Record a successful tool sequence as a draft recipe (or enrich a duplicate).
 
     ``steps``: [{"capability": str, "action": str, "args_template": dict}] in
-    execution order. Returns True when something was recorded.
+    execution order. ``step_results``: each step's result (same order) — lets
+    data-flow args become {{step.N.path}} references. Returns True when recorded.
     """
     if not steps or len(steps) < _MIN_STEPS or len(steps) > _MAX_STEPS:
         return False
@@ -434,12 +553,12 @@ async def record_candidate(
         if action and action in gates.get(cap, set()):
             return False  # approval-gated actions never enter recipes
 
-    templated_steps, param_slots = parameterize_steps(steps, user_text)
+    templated_steps, param_slots = parameterize_steps(steps, user_text, step_results)
 
-    # Reproducibility gate: skip chains whose steps depend on runtime output
-    # (orphan ids) — replay can only substitute request-derived slots, so such a
-    # recipe would replay stale values. Length is allowed up to _MAX_STEPS; this
-    # is the real safety criterion.
+    # Reproducibility gate: skip chains whose steps depend on runtime output that
+    # could NOT be turned into a {{step.N.path}} reference (orphan ids). Data-flow
+    # captured as step references passes; truly unresolvable runtime values don't.
+    # Length is allowed up to _MAX_STEPS; this is the real safety criterion.
     if not is_reproducible(templated_steps, user_text):
         logger.info("recipe_skipped_nonreproducible", steps=len(templated_steps))
         return False
@@ -565,11 +684,14 @@ async def replay(
     from app.ai.orchestrator import _agent_headers  # X-API-Key for internal calls
 
     base = config.backend_url.rstrip("/")
+    # Accumulated per-step results so later steps can reference earlier output
+    # via {{step.N.path}} (data-flow replay).
+    step_results: list[Any] = []
     try:
         async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
             for step in recipe.steps or []:
                 capability = str(step.get("capability") or "")
-                args = render_args(step.get("args_template") or {}, slots)
+                args = render_args(step.get("args_template") or {}, slots, step_results)
                 if not isinstance(args, dict):
                     args = {}
                 action = str(step.get("action") or "")
@@ -593,6 +715,7 @@ async def replay(
                     await record_outcome(recipe.id, success=False)
                     return False
                 result = resp.json() if resp.content else {}
+                step_results.append(result)
                 if isinstance(result, dict) and result.get("error"):
                     if on_event:
                         await on_event(
