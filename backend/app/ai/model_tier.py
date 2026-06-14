@@ -86,6 +86,34 @@ def has_high_complexity_signal(text: str) -> bool:
     return any(kw in lower for kw in _HIGH_COMPLEXITY_SIGNALS)
 
 
+# Action verbs: the user wants something DONE to a record (check arithmetic,
+# approve, send…), not a table shown. Such turns must reach the worker even when
+# an entity resolves a workspace canvas — otherwise a proactive table silently
+# replaces the requested action.
+_ACTION_SIGNALS = frozenset({
+    "проверь", "проверить", "перепровер", "пересчита", "пересчёт", "пересчет",
+    "утверди", "утвердить", "одобри", "отклони", "отклонить", "отправь",
+    "отправить", "удали", "удалить", "оплати", "оплатить", "подтверди",
+    "подтвердить", "валидир", "исправь", "исправить", "обнови", "обновить",
+    "измени", "изменить", "согласуй", "согласовать", "заполни", "создай счёт",
+    "проведи", "разнеси", "верифицир",
+    # English
+    "validate", "approve", "reject", "send", "delete", "pay", "confirm",
+    "verify", "fix", "update record",
+})
+
+
+def has_action_intent(text: str) -> bool:
+    """True when the request asks to act on a record, not just view data.
+
+    Action turns must go to the worker (they may need a data-flow chain:
+    find the record → operate on it), so the proactive table fast-path is
+    skipped for them.
+    """
+    lower = text.lower()
+    return any(kw in lower for kw in _ACTION_SIGNALS)
+
+
 def score_complexity(
     text: str,
     context_tokens: int = 0,

@@ -46,6 +46,7 @@ from app.ai.flow_awareness import format_flow_summary_human, get_flow_snapshot
 from app.ai.model_tier import (
     Tier,
     aux_quality_budget,
+    has_action_intent,
     has_high_complexity_signal,
     inject_chain_of_draft,
     score_complexity,
@@ -310,7 +311,11 @@ class AgentOrchestrator:
         # NO planner/worker LLM. Placed BEFORE the recipe lookup so common
         # "покажи таблицу/аналитику" turns skip the recipe embedding round-trip
         # entirely (that embedding competes with APEX for VRAM → 2-7s stalls).
-        if reasoning_mode != "strict" and not has_high_complexity_signal(content):
+        if (
+            reasoning_mode != "strict"
+            and not has_high_complexity_signal(content)
+            and not has_action_intent(content)
+        ):
             heuristic_plan = self._plan_turn(content)
             # Skipped only for explicit deep-reasoning verbs ("сравни",
             # "проанализируй", "построй план"…) — those need real worker
