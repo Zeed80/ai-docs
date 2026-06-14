@@ -46,6 +46,7 @@ from app.ai.flow_awareness import format_flow_summary_human, get_flow_snapshot
 from app.ai.model_tier import (
     Tier,
     aux_quality_budget,
+    has_high_complexity_signal,
     inject_chain_of_draft,
     score_complexity,
     should_use_cod,
@@ -302,6 +303,61 @@ class AgentOrchestrator:
         # «покажи только…») is applied deterministically — 0 LLM, мгновенно.
         if await self._try_spec_table_patch_directly(content, config, turn_started_at):
             return
+
+        # Heuristic-first for workspace tables: if a cheap heuristic plan already
+        # resolves a self-sufficient canvas, execute it deterministically with
+        # NO planner/worker LLM. Placed BEFORE the recipe lookup so common
+        # "покажи таблицу/аналитику" turns skip the recipe embedding round-trip
+        # entirely (that embedding competes with APEX for VRAM → 2-7s stalls).
+        if reasoning_mode != "strict" and not has_high_complexity_signal(content):
+            heuristic_plan = self._plan_turn(content)
+            # Skipped only for explicit deep-reasoning verbs ("сравни",
+            # "проанализируй", "построй план"…) — those need real worker
+            # reasoning, not a short-circuit to a plain table. Analytical
+            # pivots ("популярнее", "больше всего") still fire here: stacked
+            # MEDIUM words shouldn't disqualify a deterministic pivot.
+            if heuristic_plan.workspace.canvas_id in self._PROACTIVE_SAFE_CANVASES:
+                self._plan_source = "proactive_workspace"
+                plan = heuristic_plan
+                self._workspace_before = _workspace_updated_at_snapshot()
+                await self._announce_plan(plan)
+                if await self._try_proactive_workspace_execution(plan, config):
+                    audit = await self._audit_turn(plan, config)
+                    await self._publish_audit(audit)
+                    _record_feedback_async(
+                        content=content, plan=plan, trace=self._trace, audit=audit,
+                        retries=0, duration_ms=int((time.time() - turn_started_at) * 1000),
+                    )
+                    duration_ms = int((time.time() - turn_started_at) * 1000)
+                    logger.info(
+                        "agent_turn_complete",
+                        intent=plan.intent, reasoning_mode=reasoning_mode,
+                        plan_source="proactive_workspace",
+                        tools_called=self._trace.tool_calls,
+                        tool_count=len(self._trace.tool_calls),
+                        parallel_used=self._trace.parallel_used,
+                        errors=self._trace.errors,
+                        workspace_required=plan.workspace.required,
+                        audit_passed=audit.passed, audit_issues=audit.issue_codes,
+                        retries=0, llm_calls=0, aux_llm_calls=self._aux_llm_calls,
+                        duration_ms=duration_ms,
+                    )
+                    try:
+                        from app.core.metrics import (
+                            agent_turns_total, agent_turn_duration_seconds,
+                            agent_tool_calls_total,
+                        )
+                        agent_turns_total.labels(
+                            outcome="success" if audit.passed else "audit_failed"
+                        ).inc()
+                        agent_turn_duration_seconds.observe(duration_ms / 1000)
+                        for tool in self._trace.tool_calls:
+                            agent_tool_calls_total.labels(tool=tool).inc()
+                    except Exception:
+                        pass
+                    chips = self._derive_action_chips(plan, content)
+                    await self._outer_send({"type": "done", "action_chips": chips})
+                    return
 
         # Learned recipes: a high-similarity ACTIVE recipe with resolvable slots
         # is replayed deterministically (0 planner LLM calls); a weaker match
@@ -1384,7 +1440,66 @@ class AgentOrchestrator:
         spec = _workspace_tool_spec_for_plan(plan)
         if not spec:
             return False
+        return await self._execute_workspace_spec(
+            spec, config,
+            announce=(
+                "Оркестратор: исполнитель выбрал не тот инструмент, "
+                "запускаю правильный workspace tool напрямую."
+            ),
+        )
 
+    # Canvases whose skill has self-sufficient default_args — the orchestrator
+    # can run them deterministically (0 worker-LLM) the moment the plan resolves
+    # the canvas. spec-table is intentionally excluded: it needs the LLM to
+    # choose columns. invoice-pivot etc. carry sensible defaults.
+    _PROACTIVE_SAFE_CANVASES = frozenset({
+        "agent:invoices",
+        "agent:suppliers",
+        "agent:documents",
+        "agent:invoice-pivot",
+        "agent:invoice-items",
+        "agent:invoice-items-by-supplier",
+        "agent:invoice-items-grouped",
+    })
+
+    async def _try_proactive_workspace_execution(
+        self,
+        plan: OrchestratorPlan,
+        config: BuiltinAgentConfig,
+    ) -> bool:
+        """Run a self-sufficient workspace tool directly, before the worker LLM.
+
+        When the plan resolves to a safe canvas (table/pivot with usable
+        defaults), the orchestrator already knows exactly which skill to call —
+        spinning up the 35B worker just to emit that one tool call costs ~12s
+        of prefill for nothing. Execute it here; on any miss fall through to the
+        normal worker loop. Skipped for spec-table (needs LLM-chosen columns).
+        """
+        if not plan.workspace.required:
+            return False
+        if plan.workspace.canvas_id not in self._PROACTIVE_SAFE_CANVASES:
+            return False
+        spec = _workspace_tool_spec_for_plan(plan)
+        if not spec:
+            return False
+        return await self._execute_workspace_spec(
+            spec, config,
+            announce="Готовлю результат на Рабочем столе…",
+        )
+
+    async def _execute_workspace_spec(
+        self,
+        spec: dict[str, Any],
+        config: BuiltinAgentConfig,
+        *,
+        announce: str,
+    ) -> bool:
+        """Execute a resolved workspace tool spec via direct HTTP (no worker LLM).
+
+        Shared by the proactive fast-path and the post-audit repair path.
+        Resets the turn trace, runs the policy gate, POSTs to the skill endpoint
+        and records tool_call/result/text events so audit + done see the output.
+        """
         tool_name: str = spec["tool"]
         approval_gates: set[str] = set(config.approval_gates or [])
         policy = check_tool_execution(
@@ -1395,7 +1510,7 @@ class AgentOrchestrator:
         )
         if not policy.allowed or tool_name in approval_gates:
             reason = (
-                f"требует подтверждения человеком (approval gate)"
+                "требует подтверждения человеком (approval gate)"
                 if tool_name in approval_gates
                 else policy.reason
             )
@@ -1415,10 +1530,7 @@ class AgentOrchestrator:
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._outer_send({
             "type": "orchestrator.direct_tool_started",
-            "content": (
-                "Оркестратор: исполнитель выбрал не тот инструмент, "
-                "запускаю правильный workspace tool напрямую."
-            ),
+            "content": announce,
             "tool": tool_name,
             "args": spec["args"],
         })

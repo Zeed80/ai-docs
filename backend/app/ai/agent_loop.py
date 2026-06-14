@@ -37,9 +37,11 @@ def _internal_headers() -> dict:
 # Large lists (invoices, inventory, etc.) can easily hit 100k+ chars which
 # triggers unnecessary context compression. Keep enough for the model to
 # extract counts, statuses and a sample of items.
-_MAX_TOOL_RESULT_CHARS = 10000
+# Results above turn_vault.VAULT_THRESHOLD are stored in Redis and replaced
+# with a compact envelope (preview + vault_ref) before reaching this trim.
+_MAX_TOOL_RESULT_CHARS = 5000
 # Number of list items to keep in the sample shown to the LLM.
-_TOOL_RESULT_SAMPLE_ITEMS = 15
+_TOOL_RESULT_SAMPLE_ITEMS = 8
 # Minimum items to always keep regardless of size.
 _TOOL_RESULT_MIN_ITEMS = 3
 
@@ -324,7 +326,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
             "type": "function",
             "function": {
                 "name": fn_name,
-                "description": description[:1500],
+                "description": description[:400],
                 "parameters": {
                     "type": "object",
                     "properties": properties,
@@ -1979,6 +1981,28 @@ class AgentSession:
         await self._send({"type": "tool_result", "tool": fn_name, "result": result})
         return fn_name, result
 
+    async def _tool_result_to_history(self, result: dict) -> None:
+        """Serialise a tool result for conversation history.
+
+        Results exceeding VAULT_THRESHOLD are stored in Redis; the history
+        receives a compact envelope (preview + vault_ref) instead of the full
+        payload, keeping the context window thin as the dataset grows.
+        """
+        from app.ai.turn_vault import make_vault_envelope, should_vault, vault_store
+        content_json = json.dumps(result, ensure_ascii=False)
+        if should_vault(content_json):
+            try:
+                ref = await vault_store(self._session_id, result)
+                envelope = make_vault_envelope(result, ref)
+                content_json = json.dumps(envelope, ensure_ascii=False)
+            except Exception:
+                # Vault unavailable: fall back to trimmed result
+                pass
+        self.messages.append({
+            "role": "tool",
+            "content": _trim_tool_result(content_json),
+        })
+
     async def _execute_tools_sequential(
         self, tool_calls: list[dict], iteration: int
     ) -> list[tuple[str, dict]]:
@@ -1986,10 +2010,7 @@ class AgentSession:
         for tc in tool_calls:
             fn_name, result = await self._execute_single_tool(tc, iteration)
             results.append((fn_name, result))
-            self.messages.append({
-                "role": "tool",
-                "content": _trim_tool_result(json.dumps(result, ensure_ascii=False)),
-            })
+            await self._tool_result_to_history(result)
             self._trim_history()
         return results
 
@@ -2003,10 +2024,7 @@ class AgentSession:
             return_exceptions=False,
         )
         for _fn_name, result in results:
-            self.messages.append({
-                "role": "tool",
-                "content": _trim_tool_result(json.dumps(result, ensure_ascii=False)),
-            })
+            await self._tool_result_to_history(result)
         self._trim_history()
         return list(results)
 
@@ -2093,6 +2111,11 @@ class AgentSession:
         keep = self._config.max_history_messages
         if len(self.messages) > keep:
             self.messages = self.messages[-keep:]
+        # Eagerly prune old tool results: keep last 6 verbatim, replace older
+        # ones with a stub. This is free (no LLM call) and prevents tool result
+        # payloads from accumulating across turns.
+        from app.ai.context_compressor import _prune_old_tool_results
+        self.messages = _prune_old_tool_results(self.messages, keep_last=6)
 
     async def _append_memory_context(self) -> None:
         if not self._config.memory_enabled:
@@ -2106,6 +2129,11 @@ class AgentSession:
             "",
         )
         if not latest_user:
+            return
+        # Gate: skip RAG for pure workspace/flow queries answered from SQL.
+        # Saves a vector search + reranker round-trip and keeps context clean.
+        from app.ai import route_table
+        if not route_table.needs_document_retrieval(latest_user):
             return
         try:
             context = await asyncio.wait_for(
@@ -2139,7 +2167,7 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
                 f"{config.backend_url.rstrip('/')}/api/memory/search",
                 json={
                     "query": query,
-                    "limit": 20,
+                    "limit": 8,
                     "retrieval_mode": "auto_hybrid",
                     "need_full_coverage": False,
                     "include_explain": False,
@@ -2157,10 +2185,10 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
     used_chars = 0
     for index, hit in enumerate(hits, start=1):
         title = str(hit.get("title") or hit.get("kind") or "memory")
-        summary = str(hit.get("summary") or "")[:1200]
+        summary = str(hit.get("summary") or "")[:300]
         source = str(hit.get("source") or "memory")
         line = f"{index}. [{source}] {title}: {summary}".strip()
-        if used_chars + len(line) > 8000:
+        if used_chars + len(line) > 2400:
             break
         lines.append(line)
         used_chars += len(line)

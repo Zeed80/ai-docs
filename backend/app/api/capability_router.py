@@ -342,6 +342,29 @@ def _validate_capability_contract(
         )
 
 
+@router.post("/cap/vault")
+async def dispatch_vault(request: Request) -> JSONResponse:
+    """Vault capability: retrieve paginated data from a previous large tool result.
+
+    The agent calls this when it needs data beyond the 3-item preview in the
+    compact envelope. Prefer workspace.* for display — vault is for iterating.
+    """
+    from app.ai.turn_vault import vault_get
+    try:
+        body: dict = await request.json()
+    except Exception:
+        body = {}
+    vault_ref = body.get("vault_ref") or ""
+    if not vault_ref:
+        raise HTTPException(status_code=400, detail="'vault_ref' is required")
+    offset = int(body.get("offset") or 0)
+    limit = min(int(body.get("limit") or 20), 100)
+    result = await vault_get(vault_ref, offset=offset, limit=limit)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Vault ref expired or not found (TTL 15 min)")
+    return JSONResponse(content=result)
+
+
 @router.post("/cap/{capability_name}")
 async def dispatch_capability(capability_name: str, request: Request) -> JSONResponse:
     """Route a capability call to the appropriate backend endpoint."""

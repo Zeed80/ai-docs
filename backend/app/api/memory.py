@@ -45,9 +45,17 @@ from app.domain.memory_builder import build_document_memory_async
 
 router = APIRouter()
 
-_TEXT_WEIGHT = float(os.getenv("MEMORY_TEXT_WEIGHT", "0.45"))
-_VECTOR_WEIGHT = float(os.getenv("MEMORY_VECTOR_WEIGHT", "0.40"))
-_GRAPH_WEIGHT = float(os.getenv("MEMORY_GRAPH_WEIGHT", "0.15"))
+# Reciprocal Rank Fusion: each retrieval branch is ranked by its own raw score
+# and fused by rank position, not absolute score. This avoids calibrating
+# incompatible scales (cosine 0–1 vs ts_rank_cd 0–∞ vs term overlap 0–1).
+# _RRF_K dampens the contribution of low-ranked items (standard value 60).
+_RRF_K = int(os.getenv("MEMORY_RRF_K", "60"))
+# Per-branch trust: vector and lexical are primary, graph is a weaker signal.
+_RRF_BRANCH_WEIGHTS = {
+    "text": float(os.getenv("MEMORY_RRF_TEXT_WEIGHT", "1.0")),
+    "vector": float(os.getenv("MEMORY_RRF_VECTOR_WEIGHT", "1.0")),
+    "graph": float(os.getenv("MEMORY_RRF_GRAPH_WEIGHT", "0.5")),
+}
 _VECTOR_SCORE_THRESHOLD = float(os.getenv("MEMORY_VECTOR_SCORE_THRESHOLD", "0.3"))
 _AUTO_CANDIDATE_LIMIT = int(os.getenv("MEMORY_AUTO_CANDIDATE_LIMIT", "1000"))
 _RERANK_CANDIDATE_LIMIT = int(os.getenv("MEMORY_RERANK_CANDIDATE_LIMIT", "30"))
@@ -125,8 +133,7 @@ async def search_memory(
     if payload.retrieval_mode != "auto_hybrid":
         diagnostics.append(f"retrieval_mode_deprecated:{payload.retrieval_mode}")
 
-    hits = _merge_memory_hits(hits)
-    hits = _rank_memory_hits(hits)
+    hits = _rrf_fuse(hits)
 
     if hits:
         cfg = get_ai_config()
@@ -312,6 +319,22 @@ def _fts_condition(column, query: str):
         return column.ilike(f"%{query}%")
 
 
+def _fts_rank(column, query: str):
+    """Return a ts_rank_cd ranking expression for a Russian-dictionary FTS match.
+
+    Real lexical relevance (term frequency, proximity, document length) computed
+    by Postgres — replaces the crude term-overlap of _simple_score. The absolute
+    magnitude is irrelevant: RRF consumes only the rank order this produces.
+    Falls back to a constant when FTS is unavailable (e.g. SQLite in tests).
+    """
+    try:
+        tsq = func.plainto_tsquery("russian", query)
+        vec = func.to_tsvector("russian", column)
+        return func.ts_rank_cd(vec, tsq)
+    except Exception:
+        return None
+
+
 async def _search_graph_nodes(
     db: AsyncSession,
     payload: MemorySearchRequest,
@@ -329,11 +352,26 @@ async def _search_graph_nodes(
         node_query = node_query.where(KnowledgeNode.node_type.in_(payload.node_types))
     if payload.document_id:
         node_query = node_query.where(KnowledgeNode.source_document_id == payload.document_id)
-    node_result = await db.execute(
-        node_query.order_by(KnowledgeNode.created_at.desc()).limit(payload.limit)
-    )
-    for node in node_result.scalars().all():
-        score = _simple_score(payload.query, " ".join([node.title, node.summary or ""]))
+
+    # ts_rank_cd over title+summary gives real lexical relevance; canonical_key
+    # matches that the tsvector misses keep a term-overlap floor so they survive.
+    rank_title = _fts_rank(KnowledgeNode.title, payload.query)
+    rank_summary = _fts_rank(KnowledgeNode.summary, payload.query)
+    if rank_title is not None and rank_summary is not None:
+        rank_expr = rank_title + rank_summary
+        node_rows = (await db.execute(
+            node_query.add_columns(rank_expr.label("r"))
+            .order_by(rank_expr.desc()).limit(payload.limit)
+        )).all()
+    else:
+        node_rows = [
+            (n, None) for n in (await db.execute(
+                node_query.order_by(KnowledgeNode.created_at.desc()).limit(payload.limit)
+            )).scalars().all()
+        ]
+    for node, r in node_rows:
+        overlap = _simple_score(payload.query, " ".join([node.title, node.summary or ""]))
+        score = max(float(r), overlap) if r is not None else overlap
         hits.append(
             MemorySearchHit(
                 kind="node",
@@ -540,22 +578,49 @@ def _merge_memory_hits(hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
     return list(merged.values())
 
 
-def _rank_memory_hits(hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
-    return [_rank_memory_hit(hit) for hit in hits]
+def _rrf_fuse(hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
+    """Fuse text / vector / graph branches via Reciprocal Rank Fusion.
 
+    Each branch is ranked independently by its own raw score; a hit's fused
+    score is Σ weight / (k + rank). Because only rank order matters, the
+    branches' incompatible score scales (cosine, ts_rank_cd, term overlap)
+    never need calibration. The result is min-max normalised to [0, 1] so the
+    downstream reranker (0–1) and exact-match boosts stay on a comparable scale.
+    """
+    # 1. Dedupe within each branch, keeping the best per-branch raw score.
+    branch_best: dict[str, dict[tuple[str, uuid.UUID], float]] = {
+        "text": {}, "vector": {}, "graph": {},
+    }
+    for hit in hits:
+        key = (hit.kind, hit.id)
+        for branch, value in (
+            ("text", hit.text_score),
+            ("vector", hit.vector_score),
+            ("graph", hit.graph_score),
+        ):
+            if value is None:
+                continue
+            prev = branch_best[branch].get(key)
+            if prev is None or value > prev:
+                branch_best[branch][key] = float(value)
 
-def _rank_memory_hit(hit: MemorySearchHit) -> MemorySearchHit:
-    scores = [
-        (hit.text_score, _TEXT_WEIGHT),
-        (hit.vector_score, _VECTOR_WEIGHT),
-        (hit.graph_score, _GRAPH_WEIGHT),
-    ]
-    available = [(score, weight) for score, weight in scores if score is not None]
-    if not available:
-        return hit
-    weight_sum = sum(weight for _, weight in available)
-    weighted_score = sum(float(score) * weight for score, weight in available) / weight_sum
-    return hit.model_copy(update={"score": round(weighted_score, 6)})
+    # 2. Rank within each branch and accumulate weighted RRF contributions.
+    rrf: dict[tuple[str, uuid.UUID], float] = {}
+    for branch, scores in branch_best.items():
+        weight = _RRF_BRANCH_WEIGHTS.get(branch, 1.0)
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+        for rank, (key, _score) in enumerate(ranked):
+            rrf[key] = rrf.get(key, 0.0) + weight / (_RRF_K + rank + 1)
+
+    # 3. Normalise to [0, 1] for scale-compatibility with rerank/boosts.
+    max_rrf = max(rrf.values()) if rrf else 0.0
+    merged = _merge_memory_hits(hits)
+    fused: list[MemorySearchHit] = []
+    for hit in merged:
+        raw = rrf.get((hit.kind, hit.id), 0.0)
+        norm = round(raw / max_rrf, 6) if max_rrf > 0 else 0.0
+        fused.append(hit.model_copy(update={"score": norm}))
+    return fused
 
 
 def _sort_memory_hits(query: str, hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
@@ -583,71 +648,90 @@ async def _search_sql_memory(
     *,
     remaining: int,
 ) -> list[MemorySearchHit]:
+    """Lexical retrieval over chunks, evidence spans and chat messages.
+
+    Ranks by Postgres ts_rank_cd (real lexical relevance) when available,
+    falling back to recency + term-overlap on engines without FTS (SQLite).
+    text_score carries the lexical signal consumed by RRF fusion.
+    """
     if remaining <= 0:
         return []
     hits: list[MemorySearchHit] = []
 
-    chunk_query = select(DocumentChunk).where(
-        _fts_condition(DocumentChunk.text, payload.query)
-    )
-    if payload.document_id:
-        chunk_query = chunk_query.where(DocumentChunk.document_id == payload.document_id)
-    chunk_result = await db.execute(
-        chunk_query.order_by(DocumentChunk.created_at.desc()).limit(remaining)
-    )
-    for chunk in chunk_result.scalars().all():
-        score = _simple_score(payload.query, chunk.text)
-        hits.append(
-            MemorySearchHit(
-                kind="chunk",
-                id=chunk.id,
+    # ── Document chunks ──
+    rank_expr = _fts_rank(DocumentChunk.text, payload.query)
+    chunk_cond = _fts_condition(DocumentChunk.text, payload.query)
+    if rank_expr is not None:
+        stmt = select(DocumentChunk, rank_expr.label("r")).where(chunk_cond)
+        if payload.document_id:
+            stmt = stmt.where(DocumentChunk.document_id == payload.document_id)
+        rows = (await db.execute(stmt.order_by(rank_expr.desc()).limit(remaining))).all()
+        for chunk, r in rows:
+            score = float(r or 0.0)
+            hits.append(MemorySearchHit(
+                kind="chunk", id=chunk.id,
                 title=f"Document chunk #{chunk.chunk_index}",
-                summary=chunk.text[:500],
-                score=score,
-                source="sql",
-                text_score=score,
-                source_document_id=chunk.document_id,
-            )
-        )
+                summary=chunk.text[:500], score=score, source="sql",
+                text_score=score, source_document_id=chunk.document_id,
+            ))
+    else:
+        stmt = select(DocumentChunk).where(chunk_cond)
+        if payload.document_id:
+            stmt = stmt.where(DocumentChunk.document_id == payload.document_id)
+        for chunk in (await db.execute(
+            stmt.order_by(DocumentChunk.created_at.desc()).limit(remaining)
+        )).scalars().all():
+            score = _simple_score(payload.query, chunk.text)
+            hits.append(MemorySearchHit(
+                kind="chunk", id=chunk.id,
+                title=f"Document chunk #{chunk.chunk_index}",
+                summary=chunk.text[:500], score=score, source="sql",
+                text_score=score, source_document_id=chunk.document_id,
+            ))
 
+    # ── Evidence spans ──
     remaining = remaining - len(hits)
     if remaining > 0:
-        evidence_query = select(EvidenceSpan).where(
-            _fts_condition(EvidenceSpan.text, payload.query)
-        )
-        if payload.document_id:
-            evidence_query = evidence_query.where(EvidenceSpan.document_id == payload.document_id)
-        evidence_result = await db.execute(
-            evidence_query.order_by(EvidenceSpan.created_at.desc()).limit(remaining)
-        )
-        for evidence in evidence_result.scalars().all():
-            score = _simple_score(payload.query, evidence.text)
-            hits.append(
-                MemorySearchHit(
-                    kind="evidence",
-                    id=evidence.id,
-                    title=evidence.field_name or "Evidence span",
-                    summary=evidence.text[:500],
-                    score=score,
-                    source="sql",
-                    text_score=score,
-                    source_document_id=evidence.document_id,
-                    evidence=EvidenceSpanOut.model_validate(evidence),
-                )
-            )
+        rank_expr = _fts_rank(EvidenceSpan.text, payload.query)
+        ev_cond = _fts_condition(EvidenceSpan.text, payload.query)
+        if rank_expr is not None:
+            stmt = select(EvidenceSpan, rank_expr.label("r")).where(ev_cond)
+            if payload.document_id:
+                stmt = stmt.where(EvidenceSpan.document_id == payload.document_id)
+            ev_rows = (await db.execute(stmt.order_by(rank_expr.desc()).limit(remaining))).all()
+        else:
+            stmt = select(EvidenceSpan).where(ev_cond)
+            if payload.document_id:
+                stmt = stmt.where(EvidenceSpan.document_id == payload.document_id)
+            ev_rows = [
+                (e, None) for e in (await db.execute(
+                    stmt.order_by(EvidenceSpan.created_at.desc()).limit(remaining)
+                )).scalars().all()
+            ]
+        for evidence, r in ev_rows:
+            score = float(r) if r is not None else _simple_score(payload.query, evidence.text)
+            hits.append(MemorySearchHit(
+                kind="evidence", id=evidence.id,
+                title=evidence.field_name or "Evidence span",
+                summary=evidence.text[:500], score=score, source="sql",
+                text_score=score, source_document_id=evidence.document_id,
+                evidence=EvidenceSpanOut.model_validate(evidence),
+            ))
+
+    # ── Chat messages ──
     remaining = remaining - len(hits)
     if remaining > 0:
-        chat_query = (
-            select(ChatMessage)
-            .where(
-                ChatMessage.role.in_(["user", "assistant"]),
-                _fts_condition(ChatMessage.content, payload.query),
-            )
-            .order_by(ChatMessage.created_at.desc())
-            .limit(remaining)
-        )
+        rank_expr = _fts_rank(ChatMessage.content, payload.query)
+        chat_cond = _fts_condition(ChatMessage.content, payload.query)
+        base_where = [ChatMessage.role.in_(["user", "assistant"]), chat_cond]
+        if rank_expr is not None:
+            stmt = select(ChatMessage, rank_expr.label("r")).where(*base_where)
+            order_col = rank_expr.desc()
+        else:
+            stmt = select(ChatMessage).where(*base_where)
+            order_col = ChatMessage.created_at.desc()
         if payload.document_id:
-            chat_query = chat_query.where(
+            stmt = stmt.where(
                 ChatMessage.id.in_(
                     select(ChatMessageAttachment.message_id).where(
                         ChatMessageAttachment.document_id == payload.document_id,
@@ -655,21 +739,18 @@ async def _search_sql_memory(
                     )
                 )
             )
-        chat_result = await db.execute(chat_query)
-        for message in chat_result.scalars().all():
+        raw = (await db.execute(stmt.order_by(order_col).limit(remaining))).all()
+        chat_rows = raw if rank_expr is not None else [(m,) for (m,) in raw]
+        for row in chat_rows:
+            message = row[0]
+            r = row[1] if rank_expr is not None else None
             content = message.content or ""
-            score = _simple_score(payload.query, content)
-            hits.append(
-                MemorySearchHit(
-                    kind="chat_message",
-                    id=message.id,
-                    title=f"Chat {message.role}",
-                    summary=content[:500],
-                    score=score,
-                    source="chat",
-                    text_score=score,
-                )
-            )
+            score = float(r) if r is not None else _simple_score(payload.query, content)
+            hits.append(MemorySearchHit(
+                kind="chat_message", id=message.id,
+                title=f"Chat {message.role}",
+                summary=content[:500], score=score, source="chat", text_score=score,
+            ))
     return hits
 
 
@@ -1008,7 +1089,12 @@ async def _embedding_record_text(
 ) -> str | None:
     if record.content_type == "document_chunk":
         chunk = await db.get(DocumentChunk, record.content_id)
-        return chunk.text if chunk else None
+        if not chunk:
+            return None
+        # Contextual Retrieval: prepend the document context prefix so reindex
+        # produces the same enriched vector as the live embedding task.
+        prefix = (chunk.context_prefix or "").strip()
+        return f"{prefix}\n\n{chunk.text}" if prefix else chunk.text
     if record.content_type == "evidence_span":
         evidence = await db.get(EvidenceSpan, record.content_id)
         return evidence.text if evidence else None

@@ -166,7 +166,12 @@ async def _embed_document(document_id: str) -> dict:
             for chunk in chunks:
                 if not (chunk.text or "").strip():
                     continue
-                cvec = await embed_text(chunk.text, profile)
+                # Contextual Retrieval: embed the document-level context prefix
+                # together with the chunk so fragments stay self-describing.
+                # Lexical FTS still indexes chunk.text alone (no prefix noise).
+                prefix = (chunk.context_prefix or "").strip()
+                embed_input = f"{prefix}\n\n{chunk.text}" if prefix else chunk.text
+                cvec = await embed_text(embed_input, profile)
                 upsert_memory_embedding(
                     point_id=f"chunk:{chunk.id}",
                     vector=cvec,
@@ -177,6 +182,7 @@ async def _embed_document(document_id: str) -> dict:
                         "document_id": str(doc.id),
                         "embedding_model": profile.model_key,
                         "text_preview": chunk.text[:500],
+                        "has_context_prefix": bool(prefix),
                     },
                 )
             if chunks:

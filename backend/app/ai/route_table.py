@@ -109,6 +109,24 @@ def is_flow_status_query(text: str) -> bool:
     return any(marker in t for marker in _markers("flow_status_markers"))
 
 
+def needs_document_retrieval(text: str) -> bool:
+    """Decide whether a turn should run RAG (document chunks / long-term memory).
+
+    Skips the costly memory.search (vector + cross-encoder reranker) for pure
+    workspace/flow queries that are answered straight from SQL — they gain
+    nothing from semantic chunk recall and only pay latency + context noise.
+    Content markers ("о чём", "напомни", "найди похожий"…) force retrieval on,
+    even when the query is otherwise workspace-shaped. Everything else defaults
+    to retrieval — episodic/factual context is cheap insurance for open chat.
+    """
+    t = normalize(text)
+    if any(marker in t for marker in _markers("retrieval_content_markers")):
+        return True
+    if is_flow_status_query(text) or is_workspace_request(text):
+        return False
+    return True
+
+
 # ── Intent routes ──────────────────────────────────────────────────────────────
 
 
@@ -289,6 +307,25 @@ def match_fast_intent(content: str, prior_user: str | None = None) -> FastIntent
             entity_label=label,
             search_term=term,
         )
+
+    # ── Status-filtered counts ── checked before plain entity counts: a
+    # question like "сколько счетов ожидают утверждения" must count only the
+    # matching status, not the whole table. First matching rule wins (order in
+    # routes.yml disambiguates "на утверждении"=needs_review from
+    # "утверждён"=approved). The status goes into search_term too, so the
+    # result cache keys per-status (no collision with the unfiltered count).
+    for rule in fp.get("status_counts") or []:
+        entity_kw = normalize(str(rule.get("entity") or ""))
+        markers = [normalize(str(m)) for m in (rule.get("markers") or [])]
+        if entity_kw and entity_kw in t and any(m in t for m in markers):
+            status = str(rule.get("status") or "")
+            return FastIntent(
+                capability=str(rule.get("capability") or ""),
+                action="list",
+                args={"action": "list", "filters": {"status": status, "limit": 1}},
+                entity_label=str(rule.get("label") or ""),
+                search_term=status,
+            )
 
     # ── Top-level entity counts ──
     # Longest keyword first so the most specific entity wins.

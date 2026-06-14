@@ -73,13 +73,17 @@ _LOW_COMPLEXITY_SIGNALS = frozenset({
     #   secretary snapshot (flow_status_markers уже ловят их раньше)
 })
 
-# Контекст, который превращает count-вопрос в аналитику (требует фильтрованного API-вызова).
-_FILTERED_COUNT_SIGNALS = frozenset({
-    "ожидают", "ожидает", "на рассмотрении", "на утверждении", "не утвержден",
-    "просрочен", "за период", "за месяц", "за квартал", "за год", "до срока",
-    "от поставщик", "от контрагент", "по статус", "с аномалиями",
-    "pending", "overdue", "awaiting", "not approved",
-})
+def has_high_complexity_signal(text: str) -> bool:
+    """True when the text contains an explicit deep-reasoning marker.
+
+    Distinct from tier: a request can be tier MEDIUM/LARGE purely from stacked
+    analytical words ("популярнее", "больше всего") yet still be a plain
+    pivot/table. Only a HIGH-complexity verb ("сравни", "проанализируй",
+    "построй план") signals work that genuinely needs the worker LLM rather
+    than a deterministic workspace tool.
+    """
+    lower = text.lower()
+    return any(kw in lower for kw in _HIGH_COMPLEXITY_SIGNALS)
 
 
 def score_complexity(
@@ -104,12 +108,12 @@ def score_complexity(
     high_hits = sum(1 for kw in _HIGH_COMPLEXITY_SIGNALS if kw in lower)
     medium_hits = sum(1 for kw in _MEDIUM_COMPLEXITY_SIGNALS if kw in lower)
     low_hits = sum(1 for kw in _LOW_COMPLEXITY_SIGNALS if kw in lower)
-    filtered_count = any(kw in lower for kw in _FILTERED_COUNT_SIGNALS)
 
     score = high_hits * 3 + medium_hits * 1 - low_hits * 1
-    # Filtered count queries always need an API call → at least SMALL
-    if filtered_count:
-        score = max(score, 1)
+    # NOTE: filtered count questions ("сколько счетов ожидают утверждения")
+    # are handled deterministically by the status_counts fast-path (0 LLM) —
+    # they must stay at low tier so the executor fast-path fires instead of
+    # forcing model planning. (Previously bumped to SMALL via a workaround.)
 
     # Long context → bump up (conversation already complex)
     if context_tokens > 8_000:

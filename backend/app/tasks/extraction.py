@@ -2074,10 +2074,28 @@ def process_approved_document(self, document_id: str) -> dict:
         # (re-running the vision model under concurrent approvals starves the GPU
         # and trips the Celery soft time limit).
         text = _invoice_memory_text(extracted) or (doc.file_name or "")
+        # Contextual Retrieval: pass extracted invoice fields so every chunk
+        # (not just the header) is embedded with supplier/number/date context.
+        context_meta: dict | None = None
+        _inv = locals().get("invoice")
+        if _inv is not None:
+            try:
+                context_meta = {
+                    "invoice_number": _inv.invoice_number,
+                    "invoice_date": (
+                        _inv.invoice_date.strftime("%Y-%m-%d") if _inv.invoice_date else None
+                    ),
+                    "total": _inv.total_amount,
+                    "supplier_name": (
+                        _inv.supplier.name if getattr(_inv, "supplier", None) else None
+                    ),
+                }
+            except Exception:
+                context_meta = None
         try:
             from app.domain.memory_builder import build_document_memory_sync
             _set_job_step(job, "memory_graph", "running")
-            memory_result = build_document_memory_sync(db, doc, text=text)
+            memory_result = build_document_memory_sync(db, doc, text=text, context_meta=context_meta)
             _set_job_step(job, "memory_graph", "done")
             logger.info(
                 "post_approve_memory_built",
