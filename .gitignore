@@ -101,4 +101,5 @@ backend/example-invoices/
 
 # Generated test/quality reports
 backend/tests/reports/
-backups/
+# Server-side backup archives — root only (must NOT match frontend/app/admin/backups/)
+/backups/
