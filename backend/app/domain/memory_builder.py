@@ -99,6 +99,7 @@ async def build_document_memory_async(
     actor: str = "system",
     rebuild: bool = False,
     build_scope: str = "auto",
+    context_meta: dict | None = None,
 ) -> MemoryBuildResult:
     if rebuild:
         await clear_document_memory_async(db, document)
@@ -113,12 +114,14 @@ async def build_document_memory_async(
     document_entities: dict[str, dict[str, KnowledgeNode]] = {}
 
     chunks = _split_chunks(text or document.file_name)
+    context_prefix = build_chunk_context(document, text=text, extra_meta=context_meta)
     for index, chunk_text in enumerate(chunks):
         chunk = DocumentChunk(
             document_id=document.id,
             document_version_id=version_id,
             chunk_index=index,
             text=chunk_text,
+            context_prefix=context_prefix,
             token_count=_rough_token_count(chunk_text),
             metadata_={"method": AUTO_METHOD},
         )
@@ -227,6 +230,7 @@ def build_document_memory_sync(
     actor: str = "system",
     rebuild: bool = False,
     build_scope: str = "auto",
+    context_meta: dict | None = None,
 ) -> MemoryBuildResult:
     if rebuild:
         clear_document_memory_sync(db, document)
@@ -241,12 +245,14 @@ def build_document_memory_sync(
     document_entities: dict[str, dict[str, KnowledgeNode]] = {}
 
     chunks = _split_chunks(text or document.file_name)
+    context_prefix = build_chunk_context(document, text=text, extra_meta=context_meta)
     for index, chunk_text in enumerate(chunks):
         chunk = DocumentChunk(
             document_id=document.id,
             document_version_id=version_id,
             chunk_index=index,
             text=chunk_text,
+            context_prefix=context_prefix,
             token_count=_rough_token_count(chunk_text),
             metadata_={"method": AUTO_METHOD},
         )
@@ -674,6 +680,79 @@ def _get_or_create_entity_node_sync(
     db.add(node)
     db.flush()
     return node
+
+
+_DOC_TYPE_LABELS = {
+    "invoice": "Счёт",
+    "letter": "Письмо",
+    "contract": "Договор",
+    "drawing": "Чертёж",
+    "commercial_offer": "Коммерческое предложение",
+    "act": "Акт",
+    "waybill": "Накладная",
+    "other": "Документ",
+}
+
+# Metadata keys worth surfacing in the context prefix, in display order.
+# Pipelines store extracted fields on Document.metadata_; we read whatever
+# is present without requiring any particular extractor to have run.
+_CONTEXT_META_FIELDS = (
+    ("supplier_name", "поставщик"),
+    ("supplier", "поставщик"),
+    ("counterparty", "контрагент"),
+    ("number", "№"),
+    ("invoice_number", "№"),
+    ("doc_number", "№"),
+    ("date", "от"),
+    ("invoice_date", "от"),
+    ("total", "сумма"),
+    ("total_amount", "сумма"),
+    ("subject", "тема"),
+)
+
+
+def build_chunk_context(
+    document: Document,
+    *,
+    text: str | None = None,
+    extra_meta: dict | None = None,
+) -> str:
+    """Build a deterministic context prefix for Contextual Retrieval.
+
+    Each chunk is prefixed with a one-line document descriptor (type, file, and
+    extracted key fields) before embedding, so a fragment like "цена 50 шт"
+    stays findable as "цена позиций в счёте от ООО Ромашка". This matters for
+    chunks past the first: the header chunk carries supplier/number/date in its
+    own text, but later chunks lose that anchor without the prefix.
+
+    ``extra_meta`` (extracted fields the caller already has — e.g. invoice
+    supplier/number/date) takes priority over ``Document.metadata_``, which on
+    most documents holds only pipeline flags. Deterministic by design: no
+    per-chunk LLM call, so reindexing thousands of documents of any format
+    stays cheap. Returns at least the document-type label.
+    """
+    doc_type = getattr(document.doc_type, "value", document.doc_type) or "other"
+    label = _DOC_TYPE_LABELS.get(str(doc_type), "Документ")
+    parts: list[str] = [label]
+
+    meta = {**(document.metadata_ or {}), **(extra_meta or {})}
+    seen_labels: set[str] = set()
+    for key, display in _CONTEXT_META_FIELDS:
+        value = meta.get(key)
+        if value in (None, "", []) or display in seen_labels:
+            continue
+        text_value = " ".join(str(value).split())[:120]
+        if not text_value:
+            continue
+        parts.append(f"№{text_value}" if display == "№" else f"{display} {text_value}")
+        seen_labels.add(display)
+
+    if document.file_name and len(parts) == 1:
+        # No extracted fields — fall back to the file name for a bit of context.
+        parts.append(f"«{document.file_name}»")
+
+    prefix = ", ".join(parts).strip(", ")
+    return prefix if len(prefix) > len(label) else label
 
 
 def _split_chunks(text: str) -> list[str]:

@@ -41,6 +41,20 @@ workspace_request_markers:
   - "добавь поле"
   - "убери поле"
   - "отсортируй"
+  - "популярн"
+  - "чаще всего"
+  - "больше всего"
+  - "топ товар"
+  - "топ поставщик"
+  - "расскажи о товар"
+  - "какие товар"
+  - "по товарам"
+  - "номенклатур"
+  - "сгруппируй"
+  - "группировк"
+  - "по месяц"
+  - "по валют"
+  - "по статус"
 
 # Правка уже открытой таблицы.
 table_edit_markers:
@@ -65,6 +79,36 @@ existing_table_markers:
   - "текущую таблиц"
   - "в таблицу"
   - "в нее"
+
+# Запрос требует RAG-retrieval из чанков документов / долговременной памяти.
+# Если ни один маркер не найден И запрос — workspace/flow (отвечается из SQL),
+# дорогой memory.search (vector + reranker) пропускается. Маркеры контента
+# ВСЕГДА включают retrieval, даже для workspace-образных формулировок.
+retrieval_content_markers:
+  - "о чем"
+  - "о чём"
+  - "что написано"
+  - "что в документ"
+  - "что в письме"
+  - "содержани"
+  - "напомни"
+  - "почему"
+  - "что было"
+  - "что говорил"
+  - "найди похож"
+  - "похожий"
+  - "похожие"
+  - "упомина"
+  - "контекст"
+  - "расскажи про"
+  - "расскажи о письме"
+  - "ранее"
+  - "обсуждали"
+  - "что мы решили"
+  - "из переписки"
+  - "по смыслу"
+  - "семантическ"
+  - "суть"
 
 # Сквозные вопросы о состоянии документооборота (секретарь / flow-status).
 flow_status_markers:
@@ -125,6 +169,37 @@ fast_paths:
     - "на сумму"
     - "сумма счет"
     - "сумму счет"
+  # Подсчёт счетов с фильтром по статусу — проверяется ПЕРЕД entity_counts.
+  # Срабатывает если в тексте есть И entity-маркер, И status-маркер.
+  # Первое совпавшее правило выигрывает: needs_review идёт раньше approved,
+  # т.к. "на согласовании"/"на утверждении" содержат корни, пересекающиеся
+  # с "согласован"/"утверждён" — порядок различает «ждёт» от «завершено».
+  status_counts:
+    - entity: "счет"
+      markers: ["ожида", "на утверждени", "на согласовани", "на рассмотрени", "на проверк", "не утвержд", "не рассмотр", "ждут утвержд", "ждущ утвержд", "needs_review"]
+      capability: invoices
+      status: needs_review
+      label: "счетов на утверждении"
+    - entity: "счет"
+      markers: ["утвержден", "утверждён", "одобрен", "approved"]
+      capability: invoices
+      status: approved
+      label: "утверждённых счетов"
+    - entity: "счет"
+      markers: ["отклонен", "отклонён", "отказан", "rejected"]
+      capability: invoices
+      status: rejected
+      label: "отклонённых счетов"
+    - entity: "счет"
+      markers: ["оплачен", "оплаченн", "paid"]
+      capability: invoices
+      status: paid
+      label: "оплаченных счетов"
+    - entity: "счет"
+      markers: ["черновик", "черновы", "draft"]
+      capability: invoices
+      status: draft
+      label: "черновиков счетов"
   # Подсчёт сущностей верхнего уровня: keyword → capability + подпись.
   entity_counts:
     - { keyword: "счет",       capability: invoices,  label: "счетов" }
@@ -152,22 +227,39 @@ supplier_grouping:
 # Первое совпадение по keywords выигрывает (порядок имеет значение).
 
 routes:
-  # Построение таблицы с заданными колонками → spec_table (полные данные из SQL).
+  # Построение таблицы с ЗАДАННЫМИ КОЛОНКАМИ → spec_table (нужен LLM для выбора
+  # колонок). Общие «таблицу счетов» без колонок идут ниже в invoice_list →
+  # простой invoice_table, который оркестратор исполняет детерминированно (0 LLM).
   - intent: table_build
     role: invoice_specialist
     keywords:
-      - "таблицу счетов"
-      - "таблица счетов"
-      - "таблицу со счетами"
-      - "счета в таблиц"
-      - "таблицу документов"
-      - "таблицу платежей"
-      - "таблицу остатков"
-      - "таблицу товаров"
       - "с колонками"
-      - "в виде таблицы"
+      - "с полями"
+      - "со столбцами"
       - "в формате -"
       - "в формате:"
+      - "таблицу платежей"
+      - "таблицу остатков"
+      # Сравнение цен/стоимости товаров у поставщиков — это табличная аналитика
+      # с фильтром+сортировкой (spec_table за 1 LLM-вызов), НЕ RAG-поиск по
+      # документам. Направляем сюда, иначе worker уходит в memory/search (минуты).
+      - "по цене"
+      - "по цене и"
+      - "по стоимости"
+      - "убывания стоимост"
+      - "убывания цен"
+      - "возрастания цен"
+      - "возрастания стоимост"
+      - "по убыванию"
+      - "по возрастанию"
+      - "цены у разных поставщик"
+      - "цены у поставщик"
+      - "у разных поставщик"
+      - "дешевле всего"
+      - "дороже всего"
+      - "у каких поставщик дешевле"
+      - "сравни цен"
+      - "сравни стоимост"
     workspace_required: true
     default_canvas: "agent:spec-table"
     skills: ["workspace.spec_table"]
@@ -194,10 +286,49 @@ routes:
 
   - intent: invoice_list
     role: invoice_specialist
-    keywords: ["выведи счет", "список счет", "все счет"]
+    keywords:
+      - "выведи счет"
+      - "список счет"
+      - "все счет"
+      - "таблицу счет"
+      - "таблица счет"
+      - "таблицу со счет"
+      - "счета таблиц"
+      - "счетов таблиц"
+      - "счета в таблиц"
+      - "покажи счета"
+      - "показать счета"
     workspace_required: true
     default_canvas: "agent:invoices"
     skills: ["invoice.list", "workspace.invoice_table"]
+
+  # Аналитика товаров/номенклатуры в счетах: популярность, группировки.
+  - intent: invoice_items_analytics
+    role: data_analyst
+    keywords:
+      - "товар в счет"
+      - "товары в счет"
+      - "о товарах в"
+      - "расскажи о товар"
+      - "популярн"
+      - "чаще всего"
+      - "больше всего"
+      - "самые частые"
+      - "топ товар"
+      - "какие товар"
+      - "по товарам"
+      - "номенклатур"
+      - "частые позиц"
+      - "сгруппируй по товар"
+      - "сгруппируй по поставщик"
+      - "сгруппируй по месяц"
+      - "сгруппируй по валют"
+      - "сгруппируй по статус"
+      - "группировк"
+      - "по категори"
+    workspace_required: true
+    default_canvas: "agent:invoice-pivot"
+    skills: ["workspace.invoice_pivot"]
 
   - intent: tech_process
     role: technologist
@@ -234,6 +365,7 @@ fallback_canvas_rules:
 
 canvas_to_skill:
   "agent:spec-table": "workspace.spec_table"
+  "agent:invoice-pivot": "workspace.invoice_pivot"
   "agent:invoice-items-by-supplier": "workspace.invoice_items_by_supplier_table"
   "agent:invoice-items-grouped": "workspace.invoice_items_grouped_table"
   "agent:invoice-items": "workspace.invoice_items_table"
@@ -245,6 +377,9 @@ skill_to_spec:
   "workspace.spec_table":
     path: "/api/workspace/agent/spec-table"
     default_args: {}
+  "workspace.invoice_pivot":
+    path: "/api/workspace/agent/invoices/pivot-table"
+    default_args: {group_by: "item"}
   "workspace.invoice_items_by_supplier_table":
     path: "/api/workspace/agent/invoices/items-by-supplier-table"
     default_args: {}

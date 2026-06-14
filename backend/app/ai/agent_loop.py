@@ -37,9 +37,11 @@ def _internal_headers() -> dict:
 # Large lists (invoices, inventory, etc.) can easily hit 100k+ chars which
 # triggers unnecessary context compression. Keep enough for the model to
 # extract counts, statuses and a sample of items.
-_MAX_TOOL_RESULT_CHARS = 10000
+# Results above turn_vault.VAULT_THRESHOLD are stored in Redis and replaced
+# with a compact envelope (preview + vault_ref) before reaching this trim.
+_MAX_TOOL_RESULT_CHARS = 5000
 # Number of list items to keep in the sample shown to the LLM.
-_TOOL_RESULT_SAMPLE_ITEMS = 15
+_TOOL_RESULT_SAMPLE_ITEMS = 8
 # Minimum items to always keep regardless of size.
 _TOOL_RESULT_MIN_ITEMS = 3
 
@@ -324,7 +326,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
             "type": "function",
             "function": {
                 "name": fn_name,
-                "description": description[:1500],
+                "description": description[:400],
                 "parameters": {
                     "type": "object",
                     "properties": properties,
@@ -1183,6 +1185,10 @@ class AgentSession:
         # Worker role for the current turn — scopes the visible tool set to the
         # role's capability allowlist from gateway.yml. None → no scoping.
         self._active_role: str | None = None
+        # Per-turn hard tool exclusions (set by the orchestrator). Used to keep
+        # the worker off slow RAG tools (memory/search/documents) when the task
+        # is structured-data only (e.g. a spec_table). Reset each turn.
+        self._excluded_tools: set[str] = set()
 
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
@@ -1360,6 +1366,15 @@ class AgentSession:
         """
         self._active_role = (role or "").strip() or None
 
+    def set_excluded_tools(self, names: set[str] | None) -> None:
+        """Hard-hide these capabilities from the worker for the next turn.
+
+        Overrides even the always-available core set — used by the orchestrator
+        to keep structured-data turns (spec_table) off slow RAG tools. Reset
+        (passed empty) each turn by the orchestrator.
+        """
+        self._excluded_tools = set(names or ())
+
     def set_response_budget(self, max_tokens: int) -> None:
         """Set the per-turn max response tokens (clamped to a sane range)."""
         self._response_budget = max(256, min(int(max_tokens), 16384))
@@ -1382,25 +1397,30 @@ class AgentSession:
         MCP tools and tools outside the capability registry pass through.
         A role with no declared allowlist sees the full set.
         """
-        role = self._active_role
-        if not role or gateway_config.skills_mode != "capabilities":
-            return self._tools
-        allowed = gateway_config.role_capabilities(role)
-        if not allowed:
-            return self._tools
-        # Names of registry capabilities (excludes MCP tools, which pass through).
-        capability_names = set(_load_capabilities()[1].keys())
-        visible = set(allowed) | self._CORE_CAPABILITIES
-
         def _tool_name(tool: dict) -> str:
             fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
             return str(fn.get("name") or "")
 
-        return [
+        def _apply_exclusions(tools: list[dict]) -> list[dict]:
+            if not self._excluded_tools:
+                return tools
+            return [t for t in tools if _tool_name(t) not in self._excluded_tools]
+
+        role = self._active_role
+        if not role or gateway_config.skills_mode != "capabilities":
+            return _apply_exclusions(self._tools)
+        allowed = gateway_config.role_capabilities(role)
+        if not allowed:
+            return _apply_exclusions(self._tools)
+        # Names of registry capabilities (excludes MCP tools, which pass through).
+        capability_names = set(_load_capabilities()[1].keys())
+        visible = set(allowed) | self._CORE_CAPABILITIES
+
+        return _apply_exclusions([
             tool
             for tool in self._tools
             if _tool_name(tool) not in capability_names or _tool_name(tool) in visible
-        ]
+        ])
 
     def _effective_system(self) -> str:
         """Base system prompt plus the per-turn role context (if any)."""
@@ -1443,6 +1463,29 @@ class AgentSession:
     async def on_approval(self, approved: bool) -> None:
         if self._approval_future and not self._approval_future.done():
             self._approval_future.set_result(approved)
+
+    async def request_confirmation(self, prompt: str, meta: dict | None = None) -> bool:
+        """Ask the user a yes/no question, reusing the approval future channel.
+
+        Lightweight (no DB approval row) — used by explainable recipe replay to
+        confirm a learned shortcut before it has earned silent trust. Times out
+        to False (defer to the normal path) so a missing user never blocks.
+        """
+        self._approval_future = asyncio.get_event_loop().create_future()
+        await self._send({
+            "type": "approval_request",
+            "tool": "recipe_replay",
+            "preview": prompt,
+            **(meta or {}),
+        })
+        try:
+            return await asyncio.wait_for(
+                self._approval_future,
+                timeout=float(self._config.approval_timeout_seconds),
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            self._approval_future = None
+            return False
 
     def _remember_latest_turn(self, delivered_text: str) -> None:
         if not self._config.memory_enabled or not delivered_text:
@@ -1979,6 +2022,28 @@ class AgentSession:
         await self._send({"type": "tool_result", "tool": fn_name, "result": result})
         return fn_name, result
 
+    async def _tool_result_to_history(self, result: dict) -> None:
+        """Serialise a tool result for conversation history.
+
+        Results exceeding VAULT_THRESHOLD are stored in Redis; the history
+        receives a compact envelope (preview + vault_ref) instead of the full
+        payload, keeping the context window thin as the dataset grows.
+        """
+        from app.ai.turn_vault import make_vault_envelope, should_vault, vault_store
+        content_json = json.dumps(result, ensure_ascii=False)
+        if should_vault(content_json):
+            try:
+                ref = await vault_store(self._session_id, result)
+                envelope = make_vault_envelope(result, ref)
+                content_json = json.dumps(envelope, ensure_ascii=False)
+            except Exception:
+                # Vault unavailable: fall back to trimmed result
+                pass
+        self.messages.append({
+            "role": "tool",
+            "content": _trim_tool_result(content_json),
+        })
+
     async def _execute_tools_sequential(
         self, tool_calls: list[dict], iteration: int
     ) -> list[tuple[str, dict]]:
@@ -1986,10 +2051,7 @@ class AgentSession:
         for tc in tool_calls:
             fn_name, result = await self._execute_single_tool(tc, iteration)
             results.append((fn_name, result))
-            self.messages.append({
-                "role": "tool",
-                "content": _trim_tool_result(json.dumps(result, ensure_ascii=False)),
-            })
+            await self._tool_result_to_history(result)
             self._trim_history()
         return results
 
@@ -2003,10 +2065,7 @@ class AgentSession:
             return_exceptions=False,
         )
         for _fn_name, result in results:
-            self.messages.append({
-                "role": "tool",
-                "content": _trim_tool_result(json.dumps(result, ensure_ascii=False)),
-            })
+            await self._tool_result_to_history(result)
         self._trim_history()
         return list(results)
 
@@ -2093,6 +2152,11 @@ class AgentSession:
         keep = self._config.max_history_messages
         if len(self.messages) > keep:
             self.messages = self.messages[-keep:]
+        # Eagerly prune old tool results: keep last 6 verbatim, replace older
+        # ones with a stub. This is free (no LLM call) and prevents tool result
+        # payloads from accumulating across turns.
+        from app.ai.context_compressor import _prune_old_tool_results
+        self.messages = _prune_old_tool_results(self.messages, keep_last=6)
 
     async def _append_memory_context(self) -> None:
         if not self._config.memory_enabled:
@@ -2106,6 +2170,11 @@ class AgentSession:
             "",
         )
         if not latest_user:
+            return
+        # Gate: skip RAG for pure workspace/flow queries answered from SQL.
+        # Saves a vector search + reranker round-trip and keeps context clean.
+        from app.ai import route_table
+        if not route_table.needs_document_retrieval(latest_user):
             return
         try:
             context = await asyncio.wait_for(
@@ -2139,7 +2208,7 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
                 f"{config.backend_url.rstrip('/')}/api/memory/search",
                 json={
                     "query": query,
-                    "limit": 20,
+                    "limit": 8,
                     "retrieval_mode": "auto_hybrid",
                     "need_full_coverage": False,
                     "include_explain": False,
@@ -2157,10 +2226,10 @@ async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
     used_chars = 0
     for index, hit in enumerate(hits, start=1):
         title = str(hit.get("title") or hit.get("kind") or "memory")
-        summary = str(hit.get("summary") or "")[:1200]
+        summary = str(hit.get("summary") or "")[:300]
         source = str(hit.get("source") or "memory")
         line = f"{index}. [{source}] {title}: {summary}".strip()
-        if used_chars + len(line) > 8000:
+        if used_chars + len(line) > 2400:
             break
         lines.append(line)
         used_chars += len(line)

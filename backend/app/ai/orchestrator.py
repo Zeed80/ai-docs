@@ -46,6 +46,8 @@ from app.ai.flow_awareness import format_flow_summary_human, get_flow_snapshot
 from app.ai.model_tier import (
     Tier,
     aux_quality_budget,
+    has_action_intent,
+    has_high_complexity_signal,
     inject_chain_of_draft,
     score_complexity,
     should_use_cod,
@@ -276,6 +278,7 @@ class AgentOrchestrator:
             self._executor.set_response_budget(2048)
             self._executor.set_model_override(None)
             self._executor.set_active_role(None)
+            self._executor.set_excluded_tools(set())
             await self._executor.on_user_message(content)
             return
 
@@ -303,6 +306,65 @@ class AgentOrchestrator:
         if await self._try_spec_table_patch_directly(content, config, turn_started_at):
             return
 
+        # Heuristic-first for workspace tables: if a cheap heuristic plan already
+        # resolves a self-sufficient canvas, execute it deterministically with
+        # NO planner/worker LLM. Placed BEFORE the recipe lookup so common
+        # "покажи таблицу/аналитику" turns skip the recipe embedding round-trip
+        # entirely (that embedding competes with APEX for VRAM → 2-7s stalls).
+        if (
+            reasoning_mode != "strict"
+            and not has_high_complexity_signal(content)
+            and not has_action_intent(content)
+        ):
+            heuristic_plan = self._plan_turn(content)
+            # Skipped only for explicit deep-reasoning verbs ("сравни",
+            # "проанализируй", "построй план"…) — those need real worker
+            # reasoning, not a short-circuit to a plain table. Analytical
+            # pivots ("популярнее", "больше всего") still fire here: stacked
+            # MEDIUM words shouldn't disqualify a deterministic pivot.
+            if heuristic_plan.workspace.canvas_id in self._PROACTIVE_SAFE_CANVASES:
+                self._plan_source = "proactive_workspace"
+                plan = heuristic_plan
+                self._workspace_before = _workspace_updated_at_snapshot()
+                await self._announce_plan(plan)
+                if await self._try_proactive_workspace_execution(plan, config):
+                    audit = await self._audit_turn(plan, config)
+                    await self._publish_audit(audit)
+                    _record_feedback_async(
+                        content=content, plan=plan, trace=self._trace, audit=audit,
+                        retries=0, duration_ms=int((time.time() - turn_started_at) * 1000),
+                    )
+                    duration_ms = int((time.time() - turn_started_at) * 1000)
+                    logger.info(
+                        "agent_turn_complete",
+                        intent=plan.intent, reasoning_mode=reasoning_mode,
+                        plan_source="proactive_workspace",
+                        tools_called=self._trace.tool_calls,
+                        tool_count=len(self._trace.tool_calls),
+                        parallel_used=self._trace.parallel_used,
+                        errors=self._trace.errors,
+                        workspace_required=plan.workspace.required,
+                        audit_passed=audit.passed, audit_issues=audit.issue_codes,
+                        retries=0, llm_calls=0, aux_llm_calls=self._aux_llm_calls,
+                        duration_ms=duration_ms,
+                    )
+                    try:
+                        from app.core.metrics import (
+                            agent_turns_total, agent_turn_duration_seconds,
+                            agent_tool_calls_total,
+                        )
+                        agent_turns_total.labels(
+                            outcome="success" if audit.passed else "audit_failed"
+                        ).inc()
+                        agent_turn_duration_seconds.observe(duration_ms / 1000)
+                        for tool in self._trace.tool_calls:
+                            agent_tool_calls_total.labels(tool=tool).inc()
+                    except Exception:
+                        pass
+                    chips = self._derive_action_chips(plan, content)
+                    await self._outer_send({"type": "done", "action_chips": chips})
+                    return
+
         # Learned recipes: a high-similarity ACTIVE recipe with resolvable slots
         # is replayed deterministically (0 planner LLM calls); a weaker match
         # becomes a planner/worker hint. Gated to tool-shaped turns so smalltalk
@@ -312,16 +374,26 @@ class AgentOrchestrator:
             from app.ai import recipes as recipes_module
             recipe_hit = await recipes_module.find_recipe(content)
             if recipe_hit is not None:
-                recipe, score = recipe_hit
+                recipe, score, margin = recipe_hit
                 if (
                     score >= recipes_module.REPLAY_SCORE
                     and recipe.status == "active"
                 ):
                     slots = recipes_module.resolve_slots(recipe.param_slots, content)
-                    if slots is not None and await self._replay_recipe(
-                        recipe, slots, content, config, turn_started_at
-                    ):
-                        return
+                    # Component 2 — precision gate: ambiguity + intent-drift guard.
+                    gate_ok, gate_reason = recipes_module.replay_gate_ok(
+                        recipe, score, margin, content
+                    )
+                    if slots is not None and gate_ok:
+                        if await self._replay_recipe(
+                            recipe, slots, content, config, turn_started_at
+                        ):
+                            return
+                    elif not gate_ok:
+                        logger.info(
+                            "recipe_replay_gated",
+                            recipe=str(recipe.id), reason=gate_reason, score=score,
+                        )
                 if score >= recipes_module.HINT_SCORE:
                     steps_text = " → ".join(
                         f"{s.get('capability')}.{s.get('action') or 'call'}"
@@ -332,13 +404,22 @@ class AgentOrchestrator:
                         "Используй эту последовательность как отправную точку."
                     )
 
-        # strict reasoning_mode forces LLM planning regardless of tier
-        if reasoning_mode == "strict" or tier >= Tier.MEDIUM:
+        # When the heuristic already matched an explicit route (intent != general),
+        # the canvas + recommended skills are known — LLM planning adds nothing but
+        # latency (and on a busy GPU the planner call can stall for minutes while
+        # the model is reloaded). Use the heuristic plan directly. Only fall back
+        # to the model planner for genuinely unrouted SMALL+ turns.
+        heuristic_plan = self._plan_turn(content)
+        route_matched = heuristic_plan.intent != "general"
+        if route_matched:
+            self._plan_source = "heuristic_route"
+            plan = heuristic_plan
+        elif reasoning_mode == "strict" or tier >= Tier.SMALL:
             self._plan_source = "model"
             plan = await self._plan_turn_with_model(content, config)
         else:
             self._plan_source = "heuristic"
-            plan = self._plan_turn(content)
+            plan = heuristic_plan
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
 
@@ -357,6 +438,13 @@ class AgentOrchestrator:
         self._executor.set_role_context(role_context)
         # Scope the visible tool set to the role's capability allowlist.
         self._executor.set_active_role(plan.worker.role)
+        # Structured-data turns (spec_table) must not touch slow RAG tools — the
+        # 35B worker otherwise "searches" for line items in documents (minutes).
+        # Hard-hide them so it has no choice but to build the table from SQL.
+        if plan.workspace.canvas_id == "agent:spec-table":
+            self._executor.set_excluded_tools({"memory", "search", "documents"})
+        else:
+            self._executor.set_excluded_tools(set())
         # Size the response budget to the task: cheap/fast for short answers,
         # roomy for reports/tables. Avoids the old hardcoded 4096 on every turn.
         self._executor.set_response_budget(_response_budget_for(tier, plan))
@@ -619,6 +707,35 @@ class AgentOrchestrator:
         """
         from app.ai import recipes as recipes_module
 
+        # Component 4 — explainable replay: until the recipe has earned enough
+        # human-confirmed replays, ASK before running the learned shortcut. This
+        # is the human-in-the-loop guard exactly where misfire risk is highest
+        # (a similar-but-different request). After trust is earned, runs silently.
+        needs_confirmation = (
+            (recipe.confirmed_replays or 0) < recipes_module._TRUST_AFTER_CONFIRMED
+        )
+        if needs_confirmation:
+            steps_text = " → ".join(
+                f"{s.get('capability')}.{s.get('action') or 'call'}"
+                for s in (recipe.steps or [])
+            )
+            prompt = (
+                f"Задача похожа на ранее выученную «{recipe.name}».\n"
+                f"Выполнить по выученному рецепту (шаги: {steps_text})?\n"
+                f"Да — выполню сразу; Нет — разберу запрос заново."
+            )
+            approved = await self._executor.request_confirmation(
+                prompt, {"recipe_id": str(recipe.id), "recipe_name": recipe.name}
+            )
+            if not approved:
+                await self._outer_send({
+                    "type": "orchestrator.status",
+                    "content": "Секретарь: разбираю запрос обычным путём.",
+                    "plan_source": "recipe_declined",
+                    "degraded": False,
+                })
+                return False
+
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._outer_send({
             "type": "orchestrator.status",
@@ -647,6 +764,37 @@ class AgentOrchestrator:
                 "degraded": True,
             })
             return False
+
+        # Component 3 — deterministic post-check: a recipe that "ran" but produced
+        # nothing (no workspace change AND no result message) very likely matched
+        # the wrong task. Treat as a miss → count a failure (feeds the fail-rate
+        # retire logic) and fall back to the worker rather than show an empty win.
+        produced_message = any(
+            isinstance(r.get("result"), dict) and r["result"].get("message")
+            for r in self._trace.tool_results
+        )
+        workspace_changed = bool(self._trace.workspace_events) and await self._verify_workspace(
+            OrchestratorPlan(
+                goal=content, intent="recipe_replay",
+                worker=WorkerAssignment(role=recipe.role, task=content),
+                workspace=WorkspaceOutputSpec(required=True),
+            )
+        )
+        if not produced_message and not workspace_changed:
+            await recipes_module.record_outcome(recipe.id, success=False)
+            logger.info("recipe_replay_empty_result", recipe=str(recipe.id))
+            await self._outer_send({
+                "type": "orchestrator.status",
+                "content": "Секретарь: рецепт дал пустой результат, решаю задачу обычным путём.",
+                "plan_source": "recipe_fallback",
+                "degraded": True,
+            })
+            return False
+
+        # Component 4 — replay succeeded with a real result: build trust so the
+        # recipe eventually replays without asking.
+        if needs_confirmation:
+            await recipes_module.record_confirmed_replay(recipe.id)
 
         answer = "Готово — выполнено по выученному рецепту."
         last_result = next(
@@ -699,7 +847,11 @@ class AgentOrchestrator:
         if not audit.passed or audit.semantic_passed is False:
             return
         seq = list(self._trace.tool_call_seq)
-        if not (2 <= len(seq) <= 6):
+        # Length bounds live in recipes._MIN_STEPS/_MAX_STEPS; the reproducibility
+        # gate inside record_candidate is the real safety check (rejects chains
+        # with runtime data-flow regardless of length).
+        from app.ai import recipes as _recipes
+        if not (_recipes._MIN_STEPS <= len(seq) <= _recipes._MAX_STEPS):
             return
         # Only plain capability-dispatcher calls compose into recipes.
         if any("__" in name or "." in name for name, _ in seq):
@@ -712,15 +864,28 @@ class AgentOrchestrator:
             }
             for name, args in seq
         ]
+        # Per-step results (same order as the calls) so data-flow args can become
+        # {{step.N.path}} references — enables recording chains where a later step
+        # consumes an earlier step's output.
+        step_results = [
+            r.get("result") for r in self._trace.tool_results
+            if isinstance(r, dict)
+        ]
         from app.ai import recipes as recipes_module
 
         async def _record() -> None:
             try:
+                # Component 1 — passive validation: if this worker turn reproduced
+                # an existing draft's exact steps, count a confirmation (and maybe
+                # promote it to active). Cheap — no shadow run.
+                await recipes_module.confirm_draft_from_worker(content, steps)
+                # Then record/enrich the draft for this trigger as before.
                 await recipes_module.record_candidate(
                     user_text=content,
                     role=plan.worker.role,
                     intent=plan.intent,
                     steps=steps,
+                    step_results=step_results,
                 )
             except Exception as exc:
                 log_degraded("orchestrator.recipe_record", exc)
@@ -1382,7 +1547,66 @@ class AgentOrchestrator:
         spec = _workspace_tool_spec_for_plan(plan)
         if not spec:
             return False
+        return await self._execute_workspace_spec(
+            spec, config,
+            announce=(
+                "Оркестратор: исполнитель выбрал не тот инструмент, "
+                "запускаю правильный workspace tool напрямую."
+            ),
+        )
 
+    # Canvases whose skill has self-sufficient default_args — the orchestrator
+    # can run them deterministically (0 worker-LLM) the moment the plan resolves
+    # the canvas. spec-table is intentionally excluded: it needs the LLM to
+    # choose columns. invoice-pivot etc. carry sensible defaults.
+    _PROACTIVE_SAFE_CANVASES = frozenset({
+        "agent:invoices",
+        "agent:suppliers",
+        "agent:documents",
+        "agent:invoice-pivot",
+        "agent:invoice-items",
+        "agent:invoice-items-by-supplier",
+        "agent:invoice-items-grouped",
+    })
+
+    async def _try_proactive_workspace_execution(
+        self,
+        plan: OrchestratorPlan,
+        config: BuiltinAgentConfig,
+    ) -> bool:
+        """Run a self-sufficient workspace tool directly, before the worker LLM.
+
+        When the plan resolves to a safe canvas (table/pivot with usable
+        defaults), the orchestrator already knows exactly which skill to call —
+        spinning up the 35B worker just to emit that one tool call costs ~12s
+        of prefill for nothing. Execute it here; on any miss fall through to the
+        normal worker loop. Skipped for spec-table (needs LLM-chosen columns).
+        """
+        if not plan.workspace.required:
+            return False
+        if plan.workspace.canvas_id not in self._PROACTIVE_SAFE_CANVASES:
+            return False
+        spec = _workspace_tool_spec_for_plan(plan)
+        if not spec:
+            return False
+        return await self._execute_workspace_spec(
+            spec, config,
+            announce="Готовлю результат на Рабочем столе…",
+        )
+
+    async def _execute_workspace_spec(
+        self,
+        spec: dict[str, Any],
+        config: BuiltinAgentConfig,
+        *,
+        announce: str,
+    ) -> bool:
+        """Execute a resolved workspace tool spec via direct HTTP (no worker LLM).
+
+        Shared by the proactive fast-path and the post-audit repair path.
+        Resets the turn trace, runs the policy gate, POSTs to the skill endpoint
+        and records tool_call/result/text events so audit + done see the output.
+        """
         tool_name: str = spec["tool"]
         approval_gates: set[str] = set(config.approval_gates or [])
         policy = check_tool_execution(
@@ -1393,7 +1617,7 @@ class AgentOrchestrator:
         )
         if not policy.allowed or tool_name in approval_gates:
             reason = (
-                f"требует подтверждения человеком (approval gate)"
+                "требует подтверждения человеком (approval gate)"
                 if tool_name in approval_gates
                 else policy.reason
             )
@@ -1413,10 +1637,7 @@ class AgentOrchestrator:
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._outer_send({
             "type": "orchestrator.direct_tool_started",
-            "content": (
-                "Оркестратор: исполнитель выбрал не тот инструмент, "
-                "запускаю правильный workspace tool напрямую."
-            ),
+            "content": announce,
             "tool": tool_name,
             "args": spec["args"],
         })
@@ -1970,6 +2191,18 @@ def _build_worker_hint(plan: OrchestratorPlan) -> str:
             f"Результат ОБЯЗАТЕЛЬНО опубликовать на Рабочий стол (canvas_id={plan.workspace.canvas_id}). "
             "Используй workspace.* инструмент. В чат — только краткое резюме."
         )
+        # Structured-data guard: spec_table builds the answer from SQL (columns,
+        # filters, sort over a whitelisted catalog). For price/amount comparisons
+        # the model is tempted to "search" for items in documents — that's slow
+        # RAG over unstructured text and the data isn't there. Forbid it.
+        if plan.workspace.canvas_id == "agent:spec-table":
+            lines.append(
+                "Данные счетов и позиций УЖЕ структурированы в БД. Реши задачу ОДНИМ "
+                "вызовом workspace.spec_table: выбери источник, колонки, фильтр (по "
+                "наименованию товара) и сортировку (по цене/сумме). КАТЕГОРИЧЕСКИ НЕ "
+                "вызывай memory, search, documents — там этих данных нет, это медленно "
+                "и не нужно."
+            )
         if plan.workspace.filters:
             f_str = ", ".join(f"{k}={v!r}" for k, v in plan.workspace.filters.items())
             lines.append(f"Обязательные фильтры: {f_str}.")

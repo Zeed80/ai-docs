@@ -80,6 +80,7 @@ from app.api import (
     spec_tables,
 )
 from app.api import admin as admin_api
+from app.api import maintenance as maintenance_api
 from app.api import dynamic_skill_runner
 from app.api import handovers, notifications, rooms
 from app.api import setup as setup_api
@@ -355,6 +356,7 @@ def create_app() -> FastAPI:
     app.include_router(dynamic_skill_runner.router, tags=["agent-generated"], dependencies=_auth)
     app.include_router(capability_router, prefix="/api/agent", tags=["capabilities"], dependencies=_auth)
     app.include_router(admin_api.router, dependencies=_auth)
+    app.include_router(maintenance_api.router, dependencies=_auth)
     app.include_router(rooms.router, prefix="/api/rooms", tags=["rooms"], dependencies=_auth)
     app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"], dependencies=_auth)
     app.include_router(handovers.router, prefix="/api/handovers", tags=["handovers"], dependencies=_auth)

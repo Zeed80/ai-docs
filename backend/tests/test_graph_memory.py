@@ -5,7 +5,7 @@ import uuid
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.api.memory import _merge_memory_hits, _rank_memory_hit, _sort_memory_hits
+from app.api.memory import _merge_memory_hits, _rrf_fuse, _sort_memory_hits
 from app.db.base import Base
 from app.db.models import (
     Document,
@@ -201,21 +201,36 @@ def test_memory_search_merges_sql_and_vector_candidates() -> None:
     assert merged[0].vector_score == 0.9
 
 
-def test_memory_search_ranks_text_vector_graph_scores_with_weights() -> None:
-    ranked = _rank_memory_hit(
-        MemorySearchHit(
-            kind="chunk",
-            id=uuid.uuid4(),
-            title="Document chunk #0",
-            score=0.0,
-            source="sql+vector+graph",
-            text_score=0.5,
-            vector_score=1.0,
-            graph_score=0.2,
-        )
-    )
+def test_memory_rrf_fusion_favours_multi_branch_agreement() -> None:
+    """RRF ranks a hit that appears in several branches above single-branch hits.
 
-    assert ranked.score == 0.655
+    Scores are rank-based and min-max normalised to [0, 1]; the candidate ranked
+    high in both the vector and lexical branches must win regardless of the raw
+    score scales of those branches.
+    """
+    a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    fused = _rrf_fuse(
+        [
+            # `a` is top of the vector branch AND present in the lexical branch.
+            MemorySearchHit(kind="chunk", id=a, title="A", score=0.0,
+                            source="vector", vector_score=0.9),
+            MemorySearchHit(kind="chunk", id=a, title="A", score=0.0,
+                            source="sql", text_score=0.7),
+            # `b` only tops the lexical branch.
+            MemorySearchHit(kind="chunk", id=b, title="B", score=0.0,
+                            source="sql", text_score=0.9),
+            # `c` only appears low in the vector branch.
+            MemorySearchHit(kind="chunk", id=c, title="C", score=0.0,
+                            source="vector", vector_score=0.5),
+        ]
+    )
+    by_id = {hit.id: hit for hit in fused}
+    assert by_id[a].score == 1.0  # multi-branch agreement → normalised top
+    assert by_id[a].score > by_id[b].score
+    assert by_id[a].score > by_id[c].score
+    # Per-branch scores are preserved through fusion for diagnostics.
+    assert by_id[a].vector_score == 0.9
+    assert by_id[a].text_score == 0.7
 
 
 def test_memory_search_keeps_exact_episodic_fact_visible() -> None:

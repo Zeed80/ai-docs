@@ -509,3 +509,27 @@ capabilities:
           type: object
           description: "Данные для task_create: title, description, skills; для capability_propose: name, description, gap; для ai_config_set: auto_approve_confidence_threshold (0–1) и/или auto_verify_enabled (bool)"
       required: [action]
+
+  - name: vault
+    description: >
+      Получить данные из временного хранилища по vault_ref из предыдущего ответа.
+      Используй ТОЛЬКО если нужны записи за пределами 3-item preview и нет
+      подходящего workspace.* инструмента. Для отображения таблицы предпочитай
+      workspace.*, не vault.
+    path: /api/agent/cap/vault
+    method: POST
+    parameters:
+      type: object
+      properties:
+        vault_ref:
+          type: string
+          description: "vault_ref из compact envelope предыдущего tool result"
+        offset:
+          type: integer
+          description: "Смещение для пагинации (по умолчанию 0)"
+          default: 0
+        limit:
+          type: integer
+          description: "Количество записей (максимум 100, по умолчанию 20)"
+          default: 20
+      required: [vault_ref]

@@ -48,19 +48,70 @@ _MEDIUM_COMPLEXITY_SIGNALS = frozenset({
     # Russian
     "таблица", "сводка", "сумма", "топ", "список всех", "отсортируй",
     "сгруппируй", "найди аномалии", "подготовь отчёт", "отчёт",
+    # Analytical / exploratory queries that need LLM planning
+    "расскажи", "расскажи о", "популярн", "больше всего", "чаще всего",
+    "самые", "какие", "почему", "как так", "что значит", "разбери",
+    "объясни", "покажи динамику", "за период", "тенденц", "тренд",
+    "статистик", "аналитик", "по месяц", "по поставщик", "сгруппир",
+    "группировк", "номенклатур", "какая", "каких", "насколько",
     # English
     "table", "summary", "total", "top", "list all", "sort", "group",
-    "find anomalies", "prepare report", "report",
+    "find anomalies", "prepare report", "report", "explain", "popular",
+    "most common", "trending", "analytics", "by month", "by supplier",
+    "breakdown", "distribution",
 })
 
 _LOW_COMPLEXITY_SIGNALS = frozenset({
-    # Russian
-    "покажи", "выведи", "статус", "сколько", "когда", "кто", "последний",
-    "один", "найди счёт", "проверь",
+    # Russian — только однозначно тривиальные навигационные запросы без фильтров
+    "статус", "когда", "кто", "последний", "один", "найди счёт", "проверь",
     # English
-    "show", "display", "status", "how many", "when", "who", "last", "find invoice",
-    "check",
+    "status", "when", "who", "last", "find invoice", "check",
+    # NOTE: "покажи", "выведи", "сколько" убраны:
+    #   "покажи"/"выведи" — могут вести к workspace-запросу
+    #   "сколько" — фильтрованные count-вопросы ("сколько ожидают утверждения?")
+    #   требуют API-вызова; оставлять на fast-path только чистые "сколько всего" через
+    #   secretary snapshot (flow_status_markers уже ловят их раньше)
 })
+
+def has_high_complexity_signal(text: str) -> bool:
+    """True when the text contains an explicit deep-reasoning marker.
+
+    Distinct from tier: a request can be tier MEDIUM/LARGE purely from stacked
+    analytical words ("популярнее", "больше всего") yet still be a plain
+    pivot/table. Only a HIGH-complexity verb ("сравни", "проанализируй",
+    "построй план") signals work that genuinely needs the worker LLM rather
+    than a deterministic workspace tool.
+    """
+    lower = text.lower()
+    return any(kw in lower for kw in _HIGH_COMPLEXITY_SIGNALS)
+
+
+# Action verbs: the user wants something DONE to a record (check arithmetic,
+# approve, send…), not a table shown. Such turns must reach the worker even when
+# an entity resolves a workspace canvas — otherwise a proactive table silently
+# replaces the requested action.
+_ACTION_SIGNALS = frozenset({
+    "проверь", "проверить", "перепровер", "пересчита", "пересчёт", "пересчет",
+    "утверди", "утвердить", "одобри", "отклони", "отклонить", "отправь",
+    "отправить", "удали", "удалить", "оплати", "оплатить", "подтверди",
+    "подтвердить", "валидир", "исправь", "исправить", "обнови", "обновить",
+    "измени", "изменить", "согласуй", "согласовать", "заполни", "создай счёт",
+    "проведи", "разнеси", "верифицир",
+    # English
+    "validate", "approve", "reject", "send", "delete", "pay", "confirm",
+    "verify", "fix", "update record",
+})
+
+
+def has_action_intent(text: str) -> bool:
+    """True when the request asks to act on a record, not just view data.
+
+    Action turns must go to the worker (they may need a data-flow chain:
+    find the record → operate on it), so the proactive table fast-path is
+    skipped for them.
+    """
+    lower = text.lower()
+    return any(kw in lower for kw in _ACTION_SIGNALS)
 
 
 def score_complexity(
@@ -87,6 +138,10 @@ def score_complexity(
     low_hits = sum(1 for kw in _LOW_COMPLEXITY_SIGNALS if kw in lower)
 
     score = high_hits * 3 + medium_hits * 1 - low_hits * 1
+    # NOTE: filtered count questions ("сколько счетов ожидают утверждения")
+    # are handled deterministically by the status_counts fast-path (0 LLM) —
+    # they must stay at low tier so the executor fast-path fires instead of
+    # forcing model planning. (Previously bumped to SMALL via a workaround.)
 
     # Long context → bump up (conversation already complex)
     if context_tokens > 8_000:

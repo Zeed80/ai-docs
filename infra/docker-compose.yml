@@ -419,7 +419,10 @@ services:
       - ../aiagent:/aiagent:ro
       - llamacpp_models:/llamacpp-models
       - vllm_models:/vllm-models
+      # Backups produced from the admin GUI (maintenance API) land here.
+      - backups_data:/app/backups
       # Docker socket — lets backend restart llama-server / vllm-server when activating a new model
+      # and run GUI backups (pg_dump exec, volume tars).
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host-gateway:host-gateway"
@@ -650,6 +653,7 @@ volumes:
   authentik_db_data:
   authentik_media:
   authentik_templates:
+  backups_data:
 
 networks:
   app:

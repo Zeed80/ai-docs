@@ -293,6 +293,11 @@ class DocumentChunk(UUIDPrimaryKey, TimestampMixin, Base):
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Contextual Retrieval: document-level context prepended to the chunk before
+    # embedding (doc type, supplier, number, date…). Makes each chunk self-
+    # describing for vector recall without bloating lexical FTS (which indexes
+    # `text` only). NULL → legacy chunk, embed text as-is.
+    context_prefix: Mapped[str | None] = mapped_column(Text)
     token_count: Mapped[int | None] = mapped_column(Integer)
     page_number: Mapped[int | None] = mapped_column(Integer)
     bbox_data: Mapped[dict | None] = mapped_column(JSON)
@@ -1104,6 +1109,14 @@ class RecipeSkill(UUIDPrimaryKey, TimestampMixin, Base):
     capability_schema_hash: Mapped[str | None] = mapped_column(String(64))
     success_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     fail_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Passive validation (component 1): times the worker independently reproduced
+    # this recipe's exact step sequence for a matching trigger. A draft is
+    # promoted to active once this crosses the activation threshold — no shadow
+    # double-execution needed.
+    worker_confirmations: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Explainable-replay (component 4): confirmed (human-approved) replays. Below
+    # the trust threshold the agent asks before replaying; above it, runs silently.
+    confirmed_replays: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(
         String(20), default="draft", nullable=False, index=True

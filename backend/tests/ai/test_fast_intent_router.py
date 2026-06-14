@@ -28,6 +28,35 @@ def test_count_intents_match(text, capability):
 
 
 @pytest.mark.parametrize(
+    "text,status",
+    [
+        ("сколько счетов ожидают утверждения", "needs_review"),
+        ("сколько счетов на согласовании", "needs_review"),
+        ("сколько счетов на рассмотрении", "needs_review"),
+        ("сколько утверждённых счетов", "approved"),
+        ("сколько отклонённых счетов", "rejected"),
+        ("сколько оплаченных счетов", "paid"),
+        ("сколько черновиков счетов", "draft"),
+    ],
+)
+def test_status_filtered_count_carries_status(text, status):
+    """Filtered count must pass the status filter, not count the whole table."""
+    intent = match_fast_intent(text)
+    assert intent is not None
+    assert intent.capability == "invoices"
+    assert intent.args["filters"]["status"] == status
+    # status in search_term → result cache keys per-status (no collision)
+    assert intent.search_term == status
+
+
+def test_plain_count_has_no_status_filter():
+    """An unfiltered count must NOT carry a status filter (counts all rows)."""
+    intent = match_fast_intent("сколько счетов в системе")
+    assert intent is not None
+    assert "status" not in intent.args["filters"]
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "покажи все счета таблицей",       # rich output → LLM

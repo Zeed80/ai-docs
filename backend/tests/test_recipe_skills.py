@@ -135,7 +135,7 @@ async def test_find_recipe_skips_retired(recipes_db):
     recipes_db["search_results"].append({"recipe_id": rid, "score": 0.91})
     hit = await recipes.find_recipe("счета Ромашки за май")
     assert hit is not None
-    found, score = hit
+    found, score, margin = hit
     assert str(found.id) == rid and score == 0.91
 
     await recipes.record_outcome(uuid.UUID(rid), success=False, retire=True)
@@ -187,3 +187,234 @@ async def test_recipes_api_list_activate_retire(recipes_db, client, monkeypatch)
     resp = await client.post(f"/api/agent/recipes/{rid}/retire")
     assert resp.status_code == 200
     assert resp.json()["status"] == "retired"
+
+
+# ── Component 2: replay precision gate ──────────────────────────────────────────
+
+def _ns_recipe(**kw):
+    from types import SimpleNamespace
+    base = dict(trigger_examples=["счета Ромашки за май"])
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_replay_gate_blocks_ambiguous_margin():
+    """Two near-equally-similar recipes → ambiguous → defer to worker."""
+    recipe = _ns_recipe()
+    ok, reason = recipes.replay_gate_ok(recipe, score=0.90, margin=0.01, content="счета Ромашки")
+    assert not ok and "ambiguous" in reason
+
+
+def test_replay_gate_blocks_intent_modifier_drift():
+    """A modifier absent from the learned trigger ("кроме") blocks replay."""
+    recipe = _ns_recipe()
+    ok, reason = recipes.replay_gate_ok(
+        recipe, score=0.95, margin=0.20, content="счета кроме Ромашки"
+    )
+    assert not ok and reason == "intent_modifier_drift"
+
+
+def test_replay_gate_allows_clean_match():
+    recipe = _ns_recipe()
+    ok, reason = recipes.replay_gate_ok(
+        recipe, score=0.95, margin=0.20, content="счета Ромашки за июнь"
+    )
+    assert ok and reason == "ok"
+
+
+# ── Component 1: passive activation from worker confirmations ────────────────────
+
+def test_steps_match_identity():
+    a = [{"capability": "invoices", "action": "list"},
+         {"capability": "workspace", "action": "publish"}]
+    b = [{"capability": "invoices", "action": "list"},
+         {"capability": "workspace", "action": "publish"}]
+    c = [{"capability": "invoices", "action": "list"}]
+    assert recipes.steps_match(a, b)
+    assert not recipes.steps_match(a, c)
+    assert not recipes.steps_match([], [])
+
+
+@pytest.mark.asyncio
+async def test_passive_confirmation_promotes_draft(recipes_db):
+    """Worker reproducing a draft's exact steps N times → auto-active (no shadow)."""
+    await recipes.record_candidate(
+        user_text="счета Ромашки", role="invoice_specialist",
+        intent="invoice_list", steps=list(_STEPS),
+    )
+    async with recipes_db["factory"]() as db:
+        from sqlalchemy import select
+        recipe = (await db.execute(select(RecipeSkill))).scalars().one()
+        rid = recipe.id
+    # Make the trigger search resolve to this recipe with a high score.
+    recipes_db["search_results"].append({"recipe_id": str(rid), "score": 0.95})
+
+    worker_steps = [{"capability": "invoices", "action": "list"},
+                    {"capability": "workspace", "action": "publish"}]
+    await recipes.confirm_draft_from_worker("счета Ромашки за май", worker_steps)
+    async with recipes_db["factory"]() as db:
+        recipe = await db.get(RecipeSkill, rid)
+        assert recipe.status == "draft" and recipe.worker_confirmations == 1
+    await recipes.confirm_draft_from_worker("счета Ромашки за июнь", worker_steps)
+    async with recipes_db["factory"]() as db:
+        recipe = await db.get(RecipeSkill, rid)
+        assert recipe.status == "active" and recipe.worker_confirmations == 2
+
+
+@pytest.mark.asyncio
+async def test_passive_confirmation_ignores_different_steps(recipes_db):
+    """Worker doing DIFFERENT steps must not confirm the draft."""
+    await recipes.record_candidate(
+        user_text="счета Ромашки", role="invoice_specialist",
+        intent="invoice_list", steps=list(_STEPS),
+    )
+    async with recipes_db["factory"]() as db:
+        from sqlalchemy import select
+        recipe = (await db.execute(select(RecipeSkill))).scalars().one()
+        rid = recipe.id
+    recipes_db["search_results"].append({"recipe_id": str(rid), "score": 0.95})
+
+    other_steps = [{"capability": "suppliers", "action": "list"}]
+    await recipes.confirm_draft_from_worker("счета Ромашки за май", other_steps)
+    async with recipes_db["factory"]() as db:
+        recipe = await db.get(RecipeSkill, rid)
+        assert recipe.status == "draft" and recipe.worker_confirmations == 0
+
+
+# ── Reproducibility gate (replaces hard step-count cap as the real criterion) ───
+
+def test_is_reproducible_flat_chain():
+    """All args derivable from the request (slots) → reproducible."""
+    steps = [
+        {"capability": "invoices", "args_template": {"action": "list",
+         "filters": {"supplier_query": "{{user.supplier_name}}"}}},
+        {"capability": "workspace", "args_template": {"action": "publish",
+         "canvas_id": "agent:invoices"}},
+    ]
+    assert recipes.is_reproducible(steps, "счета Ромашки")
+
+
+def test_is_reproducible_rejects_runtime_uuid():
+    """A UUID arg is never user-typed → runtime data-flow → not reproducible."""
+    steps = [
+        {"capability": "invoices", "args_template": {"action": "list"}},
+        {"capability": "invoices", "args_template": {"action": "get",
+         "invoice_id": "a1b2c3d4-1111-2222-3333-444455556666"}},
+    ]
+    assert not recipes.is_reproducible(steps, "покажи счета")
+
+
+def test_is_reproducible_rejects_orphan_id_literal():
+    """An *_id literal absent from the request → output of a previous step."""
+    steps = [
+        {"capability": "documents", "args_template": {"action": "get", "document_id": "777"}},
+        {"capability": "workspace", "args_template": {"action": "publish"}},
+    ]
+    assert not recipes.is_reproducible(steps, "покажи документ")
+
+
+def test_is_reproducible_allows_id_from_request():
+    """An id that the user actually typed is fine."""
+    steps = [
+        {"capability": "documents", "args_template": {"action": "get", "document_id": "777"}},
+        {"capability": "workspace", "args_template": {"action": "publish"}},
+    ]
+    assert recipes.is_reproducible(steps, "покажи документ 777")
+
+
+@pytest.mark.asyncio
+async def test_record_candidate_skips_nonreproducible(recipes_db):
+    """A chain with runtime data-flow is NOT recorded as a recipe."""
+    steps = [
+        {"capability": "invoices", "action": "list", "args_template": {"action": "list"}},
+        {"capability": "invoices", "action": "get",
+         "args_template": {"action": "get",
+                           "invoice_id": "a1b2c3d4-1111-2222-3333-444455556666"}},
+    ]
+    recorded = await recipes.record_candidate(
+        user_text="покажи счета", role="invoice_specialist",
+        intent="invoice_list", steps=steps,
+    )
+    assert recorded is False
+    async with recipes_db["factory"]() as db:
+        from sqlalchemy import select, func
+        count = (await db.execute(select(func.count()).select_from(RecipeSkill))).scalar()
+        assert count == 0
+
+
+def test_max_steps_raised_to_ten():
+    assert recipes._MAX_STEPS == 10
+
+
+# ── Step-reference slots (data-flow replay) ─────────────────────────────────────
+
+def test_resolve_path_nested():
+    obj = {"items": [{"id": "abc"}, {"id": "def"}], "total": 2}
+    assert recipes._resolve_path(obj, "items.0.id") == "abc"
+    assert recipes._resolve_path(obj, "items.1.id") == "def"
+    assert recipes._resolve_path(obj, "total") == 2
+    assert recipes._resolve_path(obj, "missing.x") is None
+
+
+def test_find_value_path():
+    obj = {"items": [{"id": "a1b2c3d4-1111-2222-3333-444455556666"}]}
+    assert recipes._find_value_path(obj, "a1b2c3d4-1111-2222-3333-444455556666") == "items.0.id"
+    assert recipes._find_value_path(obj, "nope") is None
+
+
+def test_parameterize_creates_step_reference():
+    """An arg equal to an earlier step's output becomes a {{step.N.path}} ref."""
+    steps = [
+        {"capability": "invoices", "action": "list", "args_template": {"action": "list"}},
+        {"capability": "invoices", "action": "get",
+         "args_template": {"action": "get",
+                           "invoice_id": "a1b2c3d4-1111-2222-3333-444455556666"}},
+    ]
+    results = [
+        {"items": [{"id": "a1b2c3d4-1111-2222-3333-444455556666"}], "total": 1},
+        {"id": "a1b2c3d4-1111-2222-3333-444455556666"},
+    ]
+    templated, _ = recipes.parameterize_steps(steps, "покажи счета", results)
+    assert templated[1]["args_template"]["invoice_id"] == "{{step.0.items.0.id}}"
+    # With the reference, the chain is now reproducible.
+    assert recipes.is_reproducible(templated, "покажи счета")
+
+
+def test_render_args_resolves_step_reference_whole_value():
+    """A whole-value step ref resolves from accumulated results, preserving type."""
+    tmpl = {"action": "get", "invoice_id": "{{step.0.items.0.id}}", "limit": 5}
+    results = [{"items": [{"id": "NEW-id-123"}]}]
+    out = render_args = recipes.render_args(tmpl, {}, results)
+    assert out["invoice_id"] == "NEW-id-123"
+    assert out["limit"] == 5
+
+
+def test_render_args_step_reference_missing_result_left_intact():
+    """If the referenced step hasn't run yet, the placeholder is left as-is."""
+    tmpl = {"invoice_id": "{{step.2.items.0.id}}"}
+    out = recipes.render_args(tmpl, {}, [])
+    assert out["invoice_id"] == "{{step.2.items.0.id}}"
+
+
+@pytest.mark.asyncio
+async def test_record_candidate_records_dataflow_with_references(recipes_db):
+    """A data-flow chain is now recorded (id captured as a step reference)."""
+    steps = [
+        {"capability": "invoices", "action": "list", "args_template": {"action": "list"}},
+        {"capability": "invoices", "action": "get",
+         "args_template": {"action": "get",
+                           "invoice_id": "a1b2c3d4-1111-2222-3333-444455556666"}},
+    ]
+    results = [
+        {"items": [{"id": "a1b2c3d4-1111-2222-3333-444455556666"}], "total": 1},
+        {"id": "a1b2c3d4-1111-2222-3333-444455556666"},
+    ]
+    recorded = await recipes.record_candidate(
+        user_text="покажи счета", role="invoice_specialist",
+        intent="invoice_list", steps=steps, step_results=results,
+    )
+    assert recorded is True
+    async with recipes_db["factory"]() as db:
+        from sqlalchemy import select
+        recipe = (await db.execute(select(RecipeSkill))).scalars().one()
+        assert recipe.steps[1]["args_template"]["invoice_id"] == "{{step.0.items.0.id}}"
