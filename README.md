@@ -93,6 +93,46 @@ OLLAMA_MODEL_REASONING=gemma4:26b
 
 ## Быстрый старт
 
+### Установка одной строкой (Linux / macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Zeed80/ai-docs/main/install.sh | bash
+```
+
+Установщик сам: определит ОС, проверит Docker/Compose/git, клонирует репозиторий,
+сгенерирует секреты и `infra/.env`, поднимет стек (миграции БД применяются
+автоматически), при желании загрузит локальные модели Ollama и применит дефолты
+агента. Настройка домена/email/ключей — через TUI (whiptail) или флаги.
+
+```bash
+# Интерактивно из клона репозитория:
+./install.sh
+
+# Неинтерактивно (прод):
+./install.sh --mode prod --domain example.com --email me@example.com --yes
+
+# Полезные флаги: --mode dev|prod  --no-ai  --reconfigure  --branch <b>  --dir <path>
+```
+
+### Обновление
+
+```bash
+./update.sh            # авто-бэкап → git pull → пересборка → миграции → рестарт → health
+./update.sh --no-backup --yes
+```
+
+### Бэкап и восстановление
+
+```bash
+bash infra/installer/backup.sh                       # PG + MinIO + Qdrant + Redis + .env → backups/*.tar.gz
+bash infra/installer/restore.sh backups/<архив>.tar.gz   # восстановление (деструктивно, с подтверждением)
+```
+
+Бэкап доступен и из админ-GUI: `POST /api/admin/maintenance/backup`,
+`GET /api/admin/maintenance/backups`, `…/{name}/download` (роль admin).
+
+### Ручная настройка (альтернатива установщику)
+
 ```bash
 git clone https://github.com/Zeed80/ai-docs.git
 cd ai-docs
