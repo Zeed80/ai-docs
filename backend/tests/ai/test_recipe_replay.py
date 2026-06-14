@@ -49,7 +49,8 @@ class FakeExecutor:
             await self._send(event)
 
 
-def _recipe(status: str = "active", slots: dict | None = None) -> SimpleNamespace:
+def _recipe(status: str = "active", slots: dict | None = None,
+            confirmed_replays: int = 5) -> SimpleNamespace:
     return SimpleNamespace(
         id="11111111-1111-1111-1111-111111111111",
         name="invoice_list__invoices_workspace",
@@ -57,6 +58,11 @@ def _recipe(status: str = "active", slots: dict | None = None) -> SimpleNamespac
         status=status,
         param_slots=slots,
         capability_schema_hash="",
+        # Trusted by default (>= _TRUST_AFTER_CONFIRMED) so replay runs silently;
+        # explainable-replay path is covered by its own test.
+        confirmed_replays=confirmed_replays,
+        worker_confirmations=0,
+        trigger_examples=["выведи все товары в таблицу по счетам"],
         steps=[
             {"capability": "invoices", "action": "list",
              "args_template": {"action": "list"}},
@@ -83,7 +89,7 @@ async def test_active_recipe_replays_without_planning(monkeypatch):
     recipe = _recipe()
 
     async def fake_find(text):
-        return recipe, 0.92
+        return recipe, 0.92, 0.92
 
     replayed: dict = {}
 
@@ -135,7 +141,7 @@ async def test_failed_replay_falls_back_to_dispatch(monkeypatch):
     monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
 
     async def fake_find(text):
-        return _recipe(), 0.95
+        return _recipe(), 0.95, 0.95
 
     async def fake_replay(r, slots, cfg, on_event=None):
         return False
@@ -183,7 +189,7 @@ async def test_draft_recipe_only_hints(monkeypatch):
     monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
 
     async def fake_find(text):
-        return _recipe(status="draft"), 0.95
+        return _recipe(status="draft"), 0.95, 0.95
 
     async def fail_replay(*a, **k):
         raise AssertionError("draft recipes must not replay")

@@ -46,6 +46,24 @@ _MAX_TRIGGER_EXAMPLES = 5
 _MIN_STEPS = 2
 _MAX_STEPS = 6
 
+# Component 1 — passive validation: worker independently reproduced the recipe's
+# exact steps this many times → draft becomes active (no shadow double-run).
+_CONFIRM_ACTIVATE_AFTER = 2
+# Component 2 — replay gate: required score margin between the top recipe and the
+# runner-up. Two near-equally-similar recipes → ambiguous → defer to the worker.
+_REPLAY_MARGIN = 0.04
+# Component 4 — explainable replay: below this many human-confirmed replays the
+# agent ASKS before replaying; at/above it, replays silently.
+_TRUST_AFTER_CONFIRMED = 2
+
+# Intent-changing modifiers (component 2): if the current request contains one of
+# these and the recipe's learned trigger did NOT, the task is likely different
+# ("счета X" vs "счета КРОМЕ X") → do not replay, let the worker reason.
+_INTENT_MODIFIERS = (
+    "не ", "кроме", "без ", "только", "лишь", "исключени", "сравни", "против",
+    " vs ", "динамик", "измени", "почему", "по сравнению",
+)
+
 _VECTOR_SCOPE = "recipe_triggers"
 
 
@@ -152,6 +170,115 @@ def resolve_slots(recipe_slots: dict | None, text: str) -> dict[str, str] | None
             return None
         resolved[slot] = value
     return resolved
+
+
+def _step_signature(steps: list[dict] | None) -> list[tuple[str, str]]:
+    """Ordered (capability, action) pairs — identity of a step sequence."""
+    out: list[tuple[str, str]] = []
+    for step in steps or []:
+        out.append((str(step.get("capability") or ""), str(step.get("action") or "")))
+    return out
+
+
+def steps_match(recipe_steps: list[dict] | None, worker_steps: list[dict] | None) -> bool:
+    """True when the worker reproduced the recipe's exact (capability, action) order."""
+    a = _step_signature(recipe_steps)
+    b = _step_signature(worker_steps)
+    return bool(a) and a == b
+
+
+def _has_new_intent_modifier(content: str, trigger_examples: list[str] | None) -> bool:
+    """True when the request carries an intent-changing modifier the recipe's
+    learned triggers lacked — a strong signal the task differs ("кроме", "не",
+    "сравни"…). Component 2 precision guard."""
+    text = (content or "").lower()
+    triggers = " ".join(trigger_examples or []).lower()
+    for mod in _INTENT_MODIFIERS:
+        if mod in text and mod not in triggers:
+            return True
+    return False
+
+
+def replay_gate_ok(
+    recipe: Any,
+    score: float,
+    margin: float,
+    content: str,
+) -> tuple[bool, str]:
+    """Component 2 — decide whether an active recipe is safe to replay.
+
+    Returns (ok, reason). Blocks on: ambiguity (small score margin to the
+    runner-up) and intent drift (a modifier like "кроме"/"сравни" absent from
+    the learned trigger). resolve_slots already guards entity resolvability.
+    """
+    if margin < _REPLAY_MARGIN:
+        return False, f"ambiguous_match(margin={margin:.3f}<{_REPLAY_MARGIN})"
+    if _has_new_intent_modifier(content, getattr(recipe, "trigger_examples", None)):
+        return False, "intent_modifier_drift"
+    return True, "ok"
+
+
+async def confirm_draft_from_worker(user_text: str, worker_steps: list[dict]) -> None:
+    """Component 1 — passive activation.
+
+    After a worker turn, if a DRAFT recipe matches this trigger AND the worker
+    reproduced its exact step sequence, count one confirmation. Enough
+    independent confirmations promote the draft to active — without ever
+    shadow-running it. Cheap: reuses work the worker already did.
+    """
+    try:
+        matches = await _search_triggers(user_text, limit=1)
+    except Exception as exc:
+        log_degraded("recipes.confirm_search", exc)
+        return
+    if not matches or matches[0]["score"] < REPLAY_SCORE:
+        return
+
+    from app.db.models import RecipeSkill
+    from app.db.session import _get_session_factory
+
+    factory = _get_session_factory()
+    async with factory() as db:
+        try:
+            recipe = await db.get(RecipeSkill, uuid_module.UUID(matches[0]["recipe_id"]))
+        except Exception:
+            return
+        if recipe is None or recipe.status != "draft":
+            return
+        if not steps_match(recipe.steps, worker_steps):
+            return
+        recipe.worker_confirmations = (recipe.worker_confirmations or 0) + 1
+        if recipe.worker_confirmations >= _CONFIRM_ACTIVATE_AFTER:
+            recipe.status = "active"
+            logger.info(
+                "recipe_activated_passive",
+                recipe=str(recipe.id),
+                confirmations=recipe.worker_confirmations,
+            )
+        else:
+            logger.info(
+                "recipe_confirmation_added",
+                recipe=str(recipe.id),
+                confirmations=recipe.worker_confirmations,
+            )
+        await db.commit()
+
+
+async def record_confirmed_replay(recipe_id) -> None:
+    """Component 4 — a human approved an explainable replay; build trust."""
+    from app.db.models import RecipeSkill
+    from app.db.session import _get_session_factory
+
+    try:
+        factory = _get_session_factory()
+        async with factory() as db:
+            recipe = await db.get(RecipeSkill, recipe_id)
+            if recipe is None:
+                return
+            recipe.confirmed_replays = (recipe.confirmed_replays or 0) + 1
+            await db.commit()
+    except Exception as exc:
+        log_degraded("recipes.record_confirmed_replay", exc)
 
 
 def render_args(args_template: Any, slots: dict[str, str]) -> Any:
@@ -309,10 +436,15 @@ async def record_candidate(
 # ── Retrieval ──────────────────────────────────────────────────────────────────
 
 
-async def find_recipe(text: str) -> tuple[Any, float] | None:
-    """Best (RecipeSkill, score) for the text, or None. Retired recipes excluded."""
+async def find_recipe(text: str) -> tuple[Any, float, float] | None:
+    """Best (RecipeSkill, score, margin) for the text, or None.
+
+    ``margin`` is the score gap to the next distinct recipe candidate (0.0 when
+    there is no runner-up) — component 2 uses it to refuse ambiguous matches.
+    Retired recipes are excluded.
+    """
     try:
-        matches = await _search_triggers(text, limit=3)
+        matches = await _search_triggers(text, limit=5)
     except Exception as exc:
         log_degraded("recipes.search", exc)
         return None
@@ -324,14 +456,25 @@ async def find_recipe(text: str) -> tuple[Any, float] | None:
 
     factory = _get_session_factory()
     async with factory() as db:
+        chosen: Any = None
+        chosen_score = 0.0
+        runner_up_score: float | None = None
         for match in matches:
             try:
                 recipe = await db.get(RecipeSkill, uuid_module.UUID(match["recipe_id"]))
             except Exception:
                 continue
-            if recipe is not None and recipe.status != "retired":
-                return recipe, float(match["score"])
-    return None
+            if recipe is None or recipe.status == "retired":
+                continue
+            if chosen is None:
+                chosen, chosen_score = recipe, float(match["score"])
+            elif recipe.id != chosen.id:
+                runner_up_score = float(match["score"])
+                break
+        if chosen is None:
+            return None
+        margin = chosen_score - runner_up_score if runner_up_score is not None else chosen_score
+        return chosen, chosen_score, margin
 
 
 # ── Replay ─────────────────────────────────────────────────────────────────────

@@ -1446,6 +1446,29 @@ class AgentSession:
         if self._approval_future and not self._approval_future.done():
             self._approval_future.set_result(approved)
 
+    async def request_confirmation(self, prompt: str, meta: dict | None = None) -> bool:
+        """Ask the user a yes/no question, reusing the approval future channel.
+
+        Lightweight (no DB approval row) — used by explainable recipe replay to
+        confirm a learned shortcut before it has earned silent trust. Times out
+        to False (defer to the normal path) so a missing user never blocks.
+        """
+        self._approval_future = asyncio.get_event_loop().create_future()
+        await self._send({
+            "type": "approval_request",
+            "tool": "recipe_replay",
+            "preview": prompt,
+            **(meta or {}),
+        })
+        try:
+            return await asyncio.wait_for(
+                self._approval_future,
+                timeout=float(self._config.approval_timeout_seconds),
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            self._approval_future = None
+            return False
+
     def _remember_latest_turn(self, delivered_text: str) -> None:
         if not self._config.memory_enabled or not delivered_text:
             return

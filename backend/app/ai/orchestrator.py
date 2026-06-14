@@ -368,16 +368,26 @@ class AgentOrchestrator:
             from app.ai import recipes as recipes_module
             recipe_hit = await recipes_module.find_recipe(content)
             if recipe_hit is not None:
-                recipe, score = recipe_hit
+                recipe, score, margin = recipe_hit
                 if (
                     score >= recipes_module.REPLAY_SCORE
                     and recipe.status == "active"
                 ):
                     slots = recipes_module.resolve_slots(recipe.param_slots, content)
-                    if slots is not None and await self._replay_recipe(
-                        recipe, slots, content, config, turn_started_at
-                    ):
-                        return
+                    # Component 2 — precision gate: ambiguity + intent-drift guard.
+                    gate_ok, gate_reason = recipes_module.replay_gate_ok(
+                        recipe, score, margin, content
+                    )
+                    if slots is not None and gate_ok:
+                        if await self._replay_recipe(
+                            recipe, slots, content, config, turn_started_at
+                        ):
+                            return
+                    elif not gate_ok:
+                        logger.info(
+                            "recipe_replay_gated",
+                            recipe=str(recipe.id), reason=gate_reason, score=score,
+                        )
                 if score >= recipes_module.HINT_SCORE:
                     steps_text = " → ".join(
                         f"{s.get('capability')}.{s.get('action') or 'call'}"
@@ -677,6 +687,35 @@ class AgentOrchestrator:
         """
         from app.ai import recipes as recipes_module
 
+        # Component 4 — explainable replay: until the recipe has earned enough
+        # human-confirmed replays, ASK before running the learned shortcut. This
+        # is the human-in-the-loop guard exactly where misfire risk is highest
+        # (a similar-but-different request). After trust is earned, runs silently.
+        needs_confirmation = (
+            (recipe.confirmed_replays or 0) < recipes_module._TRUST_AFTER_CONFIRMED
+        )
+        if needs_confirmation:
+            steps_text = " → ".join(
+                f"{s.get('capability')}.{s.get('action') or 'call'}"
+                for s in (recipe.steps or [])
+            )
+            prompt = (
+                f"Задача похожа на ранее выученную «{recipe.name}».\n"
+                f"Выполнить по выученному рецепту (шаги: {steps_text})?\n"
+                f"Да — выполню сразу; Нет — разберу запрос заново."
+            )
+            approved = await self._executor.request_confirmation(
+                prompt, {"recipe_id": str(recipe.id), "recipe_name": recipe.name}
+            )
+            if not approved:
+                await self._outer_send({
+                    "type": "orchestrator.status",
+                    "content": "Секретарь: разбираю запрос обычным путём.",
+                    "plan_source": "recipe_declined",
+                    "degraded": False,
+                })
+                return False
+
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._outer_send({
             "type": "orchestrator.status",
@@ -705,6 +744,37 @@ class AgentOrchestrator:
                 "degraded": True,
             })
             return False
+
+        # Component 3 — deterministic post-check: a recipe that "ran" but produced
+        # nothing (no workspace change AND no result message) very likely matched
+        # the wrong task. Treat as a miss → count a failure (feeds the fail-rate
+        # retire logic) and fall back to the worker rather than show an empty win.
+        produced_message = any(
+            isinstance(r.get("result"), dict) and r["result"].get("message")
+            for r in self._trace.tool_results
+        )
+        workspace_changed = bool(self._trace.workspace_events) and await self._verify_workspace(
+            OrchestratorPlan(
+                goal=content, intent="recipe_replay",
+                worker=WorkerAssignment(role=recipe.role, task=content),
+                workspace=WorkspaceOutputSpec(required=True),
+            )
+        )
+        if not produced_message and not workspace_changed:
+            await recipes_module.record_outcome(recipe.id, success=False)
+            logger.info("recipe_replay_empty_result", recipe=str(recipe.id))
+            await self._outer_send({
+                "type": "orchestrator.status",
+                "content": "Секретарь: рецепт дал пустой результат, решаю задачу обычным путём.",
+                "plan_source": "recipe_fallback",
+                "degraded": True,
+            })
+            return False
+
+        # Component 4 — replay succeeded with a real result: build trust so the
+        # recipe eventually replays without asking.
+        if needs_confirmation:
+            await recipes_module.record_confirmed_replay(recipe.id)
 
         answer = "Готово — выполнено по выученному рецепту."
         last_result = next(
@@ -774,6 +844,11 @@ class AgentOrchestrator:
 
         async def _record() -> None:
             try:
+                # Component 1 — passive validation: if this worker turn reproduced
+                # an existing draft's exact steps, count a confirmation (and maybe
+                # promote it to active). Cheap — no shadow run.
+                await recipes_module.confirm_draft_from_worker(content, steps)
+                # Then record/enrich the draft for this trigger as before.
                 await recipes_module.record_candidate(
                     user_text=content,
                     role=plan.worker.role,

@@ -135,7 +135,7 @@ async def test_find_recipe_skips_retired(recipes_db):
     recipes_db["search_results"].append({"recipe_id": rid, "score": 0.91})
     hit = await recipes.find_recipe("счета Ромашки за май")
     assert hit is not None
-    found, score = hit
+    found, score, margin = hit
     assert str(found.id) == rid and score == 0.91
 
     await recipes.record_outcome(uuid.UUID(rid), success=False, retire=True)
@@ -187,3 +187,95 @@ async def test_recipes_api_list_activate_retire(recipes_db, client, monkeypatch)
     resp = await client.post(f"/api/agent/recipes/{rid}/retire")
     assert resp.status_code == 200
     assert resp.json()["status"] == "retired"
+
+
+# ── Component 2: replay precision gate ──────────────────────────────────────────
+
+def _ns_recipe(**kw):
+    from types import SimpleNamespace
+    base = dict(trigger_examples=["счета Ромашки за май"])
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_replay_gate_blocks_ambiguous_margin():
+    """Two near-equally-similar recipes → ambiguous → defer to worker."""
+    recipe = _ns_recipe()
+    ok, reason = recipes.replay_gate_ok(recipe, score=0.90, margin=0.01, content="счета Ромашки")
+    assert not ok and "ambiguous" in reason
+
+
+def test_replay_gate_blocks_intent_modifier_drift():
+    """A modifier absent from the learned trigger ("кроме") blocks replay."""
+    recipe = _ns_recipe()
+    ok, reason = recipes.replay_gate_ok(
+        recipe, score=0.95, margin=0.20, content="счета кроме Ромашки"
+    )
+    assert not ok and reason == "intent_modifier_drift"
+
+
+def test_replay_gate_allows_clean_match():
+    recipe = _ns_recipe()
+    ok, reason = recipes.replay_gate_ok(
+        recipe, score=0.95, margin=0.20, content="счета Ромашки за июнь"
+    )
+    assert ok and reason == "ok"
+
+
+# ── Component 1: passive activation from worker confirmations ────────────────────
+
+def test_steps_match_identity():
+    a = [{"capability": "invoices", "action": "list"},
+         {"capability": "workspace", "action": "publish"}]
+    b = [{"capability": "invoices", "action": "list"},
+         {"capability": "workspace", "action": "publish"}]
+    c = [{"capability": "invoices", "action": "list"}]
+    assert recipes.steps_match(a, b)
+    assert not recipes.steps_match(a, c)
+    assert not recipes.steps_match([], [])
+
+
+@pytest.mark.asyncio
+async def test_passive_confirmation_promotes_draft(recipes_db):
+    """Worker reproducing a draft's exact steps N times → auto-active (no shadow)."""
+    await recipes.record_candidate(
+        user_text="счета Ромашки", role="invoice_specialist",
+        intent="invoice_list", steps=list(_STEPS),
+    )
+    async with recipes_db["factory"]() as db:
+        from sqlalchemy import select
+        recipe = (await db.execute(select(RecipeSkill))).scalars().one()
+        rid = recipe.id
+    # Make the trigger search resolve to this recipe with a high score.
+    recipes_db["search_results"].append({"recipe_id": str(rid), "score": 0.95})
+
+    worker_steps = [{"capability": "invoices", "action": "list"},
+                    {"capability": "workspace", "action": "publish"}]
+    await recipes.confirm_draft_from_worker("счета Ромашки за май", worker_steps)
+    async with recipes_db["factory"]() as db:
+        recipe = await db.get(RecipeSkill, rid)
+        assert recipe.status == "draft" and recipe.worker_confirmations == 1
+    await recipes.confirm_draft_from_worker("счета Ромашки за июнь", worker_steps)
+    async with recipes_db["factory"]() as db:
+        recipe = await db.get(RecipeSkill, rid)
+        assert recipe.status == "active" and recipe.worker_confirmations == 2
+
+
+@pytest.mark.asyncio
+async def test_passive_confirmation_ignores_different_steps(recipes_db):
+    """Worker doing DIFFERENT steps must not confirm the draft."""
+    await recipes.record_candidate(
+        user_text="счета Ромашки", role="invoice_specialist",
+        intent="invoice_list", steps=list(_STEPS),
+    )
+    async with recipes_db["factory"]() as db:
+        from sqlalchemy import select
+        recipe = (await db.execute(select(RecipeSkill))).scalars().one()
+        rid = recipe.id
+    recipes_db["search_results"].append({"recipe_id": str(rid), "score": 0.95})
+
+    other_steps = [{"capability": "suppliers", "action": "list"}]
+    await recipes.confirm_draft_from_worker("счета Ромашки за май", other_steps)
+    async with recipes_db["factory"]() as db:
+        recipe = await db.get(RecipeSkill, rid)
+        assert recipe.status == "draft" and recipe.worker_confirmations == 0
