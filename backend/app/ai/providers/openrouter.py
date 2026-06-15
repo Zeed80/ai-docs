@@ -36,8 +36,8 @@ class OpenRouterProvider(OpenAICompatibleProvider):
 
     def _headers(self) -> dict[str, str]:
         headers = super()._headers()
-        # Override api_key reading since we always use OPENROUTER_API_KEY
-        key = os.getenv("OPENROUTER_API_KEY", "")
+        # Prefer the runtime-resolved key (provider_instances DB row), then env.
+        key = self.config.api_key or os.getenv("OPENROUTER_API_KEY", "")
         if key:
             headers["Authorization"] = f"Bearer {key}"
         headers.setdefault("HTTP-Referer", "https://ai-workspace.local")

@@ -56,8 +56,17 @@ class AnthropicProvider(AIProvider):
         self._prompt_cache: bool = False
 
     def _api_key(self) -> str:
+        # Prefer the runtime-resolved key (from the provider_instances DB row),
+        # then fall back to the environment variable.
+        if self.config.api_key:
+            return self.config.api_key
         env = self.config.api_key_env or "ANTHROPIC_API_KEY"
         return os.getenv(env, "")
+
+    def _base(self) -> str:
+        base = str(self.config.base_url or _ANTHROPIC_API).rstrip("/")
+        # Allow either ".../v1" or bare host in the registry/instance.
+        return base if base.endswith("/v1") else f"{base}/v1"
 
     def _headers(self, stream: bool = False) -> dict[str, str]:
         h = {
@@ -164,6 +173,11 @@ class AnthropicProvider(AIProvider):
             "messages": anthropic_msgs,
             "max_tokens": _MAX_TOKENS,
         }
+        # Extended thinking: enabled when the caller/catalog asks for CoT.
+        if request.thinking:
+            budget = 2048
+            payload["max_tokens"] = max(_MAX_TOKENS, budget + 1024)
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
         if system_text:
             payload["system"] = self._build_system(system_text)
         if request.tools:
@@ -173,7 +187,7 @@ class AnthropicProvider(AIProvider):
 
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             resp = await client.post(
-                f"{_ANTHROPIC_API}/messages",
+                f"{self._base()}/messages",
                 headers=self._headers(),
                 json=payload,
             )
@@ -226,7 +240,7 @@ class AnthropicProvider(AIProvider):
         }
 
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
-            resp = await client.post(f"{_ANTHROPIC_API}/messages", headers=self._headers(), json=payload)
+            resp = await client.post(f"{self._base()}/messages", headers=self._headers(), json=payload)
             resp.raise_for_status()
             body = resp.json()
 

@@ -16,11 +16,6 @@ providers:
     base_url: "http://localhost:8080"
     timeout_seconds: 180
     is_local: true
-  cloud_provider:
-    base_url: "https://api.example.invalid"
-    api_key_env: "CLOUD_AI_API_KEY"
-    timeout_seconds: 180
-    is_local: false
   openrouter:
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"
@@ -41,12 +36,106 @@ providers:
     api_key_env: "GOOGLE_API_KEY"
     timeout_seconds: 180
     is_local: false
+  openai:
+    base_url: "https://api.openai.com/v1"
+    api_key_env: "OPENAI_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  ollama_cloud:
+    base_url: "https://ollama.com/v1"
+    api_key_env: "OLLAMA_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  moonshot:
+    base_url: "https://api.moonshot.ai/v1"
+    api_key_env: "MOONSHOT_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  minimax:
+    base_url: "https://api.minimax.io/v1"
+    api_key_env: "MINIMAX_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  dashscope:
+    base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    api_key_env: "DASHSCOPE_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  mistral:
+    base_url: "https://api.mistral.ai/v1"
+    api_key_env: "MISTRAL_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  groq:
+    base_url: "https://api.groq.com/openai/v1"
+    api_key_env: "GROQ_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  together:
+    base_url: "https://api.together.xyz/v1"
+    api_key_env: "TOGETHER_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  fireworks:
+    base_url: "https://api.fireworks.ai/inference/v1"
+    api_key_env: "FIREWORKS_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  xai:
+    base_url: "https://api.x.ai/v1"
+    api_key_env: "XAI_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  cohere:
+    base_url: "https://api.cohere.ai/compatibility/v1"
+    api_key_env: "COHERE_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  perplexity:
+    base_url: "https://api.perplexity.ai"
+    api_key_env: "PERPLEXITY_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  deepinfra:
+    base_url: "https://api.deepinfra.com/v1/openai"
+    api_key_env: "DEEPINFRA_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  cerebras:
+    base_url: "https://api.cerebras.ai/v1"
+    api_key_env: "CEREBRAS_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  sambanova:
+    base_url: "https://api.sambanova.ai/v1"
+    api_key_env: "SAMBANOVA_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  nebius:
+    base_url: "https://api.studio.nebius.ai/v1"
+    api_key_env: "NEBIUS_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  novita:
+    base_url: "https://api.novita.ai/v3/openai"
+    api_key_env: "NOVITA_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  hyperbolic:
+    base_url: "https://api.hyperbolic.xyz/v1"
+    api_key_env: "HYPERBOLIC_API_KEY"
+    timeout_seconds: 180
+    is_local: false
+  lmstudio:
+    base_url: "http://localhost:1234/v1"
+    timeout_seconds: 180
+    is_local: true
 
 models:
   gemma4_e2b_ollama:
     provider: "ollama"
     provider_model: "gemma4:e2b"
-    status: "production"
+    status: "disabled"
     modalities: ["text", "vision", "audio"]
     max_context_tokens: 128000
     supports_structured_output: false
@@ -72,7 +161,7 @@ models:
   gemma4_26b_ollama:
     provider: "ollama"
     provider_model: "gemma4:26b"
-    status: "production"
+    status: "disabled"
     modalities: ["text", "vision", "tool_calling"]
     max_context_tokens: 256000
     supports_structured_output: false
@@ -86,7 +175,7 @@ models:
   qwen25_14b_awq_vllm:
     provider: "vllm"
     provider_model: "Qwen/Qwen2.5-14B-Instruct-AWQ"
-    status: "staging"
+    status: "disabled"
     modalities: ["text", "tool_calling"]
     max_context_tokens: 131072
     supports_structured_output: true
@@ -99,7 +188,7 @@ models:
   qwen25_7b_awq_vllm:
     provider: "vllm"
     provider_model: "Qwen/Qwen2.5-7B-Instruct-AWQ"
-    status: "staging"
+    status: "disabled"
     modalities: ["text", "tool_calling"]
     max_context_tokens: 131072
     supports_structured_output: true
@@ -112,7 +201,7 @@ models:
   qwen25_vl_7b_awq_vllm:
     provider: "vllm"
     provider_model: "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
-    status: "staging"
+    status: "disabled"
     modalities: ["text", "vision"]
     max_context_tokens: 32768
     supports_structured_output: true
@@ -185,7 +274,7 @@ models:
   local_embedding_vllm:
     provider: "vllm"
     provider_model: "intfloat/multilingual-e5-large"
-    status: "candidate"
+    status: "disabled"
     modalities: ["embedding"]
     max_context_tokens: 8192
     embedding_dimension: 1024
@@ -225,7 +314,7 @@ models:
   local_reranker_openai_compatible:
     provider: "openai_compatible"
     provider_model: "BAAI/bge-reranker-v2-m3"
-    status: "candidate"
+    status: "disabled"
     modalities: ["rerank"]
     max_context_tokens: 8192
     max_input_tokens: 8192
@@ -243,11 +332,13 @@ models:
   claude_sonnet_anthropic:
     provider: "anthropic"
     provider_model: "claude-sonnet-4-6"
-    status: "candidate"
+    status: "production"
     modalities: ["text", "vision", "tool_calling"]
     max_context_tokens: 200000
     supports_structured_output: true
     supports_tool_calling: true
+    thinking_supported: true
+    thinking_enabled: false
     local_only: false
     vram_gb_estimate: 0.0
     quality_score: 0.93
@@ -256,11 +347,13 @@ models:
   claude_haiku_anthropic:
     provider: "anthropic"
     provider_model: "claude-haiku-4-5"
-    status: "candidate"
+    status: "production"
     modalities: ["text", "tool_calling"]
     max_context_tokens: 200000
     supports_structured_output: true
     supports_tool_calling: true
+    thinking_supported: true
+    thinking_enabled: false
     local_only: false
     vram_gb_estimate: 0.0
     quality_score: 0.82
@@ -269,7 +362,7 @@ models:
   deepseek_r1_openrouter:
     provider: "openrouter"
     provider_model: "deepseek/deepseek-r1"
-    status: "candidate"
+    status: "disabled"
     modalities: ["text", "tool_calling"]
     max_context_tokens: 128000
     supports_structured_output: true
@@ -282,7 +375,7 @@ models:
   qwen3_235b_openrouter:
     provider: "openrouter"
     provider_model: "qwen/qwen3-235b-a22b"
-    status: "candidate"
+    status: "disabled"
     modalities: ["text", "tool_calling"]
     max_context_tokens: 40000
     supports_structured_output: true
@@ -295,7 +388,7 @@ models:
   qwen3_6_35b_ollama:
     provider: "ollama"
     provider_model: "qwen3.6:35b"
-    status: "production"
+    status: "disabled"
     modalities: ["text", "vision", "tool_calling"]
     max_context_tokens: 262144
     supports_structured_output: true
@@ -314,6 +407,8 @@ models:
     max_context_tokens: 32768
     supports_structured_output: true
     supports_tool_calling: true
+    thinking_supported: true
+    thinking_enabled: false
     local_only: true
     vram_gb_estimate: 17.5
     quality_score: 0.90
@@ -330,6 +425,8 @@ models:
     max_context_tokens: 40000
     supports_structured_output: true
     supports_tool_calling: true
+    thinking_supported: true
+    thinking_enabled: false
     local_only: true
     vram_gb_estimate: 5.5
     quality_score: 0.80
@@ -338,7 +435,7 @@ models:
   ministral_3_8b_ollama:
     provider: "ollama"
     provider_model: "ministral-3:8b"
-    status: "production"
+    status: "disabled"
     modalities: ["text", "tool_calling"]
     max_context_tokens: 32000
     supports_structured_output: true
@@ -348,20 +445,6 @@ models:
     quality_score: 0.75
     speed_score: 0.98
     notes: "Ministral-3 8B — ultra-fast local model. Primary worker and orchestrator model. Excellent tool calling."
-  future_reasoning_cloud:
-    provider: "cloud_provider"
-    provider_model: "replace-with-approved-model"
-    status: "disabled"
-    modalities: ["text", "tool_calling"]
-    max_context_tokens: 200000
-    supports_structured_output: true
-    supports_tool_calling: true
-    local_only: false
-    vram_gb_estimate: 0.0
-    quality_score: 0.0
-    speed_score: 0.0
-    notes: "Legacy placeholder. Use claude_sonnet_anthropic or deepseek_r1_openrouter instead."
-
   # ── Специализированные VLM для технических чертежей (май 2026) ──────────────
   # Источники: arXiv:2511.21631 (Qwen3-VL), ollama.com/library/qwen3-vl,
   #            arXiv:2411.02810 (CAD feature recognition), arXiv:2510.21862 (hybrid framework)
@@ -384,7 +467,7 @@ models:
   qwen3_vl_8b_ollama:
     provider: "ollama"
     provider_model: "qwen3-vl:8b"
-    status: "candidate"
+    status: "disabled"
     modalities: ["text", "vision"]
     max_context_tokens: 256000
     supports_structured_output: false
@@ -399,7 +482,7 @@ models:
   qwen35_27b_ollama:
     provider: "ollama"
     provider_model: "qwen3.5:27b"
-    status: "candidate"
+    status: "disabled"
     modalities: ["text", "vision"]
     max_context_tokens: 262144
     supports_structured_output: true
@@ -411,25 +494,10 @@ models:
     speed_score: 0.50
     notes: "Qwen3.5 27B. Natively multimodal (early fusion). Outperforms Qwen3-VL on reasoning+vision+agents. Available on Ollama."
 
-  internvl35_76b_vllm:
-    provider: "vllm"
-    provider_model: "OpenGVLab/InternVL3.5-78B-Instruct"
-    status: "disabled"
-    modalities: ["text", "vision"]
-    max_context_tokens: 128000
-    supports_structured_output: false
-    supports_tool_calling: false
-    supports_multi_image: true
-    local_only: true
-    vram_gb_estimate: 50.0
-    quality_score: 0.92
-    speed_score: 0.28
-    notes: "InternVL3.5 78B. MMMU SOTA open-source (72.2). Requires ~50 GB VRAM — does NOT fit on RTX 3090 24 GB. Disabled."
-
   glm45v_ollama:
     provider: "ollama"
     provider_model: "glm4.5v"
-    status: "candidate"
+    status: "disabled"
     modalities: ["text", "vision"]
     max_context_tokens: 128000
     supports_structured_output: false
@@ -444,7 +512,7 @@ models:
   gemma3_27b_vision_ollama:
     provider: "ollama"
     provider_model: "gemma3:27b"
-    status: "candidate"
+    status: "disabled"
     modalities: ["text", "vision"]
     max_context_tokens: 128000
     supports_structured_output: false
@@ -459,7 +527,7 @@ models:
   gemini25_pro_google:
     provider: "gemini"
     provider_model: "gemini-2.5-pro"
-    status: "candidate"
+    status: "disabled"
     modalities: ["text", "vision"]
     max_context_tokens: 1000000
     supports_structured_output: true
@@ -475,71 +543,65 @@ routes:
   invoice_ocr:
     required_modalities: ["vision"]
     local_only: true
-    fallback_chain: ["gemma4_e4b_ollama", "gemma4_26b_ollama"]
+    fallback_chain: ["gemma4_e4b_ollama", "qwen3_5_9b_ollama"]
     manual_review_fallback: true
     min_quality_score: 0.0
   structured_extraction:
     required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["gemma4_e4b_ollama", "gemma4_26b_ollama"]
+    fallback_chain: ["gemma4_e4b_ollama", "qwen3_5_9b_ollama"]
     manual_review_fallback: true
   drawing_analysis:
     required_modalities: ["vision"]
     local_only: true
-    fallback_chain: ["gemma4_26b_ollama", "gemma4_e4b_ollama"]
+    fallback_chain: ["gemma4_e4b_ollama", "qwen3_5_9b_ollama"]
     manual_review_fallback: true
   drawing_analysis_vlm:
     required_modalities: ["vision"]
     local_only: true
     fallback_chain:
-      # gemma4:e4b (9.6 GB) and gemma4:e2b (7.2 GB) are installed → try first
+      # Core multimodal set first (installed); heavy dedicated VLMs are disabled
+      # in the catalog and can be re-enabled per deployment for max quality.
+      - "qwen3_6_35b_apex_ollama"
       - "gemma4_e4b_ollama"
-      - "gemma4_e2b_ollama"
+      - "qwen3_5_9b_ollama"
       - "qwen3_vl_32b_ollama"
-      - "qwen35_27b_ollama"
-      - "qwen3_6_35b_ollama"
-      - "qwen3_vl_8b_ollama"
-      - "internvl35_76b_vllm"
-      - "glm45v_ollama"
-      - "gemma4_26b_ollama"
-      - "gemma3_27b_vision_ollama"
       - "claude_sonnet_anthropic"
-      - "gemini25_pro_google"
     manual_review_fallback: true
   engineering_reasoning:
     required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["qwen3_6_35b_ollama", "qwen3_5_9b_ollama", "gemma4_26b_ollama"]
+    fallback_chain: ["qwen3_6_35b_apex_ollama", "qwen3_5_9b_ollama"]
     manual_review_fallback: true
   email_drafting:
     required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["qwen3_6_35b_ollama", "qwen3_5_9b_ollama", "gemma4_26b_ollama"]
+    fallback_chain: ["qwen3_6_35b_apex_ollama", "qwen3_5_9b_ollama"]
     manual_review_fallback: true
   embedding:
     required_modalities: ["embedding"]
     local_only: true
-    fallback_chain: ["qwen3_embedding_8b_ollama", "local_embedding_ollama", "local_embedding_vllm"]
+    fallback_chain: ["qwen3_embedding_8b_ollama", "local_embedding_ollama"]
     manual_review_fallback: false
   reranking:
     required_modalities: ["rerank"]
     local_only: true
-    fallback_chain: ["local_reranker_ollama", "local_reranker_openai_compatible"]
+    fallback_chain: ["local_reranker_ollama"]
     manual_review_fallback: true
   classification:
     required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["gemma4_e4b_ollama", "gemma4_26b_ollama"]
+    fallback_chain: ["gemma4_e4b_ollama", "qwen3_5_9b_ollama"]
     manual_review_fallback: true
   long_context_summarization:
     required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["gemma4_26b_ollama"]
+    fallback_chain: ["qwen3_5_9b_ollama"]
     manual_review_fallback: true
   tool_calling:
     required_modalities: ["tool_calling"]
     local_only: true
-    fallback_chain: ["qwen3_6_35b_ollama", "qwen3_5_9b_ollama", "gemma4_26b_ollama", "claude_sonnet_anthropic", "deepseek_r1_openrouter"]
+    fallback_chain: ["qwen3_6_35b_apex_ollama", "qwen3_5_9b_ollama", "claude_sonnet_anthropic"]
     manual_review_fallback: true
   speech:
     required_modalities: ["audio"]
@@ -555,6 +617,6 @@ routes:
   code_generation:
     required_modalities: ["text"]
     local_only: false
-    fallback_chain: ["claude_sonnet_anthropic", "gemma4_26b_ollama"]
+    fallback_chain: ["claude_sonnet_anthropic", "qwen3_6_35b_apex_ollama"]
     manual_review_fallback: false
     notes: "CapabilityBuilder code generation: Claude API preferred, local 26b as fallback."

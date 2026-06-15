@@ -121,7 +121,7 @@ def test_tool_calls_are_only_proposed_and_allowlisted() -> None:
 
 def test_cloud_model_requires_explicit_permission() -> None:
     registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
-    model = registry.get_model("future_reasoning_cloud")
+    model = registry.get_model("claude_sonnet_anthropic")
     router = AIRouter(registry, providers={ProviderKind.OLLAMA: FakeProvider()})
 
     try:

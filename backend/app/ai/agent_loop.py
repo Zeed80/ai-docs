@@ -236,11 +236,41 @@ def _turn_model_overrides(
     )
 
 
+def _model_thinking_default(model_name: str | None) -> bool | None:
+    """Catalog thinking_enabled for a model (by key or provider_model).
+
+    Returns True/False when the model is found in the registry, else None.
+    A model without ``thinking_supported`` resolves to False (no CoT).
+    """
+    if not model_name:
+        return None
+    try:
+        from app.ai.router import ai_router
+
+        for cap in ai_router.registry.models.values():
+            if cap.name == model_name or cap.provider_model == model_name:
+                return cap.thinking_enabled if cap.thinking_supported else False
+    except Exception:
+        return None
+    return None
+
+
 def _thinking_disabled(
     config: BuiltinAgentConfig,
     override: bool | None = None,
+    model_name: str | None = None,
 ) -> bool:
-    return override if override is not None else config.disable_thinking
+    """Resolve whether thinking/CoT is OFF for this call.
+
+    Priority: explicit per-role override → the model's catalog default
+    (UI checkbox) → the global ``disable_thinking`` fallback.
+    """
+    if override is not None:
+        return override
+    model_default = _model_thinking_default(model_name)
+    if model_default is not None:
+        return not model_default  # thinking_enabled=True → not disabled
+    return config.disable_thinking
 
 
 # ── Registry loading ──────────────────────────────────────────────────────────
@@ -601,7 +631,7 @@ async def _call_ollama_streaming(
         "stream": True,
         "options": options,
     }
-    if _thinking_disabled(config, disable_thinking):
+    if _thinking_disabled(config, disable_thinking, model_name=model):
         payload["think"] = False
 
     full_content = ""
@@ -696,11 +726,84 @@ def _openai_compatible_provider_config(
             {},
         ),
     }
-    try:
+    if provider in {**mapping, **local_mapping}:
         base_url, env_key, extra = {**mapping, **local_mapping}[provider]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported openai-compatible provider: {provider}") from exc
-    return base_url, os.environ.get(env_key, ""), extra
+        return base_url, os.environ.get(env_key, ""), extra
+    # Any other provider kind registered in model_registry.yaml — resolve its
+    # endpoint and (DB-stored or env) API key through the provider registry.
+    try:
+        from app.ai.provider_registry import select_instance
+        from app.ai.schemas import ProviderKind
+
+        resolved = select_instance(ProviderKind(provider))
+        if resolved.base_url:
+            return resolved.base_url, resolved.api_key, {}
+    except Exception:
+        pass
+    raise ValueError(f"Unsupported openai-compatible provider: {provider}")
+
+
+# How each provider family disables chain-of-thought (from their API docs).
+#   reasoning_effort:"none" — Ollama (local+cloud), OpenAI o-series, Groq, xAI,
+#                             DashScope (OpenAI-compat surface).
+#   reasoning:{enabled:false} — OpenRouter extension.
+#   chat_template_kwargs — llama.cpp (Qwen3 template).
+# Providers without a documented knob get nothing (avoid 400 on strict endpoints).
+_REASONING_EFFORT_PROVIDERS = frozenset({
+    "ollama_cloud", "openai", "groq", "xai", "dashscope", "qwen", "cerebras",
+})
+
+
+def _provider_instance_extra(provider: str) -> dict[str, Any]:
+    """Return the provider node's UI-configured extra ({headers, body})."""
+    try:
+        from app.ai.provider_registry import select_instance
+        from app.ai.schemas import ProviderKind
+
+        return select_instance(ProviderKind(provider)).extra or {}
+    except Exception:
+        return {}
+
+
+def _reasoning_disable_params(provider: str) -> dict[str, Any]:
+    if provider == "llamacpp":
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+    if provider == "openrouter":
+        return {"reasoning": {"enabled": False}}
+    if provider in _REASONING_EFFORT_PROVIDERS:
+        return {"reasoning_effort": "none"}
+    return {}
+
+
+def _normalize_openai_messages(messages: list[dict]) -> list[dict]:
+    """Make a message list strictly OpenAI-compliant for cloud endpoints.
+
+    The OpenAI spec requires ``tool_calls[].function.arguments`` to be a JSON
+    **string**. The agent carries it as a dict (Ollama's native format), which
+    lenient gateways accept but strict ones (Ollama Cloud, OpenAI) reject with
+    ``cannot unmarshal object … of type string``. Serialise any dict/list args.
+    """
+    out: list[dict] = []
+    for msg in messages:
+        calls = msg.get("tool_calls")
+        if not calls:
+            out.append(msg)
+            continue
+        new_msg = dict(msg)
+        new_calls = []
+        for call in calls:
+            call = dict(call)
+            fn = dict(call.get("function") or {})
+            args = fn.get("arguments")
+            if isinstance(args, (dict, list)):
+                fn["arguments"] = json.dumps(args, ensure_ascii=False)
+            elif args is None:
+                fn["arguments"] = "{}"
+            call["function"] = fn
+            new_calls.append(call)
+        new_msg["tool_calls"] = new_calls
+        out.append(new_msg)
+    return out
 
 
 async def _call_openai_streaming(
@@ -734,7 +837,9 @@ async def _call_openai_streaming(
 
     payload: dict[str, Any] = {
         "model": model,
-        "messages": [{"role": "system", "content": system_prompt}] + messages,
+        "messages": _normalize_openai_messages(
+            [{"role": "system", "content": system_prompt}] + messages
+        ),
         "stream": True,
         "temperature": config.temperature,
     }
@@ -742,15 +847,17 @@ async def _call_openai_streaming(
         payload["max_tokens"] = int(max_tokens)
     if tools:
         payload["tools"] = tools
-    if _thinking_disabled(config, disable_thinking):
-        if provider == "llamacpp":
-            # llama.cpp uses chat_template_kwargs to control thinking in Qwen3/thinking models.
-            # The generic OpenAI "reasoning" field is NOT supported by llama.cpp.
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
-        else:
-            # OpenAI-compatible providers (OpenRouter, DeepSeek, etc.) use this
-            # to suppress reasoning traces on thinking models.
-            payload["reasoning"] = {"enabled": False}
+    if _thinking_disabled(config, disable_thinking, model_name=model):
+        # The knob to suppress reasoning is provider-specific (per their docs).
+        # Sending the wrong one to a strict endpoint returns 400, so dispatch by
+        # provider family and stay silent for providers without a known knob.
+        payload.update(_reasoning_disable_params(provider))
+
+    # Per-provider extra headers / body params configured in the UI
+    # (provider_instances.extra = {headers:{...}, body:{...}}).
+    inst_extra = _provider_instance_extra(provider)
+    headers.update(inst_extra.get("headers") or {})
+    payload.update(inst_extra.get("body") or {})
 
     full_content = ""
     scrubber = StreamingContextScrubber()
@@ -761,7 +868,13 @@ async def _call_openai_streaming(
         async with client.stream(
             "POST", f"{base_url}/chat/completions", headers=headers, json=payload
         ) as resp:
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # Surface the provider's actual error body (e.g. "model requires a
+                # subscription", "unknown parameter") instead of a bare 4xx/5xx.
+                body = (await resp.aread()).decode("utf-8", "replace")[:500]
+                raise RuntimeError(
+                    f"{provider} ({model}) → HTTP {resp.status_code}: {body}"
+                )
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data: "):
                     continue
@@ -1029,14 +1142,20 @@ async def _call_anthropic_streaming(
 # ── Provider dispatcher ───────────────────────────────────────────────────────
 
 _OPENAI_COMPATIBLE_PROVIDERS = frozenset({
+    # local OpenAI-compatible servers
     "vllm",
     "lmstudio",
     "openai_compatible",
     "llamacpp",
+    # cloud OpenAI-compatible gateways (must match ProviderKind values)
     "openrouter",
     "deepseek",
     "openai",
     "gemini",
+    "ollama_cloud",
+    "moonshot",       # Kimi
+    "minimax",
+    "dashscope",      # Qwen (Alibaba)
     "mistral",
     "groq",
     "together",
@@ -1044,7 +1163,13 @@ _OPENAI_COMPATIBLE_PROVIDERS = frozenset({
     "xai",
     "cohere",
     "perplexity",
-    "minimax",
+    "deepinfra",
+    "cerebras",
+    "sambanova",
+    "nebius",
+    "novita",
+    "hyperbolic",
+    # legacy aliases
     "kimi",
     "qwen",
 })

@@ -22,6 +22,11 @@ def _inference_options(request: AIRequest, default_temperature: float = 0.2) -> 
     return opts
 
 
+def _think_flag(request: AIRequest) -> bool:
+    """Effective thinking/CoT flag for Ollama (default off when unset)."""
+    return bool(request.thinking)
+
+
 def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:
     """Convert a Pydantic model class to an Ollama-compatible JSON schema for structured output."""
     try:
@@ -50,6 +55,7 @@ class OllamaProvider(AIProvider):
             "model": model,
             "messages": messages,
             "stream": False,
+            "think": _think_flag(request),
             "options": _inference_options(request, default_temperature=0.2),
             "keep_alive": _ollama_keep_alive(model),
         }
@@ -88,6 +94,7 @@ class OllamaProvider(AIProvider):
             "model": model,
             "messages": messages,
             "stream": False,
+            "think": _think_flag(request),
             "options": _inference_options(request, default_temperature=0.0),
             "keep_alive": _ollama_keep_alive(model),
         }
@@ -147,6 +154,7 @@ class OllamaProvider(AIProvider):
             "prompt": prompt_text,
             "images": [_ollama_image_payload(img) for img in request.images],
             "stream": False,
+            "think": _think_flag(request),
             "options": opts,
         }
         if system_text:

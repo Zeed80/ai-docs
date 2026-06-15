@@ -37,6 +37,7 @@ from app.ai.schemas import (
     AITask,
     ChatMessage,
     ModelCapability,
+    ProviderConfig,
     ProviderKind,
 )
 from app.config import settings
@@ -151,38 +152,70 @@ class AIRouter:
         self.registry = registry or ModelRegistry.from_yaml(
             "backend/app/ai/config/model_registry.yaml"
         )
-        self.providers = providers or {
-            kind: self._provider_from_config(kind)
-            for kind in self.registry.providers
-        }
+        # Default-node providers, one per kind (keeps the legacy single-node path
+        # and lets tests inject stubs by iterating ``providers``). Calls that
+        # target a *named* node (multi-machine) build a fresh provider per call —
+        # see _resolve_provider.
+        if providers is not None:
+            self.providers = providers
+        else:
+            self.providers = {}
+            for kind in self.registry.providers:
+                try:
+                    self.providers[kind] = self._build_provider(
+                        kind, self._default_resolved(kind)
+                    )
+                except Exception:  # noqa: BLE001 — placeholder kinds may be unbuildable
+                    pass
 
-    def _provider_from_config(self, kind: ProviderKind) -> AIProvider:
-        config = self.registry.providers[kind]
+    def _default_resolved(self, kind: ProviderKind):
+        from app.ai.provider_registry import select_instance
+
+        return select_instance(kind)
+
+    def _build_provider(self, kind: ProviderKind, resolved) -> AIProvider:
+        """Construct a provider bound to a resolved node (base_url + api_key)."""
+        base_config = self.registry.providers.get(kind)
+        timeout = base_config.timeout_seconds if base_config else 180.0
+        extra = resolved.extra or {}
+        config = ProviderConfig(
+            kind=kind,
+            base_url=resolved.base_url,
+            api_key=resolved.api_key or None,
+            api_key_env=base_config.api_key_env if base_config else None,
+            timeout_seconds=timeout,
+            is_local=resolved.is_local,
+            extra_headers=(extra.get("headers") or {}) if isinstance(extra, dict) else {},
+        )
         if kind == ProviderKind.OLLAMA:
-            config = config.model_copy(update={"base_url": settings.ollama_url})
             return OllamaProvider(config)
         if kind == ProviderKind.VLLM:
-            # Use the runtime VLLM_URL (e.g. http://vllm-server:8000) rather than
-            # the static registry base_url, mirroring ollama/llamacpp.
-            import os
-            vllm_url = os.environ.get("VLLM_URL", "").strip()
-            if vllm_url:
-                config = config.model_copy(update={"base_url": vllm_url})
             return VLLMProvider(config)
-        if kind == ProviderKind.LLAMACPP:
-            # llama-server speaks OpenAI-compatible API; use runtime URL from settings
-            config = config.model_copy(update={"base_url": settings.llamacpp_url})
-            return OpenAICompatibleProvider(config)
-        if kind in (ProviderKind.OPENAI_COMPATIBLE, ProviderKind.CLOUD_PROVIDER):
-            return OpenAICompatibleProvider(config)
         if kind == ProviderKind.ANTHROPIC:
-            return AnthropicProvider.from_env()
+            return AnthropicProvider(config)
         if kind == ProviderKind.OPENROUTER:
-            return OpenRouterProvider.from_env()
-        if kind in (ProviderKind.DEEPSEEK, ProviderKind.GEMINI):
-            # OpenAI-compatible endpoints — use base_url from registry, key from env
-            return OpenAICompatibleProvider(config)
-        raise KeyError(f"Unsupported AI provider: {kind.value}")
+            return OpenRouterProvider(config)
+        # Everything else (llama.cpp, LM Studio, OpenAI, and all OpenAI-compatible
+        # cloud gateways: Kimi/Moonshot, MiniMax, DashScope, Mistral, Groq,
+        # Together, Fireworks, xAI, Cohere, Perplexity, DeepInfra, Cerebras,
+        # SambaNova, Nebius, Novita, Hyperbolic, Ollama Cloud, DeepSeek, Gemini)
+        # speaks the OpenAI Chat Completions API.
+        return OpenAICompatibleProvider(config)
+
+    def _resolve_provider(self, model: ModelCapability):
+        """Pick the node for a model and build its provider. Returns (provider, resolved)."""
+        from app.ai.provider_registry import select_instance
+
+        resolved = select_instance(
+            model.provider, model.provider_model, model.preferred_instance
+        )
+        cached = self.providers.get(model.provider)
+        # Reuse the cached default-node provider (and any test-injected stub)
+        # unless the call targets a specific named node — then build fresh so
+        # the right base_url/api_key is used (multi-machine routing).
+        if cached is not None and resolved.instance_id is None:
+            return cached, resolved
+        return self._build_provider(model.provider, resolved), resolved
 
     async def run(self, request: AIRequest) -> AIResponse:
         """Run one AI task through the routing config and validate the result.
@@ -211,8 +244,14 @@ class AIRouter:
 
         for model_name in [name for name in candidates if name]:
             model = self.registry.get_model(model_name)
-            self._enforce_policy(request, model)  # policy errors are not per-model failures
-            provider = self.providers[model.provider]
+            provider, resolved = self._resolve_provider(model)
+            self._enforce_policy(request, model, resolved)  # policy errors are not per-model failures
+            # Resolve effective thinking: per-call override → model catalog default.
+            eff_thinking = request.thinking
+            if eff_thinking is None:
+                eff_thinking = model.thinking_enabled if model.thinking_supported else False
+            if request.thinking is not eff_thinking:
+                request = request.model_copy(update={"thinking": eff_thinking})
             # Container-bound servers (vLLM/llama.cpp) are started on demand and
             # auto-stopped when idle; bring the target up before dispatching.
             try:
@@ -271,9 +310,13 @@ class AIRouter:
         except Exception:
             pass
 
-    def _enforce_policy(self, request: AIRequest, model: ModelCapability) -> None:
-        provider = self.registry.providers[model.provider]
-        cloud_requested = not provider.is_local or not model.local_only
+    def _enforce_policy(self, request: AIRequest, model: ModelCapability, resolved=None) -> None:
+        if resolved is not None:
+            is_local = resolved.is_local
+        else:
+            provider = self.registry.providers.get(model.provider)
+            is_local = provider.is_local if provider else False
+        cloud_requested = not is_local or not model.local_only
         if request.confidential and cloud_requested:
             raise AIConfidentialityPolicyError(
                 f"Confidential task {request.task.value} cannot use non-local model {model.name}"

@@ -22,18 +22,20 @@ class BuiltinAgentConfig(BaseModel):
     department_enabled: bool = True
     orchestrator_model: str | None = None
     orchestrator_provider: str | None = None
-    # Thinking is disabled by default for the tool-calling roles: on reasoning
-    # models (qwen3.5:9b) it spends the token budget on hidden reasoning before
-    # every step — ~2× slower turns and more tool-call flailing — for no gain on
-    # structured routing. Re-enable per role if a deployment uses non-thinking
-    # models or needs deeper planning. Builder keeps thinking (capability design).
-    orchestrator_disable_thinking: bool = True
+    # Per-role thinking override (tri-state):
+    #   None  → defer to the model's catalog default (ModelCapability.thinking_enabled)
+    #   True  → force thinking OFF for this role
+    #   False → force thinking ON for this role
+    # Tool-calling roles default to None: on non-thinking models (the catalog
+    # default) this resolves to OFF, matching prior behaviour, while a model the
+    # operator marks as a thinker (UI checkbox) will reason. Builder forces ON.
+    orchestrator_disable_thinking: bool | None = None
     worker_model: str | None = None
     worker_provider: str | None = None
-    worker_disable_thinking: bool = True
+    worker_disable_thinking: bool | None = None
     auditor_model: str | None = None
     auditor_provider: str | None = None
-    auditor_disable_thinking: bool = True
+    auditor_disable_thinking: bool | None = None
     # Allow the semantic auditor to use a cloud model (e.g. claude_*_anthropic
     # from the registry). Default False — quality checks stay local; the AI
     # router still hard-blocks any confidential content from cloud routes.
@@ -44,7 +46,7 @@ class BuiltinAgentConfig(BaseModel):
     builder_disable_thinking: bool = False
     fast_model: str | None = None
     fast_provider: str | None = None
-    fast_disable_thinking: bool = True
+    fast_disable_thinking: bool | None = None
     # LLM provider: ollama, vllm, lmstudio, openai-compatible or supported cloud provider.
     provider: str = "ollama"
     # Ordered fallback chain tried when primary provider fails

@@ -74,6 +74,14 @@ make agent-test   # AiAgent scenarios на mock skills
 - **gemma4:26b или Claude API** — reasoning, генерация писем, NL-query. Настраиваемо per-task (on-prem или внешний API).
 - **Облако для planner/auditor**: `orchestrator_model`/`auditor_model` могут указывать на cloud-модели из `model_registry.yaml` (например `claude_sonnet_anthropic`); по умолчанию всё локально. `auditor_allow_cloud` — protected setting. AI router жёстко блокирует confidential-контент от облачных маршрутов.
 
+### Управление провайдерами и моделями (рефакторинг 2026-06-14)
+
+- **Чёткое разделение**: провайдеры (инфраструктура) vs модели (каталог) vs назначение (task/role → model).
+- **Provider instances** (`backend/app/ai/provider_registry.py`, таблица `provider_instances`): несколько узлов на один kind — Ollama/vLLM/llama.cpp на разных машинах сети. `select_instance(kind, model, preferred_instance)` выбирает узел (pin модели → узел с моделью → первый живой). Облачные ключи — зашифрованы в БД (`secret_box.py`, Fernet на app_secret_key), `.env` остаётся fallback. Резолв base_url/ключа: DB → YAML → env. Кэш в Redis (`provider_instances`), сидинг на старте (`provider_bootstrap.py`).
+- **API**: `/api/providers/*` (CRUD узлов, `/test`, `/refresh-models` авто-подтягивает облачные модели), `/api/providers/models` (каталог + thinking), `/api/providers/assignments` (единая таблица). GUI: `/settings/models` (провайдер-центричный); рич-функции (библиотека/загрузка/GPU) — `/settings/models/advanced`.
+- **Thinking (режим рассуждения)**: per-модель в каталоге (`thinking_supported`/`thinking_enabled`) + `AIRequest.thinking` прокидывается в провайдеры (Ollama `think`, Anthropic extended). Роли агента — tri-state override (`*_disable_thinking: None` → дефолт модели). UI: галочка у каждой локальной модели.
+- **Каталог**: core-набор = production (6 локальных + 2 cloud Claude); дубли VLM/устаревшее → `disabled` (скрыты фильтром по `status`, не удалены). `task_routing` (Redis) — источник правды назначений; `ai_config` — зеркало для legacy-вызовов `model_resolver.py`.
+
 ## Агент: архитектура хода (после рефакторинга 2026-06)
 
 - **Секретарь = оркестратор** (front-agent «Света», `backend/app/ai/orchestrator.py`): flow-status вопросы и детерминированные count-вопросы отвечает сам (0 LLM); остальное диспетчеризует специалистам (роли в `gateway.yml`: prompt + capability-allowlist).

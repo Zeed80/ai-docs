@@ -23,6 +23,10 @@ logger = structlog.get_logger()
 # Библиотека UI). Merged on top of the YAML catalog so runtime models become
 # selectable in routing without editing the file.
 _CATALOG_OVERLAY_KEY = "model_catalog_overlay"
+# Per-model thinking toggle overrides ({model_key: bool}). Kept separate from the
+# full-model overlay so a YAML model's CoT flag can be flipped from the UI without
+# shadowing the rest of its (canonical) YAML definition.
+_THINKING_OVERLAY_KEY = "model_thinking_overrides"
 
 
 def _load_catalog_overlay() -> dict[str, dict[str, Any]]:
@@ -43,6 +47,57 @@ def _save_catalog_overlay(overlay: dict[str, dict[str, Any]]) -> None:
         get_sync_redis().set(_CATALOG_OVERLAY_KEY, json.dumps(overlay, ensure_ascii=False))
     except Exception as exc:
         logger.warning("model_catalog_overlay_write_failed", error=str(exc))
+
+
+def _load_thinking_overrides() -> dict[str, bool]:
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        raw = get_sync_redis().get(_THINKING_OVERLAY_KEY)
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def set_thinking_override(model_key: str, enabled: bool) -> None:
+    """Persist a per-model thinking toggle (applied on every registry load)."""
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        overrides = _load_thinking_overrides()
+        overrides[model_key] = bool(enabled)
+        get_sync_redis().set(_THINKING_OVERLAY_KEY, json.dumps(overrides, ensure_ascii=False))
+    except Exception as exc:
+        logger.warning("model_thinking_override_write_failed", error=str(exc))
+
+
+# Per-model pin to a provider node ({model_key: instance_name|""}).
+_PREFERRED_INSTANCE_KEY = "model_preferred_instances"
+
+
+def _load_preferred_instances() -> dict[str, str]:
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        raw = get_sync_redis().get(_PREFERRED_INSTANCE_KEY)
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def set_preferred_instance(model_key: str, instance_name: str | None) -> None:
+    """Pin a model to a provider node (instance name), or clear with None/""."""
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        prefs = _load_preferred_instances()
+        if instance_name:
+            prefs[model_key] = instance_name
+        else:
+            prefs.pop(model_key, None)
+        get_sync_redis().set(_PREFERRED_INSTANCE_KEY, json.dumps(prefs, ensure_ascii=False))
+    except Exception as exc:
+        logger.warning("model_preferred_instance_write_failed", error=str(exc))
 
 
 class ModelRegistry:
@@ -75,6 +130,16 @@ class ModelRegistry:
             key: ModelCapability(name=key, **value)
             for key, value in raw_models.items()
         }
+        # Apply per-model thinking toggles from the UI (override YAML defaults).
+        for key, enabled in _load_thinking_overrides().items():
+            if key in models:
+                models[key] = models[key].model_copy(
+                    update={"thinking_enabled": bool(enabled), "thinking_supported": True}
+                )
+        # Apply per-model node pins from the UI.
+        for key, inst in _load_preferred_instances().items():
+            if key in models:
+                models[key] = models[key].model_copy(update={"preferred_instance": inst})
         routes = {
             AITask(key): TaskRoute(task=AITask(key), **value)
             for key, value in raw.get("routes", {}).items()
