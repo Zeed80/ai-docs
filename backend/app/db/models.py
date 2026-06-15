@@ -2823,3 +2823,34 @@ class ScenarioTrace(UUIDPrimaryKey, Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     triggered_by: Mapped[str] = mapped_column(String(100), default="system", nullable=False)
+
+
+# ── AI Provider Instances ──────────────────────────────────────────────────────
+
+
+class ProviderInstance(UUIDPrimaryKey, TimestampMixin, Base):
+    """A single AI provider endpoint (node).
+
+    Multiple rows may share the same ``kind`` — e.g. an Ollama server on the
+    local host and another on a GPU box across the LAN. Cloud providers
+    (anthropic/openrouter/…) store their API key encrypted in
+    ``api_key_encrypted``. The static YAML registry (``model_registry.yaml``)
+    provides defaults; these rows override/extend it and are editable in the UI.
+    """
+
+    __tablename__ = "provider_instances"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_provider_instances_name"),
+        Index("ix_provider_instances_kind", "kind"),
+    )
+
+    kind: Mapped[str] = mapped_column(String(50), nullable=False)  # ProviderKind value
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    base_url: Mapped[str | None] = mapped_column(String(500))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_local: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    extra: Mapped[dict | None] = mapped_column(JSON)
+    last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_check_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_error: Mapped[str | None] = mapped_column(Text)

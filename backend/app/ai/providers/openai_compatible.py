@@ -35,10 +35,12 @@ class OpenAICompatibleProvider(AIProvider):
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json", **self.config.extra_headers}
-        if self.config.api_key_env:
-            api_key = os.getenv(self.config.api_key_env)
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
+        # Prefer the runtime-resolved key (provider_instances DB row), then env.
+        api_key = self.config.api_key or (
+            os.getenv(self.config.api_key_env) if self.config.api_key_env else None
+        )
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def _messages(self, request: AIRequest) -> list[dict[str, Any]]:

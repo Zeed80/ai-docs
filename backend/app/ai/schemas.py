@@ -7,15 +7,37 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
 class ProviderKind(str, Enum):
+    # Local
     OLLAMA = "ollama"
     LLAMACPP = "llamacpp"
     VLLM = "vllm"
     OPENAI_COMPATIBLE = "openai_compatible"
+    LMSTUDIO = "lmstudio"
+    # Cloud — native integrations
     CLOUD_PROVIDER = "cloud_provider"
-    OPENROUTER = "openrouter"
     ANTHROPIC = "anthropic"
+    OPENROUTER = "openrouter"
     DEEPSEEK = "deepseek"
     GEMINI = "gemini"
+    OPENAI = "openai"
+    # Cloud — OpenAI-compatible gateways
+    OLLAMA_CLOUD = "ollama_cloud"
+    MOONSHOT = "moonshot"      # Kimi
+    MINIMAX = "minimax"
+    DASHSCOPE = "dashscope"    # Qwen (Alibaba)
+    MISTRAL = "mistral"
+    GROQ = "groq"
+    TOGETHER = "together"
+    FIREWORKS = "fireworks"
+    XAI = "xai"               # Grok
+    COHERE = "cohere"
+    PERPLEXITY = "perplexity"
+    DEEPINFRA = "deepinfra"
+    CEREBRAS = "cerebras"
+    SAMBANOVA = "sambanova"
+    NEBIUS = "nebius"
+    NOVITA = "novita"
+    HYPERBOLIC = "hyperbolic"
 
 
 class ModelStatus(str, Enum):
@@ -81,6 +103,9 @@ class AIRequest(BaseModel):
     confidential: bool = True
     allow_cloud: bool = False
     preferred_model: str | None = None
+    # Per-call thinking/CoT override. None → use the model's catalog default
+    # (``ModelCapability.thinking_enabled``). True/False force it on/off.
+    thinking: bool | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -124,10 +149,13 @@ class ProviderConfig(BaseModel):
     kind: ProviderKind
     base_url: HttpUrl | str
     api_key_env: str | None = None
+    # Runtime-resolved plaintext key (from DB provider_instances or env). In-memory
+    # only — never persisted to the YAML registry. Providers prefer this over env.
+    api_key: str | None = Field(default=None, exclude=True)
     timeout_seconds: float = 120.0
     is_local: bool = True
     extra_headers: dict[str, str] = Field(default_factory=dict)
-    # Forward-looking: extra endpoints for the same provider (multi-GPU/remote).
+    # Deprecated: superseded by the ``provider_instances`` table (multi-node).
     nodes: list[ProviderNode] = Field(default_factory=list)
 
 
@@ -157,6 +185,16 @@ class ModelCapability(BaseModel):
     quality_score: float = 0.0
     speed_score: float = 0.0
     vram_gb_estimate: float | None = None   # expected VRAM usage in GB
+    # Thinking / chain-of-thought (CoT) control.
+    #   thinking_supported — the model can reason step-by-step (Qwen3, DeepSeek-R1…)
+    #   thinking_enabled    — default state of the per-model toggle. For extraction
+    #                         workloads CoT usually hurts, so it defaults off.
+    thinking_supported: bool = False
+    thinking_enabled: bool = False
+    # Optional pin to a specific provider node (provider_instances.name). When set,
+    # calls for this model always route to that node; otherwise the router picks
+    # any healthy node of the model's provider kind that hosts the model.
+    preferred_instance: str | None = None
     notes: str | None = None
 
 

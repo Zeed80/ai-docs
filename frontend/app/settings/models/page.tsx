@@ -25,14 +25,7 @@ const btnDanger = `${btn} bg-red-700 hover:bg-red-600 text-white`;
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type Provider = "ollama" | "llamacpp" | "vllm";
-type Tab =
-  | "assignment"
-  | "overview"
-  | "library"
-  | "routing"
-  | "parameters"
-  | "gpu"
-  | "agent";
+type Tab = "assignment" | "overview" | "library" | "parameters" | "gpu";
 type Source = "local" | "huggingface" | "modelscope";
 
 interface CatalogEntry {
@@ -51,22 +44,6 @@ interface RepoFile {
   size_human?: string;
   quant?: string;
   is_split?: boolean;
-}
-
-interface RoutingTask {
-  task: string;
-  label: string;
-  models: string[];
-  profile: string;
-  local_only: boolean;
-  allow_cloud: boolean;
-  confidential_locked: boolean;
-  required_modalities: string[];
-  params: {
-    temperature?: number;
-    top_p?: number;
-    repeat_penalty?: number;
-  };
 }
 
 const LOCAL_PROVIDERS = [
@@ -747,6 +724,467 @@ function TelemetryPanel() {
   );
 }
 
+// ── Providers config (keys + local nodes) ───────────────────────────────────
+
+interface ProviderInstanceT {
+  id: string;
+  kind: string;
+  name: string;
+  base_url: string | null;
+  default_base_url?: string;
+  extra?: { headers?: Record<string, string>; body?: Record<string, unknown> };
+  enabled: boolean;
+  is_local: boolean;
+  api_key_set: boolean;
+  api_key_mask: string;
+  last_check_ok: boolean | null;
+  last_error: string | null;
+}
+interface KnownKindT {
+  kind: string;
+  is_local: boolean;
+  default_base_url: string;
+  requires_api_key: boolean;
+}
+
+async function provFetch(path: string, init?: RequestInit) {
+  return fetch(`${API}/api/providers${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      ...(init && init.method && init.method !== "GET"
+        ? { "Content-Type": "application/json", ...(await csrfHeaders()) }
+        : {}),
+      ...(init?.headers || {}),
+    },
+  });
+}
+
+function ProvidersConfigPanel() {
+  const [instances, setInstances] = useState<ProviderInstanceT[]>([]);
+  const [kinds, setKinds] = useState<KnownKindT[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [selCloud, setSelCloud] = useState<string | null>(null);
+
+  const flash = (m: string) => {
+    setMsg(m);
+    window.setTimeout(() => setMsg(null), 2500);
+  };
+  const load = useCallback(async () => {
+    try {
+      const r = await provFetch("");
+      if (r.ok) {
+        const d = await r.json();
+        setInstances(d.instances || []);
+        setKinds(d.known_kinds || []);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const localKinds = kinds.filter((k) => k.is_local).map((k) => k.kind);
+  const cloud = instances
+    .filter((i) => !i.is_local)
+    .sort((a, b) => providerLabel(a.kind).localeCompare(providerLabel(b.kind)));
+  const localNodesByKind = (kind: string) =>
+    instances.filter((i) => i.is_local && i.kind === kind);
+
+  // Default-select the first configured cloud provider (or the first one).
+  useEffect(() => {
+    if (selCloud === null && cloud.length) {
+      setSelCloud(cloud.find((c) => c.api_key_set)?.id ?? cloud[0].id);
+    }
+  }, [cloud, selCloud]);
+  const selectedCloud = cloud.find((c) => c.id === selCloud) || null;
+
+  const test = async (id: string) => {
+    setBusy(id);
+    try {
+      const r = await provFetch(`/${id}/test`, { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      flash(d.ok ? `OK · моделей: ${d.model_count}` : `Ошибка: ${d.error}`);
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className={card}>
+      <div className={cardH}>
+        <span className="text-sm font-medium text-slate-100">
+          Провайдеры и API-ключи
+        </span>
+        {msg && <span className="text-xs text-emerald-400">{msg}</span>}
+      </div>
+      <div className="p-4 space-y-5">
+        {/* Cloud providers — master/detail */}
+        <div>
+          <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+            Облачные провайдеры — выберите слева, настройте справа
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3 rounded-md border border-slate-700 bg-slate-900/40">
+            {/* list */}
+            <div className="sm:w-56 sm:max-h-80 sm:overflow-y-auto border-b sm:border-b-0 sm:border-r border-slate-700 p-2 space-y-0.5">
+              {cloud.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setSelCloud(c.id)}
+                  className={`w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 ${
+                    c.id === selCloud
+                      ? "bg-blue-600/20 text-blue-200"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  <StatusDotT ok={c.last_check_ok} />
+                  <span className="flex-1 truncate">
+                    {providerLabel(c.kind)}
+                  </span>
+                  <span
+                    className={`text-[10px] ${
+                      c.api_key_set ? "text-emerald-400" : "text-slate-600"
+                    }`}
+                  >
+                    {c.api_key_set ? "ключ ✓" : "нет"}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {/* detail */}
+            <div className="flex-1 p-3">
+              {selectedCloud ? (
+                <CloudProviderDetail
+                  inst={selectedCloud}
+                  busy={busy === selectedCloud.id}
+                  onTest={() => test(selectedCloud.id)}
+                  onChanged={load}
+                  flash={flash}
+                  setBusy={setBusy}
+                />
+              ) : (
+                <div className="text-sm text-slate-500">
+                  Выберите провайдера слева.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Local nodes */}
+        <div>
+          <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+            Локальные узлы — можно добавить адрес Ollama/vLLM на другой машине
+          </div>
+          <div className="space-y-3">
+            {localKinds.map((kind) => (
+              <LocalKindBlock
+                key={kind}
+                kind={kind}
+                nodes={localNodesByKind(kind)}
+                busy={busy}
+                onTest={test}
+                onChanged={load}
+                flash={flash}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatusDotT({ ok }: { ok: boolean | null }) {
+  const c =
+    ok === true
+      ? "text-emerald-400"
+      : ok === false
+        ? "text-red-400"
+        : "text-slate-600";
+  return <span className={c}>●</span>;
+}
+
+function CloudProviderDetail({
+  inst,
+  busy,
+  onTest,
+  onChanged,
+  flash,
+  setBusy,
+}: {
+  inst: ProviderInstanceT;
+  busy: boolean;
+  onTest: () => void;
+  onChanged: () => void;
+  flash: (m: string) => void;
+  setBusy: (s: string | null) => void;
+}) {
+  const [key, setKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(inst.base_url || "");
+  const [showAdv, setShowAdv] = useState(false);
+  const [headersText, setHeadersText] = useState("");
+  const [bodyText, setBodyText] = useState("");
+  useEffect(() => {
+    setKey("");
+    setBaseUrl(inst.base_url || "");
+    const h = inst.extra?.headers ?? {};
+    const b = inst.extra?.body ?? {};
+    setHeadersText(Object.keys(h).length ? JSON.stringify(h, null, 2) : "");
+    setBodyText(Object.keys(b).length ? JSON.stringify(b, null, 2) : "");
+    setShowAdv(Object.keys(h).length > 0 || Object.keys(b).length > 0);
+  }, [inst.id, inst.base_url, inst.extra]);
+
+  const save = async () => {
+    // Validate the optional JSON blocks before sending.
+    let headers: Record<string, unknown> = {};
+    let bodyParams: Record<string, unknown> = {};
+    try {
+      headers = headersText.trim() ? JSON.parse(headersText) : {};
+      bodyParams = bodyText.trim() ? JSON.parse(bodyText) : {};
+    } catch {
+      flash("Доп. параметры: некорректный JSON");
+      return;
+    }
+    setBusy(inst.id);
+    try {
+      const body: Record<string, unknown> = {
+        base_url: baseUrl,
+        extra: { headers, body: bodyParams },
+      };
+      if (key) body.api_key = key;
+      const r = await provFetch(`/${inst.id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        setKey("");
+        flash("Сохранено");
+        onChanged();
+      } else flash("Ошибка сохранения");
+    } finally {
+      setBusy(null);
+    }
+  };
+  const fetchModels = async () => {
+    setBusy(inst.id);
+    try {
+      const r = await provFetch(`/${inst.id}/refresh-models`, {
+        method: "POST",
+      });
+      const d = await r.json().catch(() => ({}));
+      flash(r.ok ? `Подтянуто моделей: ${d.count}` : `Ошибка: ${d.detail}`);
+      onChanged();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <StatusDotT ok={inst.last_check_ok} />
+        <span className="text-sm font-semibold text-slate-100">
+          {providerLabel(inst.kind)}
+        </span>
+        <span className="text-xs text-slate-500">
+          {inst.api_key_set ? `ключ: ${inst.api_key_mask}` : "ключ не задан"}
+        </span>
+      </div>
+
+      <label className="block text-xs text-slate-400">
+        API-ключ
+        <input
+          className={`${input} mt-1`}
+          type="password"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder={
+            inst.api_key_set
+              ? "•••••• (введите, чтобы заменить)"
+              : "Введите API-ключ"
+          }
+        />
+      </label>
+
+      <label className="block text-xs text-slate-400">
+        Адрес API (base URL)
+        <input
+          className={`${input} mt-1`}
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="https://api.example.com/v1"
+        />
+      </label>
+
+      <div>
+        <button
+          className="text-xs text-blue-400 hover:text-blue-300"
+          onClick={() => setShowAdv((v) => !v)}
+        >
+          {showAdv ? "▾" : "▸"} Доп. параметры (заголовки / тело запроса)
+        </button>
+        {showAdv && (
+          <div className="mt-2 grid grid-cols-1 gap-2">
+            <label className="block text-xs text-slate-400">
+              Доп. HTTP-заголовки (JSON)
+              <textarea
+                className={`${input} mt-1 font-mono text-xs`}
+                rows={3}
+                value={headersText}
+                onChange={(e) => setHeadersText(e.target.value)}
+                placeholder={'{\n  "OpenAI-Organization": "org-..."\n}'}
+              />
+            </label>
+            <label className="block text-xs text-slate-400">
+              Доп. параметры запроса (JSON) — добавляются в тело каждого запроса
+              <textarea
+                className={`${input} mt-1 font-mono text-xs`}
+                rows={3}
+                value={bodyText}
+                onChange={(e) => setBodyText(e.target.value)}
+                placeholder={'{\n  "reasoning_effort": "low"\n}'}
+              />
+            </label>
+            <p className="text-[11px] text-slate-600">
+              Применяются ко всем вызовам этого провайдера. Стандартные
+              temperature / top-p / max-tokens — во вкладке «Параметры».
+            </p>
+          </div>
+        )}
+      </div>
+
+      {inst.last_error && (
+        <div className="text-xs text-red-400">
+          Последняя ошибка: {inst.last_error}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2 pt-1">
+        <button className={btnPrimary} disabled={busy} onClick={save}>
+          Сохранить
+        </button>
+        <button className={btnSecondary} disabled={busy} onClick={onTest}>
+          {busy ? "…" : "Проверить"}
+        </button>
+        <button
+          className={btnSecondary}
+          disabled={busy || !inst.api_key_set}
+          onClick={fetchModels}
+        >
+          Подтянуть модели
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function LocalKindBlock({
+  kind,
+  nodes,
+  busy,
+  onTest,
+  onChanged,
+  flash,
+}: {
+  kind: string;
+  nodes: ProviderInstanceT[];
+  busy: string | null;
+  onTest: (id: string) => void;
+  onChanged: () => void;
+  flash: (m: string) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("http://");
+  const add = async () => {
+    const r = await provFetch("", {
+      method: "POST",
+      body: JSON.stringify({
+        kind,
+        name: name || `${kind} — узел`,
+        base_url: url,
+      }),
+    });
+    if (r.ok) {
+      setAdding(false);
+      setName("");
+      setUrl("http://");
+      flash("Узел добавлен");
+      onChanged();
+    } else {
+      const d = await r.json().catch(() => ({}));
+      alert(`Ошибка: ${d.detail || r.status}`);
+    }
+  };
+  const remove = async (id: string) => {
+    if (!confirm("Удалить узел?")) return;
+    await provFetch(`/${id}`, { method: "DELETE" });
+    flash("Узел удалён");
+    onChanged();
+  };
+  return (
+    <div className="rounded-md border border-slate-700 bg-slate-900/40 px-3 py-2">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-sm text-slate-200">{providerLabel(kind)}</span>
+        <button
+          className="text-xs text-blue-400 hover:text-blue-300"
+          onClick={() => setAdding((v) => !v)}
+        >
+          + добавить узел
+        </button>
+      </div>
+      {nodes.map((n) => (
+        <div key={n.id} className="flex items-center gap-2 py-1 text-sm">
+          <StatusDotT ok={n.last_check_ok} />
+          <span className="text-slate-300 w-40 truncate">{n.name}</span>
+          <span className="text-xs text-slate-500 flex-1 truncate">
+            {n.base_url || "(адрес по умолчанию)"}
+          </span>
+          <button
+            className="text-xs text-slate-400 hover:text-slate-200"
+            disabled={busy === n.id}
+            onClick={() => onTest(n.id)}
+          >
+            проверить
+          </button>
+          {!n.name.includes("(default)") && (
+            <button
+              className="text-xs text-red-400 hover:text-red-300"
+              onClick={() => remove(n.id)}
+            >
+              удалить
+            </button>
+          )}
+        </div>
+      ))}
+      {adding && (
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          <input
+            className={`${input} w-44`}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Имя (GPU-сервер 2)"
+          />
+          <input
+            className={`${input} flex-1 min-w-[200px]`}
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="http://192.168.1.50:11434"
+          />
+          <button className={btnPrimary} onClick={add}>
+            Добавить
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Overview Tab ─────────────────────────────────────────────────────────────
 
 function OverviewTab({
@@ -766,6 +1204,9 @@ function OverviewTab({
 
   return (
     <div className="space-y-6">
+      {/* Provider keys & nodes */}
+      <ProvidersConfigPanel />
+
       {/* VRAM summary */}
       <div className={card}>
         <div className={cardH}>
@@ -1406,327 +1847,6 @@ function LibraryTab() {
   );
 }
 
-// ── Routing Tab ───────────────────────────────────────────────────────────────
-
-function modelLabel(entry: CatalogEntry | undefined, key: string): string {
-  if (!entry) return key;
-  return `${entry.provider_model} · ${entry.provider}`;
-}
-
-function RoutingRow({
-  task,
-  catalog,
-  profiles,
-  onSaved,
-}: {
-  task: RoutingTask;
-  catalog: CatalogEntry[];
-  profiles: Profile[];
-  onSaved: (t: RoutingTask) => void;
-}) {
-  const [draft, setDraft] = useState<RoutingTask>(task);
-  const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
-
-  useEffect(() => {
-    setDraft(task);
-    setDirty(false);
-  }, [task]);
-
-  const byKey = (k: string) => catalog.find((c) => c.key === k);
-
-  // Models eligible for this task: must cover all required modalities, and
-  // respect the local/cloud policy currently selected.
-  const eligible = catalog.filter((c) => {
-    const modOk = draft.required_modalities.every((m) =>
-      c.modalities.includes(m),
-    );
-    const isLocal = LOCAL_PROVIDERS.includes(c.provider);
-    const policyOk = draft.allow_cloud || isLocal;
-    return modOk && policyOk;
-  });
-
-  const update = (patch: Partial<RoutingTask>) => {
-    setDraft((d) => ({ ...d, ...patch }));
-    setDirty(true);
-  };
-
-  const setPrimary = (key: string) => {
-    const rest = draft.models.filter((m) => m !== key);
-    update({ models: [key, ...rest] });
-  };
-  const addFallback = (key: string) => {
-    if (!key || draft.models.includes(key)) return;
-    update({ models: [...draft.models, key] });
-  };
-  const removeModel = (key: string) => {
-    update({ models: draft.models.filter((m) => m !== key) });
-  };
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      const r = await fetch(`${API}/api/local-models/routing/${draft.task}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(await csrfHeaders()),
-        },
-        credentials: "include",
-        body: JSON.stringify({
-          models: draft.models,
-          profile: draft.profile,
-          local_only: draft.local_only,
-          allow_cloud: draft.allow_cloud,
-        }),
-      });
-      const data = await r.json();
-      if (!r.ok) {
-        alert(`Ошибка: ${data.detail || JSON.stringify(data)}`);
-      } else {
-        setDirty(false);
-        onSaved({ ...draft, ...data });
-      }
-    } catch (e) {
-      alert(`Ошибка: ${e}`);
-    }
-    setSaving(false);
-  };
-
-  const reset = async () => {
-    setSaving(true);
-    try {
-      const r = await fetch(
-        `${API}/api/local-models/routing/${draft.task}/reset`,
-        {
-          method: "POST",
-          headers: await csrfHeaders(),
-          credentials: "include",
-        },
-      );
-      const data = await r.json();
-      onSaved({ ...draft, ...data });
-      setDirty(false);
-    } catch {
-      /* ignore */
-    }
-    setSaving(false);
-  };
-
-  const primary = draft.models[0];
-  const fallbacks = draft.models.slice(1);
-
-  const [bench, setBench] = useState<string | null>(null);
-  const benchmark = async () => {
-    if (!primary) return;
-    setBench("...");
-    try {
-      const r = await fetch(`${API}/api/local-models/benchmark`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(await csrfHeaders()),
-        },
-        credentials: "include",
-        body: JSON.stringify({ model_key: primary, task: draft.task }),
-      });
-      const d = await r.json();
-      setBench(d.ok ? `${d.latency_ms} ms` : `ошибка`);
-    } catch {
-      setBench("ошибка");
-    }
-  };
-
-  return (
-    <div className="px-4 py-3 space-y-2 hover:bg-slate-800/20">
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="w-40 shrink-0">
-          <div className="text-sm text-slate-100">{draft.label}</div>
-          <div className="text-xs text-slate-600 font-mono">
-            {draft.required_modalities.join(", ") || "—"}
-          </div>
-        </div>
-
-        {/* Primary model */}
-        <select
-          className={`${select} flex-1 min-w-48`}
-          value={primary ?? ""}
-          onChange={(e) => setPrimary(e.target.value)}
-        >
-          {!primary && <option value="">— выбрать модель —</option>}
-          {eligible.map((c) => (
-            <option key={c.key} value={c.key}>
-              {modelLabel(c, c.key)}
-              {c.vram_gb_estimate ? ` · ${c.vram_gb_estimate} GB` : ""}
-            </option>
-          ))}
-        </select>
-
-        {/* Profile */}
-        <select
-          className={`${select} w-44`}
-          value={draft.profile}
-          onChange={(e) => update({ profile: e.target.value })}
-        >
-          {profiles.map((p) => (
-            <option key={p.name} value={p.name}>
-              {PROFILE_LABELS[p.name] ?? p.name}
-              {p.builtin ? "" : " (custom)"}
-            </option>
-          ))}
-        </select>
-
-        {/* Policy */}
-        {draft.confidential_locked ? (
-          <span
-            className="text-xs bg-slate-800 text-slate-300 px-2 py-1 rounded whitespace-nowrap"
-            title="Конфиденциальная задача — только локально"
-          >
-            🔒 local
-          </span>
-        ) : (
-          <button
-            onClick={() =>
-              update({
-                allow_cloud: !draft.allow_cloud,
-                local_only: draft.allow_cloud,
-              })
-            }
-            className={`${btn} whitespace-nowrap ${
-              draft.allow_cloud
-                ? "bg-purple-900 text-purple-200"
-                : "bg-slate-700 text-slate-300"
-            }`}
-          >
-            {draft.allow_cloud ? "☁ cloud ok" : "🔒 local"}
-          </button>
-        )}
-      </div>
-
-      {/* Fallback chain */}
-      <div className="flex items-center gap-2 flex-wrap pl-40">
-        <span className="text-xs text-slate-500">fallback:</span>
-        {fallbacks.length === 0 && (
-          <span className="text-xs text-slate-600">нет</span>
-        )}
-        {fallbacks.map((k) => (
-          <span
-            key={k}
-            className="text-xs bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded flex items-center gap-1"
-          >
-            {modelLabel(byKey(k), k)}
-            <button
-              onClick={() => removeModel(k)}
-              className="text-slate-500 hover:text-red-400"
-            >
-              ✕
-            </button>
-          </span>
-        ))}
-        <select
-          className={`${select} w-44 text-xs`}
-          value=""
-          onChange={(e) => addFallback(e.target.value)}
-        >
-          <option value="">+ добавить fallback</option>
-          {eligible
-            .filter((c) => !draft.models.includes(c.key))
-            .map((c) => (
-              <option key={c.key} value={c.key}>
-                {modelLabel(c, c.key)}
-              </option>
-            ))}
-        </select>
-
-        <div className="flex-1" />
-        {bench && (
-          <span className="text-xs text-slate-400 font-mono">⏱ {bench}</span>
-        )}
-        <button
-          onClick={benchmark}
-          disabled={!primary || bench === "..."}
-          className={`${btn} bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-50`}
-          title="Замер латентности основной модели"
-        >
-          ⏱
-        </button>
-        {dirty && (
-          <button onClick={save} disabled={saving} className={btnPrimary}>
-            {saving ? "..." : "Сохранить"}
-          </button>
-        )}
-        <button onClick={reset} disabled={saving} className={btnSecondary}>
-          Сброс
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function RoutingTab() {
-  const [tasks, setTasks] = useState<RoutingTask[]>([]);
-  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-
-  const load = useCallback(() => {
-    fetch(`${API}/api/local-models/routing`, { credentials: "include" })
-      .then((r) => r.json())
-      .then((d) => {
-        setTasks(d.tasks || []);
-        setCatalog(d.catalog || []);
-      })
-      .catch(() => {});
-    fetch(`${API}/api/local-models/parameter-profiles`, {
-      credentials: "include",
-    })
-      .then((r) => r.json())
-      .then((d) => setProfiles(d.profiles || []))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  return (
-    <div className="space-y-4">
-      <div className="text-xs text-slate-500 bg-slate-900 rounded p-3 border border-slate-800">
-        Для каждой задачи: основная модель, цепочка fallback (пробуются по
-        порядку), профиль инференса и политика. Задачи с документами (OCR,
-        чертежи, эмбеддинги, реранкинг) заблокированы на{" "}
-        <b className="text-slate-300">🔒 local</b> — документы конфиденциальны.
-      </div>
-      <div className={card}>
-        <div className={cardH}>
-          <span className="text-sm font-medium text-slate-100">
-            Маршрутизация задач
-          </span>
-          <span className="text-xs text-slate-500">
-            {catalog.length} моделей в каталоге
-          </span>
-        </div>
-        <div className="divide-y divide-slate-800">
-          {tasks.map((t) => (
-            <RoutingRow
-              key={t.task}
-              task={t}
-              catalog={catalog}
-              profiles={profiles}
-              onSaved={(nt) =>
-                setTasks((prev) =>
-                  prev.map((x) => (x.task === nt.task ? nt : x)),
-                )
-              }
-            />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Parameters Tab ───────────────────────────────────────────────────────────
-
 function ParametersTab() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selected, setSelected] = useState("anti_hallucination");
@@ -2148,434 +2268,34 @@ function GPUTab({ status }: { status: AllStatus | null }) {
 
 // ── Agent Tab ─────────────────────────────────────────────────────────────────
 
-interface AgentRoleConfig {
-  model: string | null;
-  provider: string | null;
-}
-
-interface AgentFullConfig {
-  provider: string;
-  model: string;
-  orchestrator_provider: string | null;
-  orchestrator_model: string | null;
-  worker_provider: string | null;
-  worker_model: string | null;
-  auditor_provider: string | null;
-  auditor_model: string | null;
-  builder_provider: string | null;
-  builder_model: string | null;
-  fast_provider: string | null;
-  fast_model: string | null;
-  prompt_cache_enabled: boolean;
-  ollama_url: string;
-  vllm_url: string;
-  lmstudio_url: string;
-  openai_compatible_url: string;
-  temperature: number;
-  max_steps: number;
-  llm_timeout_seconds: number;
-  max_worker_steps: number;
-  max_audit_retries: number;
-  [key: string]: unknown;
-}
-
-const LOCAL_URL_LABELS: Record<string, string> = {
-  ollama: "ollama_url",
-  vllm: "vllm_url",
-  lmstudio: "lmstudio_url",
-  openai_compatible: "openai_compatible_url",
-};
-
-function AgentTab() {
-  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
-  const [cfg, setCfg] = useState<AgentFullConfig | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [savedMsg, setSavedMsg] = useState<string | null>(null);
-  const [running, setRunning] = useState<Record<string, boolean>>({});
-
-  const load = useCallback(async () => {
-    try {
-      const [catRes, cfgRes, stRes] = await Promise.all([
-        fetch(`${API}/api/local-models/assignment`, { credentials: "include" }),
-        fetch(`${API}/api/ai/agent-config`, { credentials: "include" }),
-        fetch(`${API}/api/local-models/status`, { credentials: "include" }),
-      ]);
-      if (catRes.ok) {
-        const d = await catRes.json();
-        setCatalog(d.catalog || []);
-      }
-      if (cfgRes.ok) setCfg(await cfgRes.json());
-      if (stRes.ok) {
-        const st = await stRes.json();
-        const provs = st.providers || {};
-        setRunning({
-          ollama: !!provs.ollama?.running,
-          llamacpp: !!provs.llamacpp?.running,
-          vllm: !!provs.vllm?.running,
-        });
-      }
-    } catch {
-      /* ignore */
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const isLocal = (c: CatalogEntry) => LOCAL_PROVIDERS.includes(c.provider);
-  const allText = [
-    ...catalog.filter((c) => c.modalities.includes("text")),
-  ].sort((a, b) => Number(isLocal(b)) - Number(isLocal(a)));
-
-  const toKey = (model?: string | null, provider?: string | null) =>
-    catalog.find((c) => c.provider_model === model && c.provider === provider)
-      ?.key ?? "";
-  const fromKey = (key: string) => {
-    const c = catalog.find((e) => e.key === key);
-    return c
-      ? { model: c.provider_model, provider: c.provider }
-      : { model: "", provider: "" };
-  };
-
-  const dot = (p: string) => {
-    if (!(p in running)) return "";
-    return running[p] ? " ●" : " ○";
-  };
-
-  const setRole = (
-    provKey: keyof AgentFullConfig,
-    modelKey: keyof AgentFullConfig,
-    catalogKey: string,
-  ) => {
-    if (!cfg) return;
-    const { model, provider } = fromKey(catalogKey);
-    setCfg({ ...cfg, [provKey]: provider || null, [modelKey]: model || null });
-  };
-
-  const save = async () => {
-    if (!cfg) return;
-    setSaving(true);
-    setSavedMsg(null);
-    try {
-      const r = await fetch(`${API}/api/ai/agent-config`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          ...(await csrfHeaders()),
-        },
-        credentials: "include",
-        body: JSON.stringify(cfg),
-      });
-      const data = await r.json();
-      if (!r.ok) alert(`Ошибка: ${data.detail || JSON.stringify(data)}`);
-      else {
-        setCfg(data);
-        setSavedMsg("Сохранено");
-        setTimeout(() => setSavedMsg(null), 3000);
-      }
-    } catch (e) {
-      alert(`Ошибка: ${e}`);
-    }
-    setSaving(false);
-  };
-
-  const applyStableLocal = async () => {
-    try {
-      const r = await fetch(`${API}/api/ai/agent-config/presets/stable-local`, {
-        method: "POST",
-        headers: { ...(await csrfHeaders()) },
-        credentials: "include",
-      });
-      if (r.ok) {
-        const d = await r.json();
-        setCfg(d);
-        setSavedMsg("Режим применён");
-      } else alert("Не удалось применить preset");
-    } catch {
-      alert("Ошибка при применении preset");
-    }
-  };
-
-  if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
-  if (!cfg)
-    return (
-      <div className="text-sm text-slate-400">
-        Конфигурация агента недоступна
-      </div>
-    );
-
-  const roles: Array<{
-    label: string;
-    provKey: keyof AgentFullConfig;
-    modelKey: keyof AgentFullConfig;
-    hint: string;
-  }> = [
-    {
-      label: "Оркестратор",
-      provKey: "orchestrator_provider",
-      modelKey: "orchestrator_model",
-      hint: "Планирование, назначение ролей",
-    },
-    {
-      label: "Исполнители (Workers)",
-      provKey: "worker_provider",
-      modelKey: "worker_model",
-      hint: "Выполнение задач, вызов инструментов",
-    },
-    {
-      label: "Аудитор",
-      provKey: "auditor_provider",
-      modelKey: "auditor_model",
-      hint: "Проверка результата перед выводом",
-    },
-    {
-      label: "Builder (тяжёлые задачи)",
-      provKey: "builder_provider",
-      modelKey: "builder_model",
-      hint: "Генерация кода, новые skills",
-    },
-    {
-      label: "Быстрая модель",
-      provKey: "fast_provider",
-      modelKey: "fast_model",
-      hint: "Краткие ответы, заголовки чата",
-    },
-  ];
-
-  const genParams: Array<{
-    key: keyof AgentFullConfig;
-    label: string;
-    min: number;
-    max: number;
-    step: number;
-  }> = [
-    { key: "temperature", label: "Temperature", min: 0, max: 2, step: 0.05 },
-    { key: "max_steps", label: "Max steps", min: 1, max: 30, step: 1 },
-    {
-      key: "llm_timeout_seconds",
-      label: "LLM timeout (с)",
-      min: 10,
-      max: 1800,
-      step: 1,
-    },
-    {
-      key: "max_worker_steps",
-      label: "Max worker steps",
-      min: 1,
-      max: 60,
-      step: 1,
-    },
-    {
-      key: "max_audit_retries",
-      label: "Audit retries",
-      min: 0,
-      max: 5,
-      step: 1,
-    },
-  ];
-
-  return (
-    <div className="space-y-6">
-      <p className="text-sm text-slate-400">
-        Модели агента «Света» для каждой роли. Все изменения применяются
-        немедленно — без перезапуска сервера.
-      </p>
-
-      {/* Stable Local preset */}
-      <div className="rounded-md border border-emerald-800/50 bg-emerald-950/20 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium text-emerald-200">
-              Стабильный локальный режим
-            </div>
-            <div className="mt-1 text-xs text-emerald-100/70">
-              3 модели: малая для оркестратора, основная для исполнителей и
-              аудитора, большая только для builder.
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={applyStableLocal}
-            className="rounded bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-600"
-          >
-            Применить режим
-          </button>
-        </div>
-      </div>
-
-      {/* Default provider & model */}
-      <div className={card}>
-        <div className={cardH}>
-          <span className="text-sm font-semibold text-slate-100">
-            Провайдер по умолчанию
-          </span>
-          <span className="text-xs text-slate-500">
-            используется когда для роли не задан отдельный провайдер
-          </span>
-        </div>
-        <div className="p-4 space-y-3">
-          <ProviderModelSelect
-            value={toKey(cfg.model, cfg.provider)}
-            options={allText}
-            statuses={running}
-            onChange={(key) => {
-              const { model, provider } = fromKey(key);
-              setCfg({ ...cfg, model, provider: provider || "ollama" });
-            }}
-          />
-          {LOCAL_URL_LABELS[cfg.provider] && (
-            <label className="block space-y-1">
-              <span className="text-xs text-slate-400">{cfg.provider} URL</span>
-              <input
-                className={`${input} text-sm`}
-                value={String(cfg[LOCAL_URL_LABELS[cfg.provider]] ?? "")}
-                onChange={(e) =>
-                  setCfg({
-                    ...cfg,
-                    [LOCAL_URL_LABELS[cfg.provider]]: e.target.value,
-                  })
-                }
-              />
-            </label>
-          )}
-          {cfg.provider === "anthropic" && (
-            <label className="flex items-start gap-3 rounded-md border border-slate-700 bg-slate-900/50 p-3 cursor-pointer">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={cfg.prompt_cache_enabled}
-                onChange={(e) =>
-                  setCfg({ ...cfg, prompt_cache_enabled: e.target.checked })
-                }
-              />
-              <div>
-                <span className="text-sm text-slate-200">
-                  Prompt Caching (beta)
-                </span>
-                <p className="mt-0.5 text-xs text-slate-400">
-                  Ускоряет повторные запросы, снижает стоимость при длинных
-                  сессиях.
-                </p>
-              </div>
-            </label>
-          )}
-        </div>
-      </div>
-
-      {/* Per-role selectors */}
-      <div className={card}>
-        <div className={cardH}>
-          <span className="text-sm font-semibold text-slate-100">
-            Модели по ролям
-          </span>
-          <span className="text-xs text-slate-500">
-            пусто = использует провайдер по умолчанию
-          </span>
-        </div>
-        <div className="p-4 space-y-4">
-          {roles.map(({ label, provKey, modelKey, hint }) => (
-            <label key={String(modelKey)} className="block space-y-1">
-              <div className="flex items-baseline gap-2">
-                <span className="text-xs font-medium text-slate-300">
-                  {label}
-                </span>
-                <span className="text-xs text-slate-600">{hint}</span>
-              </div>
-              <ProviderModelSelect
-                value={toKey(
-                  cfg[modelKey] as string | null,
-                  cfg[provKey] as string | null,
-                )}
-                options={allText}
-                statuses={running}
-                allowEmpty
-                placeholder={`— как по умолчанию (${cfg.provider}) —`}
-                onChange={(key) => {
-                  const pk = provKey as string;
-                  const mk = modelKey as string;
-                  if (!key) {
-                    setCfg({ ...cfg, [pk]: null, [mk]: null });
-                    return;
-                  }
-                  const { model, provider } = fromKey(key);
-                  setCfg({ ...cfg, [pk]: provider, [mk]: model });
-                }}
-              />
-            </label>
-          ))}
-          <p className="text-xs text-slate-600">
-            <span className="text-emerald-400">●</span> запущен ·{" "}
-            <span className="text-slate-500">○</span> остановлен
-            {Object.values(running).some(Boolean)
-              ? ""
-              : " — ни один локальный провайдер не запущен"}
-          </p>
-        </div>
-      </div>
-
-      {/* Generation params */}
-      <div className={card}>
-        <div className={cardH}>
-          <span className="text-sm font-semibold text-slate-100">
-            Параметры генерации
-          </span>
-        </div>
-        <div className="p-4">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            {genParams.map(({ key, label, min, max, step }) => (
-              <label key={String(key)} className="block space-y-1">
-                <span className="text-xs text-slate-400">{label}</span>
-                <input
-                  className={`${input} text-sm`}
-                  type="number"
-                  min={min}
-                  max={max}
-                  step={step}
-                  value={(cfg[key] as number) ?? 0}
-                  onChange={(e) =>
-                    setCfg({ ...cfg, [key]: Number(e.target.value) })
-                  }
-                />
-              </label>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <button className={btnPrimary} onClick={save} disabled={saving}>
-          {saving ? "Сохранение…" : "Сохранить"}
-        </button>
-        {savedMsg && (
-          <span className="text-xs text-emerald-400">{savedMsg}</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Assignment Tab (simplified: documents only) ─────────────────────────────
-
-interface DocGroup {
-  vision_model?: string | null;
-  text_model?: string | null;
-  embedding_model?: string | null;
-  rerank_model?: string | null;
-  ocr_fallback_model?: string | null;
-}
 const PROVIDER_DISPLAY: Record<string, string> = {
   ollama: "Ollama",
   llamacpp: "llama.cpp",
   vllm: "vLLM",
+  openai_compatible: "OpenAI-совм.",
+  lmstudio: "LM Studio",
   anthropic: "Anthropic",
   openrouter: "OpenRouter",
   deepseek: "DeepSeek",
   gemini: "Gemini",
-  openai_compatible: "OpenAI-совм.",
-  lmstudio: "LM Studio",
+  openai: "OpenAI",
+  ollama_cloud: "Ollama Cloud",
+  moonshot: "Kimi (Moonshot)",
+  minimax: "MiniMax",
+  dashscope: "Qwen (DashScope)",
+  mistral: "Mistral",
+  groq: "Groq",
+  together: "Together",
+  fireworks: "Fireworks",
+  xai: "xAI (Grok)",
+  cohere: "Cohere",
+  perplexity: "Perplexity",
+  deepinfra: "DeepInfra",
+  cerebras: "Cerebras",
+  sambanova: "SambaNova",
+  nebius: "Nebius",
+  novita: "Novita",
+  hyperbolic: "Hyperbolic",
 };
 const providerLabel = (p: string) => PROVIDER_DISPLAY[p] ?? p;
 
@@ -2659,32 +2379,70 @@ function ProviderModelSelect({
   );
 }
 
-function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
-  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
-  const [docs, setDocs] = useState<DocGroup>({});
-  const [loading, setLoading] = useState(true);
-  const [savingDocs, setSavingDocs] = useState(false);
-  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+interface SlotItem {
+  slot: string;
+  group: string;
+  label: string;
+  hint: string;
+  model: string | null;
+  local_only: boolean;
+}
+interface ProvModel extends CatalogEntry {
+  thinking_supported: boolean;
+  thinking_enabled: boolean;
+  loaded?: boolean;
+  node?: string | null;
+}
+
+// Which model capability each slot needs — drives the dropdown filter.
+const SLOT_MODALITY: Record<string, string> = {
+  ocr_fast: "vision",
+  ocr_large: "vision",
+  agent_orchestrator: "tool_calling",
+  agent_email: "text",
+  agent_large: "text",
+  embedding: "embedding",
+  rerank: "rerank",
+};
+const GROUP_ICON: Record<string, string> = {
+  Документы: "📄",
+  Агент: "🤖",
+  Поиск: "🔎",
+};
+
+function AssignmentTab() {
+  const [slots, setSlots] = useState<SlotItem[]>([]);
+  const [models, setModels] = useState<ProvModel[]>([]);
   const [running, setRunning] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [selProv, setSelProv] = useState<string>("");
+
+  const flash = (m: string) => {
+    setMsg(m);
+    window.setTimeout(() => setMsg(null), 2200);
+  };
 
   const load = useCallback(async () => {
     try {
-      const [a, s] = await Promise.all([
-        fetch(`${API}/api/local-models/assignment`, { credentials: "include" }),
+      const [sl, md, st] = await Promise.all([
+        fetch(`${API}/api/providers/slots`, { credentials: "include" }),
+        fetch(`${API}/api/providers/live-models`, { credentials: "include" }),
         fetch(`${API}/api/local-models/status`, { credentials: "include" }),
       ]);
-      if (a.ok) {
-        const d = await a.json();
-        setCatalog(d.catalog || []);
-        setDocs(d.documents || {});
+      if (sl.ok) setSlots(await sl.json());
+      if (md.ok) {
+        const m: ProvModel[] = await md.json();
+        setModels(m);
+        setSelProv((cur) => cur || m[0]?.provider || "");
       }
-      if (s.ok) {
-        const st = await s.json();
-        const provs = st.providers || {};
+      if (st.ok) {
+        const s = await st.json();
+        const p = s.providers || {};
         setRunning({
-          ollama: !!provs.ollama?.running,
-          llamacpp: !!provs.llamacpp?.running,
-          vllm: !!provs.vllm?.running,
+          ollama: !!p.ollama?.running,
+          llamacpp: !!p.llamacpp?.running,
+          vllm: !!p.vllm?.running,
         });
       }
     } catch {
@@ -2696,168 +2454,287 @@ function AssignmentTab({ onTabChange }: { onTabChange: (t: Tab) => void }) {
     load();
   }, [load]);
 
-  const isLocal = (c: CatalogEntry) => LOCAL_PROVIDERS.includes(c.provider);
-  const byMod = (m: string, localOnly = false) =>
-    catalog.filter(
-      (c) => c.modalities.includes(m) && (!localOnly || isLocal(c)),
+  const isLocal = (c: ProvModel) => LOCAL_PROVIDERS.includes(c.provider);
+  // A physically loaded model is always selectable, even if the catalog marks it
+  // disabled (the catalog "disabled" only declutters models that aren't present).
+  const selectable = (c: ProvModel) => c.loaded || c.status !== "disabled";
+  const optsFor = (slot: SlotItem): CatalogEntry[] => {
+    const mod = SLOT_MODALITY[slot.slot];
+    return models.filter(
+      (c) =>
+        selectable(c) &&
+        c.modalities.includes(mod) &&
+        (!slot.local_only || isLocal(c)),
     );
+  };
 
-  const visionModels = byMod("vision", true); // OCR — конфиденциально, только локально
-  const textModels = byMod("text"); // текстовые задачи — включая облачные
-  const embedModels = byMod("embedding");
-  const rerankModels = byMod("rerank");
-
-  const saveDocs = async () => {
-    setSavingDocs(true);
-    setSavedMsg(null);
+  const assign = async (slot: string, model: string) => {
+    if (!model) return;
     try {
-      const r = await fetch(`${API}/api/local-models/assignment/documents`, {
+      const r = await fetch(`${API}/api/providers/slots/${slot}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           ...(await csrfHeaders()),
         },
         credentials: "include",
-        body: JSON.stringify(docs),
+        body: JSON.stringify({ model }),
       });
-      const data = await r.json();
-      if (!r.ok) alert(`Ошибка: ${data.detail || JSON.stringify(data)}`);
-      else {
-        setDocs(data);
-        setSavedMsg("Сохранено");
+      if (r.ok) {
+        flash("Назначено и применено");
+        load();
+      } else {
+        const d = await r.json().catch(() => ({}));
+        alert(`Ошибка: ${d.detail || r.status}`);
       }
     } catch (e) {
       alert(`Ошибка: ${e}`);
     }
-    setSavingDocs(false);
   };
+
+  const toggleThinking = async (key: string, enabled: boolean) => {
+    try {
+      await fetch(
+        `${API}/api/providers/models/${encodeURIComponent(key)}/thinking`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            ...(await csrfHeaders()),
+          },
+          credentials: "include",
+          body: JSON.stringify({ enabled }),
+        },
+      );
+      flash(enabled ? "Рассуждение включено" : "Рассуждение выключено");
+      load();
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    }
+  };
+
+  const delModel = async (m: ProvModel) => {
+    if (m.provider !== "ollama") {
+      alert(
+        "Удаление поддерживается только для Ollama. Для llama.cpp/vLLM — во вкладке «Библиотека».",
+      );
+      return;
+    }
+    if (!confirm(`Удалить модель ${m.provider_model} из Ollama?`)) return;
+    try {
+      const r = await fetch(
+        `${API}/api/local-models/ollama/models/${encodeURIComponent(m.provider_model)}`,
+        {
+          method: "DELETE",
+          headers: await csrfHeaders(),
+          credentials: "include",
+        },
+      );
+      if (r.ok) {
+        flash("Модель удалена");
+        load();
+      } else alert("Не удалось удалить");
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    }
+  };
+  const modelByKey = (key: string | null) =>
+    key ? models.find((m) => m.key === key) : undefined;
 
   if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
 
+  const groups = ["Документы", "Агент", "Поиск"];
+  const provList = Array.from(new Set(models.map((m) => m.provider)));
+  const provModels = models.filter(
+    (m) => m.provider === selProv && selectable(m),
+  );
+
   return (
     <div className="space-y-6">
-      <div className="space-y-1">
-        <p className="text-sm text-slate-400">
-          Сначала выберите провайдера, затем модель. Тонкая настройка по
-          отдельным задачам и ролям —{" "}
-          <button
-            className="text-blue-400 hover:underline"
-            onClick={() => onTabChange("routing")}
-          >
-            в Маршрутизации
-          </button>
-          .
-        </p>
+      <div className="flex items-center justify-between">
         <p className="text-xs text-slate-600">
           <span className="text-emerald-400">●</span> запущен ·{" "}
           <span className="text-slate-500">○</span> остановлен — vLLM и
-          llama.cpp стартуют по требованию и выгружаются после простоя (только
-          оркестратор агента всегда в памяти).
+          llama.cpp стартуют по требованию. Изменения применяются сразу.
         </p>
+        {msg && <span className="text-xs text-emerald-400">{msg}</span>}
       </div>
 
-      {/* Document processing */}
+      {/* Slots */}
+      {groups.map((g) => {
+        const gslots = slots.filter((s) => s.group === g);
+        if (!gslots.length) return null;
+        return (
+          <div key={g} className={card}>
+            <div className={cardH}>
+              <span className="text-sm font-semibold text-slate-100">
+                {GROUP_ICON[g]} {g}
+              </span>
+              {g === "Документы" && (
+                <span className="text-xs text-slate-500">
+                  🔒 конфиденциально — только локальные модели
+                </span>
+              )}
+              {g === "Агент" && (
+                <span className="text-xs text-slate-500">
+                  можно облачные модели (на ваш выбор)
+                </span>
+              )}
+            </div>
+            <div className="p-4 space-y-3">
+              {gslots.map((s) => {
+                const chosen = modelByKey(s.model);
+                return (
+                  <div
+                    key={s.slot}
+                    className="grid grid-cols-1 sm:grid-cols-[200px_1fr] gap-2 sm:items-center"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm text-slate-200">{s.label}</div>
+                      <div className="text-xs text-slate-500">{s.hint}</div>
+                    </div>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex-1 min-w-0">
+                        <ProviderModelSelect
+                          value={s.model ?? ""}
+                          options={optsFor(s)}
+                          statuses={running}
+                          onChange={(v) => assign(s.slot, v)}
+                        />
+                      </div>
+                      {chosen?.thinking_supported && (
+                        <label
+                          className="flex items-center gap-1.5 text-xs text-slate-300 whitespace-nowrap cursor-pointer"
+                          title="Режим рассуждения (chain-of-thought) для этой модели"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={chosen.thinking_enabled}
+                            onChange={(e) =>
+                              toggleThinking(chosen.key, e.target.checked)
+                            }
+                          />
+                          размышление
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Per-provider models + thinking toggle */}
       <div className={card}>
         <div className={cardH}>
           <span className="text-sm font-semibold text-slate-100">
-            Обработка документов
+            Модели провайдеров
           </span>
           <span className="text-xs text-slate-500">
-            🔒 OCR только локально · текст и реранкинг — можно облачные
+            все загруженные модели · скачать новые — во вкладке «Библиотека»
           </span>
         </div>
-        <div className="p-4 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="space-y-1 min-w-0">
-              <span className="text-xs text-slate-400">
-                Распознавание (OCR, чертежи) — vision
-              </span>
-              <ProviderModelSelect
-                value={docs.vision_model ?? ""}
-                options={visionModels}
-                statuses={running}
-                onChange={(v) => setDocs((d) => ({ ...d, vision_model: v }))}
-              />
-            </label>
-            <label className="space-y-1 min-w-0">
-              <span className="text-xs text-slate-400">
-                Извлечение, письма, рассуждение — текст
-              </span>
-              <ProviderModelSelect
-                value={docs.text_model ?? ""}
-                options={textModels}
-                statuses={running}
-                onChange={(v) => setDocs((d) => ({ ...d, text_model: v }))}
-              />
-            </label>
-            <label className="space-y-1 min-w-0">
-              <span className="text-xs text-slate-400">Эмбеддинги (поиск)</span>
-              <ProviderModelSelect
-                value={docs.embedding_model ?? ""}
-                options={embedModels}
-                statuses={running}
-                onChange={(v) => setDocs((d) => ({ ...d, embedding_model: v }))}
-              />
-            </label>
-            <label className="space-y-1 min-w-0">
-              <span className="text-xs text-slate-400">Реранкинг</span>
-              <ProviderModelSelect
-                value={docs.rerank_model ?? ""}
-                options={rerankModels}
-                statuses={running}
-                onChange={(v) => setDocs((d) => ({ ...d, rerank_model: v }))}
-              />
-            </label>
-            <label className="space-y-1 min-w-0 sm:col-span-2">
-              <span className="text-xs text-slate-400">
-                OCR fallback — большая модель для спорных счетов{" "}
-                <span className="text-slate-600">
-                  (арифм. ошибки, отсутствующие поля)
-                </span>
-              </span>
-              <ProviderModelSelect
-                value={docs.ocr_fallback_model ?? ""}
-                options={visionModels}
-                statuses={running}
-                allowEmpty
-                placeholder="— не задано —"
-                onChange={(v) =>
-                  setDocs((d) => ({ ...d, ocr_fallback_model: v || null }))
-                }
-              />
-            </label>
+        <div className="flex flex-col sm:flex-row">
+          {/* provider list */}
+          <div className="sm:w-44 border-b sm:border-b-0 sm:border-r border-slate-700 p-2 space-y-1">
+            {provList.map((p) => (
+              <button
+                key={p}
+                onClick={() => setSelProv(p)}
+                className={`w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 ${
+                  p === selProv
+                    ? "bg-blue-600/20 text-blue-200"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                {p in running && (
+                  <span
+                    className={
+                      running[p] ? "text-emerald-400" : "text-slate-600"
+                    }
+                  >
+                    {running[p] ? "●" : "○"}
+                  </span>
+                )}
+                <span className="flex-1 truncate">{providerLabel(p)}</span>
+              </button>
+            ))}
           </div>
-          <div className="flex items-center gap-3">
-            <button
-              className={btnPrimary}
-              onClick={saveDocs}
-              disabled={savingDocs}
-            >
-              {savingDocs ? "Сохранение…" : "Сохранить"}
-            </button>
-            {savedMsg && (
-              <span className="text-xs text-emerald-400">{savedMsg}</span>
+          {/* models of selected provider */}
+          <div className="flex-1 p-2">
+            {provModels.length === 0 && (
+              <div className="text-xs text-slate-500 px-2 py-3">
+                Нет загруженных моделей. Добавьте их во вкладке «Библиотека» или
+                подтяните облачные во вкладке «Провайдеры».
+              </div>
             )}
+            <table className="w-full text-sm">
+              <tbody>
+                {provModels.map((m) => (
+                  <tr key={m.key} className="border-b border-slate-800">
+                    <td className="py-1.5 pr-2">
+                      <div className="text-slate-200">{m.provider_model}</div>
+                      <div className="text-xs text-slate-600">
+                        {m.modalities.join(", ")}
+                        {m.vram_gb_estimate
+                          ? ` · ${m.vram_gb_estimate} GB`
+                          : ""}
+                        {m.node ? ` · ${m.node}` : ""}
+                      </div>
+                    </td>
+                    <td className="py-1.5 px-2 whitespace-nowrap">
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded ${
+                          m.loaded
+                            ? "bg-emerald-700/40 text-emerald-300"
+                            : "bg-slate-700/40 text-slate-400"
+                        }`}
+                      >
+                        {m.loaded ? "загружена" : m.status}
+                      </span>
+                    </td>
+                    <td className="py-1.5 px-2 whitespace-nowrap">
+                      {m.thinking_supported ? (
+                        <label className="inline-flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={m.thinking_enabled}
+                            onChange={(e) =>
+                              toggleThinking(m.key, e.target.checked)
+                            }
+                          />
+                          Рассуждение
+                        </label>
+                      ) : (
+                        <span className="text-xs text-slate-600">без CoT</span>
+                      )}
+                    </td>
+                    <td className="py-1.5 pl-2 text-right whitespace-nowrap">
+                      {m.provider === "ollama" && m.loaded && (
+                        <button
+                          className="text-xs text-red-400 hover:text-red-300"
+                          onClick={() => delModel(m)}
+                          title="Удалить модель из Ollama"
+                        >
+                          удалить
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
-      </div>
-
-      {/* Agent hint */}
-      <div className="rounded-md border border-slate-700 bg-slate-900/40 px-4 py-3 text-sm text-slate-400">
-        Настройка моделей агента →{" "}
-        <button
-          className="text-blue-400 hover:underline"
-          onClick={() => onTabChange("agent")}
-        >
-          вкладка «Агент»
-        </button>
       </div>
     </div>
   );
 }
 
 export default function ModelsPage() {
-  const [tab, setTab] = useState<Tab>("assignment");
+  const [tab, setTab] = useState<Tab>("overview");
   const [status, setStatus] = useState<AllStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -2880,11 +2757,9 @@ export default function ModelsPage() {
   }, [loadStatus]);
 
   const TABS: { id: Tab; label: string }[] = [
-    { id: "assignment", label: "Назначение" },
-    { id: "agent", label: "Агент" },
     { id: "overview", label: "Провайдеры" },
+    { id: "assignment", label: "Назначение" },
     { id: "library", label: "Библиотека" },
-    { id: "routing", label: "Маршрутизация" },
     { id: "parameters", label: "Параметры" },
     { id: "gpu", label: "GPU Бюджет" },
   ];
@@ -2930,13 +2805,11 @@ export default function ModelsPage() {
 
         {/* Tab content */}
         <div>
-          {tab === "assignment" && <AssignmentTab onTabChange={setTab} />}
-          {tab === "agent" && <AgentTab />}
           {tab === "overview" && (
             <OverviewTab status={status} onTabChange={setTab} />
           )}
+          {tab === "assignment" && <AssignmentTab />}
           {tab === "library" && <LibraryTab />}
-          {tab === "routing" && <RoutingTab />}
           {tab === "parameters" && <ParametersTab />}
           {tab === "gpu" && <GPUTab status={status} />}
         </div>
