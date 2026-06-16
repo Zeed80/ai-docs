@@ -2108,6 +2108,12 @@ def process_approved_document(self, document_id: str) -> dict:
             _set_job_step(job, "memory_graph", "failed", error=str(e))
             logger.warning("post_approve_memory_failed", document_id=document_id, error=str(e))
 
+        try:
+            from app.domain.memory_builder import build_supplier_invoice_memory_sync
+            build_supplier_invoice_memory_sync(db, invoice)
+        except Exception as e:
+            logger.warning("post_approve_business_memory_failed", document_id=document_id, error=str(e))
+
         # ── Step: embedding ──────────────────────────────────────────────────
         if _step_status(job, "embedding") != "done":
             _set_job_step(job, "embedding", "queued")

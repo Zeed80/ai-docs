@@ -54,6 +54,51 @@ interface NtdControlConfig {
   updated_at: string | null;
 }
 
+interface GraphInsight {
+  id: string;
+  insight_type: string;
+  title: string;
+  summary: string;
+  confidence: number;
+  metadata: Record<string, unknown> | null;
+}
+
+interface GraphStats {
+  nodes: number;
+  edges: number;
+  last_run_at: string | null;
+  insight_count: number;
+}
+
+interface GraphAnalyticsSettingsState {
+  enabled: boolean;
+  interval_seconds: number;
+}
+
+const GRAPH_INSIGHT_LABELS: Record<string, string> = {
+  god_nodes: "Самые связанные узлы",
+  cluster: "Кластер",
+  surprising_connection: "Неожиданная связь",
+  unknown: "Прочее",
+};
+
+const GRAPH_INTERVAL_PRESETS = [
+  { label: "30 минут", seconds: 1_800 },
+  { label: "1 час", seconds: 3_600 },
+  { label: "6 часов", seconds: 21_600 },
+  { label: "Сутки", seconds: 86_400 },
+  { label: "Неделя", seconds: 604_800 },
+];
+
+function formatGraphDate(iso: string | null): string {
+  if (!iso) return "ещё не запускалась";
+  try {
+    return new Date(iso).toLocaleString("ru-RU");
+  } catch {
+    return iso;
+  }
+}
+
 interface AiConfigStatus {
   ok: boolean;
   ollama_available: boolean;
@@ -480,6 +525,14 @@ export default function SettingsPage() {
   const [indexingEmbeddings, setIndexingEmbeddings] = useState(false);
   const [rebuildMessage, setRebuildMessage] = useState<string | null>(null);
 
+  // Memory / graph analytics
+  const [graphInsights, setGraphInsights] = useState<GraphInsight[]>([]);
+  const [graphStats, setGraphStats] = useState<GraphStats | null>(null);
+  const [graphSettings, setGraphSettings] =
+    useState<GraphAnalyticsSettingsState | null>(null);
+  const [graphBusy, setGraphBusy] = useState<string | null>(null);
+  const [graphMessage, setGraphMessage] = useState<string | null>(null);
+
   // NTD
   const [ntdConfig, setNtdConfig] = useState<NtdControlConfig | null>(null);
   const [ntdSaving, setNtdSaving] = useState(false);
@@ -580,6 +633,71 @@ export default function SettingsPage() {
       setEmbeddingStats(await r.json());
     } catch {
       setEmbeddingStats(null);
+    }
+  }
+
+  async function loadGraphStats() {
+    try {
+      const r = await fetch(`${API}/api/admin/graph/stats`);
+      setGraphStats(await r.json());
+    } catch {
+      setGraphStats(null);
+    }
+  }
+
+  async function loadGraphInsights() {
+    try {
+      const r = await fetch(`${API}/api/admin/graph/insights`);
+      setGraphInsights(await r.json());
+    } catch {
+      setGraphInsights([]);
+    }
+  }
+
+  async function loadGraphSettings() {
+    try {
+      const r = await fetch(`${API}/api/admin/graph/settings`);
+      setGraphSettings(await r.json());
+    } catch {
+      setGraphSettings(null);
+    }
+  }
+
+  async function handleRebuildGraph() {
+    setGraphBusy("rebuild");
+    setGraphMessage(null);
+    try {
+      const r = await mutFetch(`${API}/api/admin/graph/rebuild`, {
+        method: "POST",
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const res = await r.json();
+      setGraphMessage(
+        `Пересборка графа запущена в фоне (задача ${res.task_id}). Обновите страницу через минуту-другую — на большом корпусе это может занять время.`,
+      );
+    } catch {
+      setGraphMessage("Не удалось запустить пересборку графа");
+    } finally {
+      setGraphBusy(null);
+    }
+  }
+
+  async function handleSaveGraphSettings(next: GraphAnalyticsSettingsState) {
+    setGraphBusy("settings");
+    setGraphMessage(null);
+    try {
+      const r = await mutFetch(`${API}/api/admin/graph/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setGraphSettings(await r.json());
+      setGraphMessage("Настройки сохранены.");
+    } catch {
+      setGraphMessage("Не удалось сохранить настройки графовой аналитики");
+    } finally {
+      setGraphBusy(null);
     }
   }
 
@@ -712,6 +830,9 @@ export default function SettingsPage() {
       } else if (tab === "memory") {
         loadEmbeddingProfile();
         loadEmbeddingStats();
+        loadGraphStats();
+        loadGraphInsights();
+        loadGraphSettings();
       } else if (tab === "data") {
         loadNtdConfig();
         loadEmbeddingStats();
@@ -2521,6 +2642,147 @@ export default function SettingsPage() {
             {rebuildMessage && (
               <p className="mt-3 text-xs text-slate-300">{rebuildMessage}</p>
             )}
+          </SectionCard>
+
+          <SectionCard
+            title="Графовая аналитика"
+            subtitle="Фоновый анализ графа памяти: самые связанные узлы (god nodes), кластеры поставщиков/счетов и неожиданные междоменные связи. Считается периодически в фоне и кэшируется — агент читает готовый результат, не пересчитывая граф на лету."
+            action={
+              <div className="flex gap-2">
+                <button
+                  onClick={handleRebuildGraph}
+                  disabled={graphBusy === "rebuild"}
+                  className={btnSecondary}
+                >
+                  {graphBusy === "rebuild"
+                    ? "Запускаю…"
+                    : "Пересобрать граф полностью"}
+                </button>
+              </div>
+            }
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+              {[
+                { label: "Узлов в графе", value: graphStats?.nodes ?? "—" },
+                { label: "Связей в графе", value: graphStats?.edges ?? "—" },
+                {
+                  label: "Insights",
+                  value: graphStats?.insight_count ?? "—",
+                },
+                {
+                  label: "Последний прогон",
+                  value: formatGraphDate(graphStats?.last_run_at ?? null),
+                },
+              ].map(({ label, value }) => (
+                <div key={label} className="rounded-md bg-slate-900/50 p-3">
+                  <p className="text-xs text-slate-500">{label}</p>
+                  <p className="mt-1 text-sm font-mono text-slate-200 break-all">
+                    {value}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-slate-900/50 p-3">
+              {graphSettings && (
+                <>
+                  <label className="flex items-center gap-2 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={graphSettings.enabled}
+                      disabled={graphBusy === "settings"}
+                      onChange={(e) =>
+                        void handleSaveGraphSettings({
+                          ...graphSettings,
+                          enabled: e.target.checked,
+                        })
+                      }
+                    />
+                    Включена
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-300">
+                    Интервал пересчёта:
+                    <select
+                      className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+                      value={graphSettings.interval_seconds}
+                      disabled={
+                        graphBusy === "settings" || !graphSettings.enabled
+                      }
+                      onChange={(e) =>
+                        void handleSaveGraphSettings({
+                          ...graphSettings,
+                          interval_seconds: Number(e.target.value),
+                        })
+                      }
+                    >
+                      {GRAPH_INTERVAL_PRESETS.map((p) => (
+                        <option key={p.seconds} value={p.seconds}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Пересчёт пропускается, если граф не менялся с прошлого прогона —
+              интервал задаёт лишь верхнюю границу частоты, не гарантию.
+              «Пересобрать граф полностью» проходит по всем
+              счетам/аномалиям/согласованиям, досоздаёт graph-узлы для
+              документов, обработанных до включения графовой памяти, и
+              форсированно пересчитывает insights.
+            </p>
+            {graphMessage && (
+              <p className="mt-3 text-xs text-slate-300">{graphMessage}</p>
+            )}
+
+            <div className="mt-4 overflow-hidden rounded-md border border-slate-800">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-900/70 text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Тип</th>
+                    <th className="px-3 py-2 text-left font-medium">
+                      Заголовок
+                    </th>
+                    <th className="px-3 py-2 text-left font-medium">
+                      Описание
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {graphInsights.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="px-3 py-6 text-center text-slate-500"
+                      >
+                        Пока нет данных — фоновая аналитика ещё не запускалась
+                        либо граф пуст.
+                      </td>
+                    </tr>
+                  ) : (
+                    graphInsights.map((i) => (
+                      <tr
+                        key={i.id}
+                        className="border-t border-slate-800 align-top"
+                      >
+                        <td className="px-3 py-2 whitespace-nowrap text-xs text-slate-500">
+                          {GRAPH_INSIGHT_LABELS[i.insight_type] ??
+                            i.insight_type}
+                        </td>
+                        <td className="px-3 py-2 font-medium text-slate-200">
+                          {i.title}
+                        </td>
+                        <td className="px-3 py-2 text-slate-400">
+                          {i.summary}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </SectionCard>
         </div>
       )}

@@ -40,6 +40,11 @@ x-backend-env: &backend-env
   TELEGRAM_NOTIFICATIONS_CHAT_ID: ${TELEGRAM_NOTIFICATIONS_CHAT_ID:-}
   TELEGRAM_NOTIFICATIONS_ENABLED: ${TELEGRAM_NOTIFICATIONS_ENABLED:-false}
   AIAGENT_ROOT: /aiagent
+  # RRF graph-branch weight — raised from default 0.5 after measuring on the
+  # populated business-entity graph (Part D): at 0.5, 0/4 relational sample
+  # queries surfaced a graph hit in the top-10 fused results; at 1.0, 2/4 did,
+  # with no regression on test_graph_memory.py/test_memory_api.py.
+  MEMORY_RRF_GRAPH_WEIGHT: ${MEMORY_RRF_GRAPH_WEIGHT:-1.0}
   LLAMACPP_URL: ${LLAMACPP_URL:-http://llama-server:8080}
   LLAMACPP_MODEL: ${LLAMACPP_MODEL:-/models/model.gguf}
   LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-16384}

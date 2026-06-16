@@ -139,6 +139,21 @@ celery_app.conf.beat_schedule = {
         "task": "agent.cron_dispatch",
         "schedule": 60.0,
     },
+    # Safety net: sweep business-entity graph nodes/edges left orphaned by
+    # any path that bypassed the memory_builder hooks — every 30 minutes.
+    "memory-reconcile-graph": {
+        "task": "memory.reconcile_graph",
+        "schedule": 1_800.0,
+    },
+    # Background graph analytics (god nodes/clusters/surprising connections).
+    # The actual cadence is admin-configurable (GraphAnalyticsSettings in
+    # Redis, /api/admin/graph/settings) — celery-beat itself only ticks every
+    # 30 min, the task self-throttles against the configured interval, so
+    # most ticks are a cheap no-op regardless of how low the interval is set.
+    "memory-graph-analytics": {
+        "task": "memory.run_graph_analytics",
+        "schedule": 1_800.0,
+    },
 }
 
 celery_app.autodiscover_tasks([
@@ -158,3 +173,5 @@ from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
 from app.tasks import canonical_cluster as _canonical_cluster  # noqa: F401
 from app.tasks import tp_generation as _tp_generation  # noqa: F401
 from app.tasks import agent_cron as _agent_cron  # noqa: F401
+from app.tasks import graph_memory as _graph_memory  # noqa: F401
+from app.tasks import graph_analytics as _graph_analytics  # noqa: F401

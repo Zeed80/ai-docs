@@ -33,6 +33,8 @@ def test_routes_yml_loads_and_is_structurally_valid():
         "table_edit_markers",
         "existing_table_markers",
         "flow_status_markers",
+        "relational_markers",
+        "entity_domain_markers",
     ):
         markers = table.get(key)
         assert markers, f"{key} must not be empty"
@@ -62,6 +64,30 @@ def test_flow_status_markers():
     assert route_table.is_flow_status_query("Что требует внимания?")
     assert route_table.is_flow_status_query("дай сводку по документам")
     assert not route_table.is_flow_status_query("сколько счетов от Ромашки")
+
+
+def test_needs_document_retrieval_skips_pure_workspace_query():
+    # Plain table/list request — answered straight from SQL, no RAG needed.
+    assert not route_table.needs_document_retrieval("покажи список счетов")
+
+
+def test_needs_document_retrieval_content_marker_forces_retrieval():
+    assert route_table.needs_document_retrieval("о чём этот документ")
+
+
+def test_needs_document_retrieval_relational_override_on_workspace_shaped_query():
+    # Workspace-shaped (mentions "поставщик") but actually a relationship
+    # question — must NOT be skipped just because it looks like a list request.
+    assert route_table.needs_document_retrieval("что связано с этим поставщиком")
+    assert route_table.needs_document_retrieval("история аномалий у этого поставщика")
+    assert route_table.needs_document_retrieval("цепочка согласования по этому счету")
+
+
+def test_needs_document_retrieval_relational_word_alone_is_not_enough():
+    # "связ"/"истор" without an entity-domain word shouldn't force anything
+    # special here — falls through to the default (True), since it's not a
+    # workspace/flow-status query in the first place.
+    assert route_table.needs_document_retrieval("расскажи историю кота")
 
 
 def test_match_route_table_edit():

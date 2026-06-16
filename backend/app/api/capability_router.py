@@ -160,6 +160,11 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "explain":          ("POST", "/api/memory/explain",                  []),
         "reindex":          ("POST", "/api/memory/reindex",                  []),
         "embeddings_stats": ("GET",  "/api/memory/embeddings/stats",         []),
+        # Multi-hop graph traversal — relational questions ("что связано с
+        # этим поставщиком", "цепочка согласования по счёту") need this
+        # instead of lexical/vector memory.search.
+        "neighborhood":     ("GET",  "/api/graph/nodes/{node_id}/neighborhood", ["node_id"]),
+        "path":             ("GET",  "/api/graph/path",                      []),
     },
     "tech": {
         "process_plan_list":             ("GET",   "/api/technology/process-plans",                                    []),

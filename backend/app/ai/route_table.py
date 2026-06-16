@@ -123,6 +123,13 @@ def needs_document_retrieval(text: str) -> bool:
     if any(marker in t for marker in _markers("retrieval_content_markers")):
         return True
     if is_flow_status_query(text) or is_workspace_request(text):
+        # Override: a workspace/flow-shaped query that's actually asking about
+        # a RELATIONSHIP ("что связано с этим поставщиком") needs graph
+        # traversal, not a table/status answer — don't skip retrieval for it.
+        if any(marker in t for marker in _markers("relational_markers")) and any(
+            marker in t for marker in _markers("entity_domain_markers")
+        ):
+            return True
         return False
     return True
 

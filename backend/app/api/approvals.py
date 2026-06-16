@@ -164,6 +164,12 @@ async def request_approval(
 
     await db.commit()
     await db.refresh(approval)
+    try:
+        from app.domain.memory_builder import build_approval_memory_async
+        await build_approval_memory_async(db, approval)
+        await db.commit()
+    except Exception as e:
+        logger.warning("approval_memory_build_failed", error=str(e))
     logger.info("approval_requested", approval_id=str(approval.id), action=payload.action_type.value)
     return approval
 
@@ -378,6 +384,12 @@ async def decide_approval(
 
     await db.commit()
     await db.refresh(approval)
+    try:
+        from app.domain.memory_builder import build_approval_memory_async
+        await build_approval_memory_async(db, approval)
+        await db.commit()
+    except Exception as e:
+        logger.warning("approval_memory_build_failed", error=str(e))
     logger.info("approval_decided", approval_id=str(approval_id), status=payload.status.value)
 
     # Record approval wait time metric

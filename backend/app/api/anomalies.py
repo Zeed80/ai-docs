@@ -95,6 +95,13 @@ async def check_all_anomalies(
         await db.commit()
         for a in anomalies:
             await db.refresh(a)
+        try:
+            from app.domain.memory_builder import build_anomaly_memory_async
+            for a in anomalies:
+                await build_anomaly_memory_async(db, a)
+            await db.commit()
+        except Exception as e:
+            logger.warning("anomaly_memory_build_failed", error=str(e))
 
     logger.info(
         "anomaly_check_complete",
@@ -324,6 +331,12 @@ async def create_anomaly(
     db.add(card)
     await db.commit()
     await db.refresh(card)
+    try:
+        from app.domain.memory_builder import build_anomaly_memory_async
+        await build_anomaly_memory_async(db, card)
+        await db.commit()
+    except Exception as e:
+        logger.warning("anomaly_memory_build_failed", error=str(e))
     return card
 
 
@@ -454,6 +467,12 @@ async def resolve_anomaly(
     )
     await db.commit()
     await db.refresh(card)
+    try:
+        from app.domain.memory_builder import build_anomaly_memory_async
+        await build_anomaly_memory_async(db, card)
+        await db.commit()
+    except Exception as e:
+        logger.warning("anomaly_memory_build_failed", error=str(e))
     return card
 
 
