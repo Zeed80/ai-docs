@@ -471,8 +471,17 @@ interface ApprovalPolicy {
   max_amount: number | null;
 }
 
+const TAB_IDS: TabId[] = ["agent", "memory", "data", "system", "email"];
+
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<TabId>("agent");
+
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (requested && (TAB_IDS as string[]).includes(requested)) {
+      setActiveTab(requested as TabId);
+    }
+  }, []);
 
   // Approval policy
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>({

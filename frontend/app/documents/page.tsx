@@ -1886,10 +1886,25 @@ function GraphPanel({
   if (!selected) return <EmptySelection />;
   return (
     <section className="mt-5 space-y-5">
+      <p className="text-xs text-slate-500">
+        Окружение графа памяти для этого документа (узлы/рёбра, до которых можно
+        дойти за 2 шага от него). Это локальный срез, а не граф целиком — общую
+        картину (все узлы/связи, god nodes, кластеры) смотрите в{" "}
+        <Link href="/settings?tab=memory" className="text-blue-400 underline">
+          Настройки → Память → Графовая аналитика
+        </Link>
+        .
+      </p>
       <div className="grid gap-4 md:grid-cols-3">
         <Metric label="Явные связи" value={summary?.links.length ?? 0} />
-        <Metric label="Узлы графа" value={dependencies?.total_nodes ?? 0} />
-        <Metric label="Ребра графа" value={dependencies?.total_edges ?? 0} />
+        <Metric
+          label="Узлы графа (этот документ)"
+          value={dependencies?.total_nodes ?? 0}
+        />
+        <Metric
+          label="Рёбра графа (этот документ)"
+          value={dependencies?.total_edges ?? 0}
+        />
       </div>
       <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
         <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
