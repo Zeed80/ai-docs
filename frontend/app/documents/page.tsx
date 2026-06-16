@@ -404,6 +404,8 @@ export default function DocumentsPage() {
   const [customLinkType, setCustomLinkType] = useState("");
   const [targetQuery, setTargetQuery] = useState("");
   const [targetDocumentId, setTargetDocumentId] = useState("");
+  const [selectedTargetDoc, setSelectedTargetDoc] =
+    useState<SearchDocument | null>(null);
   const [targetSearchResults, setTargetSearchResults] = useState<
     SearchDocument[]
   >([]);
@@ -889,6 +891,7 @@ export default function DocumentsPage() {
       }),
     );
     setTargetDocumentId("");
+    setSelectedTargetDoc(null);
     setTargetQuery("");
   }
 
@@ -1063,6 +1066,7 @@ export default function DocumentsPage() {
               customLinkType={customLinkType}
               targetQuery={targetQuery}
               targetDocumentId={targetDocumentId}
+              selectedTargetDoc={selectedTargetDoc}
               targetSearchResults={targetSearchResults}
               linkedDocNames={linkedDocNames}
               busyAction={busyAction}
@@ -1074,7 +1078,11 @@ export default function DocumentsPage() {
               onLinkType={setLinkType}
               onCustomLinkType={setCustomLinkType}
               onTargetQuery={setTargetQuery}
-              onTargetDocumentId={setTargetDocumentId}
+              onSelectTargetDoc={(doc) => {
+                setTargetDocumentId(doc?.id ?? "");
+                setSelectedTargetDoc(doc);
+                if (!doc) setTargetQuery("");
+              }}
               onCreateLink={createLink}
               onDeleteLink={deleteLink}
               onRebuild={(scope) =>
@@ -1915,6 +1923,7 @@ function GraphPanel({
   customLinkType,
   targetQuery,
   targetDocumentId,
+  selectedTargetDoc,
   targetSearchResults,
   linkedDocNames,
   busyAction,
@@ -1926,7 +1935,7 @@ function GraphPanel({
   onLinkType,
   onCustomLinkType,
   onTargetQuery,
-  onTargetDocumentId,
+  onSelectTargetDoc,
   onCreateLink,
   onDeleteLink,
   onRebuild,
@@ -1939,6 +1948,7 @@ function GraphPanel({
   customLinkType: string;
   targetQuery: string;
   targetDocumentId: string;
+  selectedTargetDoc: SearchDocument | null;
   targetSearchResults: SearchDocument[];
   linkedDocNames: Record<
     string,
@@ -1953,7 +1963,7 @@ function GraphPanel({
   onLinkType: (value: string) => void;
   onCustomLinkType: (value: string) => void;
   onTargetQuery: (value: string) => void;
-  onTargetDocumentId: (value: string) => void;
+  onSelectTargetDoc: (doc: SearchDocument | null) => void;
   onCreateLink: () => void;
   onDeleteLink: (id: string) => void;
   onRebuild: (scope: string) => void;
@@ -1961,75 +1971,111 @@ function GraphPanel({
   if (!selected) return <EmptySelection />;
   const linkTypeLabel = (value: string) =>
     LINK_TYPE_PRESETS.find((p) => p.value === value)?.label ?? value;
+  const docTypeLabel = (value: string | null) =>
+    value ? (DOC_TYPE_LABELS[value] ?? value) : null;
+  const showResults =
+    !selectedTargetDoc &&
+    targetQuery.trim().length > 0 &&
+    targetSearchResults.length > 0;
   return (
     <section className="mt-5 space-y-5">
       <p className="text-sm text-slate-400">
         Свяжите этот документ с другими — счётом, чертежом, договором, КП —
         чтобы быстро находить связанные файлы. Связь работает в обе стороны.
       </p>
-      <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
-        <div className="grid gap-2 md:grid-cols-[1fr_1.4fr_1fr_auto]">
-          <select
-            value={linkType}
-            onChange={(event) => onLinkType(event.target.value)}
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-          >
-            {LINK_TYPE_PRESETS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          {linkType === "custom" ? (
-            <input
-              value={customLinkType}
-              onChange={(event) => onCustomLinkType(event.target.value)}
-              placeholder="Свой тип связи"
-              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-            />
+      <div className="rounded-md border border-slate-800 bg-slate-900 p-4 space-y-4">
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">
+            1. Найдите документ, с которым нужно связать
+          </label>
+          {selectedTargetDoc ? (
+            <div className="flex items-center justify-between rounded-md border border-blue-700 bg-blue-950/40 px-3 py-2 text-sm">
+              <span className="text-slate-200">
+                {selectedTargetDoc.file_name}
+                {docTypeLabel(selectedTargetDoc.doc_type)
+                  ? ` (${docTypeLabel(selectedTargetDoc.doc_type)})`
+                  : ""}
+              </span>
+              <button
+                onClick={() => onSelectTargetDoc(null)}
+                className="rounded-md px-2 py-1 text-xs text-slate-400 hover:bg-slate-800"
+              >
+                Изменить
+              </button>
+            </div>
           ) : (
-            <input
-              value={targetQuery}
-              onChange={(event) => onTargetQuery(event.target.value)}
-              placeholder="Найти документ по имени файла"
-              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-            />
+            <div className="relative">
+              <input
+                value={targetQuery}
+                onChange={(event) => onTargetQuery(event.target.value)}
+                placeholder="Начните вводить имя файла…"
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+              />
+              {showResults && (
+                <ul className="absolute z-10 mt-1 w-full max-h-56 overflow-auto rounded-md border border-slate-700 bg-slate-950 shadow-lg">
+                  {targetSearchResults
+                    .filter((item) => item.id !== selected.id)
+                    .map((item) => (
+                      <li key={item.id}>
+                        <button
+                          onClick={() => onSelectTargetDoc(item)}
+                          className="block w-full px-3 py-2 text-left text-sm text-slate-200 hover:bg-slate-800"
+                        >
+                          {item.file_name}
+                          {docTypeLabel(item.doc_type) && (
+                            <span className="ml-2 text-xs text-slate-500">
+                              {docTypeLabel(item.doc_type)}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+              {targetQuery.trim().length > 0 &&
+                targetSearchResults.length === 0 && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Ничего не найдено — попробуйте другую часть имени файла.
+                  </p>
+                )}
+            </div>
           )}
-          <select
-            value={targetDocumentId}
-            onChange={(event) => onTargetDocumentId(event.target.value)}
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-          >
-            <option value="">Не выбран</option>
-            {targetSearchResults
-              .filter((item) => item.id !== selected.id)
-              .map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.file_name}
-                  {item.doc_type
-                    ? ` (${DOC_TYPE_LABELS[item.doc_type] ?? item.doc_type})`
-                    : ""}
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">
+            2. Укажите, как документы связаны
+          </label>
+          <div className="grid gap-2 md:grid-cols-2">
+            <select
+              value={linkType}
+              onChange={(event) => onLinkType(event.target.value)}
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+            >
+              {LINK_TYPE_PRESETS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
                 </option>
               ))}
-          </select>
-          <button
-            onClick={onCreateLink}
-            disabled={!targetDocumentId || Boolean(busyAction)}
-            className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50"
-          >
-            Связать
-          </button>
-        </div>
-        {linkType === "custom" && (
-          <div className="mt-2 md:col-span-4">
-            <input
-              value={targetQuery}
-              onChange={(event) => onTargetQuery(event.target.value)}
-              placeholder="Найти документ по имени файла"
-              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-            />
+            </select>
+            {linkType === "custom" && (
+              <input
+                value={customLinkType}
+                onChange={(event) => onCustomLinkType(event.target.value)}
+                placeholder="Свой тип связи"
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+              />
+            )}
           </div>
-        )}
+        </div>
+
+        <button
+          onClick={onCreateLink}
+          disabled={!targetDocumentId || Boolean(busyAction)}
+          className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        >
+          3. Связать документы
+        </button>
       </div>
 
       <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
