@@ -410,6 +410,14 @@ class AgentOrchestrator:
         # the model is reloaded). Use the heuristic plan directly. Only fall back
         # to the model planner for genuinely unrouted SMALL+ turns.
         heuristic_plan = self._plan_turn(content)
+        # _plan_turn sets canvas_id/workspace_required for supplier-name and
+        # supplier-grouping requests but — unlike _normalize_model_plan — never
+        # injects the matching skill into recommended_skills. Without it the
+        # worker on a heuristic-only (degraded) turn is told "memory.search"
+        # and has to improvise: it wanders through search/documents/invoices
+        # and either skips the workspace or hand-rolls a few sample rows
+        # instead of the real spec_table/fixed-table SQL result.
+        heuristic_plan = _normalize_model_plan(heuristic_plan, content)
         route_matched = heuristic_plan.intent != "general"
         if route_matched:
             self._plan_source = "heuristic_route"
@@ -1085,7 +1093,12 @@ class AgentOrchestrator:
         if matched_route:
             skills = list(matched_route.get("skills", []))[:2]
         if not skills:
-            skills = ["memory.search"]
+            # Bulk/listing turns ("выведи все...", "список...") need the real
+            # SQL-backed table engine, not a vector/text search round-trip —
+            # without this hint a degraded (heuristic-only) turn wanders
+            # through memory/search/documents and reports false negatives on
+            # data that's actually there (smart-filter would have found it).
+            skills = ["workspace.spec_table", "memory.search"] if workspace_required else ["memory.search"]
 
         return OrchestratorPlan(
             goal=content.strip()[:500],
