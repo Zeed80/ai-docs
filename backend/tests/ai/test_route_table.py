@@ -171,3 +171,55 @@ def test_prompt_sections_rendered():
     assert "technologist" in text
     assert "секретарь-оркестратор" in text
     assert "tech.generate_tp_from_drawing" in text
+
+
+# ── has_specific_filter_content: proactive-path gate ──────────────────────────
+
+
+def test_filter_content_pure_listing_no_filter():
+    """Generic listing requests have no residual filter content."""
+    assert not route_table.has_specific_filter_content("выведи все счета")
+    assert not route_table.has_specific_filter_content("список всех счетов")
+    assert not route_table.has_specific_filter_content("покажи всех поставщиков")
+    assert not route_table.has_specific_filter_content("таблицу счетов")
+    assert not route_table.has_specific_filter_content("покажи все документы")
+
+
+def test_filter_content_item_name_is_residual():
+    """A specific item/product name is residual content — proactive must be skipped."""
+    assert route_table.has_specific_filter_content("выведи все фрезы со всех счетов")
+    assert route_table.has_specific_filter_content("выведи все резцы со всех счетов")
+    assert route_table.has_specific_filter_content("все болты в таблице")
+    assert route_table.has_specific_filter_content("покажи сверла из счетов")
+
+
+def test_filter_content_time_period_is_residual():
+    """Time/period qualifiers are filter content that static skills can't express."""
+    assert route_table.has_specific_filter_content("список счетов за май")
+    assert route_table.has_specific_filter_content("счета за январь 2025")
+    assert route_table.has_specific_filter_content("выведи счета последнего квартала")
+
+
+def test_filter_content_geo_name_is_residual():
+    """Geographic names are filter criteria."""
+    assert route_table.has_specific_filter_content("таблицу поставщиков из Москвы")
+    assert route_table.has_specific_filter_content("поставщики Казань")
+
+
+def test_filter_content_with_matched_route_no_extra():
+    """Route keywords fully explain the message — no residual."""
+    invoice_list_route = route_table.match_route("список счетов")
+    assert not route_table.has_specific_filter_content("список счетов", invoice_list_route)
+
+
+def test_filter_content_with_matched_route_has_extra():
+    """Route matched but message has extra content not covered by route keywords."""
+    invoice_list_route = route_table.match_route("список счетов")
+    assert route_table.has_specific_filter_content("список счетов за май", invoice_list_route)
+    assert route_table.has_specific_filter_content("список счетов фрезы", invoice_list_route)
+
+
+def test_filter_content_function_words_not_residual():
+    """Common Russian function words don't trigger filter detection."""
+    assert not route_table.has_specific_filter_content("покажи мне все счета пожалуйста")
+    assert not route_table.has_specific_filter_content("выведи для нас таблицу поставщиков")

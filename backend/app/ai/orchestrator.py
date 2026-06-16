@@ -322,7 +322,15 @@ class AgentOrchestrator:
             # reasoning, not a short-circuit to a plain table. Analytical
             # pivots ("популярнее", "больше всего") still fire here: stacked
             # MEDIUM words shouldn't disqualify a deterministic pivot.
-            if heuristic_plan.workspace.canvas_id in self._PROACTIVE_SAFE_CANVASES:
+            _proactive_route = route_table.match_route(_norm(content))
+            if (
+                heuristic_plan.workspace.canvas_id in self._PROACTIVE_SAFE_CANVASES
+                # Gate: message must be fully explained by routing vocabulary.
+                # "Выведи все счета" → ok. "Выведи все фрезы со всех счетов" →
+                # "фрезы" is residual filter content the static skill can't express;
+                # skip proactive and let LLM planning build the right spec_table.
+                and not route_table.has_specific_filter_content(content, _proactive_route)
+            ):
                 self._plan_source = "proactive_workspace"
                 plan = heuristic_plan
                 self._workspace_before = _workspace_updated_at_snapshot()
@@ -419,10 +427,18 @@ class AgentOrchestrator:
         # instead of the real spec_table/fixed-table SQL result.
         heuristic_plan = _normalize_model_plan(heuristic_plan, content)
         route_matched = heuristic_plan.intent != "general"
-        if route_matched:
+
+        # Detect filter-specific content ("фрезы", "за май", "из Москвы"…)
+        # beyond the routing vocabulary. Static skills (invoice_table etc.) have
+        # no filter params — when filter content is present, LLM planning must
+        # run to build the correct spec_table spec regardless of tier.
+        _plan_route = route_table.match_route(_norm(content))
+        _needs_filter_planning = route_table.has_specific_filter_content(content, _plan_route)
+
+        if route_matched and not _needs_filter_planning:
             self._plan_source = "heuristic_route"
             plan = heuristic_plan
-        elif reasoning_mode == "strict" or tier >= Tier.SMALL:
+        elif reasoning_mode == "strict" or tier >= Tier.SMALL or _needs_filter_planning:
             self._plan_source = "model"
             plan = await self._plan_turn_with_model(content, config)
         else:

@@ -218,6 +218,62 @@ def supplier_grouping() -> dict[str, Any]:
     return dict(_table().get("supplier_grouping") or {})
 
 
+def has_specific_filter_content(text: str, route: dict | None = None) -> bool:
+    """Return True when the message contains filter-specific content beyond routing vocabulary.
+
+    Mechanism: build a set of "claimed" token stems from all routing vocabulary
+    sources (workspace markers, entity markers, coverage stopwords, plus the
+    matched route's own keywords). Then tokenise the message into 3+ char tokens
+    and check whether any token is NOT explained by a claimed stem via prefix
+    matching (handles Russian inflection: "таблиц" covers "таблице"/"таблицу"
+    etc., "счет" covers "счетов"/"счетам").
+
+    True  → message has a specific filter ("фрезы", "за май", "из Москвы")
+            that a static skill cannot express → skip proactive path, use LLM.
+    False → message is fully explained by routing vocabulary → static skill ok.
+
+    Examples::
+
+        has_specific_filter_content("выведи все счета")                  → False
+        has_specific_filter_content("выведи все фрезы со всех счетов")   → True
+        has_specific_filter_content("список счетов за май")              → True
+        has_specific_filter_content("таблицу поставщиков из Москвы")     → True
+        has_specific_filter_content("покажи всех поставщиков")           → False
+    """
+    t = normalize(text)
+
+    # Collect "claimed" token stems from all routing vocabulary sources.
+    claimed: set[str] = set()
+
+    # workspace_request_markers + entity_domain_markers cover core listing vocab.
+    for marker in (*_markers("workspace_request_markers"), *_markers("entity_domain_markers")):
+        for tok in marker.split():
+            if len(tok) >= 3:
+                claimed.add(tok)
+
+    # coverage_stopwords: domain routing targets + Russian function words
+    # that are NOT filter criteria (maintained in routes.yml for easy tuning).
+    for tok in _markers("coverage_stopwords"):
+        if len(tok) >= 3:
+            claimed.add(tok)
+
+    # If a specific route was matched, also claim its own keyword stems.
+    if route:
+        for kw in route.get("keywords") or []:
+            for tok in normalize(kw).split():
+                if len(tok) >= 3:
+                    claimed.add(tok)
+
+    # Find all 3+ char tokens in the normalized message.
+    msg_tokens = re.findall(r"[а-яёa-z0-9]{3,}", t)
+
+    def _covered(tok: str) -> bool:
+        # A token is covered if any claimed stem is a prefix of it.
+        return any(tok.startswith(stem) for stem in claimed if len(stem) >= 3)
+
+    return any(not _covered(tok) for tok in msg_tokens)
+
+
 def is_supplier_grouping_request(text: str) -> bool:
     sg = supplier_grouping()
     t = normalize(text)
