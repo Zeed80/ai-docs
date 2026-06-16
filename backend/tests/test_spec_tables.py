@@ -455,3 +455,74 @@ async def test_catalog_endpoint(client):
     assert "invoices" in catalog
     keys = [f["key"] for f in catalog["invoices"]["fields"]]
     assert "items_list" in keys and "tax_amount" in keys
+
+
+# ── parse_patch_command: multi-item "оставь только X и Y" ─────────────────────
+
+
+def test_only_multi_item_creates_separate_contains():
+    """'оставь только резцы и пластины' → clear_filters + two contains ops (OR semantics)."""
+    spec = ts.TableSpec(
+        source="invoice_items",
+        columns=[ts.ColumnSpec(field="item_name"), ts.ColumnSpec(field="quantity")],
+    )
+    cmd = ts.parse_patch_command("оставь только резцы и пластины", spec)
+    assert cmd is not None
+    ops = cmd.ops
+    assert ops[0].op == "clear_filters"
+    filter_ops = [o for o in ops if o.op == "add_filter"]
+    assert len(filter_ops) == 2
+    values = {o.filter.value for o in filter_ops}
+    # Stems: "резц" and "пластин" (or similar prefix)
+    assert all(o.filter.op == "contains" for o in filter_ops)
+    # For invoice_items source the default filter target is "description"
+    assert len({o.filter.field for o in filter_ops}) == 1  # consistent field
+    # Both stems must be present and non-empty
+    assert all(len(v) >= 3 for v in values)
+
+
+def test_only_single_item_keeps_smart_filter():
+    """'оставь только фрезы' (no 'и') → single smart filter, not contains."""
+    spec = ts.TableSpec(
+        source="invoice_items",
+        columns=[ts.ColumnSpec(field="item_name")],
+    )
+    cmd = ts.parse_patch_command("оставь только фрезы", spec)
+    assert cmd is not None
+    filter_ops = [o for o in cmd.ops if o.op == "add_filter"]
+    assert len(filter_ops) == 1
+    assert filter_ops[0].filter.op == "smart"
+
+
+# ── parse_patch_command: "и X" filter-add continuation ────────────────────────
+
+
+def test_and_filter_adds_without_clearing():
+    """'и пластины' → add_filter without clear_filters (additive)."""
+    spec = ts.TableSpec(
+        source="invoice_items",
+        columns=[ts.ColumnSpec(field="item_name")],
+        filters=[ts.FilterSpec(field="item_name", op="contains", value="резц")],
+    )
+    cmd = ts.parse_patch_command("и пластины", spec)
+    assert cmd is not None
+    assert not any(o.op == "clear_filters" for o in cmd.ops)
+    filter_ops = [o for o in cmd.ops if o.op == "add_filter"]
+    assert len(filter_ops) >= 1
+    assert all(o.filter.op == "contains" for o in filter_ops)
+    assert all(len(o.filter.value) >= 3 for o in filter_ops)
+
+
+def test_and_filter_also_pattern():
+    """'а также сверла' → add_filter."""
+    spec = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="item_name")])
+    cmd = ts.parse_patch_command("а также сверла", spec)
+    assert cmd is not None
+    assert any(o.op == "add_filter" for o in cmd.ops)
+
+
+def test_and_filter_question_word_ignored():
+    """'и почему так' must not match the filter-add pattern."""
+    spec = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="item_name")])
+    cmd = ts.parse_patch_command("и почему так", spec)
+    assert cmd is None

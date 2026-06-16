@@ -957,6 +957,67 @@ _SORT_RE = re.compile(
 _ONLY_RE = re.compile(
     r"(?:покажи|выведи|оставь)\s+только\s+(?P<what>.+?)\s*$"
 )
+# Filter-add continuation: "и пластины", "а также резцы", "добавь болты М8".
+# Fired when the user extends the current filter set with new item(s).
+# Must be anchored (match from start) so "и почему так?" doesn't qualify.
+_AND_FILTER_RE = re.compile(
+    r"^(?:и\s+|а\s+также\s+|добавь\s+(?:к\s+(?:ним|нему|таблице)\s+)?(?:все(?:х|м)?\s+)?|включи\s+(?:все(?:х)?\s+)?)"
+    r"(?P<what>[а-яёa-z][а-яёa-z0-9\s\-]{1,50}?)\s*$",
+    re.IGNORECASE,
+)
+# Words that mean the user is asking a question/making a statement, not adding an item.
+_NON_ITEM_WORDS = frozenset({
+    "почему", "зачем", "когда", "куда", "откуда", "где", "как", "так",
+    "правда", "хорошо", "плохо", "верно", "неверно", "ясно", "конечно",
+    "они", "вы", "ты", "он", "она", "мы", "нас", "вас",
+})
+
+
+def _contains_stem(word: str) -> str:
+    """Strip common Russian case/plural endings to get an ilike-friendly stem.
+
+    "пластины" → "пластин", "фрезы" → "фрез", "резцы" → "резц".
+    Keeps at least 4 chars so short words are not mangled.
+    """
+    word = word.strip()
+    if len(word) <= 4:
+        return word
+    for ending in ("ями", "ами", "ях", "ах", "ов", "ей", "ам", "ям"):
+        if word.endswith(ending) and len(word) - len(ending) >= 4:
+            return word[:-len(ending)]
+    for ending in ("ые", "ий", "ие", "ых", "их"):
+        if word.endswith(ending) and len(word) - 2 >= 4:
+            return word[:-2]
+    for ending in ("ы", "и", "е", "а", "я"):
+        if word.endswith(ending) and len(word) - 1 >= 4:
+            return word[:-1]
+    return word
+
+
+def _filter_items_from_query(query: str) -> list[str]:
+    """Split a query on ' и ' and return stems for each item part.
+
+    "резцы и пластины" → ["резц", "пластин"].
+    Single-item queries return a one-element list.
+    Numbers and qualifier words are kept as-is; the overall split is on the
+    Russian conjunction 'и' used as an item separator.
+    """
+    parts = [p.strip() for p in re.split(r"\s+и\s+", query, flags=re.IGNORECASE) if p.strip()]
+    stems: list[str] = []
+    for part in parts:
+        # Take only the last significant word of each part as the contains-stem
+        # (strips pre-qualifiers like "все", "любые").
+        words = [w for w in part.split() if w not in _STOP_TOKENS and len(w) >= 3]
+        if not words:
+            continue
+        # Use the full part stem when it's a short phrase (≤ 2 content words).
+        if len(words) <= 2:
+            stem = _contains_stem(" ".join(words))
+        else:
+            stem = _contains_stem(part)
+        if len(stem) >= 3:
+            stems.append(stem)
+    return stems
 
 
 @dataclass
@@ -969,7 +1030,7 @@ def parse_patch_command(text: str, spec: TableSpec) -> ParsedCommand | None:
     """Recognise a table-edit command deterministically, or None → use the LLM.
 
     Supported: добавить/убрать столбец (с позицией «перед/после X»),
-    сортировка, «покажи только …» (smart-фильтр по содержимому).
+    сортировка, «покажи только …», «и X / а также X / добавь X» (расширение фильтра).
     """
     source = SOURCES.get(spec.source)
     if source is None:
@@ -1009,18 +1070,48 @@ def parse_patch_command(text: str, spec: TableSpec) -> ParsedCommand | None:
             f"отсортировал по «{fd.header}» ({'убыв.' if direction == 'desc' else 'возр.'})",
         )
 
+    target_field = source.primary_text_field or "description"
+
     if m := _ONLY_RE.search(t):
-        query = m.group("what")
+        query = m.group("what").strip()
+        items = _filter_items_from_query(query)
+        if len(items) > 1:
+            # "оставь только резцы и пластины" → clear + one contains per item.
+            # OR-semantics come from execute_spec's same-field grouping: adding
+            # multiple contains on the same field produces OR, not AND.
+            ops_list: list[PatchOp] = [PatchOp(op="clear_filters")]
+            for stem in items:
+                ops_list.append(PatchOp(op="add_filter", filter=FilterSpec(
+                    field=target_field, op="contains", value=stem,
+                )))
+            return ParsedCommand(ops_list, f"оставил только «{query}»")
+        # Single item → keep smart filter (FTS + stemming).
         return ParsedCommand(
             [
                 PatchOp(op="clear_filters"),
                 PatchOp(op="add_filter", filter=FilterSpec(
-                    field=source.primary_text_field or "description",
-                    op="smart",
-                    value=query,
+                    field=target_field, op="smart", value=query,
                 )),
             ],
             f"оставил только «{query}»",
         )
+
+    if m := _AND_FILTER_RE.match(t):
+        what = m.group("what").strip()
+        # Reject if the matched text looks like a question/statement, not an item.
+        words = what.split()
+        if any(w in _NON_ITEM_WORDS for w in words):
+            return None
+        items = _filter_items_from_query(what)
+        if not items:
+            return None
+        ops_list = [
+            PatchOp(op="add_filter", filter=FilterSpec(
+                field=target_field, op="contains", value=stem,
+            ))
+            for stem in items
+        ]
+        label = " и ".join(f"«{s}»" for s in items)
+        return ParsedCommand(ops_list, f"добавил фильтр по {label}")
 
     return None
