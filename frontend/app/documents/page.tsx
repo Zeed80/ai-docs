@@ -11,6 +11,7 @@ import {
 } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
+import { useHasRole } from "@/lib/rbac";
 
 const API = getApiBaseUrl();
 const MAX_UPLOAD_MB = 100;
@@ -159,7 +160,7 @@ const TABS: Array<{ key: WorkspaceTab; label: string }> = [
   { key: "upload", label: "Загрузка" },
   { key: "registry", label: "Реестр" },
   { key: "queue", label: "Обработка" },
-  { key: "graph", label: "Связи и граф" },
+  { key: "graph", label: "Связи документа" },
   { key: "ntd", label: "НТД" },
 ];
 
@@ -185,6 +186,20 @@ const DOC_TYPES = [
   { value: "act", label: "Акт" },
   { value: "waybill", label: "Накладная" },
   { value: "other", label: "Другое" },
+];
+
+const DOC_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  DOC_TYPES.filter((t) => t.value).map((t) => [t.value, t.label]),
+);
+
+const LINK_TYPE_PRESETS = [
+  { value: "related", label: "Связанный документ" },
+  { value: "attachment", label: "Вложение / приложение" },
+  { value: "contract_for", label: "Договор к этому документу" },
+  { value: "drawing_for", label: "Чертёж к этому документу" },
+  { value: "response_to", label: "Ответ на письмо/КП" },
+  { value: "duplicate_of", label: "Дубликат" },
+  { value: "custom", label: "Другое (свой тип)…" },
 ];
 
 /** Extension → doc_type mapping (client-side, no AI) */
@@ -386,11 +401,17 @@ export default function DocumentsPage() {
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [dependencyQuery, setDependencyQuery] = useState("");
   const [linkType, setLinkType] = useState("related");
+  const [customLinkType, setCustomLinkType] = useState("");
   const [targetQuery, setTargetQuery] = useState("");
   const [targetDocumentId, setTargetDocumentId] = useState("");
   const [targetSearchResults, setTargetSearchResults] = useState<
     SearchDocument[]
   >([]);
+  const [linkedDocNames, setLinkedDocNames] = useState<
+    Record<string, { file_name: string; doc_type: string | null }>
+  >({});
+  const [showGraphDebug, setShowGraphDebug] = useState(false);
+  const isAdmin = useHasRole("admin");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const selectedItem = useMemo(
@@ -468,6 +489,37 @@ export default function DocumentsPage() {
     loadSummary(selectedId);
     loadDependencies(selectedId);
   }, [loadDependencies, loadSummary, selectedId]);
+
+  useEffect(() => {
+    const missing = (summary?.links ?? [])
+      .filter((l) => l.linked_entity_type === "document")
+      .map((l) => l.linked_entity_id)
+      .filter((id) => !linkedDocNames[id]);
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        missing.map(async (id) => {
+          const doc = await requestJson<DocumentItem>(
+            `/api/documents/${id}`,
+          ).catch(() => null);
+          return [id, doc] as const;
+        }),
+      );
+      if (cancelled) return;
+      setLinkedDocNames((prev) => {
+        const next = { ...prev };
+        for (const [id, doc] of entries) {
+          if (doc)
+            next[id] = { file_name: doc.file_name, doc_type: doc.doc_type };
+        }
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [summary, linkedDocNames]);
 
   useEffect(() => {
     if (!targetQuery.trim()) {
@@ -824,13 +876,15 @@ export default function DocumentsPage() {
 
   async function createLink() {
     if (!selected || !targetDocumentId) return;
+    const resolvedLinkType =
+      linkType === "custom" ? customLinkType.trim() || "related" : linkType;
     await runAction("link", () =>
       requestJson(`/api/documents/${selected.id}/links`, {
         method: "POST",
         body: JSON.stringify({
           linked_entity_type: "document",
           linked_entity_id: targetDocumentId,
-          link_type: linkType || "related",
+          link_type: resolvedLinkType,
         }),
       }),
     );
@@ -1006,13 +1060,19 @@ export default function DocumentsPage() {
               dependencies={dependencies}
               dependencyQuery={dependencyQuery}
               linkType={linkType}
+              customLinkType={customLinkType}
               targetQuery={targetQuery}
               targetDocumentId={targetDocumentId}
               targetSearchResults={targetSearchResults}
+              linkedDocNames={linkedDocNames}
               busyAction={busyAction}
+              isAdmin={isAdmin}
+              showGraphDebug={showGraphDebug}
+              onToggleGraphDebug={() => setShowGraphDebug((v) => !v)}
               onDependencyQuery={setDependencyQuery}
               onSearchDependencies={() => loadDependencies(selectedId)}
               onLinkType={setLinkType}
+              onCustomLinkType={setCustomLinkType}
               onTargetQuery={setTargetQuery}
               onTargetDocumentId={setTargetDocumentId}
               onCreateLink={createLink}
@@ -1852,13 +1912,19 @@ function GraphPanel({
   dependencies,
   dependencyQuery,
   linkType,
+  customLinkType,
   targetQuery,
   targetDocumentId,
   targetSearchResults,
+  linkedDocNames,
   busyAction,
+  isAdmin,
+  showGraphDebug,
+  onToggleGraphDebug,
   onDependencyQuery,
   onSearchDependencies,
   onLinkType,
+  onCustomLinkType,
   onTargetQuery,
   onTargetDocumentId,
   onCreateLink,
@@ -1870,13 +1936,22 @@ function GraphPanel({
   dependencies: DependenciesSummary | null;
   dependencyQuery: string;
   linkType: string;
+  customLinkType: string;
   targetQuery: string;
   targetDocumentId: string;
   targetSearchResults: SearchDocument[];
+  linkedDocNames: Record<
+    string,
+    { file_name: string; doc_type: string | null }
+  >;
   busyAction: string | null;
+  isAdmin: boolean;
+  showGraphDebug: boolean;
+  onToggleGraphDebug: () => void;
   onDependencyQuery: (value: string) => void;
   onSearchDependencies: () => void;
   onLinkType: (value: string) => void;
+  onCustomLinkType: (value: string) => void;
   onTargetQuery: (value: string) => void;
   onTargetDocumentId: (value: string) => void;
   onCreateLink: () => void;
@@ -1884,72 +1959,42 @@ function GraphPanel({
   onRebuild: (scope: string) => void;
 }) {
   if (!selected) return <EmptySelection />;
+  const linkTypeLabel = (value: string) =>
+    LINK_TYPE_PRESETS.find((p) => p.value === value)?.label ?? value;
   return (
     <section className="mt-5 space-y-5">
-      <p className="text-xs text-slate-500">
-        Окружение графа памяти для этого документа (узлы/рёбра, до которых можно
-        дойти за 2 шага от него). Это локальный срез, а не граф целиком — общую
-        картину (все узлы/связи, god nodes, кластеры) смотрите в{" "}
-        <Link href="/settings?tab=memory" className="text-blue-400 underline">
-          Настройки → Память → Графовая аналитика
-        </Link>
-        .
+      <p className="text-sm text-slate-400">
+        Свяжите этот документ с другими — счётом, чертежом, договором, КП —
+        чтобы быстро находить связанные файлы. Связь работает в обе стороны.
       </p>
-      <div className="grid gap-4 md:grid-cols-3">
-        <Metric label="Явные связи" value={summary?.links.length ?? 0} />
-        <Metric
-          label="Узлы графа (этот документ)"
-          value={dependencies?.total_nodes ?? 0}
-        />
-        <Metric
-          label="Рёбра графа (этот документ)"
-          value={dependencies?.total_edges ?? 0}
-        />
-      </div>
       <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
-        <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
-          <input
-            value={dependencyQuery}
-            onChange={(event) => onDependencyQuery(event.target.value)}
-            placeholder="Поиск по зависимостям"
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-          />
-          <button
-            onClick={onSearchDependencies}
-            className="rounded-md bg-slate-700 px-3 py-2 text-sm"
-          >
-            Найти
-          </button>
-          <div className="flex gap-2">
-            <button
-              onClick={() => onRebuild("compact")}
-              disabled={Boolean(busyAction)}
-              className="rounded-md bg-slate-700 px-3 py-2 text-sm disabled:opacity-50"
-            >
-              Compact
-            </button>
-            <button
-              onClick={() => onRebuild("extended")}
-              disabled={Boolean(busyAction)}
-              className="rounded-md bg-slate-700 px-3 py-2 text-sm disabled:opacity-50"
-            >
-              Extended
-            </button>
-          </div>
-        </div>
-        <div className="mt-4 grid gap-2 md:grid-cols-[0.7fr_1fr_1fr_auto]">
-          <input
+        <div className="grid gap-2 md:grid-cols-[1fr_1.4fr_1fr_auto]">
+          <select
             value={linkType}
             onChange={(event) => onLinkType(event.target.value)}
-            placeholder="Тип связи"
             className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-          />
-          <input
-            value={targetQuery}
-            onChange={(event) => onTargetQuery(event.target.value)}
-            placeholder="Найти документ для связи"
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-          />
+          >
+            {LINK_TYPE_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          {linkType === "custom" ? (
+            <input
+              value={customLinkType}
+              onChange={(event) => onCustomLinkType(event.target.value)}
+              placeholder="Свой тип связи"
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+            />
+          ) : (
+            <input
+              value={targetQuery}
+              onChange={(event) => onTargetQuery(event.target.value)}
+              placeholder="Найти документ по имени файла"
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+            />
+          )}
           <select
             value={targetDocumentId}
             onChange={(event) => onTargetDocumentId(event.target.value)}
@@ -1961,6 +2006,9 @@ function GraphPanel({
               .map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.file_name}
+                  {item.doc_type
+                    ? ` (${DOC_TYPE_LABELS[item.doc_type] ?? item.doc_type})`
+                    : ""}
                 </option>
               ))}
           </select>
@@ -1969,39 +2017,159 @@ function GraphPanel({
             disabled={!targetDocumentId || Boolean(busyAction)}
             className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50"
           >
-            Добавить
+            Связать
           </button>
         </div>
+        {linkType === "custom" && (
+          <div className="mt-2 md:col-span-4">
+            <input
+              value={targetQuery}
+              onChange={(event) => onTargetQuery(event.target.value)}
+              placeholder="Найти документ по имени файла"
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+            />
+          </div>
+        )}
       </div>
-      <div className="grid gap-4 xl:grid-cols-3">
-        <ListPanel
-          title="Явные связи"
-          items={(summary?.links ?? []).map((link) => ({
-            id: link.id,
-            title: `${link.link_type}: ${link.linked_entity_type}`,
-            detail: link.linked_entity_id,
-            action: () => onDeleteLink(link.id),
-          }))}
-        />
-        <ListPanel
-          title="Узлы памяти"
-          items={(dependencies?.nodes ?? []).map((node) => ({
-            id: node.id,
-            title: `${node.node_type}: ${node.title}`,
-            detail: node.summary ?? `confidence ${node.confidence.toFixed(2)}`,
-          }))}
-        />
-        <ListPanel
-          title="Ребра графа"
-          items={(dependencies?.edges ?? []).map((edge) => ({
-            id: edge.id,
-            title: edge.edge_type,
-            detail:
-              edge.reason ??
-              `${edge.source_node_id.slice(0, 8)} -> ${edge.target_node_id.slice(0, 8)}`,
-          }))}
-        />
+
+      <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
+        <h3 className="mb-3 text-sm font-medium text-slate-300">
+          Связанные документы ({summary?.links.length ?? 0})
+        </h3>
+        {!summary?.links.length ? (
+          <p className="text-sm text-slate-500">
+            Пока нет связанных документов.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {summary.links.map((link) => {
+              const target =
+                link.linked_entity_type === "document"
+                  ? linkedDocNames[link.linked_entity_id]
+                  : undefined;
+              return (
+                <li
+                  key={link.id}
+                  className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                >
+                  <div>
+                    <span className="text-slate-200">
+                      {target
+                        ? target.file_name
+                        : `${link.linked_entity_type}: ${link.linked_entity_id.slice(0, 8)}…`}
+                    </span>
+                    <span className="ml-2 text-xs text-slate-500">
+                      {linkTypeLabel(link.link_type)}
+                      {target?.doc_type
+                        ? ` · ${DOC_TYPE_LABELS[target.doc_type] ?? target.doc_type}`
+                        : ""}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => onDeleteLink(link.id)}
+                    className="rounded-md px-2 py-1 text-xs text-red-400 hover:bg-red-950"
+                  >
+                    Удалить
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
+
+      {isAdmin && (
+        <div>
+          <button
+            onClick={onToggleGraphDebug}
+            className="text-xs text-slate-500 underline hover:text-slate-300"
+          >
+            {showGraphDebug ? "Скрыть" : "Показать"} технические детали графа
+            памяти
+          </button>
+        </div>
+      )}
+
+      {isAdmin && showGraphDebug && (
+        <div className="space-y-5">
+          <p className="text-xs text-slate-500">
+            Окружение графа памяти для этого документа (узлы/рёбра, до которых
+            можно дойти за 2 шага от него). Это локальный срез, а не граф
+            целиком — общую картину (все узлы/связи, god nodes, кластеры)
+            смотрите в{" "}
+            <Link
+              href="/settings?tab=memory"
+              className="text-blue-400 underline"
+            >
+              Настройки → Память → Графовая аналитика
+            </Link>
+            .
+          </p>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Metric
+              label="Узлы графа (этот документ)"
+              value={dependencies?.total_nodes ?? 0}
+            />
+            <Metric
+              label="Рёбра графа (этот документ)"
+              value={dependencies?.total_edges ?? 0}
+            />
+          </div>
+          <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
+            <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
+              <input
+                value={dependencyQuery}
+                onChange={(event) => onDependencyQuery(event.target.value)}
+                placeholder="Поиск по зависимостям"
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+              />
+              <button
+                onClick={onSearchDependencies}
+                className="rounded-md bg-slate-700 px-3 py-2 text-sm"
+              >
+                Найти
+              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onRebuild("compact")}
+                  disabled={Boolean(busyAction)}
+                  className="rounded-md bg-slate-700 px-3 py-2 text-sm disabled:opacity-50"
+                >
+                  Compact
+                </button>
+                <button
+                  onClick={() => onRebuild("extended")}
+                  disabled={Boolean(busyAction)}
+                  className="rounded-md bg-slate-700 px-3 py-2 text-sm disabled:opacity-50"
+                >
+                  Extended
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-4 xl:grid-cols-2">
+            <ListPanel
+              title="Узлы памяти"
+              items={(dependencies?.nodes ?? []).map((node) => ({
+                id: node.id,
+                title: `${node.node_type}: ${node.title}`,
+                detail:
+                  node.summary ?? `confidence ${node.confidence.toFixed(2)}`,
+              }))}
+            />
+            <ListPanel
+              title="Ребра графа"
+              items={(dependencies?.edges ?? []).map((edge) => ({
+                id: edge.id,
+                title: edge.edge_type,
+                detail:
+                  edge.reason ??
+                  `${edge.source_node_id.slice(0, 8)} -> ${edge.target_node_id.slice(0, 8)}`,
+              }))}
+            />
+          </div>
+        </div>
+      )}
     </section>
   );
 }
