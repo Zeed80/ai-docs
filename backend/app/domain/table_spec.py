@@ -789,29 +789,42 @@ async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
     exprs = _EXPRS[spec.source]()
     stmt = _base_stmt(spec.source, exprs, keys)
 
-    # Filters
+    # Filters. Same-field filters OR together (facets: "фреза" OR "резец" on
+    # description — a model/patch adding a second contains on the same field
+    # almost always means "also include", never "and also contains both
+    # substrings" which is an impossible/empty condition for distinct values).
+    # Different fields AND together (narrowing), same as before.
+    field_conds: dict[str, list[Any]] = {}
+    smart_conds: list[Any] = []
     for flt in spec.filters:
         if flt.op == "smart":
             cond = await _smart_text_condition(db, spec.source, str(flt.value or ""))
             if cond is not None:
-                stmt = stmt.where(cond)
+                smart_conds.append(cond)
             continue
         expr = exprs[flt.field]
+        cond = None
         if flt.op == "eq":
-            stmt = stmt.where(expr == flt.value)
+            cond = expr == flt.value
         elif flt.op == "ne":
-            stmt = stmt.where(expr != flt.value)
+            cond = expr != flt.value
         elif flt.op == "contains":
-            stmt = stmt.where(expr.ilike(f"%{flt.value}%"))
+            cond = expr.ilike(f"%{flt.value}%")
         elif flt.op == "gte":
-            stmt = stmt.where(expr >= flt.value)
+            cond = expr >= flt.value
         elif flt.op == "lte":
-            stmt = stmt.where(expr <= flt.value)
+            cond = expr <= flt.value
         elif flt.op == "between":
-            stmt = stmt.where(expr.between(flt.value, flt.value2))
+            cond = expr.between(flt.value, flt.value2)
         elif flt.op == "in":
             values = flt.value if isinstance(flt.value, list) else [flt.value]
-            stmt = stmt.where(expr.in_(values))
+            cond = expr.in_(values)
+        if cond is not None:
+            field_conds.setdefault(flt.field, []).append(cond)
+    for conds in field_conds.values():
+        stmt = stmt.where(conds[0] if len(conds) == 1 else or_(*conds))
+    for cond in smart_conds:
+        stmt = stmt.where(cond)
 
     # True total BEFORE any limit — the full-data guarantee.
     total = (

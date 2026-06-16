@@ -37,6 +37,9 @@ class FakeExecutor:
     def set_active_role(self, r):
         return None
 
+    def set_excluded_tools(self, tools):
+        return None
+
     def record_external_turn(self, u, a):
         self.external_turns.append((u, a))
 
