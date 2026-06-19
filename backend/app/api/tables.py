@@ -358,111 +358,139 @@ def _export_xlsx(data: TableQueryResponse, table_name: str) -> StreamingResponse
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.table import Table, TableStyleInfo
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = {"invoices": "Счета", "documents": "Документы"}.get(
+    sheet_title = {"invoices": "Счета", "documents": "Документы"}.get(
         table_name, table_name.capitalize()
     )
-    ws.freeze_panes = "A2"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_title
     ws.sheet_view.showGridLines = False
 
-    # Header style
-    header_font = Font(bold=True, size=11, color="FFFFFF")
-    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-    thin_side = Side(style="thin", color="B7C9D6")
-    header_border = Border(
-        left=thin_side,
-        right=thin_side,
-        top=thin_side,
-        bottom=thin_side,
-    )
-    cell_border = Border(
-        left=thin_side,
-        right=thin_side,
-        top=thin_side,
-        bottom=thin_side,
-    )
-    wrap_top = Alignment(vertical="top", wrap_text=True)
-    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    right_top = Alignment(horizontal="right", vertical="top", wrap_text=True)
-    money_format = '# ##0,00'
+    ncols = len(data.columns)
+    if ncols == 0:
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return _xlsx_response(buf, table_name)
 
-    # Headers
+    last_col_letter = get_column_letter(ncols)
+
+    # ── Reusable styles ────────────────────────────────────────────────────
+    header_font = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    body_font = Font(name="Calibri", size=10, color="1A1A1A")
+    thin = Side(style="thin", color="D6DCE4")
+    cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    text_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    num_align = Alignment(horizontal="right", vertical="top")
+    money_format = "#,##0.00"
+    int_format = "#,##0"
+    num_format = "#,##0.###"
+
+    # ── Title band (rows 1-2), table starts at row HEADER_ROW ──────────────
+    HEADER_ROW = 4
+    ws.cell(row=1, column=1, value=sheet_title)
+    ws.cell(row=1, column=1).font = Font(name="Calibri", bold=True, size=16, color="1F4E78")
+    ws.cell(row=1, column=1).alignment = Alignment(vertical="center")
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    ws.row_dimensions[1].height = 26
+
+    info = (
+        f"Экспортировано: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        f"    ·    Всего записей: {data.total}"
+    )
+    ws.cell(row=2, column=1, value=info)
+    ws.cell(row=2, column=1).font = Font(name="Calibri", italic=True, size=9, color="808080")
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+
+    # ── Header row ─────────────────────────────────────────────────────────
     for col_idx, col in enumerate(data.columns, 1):
-        cell = ws.cell(row=1, column=col_idx, value=col.label)
+        cell = ws.cell(row=HEADER_ROW, column=col_idx, value=col.label)
         cell.font = header_font
         cell.fill = header_fill
-        cell.border = header_border
-        cell.alignment = center
+        cell.border = cell_border
+        cell.alignment = header_align
+    ws.row_dimensions[HEADER_ROW].height = 24
 
-    # Data rows — hidden ID column at end
-    for row_idx, row in enumerate(data.rows, 2):
+    # ── Data rows (+ hidden ID column for round-trip import) ───────────────
+    first_data_row = HEADER_ROW + 1
+    id_col_idx = ncols + 1
+    ws.cell(row=HEADER_ROW, column=id_col_idx, value="ID")
+    for offset, row in enumerate(data.rows):
+        r = first_data_row + offset
         for col_idx, col in enumerate(data.columns, 1):
             value = _excel_cell_value(row.data.get(col.key), col.key, col.data_type)
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = ws.cell(row=r, column=col_idx, value=value)
+            cell.font = body_font
             cell.border = cell_border
-            cell.alignment = wrap_top
-            if is_money_key(col.key):
+            if col.key == "row_no":
+                cell.number_format = int_format
+                cell.alignment = Alignment(horizontal="center", vertical="top")
+            elif is_money_key(col.key):
                 cell.number_format = money_format
-                cell.alignment = right_top
+                cell.alignment = num_align
             elif col.data_type == "number":
-                cell.number_format = '# ##0,####'
-                cell.alignment = right_top
-        # Hidden ID column
-        ws.cell(row=row_idx, column=len(data.columns) + 1, value=row.id)
+                cell.number_format = num_format
+                cell.alignment = num_align
+            else:
+                cell.alignment = text_align
+        ws.cell(row=r, column=id_col_idx, value=row.id)
 
-    # Hide ID column
-    id_col_letter = _col_letter(len(data.columns) + 1)
-    ws.column_dimensions[id_col_letter].hidden = True
+    last_row = HEADER_ROW + len(data.rows)
+    ws.freeze_panes = f"A{first_data_row}"
+    ws.column_dimensions[get_column_letter(id_col_idx)].hidden = True
 
-    # Auto-width
+    # ── Column widths ──────────────────────────────────────────────────────
     for col_idx, col in enumerate(data.columns, 1):
         max_len = len(col.label)
         for row in data.rows:
             val = str(row.data.get(col.key, "") or "")
-            max_len = max(max_len, max((len(line) for line in val.splitlines()), default=0))
+            max_len = max(
+                max_len, max((len(line) for line in val.splitlines()), default=0)
+            )
         width = min(max(max_len + 3, 12), 60)
         if is_money_key(col.key):
             width = max(width, 16)
-        # Multi-line free-text columns read better with a wider minimum.
         if col.key in ("items_list", "notes"):
             width = min(max(width, 40), 70)
-        ws.column_dimensions[_col_letter(col_idx)].width = width
+        if col.key == "row_no":
+            width = 6
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
 
-    for row_idx in range(2, len(data.rows) + 2):
+    # ── Row heights for multi-line cells ───────────────────────────────────
+    for r in range(first_data_row, last_row + 1):
         max_lines = 1
-        for col_idx in range(1, len(data.columns) + 1):
-            value = ws.cell(row=row_idx, column=col_idx).value
+        for col_idx in range(1, ncols + 1):
+            value = ws.cell(row=r, column=col_idx).value
             if isinstance(value, str):
                 max_lines = max(max_lines, value.count("\n") + 1)
-        ws.row_dimensions[row_idx].height = min(max(18, max_lines * 16), 180)
+        if max_lines > 1:
+            ws.row_dimensions[r].height = min(max_lines * 15, 180)
 
-    if data.columns:
-        last_col = get_column_letter(len(data.columns))
-        last_row = max(len(data.rows) + 1, 1)
+    # ── Banded table (provides its OWN single autofilter — do not also set
+    # ws.auto_filter, that produces a corrupt "needs repair" workbook) ──────
+    if data.rows:
         display_name = f"{table_name[:20].replace('-', '_')}_export"
-        table = Table(displayName=display_name, ref=f"A1:{last_col}{last_row}")
+        table = Table(
+            displayName=display_name,
+            ref=f"A{HEADER_ROW}:{last_col_letter}{last_row}",
+        )
         table.tableStyleInfo = TableStyleInfo(
             name="TableStyleMedium2",
-            showFirstColumn=False,
-            showLastColumn=False,
             showRowStripes=True,
             showColumnStripes=False,
         )
         ws.add_table(table)
-        ws.auto_filter.ref = f"A1:{last_col}{last_row}"
-
-    # Footer with metadata
-    footer_row = len(data.rows) + 3
-    ws.cell(row=footer_row, column=1, value=f"Экспорт: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    ws.cell(row=footer_row, column=1).font = Font(italic=True, color="999999", size=9)
-    ws.cell(row=footer_row + 1, column=1, value=f"Всего записей: {data.total}")
-    ws.cell(row=footer_row + 1, column=1).font = Font(italic=True, color="999999", size=9)
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
+    return _xlsx_response(buf, table_name)
 
+
+def _xlsx_response(buf: io.BytesIO, table_name: str) -> StreamingResponse:
     filename = f"{table_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     return StreamingResponse(
         buf,
@@ -489,14 +517,6 @@ def _export_csv(data: TableQueryResponse) -> StreamingResponse:
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
-
-def _col_letter(idx: int) -> str:
-    result = ""
-    while idx > 0:
-        idx, remainder = divmod(idx - 1, 26)
-        result = chr(65 + remainder) + result
-    return result
 
 
 def _excel_cell_value(value, key: str, data_type: str):

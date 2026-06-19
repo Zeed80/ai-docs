@@ -811,6 +811,28 @@ export default function InvoicesPage() {
         </div>
       )}
 
+      {/* Ask Sveta (agent, scoped to invoices) */}
+      <div className="flex items-center gap-2 mb-3">
+        <input
+          type="text"
+          value={askQuery}
+          onChange={(e) => setAskQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && askSveta()}
+          placeholder="Спросить Свету про счета: «сравни цены поставщиков за апрель»..."
+          className="flex-1 px-3 py-1.5 text-sm bg-slate-800/60 border border-slate-700 text-slate-300 placeholder-slate-600 rounded outline-none focus:border-purple-500"
+        />
+        <button
+          onClick={askSveta}
+          disabled={!askQuery.trim()}
+          className="px-3 py-1.5 text-xs bg-purple-700 text-white rounded hover:bg-purple-600 disabled:opacity-40 flex items-center gap-1"
+        >
+          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M10 2l1.5 4.5L16 8l-4.5 1.5L10 14l-1.5-4.5L4 8l4.5-1.5L10 2z" />
+          </svg>
+          Спросить Свету
+        </button>
+      </div>
+
       {/* Toolbar */}
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <div className="flex gap-1.5">
@@ -898,28 +920,6 @@ export default function InvoicesPage() {
           className="px-2.5 py-1.5 text-xs text-slate-400 border border-slate-600 rounded hover:bg-slate-700"
         >
           + Вид
-        </button>
-      </div>
-
-      {/* Ask Sveta (agent, scoped to invoices) */}
-      <div className="flex items-center gap-2 mb-3">
-        <input
-          type="text"
-          value={askQuery}
-          onChange={(e) => setAskQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && askSveta()}
-          placeholder="Спросить Свету про счета: «сравни цены поставщиков за апрель»..."
-          className="flex-1 px-3 py-1.5 text-sm bg-slate-800/60 border border-slate-700 text-slate-300 placeholder-slate-600 rounded outline-none focus:border-purple-500"
-        />
-        <button
-          onClick={askSveta}
-          disabled={!askQuery.trim()}
-          className="px-3 py-1.5 text-xs bg-purple-700 text-white rounded hover:bg-purple-600 disabled:opacity-40 flex items-center gap-1"
-        >
-          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-            <path d="M10 2l1.5 4.5L16 8l-4.5 1.5L10 14l-1.5-4.5L4 8l4.5-1.5L10 2z" />
-          </svg>
-          Спросить Свету
         </button>
       </div>
 
