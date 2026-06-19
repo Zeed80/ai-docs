@@ -12,7 +12,25 @@ import {
   type ColumnDef,
   type SortingState,
   type RowSelectionState,
+  type ColumnOrderState,
+  type VisibilityState,
+  type Header,
 } from "@tanstack/react-table";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   tables,
   type TableColumn,
@@ -21,6 +39,19 @@ import {
   type TableSort,
   type SavedView,
 } from "@/lib/api-client";
+import {
+  type ColumnPrefs,
+  PINNED_LEFT,
+  PINNED_RIGHT,
+  defaultPrefs,
+  loadColumnPrefs,
+  reconcilePrefs,
+  saveColumnPrefs,
+  visibleOrderedKeys,
+} from "@/lib/invoice-columns";
+import { ColumnManager } from "@/components/invoices/ColumnManager";
+import { FilterBuilder } from "@/components/invoices/FilterBuilder";
+import { EditableNotesCell } from "@/components/invoices/EditableNotesCell";
 
 const API = getApiBaseUrl();
 
@@ -120,37 +151,107 @@ function DeleteDialog({
   );
 }
 
+// Sortable (drag-to-reorder) table header cell.
+function DraggableHeader({
+  header,
+  children,
+}: {
+  header: Header<TableRow, unknown>;
+  children: React.ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: header.column.id });
+  return (
+    <th
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Translate.toString(transform),
+        transition,
+        opacity: isDragging ? 0.6 : 1,
+      }}
+      className="px-3 py-2.5 text-left"
+    >
+      <span className="flex items-center gap-1">
+        <button
+          {...attributes}
+          {...listeners}
+          className="cursor-grab text-slate-600 hover:text-slate-300 active:cursor-grabbing"
+          title="Перетащить столбец"
+          aria-label="Перетащить столбец"
+        >
+          <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M7 4a1 1 0 110 2 1 1 0 010-2zM7 9a1 1 0 110 2 1 1 0 010-2zM7 14a1 1 0 110 2 1 1 0 010-2zM13 4a1 1 0 110 2 1 1 0 010-2zM13 9a1 1 0 110 2 1 1 0 010-2zM13 14a1 1 0 110 2 1 1 0 010-2z" />
+          </svg>
+        </button>
+        <span
+          onClick={header.column.getToggleSortingHandler()}
+          className={
+            header.column.getCanSort()
+              ? "cursor-pointer select-none hover:text-slate-200"
+              : ""
+          }
+        >
+          {children}
+          {header.column.getIsSorted() === "asc" && " ↑"}
+          {header.column.getIsSorted() === "desc" && " ↓"}
+        </span>
+      </span>
+    </th>
+  );
+}
+
 export default function InvoicesPage() {
   const router = useRouter();
   const [rows, setRows] = useState<TableRow[]>([]);
-  const [columns, setColumns] = useState<TableColumn[]>([]);
+  const [catalog, setCatalog] = useState<TableColumn[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [statusFilter, setStatusFilter] = useState<string>("");
+  const [customFilters, setCustomFilters] = useState<TableFilter[]>([]);
   const [search, setSearch] = useState("");
   const [views, setViews] = useState<SavedView[]>([]);
   const [activeView, setActiveView] = useState<string | null>(null);
   const [showViewDialog, setShowViewDialog] = useState(false);
   const [viewName, setViewName] = useState("");
-  const [nlQuery, setNlQuery] = useState("");
-  const [nlInterpretation, setNlInterpretation] = useState<string | null>(null);
-  const [nlLoading, setNlLoading] = useState(false);
+  const [showColumns, setShowColumns] = useState(false);
+  const [showFilter, setShowFilter] = useState(false);
+  const [askQuery, setAskQuery] = useState("");
   const [deleteDialog, setDeleteDialog] = useState<{ mode: DeleteMode } | null>(
     null,
   );
   const [deleting, setDeleting] = useState(false);
+
+  // Column layout (hybrid: localStorage default + server "Views").
+  const [prefs, setPrefs] = useState<ColumnPrefs>({
+    order: [],
+    visibility: {},
+    widths: {},
+  });
+  const prefsReady = useRef(false);
+
   const searchTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
   const limit = 50;
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
+
+  // Combined filters: custom conditions + the quick status chip.
   const filters = useMemo<TableFilter[]>(() => {
-    const f: TableFilter[] = [];
-    if (statusFilter)
-      f.push({ column: "status", operator: "eq", value: statusFilter });
-    return f;
-  }, [statusFilter]);
+    const base = [...customFilters];
+    if (statusFilter && !base.some((f) => f.column === "status"))
+      base.push({ column: "status", operator: "eq", value: statusFilter });
+    return base;
+  }, [customFilters, statusFilter]);
 
   const apiSort = useMemo<TableSort[]>(
     () =>
@@ -164,6 +265,8 @@ export default function InvoicesPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
+      // No `columns` passed → backend returns the FULL catalog + all data
+      // fields. Visibility/order are applied client-side.
       const data = await tables.query({
         table: "invoices",
         filters,
@@ -173,7 +276,7 @@ export default function InvoicesPage() {
         limit,
       });
       setRows(data.rows);
-      setColumns(data.columns);
+      setCatalog(data.columns);
       setTotal(data.total);
     } catch {
       setRows([]);
@@ -193,6 +296,19 @@ export default function InvoicesPage() {
       .catch(() => {});
   }, []);
 
+  // Initialise column prefs once the catalog is known.
+  useEffect(() => {
+    if (prefsReady.current || catalog.length === 0) return;
+    const allKeys = catalog.map((c) => c.key);
+    setPrefs(reconcilePrefs(loadColumnPrefs(), allKeys));
+    prefsReady.current = true;
+  }, [catalog]);
+
+  // Persist prefs to localStorage whenever they change (after init).
+  useEffect(() => {
+    if (prefsReady.current && prefs.order.length) saveColumnPrefs(prefs);
+  }, [prefs]);
+
   // Clear selection when data refreshes
   useEffect(() => {
     setRowSelection({});
@@ -206,41 +322,14 @@ export default function InvoicesPage() {
     }, 300);
   };
 
-  const runNlFilter = async () => {
-    if (!nlQuery.trim()) return;
-    setNlLoading(true);
-    try {
-      const res = await mutFetch(`${API}/api/search/nl`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: nlQuery, limit: 1 }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setNlInterpretation(data.interpretation ?? nlQuery);
-        if (data.status) {
-          setStatusFilter(data.status);
-          setOffset(0);
-        }
-        if (data.search_text) {
-          setSearch(data.search_text);
-          setOffset(0);
-        }
-        setActiveView(null);
-      }
-    } catch {
-      setNlInterpretation(null);
-    } finally {
-      setNlLoading(false);
-    }
-  };
-
-  const clearNlFilter = () => {
-    setNlQuery("");
-    setNlInterpretation(null);
-    setSearch("");
-    setStatusFilter("");
-    setOffset(0);
+  // Hand the query to the agent «Света», scoped to invoices.
+  const askSveta = () => {
+    const q = askQuery.trim();
+    if (!q) return;
+    window.dispatchEvent(
+      new CustomEvent("sveta:ask", { detail: { text: `[Только счета] ${q}` } }),
+    );
+    setAskQuery("");
   };
 
   const selectedIds = useMemo(
@@ -258,7 +347,6 @@ export default function InvoicesPage() {
     setDeleting(true);
     try {
       if (mode === "selected") {
-        // Delete one by one (parallel, max 10 at a time)
         const chunks: string[][] = [];
         for (let i = 0; i < selectedIds.length; i += 10)
           chunks.push(selectedIds.slice(i, i + 10));
@@ -339,10 +427,18 @@ export default function InvoicesPage() {
     }
   };
 
+  const updateRowNote = (invoiceId: string, notes: string) => {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id === invoiceId ? { ...r, data: { ...r.data, notes } } : r,
+      ),
+    );
+  };
+
   // ── Table columns ──────────────────────────────────────────────────────────
 
   const checkboxCol: ColumnDef<TableRow> = {
-    id: "__select",
+    id: PINNED_LEFT,
     header: ({ table }) => (
       <input
         type="checkbox"
@@ -369,7 +465,7 @@ export default function InvoicesPage() {
   };
 
   const actionsCol: ColumnDef<TableRow> = {
-    id: "__actions",
+    id: PINNED_RIGHT,
     header: "",
     cell: ({ row }) => (
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
@@ -427,10 +523,62 @@ export default function InvoicesPage() {
     size: 64,
   };
 
+  const renderCell = (col: TableColumn, val: unknown, row: TableRow) => {
+    if (col.key === "notes") {
+      return (
+        <EditableNotesCell
+          invoiceId={row.id}
+          value={(val as string) ?? null}
+          onSaved={(next) => updateRowNote(row.id, next)}
+        />
+      );
+    }
+    if (col.key === "items_list") {
+      return (
+        <div className="max-h-32 overflow-y-auto whitespace-pre-line text-xs leading-snug text-slate-300">
+          {(val as string) ?? "—"}
+        </div>
+      );
+    }
+    if (col.key === "row_no") {
+      return <span className="text-slate-500">{val as number}</span>;
+    }
+    if (col.key === "status") {
+      const s = val as string;
+      return (
+        <span
+          className={`px-2 py-0.5 text-xs rounded-full ${statusBadge[s] ?? "bg-slate-700"}`}
+        >
+          {statusLabel[s] ?? s}
+        </span>
+      );
+    }
+    if (["total_amount", "tax_amount", "subtotal"].includes(col.key)) {
+      const n = val as number | null;
+      return n != null
+        ? n.toLocaleString("ru-RU", { minimumFractionDigits: 2 })
+        : "—";
+    }
+    if (col.key === "overall_confidence") {
+      const n = val as number | null;
+      if (n == null) return "—";
+      return (
+        <span
+          className={`text-xs ${n >= 0.8 ? "text-green-400" : n >= 0.5 ? "text-amber-400" : "text-red-400"}`}
+        >
+          {(n * 100).toFixed(0)}%
+        </span>
+      );
+    }
+    if (col.data_type === "date" && val)
+      return new Date(val as string).toLocaleDateString("ru-RU");
+    return (val as string) ?? "—";
+  };
+
   const tableColumns = useMemo<ColumnDef<TableRow>[]>(
     () => [
       checkboxCol,
-      ...columns.map((col) => ({
+      ...catalog.map((col) => ({
         id: col.key,
         header: col.label,
         accessorFn: (row: TableRow) => row.data[col.key],
@@ -440,51 +588,31 @@ export default function InvoicesPage() {
         }: {
           getValue: () => unknown;
           row: { original: TableRow };
-        }) => {
-          const val = getValue();
-          if (col.key === "status") {
-            const s = val as string;
-            return (
-              <span
-                className={`px-2 py-0.5 text-xs rounded-full ${statusBadge[s] ?? "bg-slate-700"}`}
-              >
-                {statusLabel[s] ?? s}
-              </span>
-            );
-          }
-          if (["total_amount", "tax_amount", "subtotal"].includes(col.key)) {
-            const n = val as number | null;
-            return n != null
-              ? n.toLocaleString("ru-RU", { minimumFractionDigits: 2 })
-              : "—";
-          }
-          if (col.key === "overall_confidence") {
-            const n = val as number | null;
-            if (n == null) return "—";
-            return (
-              <span
-                className={`text-xs ${n >= 0.8 ? "text-green-400" : n >= 0.5 ? "text-amber-400" : "text-red-400"}`}
-              >
-                {(n * 100).toFixed(0)}%
-              </span>
-            );
-          }
-          if (col.data_type === "date" && val)
-            return new Date(val as string).toLocaleDateString("ru-RU");
-          return (val as string) ?? "—";
-        },
+        }) => renderCell(col, getValue(), r.original),
         enableSorting: col.sortable,
+        size: prefs.widths[col.key],
       })),
       actionsCol,
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     ],
-    [columns],
+    // checkboxCol/actionsCol/renderCell are recreated each render by design.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [catalog, prefs.widths],
+  );
+
+  // TanStack ordering/visibility derived from prefs (+ pinned service columns).
+  const columnOrder = useMemo<ColumnOrderState>(
+    () => [PINNED_LEFT, ...prefs.order, PINNED_RIGHT],
+    [prefs.order],
+  );
+  const columnVisibility = useMemo<VisibilityState>(
+    () => ({ ...prefs.visibility }),
+    [prefs.visibility],
   );
 
   const table = useReactTable({
     data: rows,
     columns: tableColumns,
-    state: { sorting, rowSelection },
+    state: { sorting, rowSelection, columnOrder, columnVisibility },
     onSortingChange: setSorting,
     onRowSelectionChange: setRowSelection,
     getCoreRowModel: getCoreRowModel(),
@@ -493,10 +621,33 @@ export default function InvoicesPage() {
     enableRowSelection: true,
   });
 
+  const handleHeaderDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const a = active.id as string;
+    const b = over.id as string;
+    if (a === PINNED_LEFT || a === PINNED_RIGHT) return;
+    setPrefs((p) => {
+      const oldIndex = p.order.indexOf(a);
+      const newIndex = p.order.indexOf(b);
+      if (oldIndex < 0 || newIndex < 0) return p;
+      return { ...p, order: arrayMove(p.order, oldIndex, newIndex) };
+    });
+    setActiveView(null);
+  };
+
   // ── Export ─────────────────────────────────────────────────────────────────
 
+  const exportColumns = useMemo(() => visibleOrderedKeys(prefs), [prefs]);
+
   const handleExport = async (format: string) => {
-    const resp = await tables.exportUrl({ table: "invoices", filters, format });
+    const resp = await tables.exportUrl({
+      table: "invoices",
+      filters,
+      sort: apiSort,
+      columns: exportColumns,
+      format,
+    });
     if (!resp.ok) return;
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
@@ -529,6 +680,7 @@ export default function InvoicesPage() {
     const view = await tables.createView({
       name: viewName.trim(),
       table: "invoices",
+      columns: visibleOrderedKeys(prefs),
       filters,
       sort: apiSort,
     });
@@ -541,10 +693,24 @@ export default function InvoicesPage() {
     setActiveView(view.id);
     const sf = view.filters.find((f) => f.column === "status");
     setStatusFilter(sf ? (sf.value as string) : "");
+    setCustomFilters(view.filters.filter((f) => f.column !== "status"));
     if (view.sort.length > 0)
       setSorting(
         view.sort.map((s) => ({ id: s.column, desc: s.direction === "desc" })),
       );
+    // Restore column layout (visible set + order) from the saved view.
+    if (view.columns && view.columns.length) {
+      setPrefs((p) => {
+        const allKeys = catalog.map((c) => c.key);
+        const order = [
+          ...view.columns!.filter((k) => allKeys.includes(k)),
+          ...allKeys.filter((k) => !view.columns!.includes(k)),
+        ];
+        const visibility: Record<string, boolean> = {};
+        for (const k of allKeys) visibility[k] = view.columns!.includes(k);
+        return { ...p, order, visibility };
+      });
+    }
     setOffset(0);
   };
 
@@ -558,9 +724,17 @@ export default function InvoicesPage() {
   };
   const totalPages = Math.ceil(total / limit);
   const currentPage = Math.floor(offset / limit) + 1;
+  // Sortable header ids — visible data columns only (pinned cols excluded).
+  const dataColumnIds = useMemo(() => visibleOrderedKeys(prefs), [prefs]);
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div
+      className="p-6 max-w-7xl mx-auto"
+      onClick={() => {
+        setShowColumns(false);
+        setShowFilter(false);
+      }}
+    >
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-slate-100">Счета</h1>
@@ -659,10 +833,65 @@ export default function InvoicesPage() {
 
         <input
           type="text"
-          placeholder="Поиск по номеру..."
+          placeholder="Поиск по ключевым словам..."
           onChange={(e) => handleSearchChange(e.target.value)}
-          className="px-3 py-1.5 text-sm bg-slate-800 border border-slate-600 text-slate-200 placeholder-slate-500 rounded w-48 outline-none focus:border-blue-400"
+          className="px-3 py-1.5 text-sm bg-slate-800 border border-slate-600 text-slate-200 placeholder-slate-500 rounded w-56 outline-none focus:border-blue-400"
         />
+
+        {/* Filter builder */}
+        <div className="relative" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => {
+              setShowFilter((s) => !s);
+              setShowColumns(false);
+            }}
+            className={`px-2.5 py-1.5 text-xs rounded border ${
+              customFilters.length
+                ? "border-blue-600 bg-blue-900/30 text-blue-300"
+                : "border-slate-600 text-slate-400 hover:bg-slate-700"
+            }`}
+          >
+            Фильтр{customFilters.length ? ` (${customFilters.length})` : ""}
+          </button>
+          {showFilter && (
+            <FilterBuilder
+              catalog={catalog}
+              filters={customFilters}
+              onChange={(f) => {
+                setCustomFilters(f);
+                setOffset(0);
+                setActiveView(null);
+              }}
+              onClose={() => setShowFilter(false)}
+            />
+          )}
+        </div>
+
+        {/* Column manager */}
+        <div className="relative" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => {
+              setShowColumns((s) => !s);
+              setShowFilter(false);
+            }}
+            className="px-2.5 py-1.5 text-xs text-slate-400 border border-slate-600 rounded hover:bg-slate-700"
+          >
+            ⚙ Столбцы
+          </button>
+          {showColumns && (
+            <ColumnManager
+              catalog={catalog}
+              order={prefs.order}
+              visibility={prefs.visibility}
+              onChange={(order, visibility) => {
+                setPrefs((p) => ({ ...p, order, visibility }));
+                setActiveView(null);
+              }}
+              onReset={() => setPrefs(defaultPrefs(catalog.map((c) => c.key)))}
+              onClose={() => setShowColumns(false)}
+            />
+          )}
+        </div>
 
         <button
           onClick={() => setShowViewDialog(true)}
@@ -672,34 +901,26 @@ export default function InvoicesPage() {
         </button>
       </div>
 
-      {/* NL filter */}
+      {/* Ask Sveta (agent, scoped to invoices) */}
       <div className="flex items-center gap-2 mb-3">
         <input
           type="text"
-          value={nlQuery}
-          onChange={(e) => setNlQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && runNlFilter()}
-          placeholder="AI-фильтр: «счета от Иванова за апрель»..."
+          value={askQuery}
+          onChange={(e) => setAskQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && askSveta()}
+          placeholder="Спросить Свету про счета: «сравни цены поставщиков за апрель»..."
           className="flex-1 px-3 py-1.5 text-sm bg-slate-800/60 border border-slate-700 text-slate-300 placeholder-slate-600 rounded outline-none focus:border-purple-500"
         />
         <button
-          onClick={runNlFilter}
-          disabled={nlLoading || !nlQuery.trim()}
-          className="px-3 py-1.5 text-xs bg-purple-700 text-white rounded hover:bg-purple-600 disabled:opacity-40"
+          onClick={askSveta}
+          disabled={!askQuery.trim()}
+          className="px-3 py-1.5 text-xs bg-purple-700 text-white rounded hover:bg-purple-600 disabled:opacity-40 flex items-center gap-1"
         >
-          {nlLoading ? "…" : "AI"}
+          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M10 2l1.5 4.5L16 8l-4.5 1.5L10 14l-1.5-4.5L4 8l4.5-1.5L10 2z" />
+          </svg>
+          Спросить Свету
         </button>
-        {nlInterpretation && (
-          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-purple-900/30 border border-purple-700/50 rounded text-xs text-purple-300">
-            <span>{nlInterpretation}</span>
-            <button
-              onClick={clearNlFilter}
-              className="text-purple-400 hover:text-white ml-1"
-            >
-              ×
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Bulk action bar — shown when rows are selected */}
@@ -760,54 +981,76 @@ export default function InvoicesPage() {
         <div className="text-slate-400 py-12 text-center">Нет счетов</div>
       ) : (
         <>
-          <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-700/50 text-slate-400 text-xs uppercase">
-                {table.getHeaderGroups().map((hg) => (
-                  <tr key={hg.id}>
-                    {hg.headers.map((header) => (
-                      <th
-                        key={header.id}
-                        onClick={header.column.getToggleSortingHandler()}
-                        className={`px-3 py-2.5 text-left ${header.column.getCanSort() ? "cursor-pointer select-none hover:text-slate-200" : ""}`}
+          <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-x-auto">
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleHeaderDragEnd}
+            >
+              <table className="w-full text-sm">
+                <thead className="bg-slate-700/50 text-slate-400 text-xs uppercase">
+                  {table.getHeaderGroups().map((hg) => (
+                    <tr key={hg.id}>
+                      <SortableContext
+                        items={dataColumnIds}
+                        strategy={horizontalListSortingStrategy}
                       >
-                        <span className="flex items-center gap-1">
+                        {hg.headers.map((header) => {
+                          const id = header.column.id;
+                          if (id === PINNED_LEFT || id === PINNED_RIGHT) {
+                            return (
+                              <th
+                                key={header.id}
+                                className="px-3 py-2.5 text-left"
+                              >
+                                {flexRender(
+                                  header.column.columnDef.header,
+                                  header.getContext(),
+                                )}
+                              </th>
+                            );
+                          }
+                          return (
+                            <DraggableHeader key={header.id} header={header}>
+                              {flexRender(
+                                header.column.columnDef.header,
+                                header.getContext(),
+                              )}
+                            </DraggableHeader>
+                          );
+                        })}
+                      </SortableContext>
+                    </tr>
+                  ))}
+                </thead>
+                <tbody className="divide-y divide-slate-700">
+                  {table.getRowModel().rows.map((row) => (
+                    <tr
+                      key={row.id}
+                      className={`group cursor-pointer transition-colors ${row.getIsSelected() ? "bg-blue-950/30" : "hover:bg-slate-700/50"}`}
+                      onClick={() => {
+                        const docId = row.original.data.document_id as
+                          | string
+                          | null;
+                        if (docId) router.push(`/documents/${docId}/review`);
+                      }}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <td
+                          key={cell.id}
+                          className="px-3 py-2.5 text-slate-200 align-top"
+                        >
                           {flexRender(
-                            header.column.columnDef.header,
-                            header.getContext(),
+                            cell.column.columnDef.cell,
+                            cell.getContext(),
                           )}
-                          {header.column.getIsSorted() === "asc" && " ↑"}
-                          {header.column.getIsSorted() === "desc" && " ↓"}
-                        </span>
-                      </th>
-                    ))}
-                  </tr>
-                ))}
-              </thead>
-              <tbody className="divide-y divide-slate-700">
-                {table.getRowModel().rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className={`group cursor-pointer transition-colors ${row.getIsSelected() ? "bg-blue-950/30" : "hover:bg-slate-700/50"}`}
-                    onClick={() => {
-                      const docId = row.original.data.document_id as
-                        | string
-                        | null;
-                      if (docId) router.push(`/documents/${docId}/review`);
-                    }}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="px-3 py-2.5 text-slate-200">
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext(),
-                        )}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </DndContext>
           </div>
 
           {/* Pagination + bulk delete buttons */}

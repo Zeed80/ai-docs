@@ -411,7 +411,13 @@ def resolve_source(text: str) -> SourceDef | None:
 # ── Query builders per source ──────────────────────────────────────────────────
 
 
-def _items_list_subq():
+def invoice_items_list_subquery():
+    """Correlated scalar subquery: newline-joined item list for an Invoice.
+
+    Format per line: ``описание — кол-во ед.`` ordered by ``line_number``.
+    Canonical source of the items-list format — reused by the invoices table
+    API (``/api/tables/query``) so the column matches agent spec-tables.
+    """
     line_text = func.coalesce(InvoiceLine.description, "—") + func.coalesce(
         " — " + func.trim(func.to_char(InvoiceLine.quantity, "FM999999990.###"))
         + " " + func.coalesce(InvoiceLine.unit, "шт"),
@@ -428,6 +434,10 @@ def _items_list_subq():
         .correlate(Invoice)
         .scalar_subquery()
     )
+
+
+# Backwards-compatible private alias used within this module.
+_items_list_subq = invoice_items_list_subquery
 
 
 def _items_count_subq():

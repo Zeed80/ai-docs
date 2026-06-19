@@ -650,11 +650,7 @@ export function SvetaPanel() {
         autoApproveRef.current &&
         wsRef.current?.readyState === WebSocket.OPEN
       ) {
-        wsRef.current.send(
-          JSON.stringify(
-            buildAgentApprovalMessage(true),
-          ),
-        );
+        wsRef.current.send(JSON.stringify(buildAgentApprovalMessage(true)));
         setMessages((prev) => [
           ...prev,
           {
@@ -845,6 +841,48 @@ export function SvetaPanel() {
     setIsStreaming(true);
   }
 
+  // Programmatic ask — used by other pages (e.g. the invoices «Спросить Свету»
+  // button) via a window `sveta:ask` CustomEvent. Queues until the socket opens.
+  const pendingAskRef = useRef<string | null>(null);
+  const sendAgentText = useCallback(
+    (text: string) => {
+      const content = text.trim();
+      if (!content) return;
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        pendingAskRef.current = content;
+        return;
+      }
+      setMessages((prev) => [...prev, { id: genId(), role: "user", content }]);
+      wsRef.current.send(
+        JSON.stringify(
+          buildAgentUserMessage(content, currentSessionId, [], reasoningMode),
+        ),
+      );
+      setLastTurnTools([]);
+      currentTurnToolsRef.current = [];
+      setIsStreaming(true);
+      inputRef.current?.focus();
+    },
+    [currentSessionId, reasoningMode],
+  );
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ text?: string }>).detail;
+      if (detail?.text) sendAgentText(detail.text);
+    };
+    window.addEventListener("sveta:ask", handler);
+    return () => window.removeEventListener("sveta:ask", handler);
+  }, [sendAgentText]);
+
+  useEffect(() => {
+    if (isConnected && pendingAskRef.current) {
+      const text = pendingAskRef.current;
+      pendingAskRef.current = null;
+      sendAgentText(text);
+    }
+  }, [isConnected, sendAgentText]);
+
   async function handleApproval(msgId: string, approved: boolean) {
     const msg = messages.find((m) => m.id === msgId);
 
@@ -897,11 +935,7 @@ export function SvetaPanel() {
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     if (!approved) autoApproveRef.current = false;
-    wsRef.current.send(
-      JSON.stringify(
-        buildAgentApprovalMessage(approved),
-      ),
-    );
+    wsRef.current.send(JSON.stringify(buildAgentApprovalMessage(approved)));
     setMessages((prev) =>
       prev.map((m) =>
         m.id === msgId

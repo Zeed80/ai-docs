@@ -668,6 +668,8 @@ export const tables = {
   exportUrl: (data: {
     table: string;
     filters?: TableFilter[];
+    sort?: TableSort[];
+    columns?: string[];
     format?: string;
   }) => {
     // Returns blob for download
@@ -694,6 +696,7 @@ export const tables = {
   createView: (data: {
     name: string;
     table: string;
+    columns?: string[];
     filters?: TableFilter[];
     sort?: TableSort[];
   }) =>

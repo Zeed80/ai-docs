@@ -21,10 +21,14 @@ from app.db.models import (
     DocumentStatus,
     DocumentType,
     Invoice,
+    InvoiceLine,
     InvoiceStatus,
+    Party,
     SavedView,
 )
 from app.db.session import get_db
+from app.db.text_search import text_search_condition
+from app.domain.table_spec import invoice_items_list_subquery
 from app.domain.tables import (
     Export1CRequest,
     ExportRequest,
@@ -52,13 +56,22 @@ _EXPORT_MAX_ROWS = 100_000
 # ── Column definitions ─────────────────────────────────────────────────────
 
 INVOICE_COLUMNS = [
+    # row_no — synthetic 1..N position number; data filled at query time, not a
+    # DB column. Not sortable / not filterable.
+    TableColumn(key="row_no", label="№", data_type="number", sortable=False, filterable=False),
     TableColumn(key="invoice_number", label="Номер счёта", data_type="string"),
-    TableColumn(key="invoice_date", label="Дата", data_type="date"),
+    TableColumn(key="invoice_date", label="Дата счёта", data_type="date"),
+    TableColumn(key="due_date", label="Срок оплаты", data_type="date"),
     TableColumn(key="supplier_name", label="Поставщик", data_type="string"),
-    TableColumn(key="total_amount", label="Сумма", data_type="number"),
+    TableColumn(key="supplier_inn", label="ИНН поставщика", data_type="string", sortable=False),
+    # items_list — aggregated, multi-line. Not sortable / not filterable as a column.
+    TableColumn(key="items_list", label="Перечень товаров", data_type="string", sortable=False, filterable=False),
+    TableColumn(key="total_amount", label="Сумма (с НДС)", data_type="number"),
     TableColumn(key="currency", label="Валюта", data_type="string"),
     TableColumn(key="tax_amount", label="НДС", data_type="number"),
     TableColumn(key="subtotal", label="Сумма без НДС", data_type="number"),
+    # notes — user-editable free text. Not sortable; searchable via keyword search.
+    TableColumn(key="notes", label="Примечание", data_type="string", sortable=False, filterable=False),
     TableColumn(key="status", label="Статус", data_type="enum"),
     TableColumn(key="overall_confidence", label="Уверенность", data_type="number"),
     TableColumn(key="line_count", label="Позиций", data_type="number"),
@@ -93,9 +106,20 @@ async def table_query(
         raise HTTPException(400, f"Unknown table: {payload.table}")
 
 
+def _supplier_name_subq():
+    """Correlated scalar subquery for the supplier's name (for sorting)."""
+    return (
+        select(Party.name)
+        .where(Party.id == Invoice.supplier_id)
+        .correlate(Invoice)
+        .scalar_subquery()
+    )
+
+
 async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQueryResponse:
+    items_subq = invoice_items_list_subquery()
     query = (
-        select(Invoice)
+        select(Invoice, items_subq.label("items_list"))
         .options(selectinload(Invoice.lines), selectinload(Invoice.supplier))
     )
 
@@ -103,46 +127,58 @@ async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQuer
     for f in req.filters:
         query = _apply_invoice_filter(query, f)
 
-    # Search
+    # Keyword search — full-text (russian) + trigram + ilike fallback, across
+    # invoice number, notes, supplier name and item descriptions. Supplier and
+    # lines are matched via EXISTS (.has/.any) to avoid row duplication.
     if req.search:
+        q = req.search
         query = query.where(
             or_(
-                Invoice.invoice_number.ilike(f"%{req.search}%"),
+                text_search_condition(db, [Invoice.invoice_number, Invoice.notes], q),
+                Invoice.supplier.has(text_search_condition(db, [Party.name], q)),
+                Invoice.lines.any(text_search_condition(db, [InvoiceLine.description], q)),
             )
         )
 
-    # Count
+    # Count — no joins are added (filters use EXISTS), so rows are unique.
     count_q = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_q)).scalar() or 0
 
     # Sort
+    has_sort = False
     for s in req.sort:
         col = _get_invoice_sort_column(s.column)
         if col is not None:
             query = query.order_by(col.desc() if s.direction == "desc" else col.asc())
-    if not req.sort:
+            has_sort = True
+    if not has_sort:
         query = query.order_by(Invoice.created_at.desc())
 
     # Paginate
     query = query.offset(req.offset).limit(req.limit)
     result = await db.execute(query)
-    invoices = result.scalars().all()
+    records = result.all()  # list of (Invoice, items_list) tuples
 
-    # Build rows
-    columns = [c for c in INVOICE_COLUMNS if not req.columns or c.key in req.columns]
+    # Build rows — row_no is the 1-based position within the current result page.
+    columns = _select_columns(INVOICE_COLUMNS, req.columns)
     rows = []
-    for inv in invoices:
+    for idx, (inv, items_list) in enumerate(records):
         rows.append(TableRow(
             id=str(inv.id),
             data={
                 "document_id": str(inv.document_id) if inv.document_id else None,
+                "row_no": req.offset + idx + 1,
                 "invoice_number": inv.invoice_number,
                 "invoice_date": inv.invoice_date.isoformat() if inv.invoice_date else None,
+                "due_date": inv.due_date.isoformat() if inv.due_date else None,
                 "supplier_name": inv.supplier.name if inv.supplier else None,
+                "supplier_inn": inv.supplier.inn if inv.supplier else None,
+                "items_list": items_list,
                 "total_amount": inv.total_amount,
                 "currency": inv.currency,
                 "tax_amount": inv.tax_amount,
                 "subtotal": inv.subtotal,
+                "notes": inv.notes,
                 "status": inv.status.value if inv.status else None,
                 "overall_confidence": inv.overall_confidence,
                 "line_count": len(inv.lines),
@@ -156,14 +192,35 @@ async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQuer
     )
 
 
+def _select_columns(catalog: list[TableColumn], requested: list[str] | None) -> list[TableColumn]:
+    """Return catalog columns filtered AND ordered by ``requested`` keys.
+
+    Preserves the caller's column order (needed so exports match the on-screen
+    layout). Unknown keys are ignored; when ``requested`` is empty, the full
+    catalog order is used.
+    """
+    if not requested:
+        return list(catalog)
+    by_key = {c.key: c for c in catalog}
+    return [by_key[k] for k in requested if k in by_key]
+
+
 def _apply_invoice_filter(query, f: TableFilter):
+    # Supplier name — match via EXISTS to avoid joining (no row duplication).
+    if f.column == "supplier_name" and isinstance(f.value, str):
+        if f.operator in ("eq", "contains"):
+            return query.where(Invoice.supplier.has(Party.name.ilike(f"%{f.value}%")))
+        return query
+
     col_map = {
         "status": Invoice.status,
         "currency": Invoice.currency,
         "supplier_id": Invoice.supplier_id,
         "total_amount": Invoice.total_amount,
         "tax_amount": Invoice.tax_amount,
+        "subtotal": Invoice.subtotal,
         "invoice_date": Invoice.invoice_date,
+        "due_date": Invoice.due_date,
         "overall_confidence": Invoice.overall_confidence,
     }
     col = col_map.get(f.column)
@@ -194,13 +251,17 @@ def _get_invoice_sort_column(key: str):
     mapping = {
         "invoice_number": Invoice.invoice_number,
         "invoice_date": Invoice.invoice_date,
+        "due_date": Invoice.due_date,
         "total_amount": Invoice.total_amount,
         "tax_amount": Invoice.tax_amount,
+        "subtotal": Invoice.subtotal,
         "currency": Invoice.currency,
         "status": Invoice.status,
         "overall_confidence": Invoice.overall_confidence,
         "created_at": Invoice.created_at,
     }
+    if key == "supplier_name":
+        return _supplier_name_subq()
     return mapping.get(key)
 
 
@@ -275,6 +336,7 @@ async def export_excel(
     query_req = TableQueryRequest(
         table=payload.table,
         filters=payload.filters,
+        sort=payload.sort,
         columns=payload.columns,
         limit=_EXPORT_MAX_ROWS,
     )
@@ -298,7 +360,9 @@ def _export_xlsx(data: TableQueryResponse, table_name: str) -> StreamingResponse
 
     wb = Workbook()
     ws = wb.active
-    ws.title = table_name.capitalize()
+    ws.title = {"invoices": "Счета", "documents": "Документы"}.get(
+        table_name, table_name.capitalize()
+    )
     ws.freeze_panes = "A2"
     ws.sheet_view.showGridLines = False
 
@@ -360,6 +424,9 @@ def _export_xlsx(data: TableQueryResponse, table_name: str) -> StreamingResponse
         width = min(max(max_len + 3, 12), 60)
         if is_money_key(col.key):
             width = max(width, 16)
+        # Multi-line free-text columns read better with a wider minimum.
+        if col.key in ("items_list", "notes"):
+            width = min(max(width, 40), 70)
         ws.column_dimensions[_col_letter(col_idx)].width = width
 
     for row_idx in range(2, len(data.rows) + 2):

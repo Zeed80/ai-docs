@@ -83,6 +83,7 @@ class SavedViewOut(BaseModel):
 class ExportRequest(BaseModel):
     table: str = "invoices"
     filters: list[TableFilter] = []
+    sort: list[TableSort] = []
     columns: list[str] | None = None
     format: str = "xlsx"  # xlsx, csv
 
