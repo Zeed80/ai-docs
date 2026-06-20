@@ -194,9 +194,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # run, then refresh the Redis cache used by the AI router. Idempotent.
     try:
         from app.ai.provider_bootstrap import seed_and_refresh_providers
+        from app.ai.model_runtime_store import hydrate_runtime_cache
         from app.db.session import _get_session_factory
         async with _get_session_factory()() as db:
             await seed_and_refresh_providers(db)
+            await hydrate_runtime_cache(db)
     except Exception as exc:
         logger.warning("provider_instances_bootstrap_failed", error=str(exc))
 

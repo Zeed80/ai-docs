@@ -48,6 +48,10 @@ logger = structlog.get_logger()
 class AIConfidentialityPolicyError(RuntimeError):
     """Raised when an AI request would violate local-only/confidential policy."""
 
+
+class AIStructuredOutputValidationError(RuntimeError):
+    """Raised when a critical structured AI response does not validate."""
+
 _EMAIL_SYSTEM = """Ты — AI-сотрудник Света. Пишешь деловые письма на русском языке
 для промышленного предприятия. Отвечай строго в JSON."""
 
@@ -388,6 +392,15 @@ class AIRouter:
                 schema=schema.__name__ if hasattr(schema, "__name__") else str(schema),
                 error=str(exc),
             )
+            if request.confidential or request.task in {
+                AITask.INVOICE_OCR,
+                AITask.STRUCTURED_EXTRACTION,
+                AITask.DRAWING_ANALYSIS,
+                AITask.DRAWING_ANALYSIS_VLM,
+            }:
+                raise AIStructuredOutputValidationError(
+                    f"Structured output validation failed for {request.task.value}: {exc}"
+                ) from exc
         return response
 
     def _filter_tool_calls(

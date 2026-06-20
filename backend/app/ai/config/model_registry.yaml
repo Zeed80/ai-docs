@@ -135,16 +135,16 @@ models:
   gemma4_e2b_ollama:
     provider: "ollama"
     provider_model: "gemma4:e2b"
-    status: "disabled"
+    status: "production"
     modalities: ["text", "vision", "audio"]
     max_context_tokens: 128000
-    supports_structured_output: false
+    supports_structured_output: true
     supports_tool_calling: false
     local_only: true
     vram_gb_estimate: 3.5
     quality_score: 0.65
     speed_score: 0.95
-    notes: "Compact 2B multimodal model (7.2 GB). Fast vision OCR; use when VRAM is constrained."
+    notes: "Compact 2B multimodal model (7.2 GB). Fast vision OCR and a cheap, JSON-reliable turn router (fast_model). Honors Ollama structured output."
   gemma4_e4b_ollama:
     provider: "ollama"
     provider_model: "gemma4:e4b"
@@ -417,6 +417,23 @@ models:
       Qwen3.6-35B-A3B (MoE, 3B active) в кванте APEX Compact с vision (mmproj).
       Бенч на RTX 3090: 135 tok/s — быстрее qwen3.5:9b при качестве класса 30B+.
       Основная модель отдела ИИ: worker/orchestrator/builder.
+  qwen3_6_27b_qwopus_ollama:
+    provider: "ollama"
+    provider_model: "fredrezones55/Qwopus3.6:27b"
+    status: "production"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 32768
+    supports_structured_output: true
+    supports_tool_calling: true
+    thinking_supported: true
+    thinking_enabled: false
+    local_only: true
+    vram_gb_estimate: 15.0
+    quality_score: 0.88
+    speed_score: 0.90
+    notes: >
+      Production local agent model currently used by agent_config for
+      orchestrator, worker, email, and builder roles.
   qwen3_5_9b_ollama:
     provider: "ollama"
     provider_model: "qwen3.5:9b"

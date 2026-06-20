@@ -2301,6 +2301,15 @@ const providerLabel = (p: string) => PROVIDER_DISPLAY[p] ?? p;
 
 // Two-step cascade: pick a provider, then a model of that provider. Far clearer
 // than one flat list mixing every provider's models. `value` is a catalog key.
+// Human-readable name of a missing capability, for the warning text.
+const MODALITY_LABEL: Record<string, string> = {
+  tool_calling: "вызов инструментов",
+  vision: "распознавание изображений",
+  text: "текст",
+  embedding: "эмбеддинги",
+  rerank: "переранжирование",
+};
+
 function ProviderModelSelect({
   value,
   options,
@@ -2308,6 +2317,7 @@ function ProviderModelSelect({
   placeholder,
   allowEmpty,
   statuses,
+  requiredModality,
 }: {
   value: string;
   options: CatalogEntry[];
@@ -2315,6 +2325,7 @@ function ProviderModelSelect({
   placeholder?: string;
   allowEmpty?: boolean;
   statuses?: Record<string, boolean>; // provider -> running (for the ●/○ hint)
+  requiredModality?: string; // capability the slot needs; mismatch → warn, not hide
 }) {
   const providers = Array.from(new Set(options.map((o) => o.provider)));
   const current = options.find((o) => o.key === value);
@@ -2345,36 +2356,53 @@ function ProviderModelSelect({
     onChange(allowEmpty ? "" : (first?.key ?? ""));
   };
 
+  const unsuitable = (o: CatalogEntry) =>
+    !!requiredModality && !o.modalities?.includes(requiredModality);
+  const selectedUnsuitable = !!current && unsuitable(current);
+  const reqLabel =
+    (requiredModality &&
+      (MODALITY_LABEL[requiredModality] ?? requiredModality)) ||
+    "";
+
   return (
-    <div className="flex gap-2 min-w-0">
-      <select
-        className={`${selectBase} w-32 shrink-0`}
-        value={selectedProvider}
-        onChange={(e) => onProvider(e.target.value)}
-      >
-        {providers.length === 0 && <option value="">— нет —</option>}
-        {providers.map((p) => (
-          <option key={p} value={p}>
-            {providerLabel(p)}
-            {dot(p)}
-          </option>
-        ))}
-      </select>
-      <select
-        className={`${selectBase} flex-1 min-w-0`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {(allowEmpty || !value) && (
-          <option value="">{placeholder ?? "— модель —"}</option>
-        )}
-        {models.map((c) => (
-          <option key={c.key} value={c.key}>
-            {c.provider_model}
-            {c.vram_gb_estimate ? ` · ${c.vram_gb_estimate} GB` : ""}
-          </option>
-        ))}
-      </select>
+    <div className="flex flex-col gap-1 min-w-0">
+      <div className="flex gap-2 min-w-0">
+        <select
+          className={`${selectBase} w-32 shrink-0`}
+          value={selectedProvider}
+          onChange={(e) => onProvider(e.target.value)}
+        >
+          {providers.length === 0 && <option value="">— нет —</option>}
+          {providers.map((p) => (
+            <option key={p} value={p}>
+              {providerLabel(p)}
+              {dot(p)}
+            </option>
+          ))}
+        </select>
+        <select
+          className={`${selectBase} flex-1 min-w-0`}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          {(allowEmpty || !value) && (
+            <option value="">{placeholder ?? "— модель —"}</option>
+          )}
+          {models.map((c) => (
+            <option key={c.key} value={c.key}>
+              {unsuitable(c) ? "⚠ " : ""}
+              {c.provider_model}
+              {c.vram_gb_estimate ? ` · ${c.vram_gb_estimate} GB` : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+      {selectedUnsuitable && (
+        <span className="text-xs text-amber-400">
+          ⚠ Модель не заявляет «{reqLabel}» — может работать хуже для этой роли.
+          Выбор разрешён.
+        </span>
+      )}
     </div>
   );
 }
@@ -2386,6 +2414,20 @@ interface SlotItem {
   hint: string;
   model: string | null;
   local_only: boolean;
+  required_modality?: string | null; // capability the slot needs (backend = source)
+}
+interface AssignmentIssue {
+  slot: string;
+  model: string | null;
+  code: string;
+  message: string;
+  severity: "warning" | "error";
+}
+interface AssignmentDiffItem {
+  slot: string;
+  old_model: string | null;
+  new_model: string | null;
+  affected: string[];
 }
 interface ProvModel extends CatalogEntry {
   thinking_supported: boolean;
@@ -2394,16 +2436,8 @@ interface ProvModel extends CatalogEntry {
   node?: string | null;
 }
 
-// Which model capability each slot needs — drives the dropdown filter.
-const SLOT_MODALITY: Record<string, string> = {
-  ocr_fast: "vision",
-  ocr_large: "vision",
-  agent_orchestrator: "tool_calling",
-  agent_email: "text",
-  agent_large: "text",
-  embedding: "embedding",
-  rerank: "rerank",
-};
+// Required modality per slot is provided by the backend (`required_modality`)
+// — single source of truth, no frontend copy to drift.
 const GROUP_ICON: Record<string, string> = {
   Документы: "📄",
   Агент: "🤖",
@@ -2412,11 +2446,20 @@ const GROUP_ICON: Record<string, string> = {
 
 function AssignmentTab() {
   const [slots, setSlots] = useState<SlotItem[]>([]);
+  const [draft, setDraft] = useState<Record<string, string | null>>({});
   const [models, setModels] = useState<ProvModel[]>([]);
   const [running, setRunning] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [selProv, setSelProv] = useState<string>("");
+  const [diff, setDiff] = useState<AssignmentDiffItem[]>([]);
+  const [warnings, setWarnings] = useState<AssignmentIssue[]>([]);
+  const [errors, setErrors] = useState<AssignmentIssue[]>([]);
+  const [lastRevision, setLastRevision] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState<"validate" | "apply" | "rollback" | null>(
+    null,
+  );
 
   const flash = (m: string) => {
     setMsg(m);
@@ -2426,11 +2469,24 @@ function AssignmentTab() {
   const load = useCallback(async () => {
     try {
       const [sl, md, st] = await Promise.all([
-        fetch(`${API}/api/providers/slots`, { credentials: "include" }),
+        fetch(`${API}/api/providers/assignment-draft`, {
+          credentials: "include",
+        }),
         fetch(`${API}/api/providers/live-models`, { credentials: "include" }),
         fetch(`${API}/api/local-models/status`, { credentials: "include" }),
       ]);
-      if (sl.ok) setSlots(await sl.json());
+      if (sl.ok) {
+        const d = await sl.json();
+        const nextSlots: SlotItem[] = d.slots || [];
+        setSlots(nextSlots);
+        setDraft(
+          Object.fromEntries(nextSlots.map((s) => [s.slot, s.model ?? null])),
+        );
+        setDiff(d.diff || []);
+        setWarnings(d.warnings || []);
+        setErrors(d.errors || []);
+        setDirty(false);
+      }
       if (md.ok) {
         const m: ProvModel[] = await md.json();
         setModels(m);
@@ -2458,37 +2514,118 @@ function AssignmentTab() {
   // A physically loaded model is always selectable, even if the catalog marks it
   // disabled (the catalog "disabled" only declutters models that aren't present).
   const selectable = (c: ProvModel) => c.loaded || c.status !== "disabled";
+  // Show EVERY loaded model for the slot — never hide by capability. Models that
+  // lack the slot's required modality are still selectable but flagged with a
+  // warning (see ProviderModelSelect). local_only stays a hard rule: confidential
+  // slots must not offer cloud models.
   const optsFor = (slot: SlotItem): CatalogEntry[] => {
-    const mod = SLOT_MODALITY[slot.slot];
     return models.filter(
-      (c) =>
-        selectable(c) &&
-        c.modalities.includes(mod) &&
-        (!slot.local_only || isLocal(c)),
+      (c) => selectable(c) && (!slot.local_only || isLocal(c)),
     );
   };
 
-  const assign = async (slot: string, model: string) => {
-    if (!model) return;
+  const setDraftModel = (slot: string, model: string) => {
+    setDraft((prev) => ({ ...prev, [slot]: model || null }));
+    setDirty(true);
+    setDiff([]);
+    setWarnings([]);
+    setErrors([]);
+  };
+
+  const validateDraft = async () => {
+    setBusy("validate");
     try {
-      const r = await fetch(`${API}/api/providers/slots/${slot}`, {
-        method: "PUT",
+      const r = await fetch(`${API}/api/providers/assignment-draft/validate`, {
+        method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(await csrfHeaders()),
         },
         credentials: "include",
-        body: JSON.stringify({ model }),
+        body: JSON.stringify({ slots: draft }),
       });
       if (r.ok) {
-        flash("Назначено и применено");
-        load();
+        const d = await r.json();
+        setDiff(d.diff || []);
+        setWarnings(d.warnings || []);
+        setErrors(d.errors || []);
+        flash("Проверка завершена");
       } else {
         const d = await r.json().catch(() => ({}));
         alert(`Ошибка: ${d.detail || r.status}`);
       }
     } catch (e) {
       alert(`Ошибка: ${e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const applyDraft = async (confirmWarnings = false) => {
+    setBusy("apply");
+    try {
+      const r = await fetch(`${API}/api/providers/assignment-draft/apply`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await csrfHeaders()),
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          slots: draft,
+          confirm_warnings: confirmWarnings,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 409 && d.detail?.warnings && !confirmWarnings) {
+        setWarnings(d.detail.warnings);
+        if (
+          confirm(
+            "Есть предупреждения по назначению моделей. Применить всё равно?",
+          )
+        ) {
+          await applyDraft(true);
+        }
+        return;
+      }
+      if (!r.ok) {
+        alert(`Ошибка: ${JSON.stringify(d.detail || d)}`);
+        return;
+      }
+      setLastRevision(d.revision_id || null);
+      flash("Назначения применены");
+      load();
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const rollback = async () => {
+    if (!lastRevision) return;
+    setBusy("rollback");
+    try {
+      const r = await fetch(
+        `${API}/api/providers/assignments/${lastRevision}/rollback`,
+        {
+          method: "POST",
+          headers: await csrfHeaders(),
+          credentials: "include",
+        },
+      );
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        alert(`Ошибка: ${d.detail || r.status}`);
+        return;
+      }
+      flash("Последнее изменение откачено");
+      setLastRevision(null);
+      load();
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -2555,10 +2692,84 @@ function AssignmentTab() {
         <p className="text-xs text-slate-600">
           <span className="text-emerald-400">●</span> запущен ·{" "}
           <span className="text-slate-500">○</span> остановлен — vLLM и
-          llama.cpp стартуют по требованию. Изменения применяются сразу.
+          llama.cpp стартуют по требованию. Изменения сначала попадают в
+          черновик.
         </p>
-        {msg && <span className="text-xs text-emerald-400">{msg}</span>}
+        <div className="flex items-center gap-2">
+          {msg && <span className="text-xs text-emerald-400">{msg}</span>}
+          {lastRevision && (
+            <button
+              className={`${btnSecondary} text-xs`}
+              disabled={busy === "rollback"}
+              onClick={rollback}
+            >
+              Откатить последнее
+            </button>
+          )}
+          <button
+            className={`${btnSecondary} text-xs`}
+            disabled={!dirty || busy !== null}
+            onClick={() => {
+              setDraft(
+                Object.fromEntries(slots.map((s) => [s.slot, s.model ?? null])),
+              );
+              setDiff([]);
+              setWarnings([]);
+              setErrors([]);
+              setDirty(false);
+            }}
+          >
+            Сбросить
+          </button>
+          <button
+            className={`${btnSecondary} text-xs`}
+            disabled={!dirty || busy !== null}
+            onClick={validateDraft}
+          >
+            {busy === "validate" ? "Проверка…" : "Проверить"}
+          </button>
+          <button
+            className={`${btnPrimary} text-xs`}
+            disabled={!dirty || busy !== null}
+            onClick={() => applyDraft(false)}
+          >
+            {busy === "apply" ? "Применение…" : "Применить"}
+          </button>
+        </div>
       </div>
+
+      {(diff.length > 0 || warnings.length > 0 || errors.length > 0) && (
+        <div className={card}>
+          <div className={cardH}>
+            <span className="text-sm font-semibold text-slate-100">
+              Проверка черновика
+            </span>
+            <span className="text-xs text-slate-500">
+              {diff.length} изменений · {warnings.length} предупреждений ·{" "}
+              {errors.length} ошибок
+            </span>
+          </div>
+          <div className="p-3 space-y-2 text-xs">
+            {errors.map((e, i) => (
+              <div key={`e-${i}`} className="text-red-300">
+                {e.slot}: {e.message}
+              </div>
+            ))}
+            {warnings.map((w, i) => (
+              <div key={`w-${i}`} className="text-amber-300">
+                {w.slot}: {w.message}
+              </div>
+            ))}
+            {diff.map((d) => (
+              <div key={d.slot} className="text-slate-400">
+                <span className="text-slate-200">{d.slot}</span>:{" "}
+                {d.old_model ?? "—"} → {d.new_model ?? "—"} ·{" "}
+                {d.affected.join(", ")}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Slots */}
       {groups.map((g) => {
@@ -2584,6 +2795,8 @@ function AssignmentTab() {
             <div className="p-4 space-y-3">
               {gslots.map((s) => {
                 const chosen = modelByKey(s.model);
+                const draftValue = draft[s.slot] ?? "";
+                const draftChosen = modelByKey(draftValue);
                 return (
                   <div
                     key={s.slot}
@@ -2596,22 +2809,28 @@ function AssignmentTab() {
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="flex-1 min-w-0">
                         <ProviderModelSelect
-                          value={s.model ?? ""}
+                          value={draftValue}
                           options={optsFor(s)}
                           statuses={running}
-                          onChange={(v) => assign(s.slot, v)}
+                          requiredModality={s.required_modality ?? undefined}
+                          onChange={(v) => setDraftModel(s.slot, v)}
                         />
                       </div>
-                      {chosen?.thinking_supported && (
+                      {draftChosen?.key !== chosen?.key && (
+                        <span className="text-xs text-amber-400 whitespace-nowrap">
+                          черновик
+                        </span>
+                      )}
+                      {draftChosen?.thinking_supported && (
                         <label
                           className="flex items-center gap-1.5 text-xs text-slate-300 whitespace-nowrap cursor-pointer"
                           title="Режим рассуждения (chain-of-thought) для этой модели"
                         >
                           <input
                             type="checkbox"
-                            checked={chosen.thinking_enabled}
+                            checked={draftChosen.thinking_enabled}
                             onChange={(e) =>
-                              toggleThinking(chosen.key, e.target.checked)
+                              toggleThinking(draftChosen.key, e.target.checked)
                             }
                           />
                           размышление

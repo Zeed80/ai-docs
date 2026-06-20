@@ -33,6 +33,7 @@ class AuditCode(StrEnum):
     TOOL_OFF_PLAN = "tool_off_plan"                      # executor picked a tool outside the plan
     # Answer quality
     EMPTY_ANSWER = "empty_answer"                        # no text and no workspace output
+    UNGROUNDED_ANSWER = "ungrounded_answer"              # factual answer with no data tool call
     SEMANTIC_SUSPECT = "semantic_suspect"                # semantic audit doubts the answer
 
 
@@ -58,6 +59,7 @@ RETRYABLE: frozenset[AuditCode] = frozenset({
     AuditCode.CHAT_TABLE_LEAK,
     AuditCode.FILTER_MISSING,
     AuditCode.FILTER_MISMATCH,
+    AuditCode.EMPTY_ANSWER,
 })
 
 # Issues that signal a genuinely missing capability (feed the builder flow).

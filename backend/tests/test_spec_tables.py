@@ -452,8 +452,10 @@ async def test_catalog_endpoint(client):
     resp = await client.get("/api/workspace/agent/spec-table/catalog")
     assert resp.status_code == 200
     catalog = resp.json()
-    assert "invoices" in catalog
-    keys = [f["key"] for f in catalog["invoices"]["fields"]]
+    assert "group_by" in catalog["_spec_format"]  # grouping is discoverable
+    sources = catalog["sources"]
+    assert "invoices" in sources
+    keys = [f["key"] for f in sources["invoices"]["fields"]]
     assert "items_list" in keys and "tax_amount" in keys
 
 
@@ -479,6 +481,51 @@ def test_only_multi_item_creates_separate_contains():
     assert len({o.filter.field for o in filter_ops}) == 1  # consistent field
     # Both stems must be present and non-empty
     assert all(len(v) >= 3 for v in values)
+
+
+def test_group_by_validation():
+    """group_by accepts real fields, rejects unknown ones."""
+    ok = ts.TableSpec(source="invoice_items", group_by=["supplier_name"])
+    assert ts.validate_spec(ok) == []
+    bad = ts.TableSpec(source="invoice_items", group_by=["nonsense_field"])
+    probs = ts.validate_spec(bad)
+    assert any("group_by" in p for p in probs)
+
+
+def test_filter_op_like_alias_maps_to_contains():
+    """Models reaching for SQL 'like'/'ilike' must not silently match nothing."""
+    assert ts.FilterSpec(field="description", op="ilike", value="фрез").op == "contains"
+    assert ts.FilterSpec(field="description", op="LIKE", value="фрез").op == "contains"
+
+
+def test_reconcile_ops_enforces_grouping_and_sort():
+    """A worker spec lacking group/sort the user asked for is reconciled."""
+    spec = ts.TableSpec(
+        source="invoice_items",
+        columns=[ts.ColumnSpec(field="description"), ts.ColumnSpec(field="supplier_name")],
+        filters=[ts.FilterSpec(field="description", op="contains", value="фрез")],
+    )
+    ops, notes = ts.reconcile_ops(
+        spec,
+        "Выведи все фрезы и резцы, отсортируй по дате по убыванию и объедини по поставщикам",
+    )
+    by_op = {o.op: o for o in ops}
+    assert "set_group_by" in by_op and by_op["set_group_by"].field == "supplier_name"
+    assert "set_sort" in by_op and by_op["set_sort"].field == "invoice_date"
+    assert by_op["set_sort"].dir == "desc"
+    # Applying them yields a grouped, date-sorted spec.
+    patched = ts.apply_patch(spec, ops)
+    assert patched.group_by == ["supplier_name"]
+
+
+def test_reconcile_ops_idempotent_when_already_satisfied():
+    spec = ts.TableSpec(
+        source="invoice_items",
+        group_by=["supplier_name"],
+        sort=[ts.SortSpec(field="invoice_date", dir="desc")],
+    )
+    ops, _ = ts.reconcile_ops(spec, "объедини по поставщикам, сортируй по дате по убыванию")
+    assert ops == []
 
 
 def test_only_single_item_keeps_smart_filter():

@@ -296,11 +296,22 @@ def is_reproducible(templated_steps: list[dict], user_text: str) -> bool:
     return True
 
 
-def resolve_slots(recipe_slots: dict | None, text: str) -> dict[str, str] | None:
-    """Slot values for this text, or None when any declared slot is unresolvable."""
+def resolve_slots(
+    recipe_slots: dict | None,
+    text: str,
+    extra_entities: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    """Slot values for this text, or None when any declared slot is unresolvable.
+
+    ``extra_entities`` (typed entities from the TurnDecision) take precedence over
+    the regex extractor, so slot resolution follows the same understanding the
+    router used to classify the turn.
+    """
     if not recipe_slots:
         return {}
     entities = extract_entities(text)
+    if extra_entities:
+        entities = {**entities, **{k: v for k, v in extra_entities.items() if v}}
     resolved: dict[str, str] = {}
     for slot in recipe_slots:
         value = entities.get(slot)
@@ -535,6 +546,7 @@ async def record_candidate(
     steps: list[dict],
     step_results: list[Any] | None = None,
     session_id: str | None = None,
+    output_channel: str | None = None,
 ) -> bool:
     """Record a successful tool sequence as a draft recipe (or enrich a duplicate).
 
@@ -595,6 +607,8 @@ async def record_candidate(
             name=_derive_name(intent, templated_steps),
             description=f"Выучено из задачи: {user_text[:300]}",
             role=role,
+            intent=intent or None,
+            output_channel=output_channel,
             trigger_examples=[user_text],
             steps=templated_steps,
             param_slots=param_slots or None,

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 import structlog
@@ -27,11 +28,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import provider_registry
+from app.ai import model_runtime_store
 from app.ai.model_registry import ModelRegistry
-from app.ai.schemas import ProviderKind
+from app.ai.schemas import AITask, ModelCapability, ModelStatus, ProviderKind
 from app.ai.secret_box import decrypt, encrypt, mask
-from app.auth.jwt import require_role
-from app.auth.models import UserRole
+from app.auth.jwt import get_current_user, require_role
+from app.auth.models import UserInfo, UserRole
 from app.db.models import ProviderInstance
 from app.db.session import get_db
 
@@ -332,8 +334,19 @@ async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -
             notes=f"Auto-fetched from {kind.value} on {time.strftime('%Y-%m-%d')}.",
         )
         registry.add_model(key, cap, persist=True)
+        await model_runtime_store.persist_catalog_entry(
+            db,
+            model_key=key,
+            provider=kind.value,
+            provider_model=provider_model,
+            capability=cap.model_dump(mode="json", exclude={"name"}),
+            source="cloud_refresh",
+            verification_status="discovered",
+        )
         added.append(key)
 
+    await db.commit()
+    await model_runtime_store.hydrate_runtime_cache(db)
     return {"ok": True, "added": added, "count": len(added)}
 
 
@@ -356,7 +369,10 @@ class CatalogModelOut(BaseModel):
 
 
 @router.get("/models", response_model=list[CatalogModelOut], dependencies=_admin)
-async def list_models(include_disabled: bool = True) -> list[CatalogModelOut]:
+async def list_models(
+    include_disabled: bool = True,
+    db: AsyncSession = Depends(get_db),
+) -> list[CatalogModelOut]:
     """Catalog models with status + thinking flags. The UI filters by ``status``
     to declutter (production by default, ``include all`` reveals candidates)."""
     registry = _registry()
@@ -454,7 +470,7 @@ async def _node_loaded_models(resolved) -> list[tuple[str, float | None]]:
 
 
 @router.get("/live-models", response_model=list[LiveModelOut], dependencies=_admin)
-async def live_models() -> list[LiveModelOut]:
+async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
     """All selectable models: every model actually loaded on every configured
     provider node, merged with catalog metadata. Discovered models are registered
     into the catalog overlay so they get a stable key (assignable + thinking)."""
@@ -464,10 +480,25 @@ async def live_models() -> list[LiveModelOut]:
     # catalog: provider_model (per provider) → (key, cap)
     by_pm: dict[tuple[str, str], tuple[str, object]] = {}
     for key, cap in registry.models.items():
-        by_pm[(cap.provider.value, cap.provider_model)] = (key, cap)
+        pm_key = (cap.provider.value, cap.provider_model)
+        existing = by_pm.get(pm_key)
+        if existing is None:
+            by_pm[pm_key] = (key, cap)
+            continue
+        _existing_key, existing_cap = existing
+        existing_is_weaker = (
+            existing_cap.capability_source == "discovered" and cap.capability_source != "discovered"
+        ) or (
+            existing_cap.status != ModelStatus.PRODUCTION and cap.status == ModelStatus.PRODUCTION
+        )
+        if existing_is_weaker:
+            by_pm[pm_key] = (key, cap)
 
     out: dict[str, LiveModelOut] = {}
     seen_keys: set[str] = set()
+    # Discovered models to persist once after the scan (race-safe upsert, single
+    # commit) — never write/commit per-iteration inside this GET.
+    discovered_to_persist: list[dict] = []
 
     # 1) Live local nodes.
     local_kinds = [ProviderKind.OLLAMA, ProviderKind.VLLM, ProviderKind.LLAMACPP,
@@ -504,6 +535,14 @@ async def live_models() -> list[LiveModelOut]:
                             vram_gb_estimate=vram,
                         )
                         registry.add_model(key, cap, persist=True)
+                        discovered_to_persist.append({
+                            "model_key": key,
+                            "provider": kind.value,
+                            "provider_model": pm,
+                            "capability": cap.model_dump(mode="json", exclude={"name"}),
+                            "source": "local_live_discovery",
+                            "verification_status": "discovered",
+                        })
                     seen_keys.add(key)
                     th = registry.models[key]
                     out[key] = LiveModelOut(
@@ -527,6 +566,19 @@ async def live_models() -> list[LiveModelOut]:
             thinking_enabled=cap.thinking_enabled, loaded=False, node=None,
             vram_gb_estimate=cap.vram_gb_estimate,
         )
+
+    # Persist newly-discovered models once (race-safe upsert + single commit).
+    # Best-effort: a GET must still return the list even if the write fails.
+    if discovered_to_persist:
+        try:
+            for entry in discovered_to_persist:
+                await model_runtime_store.persist_catalog_entry(db, **entry)
+            await db.commit()
+            await model_runtime_store.hydrate_runtime_cache(db)
+        except Exception as exc:  # noqa: BLE001
+            await db.rollback()
+            logger.warning("live_models_discovery_persist_failed", error=str(exc))
+
     return list(out.values())
 
 
@@ -535,7 +587,11 @@ class ThinkingUpdate(BaseModel):
 
 
 @router.patch("/models/{model_key}/thinking", dependencies=_admin)
-async def set_model_thinking(model_key: str, payload: ThinkingUpdate) -> dict:
+async def set_model_thinking(
+    model_key: str,
+    payload: ThinkingUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Toggle the per-model reasoning (CoT) flag — the local-model checkbox."""
     from app.ai.model_registry import set_thinking_override
 
@@ -543,6 +599,13 @@ async def set_model_thinking(model_key: str, payload: ThinkingUpdate) -> dict:
     if model_key not in registry.models:
         raise HTTPException(404, f"Unknown model: {model_key}")
     set_thinking_override(model_key, payload.enabled)
+    await model_runtime_store.persist_model_override(
+        db,
+        model_key=model_key,
+        thinking_enabled=payload.enabled,
+    )
+    await db.commit()
+    await model_runtime_store.hydrate_runtime_cache(db)
     return {"ok": True, "model": model_key, "thinking_enabled": payload.enabled}
 
 
@@ -551,7 +614,11 @@ class PreferredInstanceUpdate(BaseModel):
 
 
 @router.patch("/models/{model_key}/preferred-instance", dependencies=_admin)
-async def set_model_preferred_instance(model_key: str, payload: PreferredInstanceUpdate) -> dict:
+async def set_model_preferred_instance(
+    model_key: str,
+    payload: PreferredInstanceUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Pin a model to a specific provider node (multi-machine routing)."""
     from app.ai.model_registry import set_preferred_instance
 
@@ -559,13 +626,20 @@ async def set_model_preferred_instance(model_key: str, payload: PreferredInstanc
     if model_key not in registry.models:
         raise HTTPException(404, f"Unknown model: {model_key}")
     set_preferred_instance(model_key, payload.instance_name or None)
+    await model_runtime_store.persist_model_override(
+        db,
+        model_key=model_key,
+        preferred_instance=payload.instance_name or "",
+    )
+    await db.commit()
+    await model_runtime_store.hydrate_runtime_cache(db)
     return {"ok": True, "model": model_key, "preferred_instance": payload.instance_name or None}
 
 
 # ── Simplified assignment slots ─────────────────────────────────────────────
-# Seven practical slots fan out to the underlying stores (task_routing +
-# agent_config + ai_config mirror). Changes take effect immediately — the AI
-# router reads task_routing/agent_config from Redis on every call.
+# Practical slots fan out to task_routing + agent_config + ai_config mirror.
+# The UI uses assignment-draft endpoints; PUT /slots/{slot} remains for
+# backward compatibility and tests.
 
 
 class SlotOut(BaseModel):
@@ -573,19 +647,24 @@ class SlotOut(BaseModel):
     group: str
     label: str
     hint: str
-    model: str | None      # catalog key
-    local_only: bool       # cloud models forbidden for this slot
+    model: str | None              # catalog key
+    local_only: bool               # cloud models forbidden for this slot
+    required_modality: str | None = None  # capability the slot needs (UI ⚠ source)
 
 
 # local_only=True → конфиденциальные задачи (содержимое документов), облако
 # запрещено. Агентские слоты допускают облако (выбор оператора).
 _SLOTS = [
-    ("ocr_fast", "Документы", "Быстрая (основная)",
-     "OCR счётов, классификация, извлечение полей, чертежи", True),
+    ("ocr_fast", "Документы", "Быстрая (OCR/VLM)",
+     "OCR счётов, классификация и первичный VLM-анализ", True),
+    ("structured_extraction", "Документы", "Извлечение полей",
+     "Структурированное извлечение и текстовая проверка документов", True),
     ("ocr_large", "Документы", "Крупная (сложные случаи)",
      "Повторное извлечение при низкой уверенности/ошибках", True),
     ("agent_orchestrator", "Агент", "Оркестратор",
      "Планирование, вызов инструментов, диалог", False),
+    ("agent_fast", "Агент", "Быстрая (роутер/простые ходы)",
+     "Классификация хода и быстрые ответы — лёгкая модель, structured output", False),
     ("agent_email", "Агент", "Письма",
      "Генерация деловых писем и черновиков", False),
     ("agent_large", "Агент", "Большая (скиллы/скрипты/ТП)",
@@ -595,6 +674,18 @@ _SLOTS = [
     ("rerank", "Поиск", "Реранкинг",
      "Переранжирование результатов поиска", True),
 ]
+
+_SLOT_MODALITY = {
+    "ocr_fast": "vision",
+    "structured_extraction": "text",
+    "ocr_large": "vision",
+    "agent_orchestrator": "tool_calling",
+    "agent_fast": "text",
+    "agent_email": "text",
+    "agent_large": "text",
+    "embedding": "embedding",
+    "rerank": "rerank",
+}
 
 
 def _key_for_raw(registry, raw: str | None) -> str | None:
@@ -614,6 +705,8 @@ def _slot_current_model(slot: str, registry) -> str | None:
 
     if slot == "ocr_fast":
         return get_routing_for(AITask.INVOICE_OCR).primary
+    if slot == "structured_extraction":
+        return get_routing_for(AITask.STRUCTURED_EXTRACTION).primary
     if slot == "embedding":
         return get_routing_for(AITask.EMBEDDING).primary
     if slot == "rerank":
@@ -629,6 +722,8 @@ def _slot_current_model(slot: str, registry) -> str | None:
     cfg = get_builtin_agent_config()
     if slot == "agent_orchestrator":
         return _key_for_raw(registry, cfg.orchestrator_model or cfg.model)
+    if slot == "agent_fast":
+        return _key_for_raw(registry, cfg.fast_model)
     if slot == "agent_large":
         return _key_for_raw(registry, cfg.builder_model)
     return None
@@ -650,14 +745,198 @@ class SlotWrite(BaseModel):
     model: str  # catalog key
 
 
-@router.put("/slots/{slot}", dependencies=_admin)
-async def set_slot(slot: str, payload: SlotWrite) -> dict:
-    """Assign a model to a slot — fans out to all underlying tasks/roles."""
-    registry = _registry()
-    cap = registry.models.get(payload.model)
+class AssignmentDraftIn(BaseModel):
+    slots: dict[str, str | None]
+    confirm_warnings: bool = False
+
+
+class AssignmentIssue(BaseModel):
+    slot: str
+    model: str | None = None
+    code: str
+    message: str
+    severity: str = "warning"
+
+
+class AssignmentDiffItem(BaseModel):
+    slot: str
+    old_model: str | None
+    new_model: str | None
+    affected: list[str]
+
+
+class AssignmentDraftOut(BaseModel):
+    slots: list[SlotOut]
+    diff: list[AssignmentDiffItem] = []
+    warnings: list[AssignmentIssue] = []
+    errors: list[AssignmentIssue] = []
+    ok_to_apply: bool = True
+    revision_id: str | None = None
+
+
+def _slot_meta(slot: str):
+    return next((s for s in _SLOTS if s[0] == slot), None)
+
+
+def _build_slot_out(slot: str, group: str, label: str, hint: str, local_only: bool, model: str | None) -> SlotOut:
+    """SlotOut with the single-source required_modality (UI reads it for ⚠)."""
+    return SlotOut(
+        slot=slot, group=group, label=label, hint=hint,
+        model=model, local_only=local_only,
+        required_modality=_SLOT_MODALITY.get(slot),
+    )
+
+
+def _all_slots_out(model_of) -> list[SlotOut]:
+    """Build every SlotOut; `model_of(slot)` returns the assigned model key."""
+    return [
+        _build_slot_out(slot, group, label, hint, local_only, model_of(slot))
+        for slot, group, label, hint, local_only in _SLOTS
+    ]
+
+
+def _slot_affected(slot: str) -> list[str]:
+    if slot == "ocr_fast":
+        return [
+            AITask.INVOICE_OCR.value,
+            AITask.CLASSIFICATION.value,
+            AITask.DRAWING_ANALYSIS.value,
+            AITask.DRAWING_ANALYSIS_VLM.value,
+        ]
+    if slot == "structured_extraction":
+        return [AITask.STRUCTURED_EXTRACTION.value, AITask.LONG_CONTEXT_SUMMARIZATION.value]
+    if slot == "ocr_large":
+        return ["ai_config.model_ocr_fallback"]
+    if slot == "embedding":
+        return [AITask.EMBEDDING.value]
+    if slot == "rerank":
+        return [AITask.RERANKING.value]
+    if slot == "agent_email":
+        return [AITask.EMAIL_DRAFTING.value]
+    if slot == "agent_orchestrator":
+        return [
+            "agent_config.orchestrator_model",
+            "agent_config.worker_model",
+            AITask.ORCHESTRATOR_PLANNING.value,
+            AITask.TOOL_CALLING.value,
+        ]
+    if slot == "agent_fast":
+        return ["agent_config.fast_model"]
+    if slot == "agent_large":
+        return ["agent_config.builder_model", AITask.CODE_GENERATION.value]
+    return []
+
+
+def _assignment_snapshot(registry) -> dict[str, Any]:
+    return {"slots": {slot: _slot_current_model(slot, registry) for slot, *_ in _SLOTS}}
+
+
+async def _loaded_index() -> dict[tuple[str, str], str]:
+    """One pass over all local nodes → {(provider, model_or_bare): node}.
+
+    Built once per request and reused, instead of per-slot HTTP fan-out to each
+    node's /api/tags during draft validation.
+    """
+    index: dict[tuple[str, str], str] = {}
+    for kind in _LOCAL_KINDS:
+        for inst in provider_registry.list_instances(kind):
+            for name, _vram in await _node_loaded_models(inst):
+                index.setdefault((kind.value, name), inst.name)
+                index.setdefault((kind.value, name.split(":")[0]), inst.name)
+    return index
+
+
+def _loaded_node_for(cap: ModelCapability, index: dict[tuple[str, str], str]) -> str | None:
+    if cap.provider not in _LOCAL_KINDS:
+        return None
+    pv = cap.provider.value
+    return (
+        index.get((pv, cap.provider_model))
+        or index.get((pv, cap.provider_model.split(":")[0]))
+    )
+
+
+def _verification_warning(slot: str, model_key: str, cap: ModelCapability) -> AssignmentIssue | None:
+    """Return only actionable verification warnings.
+
+    A production model with manually curated capabilities is not a failed eval.
+    It is the normal state for the static YAML registry. Reserve failure wording
+    for explicit failed verification records when such records are wired into
+    the catalog.
+    """
+    if cap.status == ModelStatus.DISABLED:
+        return AssignmentIssue(
+            slot=slot,
+            model=model_key,
+            code="disabled_model",
+            message="Модель отключена в каталоге; используйте только если она реально загружена и нужна как override",
+        )
+    if cap.status in {ModelStatus.CANDIDATE, ModelStatus.STAGING}:
+        return AssignmentIssue(
+            slot=slot,
+            model=model_key,
+            code="not_production",
+            message="Модель ещё не переведена в production-профиль",
+        )
+    if cap.capability_source == "discovered":
+        return AssignmentIssue(
+            slot=slot,
+            model=model_key,
+            code="unverified_capability_profile",
+            message="Модель обнаружена автоматически; capability-профиль ещё не подтверждён smoke/eval",
+        )
+    return None
+
+
+async def _validate_assignment_draft(
+    registry,
+    draft: dict[str, str | None],
+    loaded: dict[tuple[str, str], str] | None = None,
+) -> tuple[list[AssignmentDiffItem], list[AssignmentIssue], list[AssignmentIssue]]:
+    warnings: list[AssignmentIssue] = []
+    errors: list[AssignmentIssue] = []
+    diff: list[AssignmentDiffItem] = []
+    current = _assignment_snapshot(registry)["slots"]
+    if loaded is None:
+        loaded = await _loaded_index()
+
+    for slot, model_key in draft.items():
+        meta = _slot_meta(slot)
+        if meta is None:
+            errors.append(AssignmentIssue(slot=slot, model=model_key, code="unknown_slot", message="Неизвестный слот", severity="error"))
+            continue
+        if not model_key:
+            # Explicit unset (e.g. rollback to an empty old_model) — emit a diff
+            # so it is actually applied; no model = no capability checks.
+            old = current.get(slot)
+            if old is not None:
+                diff.append(AssignmentDiffItem(slot=slot, old_model=old, new_model=None, affected=_slot_affected(slot)))
+            continue
+        cap = registry.models.get(model_key)
+        if cap is None:
+            errors.append(AssignmentIssue(slot=slot, model=model_key, code="unknown_model", message="Модель не найдена в каталоге", severity="error"))
+            continue
+        if bool(meta[4]) and not cap.local_only:
+            errors.append(AssignmentIssue(slot=slot, model=model_key, code="cloud_for_confidential", message="Конфиденциальный слот допускает только локальные модели", severity="error"))
+        required = _SLOT_MODALITY.get(slot)
+        if required and required not in {m.value for m in cap.modalities}:
+            warnings.append(AssignmentIssue(slot=slot, model=model_key, code="modality_mismatch", message=f"Модель не заявляет capability '{required}'"))
+        verification_warning = _verification_warning(slot, model_key, cap)
+        if verification_warning is not None:
+            warnings.append(verification_warning)
+        if cap.provider in _LOCAL_KINDS and _loaded_node_for(cap, loaded) is None:
+            warnings.append(AssignmentIssue(slot=slot, model=model_key, code="not_loaded", message="Модель не найдена ни на одном локальном узле сейчас"))
+        old = current.get(slot)
+        if old != model_key:
+            diff.append(AssignmentDiffItem(slot=slot, old_model=old, new_model=model_key, affected=_slot_affected(slot)))
+    return diff, warnings, errors
+
+
+def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
+    cap = registry.models.get(model_key)
     if cap is None:
-        raise HTTPException(404, f"Unknown model: {payload.model}")
-    meta = next((s for s in _SLOTS if s[0] == slot), None)
+        raise HTTPException(404, f"Unknown model: {model_key}")
+    meta = _slot_meta(slot)
     if meta is None:
         raise HTTPException(400, f"Unknown slot: {slot}")
     if meta[4] and not cap.local_only:
@@ -675,7 +954,15 @@ async def set_slot(slot: str, payload: SlotWrite) -> dict:
         block it at dispatch; local model → local-only.
         """
         current = get_routing_for(task)
-        tail = [m for m in current.models if m != model_key]
+        valid_keys = set(registry.models)
+        stale_tail = [m for m in current.models if m != model_key and m not in valid_keys]
+        if stale_tail:
+            logger.warning(
+                "task_routing_stale_fallbacks_dropped",
+                task=task.value,
+                models=stale_tail,
+            )
+        tail = [m for m in current.models if m != model_key and m in valid_keys]
         routing = current.model_copy(update={
             "models": [model_key, *tail],
             "local_only": cap.local_only,
@@ -683,16 +970,19 @@ async def set_slot(slot: str, payload: SlotWrite) -> dict:
         })
         save_task_routing(task, routing)
 
-    key = payload.model
+    key = model_key
     try:
         if slot == "ocr_fast":
             for t in (
-                AITask.INVOICE_OCR, AITask.STRUCTURED_EXTRACTION, AITask.CLASSIFICATION,
+                AITask.INVOICE_OCR, AITask.CLASSIFICATION,
                 AITask.DRAWING_ANALYSIS, AITask.DRAWING_ANALYSIS_VLM,
-                AITask.LONG_CONTEXT_SUMMARIZATION, AITask.ENGINEERING_REASONING,
             ):
                 _set_primary(t, key)
-            _mirror_ai_config(DocumentGroup(vision_model=key, text_model=key))
+            _mirror_ai_config(DocumentGroup(vision_model=key))
+        elif slot == "structured_extraction":
+            for t in (AITask.STRUCTURED_EXTRACTION, AITask.LONG_CONTEXT_SUMMARIZATION):
+                _set_primary(t, key)
+            _mirror_ai_config(DocumentGroup(text_model=key))
         elif slot == "ocr_large":
             _mirror_ai_config(DocumentGroup(ocr_fallback_model=key))
         elif slot == "embedding":
@@ -704,14 +994,19 @@ async def set_slot(slot: str, payload: SlotWrite) -> dict:
         elif slot == "agent_email":
             _assign_task(AITask.EMAIL_DRAFTING, key)
         elif slot == "agent_orchestrator":
+            # Orchestrator + worker + base model. fast_model is a SEPARATE slot
+            # (agent_fast) so a heavy orchestrator no longer forces a heavy router.
             update_builtin_agent_config(BuiltinAgentConfigUpdate(
                 provider=cap.provider.value, model=cap.provider_model,
                 orchestrator_provider=cap.provider.value, orchestrator_model=cap.provider_model,
                 worker_provider=cap.provider.value, worker_model=cap.provider_model,
-                fast_provider=cap.provider.value, fast_model=cap.provider_model,
             ))
             for t in (AITask.ORCHESTRATOR_PLANNING, AITask.TOOL_CALLING):
                 _assign_task(t, key)
+        elif slot == "agent_fast":
+            update_builtin_agent_config(BuiltinAgentConfigUpdate(
+                fast_provider=cap.provider.value, fast_model=cap.provider_model,
+            ))
         elif slot == "agent_large":
             update_builtin_agent_config(BuiltinAgentConfigUpdate(
                 builder_provider=cap.provider.value, builder_model=cap.provider_model,
@@ -719,4 +1014,215 @@ async def set_slot(slot: str, payload: SlotWrite) -> dict:
             _assign_task(AITask.CODE_GENERATION, key)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+def _unset_slot(slot: str, registry) -> None:
+    """Revert a slot to its YAML/default (used by rollback to an empty old_model)."""
+    from app.ai.agent_config import (
+        BuiltinAgentConfigUpdate,
+        _default_config,
+        update_builtin_agent_config,
+    )
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import reset_task_routing
+
+    defaults = _default_config()
+    if slot == "agent_orchestrator":
+        update_builtin_agent_config(BuiltinAgentConfigUpdate(
+            model=defaults.model, orchestrator_model=defaults.orchestrator_model,
+            worker_model=defaults.worker_model,
+        ))
+        for t in (AITask.ORCHESTRATOR_PLANNING, AITask.TOOL_CALLING):
+            reset_task_routing(t)
+    elif slot == "agent_fast":
+        update_builtin_agent_config(BuiltinAgentConfigUpdate(fast_model=defaults.fast_model))
+    elif slot == "agent_large":
+        update_builtin_agent_config(BuiltinAgentConfigUpdate(builder_model=defaults.builder_model))
+        reset_task_routing(AITask.CODE_GENERATION)
+    else:
+        for item in _slot_affected(slot):
+            if "." not in item:
+                try:
+                    reset_task_routing(AITask(item))
+                except ValueError:
+                    pass
+
+
+async def _persist_slot_durable(db: AsyncSession, slot: str) -> None:
+    """Mirror a just-applied slot's effective state into Postgres (durable).
+
+    task_routing and agent_config are otherwise Redis-only and reset on a flush.
+    (ocr_large maps only to ai_config — a separate store, out of scope here.)
+    """
+    from app.ai.agent_config import get_builtin_agent_config
+    from app.ai.schemas import AITask
+    from app.ai.task_routing import get_routing_for
+
+    agent_done = False
+    for item in _slot_affected(slot):
+        if item.startswith("agent_config."):
+            if not agent_done:
+                await model_runtime_store.persist_agent_config(
+                    db, config=get_builtin_agent_config().model_dump(mode="json"))
+                agent_done = True
+        elif "." not in item:  # an AITask value
+            try:
+                task = AITask(item)
+            except ValueError:
+                continue
+            await model_runtime_store.persist_task_routing(
+                db, task=task.value, routing=get_routing_for(task).model_dump(mode="json"))
+
+
+async def _apply_draft_atomic(
+    db: AsyncSession, diff: list[AssignmentDiffItem], before: dict, registry,
+) -> None:
+    """Apply all slots; on any failure restore already-applied slots to `before`.
+
+    Redis writes are outside the DB transaction, so we compensate manually to
+    avoid a half-applied assignment with no revision.
+    """
+    applied: list[str] = []
+    try:
+        for item in diff:
+            if item.new_model:
+                _apply_slot_assignment(item.slot, item.new_model, registry)
+            else:
+                _unset_slot(item.slot, registry)
+            applied.append(item.slot)
+            await _persist_slot_durable(db, item.slot)
+    except Exception:
+        for slot in applied:
+            old = before["slots"].get(slot)
+            try:
+                if old:
+                    _apply_slot_assignment(slot, old, registry)
+                else:
+                    _unset_slot(slot, registry)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("assignment_rollback_failed", slot=slot, error=str(exc))
+        raise
+
+
+@router.get("/assignment-draft", response_model=AssignmentDraftOut, dependencies=_admin)
+async def get_assignment_draft(db: AsyncSession = Depends(get_db)) -> AssignmentDraftOut:
+    registry = _registry()
+    return AssignmentDraftOut(
+        slots=_all_slots_out(lambda s: _slot_current_model(s, registry))
+    )
+
+
+@router.post("/assignment-draft/validate", response_model=AssignmentDraftOut, dependencies=_admin)
+async def validate_assignment_draft(
+    payload: AssignmentDraftIn,
+    db: AsyncSession = Depends(get_db),
+) -> AssignmentDraftOut:
+    registry = _registry()
+    diff, warnings, errors = await _validate_assignment_draft(registry, payload.slots)
+    return AssignmentDraftOut(
+        slots=_all_slots_out(lambda s: payload.slots.get(s, _slot_current_model(s, registry))),
+        diff=diff,
+        warnings=warnings,
+        errors=errors,
+        ok_to_apply=not errors,
+    )
+
+
+@router.post("/assignment-draft/apply", response_model=AssignmentDraftOut, dependencies=_admin)
+async def apply_assignment_draft(
+    payload: AssignmentDraftIn,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> AssignmentDraftOut:
+    registry = _registry()
+    loaded = await _loaded_index()
+    diff, warnings, errors = await _validate_assignment_draft(registry, payload.slots, loaded)
+    if errors:
+        raise HTTPException(400, {"errors": [e.model_dump() for e in errors]})
+    if warnings and not payload.confirm_warnings:
+        raise HTTPException(409, {"warnings": [w.model_dump() for w in warnings]})
+
+    before = _assignment_snapshot(registry)
+    await _apply_draft_atomic(db, diff, before, registry)  # rolls back Redis on error
+    after_registry = _registry()
+    after = _assignment_snapshot(after_registry)
+    revision = await model_runtime_store.create_assignment_revision(
+        db,
+        created_by=user.sub,
+        before_snapshot=before,
+        after_snapshot=after,
+        diff=[d.model_dump() for d in diff],
+        warnings=[w.model_dump() for w in warnings],
+    )
+    await db.commit()
+    await model_runtime_store.hydrate_runtime_cache(db)
+    return AssignmentDraftOut(
+        slots=_all_slots_out(lambda s: _slot_current_model(s, after_registry)),
+        diff=diff,
+        warnings=warnings,
+        ok_to_apply=True,
+        revision_id=str(revision.id),
+    )
+
+
+@router.post("/assignments/{revision_id}/rollback", response_model=AssignmentDraftOut, dependencies=_admin)
+async def rollback_assignment_revision(
+    revision_id: str,
+    confirm_warnings: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> AssignmentDraftOut:
+    revision = await model_runtime_store.get_assignment_revision(db, revision_id)
+    if revision is None:
+        raise HTTPException(404, "Assignment revision not found")
+    registry = _registry()
+    loaded = await _loaded_index()
+    before = _assignment_snapshot(registry)
+    # Restore every changed slot to its old value, INCLUDING slots that were
+    # previously unset (old_model is None) → explicit unset on rollback.
+    target = {
+        item.get("slot"): item.get("old_model")
+        for item in (revision.diff or [])
+        if item.get("slot")
+    }
+    diff, warnings, errors = await _validate_assignment_draft(registry, target, loaded)
+    if errors:
+        raise HTTPException(400, {"errors": [e.model_dump() for e in errors]})
+    if warnings and not confirm_warnings:
+        raise HTTPException(409, {"warnings": [w.model_dump() for w in warnings]})
+    await _apply_draft_atomic(db, diff, before, registry)
+    after_registry = _registry()
+    after = _assignment_snapshot(after_registry)
+    rollback_revision = await model_runtime_store.create_assignment_revision(
+        db,
+        created_by=user.sub,
+        before_snapshot=before,
+        after_snapshot=after,
+        diff=[d.model_dump() for d in diff],
+        warnings=[w.model_dump() for w in warnings],
+    )
+    await db.commit()
+    await model_runtime_store.hydrate_runtime_cache(db)
+    return AssignmentDraftOut(
+        slots=_all_slots_out(lambda s: _slot_current_model(s, after_registry)),
+        diff=diff,
+        warnings=warnings,
+        ok_to_apply=True,
+        revision_id=str(rollback_revision.id),
+    )
+
+
+@router.put("/slots/{slot}", dependencies=_admin)
+async def set_slot(
+    slot: str,
+    payload: SlotWrite,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Assign a model to a slot immediately. Kept for compatibility."""
+    registry = _registry()
+    _apply_slot_assignment(slot, payload.model, registry)
+    await _persist_slot_durable(db, slot)
+    await db.commit()
+    await model_runtime_store.hydrate_runtime_cache(db)
+    key = payload.model
     return {"ok": True, "slot": slot, "model": key}

@@ -85,6 +85,9 @@ export function AgentWorkspaceBlocks({
 }) {
   const [blocks, setBlocks] = useState<CanvasBlock[]>([]);
   const [loading, setLoading] = useState(true);
+  // Shown while a turn is routed to the desktop but the block hasn't arrived yet,
+  // so the user isn't left staring at an empty panel wondering where it went.
+  const [pending, setPending] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/api/workspace/blocks`, {
@@ -108,12 +111,18 @@ export function AgentWorkspaceBlocks({
 
   useEffect(() => {
     load();
-    const onUpdate = () => load();
+    const onUpdate = () => {
+      setPending(false);
+      load();
+    };
+    const onPending = () => setPending(true);
     window.addEventListener("workspace-blocks-updated", onUpdate);
+    window.addEventListener("workspace-pending", onPending);
     // Fallback poll every 15 s in case the WS event was lost
     const timer = setInterval(load, 15_000);
     return () => {
       window.removeEventListener("workspace-blocks-updated", onUpdate);
+      window.removeEventListener("workspace-pending", onPending);
       clearInterval(timer);
     };
   }, [load]);
@@ -128,7 +137,17 @@ export function AgentWorkspaceBlocks({
     );
   }
 
-  if (blocks.length === 0) return null;
+  if (blocks.length === 0) {
+    if (!pending) return null;
+    return (
+      <div
+        className={`flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400 ${className}`}
+      >
+        <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-sky-500" />
+        Света готовит вывод на рабочий стол…
+      </div>
+    );
+  }
 
   return (
     <div className={`flex min-h-0 w-full flex-col gap-3 ${className}`}>

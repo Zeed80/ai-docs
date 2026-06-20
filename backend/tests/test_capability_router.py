@@ -11,14 +11,18 @@ from httpx import AsyncClient
 async def test_unknown_capability_returns_404(client: AsyncClient):
     r = await client.post("/api/agent/cap/nonexistent_cap", json={"action": "list"})
     assert r.status_code == 404
-    assert "Unknown capability" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert detail["error_code"] == "unknown_capability"
+    assert "Unknown capability" in detail["message"]
 
 
 @pytest.mark.asyncio
 async def test_missing_action_returns_400(client: AsyncClient):
     r = await client.post("/api/agent/cap/documents", json={"some": "data"})
     assert r.status_code == 400
-    assert "action" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert detail["error_code"] == "missing_action"
+    assert "action" in detail["message"]
 
 
 @pytest.mark.asyncio
@@ -27,8 +31,10 @@ async def test_unknown_action_returns_400(client: AsyncClient):
         "/api/agent/cap/documents", json={"action": "nonexistent_action"}
     )
     assert r.status_code == 400
-    assert "Unknown action" in r.json()["detail"]
-    assert "Available:" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert detail["error_code"] == "unknown_action"
+    assert "Unknown action" in detail["message"]
+    assert isinstance(detail["available"], list) and detail["available"]
 
 
 @pytest.mark.asyncio
@@ -92,7 +98,9 @@ async def test_dispatch_rejects_missing_path_params(client: AsyncClient):
     r = await client.post("/api/agent/cap/documents", json={"action": "get"})
 
     assert r.status_code == 422
-    assert "document_id" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert detail["error_code"] == "missing_args"
+    assert "document_id" in detail["missing"]
 
 
 def test_runtime_contract_blocks_risky_action_without_gate(monkeypatch):

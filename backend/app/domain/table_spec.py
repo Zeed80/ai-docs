@@ -69,7 +69,14 @@ class FilterSpec(BaseModel):
     @field_validator("op", mode="before")
     @classmethod
     def _lenient_op(cls, value: Any) -> Any:
-        return str(value).strip().lower() if isinstance(value, str) else value
+        if not isinstance(value, str):
+            return value
+        v = value.strip().lower()
+        # Models reach for SQL "like"/"ilike" — map them to the engine's substring
+        # op so the call doesn't silently return 0 and force a wasted retry.
+        if v in ("like", "ilike"):
+            return "contains"
+        return v
 
 
 class SortSpec(BaseModel):
@@ -95,6 +102,10 @@ class TableSpec(BaseModel):
     columns: list[ColumnSpec] = Field(default_factory=list)
     filters: list[FilterSpec] = Field(default_factory=list)
     sort: list[SortSpec] = Field(default_factory=list)
+    # Cluster rows so all rows sharing these field values sit together ("объедини/
+    # сгруппируй по поставщику"). All detail rows are kept; group_by fields become
+    # the PRIMARY sort keys, the explicit `sort` applies within each group.
+    group_by: list[str] = Field(default_factory=list)
     limit: int | None = None  # None → all rows (up to MAX_ROWS)
 
 
@@ -782,6 +793,9 @@ def validate_spec(spec: TableSpec) -> list[str]:
     for srt in spec.sort:
         if srt.field not in source.fields:
             problems.append(f"unknown sort field {srt.field!r}")
+    for gb in spec.group_by:
+        if gb not in source.fields:
+            problems.append(f"unknown group_by field {gb!r}")
     return problems
 
 
@@ -795,6 +809,13 @@ async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
     columns = list(spec.columns) or [
         ColumnSpec(field=f) for f in source.default_columns
     ]
+    # Ensure group_by fields are visible columns (so the grouping is legible),
+    # placed first. Skip unknown fields — validate_spec already vetted them.
+    existing = {c.field for c in columns}
+    for gb in spec.group_by:
+        if gb in source.fields and gb not in existing:
+            columns.insert(0, ColumnSpec(field=gb))
+            existing.add(gb)
     keys = [c.field for c in columns]
     exprs = _EXPRS[spec.source]()
     stmt = _base_stmt(spec.source, exprs, keys)
@@ -841,7 +862,13 @@ async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar() or 0
 
-    # Sort
+    # Sort — group_by fields cluster first (primary keys), then explicit sort
+    # applies within each group. "объедини по поставщикам, сортируй по дате" →
+    # rows grouped under each supplier, date-sorted inside the group.
+    explicit_sort_fields = {s.field for s in spec.sort}
+    for gb in spec.group_by:
+        if gb in exprs and gb not in explicit_sort_fields:
+            stmt = stmt.order_by(exprs[gb].asc())
     for srt in spec.sort:
         expr = exprs[srt.field]
         stmt = stmt.order_by(expr.desc() if srt.dir == "desc" else expr.asc())
@@ -882,6 +909,7 @@ class PatchOp(BaseModel):
     op: Literal[
         "add_column", "remove_column", "move_column",
         "set_sort", "add_filter", "clear_filters", "set_limit",
+        "set_group_by",
     ]
     field: str | None = None
     header: str | None = None
@@ -940,6 +968,11 @@ def apply_patch(spec: TableSpec, ops: list[PatchOp]) -> TableSpec:
             if not op.field or op.field not in source.fields:
                 raise ValueError(f"unknown sort field {op.field!r}")
             spec.sort = [SortSpec(field=op.field, dir=op.dir)]
+        elif op.op == "set_group_by":
+            if not op.field or op.field not in source.fields:
+                raise ValueError(f"unknown group_by field {op.field!r}")
+            if op.field not in spec.group_by:
+                spec.group_by = [op.field, *spec.group_by]
         elif op.op == "add_filter":
             if op.filter is None:
                 raise ValueError("add_filter requires a filter")
@@ -966,6 +999,16 @@ _SORT_RE = re.compile(
 )
 _ONLY_RE = re.compile(
     r"(?:покажи|выведи|оставь)\s+только\s+(?P<what>.+?)\s*$"
+)
+# Grouping directive anywhere in the request: «объедини по поставщикам»,
+# «сгруппируй по поставщику», «группировка по дате».
+_GROUP_RE = re.compile(
+    r"(?:объедин\w+|сгруппир\w+|группир\w+|группиров\w+)\s+по\s+(?P<what>[\w]+(?:\s+[\w]+){0,2})"
+)
+# Sort directive anywhere in the request (not anchored to the whole string).
+_SORT_INLINE_RE = re.compile(
+    r"(?:отсортир\w+|сортир\w+|упорядоч\w+)\s+(?:по\s+)?(?P<what>[\w]+(?:\s+[\w]+){0,2}?)"
+    r"(?:\s+(?P<dir>по\s+убыван\w*|по\s+возрастан\w*|убыв\w*|возраст\w*))?"
 )
 # Filter-add continuation: "и пластины", "а также резцы", "добавь болты М8".
 # Fired when the user extends the current filter set with new item(s).
@@ -1125,3 +1168,38 @@ def parse_patch_command(text: str, spec: TableSpec) -> ParsedCommand | None:
         return ParsedCommand(ops_list, f"добавил фильтр по {label}")
 
     return None
+
+
+def reconcile_ops(spec: TableSpec, user_text: str) -> tuple[list[PatchOp], list[str]]:
+    """Deterministically derive grouping/sort the user asked for but the worker
+    LLM may have dropped from a multi-clause request.
+
+    Scans the ORIGINAL request for «объедини/сгруппируй по X» and «сортируй по X»
+    and returns the PatchOps needed to add the missing group_by / sort — so a
+    complex query is honoured structurally, not left to the model's compliance.
+    Returns ([] , []) when the spec already satisfies the request. Idempotent.
+    """
+    source = SOURCES.get(spec.source)
+    if source is None:
+        return [], []
+    text = _norm(user_text)
+    ops: list[PatchOp] = []
+    notes: list[str] = []
+
+    gm = _GROUP_RE.search(text)
+    if gm:
+        fd = resolve_field(source, gm.group("what"))
+        if fd and fd.key not in spec.group_by:
+            ops.append(PatchOp(op="set_group_by", field=fd.key))
+            notes.append(f"группировка по «{fd.header}»")
+
+    sm = _SORT_INLINE_RE.search(text)
+    if sm:
+        fd = resolve_field(source, sm.group("what"))
+        if fd and not any(s.field == fd.key for s in spec.sort):
+            dir_str = sm.group("dir") or ""
+            direction = "desc" if "убыв" in dir_str else "asc"
+            ops.append(PatchOp(op="set_sort", field=fd.key, dir=direction))
+            notes.append(f"сортировка по «{fd.header}»")
+
+    return ops, notes

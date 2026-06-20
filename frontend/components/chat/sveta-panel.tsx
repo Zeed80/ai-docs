@@ -535,6 +535,10 @@ export function SvetaPanel() {
       return;
     }
 
+    if (type === "workspace.publish_started" && typeof window !== "undefined") {
+      // Show the desktop "preparing…" placeholder while the block is produced.
+      window.dispatchEvent(new CustomEvent("workspace-pending"));
+    }
     if (
       type === "status" ||
       type === "orchestrator.status" ||

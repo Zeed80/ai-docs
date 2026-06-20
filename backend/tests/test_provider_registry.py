@@ -89,6 +89,19 @@ def test_select_instance_routes_to_node_hosting_model(monkeypatch):
     assert sel.base_url == "http://b:11434"
 
 
+def test_select_instance_raises_when_model_known_missing(monkeypatch):
+    rows = [
+        {"id": "1", "kind": "ollama", "name": "node-a", "base_url": "http://a:11434", "enabled": True, "is_local": True},
+        {"id": "2", "kind": "ollama", "name": "node-b", "base_url": "http://b:11434", "enabled": True, "is_local": True},
+    ]
+    monkeypatch.setattr(pr, "_redis_get_instances", lambda: rows)
+    pr._availability_cache.clear()
+    monkeypatch.setattr(pr, "_models_on_node", lambda _node: {"gemma4:e4b"})
+
+    with pytest.raises(RuntimeError, match="not served"):
+        pr.select_instance(ProviderKind.OLLAMA, "qwen3.5:9b")
+
+
 def test_disabled_instances_excluded(monkeypatch):
     rows = [
         {"id": "1", "kind": "vllm", "name": "v-a", "base_url": "http://a:8000", "enabled": False, "is_local": True},

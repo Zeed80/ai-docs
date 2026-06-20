@@ -1225,12 +1225,17 @@ class RecipeSkillOut(BaseModel):
     name: str
     description: str | None = None
     role: str
+    intent: str | None = None
+    output_channel: str | None = None
     trigger_examples: list
     steps: list
     param_slots: dict | None = None
     capability_schema_hash: str | None = None
     success_count: int
     fail_count: int
+    # Trust/activation transparency: why a recipe still asks before replaying.
+    worker_confirmations: int = 0
+    confirmed_replays: int = 0
     last_used_at: datetime | None = None
     status: str
     created_by: str

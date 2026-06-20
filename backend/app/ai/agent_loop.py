@@ -329,6 +329,16 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
 
     manifest = load_capability_manifest(cap_path)
 
+    # _DISPATCH is the single source of truth for valid actions; inject it as a
+    # JSON-schema enum so the model can only emit a routable action (no more
+    # "400 Unknown action" from guessed strings). Read live → drift-proof.
+    try:
+        from app.api.capability_router import capability_action_map
+        action_enum = capability_action_map()
+    except Exception as exc:
+        log_degraded("agent_loop.action_enum", exc)
+        action_enum = {}
+
     tools: list[dict] = []
     skill_map: dict[str, dict] = {}
     gate_actions: dict[str, set[str]] = {}
@@ -349,6 +359,10 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
         if params_schema.get("required"):
             required = list(params_schema["required"])
 
+        # Constrain `action` to the dispatcher's real enum for this capability.
+        if "action" in properties and name in action_enum:
+            properties["action"]["enum"] = action_enum[name]
+
         fn_name = _sanitize_name(name)
         description = (cap.get("description") or name).strip()
 
@@ -356,7 +370,8 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
             "type": "function",
             "function": {
                 "name": fn_name,
-                "description": description[:400],
+                # Keep the full curated description (actions + rules); 400 chars
+                "description": description[:1200],
                 "parameters": {
                     "type": "object",
                     "properties": properties,
@@ -588,6 +603,16 @@ async def _execute_skill(
                 await asyncio.sleep(2 ** attempt)
                 continue
             else:
+                # Surface structured dispatcher errors (error_code + available/
+                # missing) so the model can self-correct, instead of a raw,
+                # truncated HTTP-text blob it cannot reliably parse.
+                try:
+                    body = resp.json()
+                    detail = body.get("detail") if isinstance(body, dict) else None
+                except Exception:
+                    detail = None
+                if isinstance(detail, dict) and detail.get("error_code"):
+                    return {"status": f"HTTP {resp.status_code}", **detail}
                 return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
@@ -1001,7 +1026,16 @@ def _convert_messages_to_anthropic(
                 result.append({"role": "assistant", "content": content})
 
         elif role == "tool":
-            tc_id = pending_ids.pop(0) if pending_ids else f"toolu_unknown_{len(pending_results)}"
+            # Link result to its call by id when available; fall back to FIFO
+            # order only for legacy messages that carry no tool_call_id.
+            msg_id = msg.get("tool_call_id") or ""
+            if msg_id and msg_id in pending_ids:
+                pending_ids.remove(msg_id)
+                tc_id = msg_id
+            elif pending_ids:
+                tc_id = pending_ids.pop(0)
+            else:
+                tc_id = msg_id or f"toolu_unknown_{len(pending_results)}"
             pending_results.append({
                 "type": "tool_result",
                 "tool_use_id": tc_id,
@@ -1314,6 +1348,9 @@ class AgentSession:
         # the worker off slow RAG tools (memory/search/documents) when the task
         # is structured-data only (e.g. a spec_table). Reset each turn.
         self._excluded_tools: set[str] = set()
+        # Orchestrator routed this turn to the desktop — reliable auto-publish
+        # fallback in _deliver_final_content (by intent, not keyword). Reset each turn.
+        self._workspace_expected: bool = False
 
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
@@ -1503,6 +1540,15 @@ class AgentSession:
     def set_response_budget(self, max_tokens: int) -> None:
         """Set the per-turn max response tokens (clamped to a sane range)."""
         self._response_budget = max(256, min(int(max_tokens), 16384))
+
+    def set_workspace_expected(self, expected: bool) -> None:
+        """Tell the worker the orchestrator routed this turn to the desktop.
+
+        Used as a reliable fallback in ``_deliver_final_content``: a structural
+        result is auto-published to the desktop by *intent*, not by keyword
+        markers in the user's phrasing. Reset each turn by the orchestrator.
+        """
+        self._workspace_expected = bool(expected)
 
     def set_model_override(self, model: str | None) -> None:
         """Set a per-turn worker model (tier-based fast/strong routing).
@@ -1987,7 +2033,15 @@ class AgentSession:
             await self._send({"type": "text", "content": summary})
             return summary
 
-        if _is_workspace_output_request(latest_user) and len(text) > 500:
+        # Reliable fallback: when the orchestrator routed this turn to the desktop
+        # (by intent), a substantial non-table result is still published there —
+        # no dependency on keyword markers in the user's phrasing. The legacy
+        # keyword gate remains for turns the orchestrator didn't classify.
+        publish_to_desktop = (
+            self._workspace_expected
+            or _is_workspace_output_request(latest_user)
+        )
+        if publish_to_desktop and len(text) > 200:
             await self._publish_canvas(
                 {"type": "markdown", "title": "Результат", "content": text},
                 canvas_id=_agent_canvas_id("llm-result"),
@@ -2051,12 +2105,33 @@ class AgentSession:
 
     async def _execute_single_tool(
         self, tc: dict, iteration: int
-    ) -> tuple[str, dict]:
-        """Execute one tool call and return (fn_name, result). Does NOT append to messages."""
+    ) -> tuple[str, dict, str]:
+        """Execute one tool call and return (fn_name, result, tool_call_id).
+
+        Does NOT append to messages. The tool_call_id is threaded back so the
+        result message can be linked to its originating call (OpenAI spec
+        requires it; Anthropic matches tool_result.tool_use_id by id, not order).
+        """
         fn = tc.get("function", {})
         fn_name = fn.get("name", "")
+        tc_id = tc.get("id") or ""
         raw_args = fn.get("arguments", {})
-        args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
+        if isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            try:
+                args = json.loads(raw_args or "{}")
+            except (json.JSONDecodeError, TypeError):
+                # Surface a structured error so the model can self-correct by
+                # re-issuing the call with valid JSON, instead of silently
+                # executing with empty args or crashing the whole turn.
+                result = {
+                    "error_code": "bad_arguments",
+                    "error": "Аргументы инструмента не являются валидным JSON.",
+                    "hint": "Повтори вызов с корректным JSON-объектом аргументов.",
+                }
+                await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+                return fn_name, result, tc_id
 
         asyncio.create_task(self._log_action(
             iteration=iteration,
@@ -2107,7 +2182,7 @@ class AgentSession:
                 "required_approval": policy.required_approval,
             }
             await self._send({"type": "tool_result", "tool": fn_name, "result": result})
-            return fn_name, result
+            return fn_name, result, tc_id
 
         if original_name in current_gates:
             asyncio.create_task(self._log_action(
@@ -2126,13 +2201,14 @@ class AgentSession:
             if not approved:
                 result: dict = {"status": "rejected", "message": "Отклонено пользователем"}
                 await self._send({"type": "tool_result", "tool": fn_name, "result": result})
-                return fn_name, result
+                return fn_name, result, tc_id
 
         if skill:
             result = await _execute_skill(skill, args, self._config)
         else:
             available = sorted(self._skill_map.keys())[:30]
             result = {
+                "error_code": "unknown_skill",
                 "error": f"Unknown skill: {fn_name}",
                 "available_skills": available,
                 "hint": "Проверь имя скилла — используй двойное подчёркивание вместо точки (например invoice__list).",
@@ -2145,9 +2221,9 @@ class AgentSession:
             tool_result=result if len(str(result)) < 2000 else {"truncated": True},
         ))
         await self._send({"type": "tool_result", "tool": fn_name, "result": result})
-        return fn_name, result
+        return fn_name, result, tc_id
 
-    async def _tool_result_to_history(self, result: dict) -> None:
+    async def _tool_result_to_history(self, result: dict, tool_call_id: str = "") -> None:
         """Serialise a tool result for conversation history.
 
         Results exceeding VAULT_THRESHOLD are stored in Redis; the history
@@ -2164,19 +2240,22 @@ class AgentSession:
             except Exception:
                 # Vault unavailable: fall back to trimmed result
                 pass
-        self.messages.append({
+        msg: dict = {
             "role": "tool",
             "content": _trim_tool_result(content_json),
-        })
+        }
+        if tool_call_id:
+            msg["tool_call_id"] = tool_call_id
+        self.messages.append(msg)
 
     async def _execute_tools_sequential(
         self, tool_calls: list[dict], iteration: int
     ) -> list[tuple[str, dict]]:
         results: list[tuple[str, dict]] = []
         for tc in tool_calls:
-            fn_name, result = await self._execute_single_tool(tc, iteration)
+            fn_name, result, tc_id = await self._execute_single_tool(tc, iteration)
             results.append((fn_name, result))
-            await self._tool_result_to_history(result)
+            await self._tool_result_to_history(result, tc_id)
             self._trim_history()
         return results
 
@@ -2189,10 +2268,10 @@ class AgentSession:
             *[self._execute_single_tool(tc, iteration) for tc in tool_calls],
             return_exceptions=False,
         )
-        for _fn_name, result in results:
-            await self._tool_result_to_history(result)
+        for _fn_name, result, tc_id in results:
+            await self._tool_result_to_history(result, tc_id)
         self._trim_history()
-        return list(results)
+        return [(fn_name, result) for fn_name, result, _tc_id in results]
 
     @staticmethod
     def _terminal_publish_reply(results: list[tuple[str, dict]]) -> str | None:

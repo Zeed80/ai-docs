@@ -248,14 +248,22 @@ def select_instance(
     if kind not in _LOCAL_KINDS or len(instances) == 1 or not provider_model:
         return instances[0]
 
-    # Multiple local nodes: prefer one that hosts the model.
+    # Multiple local nodes: prefer one that hosts the model. If at least one
+    # node answered with a non-empty model list and none host it, this is a
+    # known-missing state, not unknown availability.
+    saw_known_inventory = False
     for inst in instances:
         served = _models_on_node(inst)
         if not served:
             continue
+        saw_known_inventory = True
         bare = provider_model.split(":")[0]
         if provider_model in served or bare in served:
             return inst
+    if saw_known_inventory:
+        raise RuntimeError(
+            f"Model {provider_model} is not served by any enabled {kind.value} node"
+        )
     return instances[0]
 
 

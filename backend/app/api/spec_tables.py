@@ -207,18 +207,30 @@ async def patch_spec_table(
 async def spec_table_catalog() -> dict[str, Any]:
     """Field catalog: sources and their allowed fields (for the agent/UI)."""
     return {
-        source.key: {
-            "title": source.title,
-            "default_columns": list(source.default_columns),
-            "fields": [
-                {
-                    "key": fd.key,
-                    "header": fd.header,
-                    "type": fd.type,
-                    "synonyms": list(fd.synonyms),
-                }
-                for fd in source.fields.values()
-            ],
-        }
-        for source in SOURCES.values()
+        "_spec_format": {
+            "source": "invoices|invoice_items|suppliers|…",
+            "columns": "[{field, header?}]",
+            "filters": "[{field, op, value}] — op: eq|ne|contains|gte|lte|between|in|smart",
+            "sort": "[{field, dir: asc|desc}]",
+            "group_by": "[field] — объединить/сгруппировать строки по полю "
+                        "(«объедини по поставщикам» → group_by:['supplier_name']); "
+                        "строки кластеризуются, sort применяется внутри группы",
+            "limit": "int | null (все строки)",
+        },
+        "sources": {
+            source.key: {
+                "title": source.title,
+                "default_columns": list(source.default_columns),
+                "fields": [
+                    {
+                        "key": fd.key,
+                        "header": fd.header,
+                        "type": fd.type,
+                        "synonyms": list(fd.synonyms),
+                    }
+                    for fd in source.fields.values()
+                ],
+            }
+            for source in SOURCES.values()
+        },
     }

@@ -245,6 +245,55 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
 }
 
 
+def capability_action_map() -> dict[str, list[str]]:
+    """Action enum per capability — the single source of truth for tool schemas.
+
+    The agent's tool catalog injects these as JSON-schema ``enum`` on the
+    ``action`` field, so the model can only emit a valid action and the dispatcher
+    never has to reject a guessed string. Drift is structurally impossible because
+    both the schema and the routing read this same ``_DISPATCH`` table.
+    """
+    return {cap: sorted(actions.keys()) for cap, actions in _DISPATCH.items()}
+
+
+# Capabilities handled by dedicated routes outside the generic _DISPATCH table.
+_SPECIAL_CAPABILITIES = {"vault"}
+
+
+def validate_capability_catalog() -> list[str]:
+    """Fail-closed consistency check: capabilities.yml ↔ _DISPATCH.
+
+    Returns a list of human-readable problems (empty = consistent). Run as a
+    test and optionally at startup so the hand-curated manifest can never drift
+    from the dispatcher's real routing table.
+    """
+    manifest = load_capability_manifest()
+    problems: list[str] = []
+    declared = {c.name for c in manifest.capabilities}
+
+    # Every declared capability must be routable (or a known special route).
+    for name in declared:
+        if name not in _DISPATCH and name not in _SPECIAL_CAPABILITIES:
+            problems.append(f"capability '{name}' declared in manifest but absent from _DISPATCH")
+
+    # Every routable capability should be declared so the model can see it.
+    for name in _DISPATCH:
+        if name not in declared:
+            problems.append(f"capability '{name}' in _DISPATCH but not declared in manifest")
+
+    # Gate actions must reference real actions of their capability.
+    for cap in manifest.capabilities:
+        if cap.name in _SPECIAL_CAPABILITIES:
+            continue
+        actions = set(_DISPATCH.get(cap.name, {}).keys())
+        for gate in cap.gate_actions:
+            if gate not in actions:
+                problems.append(
+                    f"gate_action '{cap.name}.{gate}' has no matching action in _DISPATCH"
+                )
+    return problems
+
+
 def _service_headers() -> dict:
     """Auth headers for internal service-to-service calls."""
     from app.config import settings
@@ -320,7 +369,10 @@ def _validate_capability_contract(
     if capability is None:
         raise HTTPException(
             status_code=503,
-            detail=f"Capability '{capability_name}' is not declared in the active manifest",
+            detail={
+                "error_code": "contract_unavailable",
+                "message": f"Capability '{capability_name}' is not declared in the active manifest",
+            },
         )
 
     if (
@@ -329,10 +381,13 @@ def _validate_capability_contract(
     ):
         raise HTTPException(
             status_code=503,
-            detail=(
-                f"Risky action '{capability_name}.{action}' is blocked because "
-                "it is missing from gate_actions"
-            ),
+            detail={
+                "error_code": "gate_missing",
+                "message": (
+                    f"Risky action '{capability_name}.{action}' is blocked because "
+                    "it is missing from gate_actions"
+                ),
+            },
         )
 
     missing = [
@@ -343,7 +398,11 @@ def _validate_capability_contract(
     if missing:
         raise HTTPException(
             status_code=422,
-            detail=f"Missing required path parameters: {missing}",
+            detail={
+                "error_code": "missing_args",
+                "message": f"Missing required path parameters: {missing}",
+                "missing": missing,
+            },
         )
 
 
@@ -375,7 +434,14 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
     """Route a capability call to the appropriate backend endpoint."""
     actions = _DISPATCH.get(capability_name)
     if actions is None:
-        raise HTTPException(status_code=404, detail=f"Unknown capability: {capability_name}")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error_code": "unknown_capability",
+                "message": f"Unknown capability: {capability_name}",
+                "available": sorted(_DISPATCH.keys()),
+            },
+        )
 
     try:
         body: dict = await request.json()
@@ -384,15 +450,24 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
 
     action = body.pop("action", None)
     if not action:
-        raise HTTPException(status_code=400, detail="'action' field is required")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "missing_action",
+                "message": "'action' field is required",
+                "available": sorted(actions.keys()),
+            },
+        )
 
     route = actions.get(action)
     if route is None:
-        available = sorted(actions.keys())
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown action '{action}' for capability '{capability_name}'. "
-                   f"Available: {available}",
+            detail={
+                "error_code": "unknown_action",
+                "message": f"Unknown action '{action}' for capability '{capability_name}'.",
+                "available": sorted(actions.keys()),
+            },
         )
 
     method, path_tpl, path_params = route

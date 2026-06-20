@@ -1097,6 +1097,11 @@ class RecipeSkill(UUIDPrimaryKey, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text)
     role: Mapped[str] = mapped_column(String(80), default="data_analyst", nullable=False)
+    # Reproducibility contract captured from the TurnDecision at record time.
+    # Replay is gated on the new turn matching these, so a recipe learned for a
+    # workspace/analytical turn is never replayed on a drifted chat turn.
+    intent: Mapped[str | None] = mapped_column(String(40))
+    output_channel: Mapped[str | None] = mapped_column(String(20))
     # Texts that triggered this recipe; embedded into the recipe_triggers
     # Qdrant collection for similarity retrieval at plan time.
     trigger_examples: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
@@ -2854,3 +2859,76 @@ class ProviderInstance(UUIDPrimaryKey, TimestampMixin, Base):
     last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_check_ok: Mapped[bool | None] = mapped_column(Boolean)
     last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class ModelCatalogRuntimeEntry(UUIDPrimaryKey, TimestampMixin, Base):
+    """Runtime-discovered model catalog entries persisted outside Redis."""
+
+    __tablename__ = "model_catalog_runtime_entries"
+    __table_args__ = (
+        UniqueConstraint("model_key", name="uq_model_catalog_runtime_entries_key"),
+        Index("ix_model_catalog_runtime_entries_provider", "provider"),
+    )
+
+    model_key: Mapped[str] = mapped_column(String(240), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    provider_model: Mapped[str] = mapped_column(String(500), nullable=False)
+    capability: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="discovered")
+    verification_status: Mapped[str] = mapped_column(String(40), nullable=False, default="discovered")
+
+
+class ModelRuntimeOverride(UUIDPrimaryKey, TimestampMixin, Base):
+    """Per-model runtime overrides that used to live only in Redis."""
+
+    __tablename__ = "model_runtime_overrides"
+    __table_args__ = (
+        UniqueConstraint("model_key", name="uq_model_runtime_overrides_key"),
+        Index("ix_model_runtime_overrides_status", "verification_status"),
+    )
+
+    model_key: Mapped[str] = mapped_column(String(240), nullable=False)
+    thinking_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    preferred_instance: Mapped[str | None] = mapped_column(String(150))
+    verification_status: Mapped[str] = mapped_column(String(40), nullable=False, default="discovered")
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class TaskRoutingOverride(UUIDPrimaryKey, TimestampMixin, Base):
+    """Durable mirror of a per-task routing override (else Redis-only → resets)."""
+
+    __tablename__ = "task_routing_overrides"
+    __table_args__ = (
+        UniqueConstraint("task", name="uq_task_routing_overrides_task"),
+    )
+
+    task: Mapped[str] = mapped_column(String(80), nullable=False)
+    routing: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class AgentConfigStore(UUIDPrimaryKey, TimestampMixin, Base):
+    """Durable mirror of the builtin agent config (orchestrator/worker/fast/…)."""
+
+    __tablename__ = "agent_config_store"
+    __table_args__ = (
+        UniqueConstraint("singleton_key", name="uq_agent_config_store_singleton"),
+    )
+
+    singleton_key: Mapped[str] = mapped_column(String(50), default="default", nullable=False)
+    config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class ModelAssignmentRevision(UUIDPrimaryKey, TimestampMixin, Base):
+    """Auditable assignment revision for model slot changes."""
+
+    __tablename__ = "model_assignment_revisions"
+    __table_args__ = (
+        Index("ix_model_assignment_revisions_created_at", "created_at"),
+        Index("ix_model_assignment_revisions_created_by", "created_by"),
+    )
+
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False, default="system")
+    before_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    after_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    diff: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    warnings: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
