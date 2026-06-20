@@ -2415,6 +2415,8 @@ interface SlotItem {
   model: string | null;
   local_only: boolean;
   required_modality?: string | null; // capability the slot needs (backend = source)
+  thinking_capable?: boolean; // slot supports a per-assignment reasoning toggle
+  thinking_enabled?: boolean | null; // current override (null = model default)
 }
 interface AssignmentIssue {
   slot: string;
@@ -2650,6 +2652,31 @@ function AssignmentTab() {
     }
   };
 
+  // Per-assignment reasoning (tri-state): null = model default, true/false force.
+  const setSlotThinking = async (slot: string, enabled: boolean | null) => {
+    try {
+      await fetch(`${API}/api/providers/slots/${slot}/thinking`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await csrfHeaders()),
+        },
+        credentials: "include",
+        body: JSON.stringify({ enabled }),
+      });
+      flash(
+        enabled === null
+          ? "Рассуждение: по умолчанию"
+          : enabled
+            ? "Рассуждение включено для слота"
+            : "Рассуждение выключено для слота",
+      );
+      load();
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    }
+  };
+
   const delModel = async (m: ProvModel) => {
     if (m.provider !== "ollama") {
       alert(
@@ -2821,19 +2848,36 @@ function AssignmentTab() {
                           черновик
                         </span>
                       )}
-                      {draftChosen?.thinking_supported && (
+                      {s.thinking_capable && (
                         <label
-                          className="flex items-center gap-1.5 text-xs text-slate-300 whitespace-nowrap cursor-pointer"
-                          title="Режим рассуждения (chain-of-thought) для этой модели"
+                          className="flex items-center gap-1.5 text-xs text-slate-300 whitespace-nowrap"
+                          title="Режим рассуждения (chain-of-thought) ДЛЯ ЭТОГО НАЗНАЧЕНИЯ — одну модель можно использовать с рассуждением в одном слоте и без в другом"
                         >
-                          <input
-                            type="checkbox"
-                            checked={draftChosen.thinking_enabled}
-                            onChange={(e) =>
-                              toggleThinking(draftChosen.key, e.target.checked)
-                            }
-                          />
                           размышление
+                          <select
+                            className="rounded border border-slate-600 bg-slate-900 px-1 py-0.5 text-xs text-slate-200"
+                            value={
+                              s.thinking_enabled === true
+                                ? "on"
+                                : s.thinking_enabled === false
+                                  ? "off"
+                                  : "default"
+                            }
+                            onChange={(e) =>
+                              setSlotThinking(
+                                s.slot,
+                                e.target.value === "on"
+                                  ? true
+                                  : e.target.value === "off"
+                                    ? false
+                                    : null,
+                              )
+                            }
+                          >
+                            <option value="default">по умолчанию</option>
+                            <option value="on">вкл</option>
+                            <option value="off">выкл</option>
+                          </select>
                         </label>
                       )}
                     </div>

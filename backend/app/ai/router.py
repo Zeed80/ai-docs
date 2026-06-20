@@ -250,8 +250,12 @@ class AIRouter:
             model = self.registry.get_model(model_name)
             provider, resolved = self._resolve_provider(model)
             self._enforce_policy(request, model, resolved)  # policy errors are not per-model failures
-            # Resolve effective thinking: per-call override → model catalog default.
+            # Resolve effective thinking: per-call override → per-assignment
+            # (task_routing.thinking) → model catalog default. The per-task layer
+            # lets the same model reason in one slot and not in another.
             eff_thinking = request.thinking
+            if eff_thinking is None:
+                eff_thinking = routing.thinking
             if eff_thinking is None:
                 eff_thinking = model.thinking_enabled if model.thinking_supported else False
             if request.thinking is not eff_thinking:

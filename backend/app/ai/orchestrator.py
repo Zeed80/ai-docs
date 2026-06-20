@@ -677,6 +677,11 @@ class AgentOrchestrator:
         )
         min_conf = float(config.turn_router_min_confidence)
         timeout = float(config.orchestrator_plan_timeout_seconds)
+        # Per-assignment thinking: the router IS the fast/agent_fast slot, so its
+        # reasoning toggle comes from fast_disable_thinking (tri-state) — passed
+        # explicitly so it's independent of the orchestrator slot's setting.
+        fast_thinking = _thinking_from_disable(config.fast_disable_thinking)
+        big_thinking = _thinking_from_disable(config.orchestrator_disable_thinking)
 
         # Tier 1 — cheap fast model.
         decision, source = await turn_router.route_turn(
@@ -684,6 +689,7 @@ class AgentOrchestrator:
             preferred_model=fast or big,
             timeout=timeout,
             has_open_spec_table=has_open_spec,
+            thinking=fast_thinking if fast else big_thinking,
         )
         # Tier 2 — escalate to the orchestrator model on failure/low confidence.
         if (decision is None or decision.confidence < min_conf) and big and big != (fast or big):
@@ -692,6 +698,7 @@ class AgentOrchestrator:
                 preferred_model=big,
                 timeout=timeout,
                 has_open_spec_table=has_open_spec,
+                thinking=big_thinking,
             )
             if esc is not None:
                 decision, source = esc, f"escalated_{esc_source}"
@@ -2489,6 +2496,17 @@ def _workspace_updated_at_snapshot() -> dict[str, str]:
         if block_id:
             snapshot[block_id] = updated_at
     return snapshot
+
+
+def _thinking_from_disable(disable: bool | None) -> bool | None:
+    """Tri-state *_disable_thinking → AIRequest.thinking.
+
+    None → None (defer to per-task/model default); True → thinking OFF;
+    False → thinking ON.
+    """
+    if disable is None:
+        return None
+    return not disable
 
 
 def _registry_model_name(model_name: str | None) -> str | None:

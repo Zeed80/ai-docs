@@ -650,6 +650,8 @@ class SlotOut(BaseModel):
     model: str | None              # catalog key
     local_only: bool               # cloud models forbidden for this slot
     required_modality: str | None = None  # capability the slot needs (UI ⚠ source)
+    thinking_capable: bool = False        # assigned model supports reasoning AND slot allows toggle
+    thinking_enabled: bool | None = None  # per-assignment override (None = model default)
 
 
 # local_only=True → конфиденциальные задачи (содержимое документов), облако
@@ -685,6 +687,22 @@ _SLOT_MODALITY = {
     "agent_large": "text",
     "embedding": "embedding",
     "rerank": "rerank",
+}
+
+# Per-assignment thinking storage. Task slots store the override in
+# task_routing.thinking of each listed AITask; agent slots store it in the
+# agent_config tri-state *_disable_thinking field(s). Slots absent here don't
+# support reasoning (embedding/rerank/ocr_large) → no toggle.
+_SLOT_THINKING_TASKS: dict[str, list[str]] = {
+    "ocr_fast": ["invoice_ocr", "classification", "drawing_analysis", "drawing_analysis_vlm"],
+    "structured_extraction": ["structured_extraction", "long_context_summarization"],
+    "agent_email": ["email_drafting"],
+    "agent_large": ["code_generation"],
+}
+_SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
+    "agent_orchestrator": ["orchestrator_disable_thinking", "worker_disable_thinking"],
+    "agent_fast": ["fast_disable_thinking"],
+    "agent_large": ["builder_disable_thinking"],
 }
 
 
@@ -778,19 +796,54 @@ def _slot_meta(slot: str):
     return next((s for s in _SLOTS if s[0] == slot), None)
 
 
-def _build_slot_out(slot: str, group: str, label: str, hint: str, local_only: bool, model: str | None) -> SlotOut:
-    """SlotOut with the single-source required_modality (UI reads it for ⚠)."""
+def _slot_supports_thinking(slot: str) -> bool:
+    return slot in _SLOT_THINKING_TASKS or slot in _SLOT_THINKING_AGENT_FIELDS
+
+
+def _slot_thinking_get(slot: str, registry, model_key: str | None) -> tuple[bool, bool | None]:
+    """(thinking_capable, thinking_enabled) for a slot.
+
+    thinking_capable = slot allows a toggle AND the assigned model can reason.
+    thinking_enabled = current per-assignment override (None = model default).
+    """
+    if not _slot_supports_thinking(slot):
+        return False, None
+    cap = registry.models.get(model_key) if model_key else None
+    capable = bool(cap and cap.thinking_supported)
+    enabled: bool | None = None
+    if slot in _SLOT_THINKING_AGENT_FIELDS:
+        from app.ai.agent_config import get_builtin_agent_config
+        cfg = get_builtin_agent_config()
+        field = _SLOT_THINKING_AGENT_FIELDS[slot][0]
+        disable = getattr(cfg, field, None)
+        enabled = None if disable is None else (not disable)
+    elif slot in _SLOT_THINKING_TASKS:
+        from app.ai.schemas import AITask
+        from app.ai.task_routing import get_routing_for
+        try:
+            enabled = get_routing_for(AITask(_SLOT_THINKING_TASKS[slot][0])).thinking
+        except (ValueError, KeyError):
+            enabled = None
+    return capable, enabled
+
+
+def _build_slot_out(slot: str, group: str, label: str, hint: str, local_only: bool, model: str | None, registry=None) -> SlotOut:
+    """SlotOut with single-source required_modality + per-assignment thinking."""
+    capable, enabled = (False, None)
+    if registry is not None:
+        capable, enabled = _slot_thinking_get(slot, registry, model)
     return SlotOut(
         slot=slot, group=group, label=label, hint=hint,
         model=model, local_only=local_only,
         required_modality=_SLOT_MODALITY.get(slot),
+        thinking_capable=capable, thinking_enabled=enabled,
     )
 
 
-def _all_slots_out(model_of) -> list[SlotOut]:
+def _all_slots_out(model_of, registry=None) -> list[SlotOut]:
     """Build every SlotOut; `model_of(slot)` returns the assigned model key."""
     return [
-        _build_slot_out(slot, group, label, hint, local_only, model_of(slot))
+        _build_slot_out(slot, group, label, hint, local_only, model_of(slot), registry)
         for slot, group, label, hint, local_only in _SLOTS
     ]
 
@@ -1120,7 +1173,7 @@ async def _apply_draft_atomic(
 async def get_assignment_draft(db: AsyncSession = Depends(get_db)) -> AssignmentDraftOut:
     registry = _registry()
     return AssignmentDraftOut(
-        slots=_all_slots_out(lambda s: _slot_current_model(s, registry))
+        slots=_all_slots_out(lambda s: _slot_current_model(s, registry), registry)
     )
 
 
@@ -1132,7 +1185,7 @@ async def validate_assignment_draft(
     registry = _registry()
     diff, warnings, errors = await _validate_assignment_draft(registry, payload.slots)
     return AssignmentDraftOut(
-        slots=_all_slots_out(lambda s: payload.slots.get(s, _slot_current_model(s, registry))),
+        slots=_all_slots_out(lambda s: payload.slots.get(s, _slot_current_model(s, registry)), registry),
         diff=diff,
         warnings=warnings,
         errors=errors,
@@ -1169,7 +1222,7 @@ async def apply_assignment_draft(
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
     return AssignmentDraftOut(
-        slots=_all_slots_out(lambda s: _slot_current_model(s, after_registry)),
+        slots=_all_slots_out(lambda s: _slot_current_model(s, after_registry), after_registry),
         diff=diff,
         warnings=warnings,
         ok_to_apply=True,
@@ -1216,7 +1269,7 @@ async def rollback_assignment_revision(
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
     return AssignmentDraftOut(
-        slots=_all_slots_out(lambda s: _slot_current_model(s, after_registry)),
+        slots=_all_slots_out(lambda s: _slot_current_model(s, after_registry), after_registry),
         diff=diff,
         warnings=warnings,
         ok_to_apply=True,
@@ -1238,3 +1291,47 @@ async def set_slot(
     await model_runtime_store.hydrate_runtime_cache(db)
     key = payload.model
     return {"ok": True, "slot": slot, "model": key}
+
+
+class SlotThinkingWrite(BaseModel):
+    enabled: bool | None  # None → model default; True/False → force on/off for this slot
+
+
+def _apply_slot_thinking(slot: str, enabled: bool | None) -> None:
+    """Set per-assignment reasoning for a slot (task_routing + agent_config).
+
+    The same model can thus reason in one slot and not in another. Idempotent.
+    """
+    # Task-routing slots: write thinking into each underlying task.
+    if slot in _SLOT_THINKING_TASKS:
+        from app.ai.schemas import AITask
+        from app.ai.task_routing import get_routing_for, save_task_routing
+        for tval in _SLOT_THINKING_TASKS[slot]:
+            try:
+                task = AITask(tval)
+            except ValueError:
+                continue
+            routing = get_routing_for(task).model_copy(update={"thinking": enabled})
+            save_task_routing(task, routing)
+    # Agent-config slots: write the tri-state *_disable_thinking field(s).
+    if slot in _SLOT_THINKING_AGENT_FIELDS:
+        from app.ai.agent_config import BuiltinAgentConfigUpdate, update_builtin_agent_config
+        disable = None if enabled is None else (not enabled)
+        patch = {field: disable for field in _SLOT_THINKING_AGENT_FIELDS[slot]}
+        update_builtin_agent_config(BuiltinAgentConfigUpdate(**patch))
+
+
+@router.patch("/slots/{slot}/thinking", dependencies=_admin)
+async def set_slot_thinking(
+    slot: str,
+    payload: SlotThinkingWrite,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Per-assignment reasoning toggle (None=model default, True/False=force)."""
+    if not _slot_supports_thinking(slot):
+        raise HTTPException(400, f"Слот '{slot}' не поддерживает переключение рассуждения")
+    _apply_slot_thinking(slot, payload.enabled)
+    await _persist_slot_durable(db, slot)
+    await db.commit()
+    await model_runtime_store.hydrate_runtime_cache(db)
+    return {"ok": True, "slot": slot, "thinking_enabled": payload.enabled}

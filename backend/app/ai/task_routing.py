@@ -53,6 +53,10 @@ class TaskRouting(BaseModel):
     profile: str = "balanced"
     local_only: bool = True
     allow_cloud: bool = False
+    # Per-assignment thinking/CoT override (tri-state). None → defer to the
+    # model's catalog default; True/False force reasoning on/off for THIS task
+    # only, so one model can run with reasoning in one slot and without in another.
+    thinking: bool | None = None
 
     @property
     def primary(self) -> str | None:
