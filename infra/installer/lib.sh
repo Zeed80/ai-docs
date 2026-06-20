@@ -208,3 +208,76 @@ wait_for_backend() {
   err "Backend не стал здоровым за $((max*2))с. Смотрите логи."
   return 1
 }
+
+# ── Local-AI engine profiles ────────────────────────────────────────────────
+# The compose stack gates the embedded model servers behind profiles
+# (embedded-ollama / embedded-llamacpp / embedded-vllm). Which ones run is
+# persisted as COMPOSE_PROFILES in infra/.env so install/update/backup all
+# manage the same set. profile_args turns that into explicit --profile flags
+# (more portable than relying on compose auto-reading COMPOSE_PROFILES).
+profile_args() {
+  local file="$1" raw out="" p
+  raw="$(get_env_var "$file" COMPOSE_PROFILES)"
+  raw="${raw//,/ }"
+  for p in $raw; do
+    [ -n "$p" ] && out="$out --profile $p"
+  done
+  printf '%s' "$out"
+}
+
+# ── Pre-flight: free disk space ─────────────────────────────────────────────
+# Building images + pulling engine images (vLLM ~25GB) needs headroom. Warns
+# (non-fatal) when the Docker data root has less than <min_gb> free.
+check_disk_space() {
+  local min_gb="${1:-30}" root avail_gb
+  root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
+  avail_gb="$(df -Pk "$root" 2>/dev/null | awk 'NR==2{printf "%d", $4/1024/1024}')"
+  if [ -z "$avail_gb" ]; then
+    warn "Не удалось определить свободное место для $root — пропускаю проверку."
+    return 0
+  fi
+  if [ "$avail_gb" -lt "$min_gb" ]; then
+    warn "Свободно лишь ${avail_gb}ГБ в $root (рекомендуется ≥${min_gb}ГБ для сборки и образов движков)."
+    return 1
+  fi
+  ok "Свободного места: ${avail_gb}ГБ в $root"
+  return 0
+}
+
+# ── Verify all stack services are up/healthy ────────────────────────────────
+# verify_stack <compose-invocation...> — fails if any service is exited or
+# unhealthy. Containers with a healthcheck must be "healthy"; others must run.
+verify_stack() {
+  local out unhealthy
+  out="$("$@" ps --format '{{.Name}}\t{{.State}}\t{{.Status}}' 2>/dev/null)"
+  if [ -z "$out" ]; then
+    err "Контейнеры не найдены."
+    return 1
+  fi
+  # Flag crashed/looping/unhealthy services. `ps` without -a hides one-shot
+  # init containers that exited 0 (e.g. minio-init), so they don't false-positive.
+  unhealthy="$(printf '%s\n' "$out" | awk -F'\t' '
+    $2 == "exited" || $2 == "dead" || $2 == "restarting" { print "  ✗ " $1 " — " $3; next }
+    $3 ~ /unhealthy/ { print "  ✗ " $1 " — " $3 }
+  ')"
+  if [ -n "$unhealthy" ]; then
+    err "Нездоровые сервисы:"
+    printf '%s\n' "$unhealthy" >&2
+    return 1
+  fi
+  local n; n="$(printf '%s\n' "$out" | grep -c .)"
+  ok "Все сервисы в порядке ($n контейнеров)."
+  return 0
+}
+
+# ── Migration revision summary ──────────────────────────────────────────────
+# Prints current vs head alembic revision; returns non-zero if behind head.
+report_migrations() {
+  local cur head
+  cur="$("$@" exec -T backend sh -c 'cd /app && alembic current 2>/dev/null' | awk 'NF{print $1; exit}')"
+  head="$("$@" exec -T backend sh -c 'cd /app && alembic heads 2>/dev/null' | awk 'NF{print $1; exit}')"
+  [ -z "$cur" ] && cur="(нет)"
+  log "  Ревизия БД: $cur  (head: ${head:-?})"
+  [ -n "$head" ] && [ "$cur" != "$head" ] && { warn "БД не на последней ревизии!"; return 1; }
+  return 0
+}

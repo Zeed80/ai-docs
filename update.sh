@@ -39,8 +39,10 @@ APP_ENV="$(get_env_var "$ENV_FILE" APP_ENV)"
 if [ "$APP_ENV" = "production" ]; then
   COMPOSE_ARGS="-f infra/docker-compose.yml -f infra/docker-compose.prod.yml --env-file $ENV_FILE"
 else
-  COMPOSE_ARGS="-f infra/docker-compose.yml -f infra/docker-compose.dev.yml"
+  COMPOSE_ARGS="-f infra/docker-compose.yml -f infra/docker-compose.dev.yml --env-file $ENV_FILE"
 fi
+# Keep the same local-AI engine profiles the stack was installed with.
+COMPOSE_ARGS="$COMPOSE_ARGS$(profile_args "$ENV_FILE")"
 # shellcheck disable=SC2086
 run_compose() { $COMPOSE $COMPOSE_ARGS "$@"; }
 
@@ -82,21 +84,27 @@ fi
 
 # ── 3. Rebuild images ────────────────────────────────────────────────────────
 step "3/5  Пересборка образов"
+check_disk_space 20 || { [ "$NONINTERACTIVE" = 1 ] || ask_yesno "Мало места — продолжить?" no || die "Отменено."; }
+# Capture DB revision before the new backend applies migrations on start.
+REV_BEFORE="$(run_compose exec -T backend sh -c 'cd /app && alembic current 2>/dev/null' | awk 'NF{print $1; exit}')"
 run_compose build
 ok "Образы собраны."
 
-# ── 4. Restart (migrations run in entrypoint) ────────────────────────────────
+# ── 4. Restart (migrations run in entrypoint: alembic upgrade heads) ─────────
 step "4/5  Перезапуск (миграции применятся автоматически)"
-run_compose up -d
+run_compose up -d --remove-orphans
 ok "Контейнеры обновлены."
 
-# ── 5. Health check ──────────────────────────────────────────────────────────
-step "5/5  Проверка здоровья"
+# ── 5. Health check + migration/stack verification ──────────────────────────
+step "5/5  Проверка здоровья, миграций и сервисов"
 if wait_for_backend run_compose; then
+  [ -n "${REV_BEFORE:-}" ] && log "  Ревизия БД до обновления: $REV_BEFORE"
+  report_migrations run_compose || warn "БД не на последней ревизии — смотрите логи backend."
+  verify_stack run_compose || warn "Часть сервисов не здорова: $COMPOSE $COMPOSE_ARGS ps"
   ok "Обновление успешно."
-  run_compose exec -T backend sh -c "cd /app && alembic current" 2>/dev/null | tail -1 | sed 's/^/  Ревизия БД: /'
 else
   err "Backend не стал здоровым после обновления."
+  warn "Логи:          $COMPOSE $COMPOSE_ARGS logs --tail=80 backend"
   warn "Откат кода:    git reset --hard $BEFORE && ./update.sh --no-backup"
   warn "Откат данных:  bash infra/installer/restore.sh <последний-бэкап>"
   exit 1

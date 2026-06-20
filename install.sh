@@ -86,6 +86,9 @@ ok "ОС: $OS ($ARCH)"
 check_dependencies "$OS" || die "Установите недостающие зависимости и повторите."
 COMPOSE="$(compose_cmd)"
 ok "Docker Compose: $COMPOSE"
+check_disk_space 30 || {
+  [ "$NONINTERACTIVE" = 1 ] || ask_yesno "Мало места на диске — продолжить?" no "Диск" || die "Отменено."
+}
 
 # ── 2. Mode selection ───────────────────────────────────────────────────────
 step "2/6  Режим развёртывания"
@@ -134,6 +137,31 @@ configure_env() {
     ok "Dev-конфиг: localhost, секреты сгенерированы"
   fi
 
+  # Local AI engines (compose profiles). Ollama can also run externally
+  # ("сторонняя") — then leave embedded-ollama off. vLLM/llama.cpp serve local
+  # VLM/LLM. Persisted as COMPOSE_PROFILES so install/update manage the same set.
+  local profiles=""
+  if [ "$NONINTERACTIVE" = 1 ]; then
+    profiles="${AIW_PROFILES:-embedded-ollama}"
+  else
+    local sel
+    sel="$(ask_menu "Какие локальные AI-движки запускать в стеке?" "AI-движки" \
+      ollama        "Только Ollama (OCR/извлечение) — рекомендуется" \
+      ollama-vllm   "Ollama + vLLM (локальный VLM/reasoning)" \
+      ollama-llama  "Ollama + llama.cpp" \
+      full          "Ollama + vLLM + llama.cpp" \
+      external      "Никакие (Ollama/vLLM запущены отдельно, вне стека)")"
+    case "$sel" in
+      ollama)       profiles="embedded-ollama" ;;
+      ollama-vllm)  profiles="embedded-ollama,embedded-vllm" ;;
+      ollama-llama) profiles="embedded-ollama,embedded-llamacpp" ;;
+      full)         profiles="embedded-ollama,embedded-vllm,embedded-llamacpp" ;;
+      external)     profiles="" ;;
+    esac
+  fi
+  set_env_var "$ENV_FILE" COMPOSE_PROFILES "$profiles"
+  ok "Локальные AI-движки: ${profiles:-(внешние)}"
+
   # Optional Anthropic key (cloud reasoning); local Ollama works without it.
   if [ "$NONINTERACTIVE" != 1 ]; then
     if ask_yesno "Добавить ключ Anthropic API (облачный reasoning)? Локальный Ollama работает и без него." no "AI"; then
@@ -155,8 +183,10 @@ step "4/6  Сборка и запуск стека"
 if [ "$MODE" = "prod" ]; then
   COMPOSE_ARGS="-f infra/docker-compose.yml -f infra/docker-compose.prod.yml --env-file $ENV_FILE"
 else
-  COMPOSE_ARGS="-f infra/docker-compose.yml -f infra/docker-compose.dev.yml"
+  COMPOSE_ARGS="-f infra/docker-compose.yml -f infra/docker-compose.dev.yml --env-file $ENV_FILE"
 fi
+# Append local-AI engine profiles chosen during configuration.
+COMPOSE_ARGS="$COMPOSE_ARGS$(profile_args "$ENV_FILE")"
 # shellcheck disable=SC2086
 run_compose() { $COMPOSE $COMPOSE_ARGS "$@"; }
 
@@ -167,6 +197,8 @@ ok "Контейнеры запущены."
 # ── 5. Wait for health (migrations run automatically in entrypoint) ─────────
 step "5/6  Инициализация БД и проверка здоровья"
 wait_for_backend run_compose || die "Стек не поднялся. Логи: $COMPOSE $COMPOSE_ARGS logs backend"
+report_migrations run_compose || warn "Проверьте миграции вручную."
+verify_stack run_compose || warn "Часть сервисов не здорова — проверьте: $COMPOSE $COMPOSE_ARGS ps"
 
 # ── 6. Optional AI initialization ───────────────────────────────────────────
 step "6/6  Инициализация AI (модели и агент)"

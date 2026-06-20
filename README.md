@@ -99,10 +99,13 @@ OLLAMA_MODEL_REASONING=gemma4:26b
 curl -fsSL https://raw.githubusercontent.com/Zeed80/ai-docs/main/install.sh | bash
 ```
 
-Установщик сам: определит ОС, проверит Docker/Compose/git, клонирует репозиторий,
-сгенерирует секреты и `infra/.env`, поднимет стек (миграции БД применяются
-автоматически), при желании загрузит локальные модели Ollama и применит дефолты
-агента. Настройка домена/email/ключей — через TUI (whiptail) или флаги.
+Установщик сам: определит ОС, проверит Docker/Compose/git **и свободное место**,
+клонирует репозиторий, сгенерирует секреты и `infra/.env`, спросит, какие
+локальные AI-движки запускать (Ollama / vLLM / llama.cpp — сохраняется в
+`COMPOSE_PROFILES`), поднимет стек (миграции БД применяются автоматически в
+entrypoint), проверит здоровье **всех** сервисов и ревизию БД, при желании
+загрузит модели Ollama и применит дефолты агента. Домен/email/ключи — через TUI
+(whiptail) или флаги.
 
 ```bash
 # Интерактивно из клона репозитория:
@@ -114,12 +117,30 @@ curl -fsSL https://raw.githubusercontent.com/Zeed80/ai-docs/main/install.sh | ba
 # Полезные флаги: --mode dev|prod  --no-ai  --reconfigure  --branch <b>  --dir <path>
 ```
 
+**Локальные AI-движки** управляются compose-профилями (`COMPOSE_PROFILES` в
+`infra/.env`): `embedded-ollama`, `embedded-vllm`, `embedded-llamacpp`. Если
+Ollama/vLLM запущены отдельно (вне стека) — оставьте профиль пустым. `install.sh`
+задаёт значение, `update.sh`/`backup.sh` используют тот же набор.
+
+**Первый админ.** В проде (`AUTH_ENABLED=true`) роли берутся из групп Authentik,
+а пользователь с email `INITIAL_ADMIN_EMAIL` автоматически повышается до `admin`
+при первом входе, пока ни одного админа ещё нет (роль из БД учитывается при
+авторизации каждого запроса). Без админ-роли все `/api/providers/*`,
+`/api/admin/*` и т.п. вернут `403` — это видно, например, как «модели нельзя
+назначить».
+
 ### Обновление
 
 ```bash
-./update.sh            # авто-бэкап → git pull → пересборка → миграции → рестарт → health
+./update.sh            # авто-бэкап → git pull → пересборка → миграции → рестарт → health-проверка всех сервисов
 ./update.sh --no-backup --yes
 ```
+
+Обновление выполняет: бэкап перед обновлением (PostgreSQL + Authentik DB + MinIO +
+Qdrant + Redis + `.env`), `git pull --ff-only`, пересборку образов, перезапуск
+(alembic-миграции применяются автоматически в entrypoint backend), затем проверку
+здоровья backend, **сверку ревизии БД с head** и проверку, что все сервисы
+запущены/healthy. При неуспехе печатает команды отката кода и данных.
 
 ### Бэкап и восстановление
 
@@ -266,6 +287,15 @@ make migrate
 # или
 cd backend && alembic upgrade head
 ```
+
+Миграции применяются автоматически при старте backend (entrypoint:
+`alembic upgrade heads`). Активная цепочка — `backend/migrations/`. Baseline
+(`20260424_0001`) строит полную текущую схему через `Base.metadata.create_all`,
+поэтому **каждая новая миграция должна быть идемпотентной** (guard через
+`inspect(conn).has_table/get_columns/get_indexes` или `IF NOT EXISTS`) — иначе
+чистая установка упадёт на «уже существует». Чистая установка проверяется так:
+`DROP SCHEMA public CASCADE; CREATE SCHEMA public;` → перезапуск backend → вся
+цепочка должна пройти до head без ошибок.
 
 ## Проверки
 
