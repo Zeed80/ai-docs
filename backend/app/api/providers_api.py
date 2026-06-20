@@ -856,14 +856,23 @@ def _loaded_node_for(cap: ModelCapability, index: dict[tuple[str, str], str]) ->
     )
 
 
-def _verification_warning(slot: str, model_key: str, cap: ModelCapability) -> AssignmentIssue | None:
+def _verification_warning(
+    slot: str, model_key: str, cap: ModelCapability, is_loaded: bool = False
+) -> AssignmentIssue | None:
     """Return only actionable verification warnings.
 
     A production model with manually curated capabilities is not a failed eval.
     It is the normal state for the static YAML registry. Reserve failure wording
     for explicit failed verification records when such records are wired into
     the catalog.
+
+    A model physically loaded on a node has proven it runs, so catalog-status
+    caveats (disabled / not-production / auto-discovered profile) are suppressed
+    — the operator already sees it working. Mirrors the frontend `selectable`
+    rule where a loaded model is always selectable regardless of catalog status.
     """
+    if is_loaded:
+        return None
     if cap.status == ModelStatus.DISABLED:
         return AssignmentIssue(
             slot=slot,
@@ -921,10 +930,13 @@ async def _validate_assignment_draft(
         required = _SLOT_MODALITY.get(slot)
         if required and required not in {m.value for m in cap.modalities}:
             warnings.append(AssignmentIssue(slot=slot, model=model_key, code="modality_mismatch", message=f"Модель не заявляет capability '{required}'"))
-        verification_warning = _verification_warning(slot, model_key, cap)
+        # A loaded local model has proven it runs → suppress catalog-status and
+        # not-loaded caveats; only real constraints (modality/confidential) stand.
+        is_loaded = cap.provider in _LOCAL_KINDS and _loaded_node_for(cap, loaded) is not None
+        verification_warning = _verification_warning(slot, model_key, cap, is_loaded=is_loaded)
         if verification_warning is not None:
             warnings.append(verification_warning)
-        if cap.provider in _LOCAL_KINDS and _loaded_node_for(cap, loaded) is None:
+        if cap.provider in _LOCAL_KINDS and not is_loaded:
             warnings.append(AssignmentIssue(slot=slot, model=model_key, code="not_loaded", message="Модель не найдена ни на одном локальном узле сейчас"))
         old = current.get(slot)
         if old != model_key:

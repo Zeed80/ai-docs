@@ -49,6 +49,26 @@ def test_discovered_capability_gets_precise_unverified_profile_warning():
     assert "не прошла" not in issue.message
 
 
+def test_loaded_disabled_model_is_not_warned():
+    """A physically loaded model is proven to run → no catalog-status warning.
+
+    Regression: ocr_large=qwen3.5:27b (disabled in catalog) is loaded and works,
+    but used to raise a misleading "Модель отключена в каталоге" warning.
+    """
+    cap = ModelCapability(
+        name="loaded_disabled",
+        provider=ProviderKind.OLLAMA,
+        provider_model="qwen3.5:27b",
+        status=ModelStatus.DISABLED,
+        modalities={Modality.VISION, Modality.TEXT},
+        capability_source="discovered",
+    )
+    # Not loaded → warns (catalog disabled).
+    assert _verification_warning("ocr_large", "loaded_disabled", cap).code == "disabled_model"
+    # Loaded → suppressed.
+    assert _verification_warning("ocr_large", "loaded_disabled", cap, is_loaded=True) is None
+
+
 @pytest.mark.asyncio
 async def test_assignment_draft_validate_does_not_apply(
     client: AsyncClient,
