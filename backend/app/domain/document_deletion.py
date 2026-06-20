@@ -256,6 +256,35 @@ async def hard_delete_document(
             ).scalars().all()
         )
 
+    # Canonical graph nodes (supplier, invoice, tool, standard…) deliberately
+    # carry no source_document_id so they outlive single-document deletes. Once
+    # this document's edges/mentions are gone, any node left with no edges and no
+    # mentions is an orphan and must be cleaned too. Collect every node touched by
+    # the deleted subgraph (edge endpoints + mention targets + this doc's nodes)
+    # as cleanup candidates; the actual orphan delete runs after the edge/mention
+    # removals below.
+    orphan_candidate_ids: set[uuid.UUID] = set(node_ids)
+    if edge_ids:
+        for source_node_id, target_node_id in (
+            await db.execute(
+                select(KnowledgeEdge.source_node_id, KnowledgeEdge.target_node_id).where(
+                    KnowledgeEdge.id.in_(edge_ids)
+                )
+            )
+        ).all():
+            orphan_candidate_ids.add(source_node_id)
+            orphan_candidate_ids.add(target_node_id)
+    if mention_ids:
+        orphan_candidate_ids.update(
+            node_id
+            for node_id in (
+                await db.execute(
+                    select(EntityMention.node_id).where(EntityMention.id.in_(mention_ids))
+                )
+            ).scalars().all()
+            if node_id
+        )
+
     counts: dict[str, int | str] = {"document_id": str(document_id)}
 
     async def remove(model, *conditions) -> None:
@@ -287,6 +316,12 @@ async def hard_delete_document(
     if evidence_ids:
         await remove(KnowledgeEdge, KnowledgeEdge.evidence_span_id.in_(evidence_ids))
         await remove(EvidenceSpan, EvidenceSpan.id.in_(evidence_ids))
+
+    # Drop canonical nodes that became orphaned by the edge/mention removals above
+    # (no remaining edges, no remaining mentions). Nodes still referenced by other
+    # documents keep their edges and are preserved.
+    await _delete_orphan_nodes(db, orphan_candidate_ids - node_ids, counts)
+
     if chunk_ids:
         await remove(DocumentChunk, DocumentChunk.id.in_(chunk_ids))
 
@@ -446,7 +481,20 @@ async def purge_all_development_data(
     # Also purge supplier-related data (not derived from documents)
     await _purge_supplier_data(db)
 
+    # Deterministically wipe any remaining knowledge-graph rows. Canonical nodes
+    # (supplier/invoice/tool/…) carry no source_document_id, so the per-document
+    # cascade cannot reach the ones not tied to a deleted edge; a full purge must
+    # leave the graph empty.
+    await _purge_graph_data(db)
+
     return result
+
+
+async def _purge_graph_data(db: AsyncSession) -> None:
+    """Delete all knowledge-graph rows (FK-safe order)."""
+    for model in (GraphReviewItem, KnowledgeEdge, EntityMention, KnowledgeNode):
+        await db.execute(delete(model))
+    logger.info("graph_data_purged")
 
 
 async def _purge_supplier_data(db: AsyncSession) -> None:
@@ -462,6 +510,50 @@ async def _purge_supplier_data(db: AsyncSession) -> None:
     for model in (SupplierContract, PriceHistoryEntry, SupplierProfile, Party):
         await db.execute(delete(model))
     logger.info("supplier_data_purged")
+
+
+async def _delete_orphan_nodes(
+    db: AsyncSession,
+    candidate_ids: set[uuid.UUID],
+    counts: dict[str, int | str],
+) -> None:
+    """Delete knowledge nodes from ``candidate_ids`` left with no edges/mentions."""
+    if not candidate_ids:
+        return
+    referenced: set[uuid.UUID] = set()
+    referenced.update(
+        (
+            await db.execute(
+                select(KnowledgeEdge.source_node_id).where(
+                    KnowledgeEdge.source_node_id.in_(candidate_ids)
+                )
+            )
+        ).scalars().all()
+    )
+    referenced.update(
+        (
+            await db.execute(
+                select(KnowledgeEdge.target_node_id).where(
+                    KnowledgeEdge.target_node_id.in_(candidate_ids)
+                )
+            )
+        ).scalars().all()
+    )
+    referenced.update(
+        (
+            await db.execute(
+                select(EntityMention.node_id).where(EntityMention.node_id.in_(candidate_ids))
+            )
+        ).scalars().all()
+    )
+    orphan_ids = {node_id for node_id in candidate_ids if node_id not in referenced}
+    if not orphan_ids:
+        return
+    await db.execute(delete(GraphReviewItem).where(GraphReviewItem.node_id.in_(orphan_ids)))
+    result = await db.execute(delete(KnowledgeNode).where(KnowledgeNode.id.in_(orphan_ids)))
+    counts["knowledge_nodes_orphaned"] = int(
+        counts.get("knowledge_nodes_orphaned", 0) or 0
+    ) + int(result.rowcount or 0)
 
 
 async def _delete_cross_entity_records(
