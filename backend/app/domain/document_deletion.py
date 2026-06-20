@@ -23,6 +23,7 @@ from app.db.models import (
     DocumentLink,
     DocumentProcessingJob,
     DocumentVersion,
+    DraftEmail,
     Drawing,
     DrawingAssemblyBOM,
     DrawingFeature,
@@ -32,6 +33,7 @@ from app.db.models import (
     EmailThread,
     EntityMention,
     EvidenceSpan,
+    ExportJob,
     ExtractionField,
     GraphBuildStatus,
     GraphReviewItem,
@@ -53,6 +55,7 @@ from app.db.models import (
     Party,
     PaymentSchedule,
     PriceHistoryEntry,
+    PurchaseRequest,
     QuarantineEntry,
     SupplierContract,
     SupplierProfile,
@@ -472,6 +475,71 @@ async def _delete_cross_entity_records(
     entity_pairs.extend(("invoice", invoice_id) for invoice_id in invoice_ids)
     entity_pairs.extend(("bom", bom_id) for bom_id in bom_ids)
 
+    # Collect the approval ids tied to these entities *before* deleting anything,
+    # then expand with their chain children (self-referencing chain_root_id FK).
+    root_approval_ids: set[uuid.UUID] = set()
+    for entity_type, entity_id in entity_pairs:
+        rows = (await db.execute(
+            select(Approval.id).where(
+                Approval.entity_type == entity_type,
+                Approval.entity_id == entity_id,
+            )
+        )).scalars().all()
+        root_approval_ids.update(rows)
+
+    child_approval_ids: set[uuid.UUID] = set()
+    if root_approval_ids:
+        child_rows = (await db.execute(
+            select(Approval.id).where(
+                Approval.chain_root_id.in_(root_approval_ids),
+                Approval.id.notin_(root_approval_ids),
+            )
+        )).scalars().all()
+        child_approval_ids.update(child_rows)
+
+    all_approval_ids = root_approval_ids | child_approval_ids
+
+    # Null out FK references to the approvals from tables we are *not* deleting
+    # here (export_jobs, draft_emails, purchase_requests, draft_actions), so the
+    # subsequent approval delete does not violate those constraints.
+    if all_approval_ids:
+        for model in (ExportJob, DraftEmail, PurchaseRequest, DraftAction):
+            await db.execute(
+                model.__table__.update()  # type: ignore[attr-defined]
+                .where(model.approval_id.in_(all_approval_ids))
+                .values(approval_id=None)
+            )
+        # Delete chain children first; chain roots are removed by the loop below.
+        if child_approval_ids:
+            result = await db.execute(
+                delete(Approval).where(Approval.id.in_(child_approval_ids))
+            )
+            counts[Approval.__tablename__] = int(
+                counts.get(Approval.__tablename__, 0) or 0
+            ) + int(result.rowcount or 0)
+
+    # Remove export jobs / draft emails tied to the deleted entities so no rows
+    # are left pointing at non-existent invoices/documents (orphan cleanup).
+    for entity_type, entity_id in entity_pairs:
+        export_result = await db.execute(
+            delete(ExportJob).where(
+                ExportJob.entity_type == entity_type,
+                ExportJob.entity_id == entity_id,
+            )
+        )
+        counts[ExportJob.__tablename__] = int(
+            counts.get(ExportJob.__tablename__, 0) or 0
+        ) + int(export_result.rowcount or 0)
+        email_result = await db.execute(
+            delete(DraftEmail).where(
+                DraftEmail.related_entity_type == entity_type,
+                DraftEmail.related_entity_id == entity_id,
+            )
+        )
+        counts[DraftEmail.__tablename__] = int(
+            counts.get(DraftEmail.__tablename__, 0) or 0
+        ) + int(email_result.rowcount or 0)
+
     for entity_type, entity_id in entity_pairs:
         for model in (CollectionItem, AnomalyCard, Approval, DraftAction, AuditLog, AuditTimelineEvent):
             column_type = getattr(model, "entity_type", None)
@@ -483,24 +551,6 @@ async def _delete_cross_entity_records(
             )
             key = model.__tablename__
             counts[key] = int(counts.get(key, 0) or 0) + int(result.rowcount or 0)
-
-    # Approval chain root references — delete child approvals whose chain_root
-    # was already deleted above (self-referencing FK), then orphaned roots.
-    # Two-pass avoids FK constraint violations.
-    deleted_approval_ids: set[uuid.UUID] = set()
-    for entity_type, entity_id in entity_pairs:
-        rows = (await db.execute(
-            select(Approval.id).where(
-                Approval.entity_type == entity_type,
-                Approval.entity_id == entity_id,
-            )
-        )).scalars().all()
-        deleted_approval_ids.update(rows)
-    if deleted_approval_ids:
-        # Also delete any chain children pointing at these roots
-        await db.execute(
-            delete(Approval).where(Approval.chain_root_id.in_(deleted_approval_ids))
-        )
 
 
 def _delete_storage_paths(storage_paths: Iterable[str]) -> int:
