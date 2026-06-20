@@ -1186,8 +1186,13 @@ export default function SettingsPage() {
       );
       setPurgeConfirm("");
       await loadEmbeddingStats();
-    } catch {
-      setPurgeMessage("Не удалось выполнить полную очистку");
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : "";
+      setPurgeMessage(
+        detail
+          ? `Не удалось выполнить полную очистку: ${detail}`
+          : "Не удалось выполнить полную очистку",
+      );
     } finally {
       setPurgeBusy(false);
     }

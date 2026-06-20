@@ -1268,9 +1268,13 @@ async def purge_all_documents_for_development(
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
 ):
-    """Dev-only hard purge of documents and all derived DB records."""
-    if settings.app_env == "production":
-        raise HTTPException(status_code=403, detail="This endpoint is disabled in production")
+    """Admin hard purge of all documents and every derived DB record.
+
+    Gated by the ``admin`` role plus an exact confirmation phrase — those two
+    checks are the authorization for this destructive data-management action, so
+    it is available in every environment (the admin "Полная очистка" tool is
+    surfaced in production settings).
+    """
     if payload.confirm != "DELETE ALL DOCUMENT DATA":
         raise HTTPException(
             status_code=400,
