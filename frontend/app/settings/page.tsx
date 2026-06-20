@@ -582,6 +582,9 @@ export default function SettingsPage() {
   const [purgeConfirm, setPurgeConfirm] = useState("");
   const [purgeBusy, setPurgeBusy] = useState(false);
   const [purgeMessage, setPurgeMessage] = useState<string | null>(null);
+  const [whPurgeConfirm, setWhPurgeConfirm] = useState("");
+  const [whPurgeBusy, setWhPurgeBusy] = useState(false);
+  const [whPurgeMessage, setWhPurgeMessage] = useState<string | null>(null);
 
   // Telegram
   const [tgStatus, setTgStatus] = useState<{
@@ -1195,6 +1198,34 @@ export default function SettingsPage() {
       );
     } finally {
       setPurgeBusy(false);
+    }
+  }
+
+  async function handleWarehousePurge() {
+    if (whPurgeConfirm !== "DELETE ALL WAREHOUSE DATA") return;
+    if (!confirm("Полностью очистить склад (остатки, движения, приёмки)?"))
+      return;
+    setWhPurgeBusy(true);
+    setWhPurgeMessage(null);
+    try {
+      const r = await mutFetch(`${API}/api/documents/dev/purge-warehouse`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: whPurgeConfirm }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      setWhPurgeMessage(`Склад очищен: удалено записей ${data.deleted}`);
+      setWhPurgeConfirm("");
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : "";
+      setWhPurgeMessage(
+        detail
+          ? `Не удалось очистить склад: ${detail}`
+          : "Не удалось очистить склад",
+      );
+    } finally {
+      setWhPurgeBusy(false);
     }
   }
 
@@ -2977,9 +3008,9 @@ export default function SettingsPage() {
               Полная очистка документов
             </h2>
             <p className="mt-1 text-sm text-red-200/80">
-              Dev-команда удаляет все документы, файлы и связанные записи:
-              извлечения, память, граф, НТД-проверки, счета, техпроцессы, BOM и
-              складские приёмки.
+              Удаляет все документы, файлы и связанные записи: извлечения,
+              память, граф знаний, НТД-проверки, счета, техпроцессы, BOM,
+              поставщиков и склад (остатки, движения, приёмки).
             </p>
             <div className="mt-4 flex flex-col gap-3 sm:flex-row">
               <input
@@ -3000,6 +3031,37 @@ export default function SettingsPage() {
             </div>
             {purgeMessage && (
               <p className="mt-3 text-xs text-red-100">{purgeMessage}</p>
+            )}
+          </section>
+
+          {/* Warehouse-only purge */}
+          <section className="rounded-lg border border-red-900 bg-red-950/20 p-6">
+            <h2 className="text-lg font-semibold text-red-100">
+              Полная очистка склада
+            </h2>
+            <p className="mt-1 text-sm text-red-200/80">
+              Удаляет только складские данные: остатки (номенклатуру), движения
+              и приёмки. Документы и каталог нормализации не затрагиваются.
+            </p>
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <input
+                value={whPurgeConfirm}
+                onChange={(e) => setWhPurgeConfirm(e.target.value)}
+                placeholder='Введите "DELETE ALL WAREHOUSE DATA"'
+                className="flex-1 rounded-md border border-red-900 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+              />
+              <button
+                onClick={handleWarehousePurge}
+                disabled={
+                  whPurgeBusy || whPurgeConfirm !== "DELETE ALL WAREHOUSE DATA"
+                }
+                className="rounded-md bg-red-700 px-4 py-2 text-sm text-white hover:bg-red-600 disabled:opacity-50"
+              >
+                {whPurgeBusy ? "Очищаю..." : "Очистить склад"}
+              </button>
+            </div>
+            {whPurgeMessage && (
+              <p className="mt-3 text-xs text-red-100">{whPurgeMessage}</p>
             )}
           </section>
         </div>

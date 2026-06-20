@@ -44,6 +44,7 @@ from app.domain.document_deletion import (
     hard_delete_document,
     hard_delete_documents,
     purge_all_development_data,
+    purge_warehouse_data,
 )
 from app.domain.documents import (
     DevelopmentPurgeRequest,
@@ -71,6 +72,8 @@ from app.domain.documents import (
     FieldCorrectionRequest,
     FieldCorrectionResponse,
     TaskResponse,
+    WarehousePurgeRequest,
+    WarehousePurgeResponse,
 )
 
 router = APIRouter()
@@ -1288,6 +1291,32 @@ async def purge_all_documents_for_development(
         missing=int(result["missing"]),
         documents_seen=int(result["documents_seen"]),
         results=[_delete_result_payload(item) for item in result["results"]],
+        warehouse={k: int(v) for k, v in (result.get("warehouse") or {}).items()},
+    )
+
+
+@router.post("/dev/purge-warehouse", response_model=WarehousePurgeResponse)
+async def purge_warehouse(
+    payload: WarehousePurgeRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
+):
+    """Admin hard purge of all warehouse data (stock items, movements, receipts).
+
+    Gated by the ``admin`` role plus an exact confirmation phrase. Leaves
+    documents and the normalization catalog (canonical_items) untouched.
+    """
+    if payload.confirm != "DELETE ALL WAREHOUSE DATA":
+        raise HTTPException(
+            status_code=400,
+            detail='Confirmation must equal "DELETE ALL WAREHOUSE DATA"',
+        )
+
+    counts = await purge_warehouse_data(db)
+    await db.commit()
+    return WarehousePurgeResponse(
+        deleted=sum(counts.values()),
+        counts={k: int(v) for k, v in counts.items()},
     )
 
 

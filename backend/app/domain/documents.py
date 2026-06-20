@@ -147,6 +147,16 @@ class DevelopmentPurgeResponse(BaseModel):
     missing: int = 0
     documents_seen: int = 0
     results: list[DocumentDeleteResult] = []
+    warehouse: dict[str, int] = {}
+
+
+class WarehousePurgeRequest(BaseModel):
+    confirm: str
+
+
+class WarehousePurgeResponse(BaseModel):
+    deleted: int = 0
+    counts: dict[str, int] = {}
 
 
 class DocumentSummary(BaseModel):

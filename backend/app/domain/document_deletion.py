@@ -35,8 +35,10 @@ from app.db.models import (
     EvidenceSpan,
     ExportJob,
     ExtractionField,
+    FeatureToolBinding,
     GraphBuildStatus,
     GraphReviewItem,
+    InventoryItem,
     Invoice,
     InvoiceLine,
     KnowledgeEdge,
@@ -57,6 +59,7 @@ from app.db.models import (
     PriceHistoryEntry,
     PurchaseRequest,
     QuarantineEntry,
+    StockMovement,
     SupplierContract,
     SupplierProfile,
     TechnologyCorrection,
@@ -487,6 +490,12 @@ async def purge_all_development_data(
     # leave the graph empty.
     await _purge_graph_data(db)
 
+    # Warehouse stock (inventory_items, stock_movements) is not derived from
+    # documents and survives the per-document cascade — wipe it too so a full
+    # purge leaves the warehouse empty.
+    warehouse = await purge_warehouse_data(db)
+    result["warehouse"] = warehouse
+
     return result
 
 
@@ -495,6 +504,34 @@ async def _purge_graph_data(db: AsyncSession) -> None:
     for model in (GraphReviewItem, KnowledgeEdge, EntityMention, KnowledgeNode):
         await db.execute(delete(model))
     logger.info("graph_data_purged")
+
+
+async def purge_warehouse_data(db: AsyncSession) -> dict[str, int]:
+    """Delete all warehouse data: receipts, stock items and movements.
+
+    Standalone helper so it can back both the full purge and a warehouse-only
+    clear. Caller is responsible for committing. Canonical normalization catalog
+    (``canonical_items``) is intentionally preserved — it is not warehouse stock.
+    """
+    # Nullify the only nullable FK pointing at inventory items from outside the
+    # warehouse domain so the inventory delete cannot violate it.
+    await db.execute(
+        FeatureToolBinding.__table__.update()  # type: ignore[attr-defined]
+        .where(FeatureToolBinding.warehouse_item_id.isnot(None))
+        .values(warehouse_item_id=None)
+    )
+    counts: dict[str, int] = {}
+    # FK-safe order: movements & receipt lines reference inventory items/receipts.
+    for model in (
+        StockMovement,
+        WarehouseReceiptLine,
+        WarehouseReceipt,
+        InventoryItem,
+    ):
+        result = await db.execute(delete(model))
+        counts[model.__tablename__] = int(result.rowcount or 0)
+    logger.info("warehouse_data_purged", counts=counts)
+    return counts
 
 
 async def _purge_supplier_data(db: AsyncSession) -> None:
