@@ -15,10 +15,19 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("recipe_skills", sa.Column("intent", sa.String(length=40), nullable=True))
-    op.add_column(
-        "recipe_skills", sa.Column("output_channel", sa.String(length=20), nullable=True)
-    )
+    # Idempotent: the baseline migration's create_all already builds the current
+    # recipe_skills columns on a clean install, so only add what is missing.
+    insp = sa.inspect(op.get_bind())
+    existing = {c["name"] for c in insp.get_columns("recipe_skills")}
+    if "intent" not in existing:
+        op.add_column(
+            "recipe_skills", sa.Column("intent", sa.String(length=40), nullable=True)
+        )
+    if "output_channel" not in existing:
+        op.add_column(
+            "recipe_skills",
+            sa.Column("output_channel", sa.String(length=20), nullable=True),
+        )
 
 
 def downgrade() -> None:

@@ -32,6 +32,13 @@ _FK_COLUMNS = [
 
 def upgrade() -> None:
     conn = op.get_bind()
+    # The baseline migration builds the full current schema via
+    # ``Base.metadata.create_all``, which already includes ``uq_parties_inn``
+    # (declared in Party.__table_args__). On a clean install the index therefore
+    # exists before this migration runs — skip creation to stay idempotent.
+    existing_indexes = {ix["name"] for ix in sa.inspect(conn).get_indexes("parties")}
+    if "uq_parties_inn" in existing_indexes:
+        return
     if conn.dialect.name != "postgresql":
         # SQLite/others: best-effort unique index only (tests use a clean DB).
         op.create_index("uq_parties_inn", "parties", ["inn"], unique=True)

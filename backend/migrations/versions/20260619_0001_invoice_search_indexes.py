@@ -48,6 +48,10 @@ _TRGM_INDEXES = [
 def upgrade() -> None:
     if op.get_bind().dialect.name != "postgresql":
         return
+    # Trigram indexes below need the pg_trgm extension; on a clean install it is
+    # not present yet. pg_trgm is a trusted extension (PG13+), so the DB owner can
+    # create it without superuser rights.
+    op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     for name, table, expr in _FTS_INDEXES:
         op.execute(
             f"CREATE INDEX IF NOT EXISTS {name} ON {table} USING gin ({expr})"
