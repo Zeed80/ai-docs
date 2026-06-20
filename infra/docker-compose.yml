@@ -22,6 +22,10 @@ x-backend-env: &backend-env
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
   FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
   AUTH_ENABLED: ${AUTH_ENABLED:-false}
+  # Bootstrap admin: the matching user is auto-promoted to admin on first login
+  # while no admin exists yet (see auth/user_service.upsert_user). Without this
+  # the first SSO user lands as viewer → 403 on all admin endpoints.
+  INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
   AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-agent-internal-key-2026}
   SKILL_RUNNER_URL: http://skill-runner:8077
   GPU_TEMP_HELPER_URL: http://gpu-temp-helper:9966

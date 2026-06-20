@@ -138,6 +138,14 @@ async def _verify_token(token: str) -> UserInfo:
 
         await _assert_user_active(claims["sub"])
 
+        # Merge the DB role (bootstrap admin / admin-granted roles) on top of the
+        # SSO-group roles so app-managed RBAC takes effect even when SSO groups
+        # don't carry it. Union → DB can only add privileges, never silently drop
+        # an SSO grant.
+        db_role = await _db_role_for_sub(claims["sub"])
+        if db_role is not None and db_role not in roles:
+            roles = [db_role, *roles]
+
         return UserInfo(
             sub=claims["sub"],
             email=claims.get("email", ""),
@@ -208,19 +216,74 @@ async def _verify_api_key(raw_key: str) -> UserInfo:
 # expiring. Short TTL keeps the DB load low while bounding stale access to seconds.
 _ACTIVE_CACHE_TTL = 45  # seconds
 _ACTIVE_CACHE_PREFIX = "auth:active:"
+_ROLE_CACHE_TTL = 45  # seconds
+_ROLE_CACHE_PREFIX = "auth:role:"
 
 
 async def invalidate_active_cache(sub: str) -> None:
-    """Drop the cached active-status for a user so a change takes effect immediately.
-
-    Call after activating/deactivating a user. Best-effort — ignores Redis errors.
+    """Drop the cached active-status and role for a user so a change takes effect
+    immediately. Call after activating/deactivating or changing a user's role.
+    Best-effort — ignores Redis errors.
     """
     try:
         from app.utils.redis_client import get_async_redis
 
-        await get_async_redis().delete(f"{_ACTIVE_CACHE_PREFIX}{sub}")
+        redis = get_async_redis()
+        await redis.delete(f"{_ACTIVE_CACHE_PREFIX}{sub}")
+        await redis.delete(f"{_ROLE_CACHE_PREFIX}{sub}")
     except Exception:  # pragma: no cover - cache invalidation is best-effort
         pass
+
+
+async def _db_role_for_sub(sub: str) -> UserRole | None:
+    """Return the app role stored in DB for this user (authoritative for RBAC).
+
+    ``users.role`` is synced on every login from SSO groups + the
+    INITIAL_ADMIN_EMAIL bootstrap promote + admin grants, so it must be honoured
+    at request time — otherwise the first admin (promoted in DB but not in any
+    SSO ``admins`` group) is stuck as viewer. Cached briefly; fail-open (None).
+    """
+    cache_key = f"{_ROLE_CACHE_PREFIX}{sub}"
+    redis = None
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        redis = get_async_redis()
+        cached = await redis.get(cache_key)
+        if cached:
+            try:
+                return UserRole(cached)
+            except ValueError:
+                return None
+    except Exception:
+        redis = None
+
+    try:
+        from sqlalchemy import select
+
+        from app.db.models import User
+        from app.db.session import _get_session_factory
+
+        async with _get_session_factory()() as db:
+            row = (
+                await db.execute(select(User.role).where(User.sub == sub))
+            ).scalar_one_or_none()
+    except Exception as e:
+        logger.warning("role_lookup_db_failed", error=str(e))
+        return None
+
+    role: UserRole | None = None
+    if row:
+        try:
+            role = UserRole(row)
+        except ValueError:
+            role = None
+    if redis is not None and role is not None:
+        try:
+            await redis.set(cache_key, role.value, ex=_ROLE_CACHE_TTL)
+        except Exception:  # pragma: no cover
+            pass
+    return role
 
 
 async def _assert_user_active(sub: str) -> None:
