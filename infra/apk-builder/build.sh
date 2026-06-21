@@ -32,12 +32,8 @@ cd /build/mobile
 scripts/prepare-android.sh
 sed -i "s/versionCode .*/versionCode ${VERSION_CODE}/" android/app/build.gradle
 sed -i "s/versionName \".*\"/versionName \"${VERSION_NAME}\"/" android/app/build.gradle
-
-# App display name (launcher label) = AI-DOCS_<version>.
-STR=android/app/src/main/res/values/strings.xml
-LABEL="AI-DOCS_${VERSION_NAME}"
-sed -i "s#<string name=\"app_name\">[^<]*</string>#<string name=\"app_name\">${LABEL}</string>#" "$STR"
-sed -i "s#<string name=\"title_activity_main\">[^<]*</string>#<string name=\"title_activity_main\">${LABEL}</string>#" "$STR"
+# Launcher label stays "AI-DOCS" (from capacitor appName); the version lives only
+# in the downloaded file name (AI-DOCS_<version>.apk), not in the app label.
 
 echo "[apk-builder] building release ${VERSION_NAME} (${VERSION_CODE})…"
 cd android
