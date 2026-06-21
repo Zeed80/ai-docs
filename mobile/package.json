@@ -1,5 +1,5 @@
 {
-  "name": "sveta-mobile",
+  "name": "aidocs-mobile",
   "version": "0.1.0",
   "private": true,
   "description": "Android shell (Capacitor) for the AI Manufacturing Workspace — loads the live frontend and adds native capabilities.",

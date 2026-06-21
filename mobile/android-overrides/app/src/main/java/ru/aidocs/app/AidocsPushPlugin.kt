@@ -1,4 +1,4 @@
-package ru.aiworkspace.sveta
+package ru.aidocs.app
 
 import android.content.Context
 import android.content.Intent
@@ -28,7 +28,7 @@ class AidocsPushPlugin : Plugin() {
     private fun ensureTopic(): String {
         val existing = prefs().getString(KEY_TOPIC, null)
         if (existing != null) return existing
-        val topic = "sveta-" + UUID.randomUUID().toString().replace("-", "")
+        val topic = "aidocs-" + UUID.randomUUID().toString().replace("-", "")
         prefs().edit().putString(KEY_TOPIC, topic).apply()
         return topic
     }
@@ -67,7 +67,7 @@ class AidocsPushPlugin : Plugin() {
     }
 
     companion object {
-        const val PREFS = "sveta_push"
+        const val PREFS = "aidocs_push"
         const val KEY_TOPIC = "topic"
         const val KEY_URL = "ntfy_url"
 

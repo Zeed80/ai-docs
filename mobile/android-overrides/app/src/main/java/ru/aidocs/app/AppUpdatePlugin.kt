@@ -1,4 +1,4 @@
-package ru.aiworkspace.sveta
+package ru.aidocs.app
 
 import android.content.Intent
 import android.net.Uri
@@ -96,7 +96,7 @@ class AppUpdatePlugin : Plugin() {
                 val expectedSha = manifest.optString("sha256", "")
 
                 val outDir = File(context.externalCacheDir, "apk").apply { mkdirs() }
-                val apk = File(outDir, "sveta-latest.apk")
+                val apk = File(outDir, "aidocs-latest.apk")
                 URL(apkUrl).openStream().use { input ->
                     apk.outputStream().use { input.copyTo(it) }
                 }

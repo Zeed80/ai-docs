@@ -1,4 +1,4 @@
-package ru.aiworkspace.sveta
+package ru.aidocs.app
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -156,7 +156,7 @@ class AidocsPushService : Service() {
 
     companion object {
         const val ONGOING_ID = 1001
-        const val CHANNEL_ONGOING = "sveta_ongoing"
-        const val CHANNEL_MESSAGES = "sveta_messages"
+        const val CHANNEL_ONGOING = "aidocs_ongoing"
+        const val CHANNEL_MESSAGES = "aidocs_messages"
     }
 }

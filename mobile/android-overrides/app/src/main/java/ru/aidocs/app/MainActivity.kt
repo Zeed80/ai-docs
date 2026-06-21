@@ -1,4 +1,4 @@
-package ru.aiworkspace.sveta
+package ru.aidocs.app
 
 import android.Manifest
 import android.content.Intent
@@ -78,6 +78,6 @@ class MainActivity : BridgeActivity() {
         "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
     companion object {
-        const val EXTRA_ACTION_PATH = "sveta_action_path"
+        const val EXTRA_ACTION_PATH = "aidocs_action_path"
     }
 }

@@ -77,7 +77,7 @@ jobs:
           sed -i "s#<string name=\"title_activity_main\">[^<]*</string>#<string name=\"title_activity_main\">${LABEL}</string>#" "$STR"
 
       - name: Decode keystore
-        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/sveta-release.jks
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/aidocs-release.jks
 
       - name: Build signed release APK
         working-directory: mobile/android
@@ -87,7 +87,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=sveta-release.jks \
+            -Pandroid.injected.signing.store.file=aidocs-release.jks \
             -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_PASSWORD" \
             -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
             -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"

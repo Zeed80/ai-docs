@@ -1,4 +1,4 @@
-package ru.aiworkspace.sveta
+package ru.aidocs.app
 
 import android.content.Context
 import com.getcapacitor.JSObject
