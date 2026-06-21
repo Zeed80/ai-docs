@@ -351,6 +351,15 @@ function UsersContent() {
     load();
   }
 
+  async function revokeSessions(sub: string) {
+    if (!confirm("Отозвать все QR-сессии этого пользователя?")) return;
+    const res = await fetch(
+      `${API}/api/admin/users/${encodeURIComponent(sub)}/revoke-sessions`,
+      { method: "POST", credentials: "include", headers: csrfHeaders() },
+    );
+    alert(res.ok ? "Сессии отозваны." : "Не удалось отозвать сессии.");
+  }
+
   return (
     <div className="space-y-4">
       {showCreate && (
@@ -487,6 +496,15 @@ function UsersContent() {
                             title="Показать QR для входа в приложении"
                           >
                             QR-вход
+                          </button>
+                        )}
+                        {u.is_active && (
+                          <button
+                            onClick={() => revokeSessions(u.sub)}
+                            className="text-xs text-amber-600 hover:underline"
+                            title="Отозвать все QR-сессии пользователя"
+                          >
+                            Отозвать
                           </button>
                         )}
                         {u.is_active ? (

@@ -25,3 +25,14 @@ body {
 html.is-native body {
   padding-bottom: calc(4rem + env(safe-area-inset-bottom));
 }
+
+/* Small-screen polish for the native shell: smooth horizontal table scrolling
+   and no accidental horizontal page overflow behind the bottom tab bar. */
+@media (max-width: 640px) {
+  html.is-native body {
+    overflow-x: hidden;
+  }
+  html.is-native .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+}

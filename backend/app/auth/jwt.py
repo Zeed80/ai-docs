@@ -126,6 +126,61 @@ async def get_current_user_optional(
 
 _LOCAL_ISS = "sveta-local"
 _LOCAL_TOKEN_USE = "local_session"
+_LSEPOCH_PREFIX = "auth:lsepoch:"      # per-user local-session epoch (bump = revoke all)
+_LSREVOKED_PREFIX = "auth:lsrevoked:"  # per-jti denylist (single-session revoke)
+
+
+def _session_key() -> str:
+    """Signing secret for local session tokens (dedicated key, app_secret_key fallback)."""
+    return settings.session_signing_key or settings.app_secret_key
+
+
+async def current_session_epoch(sub: str) -> int:
+    """Current local-session epoch for a user (0 if none). Fail-open to 0."""
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        val = await get_async_redis().get(f"{_LSEPOCH_PREFIX}{sub}")
+        return int(val) if val else 0
+    except Exception:
+        return 0
+
+
+async def revoke_user_sessions(sub: str) -> int:
+    """Invalidate ALL outstanding local sessions for a user by bumping the epoch."""
+    from app.utils.redis_client import get_async_redis
+
+    return int(await get_async_redis().incr(f"{_LSEPOCH_PREFIX}{sub}"))
+
+
+async def revoke_session_jti(jti: str, ttl_seconds: int = 86400) -> None:
+    """Revoke a single local session by its jti (denylist until it would expire)."""
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        await get_async_redis().setex(f"{_LSREVOKED_PREFIX}{jti}", max(ttl_seconds, 60), "1")
+    except Exception:  # pragma: no cover - best effort
+        pass
+
+
+async def _is_local_session_revoked(claims: dict) -> bool:
+    """True if this local session was revoked (by jti denylist or epoch bump).
+
+    Fail-open (not revoked) on infra errors so a Redis outage can't lock users out.
+    """
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        r = get_async_redis()
+        jti = claims.get("jti")
+        if jti and await r.get(f"{_LSREVOKED_PREFIX}{jti}"):
+            return True
+        cur = await r.get(f"{_LSEPOCH_PREFIX}{claims.get('sub')}")
+        if cur is not None and int(cur) > int(claims.get("epoch", 0)):
+            return True
+    except Exception:
+        return False
+    return False
 
 
 def mint_local_session(
@@ -135,9 +190,16 @@ def mint_local_session(
     name: str = "",
     preferred_username: str = "",
     groups: list[str] | None = None,
-    ttl_seconds: int = 28800,
+    ttl_seconds: int = 3600,
+    session_epoch: int = 0,
 ) -> str:
-    """Mint a backend-signed (HS256) session token for `sub`. Used by QR-login."""
+    """Mint a backend-signed (HS256) session token for `sub`. Used by QR-login.
+
+    Carries a `jti` (single-session revoke) and an `epoch` (revoke-all-for-user).
+    Pass the user's current epoch (see current_session_epoch) so a later bump
+    invalidates this token.
+    """
+    import secrets as _secrets
     import time
 
     from jose import jwt
@@ -151,10 +213,12 @@ def mint_local_session(
         "groups": groups or [],
         "iss": _LOCAL_ISS,
         "token_use": _LOCAL_TOKEN_USE,
+        "jti": _secrets.token_urlsafe(12),
+        "epoch": session_epoch,
         "iat": now,
         "exp": now + ttl_seconds,
     }
-    return jwt.encode(claims, settings.app_secret_key, algorithm="HS256")
+    return jwt.encode(claims, _session_key(), algorithm="HS256")
 
 
 async def _verify_local_session(token: str) -> UserInfo:
@@ -164,12 +228,19 @@ async def _verify_local_session(token: str) -> UserInfo:
 
         claims = jwt.decode(
             token,
-            settings.app_secret_key,
+            _session_key(),
             algorithms=["HS256"],
             options={"verify_aud": False},
         )
         if claims.get("iss") != _LOCAL_ISS or claims.get("token_use") != _LOCAL_TOKEN_USE:
             raise ValueError("not a local session token")
+
+        if await _is_local_session_revoked(claims):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
         groups: list[str] = claims.get("groups", [])
         roles = _groups_to_roles(groups)

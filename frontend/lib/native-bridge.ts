@@ -91,6 +91,18 @@ export async function clearServerConfig(): Promise<void> {
   await sc.clear();
 }
 
+/** Consume a deep-link path stashed by a push tap during cold start (one-shot). */
+export async function consumePendingPath(): Promise<string | null> {
+  const sc = plugin("ServerConfig");
+  if (!sc?.consumePendingPath) return null;
+  try {
+    const r = await sc.consumePendingPath();
+    return (r?.path as string) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // ── QR scanning (login / server config) ───────────────────────────────────────
 
 /** Scan a single QR/barcode with the native scanner. Returns its raw value. */

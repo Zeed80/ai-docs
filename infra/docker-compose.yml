@@ -580,7 +580,13 @@ services:
       NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
       NTFY_CACHE_DURATION: "12h"
       NTFY_AUTH_FILE: /var/lib/ntfy/auth.db
-      NTFY_AUTH_DEFAULT_ACCESS: ${NTFY_AUTH_DEFAULT_ACCESS:-deny-all}
+      # read-only default: anonymous clients may SUBSCRIBE to a topic they know
+      # (per-device topics are random secrets) but may NOT publish. The backend
+      # publishes with a write token — provision once:
+      #   docker compose exec ntfy ntfy user add --role=admin backend
+      #   docker compose exec ntfy ntfy token add backend   # → put in NTFY_TOKEN
+      # This blocks anonymous/spoofed notifications. (Push is opt-in via NTFY_ENABLED.)
+      NTFY_AUTH_DEFAULT_ACCESS: ${NTFY_AUTH_DEFAULT_ACCESS:-read-only}
       NTFY_BEHIND_PROXY: "true"
     volumes:
       - ntfy_data:/var/lib/ntfy

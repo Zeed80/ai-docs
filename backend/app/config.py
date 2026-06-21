@@ -80,6 +80,14 @@ class Settings(BaseSettings):
     # Minimum number of active admins (prevents demoting the last admin)
     min_admin_count: int = 1
 
+    # Signing key for backend-minted session tokens (QR-login). Falls back to
+    # app_secret_key when empty; set a dedicated value in production to isolate the
+    # session-signing secret from app_secret_key (Fernet) and to allow rotation.
+    session_signing_key: str = ""
+    # Lifetime of an admin-issued QR-login session (minutes). Kept short since it
+    # grants login as another user (impersonation for multi-user devices/tests).
+    qr_login_session_ttl_minutes: int = 60
+
     # Internal service-to-service key used by the AI orchestrator and capability proxy.
     # Must be set to the same value in all services that need to call the backend API.
     agent_service_key: str = ""

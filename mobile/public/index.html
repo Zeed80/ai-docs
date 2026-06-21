@@ -46,6 +46,13 @@
         <p>Подключение к серверу…</p>
       </div>
 
+      <!-- Unreachable state -->
+      <div id="unreachable" class="card hidden">
+        <p>Сервер недоступен. Проверьте интернет и адрес.</p>
+        <button id="retry">Повторить</button>
+        <button id="change" class="secondary">Сменить сервер</button>
+      </div>
+
       <!-- Setup state (no server yet) -->
       <div id="setup" class="card hidden">
         <p>Укажите адрес сервера «Света» — введите вручную или отсканируйте QR-код со страницы установки.</p>
@@ -75,8 +82,41 @@
           window.location.replace(url);
         }
 
+        // Probe the server before navigating, so an unreachable server lands on a
+        // friendly retry/change screen instead of a raw WebView error page.
+        async function connect(url) {
+          hide("setup");
+          hide("unreachable");
+          show("connecting");
+          var ok = false;
+          try {
+            var ctrl = new AbortController();
+            var to = setTimeout(function () { ctrl.abort(); }, 6000);
+            await fetch(url + "/health", {
+              method: "GET",
+              cache: "no-store",
+              signal: ctrl.signal,
+            });
+            clearTimeout(to);
+            ok = true; // any HTTP response means the server is reachable
+          } catch (e) {
+            ok = false;
+          }
+          if (ok) {
+            window.location.replace(url);
+          } else {
+            hide("connecting");
+            show("unreachable");
+            $("retry").onclick = function () { connect(url); };
+          }
+        }
+
         function looksLikeUrl(v) {
-          return /^https?:\/\/[^\s]+/i.test(v) || /^[a-z0-9.-]+\.[a-z]{2,}([/:].*)?$/i.test(v);
+          // Require https (http only for local dev hosts); ServerConfig also enforces this.
+          if (/^http:\/\//i.test(v)) {
+            return /^http:\/\/(localhost|127\.0\.0\.1|10\.0\.2\.2)([:/]|$)/i.test(v);
+          }
+          return /^https:\/\/[^\s]+/i.test(v) || /^[a-z0-9.-]+\.[a-z]{2,}([/:].*)?$/i.test(v);
         }
 
         async function save(url) {
@@ -87,28 +127,40 @@
           return url;
         }
 
+        function setupScreen() {
+          show("setup");
+          hide("connecting");
+          hide("unreachable");
+          if (!BarcodeScanner) hide("scan");
+        }
+
         async function init() {
-          // Already configured? Go straight to the live site.
+          // "Change server" returns to setup without a saved URL.
+          $("change").onclick = async function () {
+            try { if (ServerConfig && ServerConfig.clear) await ServerConfig.clear(); } catch (e) {}
+            setupScreen();
+          };
+
+          // Already configured? Probe, then go to the live site.
           if (ServerConfig && ServerConfig.get) {
             try {
               var res = await ServerConfig.get();
-              if (res && res.url) return go(res.url);
+              if (res && res.url) return connect(res.url);
             } catch (e) {}
           }
-          // Otherwise show setup. Hide the QR button if no scanner is available.
-          show("setup");
-          if (!BarcodeScanner) hide("scan");
+
+          setupScreen();
 
           $("connect").addEventListener("click", async function () {
             var v = ($("url").value || "").trim();
             if (!looksLikeUrl(v)) {
-              $("err").textContent = "Введите корректный адрес сервера.";
+              $("err").textContent = "Введите корректный https-адрес сервера.";
               return;
             }
             try {
-              go(await save(v));
+              await connect(await save(v));
             } catch (e) {
-              $("err").textContent = "Не удалось сохранить адрес.";
+              $("err").textContent = (e && e.message) || "Не удалось сохранить адрес.";
             }
           });
 
@@ -119,9 +171,9 @@
               var r = await BarcodeScanner.scan();
               var code = r && r.barcodes && r.barcodes[0] && r.barcodes[0].rawValue;
               if (!code) { $("err").textContent = "QR-код не распознан."; return; }
-              go(await save(code));
+              await connect(await save(code));
             } catch (e) {
-              $("err").textContent = "Не удалось отсканировать.";
+              $("err").textContent = (e && e.message) || "Не удалось отсканировать.";
             }
           });
         }

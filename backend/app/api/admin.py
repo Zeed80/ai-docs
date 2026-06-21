@@ -237,17 +237,22 @@ async def create_user_login_qr(
     if not user.is_active:
         raise HTTPException(status_code=400, detail="User is deactivated")
 
-    from app.auth.jwt import mint_local_session
+    from app.auth.jwt import current_session_epoch, mint_local_session
+    from app.config import settings as _settings
     from app.utils.redis_client import get_async_redis
 
-    # Session lifetime once logged in (8h); QR token validity (time to scan) 5 min.
+    # Session lifetime once logged in is short & configurable (impersonation);
+    # QR token validity (time to scan) is 5 min. The epoch lets the admin revoke.
+    session_ttl = max(60, _settings.qr_login_session_ttl_minutes * 60)
+    epoch = await current_session_epoch(user.sub)
     session_jwt = mint_local_session(
         sub=user.sub,
         email=user.email,
         name=user.name,
         preferred_username=user.preferred_username,
         groups=[],  # role is resolved from DB (users.role) at verify time
-        ttl_seconds=28800,
+        ttl_seconds=session_ttl,
+        session_epoch=epoch,
     )
     qr_token = secrets.token_urlsafe(32)
     qr_ttl = 300
@@ -265,7 +270,40 @@ async def create_user_login_qr(
     await db.commit()
 
     logger.info("admin_user_login_qr", admin=admin.sub, target=user.sub)
-    return {"token": qr_token, "expires_in": qr_ttl}
+    return {"token": qr_token, "expires_in": qr_ttl, "session_ttl": session_ttl}
+
+
+@router.post("/users/{user_sub}/revoke-sessions")
+async def revoke_user_login_sessions(
+    user_sub: str,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Admin: revoke all QR-login (backend-minted) sessions for a user immediately.
+
+    Bumps the user's session epoch so every outstanding local session token stops
+    validating. Does not affect normal Authentik SSO sessions. Audited.
+    """
+    result = await db.execute(select(User).where(User.sub == user_sub))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    from app.auth.jwt import revoke_user_sessions
+
+    epoch = await revoke_user_sessions(user.sub)
+
+    db.add(
+        AuditLog(
+            user_id=admin.sub,
+            action="admin.revoke_user_sessions",
+            entity_type="user",
+            details={"target_sub": user.sub, "new_epoch": epoch},
+        )
+    )
+    await db.commit()
+    logger.info("admin_revoke_user_sessions", admin=admin.sub, target=user.sub, epoch=epoch)
+    return {"revoked": True, "epoch": epoch}
 
 
 @router.patch("/users/{user_sub}", response_model=UserOut)

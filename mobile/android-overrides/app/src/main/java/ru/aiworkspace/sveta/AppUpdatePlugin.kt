@@ -1,6 +1,9 @@
 package ru.aiworkspace.sveta
 
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -74,6 +77,20 @@ class AppUpdatePlugin : Plugin() {
         Thread {
             try {
                 val manifest = fetchManifest(baseUrl() + rel)
+                // Android 8+: app needs the per-source "install unknown apps"
+                // permission. If missing, send the user to grant it and stop.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    !context.packageManager.canRequestPackageInstalls()
+                ) {
+                    val settingsIntent = Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${context.packageName}"),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(settingsIntent)
+                    call.reject("Разрешите установку из этого приложения и повторите")
+                    return@Thread
+                }
+
                 val apkRel = manifest.optString("url", "/download/latest.apk")
                 val apkUrl = if (apkRel.startsWith("http")) apkRel else baseUrl() + apkRel
                 val expectedSha = manifest.optString("sha256", "")

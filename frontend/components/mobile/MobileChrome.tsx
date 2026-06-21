@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   checkForUpdate,
+  consumePendingPath,
   consumeSharedIntent,
   installUpdate,
   isNative,
@@ -47,6 +48,12 @@ export function MobileChrome() {
         setPendingShare(shared);
         router.push("/mobile/share");
       }
+    })();
+
+    // Deep-link path stashed by a push tap during cold start.
+    void (async () => {
+      const path = await consumePendingPath();
+      if (path && path.startsWith("/")) router.push(path);
     })();
   }, [router]);
 
