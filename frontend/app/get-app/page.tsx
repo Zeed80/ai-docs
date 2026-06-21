@@ -51,7 +51,7 @@ export default function DownloadPage() {
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col items-center gap-6 p-6 text-slate-100">
-      <h1 className="mt-4 text-2xl font-semibold">Света для Android</h1>
+      <h1 className="mt-4 text-2xl font-semibold">AI-DOCS для Android</h1>
 
       {/* Шаг 1 — установка */}
       <div className="w-full">

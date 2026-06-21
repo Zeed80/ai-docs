@@ -211,7 +211,7 @@ export function ResizableLayout({
               />
             </svg>
           </button>
-          <span className="text-sm font-semibold text-slate-100">AI Docs</span>
+          <span className="text-sm font-semibold text-slate-100">AI-DOCS</span>
         </header>
 
         {/* Content */}

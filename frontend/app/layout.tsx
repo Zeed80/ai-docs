@@ -12,13 +12,13 @@ import { OfflineQueueWidget } from "@/components/pwa/OfflineQueueWidget";
 import { MobileChrome } from "@/components/mobile/MobileChrome";
 
 export const metadata: Metadata = {
-  title: "AI Документооборот",
+  title: "AI-DOCS",
   description: "AI-powered document processing workspace",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "AI Docs",
+    title: "AI-DOCS",
   },
 };
 

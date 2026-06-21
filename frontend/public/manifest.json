@@ -1,6 +1,6 @@
 {
-  "name": "AI Документооборот",
-  "short_name": "AI Docs",
+  "name": "AI-DOCS",
+  "short_name": "AI-DOCS",
   "description": "AI-powered document workflow workspace",
   "start_url": "/",
   "display": "standalone",

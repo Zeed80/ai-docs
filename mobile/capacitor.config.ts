@@ -14,7 +14,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
  */
 const config: CapacitorConfig = {
   appId: "ru.aiworkspace.sveta",
-  appName: "Света",
+  appName: "AI-DOCS",
   // Bundled launcher / offline fallback. No remote server.url is baked in.
   webDir: "public",
   server: {

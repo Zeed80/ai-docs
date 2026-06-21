@@ -82,10 +82,10 @@ function LoginScreen() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-5 bg-slate-900 p-6 text-slate-100">
       <div className="h-16 w-16 rounded-2xl bg-sky-500" />
-      <h1 className="text-xl font-semibold">Вход в «Свету»</h1>
+      <h1 className="text-xl font-semibold">Вход в AI-DOCS</h1>
       <p className="max-w-xs text-center text-sm text-slate-400">
-        Войдите через сервер или отсканируйте QR-код входа с уже открытой Светы
-        на компьютере.
+        Войдите через сервер или отсканируйте QR-код входа с уже открытого
+        AI-DOCS на компьютере.
       </p>
 
       <div className="flex w-full max-w-xs flex-col gap-3">

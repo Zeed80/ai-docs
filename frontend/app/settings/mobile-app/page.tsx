@@ -99,7 +99,7 @@ function MobileAppContent() {
       <div>
         <h2 className="text-base font-semibold mb-1">Мобильное приложение</h2>
         <p className="text-sm text-muted-foreground">
-          Соберите Android-приложение «Света» на сервере и раздайте по ссылке
+          Соберите Android-приложение AI-DOCS на сервере и раздайте по ссылке
           или QR-коду. Приложение само обновится у пользователей при новой
           сборке.
         </p>

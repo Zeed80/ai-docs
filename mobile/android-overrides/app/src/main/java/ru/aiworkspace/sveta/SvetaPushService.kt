@@ -91,7 +91,7 @@ class SvetaPushService : Service() {
             val obj = JSONObject(line)
             // ntfy control frames (event=open/keepalive) carry no message.
             if (obj.optString("event") != "message" && !obj.has("message")) return
-            val title = obj.optString("title").ifEmpty { "Света" }
+            val title = obj.optString("title").ifEmpty { "AI-DOCS" }
             val body = obj.optString("message")
             val click = obj.optString("click") // absolute action_url
             postUserNotification(title, body, click)
@@ -134,7 +134,7 @@ class SvetaPushService : Service() {
     private fun ongoingNotification(): Notification =
         NotificationCompat.Builder(this, CHANNEL_ONGOING)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Света")
+            .setContentTitle("AI-DOCS")
             .setContentText("Уведомления включены")
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOngoing(true)

@@ -547,7 +547,7 @@ export function Sidebar() {
       {/* Logo */}
       <div className="px-4 py-3 border-b border-slate-700">
         <h1 className="text-sm font-bold text-slate-100 tracking-tight">
-          AI Docs
+          AI-DOCS
         </h1>
         <p className="text-[10px] text-slate-400 mt-0.5">
           Света · рабочее место
