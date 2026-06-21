@@ -105,19 +105,98 @@ export async function consumePendingPath(): Promise<string | null> {
 
 // ── QR scanning (login / server config) ───────────────────────────────────────
 
-/** Scan a single QR/barcode with the native scanner. Returns its raw value. */
+/**
+ * Scan a single QR with the native scanner. Returns its raw value (or null).
+ *
+ * Uses the plugin's `startScan()` (CameraX + the BUNDLED ML Kit model) rather than
+ * `scan()` — the latter relies on the Google Code Scanner module fetched via Play
+ * Services (ModuleInstall), which fails on GMS-less devices (HONOR/Huawei: error
+ * "17: ModuleInstall.API is not available"). The bundled model works everywhere.
+ *
+ * The camera renders behind the WebView, so we make the page transparent and show
+ * a minimal viewfinder + cancel overlay while scanning.
+ */
 export async function scanQr(): Promise<string | null> {
   const scanner = plugin("BarcodeScanner");
-  if (!scanner?.scan) return null;
-  try {
-    await scanner.requestPermissions?.();
-    const res = await scanner.scan();
-    const code = res?.barcodes?.[0]?.rawValue;
-    return (code as string) ?? null;
-  } catch (e) {
-    console.warn("scanQr failed", e);
+  if (!scanner?.startScan) {
+    // Fallback for older plugin builds (GMS devices only).
+    if (scanner?.scan) {
+      try {
+        await scanner.requestPermissions?.();
+        const res = await scanner.scan();
+        return (res?.barcodes?.[0]?.rawValue as string) ?? null;
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
+
+  try {
+    const perm = await scanner.requestPermissions?.();
+    if (
+      perm &&
+      perm.camera &&
+      perm.camera !== "granted" &&
+      perm.camera !== "limited"
+    ) {
+      return null;
+    }
+  } catch {
+    /* continue — startScan will surface a hard failure */
+  }
+
+  return new Promise<string | null>((resolve) => {
+    let settled = false;
+    const overlay = buildScanOverlay(() => finish(null));
+    document.documentElement.classList.add("qr-scanning");
+    document.body.appendChild(overlay);
+
+    const finish = async (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      try {
+        await scanner.removeAllListeners?.();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await scanner.stopScan?.();
+      } catch {
+        /* ignore */
+      }
+      document.documentElement.classList.remove("qr-scanning");
+      overlay.remove();
+      resolve(value);
+    };
+
+    scanner
+      .addListener?.("barcodeScanned", (event: any) => {
+        const code = event?.barcode?.rawValue ?? event?.barcodes?.[0]?.rawValue;
+        if (code) void finish(code as string);
+      })
+      ?.catch?.(() => {});
+
+    Promise.resolve(scanner.startScan?.()).catch((e: unknown) => {
+      console.warn("startScan failed", e);
+      void finish(null);
+    });
+
+    // Safety timeout so the scanner never hangs forever.
+    setTimeout(() => void finish(null), 60000);
+  });
+}
+
+/** Minimal transparent overlay (viewfinder frame + cancel) shown during scanning. */
+function buildScanOverlay(onCancel: () => void): HTMLDivElement {
+  const overlay = document.createElement("div");
+  overlay.className = "qr-scan-overlay";
+  overlay.innerHTML = `
+    <div class="qr-scan-frame"></div>
+    <button type="button" class="qr-scan-cancel">Отмена</button>
+  `;
+  overlay.querySelector(".qr-scan-cancel")?.addEventListener("click", onCancel);
+  return overlay;
 }
 
 // ── Camera / document scan ────────────────────────────────────────────────────
