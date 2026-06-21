@@ -118,6 +118,8 @@ export interface InvoiceDetail {
   tax_amount: number | null;
   total_amount: number | null;
   status: string | null;
+  notes: string | null;
+  special_marks: string | null;
   lines: InvoiceLine[];
 }
 
@@ -427,6 +429,8 @@ export interface Invoice {
   total_amount: number | null;
   status: string;
   overall_confidence: number | null;
+  notes: string | null;
+  special_marks: string | null;
   lines: InvoiceLine[];
   created_at: string;
 }

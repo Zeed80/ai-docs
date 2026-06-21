@@ -781,6 +781,7 @@ def _invoice_items_grouped_columns(*, include_supplier: bool = False) -> list[di
         {"key": "items", "header": "Перечень товаров", "type": "text"},
         {"key": "total_amount", "header": "Общая сумма", "type": "number"},
         {"key": "notes", "header": "Примечание", "type": "text"},
+        {"key": "special_marks", "header": "Особые отметки", "type": "text"},
     ]
     if include_supplier:
         columns.insert(1, {"key": "supplier", "header": "Поставщик", "type": "text"})
@@ -878,6 +879,7 @@ def _invoice_items_grouped_workspace_row(
         "items": "\n".join(line for line in item_lines if line),
         "total_amount": _format_money(invoice.total_amount),
         "notes": invoice.notes or "",
+        "special_marks": invoice.special_marks or "",
     }
     if include_supplier:
         row["supplier"] = invoice.supplier.name if invoice.supplier else ""

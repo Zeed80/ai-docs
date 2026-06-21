@@ -442,7 +442,8 @@ class Invoice(UUIDPrimaryKey, TimestampMixin, Base):
     total_amount: Mapped[float | None] = mapped_column(Float)
 
     payment_id: Mapped[str | None] = mapped_column(String(500))
-    notes: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)  # user-only remarks
+    special_marks: Mapped[str | None] = mapped_column(Text)  # AI-extracted special conditions
     validity_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     status: Mapped[InvoiceStatus] = mapped_column(

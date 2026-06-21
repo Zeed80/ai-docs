@@ -36,15 +36,7 @@ from app.tasks.celery_app import celery_app
 
 logger = structlog.get_logger()
 
-PIPELINE_STEP_DEFINITIONS = [
-    ("store", "Файл сохранен"),
-    ("memory_seed", "Первичная память"),
-    ("classification", "Классификация"),
-    ("extraction", "Распознавание"),
-    ("sql_records", "Записи SQL"),
-    ("memory_graph", "Память и граф"),
-    ("embedding", "Векторизация"),
-]
+from app.domain.pipeline import PIPELINE_STEP_DEFINITIONS
 
 
 @lru_cache(maxsize=1)
@@ -2001,7 +1993,7 @@ def process_approved_document(self, document_id: str) -> dict:
                 tax_amount=extracted.get("tax_amount"),
                 total_amount=extracted.get("total_amount"),
                 payment_id=extracted.get("payment_id"),
-                notes=extracted.get("notes"),
+                special_marks=extracted.get("special_marks"),
                 supplier_id=supplier_party_id,
                 buyer_id=buyer_party_id,
                 status=InvoiceStatus.approved,

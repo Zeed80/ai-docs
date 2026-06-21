@@ -776,6 +776,19 @@ export default function ReviewPage() {
               onCorrect={handleCorrect}
               disabled={doc.status === "approved" || doc.status === "rejected"}
               heatmapEnabled={heatmapEnabled}
+              notes={invoiceDetail?.notes ?? null}
+              onSaveNotes={async (notes) => {
+                const invoiceId = invoiceDetail?.id;
+                if (!invoiceId) return;
+                try {
+                  await invoicesApi.update(invoiceId, { notes });
+                  setInvoiceDetail((prev) =>
+                    prev ? { ...prev, notes } : prev,
+                  );
+                } catch {
+                  showToast("Ошибка сохранения примечания");
+                }
+              }}
             />
           </div>
 

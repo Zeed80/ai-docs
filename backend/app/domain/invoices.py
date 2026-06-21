@@ -64,6 +64,7 @@ class InvoiceOut(BaseModel):
     currency: str
     payment_id: str | None = None
     notes: str | None = None
+    special_marks: str | None = None
     supplier_id: uuid.UUID | None
     buyer_id: uuid.UUID | None
     supplier: "PartyOut | None" = None
@@ -124,6 +125,7 @@ class InvoiceFieldUpdate(BaseModel):
     total_amount: float | None = None
     payment_id: str | None = None
     notes: str | None = None
+    special_marks: str | None = None
 
 
 class InvoiceDeleteRequest(BaseModel):

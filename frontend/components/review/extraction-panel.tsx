@@ -11,6 +11,9 @@ interface ExtractionPanelProps {
   onCorrect: (fieldName: string, value: string) => void;
   disabled?: boolean;
   heatmapEnabled?: boolean;
+  /** User-written notes (separate from AI-extracted special_marks). */
+  notes?: string | null;
+  onSaveNotes?: (notes: string) => void;
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -20,7 +23,7 @@ const FIELD_LABELS: Record<string, string> = {
   validity_date: "Действует до",
   currency: "Валюта",
   payment_id: "Идент. платежа",
-  notes: "Примечания",
+  special_marks: "Особые отметки",
   subtotal: "Итого без НДС",
   tax_amount: "НДС",
   total_amount: "Итого к оплате",
@@ -90,7 +93,7 @@ const GROUPS: {
   {
     key: "other",
     label: "Прочее",
-    fields: ["notes", "payment_id", "validity_date"],
+    fields: ["special_marks", "payment_id", "validity_date"],
     collapsible: true,
   },
 ];
@@ -275,7 +278,10 @@ export function ExtractionPanel({
   onCorrect,
   disabled = false,
   heatmapEnabled = true,
+  notes,
+  onSaveNotes,
 }: ExtractionPanelProps) {
+  const [userNotes, setUserNotes] = useState(notes ?? "");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
     bank: true,
     other: true,
@@ -401,6 +407,24 @@ export function ExtractionPanel({
           </div>
         )}
       </div>
+
+      {/* User notes — separate from AI-extracted special_marks */}
+      {onSaveNotes !== undefined && (
+        <div className="border-t border-slate-700 px-3 py-3 bg-slate-800/30 flex-shrink-0">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+            Примечание (ваше)
+          </label>
+          <textarea
+            value={userNotes}
+            onChange={(e) => setUserNotes(e.target.value)}
+            onBlur={() => onSaveNotes(userNotes)}
+            placeholder="Ваши заметки по этому счёту…"
+            rows={3}
+            disabled={disabled}
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 resize-none placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+          />
+        </div>
+      )}
     </div>
   );
 }

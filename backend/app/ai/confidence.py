@@ -51,7 +51,7 @@ def compute_field_confidences(
 
     top_fields = [
         "invoice_number", "invoice_date", "due_date", "validity_date", "currency",
-        "payment_id", "notes",
+        "payment_id", "special_marks",
         "subtotal", "tax_amount", "total_amount",
     ]
 

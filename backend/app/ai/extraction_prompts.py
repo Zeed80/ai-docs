@@ -98,7 +98,7 @@ Do NOT mix up supplier INN/KPP with buyer INN/KPP.
   "validity_date": "<YYYY-MM-DD — срок действия счёта / резерв до, or null>",
   "currency": "<3-letter code, default RUB>",
   "payment_id": "<идентификатор платежа / payment reference string or null>",
-  "notes": "<delivery notes, special conditions, any text after line items, or null>",
+  "special_marks": "<delivery notes, special conditions, payment terms, any free text after line items, or null>",
 
   "supplier": {{
     "name": "<full legal name or null>",

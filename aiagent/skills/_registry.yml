@@ -587,6 +587,14 @@ tools:
         - type: 'null'
         default: null
         title: Notes
+        description: "User remarks only. Do not write AI-extracted data here."
+      special_marks:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Special Marks
+        description: "AI-extracted special conditions, delivery notes, payment terms from invoice text."
     title: InvoiceFieldUpdate
     type: object
 - name: invoice.line.update

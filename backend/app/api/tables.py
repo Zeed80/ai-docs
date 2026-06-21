@@ -72,6 +72,8 @@ INVOICE_COLUMNS = [
     TableColumn(key="subtotal", label="Сумма без НДС", data_type="number"),
     # notes — user-editable free text. Not sortable; searchable via keyword search.
     TableColumn(key="notes", label="Примечание", data_type="string", sortable=False, filterable=False),
+    # special_marks — AI-extracted special conditions (read-only for users).
+    TableColumn(key="special_marks", label="Особые отметки", data_type="string", sortable=False, filterable=False),
     TableColumn(key="status", label="Статус", data_type="enum"),
     TableColumn(key="overall_confidence", label="Уверенность", data_type="number"),
     TableColumn(key="line_count", label="Позиций", data_type="number"),
@@ -134,7 +136,7 @@ async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQuer
         q = req.search
         query = query.where(
             or_(
-                text_search_condition(db, [Invoice.invoice_number, Invoice.notes], q),
+                text_search_condition(db, [Invoice.invoice_number, Invoice.notes, Invoice.special_marks], q),
                 Invoice.supplier.has(text_search_condition(db, [Party.name], q)),
                 Invoice.lines.any(text_search_condition(db, [InvoiceLine.description], q)),
             )
@@ -179,6 +181,7 @@ async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQuer
                 "tax_amount": inv.tax_amount,
                 "subtotal": inv.subtotal,
                 "notes": inv.notes,
+                "special_marks": inv.special_marks,
                 "status": inv.status.value if inv.status else None,
                 "overall_confidence": inv.overall_confidence,
                 "line_count": len(inv.lines),
@@ -453,7 +456,7 @@ def _export_xlsx(data: TableQueryResponse, table_name: str) -> StreamingResponse
         width = min(max(max_len + 3, 12), 60)
         if is_money_key(col.key):
             width = max(width, 16)
-        if col.key in ("items_list", "notes"):
+        if col.key in ("items_list", "notes", "special_marks"):
             width = min(max(width, 40), 70)
         if col.key == "row_no":
             width = 6

@@ -76,7 +76,8 @@ async def test_pipeline_job_not_created_when_auto_process_false(
     )
     job = result.scalar_one_or_none()
     assert job is not None, "Job should be created even without auto_process"
-    assert job.status == "done", "Job status must be 'done' when auto_process=false"
+    # auto_process=False triggers embedding only: job starts as queued/running/done
+    assert job.status in ("queued", "running", "done"), f"Unexpected status: {job.status}"
 
 
 # ---------------------------------------------------------------------------

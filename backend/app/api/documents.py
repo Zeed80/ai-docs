@@ -9,7 +9,7 @@ from urllib.parse import quote
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -101,6 +101,7 @@ _EXT_TO_DOC_TYPE: dict[str, str] = {
     # Spreadsheet-based financials
     ".xlsx": "invoice",
     ".xls": "invoice",
+    ".xlsm": "invoice",
     # Office documents
     ".docx": "letter",
     ".doc": "letter",
@@ -136,15 +137,7 @@ def _quick_detect_doc_type(
     return None, None
 
 
-PIPELINE_STEP_DEFINITIONS = [
-    ("store", "Файл сохранен"),
-    ("memory_seed", "Первичная память"),
-    ("classification", "Классификация"),
-    ("extraction", "Распознавание"),
-    ("sql_records", "Записи SQL"),
-    ("memory_graph", "Память и граф"),
-    ("embedding", "Векторизация"),
-]
+from app.domain.pipeline import PIPELINE_STEP_DEFINITIONS  # noqa: E402
 
 DEFAULT_ALLOWED_EXTENSIONS = {
     ".bmp",
@@ -295,6 +288,151 @@ async def _pipeline_status_for_document(
     )
 
 
+async def _batch_pipeline_status(
+    db: AsyncSession,
+    doc_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, "DocumentPipelineStatus"]:
+    """Return pipeline status for multiple documents in 12 queries total (vs N×12).
+
+    N documents that each triggered 12 individual SELECTs now cost exactly 12 queries
+    regardless of batch size, making the workspace endpoint scale to thousands of docs.
+    """
+    if not doc_ids:
+        return {}
+
+    # 1. Latest processing job per document (single query via correlated subquery)
+    latest_job_subq = (
+        select(
+            DocumentProcessingJob.document_id,
+            func.max(DocumentProcessingJob.created_at).label("max_created"),
+        )
+        .where(DocumentProcessingJob.document_id.in_(doc_ids))
+        .group_by(DocumentProcessingJob.document_id)
+        .subquery()
+    )
+    jobs_rows = (
+        await db.execute(
+            select(DocumentProcessingJob).join(
+                latest_job_subq,
+                and_(
+                    DocumentProcessingJob.document_id == latest_job_subq.c.document_id,
+                    DocumentProcessingJob.created_at == latest_job_subq.c.max_created,
+                ),
+            )
+        )
+    ).scalars().all()
+    jobs_by_doc = {j.document_id: j for j in jobs_rows}
+
+    # 2. Latest graph build status per document
+    latest_graph_subq = (
+        select(
+            GraphBuildStatus.document_id,
+            func.max(GraphBuildStatus.created_at).label("max_created"),
+        )
+        .where(GraphBuildStatus.document_id.in_(doc_ids))
+        .group_by(GraphBuildStatus.document_id)
+        .subquery()
+    )
+    graphs_rows = (
+        await db.execute(
+            select(GraphBuildStatus).join(
+                latest_graph_subq,
+                and_(
+                    GraphBuildStatus.document_id == latest_graph_subq.c.document_id,
+                    GraphBuildStatus.created_at == latest_graph_subq.c.max_created,
+                ),
+            )
+        )
+    ).scalars().all()
+    graphs_by_doc = {g.document_id: g for g in graphs_rows}
+
+    def _counts(rows) -> dict[uuid.UUID, int]:
+        return {row[0]: int(row[1]) for row in rows}
+
+    # 3–12. Grouped COUNT queries (one roundtrip each)
+    extraction_counts = _counts((await db.execute(
+        select(DocumentExtraction.document_id, func.count())
+        .where(DocumentExtraction.document_id.in_(doc_ids))
+        .group_by(DocumentExtraction.document_id)
+    )).all())
+    artifact_counts = _counts((await db.execute(
+        select(DocumentArtifact.document_id, func.count())
+        .where(DocumentArtifact.document_id.in_(doc_ids))
+        .group_by(DocumentArtifact.document_id)
+    )).all())
+    chunk_counts = _counts((await db.execute(
+        select(DocumentChunk.document_id, func.count())
+        .where(DocumentChunk.document_id.in_(doc_ids))
+        .group_by(DocumentChunk.document_id)
+    )).all())
+    evidence_counts = _counts((await db.execute(
+        select(EvidenceSpan.document_id, func.count())
+        .where(EvidenceSpan.document_id.in_(doc_ids))
+        .group_by(EvidenceSpan.document_id)
+    )).all())
+    node_counts = _counts((await db.execute(
+        select(KnowledgeNode.source_document_id, func.count())
+        .where(KnowledgeNode.source_document_id.in_(doc_ids))
+        .group_by(KnowledgeNode.source_document_id)
+    )).all())
+    edge_counts = _counts((await db.execute(
+        select(KnowledgeEdge.source_document_id, func.count())
+        .where(KnowledgeEdge.source_document_id.in_(doc_ids))
+        .group_by(KnowledgeEdge.source_document_id)
+    )).all())
+    graph_review_counts = _counts((await db.execute(
+        select(GraphReviewItem.document_id, func.count())
+        .where(
+            GraphReviewItem.document_id.in_(doc_ids),
+            GraphReviewItem.status == "pending",
+        )
+        .group_by(GraphReviewItem.document_id)
+    )).all())
+    embedding_counts = _counts((await db.execute(
+        select(MemoryEmbeddingRecord.document_id, func.count())
+        .where(MemoryEmbeddingRecord.document_id.in_(doc_ids))
+        .group_by(MemoryEmbeddingRecord.document_id)
+    )).all())
+    ntd_check_counts = _counts((await db.execute(
+        select(NTDCheckRun.document_id, func.count())
+        .where(NTDCheckRun.document_id.in_(doc_ids))
+        .group_by(NTDCheckRun.document_id)
+    )).all())
+    ntd_finding_counts = _counts((await db.execute(
+        select(NTDCheckFinding.document_id, func.count())
+        .where(
+            NTDCheckFinding.document_id.in_(doc_ids),
+            NTDCheckFinding.status == "open",
+        )
+        .group_by(NTDCheckFinding.document_id)
+    )).all())
+
+    result: dict[uuid.UUID, DocumentPipelineStatus] = {}
+    for doc_id in doc_ids:
+        job = jobs_by_doc.get(doc_id)
+        graph = graphs_by_doc.get(doc_id)
+        result[doc_id] = DocumentPipelineStatus(
+            processing_status=job.status if job else None,
+            current_step=job.current_step if job else None,
+            processing_error=job.error if job else None,
+            pipeline_steps=job.pipeline_steps if job else [],
+            extraction_count=extraction_counts.get(doc_id, 0),
+            artifact_count=artifact_counts.get(doc_id, 0),
+            graph_status=graph.status if graph else None,
+            graph_scope=graph.build_scope if graph else None,
+            graph_error=graph.error if graph else None,
+            memory_chunks=chunk_counts.get(doc_id, 0),
+            evidence_spans=evidence_counts.get(doc_id, 0),
+            graph_nodes=node_counts.get(doc_id, 0),
+            graph_edges=edge_counts.get(doc_id, 0),
+            graph_review_pending=graph_review_counts.get(doc_id, 0),
+            embedding_records=embedding_counts.get(doc_id, 0),
+            ntd_checks=ntd_check_counts.get(doc_id, 0),
+            ntd_open_findings=ntd_finding_counts.get(doc_id, 0),
+        )
+    return result
+
+
 def _initial_pipeline_steps(*, memory_seed_done: bool = False) -> list[dict]:
     steps = []
     for key, label in PIPELINE_STEP_DEFINITIONS:
@@ -354,6 +492,8 @@ async def _ingest_eml_attachments(
     SHA-256. Never raises — failures are logged and skipped so the parent ingest
     always succeeds.
     """
+    import asyncio
+
     from app.ai.parsers import parse_document
     from app.storage import file_exists, upload_file
 
@@ -378,8 +518,11 @@ async def _ingest_eml_attachments(
                 continue  # already ingested elsewhere; skip duplicate
 
             storage_path = f"documents/{att_hash[:2]}/{att_hash[2:4]}/{att_hash}"
-            if not file_exists(storage_path):
-                upload_file(att_bytes, storage_path, att.get("content_type"))
+            exists = await asyncio.to_thread(file_exists, storage_path)
+            if not exists:
+                await asyncio.to_thread(
+                    upload_file, att_bytes, storage_path, att.get("content_type")
+                )
             dt, src = _quick_detect_doc_type(att_name, att.get("content_type") or "")
             child = Document(
                 file_name=att_name,
@@ -479,6 +622,7 @@ async def ingest_document(
     auto_verify: bool = Query(False),
     manual_doc_type_override: bool = Query(False),
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: doc.ingest — Accept file, store, create Document record."""
     content = await file.read()
@@ -551,10 +695,14 @@ async def ingest_document(
     )
 
     # Store to MinIO (even suspicious files — reviewer may release them)
+    import asyncio
     storage_path = f"documents/{file_hash[:2]}/{file_hash[2:4]}/{file_hash}"
     try:
         from app.storage import upload_file
-        upload_file(content, storage_path, file.content_type or "application/octet-stream")
+        await asyncio.to_thread(
+            upload_file, content, storage_path,
+            file.content_type or "application/octet-stream",
+        )
     except Exception as e:
         logger.warning("minio_upload_failed", error=str(e), path=storage_path)
 
@@ -608,6 +756,7 @@ async def ingest_document(
         doc_type=effective_doc_type,
         doc_type_confidence=effective_confidence,
         metadata_=initial_metadata,
+        owner_sub=current_user.sub,
     )
     db.add(doc)
     await db.flush()
@@ -700,14 +849,23 @@ async def ingest_document(
             memory_seed_done=memory_seed_done,
         )
     else:
+        # auto_process=False: only embedding runs; mark full pipeline steps as skipped
         processing_job = await _create_processing_job(
             db,
             doc,
-            status="done",
-            current_step=None,
+            status="queued",
+            current_step="embedding",
             memory_seed_done=memory_seed_done,
         )
-        processing_job.finished_at = datetime.now(UTC)
+        skip_keys = {"classification", "extraction", "sql_records", "memory_graph"}
+        if not memory_seed_done:
+            skip_keys.add("memory_seed")
+        processing_job.pipeline_steps = [
+            {**step, "status": "skipped"}
+            if step.get("key") in skip_keys
+            else step
+            for step in (processing_job.pipeline_steps or [])
+        ]
 
     await db.commit()
 
@@ -877,6 +1035,7 @@ async def list_document_workspace(
     offset: int = 0,
     limit: int = Query(50, le=500),
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: doc.workspace — List documents with compact pipeline summaries.
 
@@ -901,6 +1060,12 @@ async def list_document_workspace(
             )
         )
 
+    query = await apply_visibility(
+        db, current_user, query,
+        owner_col=Document.owner_sub,
+        department_col=Document.department_id,
+    )
+
     total = (
         await db.execute(select(func.count()).select_from(query.subquery()))
     ).scalar() or 0
@@ -915,28 +1080,32 @@ async def list_document_workspace(
     )
     docs = result.scalars().all()
 
+    # status_counts и type_counts скоупированы под те же фильтры + visibility
+    base_subq = query.subquery()
     status_counts_result = await db.execute(
-        select(Document.status, func.count()).group_by(Document.status)
+        select(base_subq.c.status, func.count())
+        .select_from(base_subq)
+        .group_by(base_subq.c.status)
     )
     status_counts = {
-        status.value if hasattr(status, "value") else str(status): int(count)
-        for status, count in status_counts_result.all()
+        s.value if hasattr(s, "value") else str(s): int(count)
+        for s, count in status_counts_result.all()
     }
     type_counts_result = await db.execute(
-        select(Document.doc_type, func.count())
-        .where(Document.doc_type.is_not(None))
-        .group_by(Document.doc_type)
+        select(base_subq.c.doc_type, func.count())
+        .select_from(base_subq)
+        .where(base_subq.c.doc_type.is_not(None))
+        .group_by(base_subq.c.doc_type)
     )
     doc_type_counts = {
-        doc_type.value if hasattr(doc_type, "value") else str(doc_type): int(count)
-        for doc_type, count in type_counts_result.all()
+        dt.value if hasattr(dt, "value") else str(dt): int(count)
+        for dt, count in type_counts_result.all()
     }
 
+    doc_ids = [doc.id for doc in docs]
+    pipeline_by_id = await _batch_pipeline_status(db, doc_ids)
     items = [
-        DocumentWorkspaceItem(
-            document=doc,
-            pipeline=await _pipeline_status_for_document(db, doc.id),
-        )
+        DocumentWorkspaceItem(document=doc, pipeline=pipeline_by_id[doc.id])
         for doc in docs
     ]
     return DocumentWorkspaceResponse(

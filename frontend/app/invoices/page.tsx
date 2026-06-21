@@ -327,7 +327,9 @@ export default function InvoicesPage() {
     const q = askQuery.trim();
     if (!q) return;
     window.dispatchEvent(
-      new CustomEvent("aidocs:ask", { detail: { text: `[Только счета] ${q}` } }),
+      new CustomEvent("aidocs:ask", {
+        detail: { text: `[Только счета] ${q}` },
+      }),
     );
     setAskQuery("");
   };
@@ -531,6 +533,16 @@ export default function InvoicesPage() {
           value={(val as string) ?? null}
           onSaved={(next) => updateRowNote(row.id, next)}
         />
+      );
+    }
+    if (col.key === "special_marks") {
+      const text = (val as string | null) ?? "";
+      return text ? (
+        <span className="text-xs text-slate-400 whitespace-pre-line leading-snug">
+          {text}
+        </span>
+      ) : (
+        <span className="text-xs text-slate-600">—</span>
       );
     }
     if (col.key === "items_list") {

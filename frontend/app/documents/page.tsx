@@ -11,6 +11,7 @@ import {
 } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
+import { enqueueUpload } from "@/lib/offline-queue";
 import { useHasRole } from "@/lib/rbac";
 
 const API = getApiBaseUrl();
@@ -313,7 +314,6 @@ function pipelineProgress(pipeline: PipelineStatus | null | undefined) {
 function isPipelineActive(item: WorkspaceItem) {
   return (
     ["queued", "running"].includes(item.pipeline?.processing_status ?? "") ||
-    ["ingested", "classifying", "extracting"].includes(item.document.status) ||
     // Keep polling after watchdog reset — the Celery task may still complete
     item.pipeline?.current_step === "watchdog_reset"
   );
@@ -389,7 +389,11 @@ export default function DocumentsPage() {
   const [status, setStatus] = useState("");
   const [docType, setDocType] = useState("");
   const [search, setSearch] = useState("");
-  const [sourceChannel, setSourceChannel] = useState("upload");
+  const [sourceChannel, setSourceChannel] = useState("");
+  const [uploadSourceChannel, setUploadSourceChannel] = useLocalStorage(
+    "upload.sourceChannel",
+    "upload",
+  );
   const [uploadDocType, setUploadDocType] = useLocalStorage(
     "upload.docType",
     "",
@@ -406,6 +410,7 @@ export default function DocumentsPage() {
     "upload.manualType",
     false,
   );
+  const dragCounterRef = useRef(0);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -441,6 +446,8 @@ export default function DocumentsPage() {
     } | null;
     pipeline: PipelineStatus | null;
   } | null>(null);
+  const [registryOffset, setRegistryOffset] = useState(0);
+  const REGISTRY_PAGE_SIZE = 50;
   const isAdmin = useHasRole("admin");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -456,24 +463,46 @@ export default function DocumentsPage() {
     [selectedIds],
   );
 
-  const loadWorkspace = useCallback(async () => {
-    const params = new URLSearchParams({ limit: "100" });
-    if (status) params.set("status", status);
-    if (docType) params.set("doc_type", docType);
-    if (sourceChannel.trim())
-      params.set("source_channel", sourceChannel.trim());
-    if (search.trim()) params.set("search", search.trim());
-    const data = await requestJson<WorkspaceResponse>(
-      `/api/documents/workspace?${params}`,
-    ).catch(() => null);
-    if (!data) {
-      setWorkspace(null);
-      return;
-    }
-    setWorkspace(data);
-    setLastRefreshedAt(new Date());
-    setSelectedId((current) => current ?? data.items[0]?.document.id ?? null);
-  }, [docType, search, sourceChannel, status]);
+  const loadWorkspace = useCallback(
+    async (append = false) => {
+      const offset = append ? registryOffset : 0;
+      const params = new URLSearchParams({
+        limit: String(REGISTRY_PAGE_SIZE),
+        offset: String(offset),
+      });
+      if (status) params.set("status", status);
+      if (docType) params.set("doc_type", docType);
+      if (sourceChannel.trim())
+        params.set("source_channel", sourceChannel.trim());
+      if (search.trim()) params.set("search", search.trim());
+      const data = await requestJson<WorkspaceResponse>(
+        `/api/documents/workspace?${params}`,
+      ).catch(() => null);
+      if (!data) {
+        if (!append) setWorkspace(null);
+        return;
+      }
+      if (append) {
+        setWorkspace((prev) =>
+          prev ? { ...data, items: [...prev.items, ...data.items] } : data,
+        );
+        setRegistryOffset(offset + data.items.length);
+      } else {
+        setWorkspace(data);
+        setRegistryOffset(data.items.length);
+      }
+      setLastRefreshedAt(new Date());
+      setSelectedId((current) => current ?? data.items[0]?.document.id ?? null);
+    },
+    [
+      docType,
+      search,
+      sourceChannel,
+      status,
+      registryOffset,
+      REGISTRY_PAGE_SIZE,
+    ],
+  );
 
   const loadSummary = useCallback(async (id: string | null) => {
     if (!id) {
@@ -593,6 +622,55 @@ export default function DocumentsPage() {
     return () => window.clearTimeout(timer);
   }, [targetQuery]);
 
+  // Warn before page unload while upload is in progress
+  useEffect(() => {
+    if (!uploading) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue =
+        "Идёт загрузка файлов. Вы уверены, что хотите покинуть страницу?";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [uploading]);
+
+  // Global drag-and-drop: dropping files anywhere on the page adds them to queue
+  useEffect(() => {
+    const onDragEnter = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      dragCounterRef.current++;
+      if (dragCounterRef.current === 1) {
+        setTab("upload");
+        setDragging(true);
+      }
+    };
+    const onDragLeave = () => {
+      dragCounterRef.current = Math.max(dragCounterRef.current - 1, 0);
+      if (dragCounterRef.current === 0) setDragging(false);
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current = 0;
+      setDragging(false);
+      if (e.dataTransfer?.files?.length) addFilesToQueue(e.dataTransfer.files);
+    };
+    document.addEventListener("dragenter", onDragEnter);
+    document.addEventListener("dragleave", onDragLeave);
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("drop", onDrop);
+    return () => {
+      document.removeEventListener("dragenter", onDragEnter);
+      document.removeEventListener("dragleave", onDragLeave);
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("drop", onDrop);
+    };
+    // addFilesToQueue and setDragging are stable — defined in render scope
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function refreshSelected() {
     await loadWorkspace();
     await loadSummary(selectedId);
@@ -600,8 +678,18 @@ export default function DocumentsPage() {
   }
 
   /** Add files to the upload queue with extension-based type pre-detection. */
-  function addFilesToQueue(files: FileList | File[] | null) {
+  async function addFilesToQueue(files: FileList | File[] | null) {
     if (!files?.length) return;
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      for (const file of Array.from(files)) {
+        await enqueueUpload(file);
+      }
+      setMessage(
+        `Нет сети. ${Array.from(files).length} файл(а) сохранены — загрузятся при восстановлении соединения.`,
+      );
+      setMessageType("success");
+      return;
+    }
     const entries: PendingFile[] = Array.from(files).map((file) => {
       const guessed = guessDocType(file.name);
       // If batch type is manually locked, use it; otherwise use per-file guess
@@ -652,7 +740,9 @@ export default function DocumentsPage() {
   }
 
   function clearDoneFromQueue() {
-    setPendingFiles((prev) => prev.filter((f) => f.status === "pending"));
+    setPendingFiles((prev) =>
+      prev.filter((f) => f.status === "pending" || f.status === "error"),
+    );
   }
 
   /** Upload a single file entry using XHR (for upload progress tracking). */
@@ -664,7 +754,7 @@ export default function DocumentsPage() {
     const docType =
       manualUploadType && uploadDocType ? uploadDocType : entry.confirmedType;
     const params = new URLSearchParams({
-      source_channel: sourceChannel || "upload",
+      source_channel: uploadSourceChannel || "upload",
       auto_process: String(autoProcess),
       auto_verify: String(autoVerify && autoProcess),
       manual_doc_type_override: String(Boolean(docType && manualUploadType)),
@@ -727,8 +817,14 @@ export default function DocumentsPage() {
     setMessage(null);
     const uploadedIds: string[] = [];
 
-    for (const entry of toUpload) {
-      // Mark as uploading
+    // Local counters — avoid stale closure over `pendingFiles` state
+    let totalErrors = 0;
+    let totalQuarantined = 0;
+    let totalDuplicates = 0;
+    let totalDone = 0;
+
+    // Process one file and update its queue entry
+    async function processOne(entry: PendingFile) {
       setPendingFiles((prev) =>
         prev.map((f) =>
           f.id === entry.id ? { ...f, status: "uploading", progress: 0 } : f,
@@ -742,6 +838,7 @@ export default function DocumentsPage() {
       }));
 
       if (status === 0) {
+        totalErrors++;
         setPendingFiles((prev) =>
           prev.map((f) =>
             f.id === entry.id
@@ -754,10 +851,11 @@ export default function DocumentsPage() {
               : f,
           ),
         );
-        continue;
+        return;
       }
 
       if (status === 202 || payload.quarantined) {
+        totalQuarantined++;
         setPendingFiles((prev) =>
           prev.map((f) =>
             f.id === entry.id
@@ -771,6 +869,7 @@ export default function DocumentsPage() {
           ),
         );
       } else if (ok && payload.is_duplicate) {
+        totalDuplicates++;
         setPendingFiles((prev) =>
           prev.map((f) =>
             f.id === entry.id
@@ -787,6 +886,7 @@ export default function DocumentsPage() {
           ),
         );
       } else if (ok) {
+        totalDone++;
         if (payload.id) uploadedIds.push(String(payload.id));
         setPendingFiles((prev) =>
           prev.map((f) =>
@@ -810,6 +910,7 @@ export default function DocumentsPage() {
           ),
         );
       } else {
+        totalErrors++;
         const errDetail = payload.detail;
         const detail =
           typeof errDetail === "object" && errDetail !== null
@@ -828,19 +929,38 @@ export default function DocumentsPage() {
       }
     }
 
+    // Run up to 3 parallel uploads; each worker drains the shared queue
+    const CONCURRENCY = 3;
+    const queue = [...toUpload];
+    const workers = Array.from(
+      { length: Math.min(CONCURRENCY, queue.length) },
+      async () => {
+        while (queue.length > 0) {
+          const entry = queue.shift();
+          if (!entry) break;
+          await processOne(entry);
+        }
+      },
+    );
+    await Promise.all(workers);
+
     setUploading(false);
-    const hasErrors = pendingFiles.some((f) => f.status === "error");
-    setMessageType(hasErrors ? "error" : "success");
-    setMessage(hasErrors ? "Есть ошибки загрузки" : "Загрузка завершена");
+    const parts: string[] = [];
+    if (totalDone > 0) parts.push(`загружено: ${totalDone}`);
+    if (totalErrors > 0) parts.push(`ошибок: ${totalErrors}`);
+    if (totalQuarantined > 0) parts.push(`карантин: ${totalQuarantined}`);
+    if (totalDuplicates > 0) parts.push(`дублей: ${totalDuplicates}`);
+    setMessageType(totalErrors > 0 ? "error" : "success");
+    setMessage(parts.join(" · ") || "Готово");
     await Promise.all([loadWorkspace(), loadPipelineCurrent()]);
-    if (uploadedIds.length) {
+    if (uploadedIds.length && totalErrors === 0) {
       setSelectedIds(new Set(uploadedIds));
       setSelectedId(uploadedIds[uploadedIds.length - 1]);
       setTab(autoProcess ? "queue" : "registry");
     }
   }
 
-  /** Retry uploading a single failed file. */
+  /** Retry uploading a single failed file — reset to pending, then trigger upload. */
   function retryFile(id: string) {
     setPendingFiles((prev) =>
       prev.map((f) =>
@@ -849,6 +969,8 @@ export default function DocumentsPage() {
           : f,
       ),
     );
+    // uploadPendingFiles reads pendingFiles state; defer so the state update above lands first
+    setTimeout(() => void uploadPendingFiles(), 0);
   }
 
   async function runAction(
@@ -1084,13 +1206,19 @@ export default function DocumentsPage() {
               dragging={dragging}
               uploading={uploading}
               uploadDocType={uploadDocType}
+              uploadSourceChannel={uploadSourceChannel}
               autoProcess={autoProcess}
               autoVerify={autoVerify}
               manualUploadType={manualUploadType}
               pendingFiles={pendingFiles}
               fileInputRef={fileInputRef}
               onDrag={setDragging}
+              onDragReset={() => {
+                dragCounterRef.current = 0;
+                setDragging(false);
+              }}
               onUploadDocType={setUploadDocType}
+              onUploadSourceChannel={setUploadSourceChannel}
               onAutoProcess={setAutoProcess}
               onAutoVerify={setAutoVerify}
               onManualUploadType={setManualUploadType}
@@ -1120,6 +1248,11 @@ export default function DocumentsPage() {
                 setSelectedIds(new Set());
               }}
               onBatch={(path, body) => batchAction(path, path, body)}
+              onLoadMore={
+                (workspace?.items.length ?? 0) < (workspace?.total ?? 0)
+                  ? () => loadWorkspace(true)
+                  : undefined
+              }
             />
           )}
 
@@ -1359,13 +1492,16 @@ function UploadPanel({
   dragging,
   uploading,
   uploadDocType,
+  uploadSourceChannel,
   autoProcess,
   autoVerify,
   manualUploadType,
   pendingFiles,
   fileInputRef,
   onDrag,
+  onDragReset,
   onUploadDocType,
+  onUploadSourceChannel,
   onAutoProcess,
   onAutoVerify,
   onManualUploadType,
@@ -1379,13 +1515,16 @@ function UploadPanel({
   dragging: boolean;
   uploading: boolean;
   uploadDocType: string;
+  uploadSourceChannel: string;
   autoProcess: boolean;
   autoVerify: boolean;
   manualUploadType: boolean;
   pendingFiles: PendingFile[];
   fileInputRef: RefObject<HTMLInputElement | null>;
   onDrag: (value: boolean) => void;
+  onDragReset: () => void;
   onUploadDocType: (value: string) => void;
+  onUploadSourceChannel: (value: string) => void;
   onAutoProcess: (value: boolean) => void;
   onAutoVerify: (value: boolean) => void;
   onManualUploadType: (value: boolean) => void;
@@ -1399,12 +1538,15 @@ function UploadPanel({
   const pendingCount = pendingFiles.filter(
     (f) => f.status === "pending",
   ).length;
-  const doneCount = pendingFiles.filter(
-    (f) =>
-      f.status === "done" ||
-      f.status === "duplicate" ||
-      f.status === "quarantined",
+  const uploadedCount = pendingFiles.filter((f) => f.status === "done").length;
+  const errorCount = pendingFiles.filter((f) => f.status === "error").length;
+  const quarantinedCount = pendingFiles.filter(
+    (f) => f.status === "quarantined",
   ).length;
+  const duplicateCount = pendingFiles.filter(
+    (f) => f.status === "duplicate",
+  ).length;
+  const doneCount = uploadedCount + quarantinedCount + duplicateCount;
 
   return (
     <section className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -1431,7 +1573,8 @@ function UploadPanel({
           onDragLeave={() => onDrag(false)}
           onDrop={(event) => {
             event.preventDefault();
-            onDrag(false);
+            event.stopPropagation();
+            onDragReset();
             onAddFiles(event.dataTransfer.files);
           }}
           onClick={() => fileInputRef.current?.click()}
@@ -1465,14 +1608,23 @@ function UploadPanel({
             <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-3 py-2">
               <span className="text-xs text-slate-400">
                 Очередь: {pendingCount} ожидает
-                {doneCount > 0 && `, ${doneCount} загружено`}
+                {uploadedCount > 0 && `, ${uploadedCount} загружено`}
+                {errorCount > 0 && (
+                  <span className="text-red-400">, {errorCount} ошибок</span>
+                )}
+                {quarantinedCount > 0 && (
+                  <span className="text-amber-400">
+                    , {quarantinedCount} карантин
+                  </span>
+                )}
+                {duplicateCount > 0 && `, ${duplicateCount} дублей`}
               </span>
               {doneCount > 0 && (
                 <button
                   onClick={onClearDone}
                   className="text-xs text-slate-500 hover:text-slate-300"
                 >
-                  Очистить загруженные
+                  Очистить завершённые
                 </button>
               )}
             </div>
@@ -1652,6 +1804,20 @@ function UploadPanel({
       <div className="rounded-md border border-slate-800 bg-slate-900 p-4">
         <h2 className="text-sm font-semibold">Параметры партии</h2>
         <label className="mt-4 block text-xs text-slate-400">
+          Канал загрузки
+          <select
+            value={uploadSourceChannel}
+            onChange={(event) => onUploadSourceChannel(event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+          >
+            <option value="upload">Ручная загрузка</option>
+            <option value="email">Email</option>
+            <option value="manual">Ввод вручную</option>
+            <option value="scanner">Сканер</option>
+            <option value="other">Другой</option>
+          </select>
+        </label>
+        <label className="mt-4 block text-xs text-slate-400">
           Тип документа (для всей партии)
           <select
             value={uploadDocType}
@@ -1751,6 +1917,7 @@ function RegistryPanel({
   onSelectAllMatching,
   onClearSelection,
   onBatch,
+  onLoadMore,
 }: {
   items: WorkspaceItem[];
   total: number;
@@ -1764,6 +1931,7 @@ function RegistryPanel({
   onSelectAllMatching: () => void;
   onClearSelection: () => void;
   onBatch: (path: string, body?: Record<string, unknown>) => void;
+  onLoadMore?: () => void;
 }) {
   const pageIsFull = items.length < total;
   const pageAllChecked =
@@ -1831,6 +1999,17 @@ function RegistryPanel({
         onToggle={onToggle}
         onToggleAll={onToggleAll}
       />
+
+      {items.length < total && onLoadMore && (
+        <div className="border-t border-slate-800 px-3 py-3 text-center">
+          <button
+            onClick={onLoadMore}
+            className="rounded-md bg-slate-800 px-4 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
+          >
+            Загрузить ещё ({total - items.length} документов)
+          </button>
+        </div>
+      )}
     </section>
   );
 }
@@ -1909,6 +2088,10 @@ function QueuePanel({
               evidence_spans: 0,
               graph_nodes: 0,
               graph_edges: 0,
+              graph_review_pending: 0,
+              embedding_records: 0,
+              ntd_checks: 0,
+              ntd_open_findings: 0,
             }) as PipelineStatus,
           },
           ...items,
