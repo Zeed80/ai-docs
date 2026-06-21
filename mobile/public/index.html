@@ -195,6 +195,17 @@
             try {
               var code = await scanQr();
               if (!code) { $("err").textContent = "QR-код не распознан."; return; }
+              // Login QR (/auth/qr-redeem?t=…): configure the server to its origin
+              // AND sign in immediately — go straight into the app, never showing
+              // the login page. Any other QR is treated as a server address.
+              try {
+                var u = new URL(code);
+                if (u.pathname.indexOf("/auth/qr-redeem") === 0 && u.searchParams.get("t")) {
+                  await save(u.origin);          // persist server = origin
+                  window.location.replace(code); // → redeem → /inbox (logged in)
+                  return;
+                }
+              } catch (e) {}
               await connect(await save(code));
             } catch (e) {
               $("err").textContent = (e && e.message) || "Не удалось отсканировать.";
