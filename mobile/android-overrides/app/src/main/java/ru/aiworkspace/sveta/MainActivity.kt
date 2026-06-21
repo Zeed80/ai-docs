@@ -13,7 +13,7 @@ import com.getcapacitor.BridgeActivity
 /**
  * Main activity for the Света shell.
  *
- * Registers the app-owned Capacitor plugins (ServerConfig, AppUpdate, SvetaPush).
+ * Registers the app-owned Capacitor plugins (ServerConfig, AppUpdate, AidocsPush).
  * The community SendIntent plugin handles ACTION_SEND/SEND_MULTIPLE intake on its
  * own, so file sharing needs no custom code here.
  *
@@ -28,7 +28,7 @@ class MainActivity : BridgeActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         registerPlugin(ServerConfigPlugin::class.java)
         registerPlugin(AppUpdatePlugin::class.java)
-        registerPlugin(SvetaPushPlugin::class.java)
+        registerPlugin(AidocsPushPlugin::class.java)
         super.onCreate(savedInstanceState)
 
         // Confidential content — block screenshots + recent-apps thumbnail.

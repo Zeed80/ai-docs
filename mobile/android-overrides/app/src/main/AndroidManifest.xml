@@ -91,7 +91,7 @@
 
         <!-- Foreground service holding the ntfy subscription (no Google services) -->
         <service
-            android:name=".SvetaPushService"
+            android:name=".AidocsPushService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 

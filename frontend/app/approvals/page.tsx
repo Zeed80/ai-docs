@@ -434,7 +434,7 @@ export default function ApprovalsPage() {
                       </p>
                     )}
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      {a.requested_by ?? "sveta"} ·{" "}
+                      {a.requested_by ?? "ai-docs"} ·{" "}
                       {new Date(a.created_at).toLocaleString("ru-RU", {
                         month: "short",
                         day: "numeric",
@@ -476,7 +476,7 @@ export default function ApprovalsPage() {
                   <span>
                     Запросил:{" "}
                     <strong className="text-slate-300">
-                      {selected.requested_by ?? "sveta"}
+                      {selected.requested_by ?? "ai-docs"}
                     </strong>
                   </span>
                   <span>

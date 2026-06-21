@@ -18,7 +18,11 @@ OUT_DIR="${4:?out dir required}"
 CHANGELOG="${5:-}"
 
 mkdir -p "$OUT_DIR"
+# latest.apk = stable URL for in-app self-update; AI-DOCS_<version>.apk = the
+# human-friendly name the browser saves when downloading from /get-app.
 cp "$APK" "$OUT_DIR/latest.apk"
+FILE_NAME="AI-DOCS_${VERSION_NAME}.apk"
+cp "$APK" "$OUT_DIR/${FILE_NAME}"
 
 SHA256="$(sha256sum "$OUT_DIR/latest.apk" | awk '{print $1}')"
 
@@ -31,6 +35,7 @@ cat > "$OUT_DIR/version.json" <<JSON
   "versionName": "${VERSION_NAME}",
   "versionCode": ${VERSION_CODE},
   "url": "/download/latest.apk",
+  "fileName": "${FILE_NAME}",
   "sha256": "${SHA256}",
   "minSdk": 28,
   "changelog": "${CHANGELOG_ESC}"

@@ -10,6 +10,7 @@ interface VersionInfo {
   minSdk?: number;
   sha256?: string;
   url?: string;
+  fileName?: string;
 }
 
 const APK_URL = "/download/latest.apk";
@@ -25,28 +26,41 @@ export default function DownloadPage() {
   const [qr, setQr] = useState<string | null>(null);
   const [serverQr, setServerQr] = useState<string | null>(null);
   const [version, setVersion] = useState<VersionInfo | null>(null);
+  const [apkPath, setApkPath] = useState(APK_URL);
+  const [apkName, setApkName] = useState("latest.apk");
   const [absUrl, setAbsUrl] = useState(APK_URL);
   const [origin, setOrigin] = useState("");
 
   useEffect(() => {
     const base = typeof window !== "undefined" ? window.location.origin : "";
-    const url = `${base}${APK_URL}`;
-    setAbsUrl(url);
     setOrigin(base);
-    // QR #1 — download the APK.
-    QRCode.toDataURL(url, { width: 240, margin: 1 })
-      .then(setQr)
-      .catch(() => setQr(null));
     // QR #2 — server address for the app's first-run setup screen.
     if (base) {
       QRCode.toDataURL(base, { width: 240, margin: 1 })
         .then(setServerQr)
         .catch(() => setServerQr(null));
     }
+    // Resolve the versioned APK filename from version.json, then build link + QR.
     fetch(VERSION_URL)
       .then((r) => (r.ok ? r.json() : null))
-      .then((v) => v && setVersion(v))
-      .catch(() => {});
+      .then((v: VersionInfo | null) => {
+        if (v) setVersion(v);
+        const path = v?.fileName ? `/download/${v.fileName}` : APK_URL;
+        setApkPath(path);
+        setApkName(v?.fileName ?? "latest.apk");
+        const url = `${base}${path}`;
+        setAbsUrl(url);
+        QRCode.toDataURL(url, { width: 240, margin: 1 })
+          .then(setQr)
+          .catch(() => setQr(null));
+      })
+      .catch(() => {
+        const url = `${base}${APK_URL}`;
+        setAbsUrl(url);
+        QRCode.toDataURL(url, { width: 240, margin: 1 })
+          .then(setQr)
+          .catch(() => setQr(null));
+      });
   }, []);
 
   return (
@@ -79,7 +93,8 @@ export default function DownloadPage() {
             )}
           </div>
           <a
-            href={APK_URL}
+            href={apkPath}
+            download={apkName}
             className="w-full rounded-lg bg-sky-500 py-3 text-center text-sm font-medium text-white"
           >
             Скачать APK

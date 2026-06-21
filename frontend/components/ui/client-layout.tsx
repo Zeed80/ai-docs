@@ -7,12 +7,12 @@ import { ResizableLayout } from "@/components/ui/resizable-layout";
 import { CommandPalette } from "@/components/ui/command-palette";
 import { useEffect, useState } from "react";
 
-// SvetaPanel uses WebSocket, localStorage, and client-only state — never SSR it.
+// AssistantPanel uses WebSocket, localStorage, and client-only state — never SSR it.
 // ssr: false eliminates hydration mismatches on disabled/placeholder attributes.
-const SvetaPanel = dynamic(
+const AssistantPanel = dynamic(
   () =>
-    import("@/components/chat/sveta-panel").then((m) => ({
-      default: m.SvetaPanel,
+    import("@/components/chat/assistant-panel").then((m) => ({
+      default: m.AssistantPanel,
     })),
   {
     ssr: false,
@@ -37,7 +37,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <ResizableLayout sidebar={<Sidebar />} chat={<SvetaPanel />}>
+      <ResizableLayout sidebar={<Sidebar />} chat={<AssistantPanel />}>
         {children}
       </ResizableLayout>
       <CommandPalette

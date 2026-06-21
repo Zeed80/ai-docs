@@ -42,7 +42,7 @@ export function useDegradedMode() {
 
     // Delay first probe by 2 s — avoids false "degraded" on cold start when
     // the backend container is still warming up but the WS chat connection
-    // (established by sveta-panel) succeeds shortly after.
+    // (established by assistant-panel) succeeds shortly after.
     const initialTimer = setTimeout(() => {
       if (!cancelled) check();
     }, 2000);

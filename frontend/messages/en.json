@@ -120,8 +120,8 @@
     "no_rules": "No normalization rules"
   },
   "chat": {
-    "placeholder": "Ask Sveta...",
-    "sveta": "Sveta",
+    "placeholder": "Ask AI-DOCS...",
+    "sveta": "AI-DOCS",
     "unavailable": "Automated features temporarily unavailable"
   },
   "drawings": {

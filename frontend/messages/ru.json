@@ -120,8 +120,8 @@
     "no_rules": "Нет правил нормализации"
   },
   "chat": {
-    "placeholder": "Спросите Свету...",
-    "sveta": "Света",
+    "placeholder": "Спросите AI-DOCS...",
+    "sveta": "AI-DOCS",
     "unavailable": "Автоматические функции временно недоступны"
   },
   "drawings": {

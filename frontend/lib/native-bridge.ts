@@ -345,12 +345,12 @@ export async function shareOut(opts: {
 // ── Push registration (self-hosted ntfy) ──────────────────────────────────────
 
 /**
- * Register this device for push. The native SvetaPush plugin owns the ntfy topic
+ * Register this device for push. The native AidocsPush plugin owns the ntfy topic
  * and its foreground subscription; we just persist the topic on the backend so
  * notifications can be addressed to this user. No-op on the web.
  */
 export async function registerForPush(appVersion?: string): Promise<void> {
-  const push = plugin("SvetaPush");
+  const push = plugin("AidocsPush");
   if (!push?.register) return;
   try {
     const reg = await push.register(); // { topic, endpoint? }

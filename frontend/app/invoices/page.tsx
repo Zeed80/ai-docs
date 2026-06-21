@@ -323,11 +323,11 @@ export default function InvoicesPage() {
   };
 
   // Hand the query to the agent «AI-DOCS», scoped to invoices.
-  const askSveta = () => {
+  const askAssistant = () => {
     const q = askQuery.trim();
     if (!q) return;
     window.dispatchEvent(
-      new CustomEvent("sveta:ask", { detail: { text: `[Только счета] ${q}` } }),
+      new CustomEvent("aidocs:ask", { detail: { text: `[Только счета] ${q}` } }),
     );
     setAskQuery("");
   };
@@ -811,18 +811,18 @@ export default function InvoicesPage() {
         </div>
       )}
 
-      {/* Ask Sveta (agent, scoped to invoices) */}
+      {/* Ask the assistant (agent, scoped to invoices) */}
       <div className="flex items-center gap-2 mb-3">
         <input
           type="text"
           value={askQuery}
           onChange={(e) => setAskQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && askSveta()}
+          onKeyDown={(e) => e.key === "Enter" && askAssistant()}
           placeholder="Спросить AI-DOCS про счета: «сравни цены поставщиков за апрель»..."
           className="flex-1 px-3 py-1.5 text-sm bg-slate-800/60 border border-slate-700 text-slate-300 placeholder-slate-600 rounded outline-none focus:border-purple-500"
         />
         <button
-          onClick={askSveta}
+          onClick={askAssistant}
           disabled={!askQuery.trim()}
           className="px-3 py-1.5 text-xs bg-purple-700 text-white rounded hover:bg-purple-600 disabled:opacity-40 flex items-center gap-1"
         >

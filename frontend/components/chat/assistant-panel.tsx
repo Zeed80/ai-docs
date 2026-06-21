@@ -180,7 +180,7 @@ function FileChip({
   );
 }
 
-export function SvetaPanel() {
+export function AssistantPanel() {
   const { isDegraded } = useDegradedMode();
   const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -218,16 +218,16 @@ export function SvetaPanel() {
 
   const restoreSessionFromStorage = useCallback(() => {
     if (typeof window === "undefined") return null;
-    return window.localStorage.getItem("sveta.currentSessionId");
+    return window.localStorage.getItem("aidocs.currentSessionId");
   }, []);
 
   const persistSessionToStorage = useCallback((sessionId: string | null) => {
     if (typeof window === "undefined") return;
     if (!sessionId) {
-      window.localStorage.removeItem("sveta.currentSessionId");
+      window.localStorage.removeItem("aidocs.currentSessionId");
       return;
     }
-    window.localStorage.setItem("sveta.currentSessionId", sessionId);
+    window.localStorage.setItem("aidocs.currentSessionId", sessionId);
   }, []);
 
   const hydrateMessages = useCallback(async (sessionId: string) => {
@@ -886,7 +886,7 @@ export function SvetaPanel() {
   }
 
   // Programmatic ask — used by other pages (e.g. the invoices «Спросить AI-DOCS»
-  // button) via a window `sveta:ask` CustomEvent. Queues until the socket opens.
+  // button) via a window `aidocs:ask` CustomEvent. Queues until the socket opens.
   const pendingAskRef = useRef<string | null>(null);
   const sendAgentText = useCallback(
     (text: string) => {
@@ -915,8 +915,8 @@ export function SvetaPanel() {
       const detail = (e as CustomEvent<{ text?: string }>).detail;
       if (detail?.text) sendAgentText(detail.text);
     };
-    window.addEventListener("sveta:ask", handler);
-    return () => window.removeEventListener("sveta:ask", handler);
+    window.addEventListener("aidocs:ask", handler);
+    return () => window.removeEventListener("aidocs:ask", handler);
   }, [sendAgentText]);
 
   useEffect(() => {

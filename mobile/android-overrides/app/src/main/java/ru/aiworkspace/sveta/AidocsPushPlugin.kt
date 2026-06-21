@@ -20,8 +20,8 @@ import java.util.UUID
  *
  * Privacy: only title/body/type/action_url ever flow through ntfy; topics are random.
  */
-@CapacitorPlugin(name = "SvetaPush")
-class SvetaPushPlugin : Plugin() {
+@CapacitorPlugin(name = "AidocsPush")
+class AidocsPushPlugin : Plugin() {
 
     private fun prefs() = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -75,7 +75,7 @@ class SvetaPushPlugin : Plugin() {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val url = prefs.getString(KEY_URL, null) ?: return
             val topic = prefs.getString(KEY_TOPIC, null) ?: return
-            val intent = Intent(context, SvetaPushService::class.java).apply {
+            val intent = Intent(context, AidocsPushService::class.java).apply {
                 putExtra("url", url)
                 putExtra("topic", topic)
             }

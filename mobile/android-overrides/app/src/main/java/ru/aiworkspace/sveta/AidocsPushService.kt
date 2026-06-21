@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Reconnects with backoff. A low-importance "ongoing" notification keeps the
  * service alive on Android 8+.
  */
-class SvetaPushService : Service() {
+class AidocsPushService : Service() {
 
     private val running = AtomicBoolean(false)
     @Volatile private var worker: Thread? = null
@@ -32,9 +32,9 @@ class SvetaPushService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val url = intent?.getStringExtra("url")
-            ?: prefs().getString(SvetaPushPlugin.KEY_URL, null)
+            ?: prefs().getString(AidocsPushPlugin.KEY_URL, null)
         val topic = intent?.getStringExtra("topic")
-            ?: prefs().getString(SvetaPushPlugin.KEY_TOPIC, null)
+            ?: prefs().getString(AidocsPushPlugin.KEY_TOPIC, null)
 
         createChannels()
         startForeground(ONGOING_ID, ongoingNotification())
@@ -52,7 +52,7 @@ class SvetaPushService : Service() {
     }
 
     private fun prefs() =
-        getSharedPreferences(SvetaPushPlugin.PREFS, Context.MODE_PRIVATE)
+        getSharedPreferences(AidocsPushPlugin.PREFS, Context.MODE_PRIVATE)
 
     private fun subscribeLoop(url: String, topic: String) {
         var backoff = 2000L
