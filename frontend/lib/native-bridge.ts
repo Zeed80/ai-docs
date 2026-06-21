@@ -495,3 +495,21 @@ export async function installUpdate(): Promise<void> {
     console.warn("installUpdate failed", e);
   }
 }
+
+/** Installed app version/build (from the Capacitor App plugin). Null on web. */
+export async function getAppVersion(): Promise<{
+  version?: string;
+  build?: string;
+} | null> {
+  const app = plugin("App");
+  if (!app?.getInfo) return null;
+  try {
+    const info = await app.getInfo();
+    return {
+      version: info?.version,
+      build: info?.build != null ? String(info.build) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}

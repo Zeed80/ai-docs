@@ -6,6 +6,9 @@ import {
   registerForPush,
   getServerConfig,
   clearServerConfig,
+  checkForUpdate,
+  installUpdate,
+  getAppVersion,
 } from "@/lib/native-bridge";
 import {
   isAppLockEnabled,
@@ -54,6 +57,11 @@ export default function NotificationsSettingsPage() {
   const [lock, setLock] = useState(true);
   const [registering, setRegistering] = useState(false);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [updateState, setUpdateState] = useState<
+    "idle" | "checking" | "latest" | "available" | "installing"
+  >("idle");
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
 
   async function loadDevices() {
     try {
@@ -70,7 +78,32 @@ export default function NotificationsSettingsPage() {
     setLock(isAppLockEnabled());
     void loadDevices();
     void getServerConfig().then(setServerUrl);
+    void getAppVersion().then((v) => v?.version && setAppVersion(v.version));
   }, []);
+
+  async function checkUpdates() {
+    setUpdateState("checking");
+    try {
+      const u = await checkForUpdate();
+      if (u.available) {
+        setUpdateVersion(u.versionName ?? null);
+        setUpdateState("available");
+      } else {
+        setUpdateState("latest");
+      }
+    } catch {
+      setUpdateState("idle");
+    }
+  }
+
+  async function applyUpdate() {
+    setUpdateState("installing");
+    try {
+      await installUpdate();
+    } finally {
+      setUpdateState("available");
+    }
+  }
 
   async function changeServer() {
     if (
@@ -225,6 +258,37 @@ export default function NotificationsSettingsPage() {
                 />
               </button>
             </label>
+
+            <div className="flex items-center justify-between border-t border-border pt-4">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Обновления</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {appVersion
+                    ? `Текущая версия: ${appVersion}`
+                    : "Версия неизвестна"}
+                  {updateState === "latest" && " · установлена последняя"}
+                  {updateState === "available" &&
+                    ` · доступна ${updateVersion ?? "новая"}`}
+                </div>
+              </div>
+              {updateState === "available" || updateState === "installing" ? (
+                <button
+                  onClick={applyUpdate}
+                  disabled={updateState === "installing"}
+                  className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-60"
+                >
+                  {updateState === "installing" ? "Загрузка…" : "Обновить"}
+                </button>
+              ) : (
+                <button
+                  onClick={checkUpdates}
+                  disabled={updateState === "checking"}
+                  className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-muted/40 disabled:opacity-60"
+                >
+                  {updateState === "checking" ? "Проверяю…" : "Проверить"}
+                </button>
+              )}
+            </div>
           </>
         )}
       </div>
