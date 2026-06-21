@@ -1,0 +1,10 @@
+# Build context = repo root is used only by infra/apk-builder/Dockerfile.
+# Keep host-generated mobile artifacts out so `cap add android` runs fresh and the
+# context stays small. (backend/frontend images use their own contexts/ignores.)
+mobile/node_modules
+mobile/android
+mobile/dist
+**/*.apk
+*.jks
+*.keystore
+.git

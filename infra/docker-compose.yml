@@ -598,6 +598,21 @@ services:
     networks:
       - app
 
+  # === APK builder (on-demand) ===
+  # Not a long-running service: built as an image (toolchain + shell source) and
+  # launched on demand by the backend (via the Docker socket) when an admin clicks
+  # "собрать приложение" in settings. `profiles` keeps it from starting on `up`;
+  # it's built explicitly (install.sh/update.sh pass --profile apk-builder).
+  apk-builder:
+    build:
+      context: ..
+      dockerfile: infra/apk-builder/Dockerfile
+    image: ${COMPOSE_PROJECT_NAME:-infra}-apk-builder
+    profiles: ["apk-builder"]
+    entrypoint: ["true"]
+    networks:
+      - app
+
   # === Frontend ===
   frontend:
     build:
@@ -705,6 +720,7 @@ volumes:
   backups_data:
   releases_data:
   ntfy_data:
+  apk_keystore:
 
 networks:
   app:

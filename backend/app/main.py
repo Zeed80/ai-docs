@@ -81,6 +81,7 @@ from app.api import (
 )
 from app.api import admin as admin_api
 from app.api import devices as devices_api
+from app.api import mobile_build as mobile_build_api
 from app.api import admin_graph as admin_graph_api
 from app.api import maintenance as maintenance_api
 from app.api import dynamic_skill_runner
@@ -380,6 +381,7 @@ def create_app() -> FastAPI:
     app.include_router(setup_api.router, prefix="/api/setup", tags=["setup"], dependencies=_auth)
     app.include_router(comments_api.router, prefix="/api/comments", tags=["comments"], dependencies=_auth)
     app.include_router(devices_api.router, prefix="/api/devices", tags=["devices"], dependencies=_auth)
+    app.include_router(mobile_build_api.router, prefix="/api/mobile-build", tags=["mobile-build"], dependencies=_auth)
 
     # ── Public mobile-app distribution (no auth) ──────────────────────────────
     # APK + version.json are served at /download; assetlinks.json for Android App Links.

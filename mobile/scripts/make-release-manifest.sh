@@ -22,6 +22,10 @@ cp "$APK" "$OUT_DIR/latest.apk"
 
 SHA256="$(sha256sum "$OUT_DIR/latest.apk" | awk '{print $1}')"
 
+# JSON-escape the changelog without any interpreter dependency (the builder image
+# has no python): escape backslashes and quotes, collapse newlines/tabs to spaces.
+CHANGELOG_ESC="$(printf '%s' "$CHANGELOG" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n\r\t' '   ')"
+
 cat > "$OUT_DIR/version.json" <<JSON
 {
   "versionName": "${VERSION_NAME}",
@@ -29,7 +33,7 @@ cat > "$OUT_DIR/version.json" <<JSON
   "url": "/download/latest.apk",
   "sha256": "${SHA256}",
   "minSdk": 28,
-  "changelog": $(printf '%s' "$CHANGELOG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+  "changelog": "${CHANGELOG_ESC}"
 }
 JSON
 
