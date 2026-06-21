@@ -202,30 +202,13 @@ function buildScanOverlay(onCancel: () => void): HTMLDivElement {
 // ── Camera / document scan ────────────────────────────────────────────────────
 
 /**
- * Capture document pages. Prefers a native multi-page document scanner
- * (auto-crop / perspective / b&w); falls back to the Camera plugin, then to a
- * plain web file input. Returns the captured files (caller uploads them).
+ * Capture a document photo with the device camera. Uses the @capacitor/camera
+ * plugin (system camera / CameraX) — GMS-free, so it works on devices WITHOUT
+ * Google services (HONOR/Huawei). The previous ML Kit DocumentScanner required
+ * Google Play Services and hung on GMS-less devices, so it's no longer used.
+ * Returns the captured file(s); empty array if the user cancels.
  */
 export async function scanDocument(): Promise<File[]> {
-  // 1) Native document scanner (multi-page → images or a PDF).
-  const scanner = plugin("DocumentScanner");
-  if (scanner?.scanDocument) {
-    try {
-      const result = await scanner.scanDocument({
-        responseType: "imageFilePath",
-      });
-      const uris: string[] = result?.scannedImages ?? result?.images ?? [];
-      if (uris.length) {
-        return Promise.all(
-          uris.map((u, i) => uriToFile(u, `scan-${Date.now()}-${i + 1}.jpg`)),
-        );
-      }
-    } catch (e) {
-      console.warn("DocumentScanner failed, falling back to camera", e);
-    }
-  }
-
-  // 2) Camera plugin (single photo).
   const camera = plugin("Camera");
   if (camera?.getPhoto) {
     try {
@@ -233,21 +216,33 @@ export async function scanDocument(): Promise<File[]> {
         quality: 85,
         allowEditing: false,
         resultType: "base64",
-        source: "CAMERA",
+        source: "CAMERA", // open the camera directly, never the gallery
         saveToGallery: false,
       });
       if (photo?.base64String) {
         return [b64ToFile(photo.base64String, `photo-${Date.now()}.jpg`)];
       }
-      if (photo?.webPath) {
-        return [await uriToFile(photo.webPath, `photo-${Date.now()}.jpg`)];
+      if (photo?.dataUrl) {
+        return [b64ToFile(photo.dataUrl, `photo-${Date.now()}.jpg`)];
       }
+      if (photo?.webPath || photo?.path) {
+        return [
+          await uriToFile(
+            (photo.webPath || photo.path) as string,
+            `photo-${Date.now()}.jpg`,
+          ),
+        ];
+      }
+      return []; // nothing returned
     } catch (e) {
-      console.warn("Camera plugin failed, falling back to web input", e);
+      // User cancelled or camera error — do NOT fall back to a gallery/file
+      // picker (that's what caused the "opens gallery then hangs" report).
+      console.warn("camera getPhoto cancelled/failed", e);
+      return [];
     }
   }
 
-  // 3) Web fallback — system file picker with camera capture hint.
+  // Non-native (browser): system file picker with camera-capture hint.
   return pickFilesWeb({ accept: "image/*", capture: "environment" });
 }
 
@@ -475,11 +470,40 @@ export interface UpdateInfo {
 
 const VERSION_URL = "/download/version.json";
 
+/**
+ * Check for a newer build. Compares the served version.json against the installed
+ * versionCode (App plugin's `build`) directly in JS — robust and debuggable, and
+ * independent of the native AppUpdate check. Only the INSTALL uses the native
+ * plugin (downloadAndInstall). No-op off the native shell.
+ */
 export async function checkForUpdate(): Promise<UpdateInfo> {
-  const updater = plugin("AppUpdate");
-  if (!updater?.checkForUpdate) return { available: false };
+  if (!isNative()) return { available: false };
   try {
-    return await updater.checkForUpdate({ url: VERSION_URL });
+    // Cache-bust + no-store so we never read a stale manifest.
+    const res = await fetch(`${VERSION_URL}?_=${Date.now()}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return { available: false };
+    const v = await res.json();
+
+    let installed = 0;
+    const app = plugin("App");
+    if (app?.getInfo) {
+      try {
+        const info = await app.getInfo();
+        installed = parseInt(String(info?.build ?? "0"), 10) || 0; // Android build == versionCode
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const latest = typeof v?.versionCode === "number" ? v.versionCode : 0;
+    return {
+      available: latest > installed,
+      versionName: v?.versionName,
+      versionCode: latest,
+      changelog: v?.changelog,
+    };
   } catch (e) {
     console.warn("checkForUpdate failed", e);
     return { available: false };
