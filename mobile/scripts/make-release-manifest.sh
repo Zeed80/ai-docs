@@ -18,6 +18,8 @@ OUT_DIR="${4:?out dir required}"
 CHANGELOG="${5:-}"
 
 mkdir -p "$OUT_DIR"
+# Drop previous versioned copies so the release dir keeps only the current one.
+find "$OUT_DIR" -maxdepth 1 -name 'AI-DOCS_*.apk' -delete 2>/dev/null || true
 # latest.apk = stable URL for in-app self-update; AI-DOCS_<version>.apk = the
 # human-friendly name the browser saves when downloading from /get-app.
 cp "$APK" "$OUT_DIR/latest.apk"

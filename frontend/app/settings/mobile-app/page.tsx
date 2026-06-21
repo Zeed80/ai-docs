@@ -1,13 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import QRCode from "qrcode";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 
 const API = getApiBaseUrl();
-const APK_URL = "/download/latest.apk";
 
 interface BuildStatus {
   state: "idle" | "building" | "success" | "failed";
@@ -26,8 +24,6 @@ const STATE_LABEL: Record<BuildStatus["state"], string> = {
 
 function MobileAppContent() {
   const [status, setStatus] = useState<BuildStatus | null>(null);
-  const [qr, setQr] = useState<string | null>(null);
-  const [apkQr, setApkQr] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -36,6 +32,7 @@ function MobileAppContent() {
     try {
       const res = await fetch(`${API}/api/mobile-build/status`, {
         credentials: "include",
+        cache: "no-store",
       });
       if (res.ok) setStatus(await res.json());
     } catch {
@@ -45,14 +42,6 @@ function MobileAppContent() {
 
   useEffect(() => {
     void loadStatus();
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    // QR to the install page (server config + APK) and a direct-APK QR.
-    QRCode.toDataURL(`${origin}/get-app`, { width: 200, margin: 1 })
-      .then(setQr)
-      .catch(() => {});
-    QRCode.toDataURL(`${origin}${APK_URL}`, { width: 200, margin: 1 })
-      .then(setApkQr)
-      .catch(() => {});
   }, [loadStatus]);
 
   // Poll while a build is running.
@@ -145,60 +134,20 @@ function MobileAppContent() {
         </p>
       </div>
 
-      {/* Download */}
+      {/* Download — single canonical page */}
       <div className="rounded-lg border border-border p-4">
-        <div className="text-sm font-medium mb-3">Скачивание</div>
+        <div className="text-sm font-medium mb-1">Скачивание и установка</div>
         {status?.apk_available ? (
-          <div className="flex flex-wrap gap-6">
-            <div className="flex flex-col items-center gap-2">
-              <div className="rounded-lg bg-white p-2">
-                {qr ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={qr}
-                    alt="QR на страницу установки"
-                    width={160}
-                    height={160}
-                  />
-                ) : (
-                  <div className="h-40 w-40" />
-                )}
-              </div>
-              <span className="text-xs text-muted-foreground">
-                Страница установки
-              </span>
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <div className="rounded-lg bg-white p-2">
-                {apkQr ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={apkQr}
-                    alt="QR прямой ссылки на APK"
-                    width={160}
-                    height={160}
-                  />
-                ) : (
-                  <div className="h-40 w-40" />
-                )}
-              </div>
-              <span className="text-xs text-muted-foreground">
-                Прямая ссылка на APK
-              </span>
-            </div>
-            <div className="flex flex-col justify-center gap-2 text-sm">
-              <a href={APK_URL} className="text-primary hover:underline">
-                Скачать APK ↓
-              </a>
-              <a
-                href="/get-app"
-                className="text-primary hover:underline"
-                target="_blank"
-              >
-                Открыть страницу установки →
-              </a>
-            </div>
-          </div>
+          <p className="text-sm text-muted-foreground">
+            Раздача и QR-коды — на единой странице установки:{" "}
+            <a
+              href="/get-app"
+              target="_blank"
+              className="font-medium text-primary hover:underline"
+            >
+              открыть /get-app →
+            </a>
+          </p>
         ) : (
           <p className="text-sm text-muted-foreground">
             APK ещё не собран. Нажмите «Собрать / пересобрать».

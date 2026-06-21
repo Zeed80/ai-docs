@@ -214,13 +214,14 @@ async def callback(
 
 
 # ── QR login (authenticated desktop → mobile, passwordless) ───────────────────
-# Flow: an authenticated desktop calls /qr-login/create → gets a short-lived,
-# single-use token → renders it as a QR. The mobile app scans it and calls
-# /qr-login/redeem → backend relays the desktop's session token into the mobile's
-# httpOnly cookie. The actual session JWT is stored only server-side (Redis) and
-# delivered via Set-Cookie — it never appears in the QR.
+# Flow: an authenticated desktop calls /qr-login/create → mints a DURABLE session
+# token for the caller and stores it under a short-lived, single-use QR token. The
+# mobile app scans it and calls /qr-login/redeem → backend sets that session as the
+# device's httpOnly cookie (long-lived, so the phone stays logged in). The session
+# JWT lives only server-side (Redis) until redeemed — it never appears in the QR.
+# Revoke all of a user's QR sessions via /api/admin/users/{sub}/revoke-sessions.
 
-_QR_TTL_SECONDS = 120
+_QR_TTL_SECONDS = 120  # time to scan the QR; NOT the session lifetime
 
 
 def _token_max_age(access_token: str) -> int:
@@ -244,15 +245,28 @@ class QrRedeemRequest(BaseModel):
 
 @router.post("/qr-login/create")
 async def qr_login_create(
-    request: Request,
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
-    """Create a single-use QR-login token bound to the caller's cookie session."""
-    session_jwt = request.cookies.get("access_token")
-    if not session_jwt:
-        # Only cookie-backed browser sessions can be relayed to another device.
-        raise HTTPException(status_code=400, detail="QR login requires a cookie session")
+    """Mint a durable session for the caller and stash it under a single-use QR token.
+
+    The scanning phone gets a long-lived session (see qr_login_session_ttl_minutes),
+    so it stays logged in. Role/active status are still re-checked from the DB on
+    every request, and the session can be revoked via the admin endpoint.
+    """
+    from app.auth.jwt import current_session_epoch, mint_local_session
     from app.utils.redis_client import get_async_redis
+
+    ttl_seconds = max(3600, settings.qr_login_session_ttl_minutes * 60)
+    epoch = await current_session_epoch(user.sub)
+    session_jwt = mint_local_session(
+        sub=user.sub,
+        email=user.email,
+        name=user.name,
+        preferred_username=user.preferred_username,
+        groups=[],  # role resolved from DB at verify time
+        ttl_seconds=ttl_seconds,
+        session_epoch=epoch,
+    )
     r = get_async_redis()
     token = secrets.token_urlsafe(32)
     await r.setex(f"qrlogin:{token}", _QR_TTL_SECONDS, session_jwt)

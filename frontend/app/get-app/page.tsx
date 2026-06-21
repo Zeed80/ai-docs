@@ -41,7 +41,7 @@ export default function DownloadPage() {
         .catch(() => setServerQr(null));
     }
     // Resolve the versioned APK filename from version.json, then build link + QR.
-    fetch(VERSION_URL)
+    fetch(VERSION_URL, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((v: VersionInfo | null) => {
         if (v) setVersion(v);

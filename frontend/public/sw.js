@@ -1,4 +1,4 @@
-const CACHE_VERSION = "v4";
+const CACHE_VERSION = "v5";
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const API_CACHE = `api-${CACHE_VERSION}`;
 
@@ -39,6 +39,13 @@ self.addEventListener("fetch", (event) => {
 
   // Skip non-GET and cross-origin
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
+
+  // App distribution (/download/*: version.json, APK): NEVER cache — always fetch
+  // fresh so the install page and self-update see the current release.
+  if (url.pathname.startsWith("/download/")) {
+    event.respondWith(fetch(request));
+    return;
+  }
 
   // API requests: network-first with short cache for select endpoints
   if (url.pathname.startsWith("/api/")) {

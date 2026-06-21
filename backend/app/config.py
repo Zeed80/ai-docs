@@ -84,9 +84,11 @@ class Settings(BaseSettings):
     # app_secret_key when empty; set a dedicated value in production to isolate the
     # session-signing secret from app_secret_key (Fernet) and to allow rotation.
     session_signing_key: str = ""
-    # Lifetime of an admin-issued QR-login session (minutes). Kept short since it
-    # grants login as another user (impersonation for multi-user devices/tests).
-    qr_login_session_ttl_minutes: int = 60
+    # Lifetime of a QR-login session (minutes). Long by design: scanning a login
+    # QR signs the phone in durably ("stays logged in"). Revoke anytime via
+    # /api/admin/users/{sub}/revoke-sessions (bumps the per-user session epoch).
+    # Default ≈ 10 years.
+    qr_login_session_ttl_minutes: int = 5_256_000
 
     # Internal service-to-service key used by the AI orchestrator and capability proxy.
     # Must be set to the same value in all services that need to call the backend API.
