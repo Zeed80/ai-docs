@@ -34,6 +34,23 @@
       button.secondary { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; }
       .err { color: #f87171; font-size: 13px; min-height: 16px; }
       .hidden { display: none; }
+      /* QR scan: camera renders behind the WebView → make page transparent and
+         show only the viewfinder + cancel. */
+      html.qr-scanning, html.qr-scanning body { background: transparent !important; }
+      html.qr-scanning body > *:not(.qr-overlay) { visibility: hidden !important; }
+      .qr-overlay {
+        position: fixed; inset: 0; z-index: 99999;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px;
+      }
+      .qr-frame {
+        width: 70vw; max-width: 280px; aspect-ratio: 1 / 1;
+        border: 3px solid rgba(255,255,255,0.9); border-radius: 20px;
+        box-shadow: 0 0 0 100vmax rgba(0,0,0,0.45);
+      }
+      .qr-cancel {
+        padding: 12px 28px; border: 0; border-radius: 10px;
+        background: rgba(15,23,42,0.85); color: #fff; font-size: 15px; font-weight: 600;
+      }
     </style>
   </head>
   <body>
@@ -50,6 +67,7 @@
       <div id="unreachable" class="card hidden">
         <p>Сервер недоступен. Проверьте интернет и адрес.</p>
         <button id="retry">Повторить</button>
+        <button id="proceed" class="secondary">Продолжить всё равно</button>
         <button id="change" class="secondary">Сменить сервер</button>
       </div>
 
@@ -92,13 +110,18 @@
           try {
             var ctrl = new AbortController();
             var to = setTimeout(function () { ctrl.abort(); }, 6000);
+            // no-cors: this is a cross-origin reachability probe from the bundled
+            // launcher origin. Without no-cors the browser blocks reading the
+            // response and fetch throws even though the server is up (false
+            // "unreachable"). We don't read the body — resolving is enough.
             await fetch(url + "/health", {
               method: "GET",
+              mode: "no-cors",
               cache: "no-store",
               signal: ctrl.signal,
             });
             clearTimeout(to);
-            ok = true; // any HTTP response means the server is reachable
+            ok = true; // request completed → server reachable
           } catch (e) {
             ok = false;
           }
@@ -108,6 +131,9 @@
             hide("connecting");
             show("unreachable");
             $("retry").onclick = function () { connect(url); };
+            // Safety valve: the probe can still misfire on odd networks — let the
+            // user open the site anyway (the WebView shows its own error if down).
+            $("proceed").onclick = function () { window.location.replace(url); };
           }
         }
 
@@ -167,14 +193,64 @@
           $("scan").addEventListener("click", async function () {
             $("err").textContent = "";
             try {
-              if (BarcodeScanner.requestPermissions) await BarcodeScanner.requestPermissions();
-              var r = await BarcodeScanner.scan();
-              var code = r && r.barcodes && r.barcodes[0] && r.barcodes[0].rawValue;
+              var code = await scanQr();
               if (!code) { $("err").textContent = "QR-код не распознан."; return; }
               await connect(await save(code));
             } catch (e) {
               $("err").textContent = (e && e.message) || "Не удалось отсканировать.";
             }
+          });
+        }
+
+        // GMS-free QR scan: startScan() uses CameraX + the BUNDLED ML Kit model.
+        // scan() relies on the Google Code Scanner module (Play Services
+        // ModuleInstall) which fails on GMS-less devices (HONOR/Huawei: error 17).
+        async function scanQr() {
+          if (!BarcodeScanner) return null;
+          if (!BarcodeScanner.startScan) {
+            // Old fallback (GMS devices only).
+            if (BarcodeScanner.scan) {
+              var r = await BarcodeScanner.scan();
+              return (r && r.barcodes && r.barcodes[0] && r.barcodes[0].rawValue) || null;
+            }
+            return null;
+          }
+          try {
+            var perm = BarcodeScanner.requestPermissions
+              ? await BarcodeScanner.requestPermissions()
+              : null;
+            if (perm && perm.camera && perm.camera !== "granted" && perm.camera !== "limited") {
+              return null;
+            }
+          } catch (e) {}
+
+          return await new Promise(function (resolve) {
+            var settled = false;
+            var overlay = document.createElement("div");
+            overlay.className = "qr-overlay";
+            overlay.innerHTML =
+              '<div class="qr-frame"></div><button type="button" class="qr-cancel">Отмена</button>';
+            function finish(val) {
+              if (settled) return;
+              settled = true;
+              try { BarcodeScanner.removeAllListeners && BarcodeScanner.removeAllListeners(); } catch (e) {}
+              try { BarcodeScanner.stopScan && BarcodeScanner.stopScan(); } catch (e) {}
+              document.documentElement.classList.remove("qr-scanning");
+              if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+              resolve(val);
+            }
+            overlay.querySelector(".qr-cancel").addEventListener("click", function () { finish(null); });
+            document.documentElement.classList.add("qr-scanning");
+            document.body.appendChild(overlay);
+            try {
+              BarcodeScanner.addListener("barcodeScanned", function (ev) {
+                var code = (ev && ev.barcode && ev.barcode.rawValue) ||
+                           (ev && ev.barcodes && ev.barcodes[0] && ev.barcodes[0].rawValue);
+                if (code) finish(code);
+              });
+            } catch (e) {}
+            Promise.resolve(BarcodeScanner.startScan()).catch(function () { finish(null); });
+            setTimeout(function () { finish(null); }, 60000);
           });
         }
 
