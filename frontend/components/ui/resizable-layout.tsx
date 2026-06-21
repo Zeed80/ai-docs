@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
+import { BottomNav } from "@/components/mobile/BottomNav";
 
 const SIDEBAR_DEFAULT = 192; // w-48
 const CHAT_DEFAULT = 320; // w-80
@@ -112,6 +114,16 @@ export function ResizableLayout({
   children: React.ReactNode;
 }) {
   const viewportWidth = useViewportWidth();
+  const pathname = usePathname();
+  // Public / auth pages render full-screen without the app chrome.
+  const isBare =
+    !!pathname &&
+    (pathname.startsWith("/auth/") || pathname.startsWith("/get-app"));
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Close the mobile drawer whenever the route changes.
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
   const [sidebarWidth, setSidebarWidth] = usePersistentWidth(
     "layout:sidebarWidth",
     SIDEBAR_DEFAULT,
@@ -124,21 +136,29 @@ export function ResizableLayout({
   const sidebarDragRef = useRef<(delta: number) => void>(() => {});
   const chatDragRef = useRef<(delta: number) => void>(() => {});
   const isStacked = viewportWidth < STACK_BREAKPOINT;
-  const maxSidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, viewportWidth * 0.18));
+  const maxSidebarWidth = Math.min(
+    SIDEBAR_MAX,
+    Math.max(SIDEBAR_MIN, viewportWidth * 0.18),
+  );
   const safeSidebarWidth = isStacked
     ? viewportWidth
     : clamp(sidebarWidth, SIDEBAR_MIN, maxSidebarWidth);
   const availableForChat = viewportWidth - safeSidebarWidth - MAIN_MIN - 8;
   const maxChatWidth = Math.min(
     CHAT_MAX,
-    Math.max(CHAT_MIN, availableForChat > CHAT_MIN ? availableForChat : viewportWidth * 0.32),
+    Math.max(
+      CHAT_MIN,
+      availableForChat > CHAT_MIN ? availableForChat : viewportWidth * 0.32,
+    ),
   );
   const safeChatWidth = isStacked
     ? viewportWidth
     : clamp(chatWidth, CHAT_MIN, maxChatWidth);
 
   sidebarDragRef.current = (delta: number) => {
-    setSidebarWidth((prev) => clamp(prev + delta, SIDEBAR_MIN, maxSidebarWidth));
+    setSidebarWidth((prev) =>
+      clamp(prev + delta, SIDEBAR_MIN, maxSidebarWidth),
+    );
   };
   chatDragRef.current = (delta: number) => {
     setChatWidth((prev) => clamp(prev - delta, CHAT_MIN, maxChatWidth));
@@ -156,16 +176,63 @@ export function ResizableLayout({
     }
   }, [isStacked, safeSidebarWidth, setSidebarWidth, sidebarWidth]);
 
+  if (isBare) {
+    return <div className="min-h-screen">{children}</div>;
+  }
+
   if (isStacked) {
+    // Mobile / tablet / narrow window: single column with a top bar, the sidebar
+    // as a slide-in drawer, and the bottom tab bar. The agent ("Света") lives on
+    // its own route (/assistant) — the desktop right-hand chat pane is omitted.
     return (
       <div className="flex h-screen flex-col overflow-hidden">
-        <div className="max-h-[32vh] overflow-auto border-b border-slate-700">
-          {sidebar}
-        </div>
-        <main className="min-h-0 flex-1 overflow-auto">{children}</main>
-        <div className="h-[42vh] min-h-[320px] border-t border-slate-700">
-          {chat}
-        </div>
+        {/* Top app bar */}
+        <header
+          className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-700 bg-slate-900 px-3"
+          style={{ paddingTop: "env(safe-area-inset-top)" }}
+        >
+          <button
+            type="button"
+            aria-label="Меню"
+            onClick={() => setDrawerOpen(true)}
+            className="rounded p-1.5 text-slate-300 hover:bg-slate-700"
+          >
+            <svg
+              className="h-6 w-6"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.8}
+                d="M4 6h16M4 12h16M4 18h16"
+              />
+            </svg>
+          </button>
+          <span className="text-sm font-semibold text-slate-100">AI Docs</span>
+        </header>
+
+        {/* Content */}
+        <main className="min-h-0 flex-1 overflow-auto pb-[calc(4rem+env(safe-area-inset-bottom))]">
+          {children}
+        </main>
+
+        {/* Slide-in sidebar drawer */}
+        {drawerOpen && (
+          <div className="fixed inset-0 z-50 flex">
+            <div
+              className="absolute inset-0 bg-black/50"
+              onClick={() => setDrawerOpen(false)}
+            />
+            <div className="relative z-10 h-full w-72 max-w-[80vw] shadow-xl">
+              {sidebar}
+            </div>
+          </div>
+        )}
+
+        <BottomNav />
       </div>
     );
   }

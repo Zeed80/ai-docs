@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   checkForUpdate,
   consumePendingPath,
@@ -12,22 +12,21 @@ import {
   type UpdateInfo,
 } from "@/lib/native-bridge";
 import { setPendingShare } from "@/lib/mobile-share-store";
-import { BottomNav } from "@/components/mobile/BottomNav";
 import { BiometricGate } from "@/components/mobile/BiometricGate";
 
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? undefined;
 
 /**
- * Orchestrates the native shell experience: registers push, checks for app
- * updates, intakes shared files, and renders the mobile chrome (tab bar +
- * biometric lock). Renders nothing extra in a normal browser.
+ * Native-shell-only chrome: push registration, app-update banner, biometric lock,
+ * shared-file intake, push deep-links. The mobile tab bar/drawer is provided by
+ * ResizableLayout for ALL narrow viewports (browser included), so it's not here.
+ * Renders nothing in a normal desktop browser.
  */
 export function MobileChrome() {
   const [native, setNative] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const router = useRouter();
-  const pathname = usePathname();
 
   useEffect(() => {
     if (!isNative()) return;
@@ -59,8 +58,6 @@ export function MobileChrome() {
 
   if (!native) return null;
 
-  const hideNav = pathname?.startsWith("/auth/");
-
   return (
     <>
       <BiometricGate />
@@ -88,8 +85,6 @@ export function MobileChrome() {
           </button>
         </div>
       )}
-
-      {!hideNav && <BottomNav />}
     </>
   );
 }

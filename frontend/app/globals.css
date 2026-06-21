@@ -20,19 +20,24 @@ body {
   outline-offset: 2px;
 }
 
-/* ── Mobile shell (Capacitor native) ─────────────────────────────────────── */
-/* Reserve space for the bottom tab bar so content isn't hidden behind it. */
-html.is-native body {
-  padding-bottom: calc(4rem + env(safe-area-inset-bottom));
-}
-
-/* Small-screen polish for the native shell: smooth horizontal table scrolling
-   and no accidental horizontal page overflow behind the bottom tab bar. */
-@media (max-width: 640px) {
-  html.is-native body {
+/* ── Responsive shell (mobile / tablet, browser + native) ────────────────── */
+/* The mobile layout (ResizableLayout) owns bottom-nav clearance via main padding,
+   so no body-level padding is needed. These rules keep wide tables scrollable and
+   prevent accidental horizontal page overflow on small screens. */
+@media (max-width: 1024px) {
+  body {
     overflow-x: hidden;
   }
-  html.is-native .overflow-x-auto {
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Tables not already wrapped in a scroll container get one, so they never blow
+     out the viewport width on a phone. */
+  main table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
 }
