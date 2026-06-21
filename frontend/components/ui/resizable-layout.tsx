@@ -182,7 +182,7 @@ export function ResizableLayout({
 
   if (isStacked) {
     // Mobile / tablet / narrow window: single column with a top bar, the sidebar
-    // as a slide-in drawer, and the bottom tab bar. The agent ("Света") lives on
+    // as a slide-in drawer, and the bottom tab bar. The agent ("AI-DOCS") lives on
     // its own route (/assistant) — the desktop right-hand chat pane is omitted.
     return (
       <div className="flex h-screen flex-col overflow-hidden">

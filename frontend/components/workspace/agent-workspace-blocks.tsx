@@ -37,7 +37,7 @@ function BlockView({
       <div className="flex items-center justify-between border-b border-slate-700 bg-slate-800 px-3 py-2">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold text-slate-100">
-            {block.title || "Результат Светы"}
+            {block.title || "Результат AI-DOCS"}
           </h2>
         </div>
         <button
@@ -144,7 +144,7 @@ export function AgentWorkspaceBlocks({
         className={`flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400 ${className}`}
       >
         <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-sky-500" />
-        Света готовит вывод на рабочий стол…
+        AI-DOCS готовит вывод на рабочий стол…
       </div>
     );
   }
@@ -153,7 +153,7 @@ export function AgentWorkspaceBlocks({
     <div className={`flex min-h-0 w-full flex-col gap-3 ${className}`}>
       <div className="flex shrink-0 items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-slate-100">Вывод Светы</h2>
+          <h2 className="text-sm font-semibold text-slate-100">Вывод AI-DOCS</h2>
           <p className="mt-0.5 text-xs text-slate-500">
             Таблицы, документы, ссылки, графики и отчеты открываются здесь.
           </p>

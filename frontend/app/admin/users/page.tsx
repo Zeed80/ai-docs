@@ -262,7 +262,7 @@ function QrLoginModal({
           </button>
         </div>
         <p className="text-xs text-muted-foreground mb-4">
-          {user.name} ({user.email}). Откройте приложение «Света» → «Войти по
+          {user.name} ({user.email}). Откройте приложение «AI-DOCS» → «Войти по
           QR-коду» и отсканируйте.
         </p>
 

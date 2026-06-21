@@ -52,7 +52,7 @@ class AIConfidentialityPolicyError(RuntimeError):
 class AIStructuredOutputValidationError(RuntimeError):
     """Raised when a critical structured AI response does not validate."""
 
-_EMAIL_SYSTEM = """Ты — AI-сотрудник Света. Пишешь деловые письма на русском языке
+_EMAIL_SYSTEM = """Ты — AI-сотрудник AI-DOCS. Пишешь деловые письма на русском языке
 для промышленного предприятия. Отвечай строго в JSON."""
 
 _EMAIL_PROMPT = """Составь деловое письмо по следующему контексту:

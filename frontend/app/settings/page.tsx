@@ -419,7 +419,7 @@ function GpuBarToggleCard() {
   return (
     <SectionCard
       title="Телеметрия GPU и CPU"
-      subtitle="Компактные строки с загрузкой, температурами, частотой, VRAM и мощностью над окном агента «Света»; клик по мощности GPU или частоте CPU открывает управление лимитами. Настройка хранится в этом браузере."
+      subtitle="Компактные строки с загрузкой, температурами, частотой, VRAM и мощностью над окном агента «AI-DOCS»; клик по мощности GPU или частоте CPU открывает управление лимитами. Настройка хранится в этом браузере."
     >
       <label className="flex items-center gap-2 text-sm text-slate-200">
         <input
@@ -1399,7 +1399,7 @@ export default function SettingsPage() {
             <>
               {/* General */}
               <SectionCard
-                title="Агент «Света»"
+                title="Агент «AI-DOCS»"
                 subtitle="Основной AI-сотрудник — обрабатывает документы, отвечает на вопросы, вызывает инструменты."
               >
                 <div className="space-y-4">
@@ -3323,7 +3323,7 @@ export default function SettingsPage() {
                 AI Manufacturing Workspace v0.1.0
               </p>
               <p className="text-slate-400">
-                AI-ассистент: Света · Backend: FastAPI · AI: Ollama / OpenRouter
+                AI-ассистент: AI-DOCS · Backend: FastAPI · AI: Ollama / OpenRouter
                 / Anthropic
               </p>
               <p className="text-slate-500 text-xs mt-2">

@@ -49,7 +49,7 @@ export function SvetaPanel({
     <section className="ai-panel">
       <h2 className="sveta-title">
         <span className="sveta-orb" />
-        Света
+        AI-DOCS
       </h2>
       <p className="small-muted">{focus}</p>
       <div className="action-row" style={{ marginTop: 18 }}>

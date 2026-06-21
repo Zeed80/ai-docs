@@ -550,7 +550,7 @@ export function Sidebar() {
           AI-DOCS
         </h1>
         <p className="text-[10px] text-slate-400 mt-0.5">
-          Света · рабочее место
+          AI-DOCS · рабочее место
         </p>
       </div>
 

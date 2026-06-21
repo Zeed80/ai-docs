@@ -42,7 +42,7 @@ const LEFT: Tab[] = [
 
 const RIGHT: Tab[] = [
   { href: "/approvals", label: "Согласования", icon: <I d="M5 13l4 4L19 7" /> },
-  { href: "/assistant", label: "Света", icon: <I d="M4 5h16v11H8l-4 4z" /> },
+  { href: "/assistant", label: "AI-DOCS", icon: <I d="M4 5h16v11H8l-4 4z" /> },
 ];
 
 function NavLink({ tab, active }: { tab: Tab; active: boolean }) {

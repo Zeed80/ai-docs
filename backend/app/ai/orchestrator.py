@@ -130,7 +130,7 @@ WorkerRole = Literal[
 OutputChannel = Literal["chat", "workspace"]
 OutputType = Literal["text", "table", "document", "links", "chart", "drawing", "script"]
 
-_ORCHESTRATOR_SYSTEM_BASE = """Ты — Света, секретарь-оркестратор отдела ИИ-сотрудников.
+_ORCHESTRATOR_SYSTEM_BASE = """Ты — AI-DOCS, секретарь-оркестратор отдела ИИ-сотрудников.
 Ты держишь документооборот под контролем и распределяешь задачи специалистам.
 Верни только JSON по заданной схеме. Не отвечай пользователю текстом.
 

@@ -316,7 +316,7 @@ function NewTechProcessContent() {
             </div>
 
             <div className="text-xs text-zinc-500 space-y-1">
-              <p>Агент Света выполнит:</p>
+              <p>Агент AI-DOCS выполнит:</p>
               <ol className="list-decimal list-inside space-y-0.5 text-zinc-400">
                 <li>Анализ поверхностей чертежа</li>
                 <li>Подбор заготовки (КИМ-анализ)</li>

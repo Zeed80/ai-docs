@@ -158,7 +158,7 @@ export default function NotificationsSettingsPage() {
         Мобильное приложение
       </h2>
       <p className="text-sm text-muted-foreground mb-4">
-        Установите приложение «Света» на Android, чтобы получать
+        Установите приложение «AI-DOCS» на Android, чтобы получать
         push-уведомления, снимать документы камерой и принимать файлы из других
         приложений.
       </p>

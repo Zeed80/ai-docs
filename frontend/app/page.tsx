@@ -426,7 +426,7 @@ export default function FeedPage() {
             Требует решения
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Света обрабатывает документы и поднимает важное сюда
+            AI-DOCS обрабатывает документы и поднимает важное сюда
           </p>
         </div>
         {total > 0 && (
@@ -474,7 +474,7 @@ export default function FeedPage() {
               Нет элементов, требующих вашего решения
             </p>
             <p className="text-xs text-slate-400 mt-3">
-              Спросите Свету о чём-нибудь →
+              Спросите AI-DOCS о чём-нибудь →
             </p>
           </div>
         ) : (

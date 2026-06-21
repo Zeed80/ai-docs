@@ -57,7 +57,7 @@ export default function SharePage() {
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col gap-4 p-4">
       <h1 className="text-lg font-semibold text-slate-100">
-        Загрузить в Свету
+        Загрузить в AI-DOCS
       </h1>
 
       <ul className="divide-y divide-slate-700 rounded-lg border border-slate-700 bg-slate-800/50">

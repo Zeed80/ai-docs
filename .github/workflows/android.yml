@@ -70,6 +70,11 @@ jobs:
           APP_GRADLE=android/app/build.gradle
           sed -i "s/versionCode .*/versionCode ${{ steps.ver.outputs.code }}/" "$APP_GRADLE"
           sed -i "s/versionName \".*\"/versionName \"${{ steps.ver.outputs.name }}\"/" "$APP_GRADLE"
+          # App display name = AI-DOCS_<version>
+          STR=android/app/src/main/res/values/strings.xml
+          LABEL="AI-DOCS_${{ steps.ver.outputs.name }}"
+          sed -i "s#<string name=\"app_name\">[^<]*</string>#<string name=\"app_name\">${LABEL}</string>#" "$STR"
+          sed -i "s#<string name=\"title_activity_main\">[^<]*</string>#<string name=\"title_activity_main\">${LABEL}</string>#" "$STR"
 
       - name: Decode keystore
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/sveta-release.jks

@@ -396,7 +396,7 @@ export async function biometricVerify(
   const bio = plugin("NativeBiometric");
   if (!bio?.verifyIdentity) return true; // nothing to enforce → allow
   try {
-    await bio.verifyIdentity({ reason, title: "Света", subtitle: reason });
+    await bio.verifyIdentity({ reason, title: "AI-DOCS", subtitle: reason });
     return true;
   } catch {
     return false;

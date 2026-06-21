@@ -77,7 +77,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "calendar", label: "Календарь", href: "/calendar", group: "Навигация" },
   {
     id: "chat",
-    label: "Рабочий стол (Света)",
+    label: "Рабочий стол (AI-DOCS)",
     href: "/chat",
     group: "Навигация",
   },

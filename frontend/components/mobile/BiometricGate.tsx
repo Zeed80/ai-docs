@@ -42,7 +42,7 @@ export function BiometricGate() {
   }, []);
 
   const unlock = useCallback(async () => {
-    const ok = await biometricVerify("Разблокировать Свету");
+    const ok = await biometricVerify("Разблокировать AI-DOCS");
     if (ok) setLocked(false);
   }, []);
 

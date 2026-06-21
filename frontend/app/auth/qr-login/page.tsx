@@ -58,7 +58,7 @@ export default function QrLoginPage() {
     <div className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-5 p-6 text-slate-100">
       <h1 className="text-xl font-semibold">Вход на телефоне по QR-коду</h1>
       <p className="max-w-sm text-center text-sm text-slate-400">
-        Откройте приложение «Света» на телефоне, нажмите «Войти по QR-коду» и
+        Откройте приложение «AI-DOCS» на телефоне, нажмите «Войти по QR-коду» и
         отсканируйте этот код. Вход выполнится без ввода пароля.
       </p>
 

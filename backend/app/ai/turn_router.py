@@ -191,7 +191,7 @@ def coerce_channel(decision: TurnDecision) -> TurnDecision:
 def build_router_system(action_map: dict[str, list[str]], catalog_descriptions: dict[str, str]) -> str:
     """System prompt: enumerate the real catalog + the typed decision contract."""
     lines = [
-        "Ты — маршрутизатор ходов ИИ-секретаря «Света» промышленного предприятия.",
+        "Ты — маршрутизатор ходов ИИ-секретаря «AI-DOCS» промышленного предприятия.",
         "Определи НАМЕРЕНИЕ пользователя и верни строго структурированное решение.",
         "Не реагируй на отдельные слова-триггеры — оценивай смысл всей фразы.",
         "",

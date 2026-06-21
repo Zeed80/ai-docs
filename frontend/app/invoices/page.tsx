@@ -322,7 +322,7 @@ export default function InvoicesPage() {
     }, 300);
   };
 
-  // Hand the query to the agent «Света», scoped to invoices.
+  // Hand the query to the agent «AI-DOCS», scoped to invoices.
   const askSveta = () => {
     const q = askQuery.trim();
     if (!q) return;
@@ -818,7 +818,7 @@ export default function InvoicesPage() {
           value={askQuery}
           onChange={(e) => setAskQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && askSveta()}
-          placeholder="Спросить Свету про счета: «сравни цены поставщиков за апрель»..."
+          placeholder="Спросить AI-DOCS про счета: «сравни цены поставщиков за апрель»..."
           className="flex-1 px-3 py-1.5 text-sm bg-slate-800/60 border border-slate-700 text-slate-300 placeholder-slate-600 rounded outline-none focus:border-purple-500"
         />
         <button
@@ -829,7 +829,7 @@ export default function InvoicesPage() {
           <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
             <path d="M10 2l1.5 4.5L16 8l-4.5 1.5L10 14l-1.5-4.5L4 8l4.5-1.5L10 2z" />
           </svg>
-          Спросить Свету
+          Спросить AI-DOCS
         </button>
       </div>
 

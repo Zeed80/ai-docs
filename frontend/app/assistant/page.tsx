@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 
-// Full-screen agent ("Света") for mobile, where the desktop right-hand chat pane
+// Full-screen agent ("AI-DOCS") for mobile, where the desktop right-hand chat pane
 // is hidden. WS/localStorage/client-only — never SSR.
 const SvetaPanel = dynamic(
   () =>
