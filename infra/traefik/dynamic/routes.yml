@@ -39,6 +39,29 @@ http:
         - web
       priority: 100
 
+    # ── Mobile app distribution (public, served by backend StaticFiles) ──────────
+    app-download:
+      rule: "PathPrefix(`/download`)"
+      service: backend
+      entryPoints:
+        - web
+      priority: 110
+
+    # Android App Links file — must outrank authentik-oauth (300) on /.well-known/.
+    app-assetlinks:
+      rule: "Path(`/.well-known/assetlinks.json`)"
+      service: backend
+      entryPoints:
+        - web
+      priority: 310
+
+    # Self-hosted push (ntfy) on a dev subdomain.
+    ntfy:
+      rule: "Host(`push.localhost`)"
+      service: ntfy
+      entryPoints:
+        - web
+
     # ── Authentik SSO — browser-facing OAuth/UI paths ─────────────────────────
     # Routes Authentik through port 80 so no separate port (9100) is needed.
     # Authentik reads X-Forwarded-Host from Traefik to build absolute URLs.
@@ -89,6 +112,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://minio:9001"
+
+    ntfy:
+      loadBalancer:
+        servers:
+          - url: "http://ntfy:80"
 
   middlewares:
     # Pass canonical host to Authentik so it constructs correct absolute URLs.

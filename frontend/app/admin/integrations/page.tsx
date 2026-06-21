@@ -155,7 +155,7 @@ function IntegrationsContent() {
             type="url"
             value={externalUrl}
             onChange={(e) => setExternalUrl(e.target.value)}
-            placeholder="https://ptsai.ru"
+            placeholder="https://example.com"
             className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background"
           />
         </div>

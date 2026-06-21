@@ -13,6 +13,7 @@ from typing import Any
 
 import structlog
 from sqlalchemy import create_engine, func, select
+from sqlalchemy import update as _sa_update_top
 from sqlalchemy.orm import Session
 
 from app.ai import ru_validators as rv
@@ -112,10 +113,15 @@ def _get_or_create_processing_job(
 ) -> DocumentProcessingJob:
     job = _latest_processing_job(db, doc)
     if not job or job.status in {"done", "failed"}:
+        # New run: store and memory_seed are always already done at this point
+        steps = _default_pipeline_steps()
+        for step in steps:
+            if step["key"] in ("store", "memory_seed"):
+                step["status"] = "done"
         job = DocumentProcessingJob(
             document_id=doc.id,
             status="running",
-            pipeline_steps=_default_pipeline_steps(),
+            pipeline_steps=steps,
             current_step=current_step,
             started_at=datetime.now(UTC),
             celery_task_id=celery_task_id,
@@ -192,10 +198,22 @@ def _finish_job(
         job.current_step = "completed"
 
 
+def _touch_job(db: Session, job: DocumentProcessingJob) -> None:
+    """Refresh job.updated_at so the watchdog doesn't fire during long GPU inference."""
+    db.execute(
+        _sa_update_top(DocumentProcessingJob)
+        .where(DocumentProcessingJob.id == job.id)
+        .values(updated_at=datetime.now(UTC))
+    )
+    db.commit()
+
+
 @celery_app.task(name="app.tasks.extraction.classify_document", bind=True, max_retries=2)
-def classify_document(self, document_id: str, force: bool = False) -> dict:
+def classify_document(self, document_id: str, force: bool = False, priority: bool = False) -> dict:
     """Classify document type using the configured OCR/extraction model.
 
+    priority=True routes downstream GPU tasks to gpu_priority queue so manual
+    re-extractions jump ahead of the background batch queue.
     Updates Document.doc_type and doc_type_confidence.
     """
     logger.info("classify_start", document_id=document_id)
@@ -211,8 +229,7 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
             celery_task_id=getattr(self.request, "id", None),
         )
         _set_job_step(job, "store", "done")
-        if doc.source_channel:
-            _set_job_step(job, "memory_seed", "done")
+        _set_job_step(job, "memory_seed", "done")
         _set_job_step(job, "classification", "running")
 
         metadata = doc.metadata_ or {}
@@ -226,14 +243,15 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
             _set_job_step(job, "classification", "done")
             db.commit()
             doc_type = doc.doc_type.value
+            _gpu_queue = "gpu_priority" if priority else "gpu"
             if doc_type == "invoice":
                 _set_job_step(job, "extraction", "queued")
-                extract_invoice.delay(document_id)
+                extract_invoice.apply_async(args=[document_id], queue=_gpu_queue)
                 db.commit()
             elif doc_type in GENERIC_EXTRACTION_TYPES:
                 _set_job_step(job, "extraction", "queued")
                 db.commit()
-                extract_generic_fields.delay(document_id)
+                extract_generic_fields.apply_async(args=[document_id], queue=_gpu_queue)
             else:
                 doc.status = DocumentStatus.needs_review
                 _skip_remaining_steps(
@@ -317,9 +335,10 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
             )
 
             # Chain: if invoice → extract; if drawing → trigger drawing analysis
+            _gpu_queue = "gpu_priority" if priority else "gpu"
             if doc_type == "invoice":
                 _set_job_step(job, "extraction", "queued")
-                extract_invoice.delay(document_id)
+                extract_invoice.apply_async(args=[document_id], queue=_gpu_queue)
                 db.commit()
             elif doc_type == "drawing":
                 try:
@@ -337,7 +356,7 @@ def classify_document(self, document_id: str, force: bool = False) -> dict:
             elif doc_type in GENERIC_EXTRACTION_TYPES:
                 _set_job_step(job, "extraction", "queued")
                 db.commit()
-                extract_generic_fields.delay(document_id)
+                extract_generic_fields.apply_async(args=[document_id], queue=_gpu_queue)
             else:
                 doc.status = DocumentStatus.needs_review
                 _skip_remaining_steps(
@@ -424,6 +443,7 @@ def extract_invoice(self, document_id: str) -> dict:
             from app.tasks.gpu_lock import gpu_single_flight
 
             with gpu_single_flight(f"extract:{document_id}"):
+                _touch_job(db, job)  # reset watchdog timer: GPU acquired, inference starts now
                 extracted = _run_async(ai_router.extract_invoice(text))
 
             processing_time_ms = int((time.time() - start_time) * 1000)
@@ -491,6 +511,7 @@ def extract_invoice(self, document_id: str) -> dict:
                 )
                 try:
                     with gpu_single_flight(f"extract_fallback:{document_id}"):
+                        _touch_job(db, job)  # reset watchdog: fallback inference starts
                         _fb_extracted = _run_async(
                             ai_router.extract_invoice_with_model(text, _fb_model, _fb_provider)
                         )
@@ -846,12 +867,13 @@ def extract_generic_fields(self, document_id: str) -> dict:
 
 
 @celery_app.task(name="app.tasks.extraction.process_document")
-def process_document(document_id: str, force: bool = False) -> dict:
+def process_document(document_id: str, force: bool = False, priority: bool = False) -> dict:
     """Full pipeline: classify → extract → validate.
 
     Entry point for newly ingested documents.
+    priority=True routes downstream GPU tasks to gpu_priority queue.
     """
-    return classify_document(document_id, force)
+    return classify_document(document_id, force, priority)
 
 
 def _get_document_text(doc: Document) -> str:
@@ -1886,188 +1908,197 @@ def process_approved_document(self, document_id: str) -> dict:
             .limit(1)
         ).scalar_one_or_none()
 
-        if not extraction:
-            logger.warning("post_approve_no_extraction", document_id=document_id)
-            return {"error": "no_extraction"}
-
-        extracted = extraction.structured_data or {}
+        extracted = extraction.structured_data if extraction else {}
 
         # Reopen the existing processing job so steps stay on the same job
         job = _latest_processing_job(db, doc)
+        first_step = "sql_records" if extraction else "memory_graph"
         if job:
             job.status = "running"
-            job.current_step = "sql_records"
+            job.current_step = first_step
         else:
             job = DocumentProcessingJob(
                 document_id=doc.id,
                 status="running",
                 pipeline_steps=_default_pipeline_steps(),
-                current_step="sql_records",
+                current_step=first_step,
                 started_at=datetime.now(UTC),
             )
             db.add(job)
             db.flush()
 
-        # ── Step: sql_records ────────────────────────────────────────────────
-        _set_job_step(job, "sql_records", "running")
-
-        supplier_data = extracted.get("supplier", {}) or {}
-        buyer_data = extracted.get("buyer", {}) or {}
-        supplier_party_id = _upsert_party(db, supplier_data, role="supplier")
-        buyer_party_id = _upsert_party(db, buyer_data, role="buyer")
-
-        # Remove existing invoice if re-approved (e.g. re-uploaded / re-processed)
-        existing = db.execute(
-            select(Invoice).where(Invoice.document_id == doc.id)
-        ).scalar_one_or_none()
-        if existing:
-            # Detach any warehouse-receipt lines that reference this invoice's
-            # lines BEFORE deleting them. Re-approval must be idempotent: it must
-            # not violate the warehouse_receipt_lines FK, and must not destroy a
-            # receipt the warehouse flow already created. The receipt keeps its
-            # quantities; only the now-stale invoice-line link is cleared.
-            line_ids = (
-                db.execute(
-                    select(InvoiceLine.id).where(InvoiceLine.invoice_id == existing.id)
-                )
-                .scalars()
-                .all()
+        if not extraction:
+            logger.info(
+                "post_approve_no_extraction_skip_sql",
+                document_id=document_id,
+                doc_type=str(doc.doc_type),
             )
-            if line_ids:
-                db.execute(
-                    _sa_update(WarehouseReceiptLine)
-                    .where(WarehouseReceiptLine.invoice_line_id.in_(line_ids))
-                    .values(invoice_line_id=None)
-                )
-            # Detach receipts that point at the invoice itself (warehouse_receipts
-            # .invoice_id FK) before deleting it — same idempotency guarantee.
-            db.execute(
-                _sa_update(WarehouseReceipt)
-                .where(WarehouseReceipt.invoice_id == existing.id)
-                .values(invoice_id=None)
-            )
-            # Detach price-history entries (nullable FK) and drop derived payment
-            # schedules (non-nullable FK) so the invoice row can be replaced.
-            from app.db.models import PaymentSchedule, PriceHistoryEntry
-            db.execute(
-                _sa_update(PriceHistoryEntry)
-                .where(PriceHistoryEntry.invoice_id == existing.id)
-                .values(invoice_id=None)
-            )
-            db.execute(
-                _sa_delete(PaymentSchedule).where(PaymentSchedule.invoice_id == existing.id)
-            )
-            db.execute(_sa_delete(InvoiceLine).where(InvoiceLine.invoice_id == existing.id))
-            db.delete(existing)
-            db.flush()
+            _set_job_step(job, "sql_records", "done")
 
-        invoice = Invoice(
-            document_id=doc.id,
-            invoice_number=extracted.get("invoice_number"),
-            invoice_date=_parse_date(extracted.get("invoice_date")),
-            due_date=_parse_date(extracted.get("due_date")),
-            validity_date=_parse_date(extracted.get("validity_date")),
-            currency=extracted.get("currency", "RUB"),
-            subtotal=extracted.get("subtotal"),
-            tax_amount=extracted.get("tax_amount"),
-            total_amount=extracted.get("total_amount"),
-            payment_id=extracted.get("payment_id"),
-            notes=extracted.get("notes"),
-            supplier_id=supplier_party_id,
-            buyer_id=buyer_party_id,
-            status=InvoiceStatus.approved,
-            overall_confidence=extraction.overall_confidence,
-        )
-        db.add(invoice)
-        db.flush()
+        invoice: Invoice | None = None
+        if extraction:
+            # ── Step: sql_records ────────────────────────────────────────────────
+            _set_job_step(job, "sql_records", "running")
 
-        for line_data in extracted.get("lines", []):
-            db.add(InvoiceLine(
-                invoice_id=invoice.id,
-                line_number=line_data.get("line_number", 0),
-                sku=line_data.get("sku"),
-                description=line_data.get("description"),
-                quantity=line_data.get("quantity"),
-                unit=line_data.get("unit"),
-                unit_price=line_data.get("unit_price"),
-                amount=line_data.get("amount"),
-                tax_rate=line_data.get("tax_rate"),
-                tax_amount=line_data.get("tax_amount"),
-                weight=line_data.get("weight"),
-            ))
+            supplier_data = extracted.get("supplier", {}) or {}
+            buyer_data = extracted.get("buyer", {}) or {}
+            supplier_party_id = _upsert_party(db, supplier_data, role="supplier")
+            buyer_party_id = _upsert_party(db, buyer_data, role="buyer")
 
-        _set_job_step(job, "sql_records", "done")
-
-        # ── Auto-create pending warehouse receipt ────────────────────────────
-        try:
-            invoice_lines = db.execute(
-                select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id)
-            ).scalars().all()
-            if invoice_lines:
-                if db.get_bind().dialect.name == "postgresql":
-                    from sqlalchemy import text as _text
-                    next_val = db.execute(_text("SELECT nextval('receipt_seq')")).scalar()
-                else:
-                    # SQLite (tests) has no sequences — count-based fallback.
-                    next_val = (
-                        db.execute(
-                            select(func.count()).select_from(WarehouseReceipt)
-                        ).scalar() or 0
-                    ) + 1
-                receipt_number = f"ПО-{next_val:04d}"
-                pending_receipt = WarehouseReceipt(
-                    invoice_id=invoice.id,
-                    document_id=doc.id,
-                    supplier_id=invoice.supplier_id,
-                    status="pending",
-                    receipt_number=receipt_number,
-                    received_by="auto",
-                )
-                db.add(pending_receipt)
-                db.flush()
-                for il in invoice_lines:
-                    db.add(WarehouseReceiptLine(
-                        receipt_id=pending_receipt.id,
-                        description=il.description or "",
-                        quantity_expected=il.quantity or 0,
-                        quantity_received=il.quantity or 0,
-                        unit=il.unit or "шт",
-                        invoice_line_id=il.id,
-                    ))
-                logger.info(
-                    "auto_pending_receipt_created",
-                    document_id=document_id,
-                    receipt_number=receipt_number,
-                    lines=len(invoice_lines),
-                )
-        except Exception as e:
-            logger.warning("auto_pending_receipt_failed", document_id=document_id, error=str(e))
-
-        # ── SupplierProfile update ───────────────────────────────────────────
-        if supplier_party_id:
-            from app.db.models import SupplierProfile
-            profile = db.execute(
-                select(SupplierProfile).where(SupplierProfile.party_id == supplier_party_id)
+            # Remove existing invoice if re-approved (e.g. re-uploaded / re-processed)
+            existing = db.execute(
+                select(Invoice).where(Invoice.document_id == doc.id)
             ).scalar_one_or_none()
-            if not profile:
-                profile = SupplierProfile(party_id=supplier_party_id, total_invoices=0, total_amount=0.0)
-                db.add(profile)
+            if existing:
+                # Detach any warehouse-receipt lines that reference this invoice's
+                # lines BEFORE deleting them. Re-approval must be idempotent: it must
+                # not violate the warehouse_receipt_lines FK, and must not destroy a
+                # receipt the warehouse flow already created. The receipt keeps its
+                # quantities; only the now-stale invoice-line link is cleared.
+                line_ids = (
+                    db.execute(
+                        select(InvoiceLine.id).where(InvoiceLine.invoice_id == existing.id)
+                    )
+                    .scalars()
+                    .all()
+                )
+                if line_ids:
+                    db.execute(
+                        _sa_update(WarehouseReceiptLine)
+                        .where(WarehouseReceiptLine.invoice_line_id.in_(line_ids))
+                        .values(invoice_line_id=None)
+                    )
+                # Detach receipts that point at the invoice itself (warehouse_receipts
+                # .invoice_id FK) before deleting it — same idempotency guarantee.
+                db.execute(
+                    _sa_update(WarehouseReceipt)
+                    .where(WarehouseReceipt.invoice_id == existing.id)
+                    .values(invoice_id=None)
+                )
+                # Detach price-history entries (nullable FK) and drop derived payment
+                # schedules (non-nullable FK) so the invoice row can be replaced.
+                from app.db.models import PaymentSchedule, PriceHistoryEntry
+                db.execute(
+                    _sa_update(PriceHistoryEntry)
+                    .where(PriceHistoryEntry.invoice_id == existing.id)
+                    .values(invoice_id=None)
+                )
+                db.execute(
+                    _sa_delete(PaymentSchedule).where(PaymentSchedule.invoice_id == existing.id)
+                )
+                db.execute(_sa_delete(InvoiceLine).where(InvoiceLine.invoice_id == existing.id))
+                db.delete(existing)
+                db.flush()
+
+            invoice = Invoice(
+                document_id=doc.id,
+                invoice_number=extracted.get("invoice_number"),
+                invoice_date=_parse_date(extracted.get("invoice_date")),
+                due_date=_parse_date(extracted.get("due_date")),
+                validity_date=_parse_date(extracted.get("validity_date")),
+                currency=extracted.get("currency", "RUB"),
+                subtotal=extracted.get("subtotal"),
+                tax_amount=extracted.get("tax_amount"),
+                total_amount=extracted.get("total_amount"),
+                payment_id=extracted.get("payment_id"),
+                notes=extracted.get("notes"),
+                supplier_id=supplier_party_id,
+                buyer_id=buyer_party_id,
+                status=InvoiceStatus.approved,
+                overall_confidence=extraction.overall_confidence,
+            )
+            db.add(invoice)
             db.flush()
-            profile.total_invoices = (profile.total_invoices or 0) + 1
-            if invoice.total_amount:
-                profile.total_amount = (profile.total_amount or 0.0) + float(invoice.total_amount)
-            if invoice.invoice_date:
-                # Compare tz-safely: a stored date read back without tzinfo (e.g.
-                # from a backend that drops it) must not raise against the
-                # tz-aware parsed invoice_date.
-                _inv_dt = invoice.invoice_date
-                _last_dt = profile.last_invoice_date
-                if _inv_dt.tzinfo is None:
-                    _inv_dt = _inv_dt.replace(tzinfo=UTC)
-                if _last_dt is not None and _last_dt.tzinfo is None:
-                    _last_dt = _last_dt.replace(tzinfo=UTC)
-                if _last_dt is None or _inv_dt > _last_dt:
-                    profile.last_invoice_date = invoice.invoice_date
+
+            for line_data in extracted.get("lines", []):
+                db.add(InvoiceLine(
+                    invoice_id=invoice.id,
+                    line_number=line_data.get("line_number", 0),
+                    sku=line_data.get("sku"),
+                    description=line_data.get("description"),
+                    quantity=line_data.get("quantity"),
+                    unit=line_data.get("unit"),
+                    unit_price=line_data.get("unit_price"),
+                    amount=line_data.get("amount"),
+                    tax_rate=line_data.get("tax_rate"),
+                    tax_amount=line_data.get("tax_amount"),
+                    weight=line_data.get("weight"),
+                ))
+
+            _set_job_step(job, "sql_records", "done")
+
+            # ── Auto-create pending warehouse receipt ────────────────────────────
+            try:
+                invoice_lines = db.execute(
+                    select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id)
+                ).scalars().all()
+                if invoice_lines:
+                    if db.get_bind().dialect.name == "postgresql":
+                        from sqlalchemy import text as _text
+                        next_val = db.execute(_text("SELECT nextval('receipt_seq')")).scalar()
+                    else:
+                        # SQLite (tests) has no sequences — count-based fallback.
+                        next_val = (
+                            db.execute(
+                                select(func.count()).select_from(WarehouseReceipt)
+                            ).scalar() or 0
+                        ) + 1
+                    receipt_number = f"ПО-{next_val:04d}"
+                    pending_receipt = WarehouseReceipt(
+                        invoice_id=invoice.id,
+                        document_id=doc.id,
+                        supplier_id=invoice.supplier_id,
+                        status="pending",
+                        receipt_number=receipt_number,
+                        received_by="auto",
+                    )
+                    db.add(pending_receipt)
+                    db.flush()
+                    for il in invoice_lines:
+                        db.add(WarehouseReceiptLine(
+                            receipt_id=pending_receipt.id,
+                            description=il.description or "",
+                            quantity_expected=il.quantity or 0,
+                            quantity_received=il.quantity or 0,
+                            unit=il.unit or "шт",
+                            invoice_line_id=il.id,
+                        ))
+                    logger.info(
+                        "auto_pending_receipt_created",
+                        document_id=document_id,
+                        receipt_number=receipt_number,
+                        lines=len(invoice_lines),
+                    )
+            except Exception as e:
+                logger.warning("auto_pending_receipt_failed", document_id=document_id, error=str(e))
+
+            # ── SupplierProfile update ───────────────────────────────────────────
+            if supplier_party_id:
+                from app.db.models import SupplierProfile
+                profile = db.execute(
+                    select(SupplierProfile).where(SupplierProfile.party_id == supplier_party_id)
+                ).scalar_one_or_none()
+                if not profile:
+                    profile = SupplierProfile(party_id=supplier_party_id, total_invoices=0, total_amount=0.0)
+                    db.add(profile)
+                db.flush()
+                profile.total_invoices = (profile.total_invoices or 0) + 1
+                if invoice.total_amount:
+                    profile.total_amount = (profile.total_amount or 0.0) + float(invoice.total_amount)
+                if invoice.invoice_date:
+                    # Compare tz-safely: a stored date read back without tzinfo (e.g.
+                    # from a backend that drops it) must not raise against the
+                    # tz-aware parsed invoice_date.
+                    _inv_dt = invoice.invoice_date
+                    _last_dt = profile.last_invoice_date
+                    if _inv_dt.tzinfo is None:
+                        _inv_dt = _inv_dt.replace(tzinfo=UTC)
+                    if _last_dt is not None and _last_dt.tzinfo is None:
+                        _last_dt = _last_dt.replace(tzinfo=UTC)
+                    if _last_dt is None or _inv_dt > _last_dt:
+                        profile.last_invoice_date = invoice.invoice_date
+
+        # memory_graph and embedding run for all approved docs (even without extraction)
 
         # ── Step: memory_graph ───────────────────────────────────────────────
         # Build the graph from the already-extracted data — do NOT re-OCR here
@@ -2077,17 +2108,16 @@ def process_approved_document(self, document_id: str) -> dict:
         # Contextual Retrieval: pass extracted invoice fields so every chunk
         # (not just the header) is embedded with supplier/number/date context.
         context_meta: dict | None = None
-        _inv = locals().get("invoice")
-        if _inv is not None:
+        if invoice is not None:
             try:
                 context_meta = {
-                    "invoice_number": _inv.invoice_number,
+                    "invoice_number": invoice.invoice_number,
                     "invoice_date": (
-                        _inv.invoice_date.strftime("%Y-%m-%d") if _inv.invoice_date else None
+                        invoice.invoice_date.strftime("%Y-%m-%d") if invoice.invoice_date else None
                     ),
-                    "total": _inv.total_amount,
+                    "total": invoice.total_amount,
                     "supplier_name": (
-                        _inv.supplier.name if getattr(_inv, "supplier", None) else None
+                        invoice.supplier.name if getattr(invoice, "supplier", None) else None
                     ),
                 }
             except Exception:
@@ -2108,11 +2138,12 @@ def process_approved_document(self, document_id: str) -> dict:
             _set_job_step(job, "memory_graph", "failed", error=str(e))
             logger.warning("post_approve_memory_failed", document_id=document_id, error=str(e))
 
-        try:
-            from app.domain.memory_builder import build_supplier_invoice_memory_sync
-            build_supplier_invoice_memory_sync(db, invoice)
-        except Exception as e:
-            logger.warning("post_approve_business_memory_failed", document_id=document_id, error=str(e))
+        if invoice is not None:
+            try:
+                from app.domain.memory_builder import build_supplier_invoice_memory_sync
+                build_supplier_invoice_memory_sync(db, invoice)
+            except Exception as e:
+                logger.warning("post_approve_business_memory_failed", document_id=document_id, error=str(e))
 
         # ── Step: embedding ──────────────────────────────────────────────────
         if _step_status(job, "embedding") != "done":
@@ -2124,13 +2155,14 @@ def process_approved_document(self, document_id: str) -> dict:
         # Dispatch embedding and anomaly tasks after commit
         from app.tasks.embedding import embed_document
         embed_document.delay(document_id)
-        check_invoice_anomalies.delay(str(invoice.id))
+        if invoice is not None:
+            check_invoice_anomalies.delay(str(invoice.id))
 
         logger.info(
             "post_approve_done",
             document_id=document_id,
-            invoice_id=str(invoice.id),
-            supplier_party_id=str(supplier_party_id) if supplier_party_id else None,
+            invoice_id=str(invoice.id) if invoice is not None else None,
+            supplier_party_id=str(invoice.supplier_id) if invoice is not None and invoice.supplier_id else None,
             lines=len(extracted.get("lines", [])),
         )
 
@@ -2141,8 +2173,7 @@ def process_approved_document(self, document_id: str) -> dict:
             pass
         return {
             "document_id": document_id,
-            "invoice_id": str(invoice.id),
-            "supplier_party_id": str(supplier_party_id) if supplier_party_id else None,
+            "invoice_id": str(invoice.id) if invoice is not None else None,
             "lines": len(extracted.get("lines", [])),
         }
 
@@ -2649,7 +2680,7 @@ def watchdog_stuck_documents() -> dict:
     """
     from datetime import timedelta
 
-    STUCK_THRESHOLD_MINUTES = 20
+    STUCK_THRESHOLD_MINUTES = 60
 
     with _get_sync_session() as db:
         cutoff = datetime.now(UTC) - timedelta(minutes=STUCK_THRESHOLD_MINUTES)
@@ -2689,7 +2720,7 @@ def watchdog_stuck_documents() -> dict:
             }
             job.status = "failed"
             job.current_step = "watchdog_reset"
-            job.error = f"Stuck in extraction step for >{STUCK_THRESHOLD_MINUTES} min; reset to needs_review"
+            job.error = f"Извлечение не завершилось за {STUCK_THRESHOLD_MINUTES} мин — документ переведён на ручную проверку. Можно повторить извлечение вручную."
             recovered.append(doc_id)
 
         db.commit()

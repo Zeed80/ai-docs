@@ -7,7 +7,8 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -209,6 +210,88 @@ async def callback(
     frontend_base = _frontend_base_from_uri(redirect_uri)
     resp = RedirectResponse(url=f"{frontend_base}{_next_path}", status_code=302)
     resp.set_cookie(key="access_token", value=access_token, path="/", **cookie_opts)
+    return resp
+
+
+# ── QR login (authenticated desktop → mobile, passwordless) ───────────────────
+# Flow: an authenticated desktop calls /qr-login/create → gets a short-lived,
+# single-use token → renders it as a QR. The mobile app scans it and calls
+# /qr-login/redeem → backend relays the desktop's session token into the mobile's
+# httpOnly cookie. The actual session JWT is stored only server-side (Redis) and
+# delivered via Set-Cookie — it never appears in the QR.
+
+_QR_TTL_SECONDS = 120
+
+
+def _token_max_age(access_token: str) -> int:
+    """Cookie lifetime from the JWT's exp claim (fallback 8h)."""
+    try:
+        import base64 as _b64
+        import json as _json
+        import time as _time
+        p = access_token.split(".")[1]
+        p += "=" * (-len(p) % 4)
+        claims = _json.loads(_b64.urlsafe_b64decode(p))
+        ttl = int(claims.get("exp", 0)) - int(_time.time())
+        return ttl if ttl > 60 else 28800
+    except Exception:
+        return 28800
+
+
+class QrRedeemRequest(BaseModel):
+    token: str
+
+
+@router.post("/qr-login/create")
+async def qr_login_create(
+    request: Request,
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Create a single-use QR-login token bound to the caller's cookie session."""
+    session_jwt = request.cookies.get("access_token")
+    if not session_jwt:
+        # Only cookie-backed browser sessions can be relayed to another device.
+        raise HTTPException(status_code=400, detail="QR login requires a cookie session")
+    from app.utils.redis_client import get_async_redis
+    r = get_async_redis()
+    token = secrets.token_urlsafe(32)
+    await r.setex(f"qrlogin:{token}", _QR_TTL_SECONDS, session_jwt)
+    logger.info("qr_login_created", user=user.sub)
+    return {"token": token, "expires_in": _QR_TTL_SECONDS}
+
+
+@router.post("/qr-login/redeem")
+async def qr_login_redeem(payload: QrRedeemRequest) -> Response:
+    """Redeem a QR-login token: set the mobile device's session cookie. Public."""
+    from app.utils.redis_client import get_async_redis
+    r = get_async_redis()
+    key = f"qrlogin:{payload.token}"
+    pipe = r.pipeline()
+    pipe.get(key)
+    pipe.delete(key)  # single-use
+    session_jwt = (await pipe.execute())[0]
+    if not session_jwt:
+        raise HTTPException(status_code=400, detail="QR-код недействителен или истёк")
+
+    # Make sure the relayed session is still valid (not expired/revoked).
+    from app.auth.jwt import _verify_token
+    try:
+        await _verify_token(session_jwt)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Сессия истекла — обновите QR-код")
+
+    is_production = settings.app_env == "production"
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(
+        key="access_token",
+        value=session_jwt,
+        path="/",
+        httponly=True,
+        secure=is_production,
+        samesite="lax",
+        max_age=_token_max_age(session_jwt),
+    )
+    logger.info("qr_login_redeemed")
     return resp
 
 

@@ -873,11 +873,18 @@ async def list_document_workspace(
     doc_type: DocumentType | None = None,
     source_channel: str | None = None,
     search: str | None = None,
+    sort_by: str = Query("created_desc", pattern="^(created_desc|created_asc|updated_desc)$"),
     offset: int = 0,
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: doc.workspace — List documents with compact pipeline summaries."""
+    """Skill: doc.workspace — List documents with compact pipeline summaries.
+
+    sort_by:
+      created_desc — newest uploaded first (default, registry view)
+      created_asc  — oldest uploaded first (processing-queue order, FIFO)
+      updated_desc — most recently changed first (active processing bubbles up)
+    """
     query = select(Document)
 
     if status:
@@ -897,8 +904,14 @@ async def list_document_workspace(
     total = (
         await db.execute(select(func.count()).select_from(query.subquery()))
     ).scalar() or 0
+
+    order_col = {
+        "created_asc": Document.created_at.asc(),
+        "updated_desc": Document.updated_at.desc(),
+    }.get(sort_by, Document.created_at.desc())
+
     result = await db.execute(
-        query.order_by(Document.created_at.desc()).offset(offset).limit(limit)
+        query.order_by(order_col).offset(offset).limit(limit)
     )
     docs = result.scalars().all()
 
@@ -934,6 +947,84 @@ async def list_document_workspace(
         status_counts=status_counts,
         doc_type_counts=doc_type_counts,
     )
+
+
+# ── doc.pipeline-current ─────────────────────────────────────────────────────
+
+
+@router.get("/pipeline-current")
+async def get_pipeline_current(
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(get_current_user),
+):
+    """Return the document currently being processed on the GPU.
+
+    Finds the running job with the most recently updated timestamp —
+    this is the task that last committed (i.e. holds the GPU right now).
+    Returns null when nothing is being processed.
+    """
+    result = await db.execute(
+        select(Document, DocumentProcessingJob)
+        .join(DocumentProcessingJob, DocumentProcessingJob.document_id == Document.id)
+        .where(
+            Document.status.in_(["extracting", "classifying"]),
+            DocumentProcessingJob.status == "running",
+        )
+        .order_by(DocumentProcessingJob.updated_at.desc())
+        .limit(1)
+    )
+    row = result.first()
+    if not row:
+        return {"document": None, "pipeline": None}
+    doc, job = row
+    pipeline = await _pipeline_status_for_document(db, doc.id)
+    return {
+        "document": {
+            "id": str(doc.id),
+            "file_name": doc.file_name,
+            "status": doc.status.value if hasattr(doc.status, "value") else doc.status,
+            "doc_type": doc.doc_type.value if doc.doc_type and hasattr(doc.doc_type, "value") else doc.doc_type,
+        },
+        "pipeline": pipeline,
+    }
+
+
+# ── doc.all-ids ──────────────────────────────────────────────────────────────
+
+
+@router.get("/all-ids")
+async def list_all_document_ids(
+    status: DocumentStatus | None = None,
+    doc_type: DocumentType | None = None,
+    source_channel: str | None = None,
+    search: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(get_current_user),
+):
+    """Return all document UUIDs matching the given filters (max 5 000).
+
+    Used by the frontend 'select all' feature to select beyond the page limit
+    without loading full document objects.
+    """
+    query = select(Document.id)
+    if status:
+        query = query.where(Document.status == status)
+    if doc_type:
+        query = query.where(Document.doc_type == doc_type)
+    if source_channel:
+        query = query.where(Document.source_channel == source_channel)
+    if search:
+        query = query.where(
+            or_(
+                Document.file_name.ilike(f"%{search}%"),
+                Document.file_hash.ilike(f"%{search}%"),
+            )
+        )
+    result = await db.execute(
+        query.order_by(Document.created_at.desc()).limit(5000)
+    )
+    ids = [str(row) for row in result.scalars().all()]
+    return {"ids": ids, "total": len(ids)}
 
 
 # ── doc.invoice ──────────────────────────────────────────────────────────────
@@ -1388,9 +1479,24 @@ async def update_document(
     # On approval: create Invoice/Party records, build memory graph, queue embeddings
     if update_data.get("status") == "approved":
         try:
-            from app.tasks.extraction import process_approved_document
-            process_approved_document.delay(str(doc.id))
-            logger.info("post_approve_queued", document_id=str(doc.id))
+            from app.db.models import DocumentExtraction
+            from app.tasks.extraction import extract_invoice, process_approved_document
+            extraction_row = (
+                await db.execute(
+                    select(DocumentExtraction)
+                    .where(DocumentExtraction.document_id == doc.id)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            doc_type_val = doc.doc_type.value if doc.doc_type and hasattr(doc.doc_type, "value") else (doc.doc_type or "")
+            if not extraction_row and doc_type_val == "invoice":
+                # Extraction was interrupted (e.g. worker restart) — re-trigger it.
+                # auto_verify will call process_approved_document after it succeeds.
+                extract_invoice.delay(str(doc.id))
+                logger.info("post_approve_re_extract", document_id=str(doc.id))
+            else:
+                process_approved_document.delay(str(doc.id))
+                logger.info("post_approve_queued", document_id=str(doc.id))
         except Exception as e:
             logger.warning("post_approve_queue_failed", document_id=str(doc.id), error=str(e))
 
@@ -1666,9 +1772,6 @@ async def extract_document(
         current_step="classification",
         memory_seed_done=True,
     )
-    task = process_document.delay(str(document_id), force)
-    job.celery_task_id = str(task.id) if task else None
-
     await log_action(
         db,
         action="doc.extract",
@@ -1683,9 +1786,20 @@ async def extract_document(
         summary="Document extraction pipeline started",
         actor="system",
     )
+    # Commit BEFORE dispatching to broker so celery always finds the queued job
     await db.commit()
 
-    logger.info("extract_triggered", document_id=str(document_id), task_id=task.id)
+    task = process_document.delay(str(document_id), force, True)  # priority=True → gpu_priority queue
+    if task and task.id:
+        from sqlalchemy import update as _sa_upd
+        await db.execute(
+            _sa_upd(DocumentProcessingJob)
+            .where(DocumentProcessingJob.id == job.id)
+            .values(celery_task_id=str(task.id))
+        )
+        await db.commit()
+
+    logger.info("extract_triggered", document_id=str(document_id), task_id=getattr(task, "id", None))
     return TaskResponse(
         task_id=task.id,
         document_id=document_id,

@@ -118,10 +118,102 @@ async def get_current_user_optional(
         return None
 
 
-async def _verify_token(token: str) -> UserInfo:
-    """Verify JWT against Authentik JWKS and extract claims."""
+# ── Locally-minted session tokens ─────────────────────────────────────────────
+# For QR-login provisioning (admin issues a login for any user) we can't relay an
+# Authentik JWT we don't possess, so the backend mints its own HS256 session token
+# signed with app_secret_key. _verify_token accepts these alongside Authentik's
+# RS256 tokens. Marked by iss+token_use so they can't be confused with anything else.
+
+_LOCAL_ISS = "sveta-local"
+_LOCAL_TOKEN_USE = "local_session"
+
+
+def mint_local_session(
+    *,
+    sub: str,
+    email: str = "",
+    name: str = "",
+    preferred_username: str = "",
+    groups: list[str] | None = None,
+    ttl_seconds: int = 28800,
+) -> str:
+    """Mint a backend-signed (HS256) session token for `sub`. Used by QR-login."""
+    import time
+
+    from jose import jwt
+
+    now = int(time.time())
+    claims = {
+        "sub": sub,
+        "email": email,
+        "name": name or preferred_username or email,
+        "preferred_username": preferred_username,
+        "groups": groups or [],
+        "iss": _LOCAL_ISS,
+        "token_use": _LOCAL_TOKEN_USE,
+        "iat": now,
+        "exp": now + ttl_seconds,
+    }
+    return jwt.encode(claims, settings.app_secret_key, algorithm="HS256")
+
+
+async def _verify_local_session(token: str) -> UserInfo:
+    """Verify a backend-minted HS256 session token (see mint_local_session)."""
     try:
         from jose import jwt
+
+        claims = jwt.decode(
+            token,
+            settings.app_secret_key,
+            algorithms=["HS256"],
+            options={"verify_aud": False},
+        )
+        if claims.get("iss") != _LOCAL_ISS or claims.get("token_use") != _LOCAL_TOKEN_USE:
+            raise ValueError("not a local session token")
+
+        groups: list[str] = claims.get("groups", [])
+        roles = _groups_to_roles(groups)
+
+        await _assert_user_active(claims["sub"])
+
+        db_role = await _db_role_for_sub(claims["sub"])
+        if db_role is not None and db_role not in roles:
+            roles = [db_role, *roles]
+
+        return UserInfo(
+            sub=claims["sub"],
+            email=claims.get("email", ""),
+            name=claims.get("name", claims.get("preferred_username", "")),
+            preferred_username=claims.get("preferred_username", ""),
+            roles=roles,
+            groups=groups,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("local_session_verification_failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+async def _verify_token(token: str) -> UserInfo:
+    """Verify JWT and extract claims.
+
+    Backend-minted session tokens (HS256, see mint_local_session) take the local
+    path; everything else is verified as an Authentik RS256 token against JWKS.
+    """
+    try:
+        from jose import jwt
+
+        try:
+            _alg = jwt.get_unverified_header(token).get("alg")
+        except Exception:
+            _alg = None
+        if _alg == "HS256":
+            return await _verify_local_session(token)
 
         jwks = await _get_jwks()
 

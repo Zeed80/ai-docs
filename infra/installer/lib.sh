@@ -225,6 +225,24 @@ profile_args() {
   printf '%s' "$out"
 }
 
+# ── Render Traefik prod routes from template ────────────────────────────────
+# The committed template carries no real domain (no host hardcoded in git).
+# render_traefik_routes <env-file> <repo-root> substitutes the deployment domain
+# into infra/traefik/prod/routes.yml (gitignored). Only needed in production;
+# Traefik's directory provider ignores the .template extension.
+render_traefik_routes() {
+  local env_file="$1" root="$2"
+  local tpl="$root/infra/traefik/prod/routes.yml.template"
+  local out="$root/infra/traefik/prod/routes.yml"
+  [ -f "$tpl" ] || { warn "Шаблон роутов не найден: $tpl"; return 0; }
+  local domain push
+  domain="$(get_env_var "$env_file" TRAEFIK_DOMAIN)"
+  domain="${domain:-localhost}"
+  push="push.${domain}"
+  sed -e "s/__PUSH_DOMAIN__/${push}/g" -e "s/__DOMAIN__/${domain}/g" "$tpl" > "$out"
+  ok "Traefik-роуты сгенерированы для домена: ${domain}"
+}
+
 # ── Pre-flight: free disk space ─────────────────────────────────────────────
 # Building images + pulling engine images (vLLM ~25GB) needs headroom. Warns
 # (non-fatal) when the Docker data root has less than <min_gb> free.

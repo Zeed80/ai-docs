@@ -1,0 +1,103 @@
+name: Android release
+
+# Builds, signs and publishes the Света APK on a version tag (e.g. v1.0.0).
+# The signed APK + version.json are attached to a GitHub Release; the deploy
+# server pulls them into the `releases` volume (served at /download) — see
+# infra/installer/fetch-mobile-release.sh.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "versionName (e.g. 1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Build & sign APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need full history for a monotonic versionCode
+
+      - name: Derive version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version_name }}" ]; then
+            NAME="${{ github.event.inputs.version_name }}"
+          else
+            NAME="${GITHUB_REF_NAME#v}"
+          fi
+          CODE="$(git rev-list --count HEAD)"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22" # Capacitor 8 CLI requires Node >= 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21" # Capacitor 8 / AGP 8.13
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK platforms
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Install JS deps
+        run: npm install
+
+      - name: Generate Android project
+        run: |
+          npx cap add android
+          scripts/prepare-android.sh   # overlays overrides, Kotlin, minSdk 28, compileSdk 36
+          npx cap sync android
+
+      - name: Apply version
+        run: |
+          APP_GRADLE=android/app/build.gradle
+          sed -i "s/versionCode .*/versionCode ${{ steps.ver.outputs.code }}/" "$APP_GRADLE"
+          sed -i "s/versionName \".*\"/versionName \"${{ steps.ver.outputs.name }}\"/" "$APP_GRADLE"
+
+      - name: Decode keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/sveta-release.jks
+
+      - name: Build signed release APK
+        working-directory: mobile/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=sveta-release.jks \
+            -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
+
+      - name: Build /download payload
+        run: |
+          APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          mkdir -p ../dist/release
+          scripts/make-release-manifest.sh "$APK" \
+            "${{ steps.ver.outputs.name }}" "${{ steps.ver.outputs.code }}" \
+            ../dist/release "Релиз ${{ steps.ver.outputs.name }}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/release/latest.apk
+            dist/release/version.json

@@ -25,8 +25,10 @@ const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   {
+    // camera/microphone allowed for same-origin so the mobile WebView can use the
+    // native camera (document scan) and voice input; geolocation stays disabled.
     key: "Permissions-Policy",
-    value: "camera=(), microphone=(), geolocation=()",
+    value: "camera=(self), microphone=(self), geolocation=()",
   },
   { key: "Content-Security-Policy", value: csp },
 ];

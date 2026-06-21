@@ -340,7 +340,7 @@ async def test_emails_source_computed_fields(db_session):
                      subject="Счёт на фрезы", has_attachments=True,
                      attachment_count=2, is_inbound=True,
                      received_at=datetime(2026, 6, 10, tzinfo=UTC)),
-        EmailMessage(mailbox="procurement", from_address="buyer@ptsai.ru",
+        EmailMessage(mailbox="procurement", from_address="buyer@example.com",
                      subject="Запрос КП", has_attachments=False,
                      attachment_count=0, is_inbound=False),
     ])

@@ -9,6 +9,7 @@ import {
   InstallPrompt,
 } from "@/components/pwa/ServiceWorkerRegistration";
 import { OfflineQueueWidget } from "@/components/pwa/OfflineQueueWidget";
+import { MobileChrome } from "@/components/mobile/MobileChrome";
 
 export const metadata: Metadata = {
   title: "AI Документооборот",
@@ -46,6 +47,7 @@ export default async function RootLayout({
           <ServiceWorkerRegistration />
           <InstallPrompt />
           <OfflineQueueWidget />
+          <MobileChrome />
         </NextIntlClientProvider>
       </body>
     </html>

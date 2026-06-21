@@ -1,4 +1,8 @@
-# Traefik dynamic routing for production.
+# Traefik dynamic routing for production. (TEMPLATE — edit this file, not routes.yml)
+#
+# Rendered to routes.yml by install.sh/update.sh: __DOMAIN__ → $TRAEFIK_DOMAIN,
+# __PUSH_DOMAIN__ → push.$TRAEFIK_DOMAIN. No real domain is committed to git; the
+# generated routes.yml is gitignored.
 #
 # Single-domain, PathPrefix-based routing — works with any domain pointing at this
 # server (TLS issued on-demand via Let's Encrypt TLS-ALPN-01, see traefik.prod.yml).
@@ -24,7 +28,7 @@ http:
         # Host(), so Traefik can't infer the domain). Set to your deployment domain;
         # the issued cert is served for all routers via SNI.
         domains:
-          - main: ptsai.ru
+          - main: __DOMAIN__
       middlewares:
         - security-headers
         - rate-limit
@@ -56,6 +60,42 @@ http:
       tls:
         certResolver: letsencrypt
       priority: 100
+
+    # ── Mobile app distribution (public, served by backend StaticFiles) ──────────
+    # /download/* (signed APK + version.json). Outranks frontend (prio 1).
+    app-download:
+      rule: "PathPrefix(`/download`)"
+      service: backend
+      entryPoints: [web, websecure]
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - security-headers
+      priority: 110
+
+    # Android App Links verification file. MUST outrank authentik-oauth (300),
+    # which otherwise swallows all of /.well-known/.
+    app-assetlinks:
+      rule: "Path(`/.well-known/assetlinks.json`)"
+      service: backend
+      entryPoints: [web, websecure]
+      tls:
+        certResolver: letsencrypt
+      priority: 310
+
+    # ── Self-hosted push (ntfy) on a dedicated subdomain ─────────────────────────
+    # Requires a DNS A record for __PUSH_DOMAIN__ and NTFY_EXTERNAL_URL=https://__PUSH_DOMAIN__.
+    ntfy:
+      rule: "Host(`__PUSH_DOMAIN__`)"
+      service: ntfy
+      entryPoints: [web, websecure]
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: __PUSH_DOMAIN__
+      middlewares:
+        - security-headers
+      priority: 200
 
     # Authentik live-UI WebSocket (/ws/client/, /ws/outpost/). Must outrank
     # backend-ws (PathPrefix(`/ws`), prio 100) which otherwise swallows it and breaks
@@ -120,6 +160,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://authentik-server:9000"
+
+    ntfy:
+      loadBalancer:
+        servers:
+          - url: "http://ntfy:80"
 
     # minio-console:
     #   loadBalancer:

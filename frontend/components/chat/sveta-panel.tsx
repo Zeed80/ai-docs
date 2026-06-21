@@ -11,6 +11,12 @@ import {
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { mutFetch } from "@/lib/auth";
 import { genId } from "@/lib/ws-url";
+import {
+  isNative,
+  scanDocument,
+  dictate,
+  speechAvailable,
+} from "@/lib/native-bridge";
 import { GpuStatusBar } from "@/components/gpu-status-bar";
 import {
   createChatSession,
@@ -197,6 +203,9 @@ export function SvetaPanel() {
   const tgStreamingIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [native, setNative] = useState(false);
+  const [voiceOk, setVoiceOk] = useState(false);
+  const [listening, setListening] = useState(false);
   const dragCounterRef = useRef(0);
   const autoApproveRef = useRef(false);
   const activeHistoryLoadRef = useRef<string | null>(null);
@@ -723,10 +732,13 @@ export function SvetaPanel() {
     ]);
   }
 
-  async function uploadFile(af: AttachedFile): Promise<string | null> {
+  async function uploadFile(
+    af: AttachedFile,
+    sourceChannel = "chat",
+  ): Promise<string | null> {
     const form = new FormData();
     form.append("file", af.file);
-    const params = new URLSearchParams({ source_channel: "chat" });
+    const params = new URLSearchParams({ source_channel: sourceChannel });
     if (currentSessionId) params.set("chat_session_id", currentSessionId);
     const res = await mutFetch(`/api/documents/ingest?${params.toString()}`, {
       method: "POST",
@@ -737,7 +749,7 @@ export function SvetaPanel() {
     return (body.document_id ?? body.id ?? null) as string | null;
   }
 
-  function handleFiles(files: FileList | File[]) {
+  function handleFiles(files: FileList | File[], sourceChannel = "chat") {
     const newFiles: AttachedFile[] = Array.from(files).map((f) => ({
       id: genId(),
       file: f,
@@ -748,7 +760,7 @@ export function SvetaPanel() {
     setAttachedFiles((prev) => [...prev, ...newFiles]);
 
     for (const af of newFiles) {
-      uploadFile(af)
+      uploadFile(af, sourceChannel)
         .then((docId) => {
           setAttachedFiles((prev) =>
             prev.map((x) =>
@@ -772,6 +784,34 @@ export function SvetaPanel() {
 
   function removeAttachment(id: string) {
     setAttachedFiles((prev) => prev.filter((x) => x.id !== id));
+  }
+
+  // Detect the native shell + voice availability (client-only; panel is ssr:false).
+  useEffect(() => {
+    setNative(isNative());
+    void speechAvailable().then(setVoiceOk);
+  }, []);
+
+  // Capture a document with the native camera/scanner and attach it to the chat.
+  async function captureToChat() {
+    try {
+      const files = await scanDocument();
+      if (files.length) handleFiles(files, "mobile_chat");
+    } catch (e) {
+      console.error("captureToChat failed", e);
+    }
+  }
+
+  // Dictate a query to Света (speech-to-text), appending to the input.
+  async function startDictation() {
+    if (listening) return;
+    setListening(true);
+    try {
+      const text = await dictate();
+      if (text) setInput((prev) => (prev ? `${prev} ${text}` : text));
+    } finally {
+      setListening(false);
+    }
   }
 
   function sendMessage() {
@@ -1529,6 +1569,69 @@ export function SvetaPanel() {
               />
             </svg>
           </button>
+
+          {/* Camera / scan (native shell only) */}
+          {native && (
+            <button
+              type="button"
+              onClick={captureToChat}
+              disabled={effectivelyOffline || isStreaming}
+              aria-label="Снять документ"
+              title="Снять документ"
+              className="px-2 py-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 7h3l2-2h6l2 2h3v12H4z"
+                />
+                <circle cx="12" cy="13" r="3" strokeWidth={2} />
+              </svg>
+            </button>
+          )}
+
+          {/* Voice input (speech-to-text) */}
+          {voiceOk && (
+            <button
+              type="button"
+              onClick={startDictation}
+              disabled={effectivelyOffline || isStreaming}
+              aria-label="Голосовой ввод"
+              title="Голосовой ввод"
+              className={`px-2 py-2 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                listening
+                  ? "text-red-400 bg-slate-700 animate-pulse"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-700"
+              }`}
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 11a7 7 0 0014 0M12 18v3"
+                />
+              </svg>
+            </button>
+          )}
 
           <button
             type="button"

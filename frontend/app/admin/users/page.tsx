@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import QRCode from "qrcode";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
@@ -195,6 +196,106 @@ function CreateUserModal({
   );
 }
 
+function QrLoginModal({
+  user,
+  onClose,
+}: {
+  user: UserOut;
+  onClose: () => void;
+}) {
+  const [qr, setQr] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+
+  const refresh = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await fetch(
+        `${API}/api/admin/users/${encodeURIComponent(user.sub)}/login-qr`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", ...csrfHeaders() },
+        },
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as { token: string; expires_in: number };
+      const url = `${window.location.origin}/auth/qr-redeem?t=${data.token}`;
+      setQr(await QRCode.toDataURL(url, { width: 260, margin: 1 }));
+      setSecondsLeft(data.expires_in);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [user.sub]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (secondsLeft <= 0) return;
+    const t = setInterval(() => {
+      setSecondsLeft((s) => {
+        if (s <= 1) {
+          void refresh();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [secondsLeft, refresh]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-background rounded-xl border border-border shadow-xl w-full max-w-sm mx-4 p-6">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-base font-semibold">Вход по QR-коду</h2>
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            ✕
+          </button>
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">
+          {user.name} ({user.email}). Откройте приложение «Света» → «Войти по
+          QR-коду» и отсканируйте.
+        </p>
+
+        <div className="flex flex-col items-center gap-3">
+          <div className="rounded-xl bg-white p-3">
+            {qr ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={qr} alt="QR для входа" width={260} height={260} />
+            ) : (
+              <div className="flex h-[260px] w-[260px] items-center justify-center text-muted-foreground">
+                …
+              </div>
+            )}
+          </div>
+          {error ? (
+            <p className="text-xs text-destructive">Ошибка: {error}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Код действителен ещё {secondsLeft} с
+            </p>
+          )}
+          <button
+            onClick={() => void refresh()}
+            className="text-xs text-primary hover:underline"
+          >
+            Обновить код
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function UsersContent() {
   const [data, setData] = useState<UserListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -203,6 +304,7 @@ function UsersContent() {
   const [activeFilter, setActiveFilter] = useState<string>("");
   const [q, setQ] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [qrUser, setQrUser] = useState<UserOut | null>(null);
 
   function load() {
     setLoading(true);
@@ -257,6 +359,8 @@ function UsersContent() {
           onClose={() => setShowCreate(false)}
         />
       )}
+
+      {qrUser && <QrLoginModal user={qrUser} onClose={() => setQrUser(null)} />}
 
       <div className="flex flex-wrap gap-2 items-center">
         <input
@@ -376,6 +480,15 @@ function UsersContent() {
                         >
                           Изменить
                         </Link>
+                        {u.is_active && (
+                          <button
+                            onClick={() => setQrUser(u)}
+                            className="text-xs text-primary hover:underline"
+                            title="Показать QR для входа в приложении"
+                          >
+                            QR-вход
+                          </button>
+                        )}
                         {u.is_active ? (
                           <button
                             onClick={() => deactivate(u.sub)}

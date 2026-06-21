@@ -80,6 +80,7 @@ from app.api import (
     spec_tables,
 )
 from app.api import admin as admin_api
+from app.api import devices as devices_api
 from app.api import admin_graph as admin_graph_api
 from app.api import maintenance as maintenance_api
 from app.api import dynamic_skill_runner
@@ -378,6 +379,27 @@ def create_app() -> FastAPI:
     app.include_router(handovers.router, prefix="/api/handovers", tags=["handovers"], dependencies=_auth)
     app.include_router(setup_api.router, prefix="/api/setup", tags=["setup"], dependencies=_auth)
     app.include_router(comments_api.router, prefix="/api/comments", tags=["comments"], dependencies=_auth)
+    app.include_router(devices_api.router, prefix="/api/devices", tags=["devices"], dependencies=_auth)
+
+    # ── Public mobile-app distribution (no auth) ──────────────────────────────
+    # APK + version.json are served at /download; assetlinks.json for Android App Links.
+    # Traefik routes /download and /.well-known/assetlinks.json directly to the backend.
+    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.staticfiles import StaticFiles
+
+    _releases_dir = settings.releases_dir
+    try:
+        os.makedirs(_releases_dir, exist_ok=True)
+    except OSError:
+        pass
+    app.mount("/download", StaticFiles(directory=_releases_dir, check_dir=False), name="download")
+
+    @app.get("/.well-known/assetlinks.json", include_in_schema=False)
+    async def assetlinks():  # noqa: ANN202
+        path = os.path.join(_releases_dir, ".well-known", "assetlinks.json")
+        if os.path.isfile(path):
+            return FileResponse(path, media_type="application/json")
+        return JSONResponse([], status_code=200)
 
     return app
 

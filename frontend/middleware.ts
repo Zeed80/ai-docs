@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const PUBLIC_PATHS = ["/auth/login", "/auth/callback"];
+const PUBLIC_PATHS = [
+  "/auth/login",
+  "/auth/callback",
+  "/auth/qr-redeem",
+  "/get-app",
+];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

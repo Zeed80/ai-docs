@@ -108,6 +108,8 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
                     if doc:
                         created_docs += 1
 
+                _notify_new_email(db, mailbox, email_msg)
+
                 db.commit()
 
             except Exception as e:
@@ -123,6 +125,59 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
         errors=len(errors),
     )
     return {"mailbox": mailbox, "fetched": len(emails), "documents": created_docs, "errors": errors}
+
+
+def _mailbox_recipients(db: Session, mailbox: str) -> list[str]:
+    """Resolve which users to notify about a new email in `mailbox`.
+
+    Routing: users whose role matches the mailbox's `assigned_role`; if none is
+    configured or matches, fall back to active admins.
+    """
+    from app.db.models import MailboxConfig, User
+
+    role = db.execute(
+        select(MailboxConfig.assigned_role).where(MailboxConfig.name == mailbox)
+    ).scalar_one_or_none()
+
+    subs: list[str] = []
+    if role:
+        subs = list(
+            db.execute(
+                select(User.sub).where(User.role == role, User.is_active == True)  # noqa: E712
+            ).scalars().all()
+        )
+    if not subs:
+        subs = list(
+            db.execute(
+                select(User.sub).where(User.role == "admin", User.is_active == True)  # noqa: E712
+            ).scalars().all()
+        )
+    return subs
+
+
+def _notify_new_email(db: Session, mailbox: str, email_msg) -> None:
+    """Create an in-app + push notification for a freshly ingested inbound email."""
+    from app.db.models import NotificationType
+    from app.services.notifications import create_notification_sync
+
+    sender = email_msg.from_address or "—"
+    subject = (email_msg.subject or "(без темы)").strip()
+    title = f"Новое письмо · {mailbox}"
+    body = f"{sender}: {subject}"[:480]
+    try:
+        for sub in _mailbox_recipients(db, mailbox):
+            create_notification_sync(
+                db,
+                user_sub=sub,
+                type=NotificationType.email_received,
+                title=title,
+                body=body,
+                entity_type="email",
+                entity_id=email_msg.id,
+                action_url="/inbox",
+            )
+    except Exception as e:  # never block ingestion on notification errors
+        logger.warning("email_notify_failed", mailbox=mailbox, error=str(e))
 
 
 def _find_or_create_thread(

@@ -116,7 +116,7 @@ configure_env() {
 
   if [ "$MODE" = "prod" ]; then
     [ -z "$DOMAIN" ] && [ "$NONINTERACTIVE" != 1 ] && \
-      DOMAIN="$(ask_input "Публичный домен (например, ptsai.ru):" "" "Домен")"
+      DOMAIN="$(ask_input "Публичный домен (например, example.com):" "" "Домен")"
     [ -z "$EMAIL" ] && [ "$NONINTERACTIVE" != 1 ] && \
       EMAIL="$(ask_input "Email для Let's Encrypt / админа:" "admin@${DOMAIN:-company.com}" "Email")"
     DOMAIN="${DOMAIN:-localhost}"; EMAIL="${EMAIL:-admin@company.com}"
@@ -128,6 +128,8 @@ configure_env() {
     set_env_var "$ENV_FILE" TRAEFIK_ACME_EMAIL "$EMAIL"
     set_env_var "$ENV_FILE" CORS_ORIGINS "https://$DOMAIN"
     set_env_var "$ENV_FILE" AUTHENTIK_EXTERNAL_URL "https://$DOMAIN"
+    # Self-hosted push (ntfy) on a push.<domain> subdomain (needs a DNS A-record).
+    set_env_var "$ENV_FILE" NTFY_EXTERNAL_URL "https://push.$DOMAIN"
     set_env_var "$ENV_FILE" NEXT_PUBLIC_API_URL same-origin
     set_env_var "$ENV_FILE" NEXT_PUBLIC_WS_URL same-origin
     set_env_var "$ENV_FILE" AUTHENTIK_BOOTSTRAP_EMAIL "$EMAIL"
@@ -189,6 +191,9 @@ fi
 COMPOSE_ARGS="$COMPOSE_ARGS$(profile_args "$ENV_FILE")"
 # shellcheck disable=SC2086
 run_compose() { $COMPOSE $COMPOSE_ARGS "$@"; }
+
+# Render Traefik prod routes from the (domain-free) template before starting.
+[ "$MODE" = "prod" ] && render_traefik_routes "$ENV_FILE" "$SELF_DIR"
 
 info "docker compose up -d --build (это займёт время при первом запуске)…"
 run_compose up -d --build

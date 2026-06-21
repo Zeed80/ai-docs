@@ -217,6 +217,57 @@ async def get_user(
     return UserOut.model_validate(user)
 
 
+@router.post("/users/{user_sub}/login-qr")
+async def create_user_login_qr(
+    user_sub: str,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Admin: mint a single-use QR-login token for a chosen user.
+
+    The mobile app scans it (login screen → "Войти по QR-коду") and is signed in
+    AS that user — handy for multi-user devices and testing. The backend mints its
+    own session token (it has no Authentik token for other users); the token is
+    relayed via /api/auth/qr-login/redeem. Admin-only and audited.
+    """
+    result = await db.execute(select(User).where(User.sub == user_sub))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="User is deactivated")
+
+    from app.auth.jwt import mint_local_session
+    from app.utils.redis_client import get_async_redis
+
+    # Session lifetime once logged in (8h); QR token validity (time to scan) 5 min.
+    session_jwt = mint_local_session(
+        sub=user.sub,
+        email=user.email,
+        name=user.name,
+        preferred_username=user.preferred_username,
+        groups=[],  # role is resolved from DB (users.role) at verify time
+        ttl_seconds=28800,
+    )
+    qr_token = secrets.token_urlsafe(32)
+    qr_ttl = 300
+    r = get_async_redis()
+    await r.setex(f"qrlogin:{qr_token}", qr_ttl, session_jwt)
+
+    db.add(
+        AuditLog(
+            user_id=admin.sub,
+            action="admin.user_login_qr",
+            entity_type="user",
+            details={"target_sub": user.sub, "email": user.email},
+        )
+    )
+    await db.commit()
+
+    logger.info("admin_user_login_qr", admin=admin.sub, target=user.sub)
+    return {"token": qr_token, "expires_in": qr_ttl}
+
+
 @router.patch("/users/{user_sub}", response_model=UserOut)
 async def update_user(
     user_sub: str,

@@ -19,3 +19,9 @@ body {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
+
+/* ── Mobile shell (Capacitor native) ─────────────────────────────────────── */
+/* Reserve space for the bottom tab bar so content isn't hidden behind it. */
+html.is-native body {
+  padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+}

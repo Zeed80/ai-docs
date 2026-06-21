@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <title>Света</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; min-height: 100%;
+        background: #0f172a; color: #e2e8f0;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .wrap {
+        min-height: 100vh; box-sizing: border-box;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 16px; padding: 24px; text-align: center;
+      }
+      .logo { width: 64px; height: 64px; border-radius: 16px; background: #0ea5e9; }
+      h1 { font-size: 20px; margin: 4px 0 0; }
+      p { color: #94a3b8; font-size: 14px; margin: 0; max-width: 320px; }
+      .card { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 12px; }
+      input {
+        width: 100%; box-sizing: border-box; padding: 12px 14px; font-size: 16px;
+        border: 1px solid #334155; border-radius: 10px; background: #1e293b; color: #e2e8f0;
+      }
+      button {
+        padding: 12px 16px; font-size: 15px; border: 0; border-radius: 10px;
+        background: #0ea5e9; color: #fff; font-weight: 600;
+      }
+      button.secondary { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; }
+      .err { color: #f87171; font-size: 13px; min-height: 16px; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="logo"></div>
+      <h1>Света</h1>
+
+      <!-- Connecting state (a server is already configured) -->
+      <div id="connecting" class="hidden">
+        <p>Подключение к серверу…</p>
+      </div>
+
+      <!-- Setup state (no server yet) -->
+      <div id="setup" class="card hidden">
+        <p>Укажите адрес сервера «Света» — введите вручную или отсканируйте QR-код со страницы установки.</p>
+        <input id="url" type="url" inputmode="url" placeholder="https://server.example.com" autocomplete="off" />
+        <div class="err" id="err"></div>
+        <button id="connect">Подключиться</button>
+        <button id="scan" class="secondary">Сканировать QR-код</button>
+      </div>
+    </div>
+
+    <script>
+      // Bundled launcher. The app is NOT tied to any server: on first launch the
+      // user provides the URL (typed or scanned). It is saved by the ServerConfig
+      // plugin; the WebView then loads that live site (allowNavigation: ["*"]).
+      (function () {
+        var Plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
+        var ServerConfig = Plugins.ServerConfig;
+        var BarcodeScanner = Plugins.BarcodeScanner;
+
+        var $ = function (id) { return document.getElementById(id); };
+        function show(id) { $(id).classList.remove("hidden"); }
+        function hide(id) { $(id).classList.add("hidden"); }
+
+        function go(url) {
+          show("connecting");
+          hide("setup");
+          window.location.replace(url);
+        }
+
+        function looksLikeUrl(v) {
+          return /^https?:\/\/[^\s]+/i.test(v) || /^[a-z0-9.-]+\.[a-z]{2,}([/:].*)?$/i.test(v);
+        }
+
+        async function save(url) {
+          if (ServerConfig && ServerConfig.set) {
+            var res = await ServerConfig.set({ url: url });
+            return (res && res.url) || url;
+          }
+          return url;
+        }
+
+        async function init() {
+          // Already configured? Go straight to the live site.
+          if (ServerConfig && ServerConfig.get) {
+            try {
+              var res = await ServerConfig.get();
+              if (res && res.url) return go(res.url);
+            } catch (e) {}
+          }
+          // Otherwise show setup. Hide the QR button if no scanner is available.
+          show("setup");
+          if (!BarcodeScanner) hide("scan");
+
+          $("connect").addEventListener("click", async function () {
+            var v = ($("url").value || "").trim();
+            if (!looksLikeUrl(v)) {
+              $("err").textContent = "Введите корректный адрес сервера.";
+              return;
+            }
+            try {
+              go(await save(v));
+            } catch (e) {
+              $("err").textContent = "Не удалось сохранить адрес.";
+            }
+          });
+
+          $("scan").addEventListener("click", async function () {
+            $("err").textContent = "";
+            try {
+              if (BarcodeScanner.requestPermissions) await BarcodeScanner.requestPermissions();
+              var r = await BarcodeScanner.scan();
+              var code = r && r.barcodes && r.barcodes[0] && r.barcodes[0].rawValue;
+              if (!code) { $("err").textContent = "QR-код не распознан."; return; }
+              go(await save(code));
+            } catch (e) {
+              $("err").textContent = "Не удалось отсканировать.";
+            }
+          });
+        }
+
+        document.addEventListener("DOMContentLoaded", init);
+      })();
+    </script>
+  </body>
+</html>

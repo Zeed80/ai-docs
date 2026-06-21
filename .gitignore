@@ -103,3 +103,10 @@ backend/example-invoices/
 backend/tests/reports/
 # Server-side backup archives — root only (must NOT match frontend/app/admin/backups/)
 /backups/
+
+# Generated from routes.yml.template by install.sh/update.sh (contains the real domain)
+infra/traefik/prod/routes.yml
+
+# Local built APK artifact (do not commit)
+/sveta-debug.apk
+*.apk

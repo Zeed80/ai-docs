@@ -82,6 +82,9 @@ else
   ok "Обновлено: $BEFORE → $AFTER"
 fi
 
+# Render Traefik prod routes from the (domain-free) template before rebuild/up.
+[ "$APP_ENV" = "production" ] && render_traefik_routes "$ENV_FILE" "$SELF_DIR"
+
 # ── 3. Rebuild images ────────────────────────────────────────────────────────
 step "3/5  Пересборка образов"
 check_disk_space 20 || { [ "$NONINTERACTIVE" = 1 ] || ask_yesno "Мало места — продолжить?" no || die "Отменено."; }
@@ -101,6 +104,12 @@ if wait_for_backend run_compose; then
   [ -n "${REV_BEFORE:-}" ] && log "  Ревизия БД до обновления: $REV_BEFORE"
   report_migrations run_compose || warn "БД не на последней ревизии — смотрите логи backend."
   verify_stack run_compose || warn "Часть сервисов не здорова: $COMPOSE $COMPOSE_ARGS ps"
+  # Optional, best-effort: refresh the mobile APK served at /download from the
+  # latest GitHub Release. Enable with MOBILE_RELEASE_FETCH=1; never fails update.
+  if [ "${MOBILE_RELEASE_FETCH:-0}" = 1 ]; then
+    AIW_COMPOSE="$COMPOSE" AIW_COMPOSE_ARGS="$COMPOSE_ARGS" \
+      bash "$SELF_DIR/infra/installer/fetch-mobile-release.sh" || true
+  fi
   ok "Обновление успешно."
 else
   err "Backend не стал здоровым после обновления."

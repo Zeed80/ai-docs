@@ -703,6 +703,25 @@ export function Sidebar() {
           </p>
         </div>
         <NotificationBell />
+        <Link
+          href="/auth/qr-login"
+          title="Вход на телефоне по QR-коду"
+          className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors shrink-0"
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 3h3m0 0h3m-3 0v3m0-3v-3"
+            />
+          </svg>
+        </Link>
         <button
           onClick={handleLogout}
           title="Выйти"

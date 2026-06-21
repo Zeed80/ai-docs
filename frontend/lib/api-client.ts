@@ -202,18 +202,23 @@ export const documents = {
       body: JSON.stringify(data),
     }),
 
-  ingest: (file: File, sourceChannel = "upload") => {
+  ingest: (
+    file: File,
+    sourceChannel = "upload",
+    opts?: { chatSessionId?: string; requestedDocType?: string },
+  ) => {
     const formData = new FormData();
     formData.append("file", file);
-    return fetch(
-      `${API_BASE}/api/documents/ingest?source_channel=${sourceChannel}`,
-      {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-        headers: csrfHeaders(),
-      },
-    ).then((r) => {
+    const params = new URLSearchParams({ source_channel: sourceChannel });
+    if (opts?.chatSessionId) params.set("chat_session_id", opts.chatSessionId);
+    if (opts?.requestedDocType)
+      params.set("requested_doc_type", opts.requestedDocType);
+    return fetch(`${API_BASE}/api/documents/ingest?${params.toString()}`, {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+      headers: csrfHeaders(),
+    }).then((r) => {
       if (!r.ok && r.status !== 202)
         throw new ApiError(r.status, "Upload failed");
       return r.json();

@@ -174,6 +174,7 @@ const STATUS_FILTERS = [
   { value: "rejected", label: "Отклонены" },
   { value: "suspicious", label: "Карантин" },
   { value: "archived", label: "Архив" },
+  { value: "analyzed", label: "Проанализирован" },
 ];
 
 const DOC_TYPES = [
@@ -244,6 +245,18 @@ const PIPELINE_STEP_LABELS: Record<string, string> = {
   embedding: "Векторы",
 };
 
+const CURRENT_STEP_LABELS: Record<string, string> = {
+  store: "Сохранение файла",
+  memory_seed: "Первичная память",
+  classification: "Классификация",
+  extraction: "Извлечение данных",
+  sql_records: "Сохранение записей",
+  memory_graph: "Построение графа",
+  embedding: "Векторизация",
+  completed: "Завершён",
+  watchdog_reset: "Сброс по таймауту",
+};
+
 const FALLBACK_PROCESS_STEPS: PipelineStep[] = [
   { key: "store", label: "Файл", status: "pending" },
   { key: "memory_seed", label: "Память", status: "pending" },
@@ -300,7 +313,9 @@ function pipelineProgress(pipeline: PipelineStatus | null | undefined) {
 function isPipelineActive(item: WorkspaceItem) {
   return (
     ["queued", "running"].includes(item.pipeline?.processing_status ?? "") ||
-    ["ingested", "classifying", "extracting"].includes(item.document.status)
+    ["ingested", "classifying", "extracting"].includes(item.document.status) ||
+    // Keep polling after watchdog reset — the Celery task may still complete
+    item.pipeline?.current_step === "watchdog_reset"
   );
 }
 
@@ -413,6 +428,19 @@ export default function DocumentsPage() {
     Record<string, { file_name: string; doc_type: string | null }>
   >({});
   const [showGraphDebug, setShowGraphDebug] = useState(false);
+  /** true = user clicked "select all N" across all pages */
+  const [selectAllMatching, setSelectAllMatching] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
+  /** The document currently being processed on the GPU */
+  const [pipelineCurrent, setPipelineCurrent] = useState<{
+    document: {
+      id: string;
+      file_name: string;
+      status: string;
+      doc_type: string | null;
+    } | null;
+    pipeline: PipelineStatus | null;
+  } | null>(null);
   const isAdmin = useHasRole("admin");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -443,6 +471,7 @@ export default function DocumentsPage() {
       return;
     }
     setWorkspace(data);
+    setLastRefreshedAt(new Date());
     setSelectedId((current) => current ?? data.items[0]?.document.id ?? null);
   }, [docType, search, sourceChannel, status]);
 
@@ -473,19 +502,42 @@ export default function DocumentsPage() {
     [dependencyQuery],
   );
 
+  const loadPipelineCurrent = useCallback(async () => {
+    const data = await requestJson<{
+      document: {
+        id: string;
+        file_name: string;
+        status: string;
+        doc_type: string | null;
+      } | null;
+      pipeline: PipelineStatus | null;
+    }>(`/api/documents/pipeline-current`).catch(() => null);
+    setPipelineCurrent(data);
+  }, []);
+
   useEffect(() => {
     loadWorkspace();
-  }, [loadWorkspace]);
+    loadPipelineCurrent();
+  }, [loadWorkspace, loadPipelineCurrent]);
 
   useEffect(() => {
     const hasActivePipeline = Boolean(workspace?.items.some(isPipelineActive));
-    if (!hasActivePipeline && !uploading) return;
+    // Fast poll (2.5s) while extraction is running; slow poll (30s) always.
+    const interval = hasActivePipeline || uploading ? 2500 : 30_000;
     const timer = window.setInterval(() => {
       loadWorkspace();
-      loadSummary(selectedId);
-    }, 2500);
+      loadPipelineCurrent();
+      if (hasActivePipeline || uploading) loadSummary(selectedId);
+    }, interval);
     return () => window.clearInterval(timer);
-  }, [loadSummary, loadWorkspace, selectedId, uploading, workspace]);
+  }, [
+    loadSummary,
+    loadWorkspace,
+    loadPipelineCurrent,
+    selectedId,
+    uploading,
+    workspace,
+  ]);
 
   useEffect(() => {
     loadSummary(selectedId);
@@ -780,7 +832,7 @@ export default function DocumentsPage() {
     const hasErrors = pendingFiles.some((f) => f.status === "error");
     setMessageType(hasErrors ? "error" : "success");
     setMessage(hasErrors ? "Есть ошибки загрузки" : "Загрузка завершена");
-    await loadWorkspace();
+    await Promise.all([loadWorkspace(), loadPipelineCurrent()]);
     if (uploadedIds.length) {
       setSelectedIds(new Set(uploadedIds));
       setSelectedId(uploadedIds[uploadedIds.length - 1]);
@@ -905,6 +957,7 @@ export default function DocumentsPage() {
   }
 
   function toggleSelection(id: string, checked: boolean) {
+    setSelectAllMatching(false);
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (checked) next.add(id);
@@ -914,13 +967,28 @@ export default function DocumentsPage() {
   }
 
   function toggleAll(checked: boolean) {
-    if (checked) {
-      setSelectedIds(
-        new Set((workspace?.items ?? []).map((i) => i.document.id)),
-      );
-    } else {
+    if (!checked) {
+      setSelectAllMatching(false);
       setSelectedIds(new Set());
+      return;
     }
+    setSelectedIds(new Set((workspace?.items ?? []).map((i) => i.document.id)));
+  }
+
+  /** Load all IDs matching current filters and select them. */
+  async function selectAllAcrossPages() {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (docType) params.set("doc_type", docType);
+    if (sourceChannel.trim())
+      params.set("source_channel", sourceChannel.trim());
+    if (search.trim()) params.set("search", search.trim());
+    const data = await requestJson<{ ids: string[]; total: number }>(
+      `/api/documents/all-ids?${params}`,
+    ).catch(() => null);
+    if (!data) return;
+    setSelectedIds(new Set(data.ids));
+    setSelectAllMatching(true);
   }
 
   return (
@@ -938,9 +1006,23 @@ export default function DocumentsPage() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {lastRefreshedAt && (
+              <span
+                className="text-xs text-slate-600"
+                title="Данные обновляются автоматически"
+              >
+                ● обновлено{" "}
+                {lastRefreshedAt.toLocaleTimeString("ru-RU", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })}
+              </span>
+            )}
             {selectedIds.size > 0 && (
               <span className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300">
                 Выбрано: {selectedIds.size}
+                {selectAllMatching && " (все)"}
               </span>
             )}
             <button
@@ -1024,12 +1106,19 @@ export default function DocumentsPage() {
           {tab === "registry" && (
             <RegistryPanel
               items={workspace?.items ?? []}
+              total={workspace?.total ?? 0}
               selectedId={selectedId}
               selectedIds={selectedIds}
+              selectAllMatching={selectAllMatching}
               busyAction={busyAction}
               onSelect={setSelectedId}
               onToggle={toggleSelection}
               onToggleAll={toggleAll}
+              onSelectAllMatching={selectAllAcrossPages}
+              onClearSelection={() => {
+                setSelectAllMatching(false);
+                setSelectedIds(new Set());
+              }}
               onBatch={(path, body) => batchAction(path, path, body)}
             />
           )}
@@ -1037,6 +1126,8 @@ export default function DocumentsPage() {
           {tab === "queue" && (
             <QueuePanel
               items={workspace?.items ?? []}
+              pipelineCurrent={pipelineCurrent}
+              statusCounts={workspace?.status_counts ?? {}}
               selectedId={selectedId}
               selectedIds={selectedIds}
               busyAction={busyAction}
@@ -1649,28 +1740,41 @@ function UploadPanel({
 
 function RegistryPanel({
   items,
+  total,
   selectedId,
   selectedIds,
+  selectAllMatching,
   busyAction,
   onSelect,
   onToggle,
   onToggleAll,
+  onSelectAllMatching,
+  onClearSelection,
   onBatch,
 }: {
   items: WorkspaceItem[];
+  total: number;
   selectedId: string | null;
   selectedIds: Set<string>;
+  selectAllMatching: boolean;
   busyAction: string | null;
   onSelect: (id: string) => void;
   onToggle: (id: string, checked: boolean) => void;
   onToggleAll: (checked: boolean) => void;
+  onSelectAllMatching: () => void;
+  onClearSelection: () => void;
   onBatch: (path: string, body?: Record<string, unknown>) => void;
 }) {
+  const pageIsFull = items.length < total;
+  const pageAllChecked =
+    items.length > 0 && items.every((i) => selectedIds.has(i.document.id));
+
   return (
     <section className="mt-5 overflow-hidden rounded-md border border-slate-800">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2">
         <span className="text-sm text-slate-300">
-          Документы: {items.length}
+          Документы: {total}
+          {items.length < total && ` (показано ${items.length})`}
         </span>
         <div className="flex flex-wrap gap-2">
           <button
@@ -1689,6 +1793,36 @@ function RegistryPanel({
           </button>
         </div>
       </div>
+
+      {/* Select-all banner — shown when page is fully checked but there are more pages */}
+      {pageAllChecked && pageIsFull && (
+        <div className="flex items-center justify-between border-b border-slate-800 bg-blue-950/30 px-3 py-2 text-xs text-blue-300">
+          {selectAllMatching ? (
+            <>
+              <span>Выбраны все {selectedIds.size} документов</span>
+              <button
+                onClick={onClearSelection}
+                className="underline hover:text-blue-100"
+              >
+                Снять выбор
+              </button>
+            </>
+          ) : (
+            <>
+              <span>
+                Выбрано {selectedIds.size} из {total}.
+              </span>
+              <button
+                onClick={onSelectAllMatching}
+                className="underline hover:text-blue-100"
+              >
+                Выбрать все {total} документов
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       <DocumentTable
         items={items}
         selectedId={selectedId}
@@ -1703,6 +1837,8 @@ function RegistryPanel({
 
 function QueuePanel({
   items,
+  pipelineCurrent,
+  statusCounts,
   selectedId,
   selectedIds,
   busyAction,
@@ -1713,6 +1849,16 @@ function QueuePanel({
   onBatchMemory,
 }: {
   items: WorkspaceItem[];
+  pipelineCurrent: {
+    document: {
+      id: string;
+      file_name: string;
+      status: string;
+      doc_type: string | null;
+    } | null;
+    pipeline: PipelineStatus | null;
+  } | null;
+  statusCounts: Record<string, number>;
   selectedId: string | null;
   selectedIds: Set<string>;
   busyAction: string | null;
@@ -1722,19 +1868,61 @@ function QueuePanel({
   onBatchEmbeddings: () => void;
   onBatchMemory: () => void;
 }) {
-  // Single-flight GPU: at most ONE document is actually on the GPU at any moment.
-  // Job statuses can transiently show several "running" (chained re-enqueues,
-  // interrupted tasks), so derive the queue from the COUNT of active documents,
-  // not from how many jobs are labelled running.
-  const activeItems = items.filter(isPipelineActive);
-  // GPU processes from the END of the upload queue (last-in-first-processed),
-  // so show the last running item, falling back to the last queued item.
-  const currentItem =
-    activeItems.findLast((i) => i.pipeline?.processing_status === "running") ??
-    activeItems[activeItems.length - 1] ??
-    null;
-  const currentId = currentItem?.document.id ?? null;
-  const queueCount = Math.max(activeItems.length - (currentItem ? 1 : 0), 0);
+  // pipelineCurrent comes from /api/documents/pipeline-current — the doc
+  // actually on the GPU right now (by most-recent job updated_at).
+  const currentDoc = pipelineCurrent?.document ?? null;
+  const currentId = currentDoc?.id ?? null;
+
+  // If the GPU doc isn't in workspace's top-100 list, prepend a synthetic row
+  // so the user always sees what's being processed right now.
+  const currentInList = currentId
+    ? items.some((i) => i.document.id === currentId)
+    : false;
+  const displayItems: WorkspaceItem[] =
+    currentDoc && !currentInList
+      ? [
+          {
+            document: {
+              id: currentDoc.id,
+              file_name: currentDoc.file_name,
+              status: currentDoc.status,
+              doc_type: currentDoc.doc_type,
+              doc_type_confidence: null,
+              file_hash: "",
+              file_size: 0,
+              mime_type: "",
+              source_channel: null,
+              created_at: "",
+              updated_at: "",
+            },
+            pipeline: (pipelineCurrent?.pipeline ?? {
+              processing_status: "running",
+              current_step: null,
+              processing_error: null,
+              pipeline_steps: [],
+              extraction_count: 0,
+              artifact_count: 0,
+              graph_status: null,
+              graph_scope: null,
+              graph_error: null,
+              memory_chunks: 0,
+              evidence_spans: 0,
+              graph_nodes: 0,
+              graph_edges: 0,
+            }) as PipelineStatus,
+          },
+          ...items,
+        ]
+      : items;
+
+  // Total active count from the full DB (status_counts covers all pages).
+  const totalActive =
+    (statusCounts.ingested ?? 0) +
+    (statusCounts.classifying ?? 0) +
+    (statusCounts.extracting ?? 0);
+  // Queue = total active minus the one currently on the GPU.
+  const queueCount = Math.max(totalActive - (currentDoc ? 1 : 0), 0);
+
   return (
     <section className="mt-5 space-y-4">
       <div className="flex flex-wrap gap-2">
@@ -1756,10 +1944,8 @@ function QueuePanel({
       </div>
       <div className="rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-400">
         Обработка строго последовательная — один документ за раз (GPU).{" "}
-        {currentItem ? (
-          <span className="text-blue-300">
-            Сейчас: {currentItem.document.file_name}
-          </span>
+        {currentDoc ? (
+          <span className="text-blue-300">Сейчас: {currentDoc.file_name}</span>
         ) : (
           <span className="text-slate-500">Сейчас: простаивает</span>
         )}{" "}
@@ -1771,7 +1957,7 @@ function QueuePanel({
           <span>Этапы</span>
           <span>Прогресс</span>
         </div>
-        {items.map((item) => (
+        {displayItems.map((item) => (
           <button
             key={item.document.id}
             onClick={() => onSelect(item.document.id)}
@@ -1806,7 +1992,7 @@ function QueuePanel({
             />
           </button>
         ))}
-        {!items.length && (
+        {!displayItems.length && (
           <div className="p-8 text-center text-sm text-slate-500">
             Нет данных
           </div>
@@ -2270,6 +2456,13 @@ function NtdPanel({
   );
 }
 
+function isWatchdogError(pipeline: PipelineStatus | null): boolean {
+  return (
+    pipeline?.processing_status === "failed" &&
+    pipeline?.current_step === "watchdog_reset"
+  );
+}
+
 function DetailPanel({
   selected,
   pipeline,
@@ -2420,7 +2613,26 @@ function DetailPanel({
           >
             Удалить полностью
           </button>
-          {pipeline?.processing_error && (
+          {pipeline?.processing_error && isWatchdogError(pipeline) && (
+            <div className="rounded-md border border-amber-800 bg-amber-950/30 p-3 text-sm">
+              <p className="font-medium text-amber-300">
+                Извлечение заняло слишком долго
+              </p>
+              <p className="mt-1 text-xs text-amber-400/80">
+                Документ отправлен на ручную проверку. Если модель всё ещё
+                работает — подождите и обновите страницу. Иначе запустите
+                извлечение повторно.
+              </p>
+              <button
+                onClick={onExtract}
+                disabled={Boolean(busyAction)}
+                className="mt-2 rounded-md bg-amber-700 px-3 py-1.5 text-xs text-white hover:bg-amber-600 disabled:opacity-50"
+              >
+                Повторить извлечение
+              </button>
+            </div>
+          )}
+          {pipeline?.processing_error && !isWatchdogError(pipeline) && (
             <div className="rounded-md border border-red-900 bg-red-950/30 p-3 text-sm text-red-200">
               {pipeline.processing_error}
             </div>
@@ -2495,8 +2707,18 @@ function PipelineProgressCard({
         <div>
           <p className="text-xs text-slate-500">Пайплайн</p>
           <p className="mt-1 text-sm text-slate-300">
-            {pipeline?.processing_status ?? "нет задачи"}
-            {pipeline?.current_step ? ` · ${pipeline.current_step}` : ""}
+            {pipeline?.processing_status === "running"
+              ? "выполняется"
+              : pipeline?.processing_status === "done"
+                ? "завершён"
+                : pipeline?.processing_status === "failed"
+                  ? "ошибка"
+                  : pipeline?.processing_status === "queued"
+                    ? "в очереди"
+                    : "нет задачи"}
+            {pipeline?.current_step
+              ? ` · ${CURRENT_STEP_LABELS[pipeline.current_step] ?? pipeline.current_step}`
+              : ""}
           </p>
         </div>
         <div className="w-24">

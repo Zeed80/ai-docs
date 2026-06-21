@@ -106,6 +106,16 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = "noreply@company.com"
 
+    # Push notifications (self-hosted ntfy — no Google services).
+    # Internal URL the backend POSTs to; external URL is what the mobile app subscribes to.
+    ntfy_enabled: bool = False
+    ntfy_url: str = "http://ntfy:80"          # internal publish endpoint
+    ntfy_external_url: str = ""               # e.g. https://push.example.com (for the mobile app)
+    ntfy_token: str = ""                      # optional bearer token for ntfy auth
+
+    # Mobile app APK distribution — directory served (without auth) at /download.
+    releases_dir: str = "/releases"
+
     # Telegram
     telegram_bot_token: str = ""
     telegram_allowed_users: str = ""  # comma-separated int user IDs; empty = no whitelist

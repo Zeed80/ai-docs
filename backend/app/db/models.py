@@ -2723,6 +2723,7 @@ class NotificationType(str, enum.Enum):
     handover          = "handover"
     comment_reply     = "comment_reply"
     anomaly_detected  = "anomaly_detected"
+    email_received    = "email_received"
     system            = "system"
 
 
@@ -2740,6 +2741,26 @@ class Notification(UUIDPrimaryKey, Base):
     action_url: Mapped[str | None] = mapped_column(String(500))
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
+class DeviceRegistration(UUIDPrimaryKey, TimestampMixin, Base):
+    """A mobile device subscription for push notifications (self-hosted ntfy/UnifiedPush).
+
+    No document content is ever sent through the push channel — only a per-device
+    random topic is stored, and pushes carry title/type/action_url/id only.
+    """
+
+    __tablename__ = "device_registrations"
+
+    user_sub: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # Per-device random ntfy topic (the secret); the device subscribes to it.
+    ntfy_topic: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    # Optional full UnifiedPush endpoint URL (when a distributor is used instead of a bare topic).
+    ntfy_endpoint: Mapped[str | None] = mapped_column(String(1000))
+    platform: Mapped[str] = mapped_column(String(20), nullable=False, default="android")
+    app_version: Mapped[str | None] = mapped_column(String(50))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # ── Work Cases (Cockpit) ──────────────────────────────────────────────────────

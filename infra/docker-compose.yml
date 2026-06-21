@@ -43,6 +43,13 @@ x-backend-env: &backend-env
   TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
   TELEGRAM_NOTIFICATIONS_CHAT_ID: ${TELEGRAM_NOTIFICATIONS_CHAT_ID:-}
   TELEGRAM_NOTIFICATIONS_ENABLED: ${TELEGRAM_NOTIFICATIONS_ENABLED:-false}
+  # Mobile push via self-hosted ntfy (no Google services).
+  NTFY_ENABLED: ${NTFY_ENABLED:-false}
+  NTFY_URL: ${NTFY_URL:-http://ntfy:80}
+  NTFY_EXTERNAL_URL: ${NTFY_EXTERNAL_URL:-}
+  NTFY_TOKEN: ${NTFY_TOKEN:-}
+  # Directory (volume) where the signed APK + version.json are served at /download.
+  RELEASES_DIR: /releases
   AIAGENT_ROOT: /aiagent
   # RRF graph-branch weight — raised from default 0.5 after measuring on the
   # populated business-entity graph (Part D): at 0.5, 0/4 relational sample
@@ -430,6 +437,8 @@ services:
       - vllm_models:/vllm-models
       # Backups produced from the admin GUI (maintenance API) land here.
       - backups_data:/app/backups
+      # Signed mobile APK + version.json, served publicly at /download (CI/deploy writes here).
+      - releases_data:/releases
       # Docker socket — lets backend restart llama-server / vllm-server when activating a new model
       # and run GUI backups (pg_dump exec, volume tars).
       - /var/run/docker.sock:/var/run/docker.sock
@@ -519,7 +528,7 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    command: celery -A app.tasks.celery_app worker -l info -c 1 -Q gpu -n gpu@%h
+    command: celery -A app.tasks.celery_app worker -l info -c 1 -Q gpu_priority,gpu -n gpu@%h
     environment:
       <<: *backend-env
       SKIP_DB_MIGRATE: "1"
@@ -555,6 +564,31 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+    networks:
+      - app
+
+  # === ntfy — self-hosted push (no Google services) ===
+  # Backend publishes per-device topics here; the mobile app subscribes via Traefik
+  # (push.<domain>). Payloads carry only title/body/type/action_url — never document content.
+  ntfy:
+    image: binwiederhier/ntfy:v2.11.0
+    command: serve
+    restart: unless-stopped
+    environment:
+      NTFY_BASE_URL: ${NTFY_EXTERNAL_URL:-http://localhost}
+      NTFY_LISTEN_HTTP: ":80"
+      NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+      NTFY_CACHE_DURATION: "12h"
+      NTFY_AUTH_FILE: /var/lib/ntfy/auth.db
+      NTFY_AUTH_DEFAULT_ACCESS: ${NTFY_AUTH_DEFAULT_ACCESS:-deny-all}
+      NTFY_BEHIND_PROXY: "true"
+    volumes:
+      - ntfy_data:/var/lib/ntfy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:80/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - app
 
@@ -663,6 +697,8 @@ volumes:
   authentik_media:
   authentik_templates:
   backups_data:
+  releases_data:
+  ntfy_data:
 
 networks:
   app:
