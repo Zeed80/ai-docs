@@ -6,6 +6,7 @@ import { useState } from "react";
 import clsx from "clsx";
 import { scanDocument } from "@/lib/native-bridge";
 import { documents } from "@/lib/api-client";
+import { useAgentName } from "@/lib/agent-name";
 
 type Tab = { href: string; label: string; icon: React.ReactNode };
 
@@ -67,6 +68,7 @@ function NavLink({ tab, active }: { tab: Tab; active: boolean }) {
 export function BottomNav() {
   const pathname = usePathname();
   const router = useRouter();
+  const agentName = useAgentName();
   const [busy, setBusy] = useState(false);
 
   const isActive = (href: string) =>
@@ -150,7 +152,11 @@ export function BottomNav() {
       </div>
 
       {RIGHT.map((t) => (
-        <NavLink key={t.href} tab={t} active={isActive(t.href)} />
+        <NavLink
+          key={t.href}
+          tab={t.href === "/assistant" ? { ...t, label: agentName } : t}
+          active={isActive(t.href)}
+        />
       ))}
     </nav>
   );

@@ -14,6 +14,8 @@ import {
   type RowSelectionState,
   type ColumnOrderState,
   type VisibilityState,
+  type ColumnSizingState,
+  type Updater,
   type Header,
 } from "@tanstack/react-table";
 import {
@@ -43,6 +45,8 @@ import {
   type ColumnPrefs,
   PINNED_LEFT,
   PINNED_RIGHT,
+  MIN_COLUMN_WIDTH,
+  columnWidth,
   defaultPrefs,
   loadColumnPrefs,
   reconcilePrefs,
@@ -52,6 +56,7 @@ import {
 import { ColumnManager } from "@/components/invoices/ColumnManager";
 import { FilterBuilder } from "@/components/invoices/FilterBuilder";
 import { EditableNotesCell } from "@/components/invoices/EditableNotesCell";
+import { useAgentName } from "@/lib/agent-name";
 
 const API = getApiBaseUrl();
 
@@ -151,7 +156,7 @@ function DeleteDialog({
   );
 }
 
-// Sortable (drag-to-reorder) table header cell.
+// Sortable (drag-to-reorder) + resizable (drag-border) table header cell.
 function DraggableHeader({
   header,
   children,
@@ -167,6 +172,7 @@ function DraggableHeader({
     transition,
     isDragging,
   } = useSortable({ id: header.column.id });
+  const isResizing = header.column.getIsResizing();
   return (
     <th
       ref={setNodeRef}
@@ -174,14 +180,15 @@ function DraggableHeader({
         transform: CSS.Translate.toString(transform),
         transition,
         opacity: isDragging ? 0.6 : 1,
+        width: header.getSize(),
       }}
-      className="px-3 py-2.5 text-left"
+      className="relative px-3 py-2.5 text-left select-none"
     >
-      <span className="flex items-center gap-1">
+      <span className="flex items-center gap-1 pr-1">
         <button
           {...attributes}
           {...listeners}
-          className="cursor-grab text-slate-600 hover:text-slate-300 active:cursor-grabbing"
+          className="shrink-0 cursor-grab text-slate-600 hover:text-slate-300 active:cursor-grabbing"
           title="Перетащить столбец"
           aria-label="Перетащить столбец"
         >
@@ -191,23 +198,36 @@ function DraggableHeader({
         </button>
         <span
           onClick={header.column.getToggleSortingHandler()}
-          className={
+          className={`truncate ${
             header.column.getCanSort()
-              ? "cursor-pointer select-none hover:text-slate-200"
+              ? "cursor-pointer hover:text-slate-200"
               : ""
-          }
+          }`}
         >
           {children}
           {header.column.getIsSorted() === "asc" && " ↑"}
           {header.column.getIsSorted() === "desc" && " ↓"}
         </span>
       </span>
+      {/* Resize handle — drag the right border to change column width. */}
+      <span
+        onMouseDown={header.getResizeHandler()}
+        onTouchStart={header.getResizeHandler()}
+        onClick={(e) => e.stopPropagation()}
+        role="separator"
+        aria-label="Изменить ширину столбца"
+        title="Потяните, чтобы изменить ширину"
+        className={`absolute right-0 top-0 h-full w-1.5 cursor-col-resize touch-none select-none ${
+          isResizing ? "bg-blue-500" : "bg-transparent hover:bg-blue-500/60"
+        }`}
+      />
     </th>
   );
 }
 
 export default function InvoicesPage() {
   const router = useRouter();
+  const agentName = useAgentName();
   const [rows, setRows] = useState<TableRow[]>([]);
   const [catalog, setCatalog] = useState<TableColumn[]>([]);
   const [total, setTotal] = useState(0);
@@ -322,7 +342,7 @@ export default function InvoicesPage() {
     }, 300);
   };
 
-  // Hand the query to the agent «AI-DOCS», scoped to invoices.
+  // Hand the query to the assistant, scoped to invoices.
   const askAssistant = () => {
     const q = askQuery.trim();
     if (!q) return;
@@ -602,13 +622,14 @@ export default function InvoicesPage() {
           row: { original: TableRow };
         }) => renderCell(col, getValue(), r.original),
         enableSorting: col.sortable,
-        size: prefs.widths[col.key],
+        size: columnWidth(col.key),
+        minSize: MIN_COLUMN_WIDTH,
       })),
       actionsCol,
     ],
     // checkboxCol/actionsCol/renderCell are recreated each render by design.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [catalog, prefs.widths],
+    [catalog],
   );
 
   // TanStack ordering/visibility derived from prefs (+ pinned service columns).
@@ -620,17 +641,42 @@ export default function InvoicesPage() {
     () => ({ ...prefs.visibility }),
     [prefs.visibility],
   );
+  const columnSizing = useMemo<ColumnSizingState>(
+    () => ({ ...prefs.widths }),
+    [prefs.widths],
+  );
+
+  // Persist user column resizes into prefs.widths (→ localStorage).
+  const handleColumnSizingChange = useCallback(
+    (updater: Updater<ColumnSizingState>) => {
+      setPrefs((p) => {
+        const next =
+          typeof updater === "function" ? updater(p.widths) : updater;
+        return { ...p, widths: next };
+      });
+    },
+    [],
+  );
 
   const table = useReactTable({
     data: rows,
     columns: tableColumns,
-    state: { sorting, rowSelection, columnOrder, columnVisibility },
+    state: {
+      sorting,
+      rowSelection,
+      columnOrder,
+      columnVisibility,
+      columnSizing,
+    },
     onSortingChange: setSorting,
     onRowSelectionChange: setRowSelection,
+    onColumnSizingChange: handleColumnSizingChange,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     manualSorting: true,
     enableRowSelection: true,
+    enableColumnResizing: true,
+    columnResizeMode: "onChange",
   });
 
   const handleHeaderDragEnd = (event: DragEndEvent) => {
@@ -830,7 +876,7 @@ export default function InvoicesPage() {
           value={askQuery}
           onChange={(e) => setAskQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && askAssistant()}
-          placeholder="Спросить AI-DOCS про счета: «сравни цены поставщиков за апрель»..."
+          placeholder={`Спросить ${agentName} про счета: «сравни цены поставщиков за апрель»...`}
           className="flex-1 px-3 py-1.5 text-sm bg-slate-800/60 border border-slate-700 text-slate-300 placeholder-slate-600 rounded outline-none focus:border-purple-500"
         />
         <button
@@ -841,7 +887,7 @@ export default function InvoicesPage() {
           <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
             <path d="M10 2l1.5 4.5L16 8l-4.5 1.5L10 14l-1.5-4.5L4 8l4.5-1.5L10 2z" />
           </svg>
-          Спросить AI-DOCS
+          Спросить {agentName}
         </button>
       </div>
 
@@ -993,14 +1039,17 @@ export default function InvoicesPage() {
         <div className="text-slate-400 py-12 text-center">Нет счетов</div>
       ) : (
         <>
-          <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-x-auto">
+          <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-auto max-h-[calc(100vh-300px)] overscroll-contain">
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
               onDragEnd={handleHeaderDragEnd}
             >
-              <table className="w-full text-sm">
-                <thead className="bg-slate-700/50 text-slate-400 text-xs uppercase">
+              <table
+                className="text-sm table-fixed border-collapse min-w-full"
+                style={{ width: table.getTotalSize() }}
+              >
+                <thead className="sticky top-0 z-10 bg-slate-700 text-slate-300 text-xs uppercase shadow-sm">
                   {table.getHeaderGroups().map((hg) => (
                     <tr key={hg.id}>
                       <SortableContext
@@ -1013,6 +1062,7 @@ export default function InvoicesPage() {
                             return (
                               <th
                                 key={header.id}
+                                style={{ width: header.getSize() }}
                                 className="px-3 py-2.5 text-left"
                               >
                                 {flexRender(
@@ -1035,11 +1085,11 @@ export default function InvoicesPage() {
                     </tr>
                   ))}
                 </thead>
-                <tbody className="divide-y divide-slate-700">
+                <tbody className="divide-y divide-slate-700/70">
                   {table.getRowModel().rows.map((row) => (
                     <tr
                       key={row.id}
-                      className={`group cursor-pointer transition-colors ${row.getIsSelected() ? "bg-blue-950/30" : "hover:bg-slate-700/50"}`}
+                      className={`group cursor-pointer transition-colors ${row.getIsSelected() ? "bg-blue-950/30" : "odd:bg-slate-800 even:bg-slate-800/40 hover:bg-slate-700/50"}`}
                       onClick={() => {
                         const docId = row.original.data.document_id as
                           | string
@@ -1050,7 +1100,8 @@ export default function InvoicesPage() {
                       {row.getVisibleCells().map((cell) => (
                         <td
                           key={cell.id}
-                          className="px-3 py-2.5 text-slate-200 align-top"
+                          style={{ width: cell.column.getSize() }}
+                          className="px-3 py-2.5 text-slate-200 align-top break-words"
                         >
                           {flexRender(
                             cell.column.columnDef.cell,

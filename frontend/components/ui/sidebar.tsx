@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { logout } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/auth-context";
+import { useAgentName } from "@/lib/agent-name";
 import { useHasRole } from "@/lib/rbac";
 
 const API = getApiBaseUrl();
@@ -533,6 +534,7 @@ export function Sidebar() {
   const feedCount = useFeedCount();
   const quarantineCount = useQuarantineCount();
   const user = useCurrentUser();
+  const agentName = useAgentName();
   const isAdmin = useHasRole("admin");
 
   async function handleLogout() {
@@ -550,7 +552,7 @@ export function Sidebar() {
           AI-DOCS
         </h1>
         <p className="text-[10px] text-slate-400 mt-0.5">
-          AI-DOCS · рабочее место
+          {agentName} · рабочее место
         </p>
       </div>
 

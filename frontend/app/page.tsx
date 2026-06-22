@@ -2,6 +2,7 @@
 
 import { getApiBaseUrl } from "@/lib/api-base";
 import { apiFetch } from "@/lib/auth";
+import { useAgentName } from "@/lib/agent-name";
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
@@ -398,6 +399,7 @@ function CreateCaseForm() {
 }
 
 export default function FeedPage() {
+  const agentName = useAgentName();
   const [items, setItems] = useState<FeedItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -426,7 +428,7 @@ export default function FeedPage() {
             Требует решения
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            AI-DOCS обрабатывает документы и поднимает важное сюда
+            {agentName} обрабатывает документы и поднимает важное сюда
           </p>
         </div>
         {total > 0 && (
@@ -474,7 +476,7 @@ export default function FeedPage() {
               Нет элементов, требующих вашего решения
             </p>
             <p className="text-xs text-slate-400 mt-3">
-              Спросите AI-DOCS о чём-нибудь →
+              Спросите {agentName} о чём-нибудь →
             </p>
           </div>
         ) : (

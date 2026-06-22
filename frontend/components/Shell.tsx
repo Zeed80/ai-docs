@@ -11,7 +11,13 @@ const navItems = [
   "История",
 ];
 
-export function Shell({ children, rail }: { children: ReactNode; rail?: ReactNode }) {
+export function Shell({
+  children,
+  rail,
+}: {
+  children: ReactNode;
+  rail?: ReactNode;
+}) {
   return (
     <div className="app-shell">
       <div className="workspace-grid">
@@ -49,7 +55,7 @@ export function SvetaPanel({
     <section className="ai-panel">
       <h2 className="sveta-title">
         <span className="sveta-orb" />
-        AI-DOCS
+        Света
       </h2>
       <p className="small-muted">{focus}</p>
       <div className="action-row" style={{ marginTop: 18 }}>

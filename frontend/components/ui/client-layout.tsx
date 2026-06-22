@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { AuthProvider } from "@/lib/auth-context";
+import { AgentNameProvider } from "@/lib/agent-name";
 import { Sidebar } from "@/components/ui/sidebar";
 import { ResizableLayout } from "@/components/ui/resizable-layout";
 import { CommandPalette } from "@/components/ui/command-palette";
@@ -51,7 +52,9 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
 export function ClientLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
-      <LayoutInner>{children}</LayoutInner>
+      <AgentNameProvider>
+        <LayoutInner>{children}</LayoutInner>
+      </AgentNameProvider>
     </AuthProvider>
   );
 }

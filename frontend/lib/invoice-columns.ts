@@ -23,6 +23,41 @@ export const DEFAULT_ORDER: string[] = [
   "notes",
 ];
 
+// Per-column default widths (px). Used as the column def `size` so the initial
+// layout is sensible; user resizes (stored in prefs.widths) override these.
+export const DEFAULT_WIDTHS: Record<string, number> = {
+  row_no: 56,
+  invoice_number: 130,
+  invoice_date: 110,
+  due_date: 110,
+  validity_date: 110,
+  supplier_name: 220,
+  supplier_inn: 130,
+  supplier_kpp: 120,
+  supplier_address: 260,
+  buyer_name: 200,
+  buyer_inn: 130,
+  items_list: 320,
+  total_amount: 130,
+  currency: 80,
+  tax_amount: 120,
+  subtotal: 130,
+  payment_id: 160,
+  notes: 220,
+  special_marks: 260,
+  status: 120,
+  overall_confidence: 110,
+  line_count: 90,
+  created_at: 120,
+};
+
+export const FALLBACK_WIDTH = 150;
+export const MIN_COLUMN_WIDTH = 56;
+
+export function columnWidth(key: string): number {
+  return DEFAULT_WIDTHS[key] ?? FALLBACK_WIDTH;
+}
+
 // Service columns rendered outside the reorderable area (pinned).
 export const PINNED_LEFT = "__select";
 export const PINNED_RIGHT = "__actions";

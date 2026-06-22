@@ -192,7 +192,7 @@ class GatewayConfig:
 
     @property
     def agent_name(self) -> str:
-        return self._raw.get("agent", {}).get("name", "AI-DOCS")
+        return self._raw.get("agent", {}).get("name", "Света")
 
 
 # Module-level singleton — import and use directly.

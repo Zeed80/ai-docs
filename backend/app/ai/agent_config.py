@@ -17,7 +17,7 @@ _REDIS_KEY = "agent_config"
 
 class BuiltinAgentConfig(BaseModel):
     enabled: bool = True
-    agent_name: str = "AI-DOCS"
+    agent_name: str = "Света"
     model: str = "qwen3.5:9b"
     department_enabled: bool = True
     orchestrator_model: str | None = None

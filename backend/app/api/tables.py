@@ -62,14 +62,20 @@ INVOICE_COLUMNS = [
     TableColumn(key="invoice_number", label="Номер счёта", data_type="string"),
     TableColumn(key="invoice_date", label="Дата счёта", data_type="date"),
     TableColumn(key="due_date", label="Срок оплаты", data_type="date"),
+    TableColumn(key="validity_date", label="Действует до", data_type="date", sortable=False, filterable=False),
     TableColumn(key="supplier_name", label="Поставщик", data_type="string"),
     TableColumn(key="supplier_inn", label="ИНН поставщика", data_type="string", sortable=False),
+    TableColumn(key="supplier_kpp", label="КПП поставщика", data_type="string", sortable=False, filterable=False),
+    TableColumn(key="supplier_address", label="Адрес поставщика", data_type="string", sortable=False, filterable=False),
+    TableColumn(key="buyer_name", label="Покупатель", data_type="string", sortable=False, filterable=False),
+    TableColumn(key="buyer_inn", label="ИНН покупателя", data_type="string", sortable=False, filterable=False),
     # items_list — aggregated, multi-line. Not sortable / not filterable as a column.
     TableColumn(key="items_list", label="Перечень товаров", data_type="string", sortable=False, filterable=False),
     TableColumn(key="total_amount", label="Сумма (с НДС)", data_type="number"),
     TableColumn(key="currency", label="Валюта", data_type="string"),
     TableColumn(key="tax_amount", label="НДС", data_type="number"),
     TableColumn(key="subtotal", label="Сумма без НДС", data_type="number"),
+    TableColumn(key="payment_id", label="Идентификатор платежа", data_type="string", sortable=False, filterable=False),
     # notes — user-editable free text. Not sortable; searchable via keyword search.
     TableColumn(key="notes", label="Примечание", data_type="string", sortable=False, filterable=False),
     # special_marks — AI-extracted special conditions (read-only for users).
@@ -122,7 +128,11 @@ async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQuer
     items_subq = invoice_items_list_subquery()
     query = (
         select(Invoice, items_subq.label("items_list"))
-        .options(selectinload(Invoice.lines), selectinload(Invoice.supplier))
+        .options(
+            selectinload(Invoice.lines),
+            selectinload(Invoice.supplier),
+            selectinload(Invoice.buyer),
+        )
     )
 
     # Apply filters
@@ -173,13 +183,19 @@ async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQuer
                 "invoice_number": inv.invoice_number,
                 "invoice_date": inv.invoice_date.isoformat() if inv.invoice_date else None,
                 "due_date": inv.due_date.isoformat() if inv.due_date else None,
+                "validity_date": inv.validity_date.isoformat() if inv.validity_date else None,
                 "supplier_name": inv.supplier.name if inv.supplier else None,
                 "supplier_inn": inv.supplier.inn if inv.supplier else None,
+                "supplier_kpp": inv.supplier.kpp if inv.supplier else None,
+                "supplier_address": inv.supplier.address if inv.supplier else None,
+                "buyer_name": inv.buyer.name if inv.buyer else None,
+                "buyer_inn": inv.buyer.inn if inv.buyer else None,
                 "items_list": items_list,
                 "total_amount": inv.total_amount,
                 "currency": inv.currency,
                 "tax_amount": inv.tax_amount,
                 "subtotal": inv.subtotal,
+                "payment_id": inv.payment_id,
                 "notes": inv.notes,
                 "special_marks": inv.special_marks,
                 "status": inv.status.value if inv.status else None,

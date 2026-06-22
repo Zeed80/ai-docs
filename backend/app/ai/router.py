@@ -52,7 +52,7 @@ class AIConfidentialityPolicyError(RuntimeError):
 class AIStructuredOutputValidationError(RuntimeError):
     """Raised when a critical structured AI response does not validate."""
 
-_EMAIL_SYSTEM = """Ты — AI-сотрудник AI-DOCS. Пишешь деловые письма на русском языке
+_EMAIL_SYSTEM = """Ты — AI-сотрудник {agent_name}. Пишешь деловые письма на русском языке
 для промышленного предприятия. Отвечай строго в JSON."""
 
 _EMAIL_PROMPT = """Составь деловое письмо по следующему контексту:
@@ -506,10 +506,12 @@ class AIRouter:
 
     async def generate_email(self, context: dict) -> dict:
         import json
+        from app.ai.agent_config import get_builtin_agent_config
+
         prompt = _EMAIL_PROMPT.format(context_json=json.dumps(context, ensure_ascii=False))
         raw = await reasoning_generate(
             prompt,
-            system=_EMAIL_SYSTEM,
+            system=_EMAIL_SYSTEM.format(agent_name=get_builtin_agent_config().agent_name),
             format_json=True,
             confidential=True,
         )

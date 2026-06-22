@@ -130,7 +130,7 @@ WorkerRole = Literal[
 OutputChannel = Literal["chat", "workspace"]
 OutputType = Literal["text", "table", "document", "links", "chart", "drawing", "script"]
 
-_ORCHESTRATOR_SYSTEM_BASE = """Ты — AI-DOCS, секретарь-оркестратор отдела ИИ-сотрудников.
+_ORCHESTRATOR_SYSTEM_BASE = """Ты — {agent_name}, секретарь-оркестратор отдела ИИ-сотрудников.
 Ты держишь документооборот под контролем и распределяешь задачи специалистам.
 Верни только JSON по заданной схеме. Не отвечай пользователю текстом.
 
@@ -148,11 +148,17 @@ _ORCHESTRATOR_SYSTEM_BASE = """Ты — AI-DOCS, секретарь-оркест
 
 
 def _orchestrator_system() -> str:
-    """System prompt for the planner: static base + domain sections from routes.yml."""
+    """System prompt for the planner: static base + domain sections from routes.yml.
+
+    The persona name is the configured agent name (settings → default «Света»).
+    """
+    base = _ORCHESTRATOR_SYSTEM_BASE.format(
+        agent_name=get_builtin_agent_config().agent_name
+    )
     sections = route_table.prompt_sections()
     if sections:
-        return f"{_ORCHESTRATOR_SYSTEM_BASE}\n{sections}\n"
-    return _ORCHESTRATOR_SYSTEM_BASE
+        return f"{base}\n{sections}\n"
+    return base
 
 
 class WorkspaceOutputSpec(BaseModel):

@@ -3,6 +3,7 @@
 import { Suspense, useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useAgentName } from "@/lib/agent-name";
 import { mutFetch } from "@/lib/auth";
 
 interface Drawing {
@@ -18,6 +19,7 @@ const TP_TYPES = ["единичный", "типовой", "групповой"] 
 
 function NewTechProcessContent() {
   const router = useRouter();
+  const agentName = useAgentName();
   const searchParams = useSearchParams();
   const preselectedDrawingId = searchParams.get("drawing_id");
 
@@ -316,7 +318,7 @@ function NewTechProcessContent() {
             </div>
 
             <div className="text-xs text-zinc-500 space-y-1">
-              <p>Агент AI-DOCS выполнит:</p>
+              <p>Агент {agentName} выполнит:</p>
               <ol className="list-decimal list-inside space-y-0.5 text-zinc-400">
                 <li>Анализ поверхностей чертежа</li>
                 <li>Подбор заготовки (КИМ-анализ)</li>

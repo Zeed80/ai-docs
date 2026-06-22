@@ -1,5 +1,5 @@
 agent:
-  name: AI-DOCS
+  name: Света
   description: AI-сотрудник производственного предприятия
   language: ru
 models:

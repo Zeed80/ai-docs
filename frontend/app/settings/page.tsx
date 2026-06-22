@@ -7,6 +7,7 @@ import { csrfHeaders, mutFetch } from "@/lib/auth";
 import { MailboxSection } from "@/components/email/mailbox-settings";
 import { EmailTemplatesSection } from "@/components/email/email-templates";
 import { isGpuBarEnabled, setGpuBarEnabled } from "@/components/gpu-status-bar";
+import { useAgentName, broadcastAgentName } from "@/lib/agent-name";
 
 const API = getApiBaseUrl();
 
@@ -412,6 +413,7 @@ function SectionCard({
 }
 
 function GpuBarToggleCard() {
+  const agentName = useAgentName();
   const [enabled, setEnabled] = useState(true);
   useEffect(() => {
     setEnabled(isGpuBarEnabled());
@@ -419,7 +421,7 @@ function GpuBarToggleCard() {
   return (
     <SectionCard
       title="Телеметрия GPU и CPU"
-      subtitle="Компактные строки с загрузкой, температурами, частотой, VRAM и мощностью над окном агента «AI-DOCS»; клик по мощности GPU или частоте CPU открывает управление лимитами. Настройка хранится в этом браузере."
+      subtitle={`Компактные строки с загрузкой, температурами, частотой, VRAM и мощностью над окном агента «${agentName}»; клик по мощности GPU или частоте CPU открывает управление лимитами. Настройка хранится в этом браузере.`}
     >
       <label className="flex items-center gap-2 text-sm text-slate-200">
         <input
@@ -474,6 +476,7 @@ interface ApprovalPolicy {
 const TAB_IDS: TabId[] = ["agent", "memory", "data", "system", "email"];
 
 export default function SettingsPage() {
+  const agentName = useAgentName();
   const [activeTab, setActiveTab] = useState<TabId>("agent");
 
   useEffect(() => {
@@ -995,6 +998,9 @@ export default function SettingsPage() {
 
       setAgentConfig(nextConfig);
       setAgentConfigBaseline(nextConfig);
+      // Refresh the agent name shown across the app (re-fetches server truth;
+      // protected agent_name changes take effect once the proposal is applied).
+      broadcastAgentName();
       await loadAgentSkills();
       await loadAgentControlPlane();
       await loadAgentRuntime();
@@ -1023,6 +1029,7 @@ export default function SettingsPage() {
       const data = await r.json();
       setAgentConfig(data);
       setAgentConfigBaseline(data);
+      broadcastAgentName(data?.agent_name);
       await loadAgentSkills();
       await loadAgentControlPlane();
       await loadAgentRuntime();
@@ -1399,7 +1406,7 @@ export default function SettingsPage() {
             <>
               {/* General */}
               <SectionCard
-                title="Агент «AI-DOCS»"
+                title={`Агент «${agentName}»`}
                 subtitle="Основной AI-сотрудник — обрабатывает документы, отвечает на вопросы, вызывает инструменты."
               >
                 <div className="space-y-4">
@@ -3323,8 +3330,8 @@ export default function SettingsPage() {
                 AI Manufacturing Workspace v0.1.0
               </p>
               <p className="text-slate-400">
-                AI-ассистент: AI-DOCS · Backend: FastAPI · AI: Ollama / OpenRouter
-                / Anthropic
+                AI-ассистент: {agentName} · Backend: FastAPI · AI: Ollama /
+                OpenRouter / Anthropic
               </p>
               <p className="text-slate-500 text-xs mt-2">
                 Настройки сохраняются в Redis (shared) и локальном файле

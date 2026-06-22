@@ -9,6 +9,7 @@ import {
   resolveAgentWsConfig,
 } from "@/lib/agent-ws";
 import { useDegradedMode } from "@/lib/degraded-mode";
+import { useAgentName } from "@/lib/agent-name";
 import { mutFetch } from "@/lib/auth";
 import { genId } from "@/lib/ws-url";
 import {
@@ -182,6 +183,7 @@ function FileChip({
 
 export function AssistantPanel() {
   const { isDegraded } = useDegradedMode();
+  const agentName = useAgentName();
   const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -1129,7 +1131,7 @@ export function AssistantPanel() {
             className={`w-2 h-2 rounded-full shrink-0 ${isConnected ? "bg-green-400" : "bg-slate-500"}`}
           />
           <span className="font-semibold text-sm text-slate-100 shrink-0">
-            AI-DOCS
+            {agentName}
           </span>
           {isStreaming ? (
             <span className="shrink-0 text-[10px] text-blue-400 animate-pulse">
@@ -1250,7 +1252,7 @@ export function AssistantPanel() {
         {!isHistoryLoading && messages.length === 0 && (
           <div className="text-center text-slate-400 text-xs mt-10 space-y-1">
             <p className="text-2xl">👋</p>
-            <p className="font-medium text-slate-300">Привет! Я AI-DOCS.</p>
+            <p className="font-medium text-slate-300">Привет! Я {agentName}.</p>
             <p>Спросите меня о счётах, аномалиях или поручите задачу.</p>
             <p>Можно прикрепить файл — перетащите или нажмите скрепку.</p>
             <p className="mt-3 text-slate-400">
@@ -1670,14 +1672,14 @@ export function AssistantPanel() {
             }}
             placeholder={
               effectivelyOffline
-                ? "AI-DOCS офлайн"
+                ? `${agentName} офлайн`
                 : isUploading
                   ? "Загружаю файлы…"
                   : reasoningMode === "strict"
-                    ? "Спросите AI-DOCS (строгий режим)…"
-                    : "Спросите AI-DOCS…"
+                    ? `Спросите ${agentName} (строгий режим)…`
+                    : `Спросите ${agentName}…`
             }
-            aria-label="Сообщение AI-DOCS"
+            aria-label={`Сообщение ${agentName}`}
             disabled={effectivelyOffline || isStreaming}
             className="flex-1 px-3 py-2 text-sm bg-slate-700 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
           />

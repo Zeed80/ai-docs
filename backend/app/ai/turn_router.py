@@ -190,8 +190,11 @@ def coerce_channel(decision: TurnDecision) -> TurnDecision:
 
 def build_router_system(action_map: dict[str, list[str]], catalog_descriptions: dict[str, str]) -> str:
     """System prompt: enumerate the real catalog + the typed decision contract."""
+    from app.ai.agent_config import get_builtin_agent_config
+
+    agent_name = get_builtin_agent_config().agent_name
     lines = [
-        "Ты — маршрутизатор ходов ИИ-секретаря «AI-DOCS» промышленного предприятия.",
+        f"Ты — маршрутизатор ходов ИИ-секретаря «{agent_name}» промышленного предприятия.",
         "Определи НАМЕРЕНИЕ пользователя и верни строго структурированное решение.",
         "Не реагируй на отдельные слова-триггеры — оценивай смысл всей фразы.",
         "",

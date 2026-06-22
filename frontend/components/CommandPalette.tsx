@@ -27,7 +27,7 @@ const NAV_COMMANDS = [
   { title: "Согласования", href: "/approvals", icon: "✅" },
   { title: "Поиск (NL)", href: "/search", icon: "🔍" },
   { title: "Настройки", href: "/settings", icon: "⚙️" },
-  { title: "Чат с агентом AI-DOCS", href: "/chat", icon: "💬" },
+  { title: "Чат с агентом Света", href: "/chat", icon: "💬" },
 ];
 
 const TYPE_ICONS: Record<string, string> = {
