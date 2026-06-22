@@ -232,7 +232,18 @@ class AIRouter:
         from app.ai.task_routing import get_routing_for
 
         routing = get_routing_for(request.task)
-        candidates = [request.preferred_model] if request.preferred_model else routing.models
+        # A caller-supplied preferred_model is tried first, but the task's
+        # configured models (the UI source of truth in task_routing) stay as a
+        # fallback chain. Previously preferred_model *replaced* the chain, so a
+        # single dead/unresolvable model (e.g. an agent slot pointing at a model
+        # that is down) hard-failed the whole turn instead of degrading to the
+        # configured route. Dedup while preserving order.
+        if request.preferred_model:
+            candidates = list(
+                dict.fromkeys([request.preferred_model, *routing.models])
+            )
+        else:
+            candidates = list(routing.models)
 
         # Merge per-call request with the task's configured policy.
         eff_confidential = request.confidential or routing.local_only
@@ -247,8 +258,20 @@ class AIRouter:
         import time as _time
 
         for model_name in [name for name in candidates if name]:
-            model = self.registry.get_model(model_name)
-            provider, resolved = self._resolve_provider(model)
+            # An unknown/unresolvable candidate (e.g. an agent slot pointing at a
+            # model no longer in the catalog) must not abort the whole turn — skip
+            # to the next configured candidate. Confidentiality policy errors are
+            # NOT caught here: they propagate as a hard stop (below).
+            try:
+                model = self.registry.get_model(model_name)
+                provider, resolved = self._resolve_provider(model)
+            except (KeyError, ValueError) as exc:
+                last_error = exc
+                logger.warning(
+                    "ai_route_model_unresolved", task=request.task.value,
+                    model=model_name, error=str(exc),
+                )
+                continue
             self._enforce_policy(request, model, resolved)  # policy errors are not per-model failures
             # Resolve effective thinking: per-call override → per-assignment
             # (task_routing.thinking) → model catalog default. The per-task layer

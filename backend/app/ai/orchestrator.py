@@ -254,6 +254,9 @@ class AgentOrchestrator:
         self._trace = _TurnTrace()
         self._workspace_before: dict[str, str] = {}
         self._plan_source: str = "heuristic"
+        # Set by _decide_turn: True when the LLM router produced no usable
+        # decision (degrade to the heuristic planner this turn).
+        self._route_unavailable: bool = False
         self._tier: Tier = Tier.NANO
         # Grounding mode for the current turn (from TurnDecision). Controls
         # whether the worker may touch slow RAG tools. "none" on the legacy path.
@@ -308,6 +311,14 @@ class AgentOrchestrator:
         # decision.intent and never falls through to the keyword cascade below.
         if config.use_turn_router:
             decision = await self._decide_turn(content, config)
+            if self._route_unavailable:
+                # Degraded mode: the LLM router gave no usable decision. Fall
+                # back to the heuristic planner so obvious table/workspace turns
+                # still reach the desktop instead of a blind chat answer.
+                await self._run_heuristic_degraded(
+                    content, config, turn_started_at, reasoning_mode
+                )
+                return
             await self._dispatch_decision(
                 content, decision, config, turn_started_at, reasoning_mode
             )
@@ -709,6 +720,13 @@ class AgentOrchestrator:
             if esc is not None:
                 decision, source = esc, f"escalated_{esc_source}"
 
+        # The LLM router was unavailable (timeout/error/unparseable on both
+        # tiers). Signal the caller to degrade to the heuristic planner instead
+        # of dispatching a blind chat specialist — otherwise obvious table turns
+        # silently drop to chat whenever the model hiccups (e.g. a reasoning
+        # model that ignores the JSON schema). This is degraded mode, not the
+        # hot path: the heuristic only runs here, never on a successful route.
+        self._route_unavailable = decision is None
         if decision is None:
             decision = turn_router.safe_default_decision(content)
             source = "safe_default"
@@ -721,6 +739,27 @@ class AgentOrchestrator:
             recommended=[(r.capability, r.action) for r in decision.recommended],
         )
         return decision
+
+    async def _run_heuristic_degraded(
+        self,
+        content: str,
+        config: BuiltinAgentConfig,
+        turn_started_at: float,
+        reasoning_mode: str,
+    ) -> None:
+        """Degraded planner: build a heuristic plan with NO LLM and run it.
+
+        Used only when the LLM turn-router is unavailable. The heuristic is a
+        last resort — it never runs on a successful route — so it can't hijack
+        normal turns the way a hot-path keyword cascade would. ``_plan_turn`` +
+        ``_normalize_model_plan`` resolve the specialised canvas and inject the
+        matching workspace skill so a table turn still lands on the desktop.
+        """
+        plan = _normalize_model_plan(self._plan_turn(content), content)
+        self._plan_source = "heuristic"
+        await self._run_planned_turn(
+            content, plan, config, turn_started_at, reasoning_mode
+        )
 
     async def _dispatch_decision(
         self,
@@ -2738,6 +2777,46 @@ def _latest_spec_block() -> dict | None:
     return max(blocks, key=lambda b: str(b.get("updated_at") or ""))
 
 
+def _resolve_workspace_canvas(content: str) -> tuple[str | None, dict[str, str]]:
+    """Select the specialised workspace canvas (and filters) for a table turn.
+
+    This is canvas *template* selection for an already-decided workspace turn —
+    NOT keyword intent routing. The LLM turn-router decides *whether* a turn is a
+    table; this picks the right surface (grouped invoice items, by-supplier, the
+    already-open table, a supplier-filtered list, …) instead of funnelling every
+    workspace turn to the generic ``agent:spec-table`` canvas. Mirrors the canvas
+    resolution that ``_plan_turn`` (the degraded heuristic planner) already does,
+    so both planning paths land on the same specialised invoice tables.
+    """
+    text = _norm(content)
+    canvas_id: str | None = None
+
+    matched_route = _match_intent_route(text)
+    if matched_route:
+        canvas_id = _resolve_canvas_from_route(matched_route, text)
+
+    # A reference to an already-open table wins over re-deriving a canvas.
+    if not canvas_id and _references_existing_table(text):
+        canvas_id = _latest_workspace_table_id()
+
+    # "сгруппируй по поставщикам" → dedicated by-supplier canvas.
+    if not canvas_id and _is_supplier_grouping_request(text):
+        sg = route_table.supplier_grouping()
+        canvas_id = sg.get("canvas_id", "agent:invoice-items-by-supplier")
+
+    filters: dict[str, str] = {}
+    supplier_name = _extract_supplier_name(text)
+    if supplier_name:
+        canvas_id = canvas_id or "agent:invoice-items"
+        filters = {"supplier_query": supplier_name}
+
+    # Fall back to JSON route rules / open-table state, then the generic spec
+    # table as the universal SQL-backed surface.
+    if not canvas_id:
+        canvas_id = _fallback_canvas_id(content) or "agent:spec-table"
+    return canvas_id, filters
+
+
 def _decision_to_plan(decision: "TurnDecision", content: str) -> "OrchestratorPlan":
     """Map a typed TurnDecision onto the OrchestratorPlan the worker tail expects.
 
@@ -2746,10 +2825,13 @@ def _decision_to_plan(decision: "TurnDecision", content: str) -> "OrchestratorPl
     """
     workspace_required = decision.output_channel == "workspace"
     canvas_id: str | None = None
+    workspace_filters: dict[str, str] = {}
     if workspace_required:
-        # Analytical tables are LLM-built specs; other workspace turns also land
-        # on the spec-table canvas so the worker builds the answer from SQL.
-        canvas_id = "agent:spec-table"
+        # Pick the specialised canvas from the request (grouped invoice items,
+        # by-supplier, the open table, …) instead of always the generic
+        # spec-table — the LLM already decided this is a table; we only choose
+        # which surface. Unmatched requests still fall back to agent:spec-table.
+        canvas_id, workspace_filters = _resolve_workspace_canvas(content)
     recommended_skills = [
         f"{r.capability}.{r.action}" if r.action else r.capability
         for r in decision.recommended
@@ -2767,6 +2849,7 @@ def _decision_to_plan(decision: "TurnDecision", content: str) -> "OrchestratorPl
             output_type="table" if workspace_required else "text",
             required=workspace_required,
             canvas_id=canvas_id,
+            filters=workspace_filters,
         ),
     )
 

@@ -37,8 +37,14 @@ class FakeExecutor:
     def set_excluded_tools(self, tools) -> None:
         return None
 
+    def set_workspace_expected(self, expected: bool) -> None:
+        return None
+
     def record_external_turn(self, user_text: str, assistant_text: str) -> None:
         return None
+
+    async def request_confirmation(self, *args, **kwargs):
+        return True
 
     async def on_approval(self, approved: bool):
         return None

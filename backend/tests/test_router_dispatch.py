@@ -28,9 +28,23 @@ def test_decision_to_plan_workspace_analytical():
     plan = _decision_to_plan(d, "счета за май")
     assert plan.workspace.required is True
     assert plan.workspace.channel == "workspace"
-    assert plan.workspace.canvas_id == "agent:spec-table"
+    # Content-aware canvas: an invoice request lands on the specialised invoice
+    # surface, not the generic spec-table funnel.
+    assert plan.workspace.canvas_id == "agent:invoices"
     assert plan.worker.role == "data_analyst"
     assert plan.worker.recommended_skills == ["invoices.list"]
+
+
+def test_decision_to_plan_unmatched_workspace_falls_back_to_spec_table():
+    """A workspace turn with no specialised route still gets the universal
+    SQL-backed spec-table surface (never an empty canvas)."""
+    d = TurnDecision(
+        intent="analytical_table", role="data_analyst", output_channel="workspace",
+        goal="сводка по непонятной сущности кверти",
+    )
+    plan = _decision_to_plan(d, "сводка по непонятной сущности кверти")
+    assert plan.workspace.required is True
+    assert plan.workspace.canvas_id == "agent:spec-table"
 
 
 def test_decision_to_plan_chat_specialist():

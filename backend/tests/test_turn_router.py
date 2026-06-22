@@ -101,3 +101,42 @@ def test_lenient_parse_fenced_json_and_plain():
     assert lenient_parse_decision('{"intent":"smalltalk","confidence":1.0}')["intent"] == "smalltalk"
     # Must NOT be fooled by an empty {} embedded in prose.
     assert lenient_parse_decision("entities: {}\nno decision here") is None
+
+
+def test_lenient_parse_json_with_preamble_and_nested_objects():
+    """Qwopus often prefixes prose, then a JSON decision with nested objects.
+
+    A non-greedy `{…}` scan splits the object at the first inner `}` (inside
+    `recommended`/`entities`) and loses the decision. The greedy extractor must
+    recover the full object so the table turn isn't dropped to safe_default.
+    """
+    from app.ai.turn_router import lenient_parse_decision
+
+    raw = (
+        "Конечно, вот решение по запросу пользователя:\n"
+        '{"intent": "analytical_table", "role": "data_analyst", '
+        '"output_channel": "workspace", "grounding": "structured", '
+        '"recommended": [{"capability": "workspace", "action": "spec_table"}], '
+        '"entities": {"supplier_name": "Фрезер"}, "goal": "таблица счетов", '
+        '"confidence": 0.9}'
+    )
+    parsed = lenient_parse_decision(raw)
+    d = TurnDecision.model_validate(parsed)
+    assert d.intent == "analytical_table"
+    assert d.output_channel == "workspace"
+    assert d.recommended[0].capability == "workspace"
+    assert d.entities["supplier_name"] == "Фрезер"
+
+
+def test_lenient_parse_strips_think_block():
+    """Reasoning models emit <think>…</think> even with the toggle off."""
+    from app.ai.turn_router import lenient_parse_decision
+
+    raw = (
+        "<think>Пользователь хочет таблицу. Это analytical_table на рабочем столе."
+        "</think>\n"
+        '{"intent": "analytical_table", "output_channel": "workspace", "confidence": 0.8}'
+    )
+    parsed = lenient_parse_decision(raw)
+    assert parsed is not None
+    assert parsed["intent"] == "analytical_table"

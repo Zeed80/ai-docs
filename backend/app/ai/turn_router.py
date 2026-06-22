@@ -273,6 +273,12 @@ def lenient_parse_decision(text: str) -> dict | None:
     import re as _re
 
     cleaned = text.strip()
+    # Strip <think>…</think> reasoning blocks (Qwopus/qwen3 emit them even when
+    # the role's thinking toggle is off) before any JSON/YAML parse.
+    cleaned = _re.sub(r"<\s*think(?:ing)?\s*>[\s\S]*?</\s*think(?:ing)?\s*>", "", cleaned, flags=_re.IGNORECASE)
+    # Drop a dangling unclosed <think> preamble (model truncated mid-reasoning).
+    cleaned = _re.sub(r"^[\s\S]*?</\s*think(?:ing)?\s*>", "", cleaned, flags=_re.IGNORECASE)
+    cleaned = cleaned.strip()
     # Strip ```json / ``` fences.
     cleaned = _re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", cleaned).strip()
 
@@ -283,14 +289,19 @@ def lenient_parse_decision(text: str) -> dict | None:
             return obj
     except Exception:
         pass
-    # 2) Largest {...} block that actually carries the decision (has "intent").
-    for m in _re.finditer(r"\{.*?\}", cleaned, _re.DOTALL):
-        try:
-            obj = _json.loads(m.group(0))
+    # 2) Robust JSON extraction (greedy object + brace-repair) — handles a JSON
+    #    decision wrapped in prose/preamble with nested objects (recommended /
+    #    entities), which a non-greedy {…} scan would split mid-object.
+    try:
+        from app.ai.structured_output import extract_json_from_text
+
+        extracted = extract_json_from_text(cleaned)
+        if extracted:
+            obj = _json.loads(extracted)
             if isinstance(obj, dict) and "intent" in obj:
                 return obj
-        except Exception:
-            pass
+    except Exception:
+        pass
     # 3) YAML bullets ("- key: value" / "key: value").
     try:
         import yaml as _yaml

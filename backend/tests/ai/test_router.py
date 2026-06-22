@@ -71,6 +71,31 @@ def test_structured_output_is_validated() -> None:
     assert response.data.total == 123.45
 
 
+def test_unknown_preferred_model_falls_back_to_task_routing() -> None:
+    """A dead/unknown preferred_model must degrade to the configured task route,
+    not hard-fail the call. Regression guard for the agent turn-router, whose
+    preferred_model comes from BuiltinAgentConfig and can drift from the catalog."""
+    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+    router = AIRouter(registry, providers={ProviderKind.OLLAMA: FakeProvider()})
+
+    import asyncio
+
+    response = asyncio.run(
+        router.run(
+            AIRequest(
+                task=AITask.STRUCTURED_EXTRACTION,
+                messages=[ChatMessage(role="user", content="extract")],
+                response_schema=InvoiceMiniSchema,
+                preferred_model="totally_unknown_model_xyz",
+            )
+        )
+    )
+
+    # Fell through to a real configured model and still produced a valid result.
+    assert isinstance(response.data, InvoiceMiniSchema)
+    assert response.model != "totally_unknown_model_xyz"
+
+
 def test_structured_output_is_validated_for_vision_routes() -> None:
     registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
     router = AIRouter(registry, providers={ProviderKind.OLLAMA: FakeProvider()})
