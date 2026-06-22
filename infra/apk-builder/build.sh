@@ -47,5 +47,9 @@ APK="$(find "$PWD/app/build/outputs/apk/release" -name '*.apk' | head -1)"
 [ -n "$APK" ] || { echo "[apk-builder] APK not found" >&2; exit 1; }
 
 cd /build/mobile
-scripts/make-release-manifest.sh "$APK" "$VERSION_NAME" "$VERSION_CODE" /releases "Сборка с сервера ${VERSION_NAME}"
+MOBILE_MANIFEST_KEYSTORE="$KS" \
+MOBILE_MANIFEST_KEYSTORE_PASSWORD="$KS_PASS" \
+MOBILE_MANIFEST_KEY_ALIAS=aidocs \
+MOBILE_MANIFEST_KEY_PASSWORD="$KS_PASS" \
+  scripts/make-release-manifest.sh "$APK" "$VERSION_NAME" "$VERSION_CODE" /releases "Сборка с сервера ${VERSION_NAME}"
 echo "[apk-builder] published /releases/latest.apk + version.json"

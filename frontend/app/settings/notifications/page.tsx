@@ -108,7 +108,7 @@ export default function NotificationsSettingsPage() {
   async function changeServer() {
     if (
       !confirm(
-        "Сменить сервер? Приложение вернётся к экрану настройки для ввода нового адреса.",
+        "Сменить сервер? Приложение сбросит текущую сессию, push-настройки и вернётся к экрану ввода нового адреса.",
       )
     )
       return;

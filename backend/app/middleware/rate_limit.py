@@ -12,7 +12,12 @@ from starlette.responses import JSONResponse, Response
 
 logger = structlog.get_logger()
 
-_LOGIN_PATHS = {"/api/auth/login", "/api/auth/callback"}
+_LOGIN_PATHS = {
+    "/api/auth/login",
+    "/api/auth/callback",
+    "/api/auth/qr-login/create",
+    "/api/auth/qr-login/redeem",
+}
 
 # In-memory fallback: tracks (ip, bucket) → count for login paths when Redis is down.
 # Deque caps at 4096 entries so it never grows unbounded.

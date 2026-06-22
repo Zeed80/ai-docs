@@ -89,6 +89,11 @@ jobs:
             -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
 
       - name: Build /download payload
+        env:
+          MOBILE_MANIFEST_KEYSTORE: android/app/aidocs-release.jks
+          MOBILE_MANIFEST_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MOBILE_MANIFEST_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MOBILE_MANIFEST_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
           mkdir -p ../dist/release

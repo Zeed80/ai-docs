@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import hashlib
 from typing import Any
 
 import structlog
@@ -224,6 +225,17 @@ async def callback(
 _QR_TTL_SECONDS = 120  # time to scan the QR; NOT the session lifetime
 
 
+def _request_ip(request: Request) -> str:
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff and settings.trusted_proxy:
+        return xff.split(",")[0].strip() or "unknown"
+    return request.client.host if request.client else "unknown"
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
 def _token_max_age(access_token: str) -> int:
     """Cookie lifetime from the JWT's exp claim (fallback 8h)."""
     try:
@@ -245,6 +257,7 @@ class QrRedeemRequest(BaseModel):
 
 @router.post("/qr-login/create")
 async def qr_login_create(
+    request: Request,
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     """Mint a durable session for the caller and stash it under a single-use QR token.
@@ -270,12 +283,17 @@ async def qr_login_create(
     r = get_async_redis()
     token = secrets.token_urlsafe(32)
     await r.setex(f"qrlogin:{token}", _QR_TTL_SECONDS, session_jwt)
-    logger.info("qr_login_created", user=user.sub)
+    logger.info(
+        "qr_login_created",
+        user=user.sub,
+        ip=_request_ip(request),
+        token_hash=_token_hash(token),
+    )
     return {"token": token, "expires_in": _QR_TTL_SECONDS}
 
 
 @router.post("/qr-login/redeem")
-async def qr_login_redeem(payload: QrRedeemRequest) -> Response:
+async def qr_login_redeem(payload: QrRedeemRequest, request: Request) -> Response:
     """Redeem a QR-login token: set the mobile device's session cookie. Public."""
     from app.utils.redis_client import get_async_redis
     r = get_async_redis()
@@ -285,13 +303,25 @@ async def qr_login_redeem(payload: QrRedeemRequest) -> Response:
     pipe.delete(key)  # single-use
     session_jwt = (await pipe.execute())[0]
     if not session_jwt:
+        logger.warning(
+            "qr_login_redeem_rejected",
+            ip=_request_ip(request),
+            token_hash=_token_hash(payload.token),
+            reason="missing_or_expired",
+        )
         raise HTTPException(status_code=400, detail="QR-код недействителен или истёк")
 
     # Make sure the relayed session is still valid (not expired/revoked).
     from app.auth.jwt import _verify_token
     try:
-        await _verify_token(session_jwt)
+        redeemed_user = await _verify_token(session_jwt)
     except Exception:
+        logger.warning(
+            "qr_login_redeem_rejected",
+            ip=_request_ip(request),
+            token_hash=_token_hash(payload.token),
+            reason="invalid_session",
+        )
         raise HTTPException(status_code=400, detail="Сессия истекла — обновите QR-код")
 
     is_production = settings.app_env == "production"
@@ -305,7 +335,12 @@ async def qr_login_redeem(payload: QrRedeemRequest) -> Response:
         samesite="lax",
         max_age=_token_max_age(session_jwt),
     )
-    logger.info("qr_login_redeemed")
+    logger.info(
+        "qr_login_redeemed",
+        user=redeemed_user.sub,
+        ip=_request_ip(request),
+        token_hash=_token_hash(payload.token),
+    )
     return resp
 
 

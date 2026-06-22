@@ -8,9 +8,9 @@ import type { CapacitorConfig } from "@capacitor/cli";
  * from a QR code); it's saved by the ServerConfig plugin and the WebView then
  * loads that live site. Every frontend deploy is picked up without reinstalling.
  *
- * `allowNavigation: ["*"]` lets the WebView navigate to whatever server the user
- * chose (instead of bouncing it to an external browser); the user controls which
- * host that is.
+ * `allowNavigation: ["*"]` is used only to bootstrap the runtime-selected
+ * self-hosted server. After a server is saved, ServerConfigPlugin enforces the
+ * actual origin policy and opens foreign HTTP(S) origins outside the WebView.
  */
 const config: CapacitorConfig = {
   appId: "ru.aidocs.app",

@@ -30,6 +30,19 @@ async def test_register_is_idempotent_per_topic(client):
 
 
 @pytest.mark.asyncio
+async def test_register_accepts_native_android_topic(client):
+    topic = "aidocs-0123456789abcdef0123456789abcdef"
+    resp = await client.post(
+        "/api/devices/register",
+        json={"ntfy_topic": topic, "platform": "android", "app_version": "1.0.1"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ntfy_topic"] == topic
+    assert data["platform"] == "android"
+
+
+@pytest.mark.asyncio
 async def test_list_and_delete_device(client):
     created = (await client.post("/api/devices/register", json={})).json()
 

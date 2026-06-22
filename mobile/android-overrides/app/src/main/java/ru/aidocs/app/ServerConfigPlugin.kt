@@ -1,6 +1,9 @@
 package ru.aidocs.app
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.webkit.CookieManager
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -40,6 +43,10 @@ class ServerConfigPlugin : Plugin() {
             call.reject(e.message ?: "Invalid url")
             return
         }
+        val previous = prefs().getString(KEY_URL, null)
+        if (previous != null && previous != url) {
+            clearMobileState(context)
+        }
         prefs().edit().putString(KEY_URL, url).apply()
         val res = JSObject()
         res.put("url", url)
@@ -48,7 +55,7 @@ class ServerConfigPlugin : Plugin() {
 
     @PluginMethod
     fun clear(call: PluginCall) {
-        prefs().edit().remove(KEY_URL).apply()
+        clearMobileState(context)
         // Reload the activity → Capacitor loads the bundled launcher → setup screen.
         activity?.runOnUiThread { activity?.recreate() }
         call.resolve()
@@ -61,6 +68,28 @@ class ServerConfigPlugin : Plugin() {
         val res = JSObject()
         res.put("path", p)
         call.resolve(res)
+    }
+
+    override fun shouldOverrideLoad(url: Uri): Boolean? {
+        val saved = savedUrl(context) ?: return null
+        val scheme = url.scheme?.lowercase() ?: return null
+
+        if (scheme == "data" || scheme == "blob") return false
+        if (scheme != "http" && scheme != "https") return null
+
+        if (isSameOrigin(url, saved) || isBundledLauncherOrigin(url)) {
+            return false
+        }
+
+        // Keep untrusted origins outside the WebView so they cannot access the
+        // Capacitor bridge. This may open SSO/admin links in the system browser;
+        // QR-login remains the preferred mobile sign-in path.
+        return try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (_: Exception) {
+            true
+        }
     }
 
     /**
@@ -93,6 +122,42 @@ class ServerConfigPlugin : Plugin() {
         fun setPendingPath(context: Context, path: String) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putString(KEY_PENDING_PATH, path).apply()
+        }
+
+        fun clearMobileState(context: Context) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_URL)
+                .remove(KEY_PENDING_PATH)
+                .apply()
+            context.getSharedPreferences(AidocsPushPlugin.PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .clear()
+                .apply()
+            context.stopService(Intent(context, AidocsPushService::class.java))
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+        }
+
+        private fun isSameOrigin(url: Uri, savedUrl: String): Boolean {
+            val saved = Uri.parse(savedUrl)
+            return url.scheme.equals(saved.scheme, ignoreCase = true) &&
+                url.host.equals(saved.host, ignoreCase = true) &&
+                normalizedPort(url) == normalizedPort(saved)
+        }
+
+        private fun isBundledLauncherOrigin(url: Uri): Boolean {
+            return url.scheme.equals("https", ignoreCase = true) &&
+                url.host.equals("localhost", ignoreCase = true)
+        }
+
+        private fun normalizedPort(uri: Uri): Int {
+            if (uri.port != -1) return uri.port
+            return when (uri.scheme?.lowercase()) {
+                "http" -> 80
+                "https" -> 443
+                else -> -1
+            }
         }
     }
 }
