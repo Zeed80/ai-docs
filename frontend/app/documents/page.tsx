@@ -655,6 +655,11 @@ export default function DocumentsPage() {
       e.preventDefault();
       dragCounterRef.current = 0;
       setDragging(false);
+      // Skip if the drop landed inside the local upload dropzone — that
+      // component's own onDrop already calls addFilesToQueue, and we must
+      // not call it a second time (native events bubble past React's root).
+      const uploadZone = document.querySelector('[data-upload-zone="true"]');
+      if (uploadZone && uploadZone.contains(e.target as Node)) return;
       if (e.dataTransfer?.files?.length) addFilesToQueue(e.dataTransfer.files);
     };
     document.addEventListener("dragenter", onDragEnter);
@@ -1566,6 +1571,7 @@ function UploadPanel({
       <div className="flex flex-col gap-3">
         {/* Drop zone — compact when files are queued */}
         <div
+          data-upload-zone="true"
           onDragOver={(event) => {
             event.preventDefault();
             onDrag(true);
@@ -1573,7 +1579,9 @@ function UploadPanel({
           onDragLeave={() => onDrag(false)}
           onDrop={(event) => {
             event.preventDefault();
-            event.stopPropagation();
+            // stopPropagation on synthetic event alone is not enough — the native
+            // event still bubbles to document where our global handler fires.
+            // We use data-upload-zone="true" to let the global handler self-skip.
             onDragReset();
             onAddFiles(event.dataTransfer.files);
           }}
