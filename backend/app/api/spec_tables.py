@@ -16,9 +16,10 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import json
 import uuid
 
 from app.core.chat_bus import chat_bus
@@ -44,11 +45,44 @@ DEFAULT_CANVAS = "agent:spec-table"
 
 
 class SpecTableRequest(BaseModel):
+    # Lenient by design — weaker/thinking models mangle structured args, so we
+    # accept the spec however it arrives and normalise it (see _effective_spec):
+    #  • {"spec": {...}}              — canonical
+    #  • {"spec": "{...json...}"}     — spec as a JSON string
+    #  • {"source": ..., "columns": ...}  — fields flattened to the top level
+    # Anything that still can't be parsed yields a structured, actionable error
+    # (action=spec_table_catalog), never a bare 422 the agent can't recover from.
+    model_config = ConfigDict(extra="allow")
+
     canvas_id: str = DEFAULT_CANVAS
-    # Raw dict: LLM-built specs are validated manually so the agent receives a
-    # structured, actionable error (not a bare 422) and can self-correct.
-    spec: dict[str, Any]
+    spec: Any = None
     title: str | None = None
+    # Flattened-spec fallbacks.
+    source: str | None = None
+    columns: Any = None
+    filters: Any = None
+    sort: Any = None
+    group_by: Any = None
+    limit: Any = None
+
+
+def _effective_spec(payload: "SpecTableRequest") -> dict[str, Any] | None:
+    """Reconstruct a spec dict from whatever shape the model produced."""
+    raw = payload.spec
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            raw = None
+    if isinstance(raw, dict):
+        return raw
+    # Flattened form: assemble from recognised top-level fields.
+    assembled: dict[str, Any] = {}
+    for key in ("source", "columns", "filters", "sort", "group_by", "limit"):
+        val = getattr(payload, key, None)
+        if val is not None:
+            assembled[key] = val
+    return assembled or None
 
 
 class SpecTablePatchRequest(BaseModel):
@@ -125,10 +159,21 @@ async def publish_spec_table(
     Allowed fields per source — see /api/workspace/agent/spec-table/catalog.
     The result ALWAYS contains the full dataset (true total, hard cap 5000).
     """
+    sources = ", ".join(sorted(SOURCES))
+    effective = _effective_spec(payload)
+    if not effective:
+        return SpecTableResponse(
+            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            message=(
+                "Не передана спецификация. Передай spec как объект: "
+                f"{{source: {sources}, columns: [{{field, header?}}], "
+                "filters: [{field, op, value}], sort: [{field, dir}]}. "
+                "Справочник полей: action=spec_table_catalog."
+            ),
+        )
     try:
-        spec = TableSpec.model_validate(payload.spec)
+        spec = TableSpec.model_validate(effective)
     except Exception as exc:
-        sources = ", ".join(sorted(SOURCES))
         return SpecTableResponse(
             status="error", canvas_id=payload.canvas_id, total=0, shown=0,
             message=(

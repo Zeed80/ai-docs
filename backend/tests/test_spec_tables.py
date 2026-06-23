@@ -308,6 +308,34 @@ async def test_cell_edit_read_only_source_rejected(client, seeded):
 
 
 @pytest.mark.asyncio
+async def test_api_tolerates_flattened_and_string_specs(client, seeded):
+    """Weaker models mangle structured args — the endpoint must still build."""
+    spec_dict = _user_spec().model_dump(mode="json")
+
+    # 1. Flattened: spec fields at the top level (no "spec" wrapper).
+    resp = await client.post("/api/workspace/agent/spec-table", json={
+        "canvas_id": "agent:spec-table", **spec_dict,
+    })
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "published" and resp.json()["total"] == 3
+
+    # 2. spec passed as a JSON string.
+    import json as _json
+    resp = await client.post("/api/workspace/agent/spec-table", json={
+        "canvas_id": "agent:spec-table", "spec": _json.dumps(spec_dict),
+    })
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "published" and resp.json()["total"] == 3
+
+    # 3. Empty body → structured error, never a bare 422.
+    resp = await client.post("/api/workspace/agent/spec-table", json={
+        "canvas_id": "agent:spec-table",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "error"
+
+
+@pytest.mark.asyncio
 async def test_api_patch_unrecognized_command(client, seeded):
     await client.post("/api/workspace/agent/spec-table", json={
         "spec": _user_spec().model_dump(mode="json"),
