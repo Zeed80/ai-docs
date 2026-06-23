@@ -310,6 +310,14 @@ capabilities:
           has_attachments («Да»/«Нет»), direction (Входящее/Исходящее).
         drawings (чертежи): drawing_number, filename, title, material,
           revision, format, drawing_type, part_class, status, created_at.
+        vector_search (семантический поиск по документам): query (фильтр с
+          текстом запроса — обязателен), score, file_name, doc_type, status,
+          snippet, doc_id. Пример: source=vector_search,
+          filters=[{field: query, op: contains, value: "договоры на фрезы"}].
+        graph_query (связи в графе памяти): start_node (фильтр с названием
+          сущности — обязателен), source_title, edge_type, target_title,
+          target_type, confidence, reason. Пример: source=graph_query,
+          filters=[{field: start_node, op: contains, value: "ООО Ромашка"}].
         Фильтр op: eq|ne|contains|gte|lte|between|in|smart
         (smart — умный поиск по содержимому: «фрезы диаметра 5»).
         Полный справочник: action=spec_table_catalog.
@@ -318,6 +326,11 @@ capabilities:
         clear_filters, field, before?, after?, dir?, filter?}] ИЛИ
         command: "<русская команда>" («добавь столбец с НДС перед суммой»).
       - spec_table_catalog — справочник источников и полей.
+      - spec_table_cell_edit — правка ОДНОЙ ячейки spec-таблицы с записью в
+        БД (approval-gated): row_pk (скрытый __pk строки), field, value.
+        Доступно только для редактируемых источников (invoices, suppliers,
+        warehouse) и полей; правка уходит на подтверждение человеку, в БД
+        пишется лишь после одобрения.
 
       Прочие actions (legacy-таблицы фиксированной формы):
       - invoice_pivot — группировки счетов/товаров: body={group_by, columns:
@@ -325,18 +338,22 @@ capabilities:
       - invoice_table, invoice_items_table — фиксированные таблицы счетов.
       - general — произвольные блоки с данными НЕ из БД.
         body={title, columns:[{key,header,type}], rows:[{key:value}], canvas_id}.
+      - sql_table — свободный SQL, когда ни один источник spec_table не подходит:
+        task="<что показать на естественном языке>", limit?. Генерируется
+        валидированный SELECT (только чтение, без DML/DDL), данные из реальной БД.
+        Предпочитай spec_table; sql_table — для нестандартных срезов.
       - get_block — прочитать блок. supplier_lookup — поиск поставщиков.
         verify — проверить блок.
       canvas_id по умолчанию "agent:spec-table"; тот же id обновляет ту же таблицу.
     path: /api/agent/cap/workspace
     method: POST
-    gate_actions: []
+    gate_actions: [spec_table_cell_edit]
     parameters:
       type: object
       properties:
         action:
           type: string
-          description: "spec_table (ГЛАВНЫЙ: таблица по спецификации, полные данные из SQL) | spec_table_patch (правка spec-таблицы: ops или command) | spec_table_catalog | invoice_pivot (группировки) | invoice_table | invoice_items_table | general (данные не из БД) | get_block | supplier_lookup | verify"
+          description: "spec_table (ГЛАВНЫЙ: таблица по спецификации, полные данные из SQL; источники включают vector_search и graph_query) | spec_table_patch (правка spec-таблицы: ops или command) | spec_table_catalog | spec_table_cell_edit (правка ячейки с записью в БД, approval-gated: row_pk/field/value) | sql_table (свободный валидированный SELECT: task) | invoice_pivot (группировки) | invoice_table | invoice_items_table | general (данные не из БД) | get_block | supplier_lookup | verify"
         canvas_id:
           type: string
           description: "ID canvas-блока. По умолчанию 'agent:spec-table'; тот же id обновляет ту же таблицу."
@@ -349,12 +366,111 @@ capabilities:
         command:
           type: string
           description: "Для spec_table_patch: русская команда правки («добавь столбец с НДС перед суммой»)"
+        row_pk:
+          type: string
+          description: "Для spec_table_cell_edit: значение __pk редактируемой строки"
+        field:
+          type: string
+          description: "Для spec_table_cell_edit: ключ редактируемого поля"
+        value:
+          description: "Для spec_table_cell_edit: новое значение ячейки"
         filters:
           type: object
           description: "Фильтры для legacy-таблиц: supplier_id, status, date_from, date_to, limit"
         body:
           type: object
           description: "Данные для general: {title, columns:[{key,header,type}], rows:[{key:val}], canvas_id, block_type}"
+        task:
+          type: string
+          description: "Для sql_table: что показать на естественном языке (генерируется валидированный SELECT)"
+        limit:
+          type: integer
+          description: "Для sql_table: максимум строк (по умолчанию 200)"
+      required: [action]
+
+  - name: sheets
+    description: >
+      Черновые редактируемые таблицы («листы») — аналог Excel на рабочем столе.
+      Лист НЕ зеркало боевой БД: правка листа никогда не меняет счета/склад и
+      т.п. Используй для свободных расчётов, набросков, сводок с формулами.
+      - create — новый лист: title, columns:[{key,header,type,formula?}],
+        rows:[{колонка:значение}] (по умолчанию 3 пустых столбца A/B/C).
+      - from_spec — скопировать таблицу рабочего стола (canvas_id) в
+        редактируемый лист (для доработки без записи в БД).
+      - patch_cells — задать ячейки: edits:[{row,col,value}]. Значение с «=» —
+        формула (=A1*B1, =SUM(A1:A10), =ROUND(quantity*unit_price,2)).
+      - add_row (values?, count?), add_column (key, header?, type?, formula?,
+        before?/after?), set_formula (column, formula, row? — без row формула
+        на весь столбец), rename_column (key, header), delete, get, list.
+      - from_template — создать лист из готового шаблона: template (estimate
+        «смета», price_comparison «сравнение цен», budget «бюджет план/факт»,
+        payment_schedule «график платежей»), title?. Список: action=templates.
+      - templates — список доступных шаблонов листов.
+      Формулы: ссылки по букве столбца (A1, диапазон A1:A10) или по ключу
+      столбца (quantity); функции SUM, AVERAGE, MIN, MAX, COUNT, ROUND, ABS,
+      IF, AND, OR, NOT. Это безопасные вычисления, не пиши сюда боевые правки.
+    path: /api/agent/cap/sheets
+    method: POST
+    # delete is classified high-risk globally; the agent must confirm before
+    # removing a sheet (users delete via the UI directly, not this gate).
+    gate_actions: [delete]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "create | from_spec | from_template | templates | get | list | patch_cells | add_row | add_column | set_formula | rename_column | delete"
+        sheet_id:
+          type: string
+          description: "UUID листа (для get/patch_cells/add_row/add_column/set_formula/delete)"
+        title:
+          type: string
+          description: "Название листа (create/from_spec)"
+        columns:
+          type: array
+          description: "create: [{key, header?, type?, formula?}]"
+        rows:
+          type: array
+          description: "create: [{колонка: значение}]"
+        edits:
+          type: array
+          description: "patch_cells: [{row, col, value}] — value с «=» это формула"
+        values:
+          type: object
+          description: "add_row: значения новой строки {колонка: значение}"
+        count:
+          type: integer
+          description: "add_row: сколько строк добавить"
+        key:
+          type: string
+          description: "add_column: ключ нового столбца"
+        header:
+          type: string
+          description: "add_column: заголовок столбца"
+        type:
+          type: string
+          description: "add_column: text|number|date"
+        formula:
+          type: string
+          description: "add_column/set_formula: формула столбца/ячейки"
+        column:
+          type: string
+          description: "set_formula: ключ столбца"
+        row:
+          type: integer
+          description: "set_formula: индекс строки (без него — на весь столбец)"
+        before:
+          type: string
+          description: "add_column: вставить перед этим столбцом"
+        after:
+          type: string
+          description: "add_column: вставить после этого столбца"
+        canvas_id:
+          type: string
+          description: "from_spec: id блока-таблицы рабочего стола для копирования"
+        template:
+          type: string
+          description: "from_template: estimate|price_comparison|budget|payment_schedule (или русский синоним)"
       required: [action]
 
   - name: search

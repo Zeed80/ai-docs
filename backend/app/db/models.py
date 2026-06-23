@@ -743,6 +743,24 @@ class SavedView(UUIDPrimaryKey, TimestampMixin, Base):
     is_shared: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class WorkspaceSheet(UUIDPrimaryKey, TimestampMixin, Base):
+    """Ad-hoc, freely-editable spreadsheet ("лист") — an Excel-like surface.
+
+    Lives in the workspace, NOT a mirror of any domain table, so editing it
+    never touches production data. ``columns`` holds the grid schema
+    ({key, header, type, width, formula?}); ``rows`` holds the data as a list of
+    {colKey: value} dicts. Formula strings (prefixed "=") are stored verbatim and
+    evaluated by the formula engine on render/export.
+    """
+
+    __tablename__ = "workspace_sheets"
+
+    owner_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(300), nullable=False, default="Лист")
+    columns: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    rows: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+
 # ── Normalization Rules ─────────────────────────────────────────────────────
 
 

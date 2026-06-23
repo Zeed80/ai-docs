@@ -1559,7 +1559,8 @@ class AgentSession:
         self._turn_model_override = (model or "").strip() or None
 
     # Capabilities every role can always use, regardless of its allowlist.
-    _CORE_CAPABILITIES = frozenset({"workspace", "memory", "search"})
+    # sheets are a safe scratch area (no production DB writes) — available to all.
+    _CORE_CAPABILITIES = frozenset({"workspace", "memory", "search", "sheets"})
 
     def _tools_for_turn(self) -> list[dict]:
         """Visible tools for the current turn, scoped by the active role.

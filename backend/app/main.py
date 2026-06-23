@@ -78,6 +78,7 @@ from app.api import (
     workspace,
     workspace_export,
     spec_tables,
+    sheets,
 )
 from app.api import admin as admin_api
 from app.api import devices as devices_api
@@ -359,6 +360,7 @@ def create_app() -> FastAPI:
     app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
     app.include_router(workspace_export.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
     app.include_router(spec_tables.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
+    app.include_router(sheets.router, prefix="/api/workspace", tags=["workspace"], dependencies=_auth)
     app.include_router(mailbox.router, prefix="/api/mailbox", tags=["mailbox"], dependencies=_auth)
     app.include_router(
         email_templates.router,

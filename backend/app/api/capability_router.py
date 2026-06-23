@@ -134,18 +134,37 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     },
     "workspace": {
         # Spec-driven tables: LLM supplies only the spec, data flows SQL→table.
-        "spec_table":         ("POST", "/api/workspace/agent/spec-table",         []),
-        "spec_table_patch":   ("POST", "/api/workspace/agent/spec-table/patch",   []),
-        "spec_table_catalog": ("GET",  "/api/workspace/agent/spec-table/catalog", []),
+        "spec_table":           ("POST", "/api/workspace/agent/spec-table",           []),
+        "spec_table_patch":     ("POST", "/api/workspace/agent/spec-table/patch",     []),
+        "spec_table_catalog":   ("GET",  "/api/workspace/agent/spec-table/catalog",   []),
+        # Approval-gated: queues a DraftAction, never writes the DB directly.
+        "spec_table_cell_edit": ("POST", "/api/workspace/agent/spec-table/cell-edit", []),
         "invoice_table":             ("POST", "/api/workspace/agent/invoices/table",               []),
         "invoice_items_table":       ("POST", "/api/workspace/agent/invoices/items-table",         []),
         "invoice_items_grouped":     ("POST", "/api/workspace/agent/invoices/items-grouped-table", []),
         "invoice_items_by_supplier": ("POST", "/api/workspace/agent/invoices/items-by-supplier-table", []),
         "invoice_pivot":             ("POST", "/api/workspace/agent/invoices/pivot-table",            []),
         "general":                   ("POST", "/api/workspace/agent/generated/general",            []),
+        # Guarded free SQL (SELECT-only, validated) when no spec source fits.
+        "sql_table":                 ("POST", "/api/workspace/agent/generated/sql-table",          []),
         "supplier_lookup":           ("POST", "/api/workspace/agent/generated/supplier_lookup",    []),
         "verify":                    ("POST", "/api/workspace/agent/verify-block",                 []),
         "get_block":                 ("GET",  "/api/workspace/blocks/{canvas_id}",                 ["canvas_id"]),
+    },
+    "sheets": {
+        # Ad-hoc editable spreadsheets ("листы") — never touch production data.
+        "create":      ("POST",   "/api/workspace/sheets/create",                    []),
+        "list":        ("GET",    "/api/workspace/sheets",                           []),
+        "get":         ("GET",    "/api/workspace/sheets/{sheet_id}",                ["sheet_id"]),
+        "patch_cells": ("POST",   "/api/workspace/sheets/{sheet_id}/patch-cells",    ["sheet_id"]),
+        "add_row":     ("POST",   "/api/workspace/sheets/{sheet_id}/add-row",        ["sheet_id"]),
+        "add_column":  ("POST",   "/api/workspace/sheets/{sheet_id}/add-column",     ["sheet_id"]),
+        "set_formula":   ("POST",   "/api/workspace/sheets/{sheet_id}/set-formula",   ["sheet_id"]),
+        "rename_column": ("POST",   "/api/workspace/sheets/{sheet_id}/rename-column", ["sheet_id"]),
+        "delete":        ("DELETE", "/api/workspace/sheets/{sheet_id}",               ["sheet_id"]),
+        "from_spec":     ("POST",   "/api/workspace/sheets/from-spec",                []),
+        "from_template": ("POST",   "/api/workspace/sheets/from-template",            []),
+        "templates":     ("GET",    "/api/workspace/sheets/templates/list",           []),
     },
     "search": {
         "hybrid":        ("POST", "/api/search/hybrid",                             []),

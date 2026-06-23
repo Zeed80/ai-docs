@@ -332,7 +332,7 @@ prompts:
       default_canvases: ["agent:invoices", "agent:invoice-items"]
     data_analyst:
       prompt: ./prompts/role-data-analyst.md
-      capabilities: [invoices, documents, suppliers, warehouse, procurement, payments, anomalies, analytics]
+      capabilities: [invoices, documents, suppliers, warehouse, procurement, payments, anomalies, analytics, agent_control]
     warehouse_specialist:
       prompt: ./prompts/role-warehouse.md
       capabilities: [warehouse, documents, procurement, analytics]

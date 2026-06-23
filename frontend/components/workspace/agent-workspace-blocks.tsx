@@ -5,6 +5,7 @@ import { CanvasChart } from "@/components/canvas/canvas-chart";
 import { CanvasDocuments } from "@/components/canvas/canvas-documents";
 import { CanvasImage } from "@/components/canvas/canvas-image";
 import { CanvasMarkdown } from "@/components/canvas/canvas-markdown";
+import { CanvasSheet } from "@/components/canvas/canvas-sheet";
 import { CanvasTable } from "@/components/canvas/canvas-table";
 import type { CanvasBlock } from "@/lib/canvas-context";
 import { getApiBaseUrl } from "@/lib/api-base";
@@ -61,6 +62,9 @@ function BlockView({
             fill
             blockId={block.id}
           />
+        )}
+        {block.type === "sheet" && block.columns && (
+          <CanvasSheet block={block} fill />
         )}
         {block.type === "image" && block.url && (
           <CanvasImage url={block.url} alt={block.alt} title={block.title} />

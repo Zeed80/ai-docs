@@ -618,3 +618,42 @@ async def _execute_approved_action(approval: Approval, db: AsyncSession) -> None
                 )
         except Exception as e:
             logger.error("execute_approved_action_error", error=str(e))
+
+    elif approval.action_type == ApprovalActionType.table_apply_diff:
+        # Spec-table cell edit: apply the linked DraftAction's writeback.
+        from app.db.models import DraftAction
+        from app.domain.table_spec import apply_cell_writeback
+
+        try:
+            draft = (
+                await db.execute(
+                    select(DraftAction)
+                    .where(
+                        DraftAction.approval_id == approval.id,
+                        DraftAction.executed == False,  # noqa: E712
+                    )
+                    .order_by(DraftAction.created_at.desc())
+                )
+            ).scalars().first()
+            if draft is not None:
+                d = draft.draft_data or {}
+                ok, msg = await apply_cell_writeback(
+                    db,
+                    str(d.get("source", "")),
+                    approval.entity_id,
+                    str(d.get("field", "")),
+                    d.get("value"),
+                )
+                if ok:
+                    draft.executed = True
+                    draft.executed_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    logger.info(
+                        "table_cell_writeback_applied",
+                        entity_id=str(approval.entity_id),
+                        field=d.get("field"),
+                    )
+                else:
+                    logger.warning("table_cell_writeback_skipped", reason=msg)
+        except Exception as e:
+            logger.error("execute_approved_action_error", error=str(e))

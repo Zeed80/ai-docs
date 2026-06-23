@@ -8,13 +8,29 @@ import {
   useReducer,
 } from "react";
 
-export type CanvasBlockType = "markdown" | "table" | "image" | "chart" | "document";
+export type CanvasBlockType =
+  | "markdown"
+  | "table"
+  | "sheet"
+  | "image"
+  | "chart"
+  | "document";
 
 export interface CanvasColumn {
   key: string;
   header: string;
-  type?: "text" | "number" | "date" | "boolean" | "link" | "download" | "delete";
+  type?:
+    | "text"
+    | "number"
+    | "date"
+    | "boolean"
+    | "link"
+    | "download"
+    | "delete";
   width?: number;
+  // Spec-table cell editing (writeback through approval) — set by the backend
+  // for editable source fields (invoices / suppliers / warehouse).
+  editable?: boolean;
 }
 
 export interface CanvasDocumentItem {
@@ -36,6 +52,9 @@ export interface CanvasBlock {
   // table
   columns?: CanvasColumn[];
   rows?: Record<string, unknown>[];
+  // sheet (ad-hoc editable spreadsheet)
+  sheet_id?: string;
+  raw_rows?: Record<string, unknown>[];
   // image
   url?: string;
   alt?: string;

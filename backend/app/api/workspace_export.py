@@ -31,8 +31,8 @@ async def export_workspace_block(
     block = get_workspace_block(block_id)
     if not block:
         raise HTTPException(status_code=404, detail="Workspace block not found")
-    if block.get("type") != "table":
-        raise HTTPException(status_code=400, detail="Only table blocks can be exported")
+    if block.get("type") not in ("table", "sheet"):
+        raise HTTPException(status_code=400, detail="Only table/sheet blocks can be exported")
 
     columns = [column for column in block.get("columns") or [] if isinstance(column, dict)]
     rows = [row for row in block.get("rows") or [] if isinstance(row, dict)]

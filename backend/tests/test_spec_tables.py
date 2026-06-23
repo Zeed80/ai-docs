@@ -186,6 +186,128 @@ async def test_api_build_then_patch_command(client, seeded):
 
 
 @pytest.mark.asyncio
+async def test_execute_spec_carries_pk_and_editable_flag(db_session, seeded):
+    """Writable sources expose a hidden __pk per row and editable column flags."""
+    result = await ts.execute_spec(db_session, _user_spec())
+    by_key = {c["key"]: c for c in result.columns}
+    assert by_key["total_amount"]["editable"] is True
+    assert by_key["supplier_name"]["editable"] is False  # joined, read-only
+    assert all("__pk" in r and r["__pk"] for r in result.rows)
+
+
+@pytest.mark.asyncio
+async def test_apply_cell_writeback_coerces_and_guards(db_session, seeded):
+    from sqlalchemy import select as sa_select
+
+    inv = (await db_session.execute(
+        sa_select(Invoice).where(Invoice.invoice_number == "INV-001")
+    )).scalar_one()
+
+    ok, _ = await ts.apply_cell_writeback(
+        db_session, "invoices", inv.id, "total_amount", "15 000,50"
+    )
+    assert ok and inv.total_amount == 15000.5
+
+    # Non-editable / read-only field rejected.
+    bad, msg = await ts.apply_cell_writeback(
+        db_session, "invoices", inv.id, "supplier_name", "X"
+    )
+    assert not bad and "нередактируемо" in msg
+
+
+@pytest.mark.asyncio
+async def test_cell_edit_is_draft_first_then_applied(client, db_session, seeded):
+    from sqlalchemy import select as sa_select
+
+    from app.auth.models import UserInfo, UserRole
+    from app.db.models import Approval, ApprovalStatus, DraftAction
+
+    # Build the spec-table so the block (with spec) lives in the workspace store.
+    await client.post("/api/workspace/agent/spec-table", json={
+        "canvas_id": "agent:spec-table",
+        "spec": _user_spec().model_dump(mode="json"),
+    })
+
+    inv = (await db_session.execute(
+        sa_select(Invoice).where(Invoice.invoice_number == "INV-001")
+    )).scalar_one()
+    original = inv.total_amount
+
+    # Cell edit files an approval — NOT a direct write.
+    resp = await client.post("/api/workspace/agent/spec-table/cell-edit", json={
+        "canvas_id": "agent:spec-table",
+        "row_pk": str(inv.id),
+        "field": "total_amount",
+        "value": "99999",
+    })
+    data = resp.json()
+    assert data["status"] == "pending_approval"
+    approval_id = data["approval_id"]
+
+    await db_session.refresh(inv)
+    assert inv.total_amount == original  # nothing written yet
+
+    approval = (await db_session.execute(
+        sa_select(Approval).where(Approval.id == approval_id)
+    )).scalar_one()
+    assert approval.status == ApprovalStatus.pending
+    draft = (await db_session.execute(
+        sa_select(DraftAction).where(DraftAction.approval_id == approval.id)
+    )).scalar_one()
+    assert draft.executed is False and draft.draft_data["field"] == "total_amount"
+
+    # Read-only field is rejected at the gate (never reaches approval).
+    bad = await client.post("/api/workspace/agent/spec-table/cell-edit", json={
+        "canvas_id": "agent:spec-table",
+        "row_pk": str(inv.id),
+        "field": "supplier_name",
+        "value": "X",
+    })
+    assert bad.json()["status"] == "error"
+
+    # A manager approves → the executor applies the writeback.
+    from app.auth.jwt import get_current_user
+    from app.main import app
+
+    manager = UserInfo(
+        sub="boss", email="boss@x", name="boss",
+        preferred_username="boss", roles=[UserRole.manager],
+    )
+    app.dependency_overrides[get_current_user] = lambda: manager
+    try:
+        decided = await client.post(
+            f"/api/approvals/{approval_id}/decide",
+            json={"status": "approved"},
+        )
+        assert decided.status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    await db_session.refresh(inv)
+    assert inv.total_amount == 99999.0
+    await db_session.refresh(draft)
+    assert draft.executed is True
+
+
+@pytest.mark.asyncio
+async def test_cell_edit_read_only_source_rejected(client, seeded):
+    # documents is a read-only source (no writeback registered).
+    await client.post("/api/workspace/agent/spec-table", json={
+        "canvas_id": "agent:docs",
+        "spec": {"source": "documents", "columns": [{"field": "file_name"}]},
+    })
+    import uuid as _uuid
+    resp = await client.post("/api/workspace/agent/spec-table/cell-edit", json={
+        "canvas_id": "agent:docs",
+        "row_pk": str(_uuid.uuid4()),
+        "field": "file_name",
+        "value": "x",
+    })
+    data = resp.json()
+    assert data["status"] == "error" and "только для чтения" in data["message"]
+
+
+@pytest.mark.asyncio
 async def test_api_patch_unrecognized_command(client, seeded):
     await client.post("/api/workspace/agent/spec-table", json={
         "spec": _user_spec().model_dump(mode="json"),

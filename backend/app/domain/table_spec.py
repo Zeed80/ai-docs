@@ -336,7 +336,49 @@ SOURCES: dict[str, SourceDef] = {
         ),
         default_columns=("drawing_number", "title", "material", "drawing_type", "status"),
     ),
+    # ── Virtual sources (not SQL tables) ────────────────────────────────────
+    # Resolved by provider functions, not the SQL engine, but exposed in the
+    # same catalog so the agent picks them like any other table.
+    "vector_search": SourceDef(
+        key="vector_search",
+        title="Семантический поиск",
+        synonyms=("похож", "похожие", "семантический", "по смыслу", "найти похожие",
+                  "релевантные документы"),
+        fields=_fields(
+            FieldDef("query", "Запрос", "text",
+                     ("запрос", "текст", "поиск"), primary_text=True),
+            FieldDef("score", "Релевантность", "number", ("релевантность", "score")),
+            FieldDef("file_name", "Документ", "text", ("документ", "файл", "имя")),
+            FieldDef("doc_type", "Тип", "text", ("тип", "вид")),
+            FieldDef("status", "Статус", "text", ("статус",)),
+            FieldDef("snippet", "Фрагмент", "text", ("фрагмент", "сниппет", "текст")),
+            FieldDef("doc_id", "ID документа", "text", ("id", "идентификатор")),
+        ),
+        default_columns=("score", "file_name", "doc_type", "status"),
+    ),
+    "graph_query": SourceDef(
+        key="graph_query",
+        title="Связи (граф памяти)",
+        synonyms=("связи", "граф", "связан", "отношения", "окружение",
+                  "с кем связан", "что связано"),
+        fields=_fields(
+            FieldDef("start_node", "Сущность", "text",
+                     ("сущность", "узел", "от", "вокруг"), primary_text=True),
+            FieldDef("mode", "Режим", "text", ("режим",)),  # neighborhood|path
+            FieldDef("target", "Цель", "text", ("цель", "до")),
+            FieldDef("source_title", "От", "text", ("от", "источник")),
+            FieldDef("edge_type", "Связь", "text", ("связь", "тип связи", "отношение")),
+            FieldDef("target_title", "К", "text", ("к", "цель")),
+            FieldDef("target_type", "Тип узла", "text", ("тип узла", "тип")),
+            FieldDef("confidence", "Уверенность", "number", ("уверенность",)),
+            FieldDef("reason", "Причина", "text", ("причина", "обоснование")),
+        ),
+        default_columns=("source_title", "edge_type", "target_title", "target_type"),
+    ),
 }
+
+# Sources resolved by provider functions instead of the SQL engine.
+VIRTUAL_SOURCES: frozenset[str] = frozenset({"vector_search", "graph_query"})
 
 
 def _norm(text: str) -> str:
@@ -643,6 +685,100 @@ _EXPRS = {
     "drawings": _drawings_exprs,
 }
 
+
+# ── Writeback (editable spec-tables → DB through approval) ────────────────────
+#
+# Only own-model scalar fields are writable; joined fields (e.g. invoices'
+# supplier_name from Party) stay read-only. Each spec field key here equals the
+# model attribute (verified against the *_exprs maps above). Edits NEVER touch
+# the DB directly from here — the spec-table cell-edit endpoint files a
+# DraftAction routed through the table.apply_diff approval gate; only the
+# approved-action executor calls :func:`apply_cell_writeback`.
+
+
+@dataclass(frozen=True)
+class WritebackSpec:
+    entity_type: str
+    model: Any
+    editable: frozenset[str]
+    numeric_fields: frozenset[str] = frozenset()
+    date_fields: frozenset[str] = frozenset()
+
+
+WRITEBACK: dict[str, WritebackSpec] = {
+    "invoices": WritebackSpec(
+        entity_type="invoice",
+        model=Invoice,
+        editable=frozenset({
+            "invoice_number", "invoice_date", "due_date",
+            "subtotal", "tax_amount", "total_amount", "currency",
+        }),
+        numeric_fields=frozenset({"subtotal", "tax_amount", "total_amount"}),
+        date_fields=frozenset({"invoice_date", "due_date"}),
+    ),
+    "suppliers": WritebackSpec(
+        entity_type="supplier",
+        model=Party,
+        editable=frozenset({"name", "inn", "kpp", "address", "bank_name", "bank_bik"}),
+    ),
+    "warehouse": WritebackSpec(
+        entity_type="inventory_item",
+        model=InventoryItem,
+        editable=frozenset({"name", "sku", "current_qty", "unit", "min_qty", "location"}),
+        numeric_fields=frozenset({"current_qty", "min_qty"}),
+    ),
+}
+
+
+def writeback_for(source_key: str) -> WritebackSpec | None:
+    return WRITEBACK.get(source_key)
+
+
+def _pk_expr(source_key: str) -> Any | None:
+    wb = WRITEBACK.get(source_key)
+    return wb.model.id if wb is not None else None
+
+
+def coerce_writeback_value(source_key: str, field: str, value: Any) -> Any:
+    """Coerce a string cell value to the column's Python type."""
+    wb = WRITEBACK[source_key]
+    if value is None or value == "":
+        return None
+    if field in wb.numeric_fields:
+        return float(str(value).replace(" ", "").replace(",", "."))
+    if field in wb.date_fields:
+        from datetime import date, datetime
+
+        text = str(value).strip()
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y"):
+            try:
+                return datetime.strptime(text, fmt).date()
+            except ValueError:
+                continue
+        if isinstance(value, (date, datetime)):
+            return value
+        raise ValueError(f"Не разобрана дата: {value!r}")
+    return str(value)
+
+
+async def apply_cell_writeback(
+    db: AsyncSession, source_key: str, pk: Any, field: str, value: Any
+) -> tuple[bool, str]:
+    """Apply one approved cell edit. Returns (ok, message). Caller commits."""
+    wb = WRITEBACK.get(source_key)
+    if wb is None or field not in wb.editable:
+        return False, f"Поле «{field}» нередактируемо для источника «{source_key}»"
+    obj = (
+        await db.execute(select(wb.model).where(wb.model.id == pk))
+    ).scalar_one_or_none()
+    if obj is None:
+        return False, "Строка не найдена"
+    try:
+        setattr(obj, field, coerce_writeback_value(source_key, field, value))
+    except ValueError as exc:
+        return False, str(exc)
+    return True, "ok"
+
 # Fields whose filters must use the aggregate-free line text (smart search over
 # invoice contents): filtering invoices by «items_list» means EXISTS over lines.
 _INVOICE_ITEMS_TEXT_FIELD = "items_list"
@@ -799,12 +935,156 @@ def validate_spec(spec: TableSpec) -> list[str]:
     return problems
 
 
+def _filter_value(spec: TableSpec, field: str) -> str | None:
+    for flt in spec.filters:
+        if flt.field == field and flt.value not in (None, ""):
+            return str(flt.value)
+    return None
+
+
+def _finalize_virtual(spec: TableSpec, all_rows: list[dict]) -> TableResult:
+    """Project/sort/limit provider rows into a TableResult like the SQL path."""
+    source = SOURCES[spec.source]
+    columns = list(spec.columns) or [ColumnSpec(field=f) for f in source.default_columns]
+    keys = [c.field for c in columns]
+    field_defs = [source.fields[k] for k in keys]
+
+    total = len(all_rows)
+    rows = all_rows
+    for srt in reversed(spec.sort):
+        if srt.field in source.fields:
+            rows = sorted(
+                rows,
+                key=lambda r: (r.get(srt.field) is None, r.get(srt.field)),
+                reverse=(srt.dir == "desc"),
+            )
+    cap = min(spec.limit or MAX_ROWS, MAX_ROWS)
+    rows = rows[:cap]
+
+    out_rows = [
+        {fd.key: _format_value(r.get(fd.key), fd.type) for fd in field_defs}
+        for r in rows
+    ]
+    out_columns = [
+        {"key": fd.key, "header": col.header or fd.header, "type": fd.type,
+         "editable": False}
+        for col, fd in zip(columns, field_defs, strict=True)
+    ]
+    return TableResult(
+        columns=out_columns, rows=out_rows, total=total,
+        truncated=total > len(out_rows),
+    )
+
+
+async def _execute_vector_search(db: AsyncSession, spec: TableSpec) -> TableResult:
+    """Semantic search over the document vector store, as a table."""
+    query = _filter_value(spec, "query")
+    if not query:
+        raise ValueError(
+            "vector_search требует фильтр {field: query, op: contains, value: '<текст>'}"
+        )
+    from app.ai.embeddings import embed_text
+    from app.vector.qdrant_store import search_similar
+
+    doc_type = _filter_value(spec, "doc_type")
+    cap = min(spec.limit or 50, MAX_ROWS)
+    try:
+        vector = await embed_text(query, task_type="query")  # confidential=local
+        hits = search_similar(vector, limit=cap, doc_type=doc_type)
+    except Exception as exc:  # Qdrant/embedding unavailable — degrade, don't crash
+        logger.warning("vector_search_failed", error=str(exc))
+        raise ValueError(f"Семантический поиск недоступен: {exc}") from exc
+    rows = [
+        {
+            "score": round(float(h.get("score") or 0.0), 3),
+            "file_name": h.get("file_name") or h.get("payload", {}).get("file_name") or "",
+            "doc_type": h.get("doc_type") or "",
+            "status": h.get("status") or "",
+            "snippet": (h.get("payload", {}).get("text")
+                        or h.get("payload", {}).get("snippet") or "")[:300],
+            "doc_id": str(h.get("doc_id") or ""),
+            "query": query,
+        }
+        for h in hits
+    ]
+    return _finalize_virtual(spec, rows)
+
+
+async def _execute_graph_query(db: AsyncSession, spec: TableSpec) -> TableResult:
+    """Relationships around an entity in the knowledge graph, as a table."""
+    start = _filter_value(spec, "start_node")
+    if not start:
+        raise ValueError(
+            "graph_query требует фильтр {field: start_node, op: contains, value: '<сущность>'}"
+        )
+    from app.db.models import KnowledgeEdge, KnowledgeNode
+
+    center = (
+        await db.execute(
+            select(KnowledgeNode)
+            .where(
+                or_(
+                    KnowledgeNode.title.ilike(f"%{start}%"),
+                    KnowledgeNode.canonical_key.ilike(f"%{start}%"),
+                )
+            )
+            .order_by(KnowledgeNode.confidence.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if center is None:
+        return _finalize_virtual(spec, [])
+
+    edges = (
+        await db.execute(
+            select(KnowledgeEdge).where(
+                or_(
+                    KnowledgeEdge.source_node_id == center.id,
+                    KnowledgeEdge.target_node_id == center.id,
+                )
+            )
+        )
+    ).scalars().all()
+    node_ids = {center.id}
+    for e in edges:
+        node_ids.add(e.source_node_id)
+        node_ids.add(e.target_node_id)
+    nodes = (
+        await db.execute(select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids)))
+    ).scalars().all()
+    by_id = {n.id: n for n in nodes}
+
+    rows = []
+    for e in edges:
+        src = by_id.get(e.source_node_id)
+        tgt = by_id.get(e.target_node_id)
+        rows.append({
+            "start_node": center.title,
+            "source_title": src.title if src else "",
+            "edge_type": e.edge_type,
+            "target_title": tgt.title if tgt else "",
+            "target_type": tgt.node_type if tgt else "",
+            "confidence": round(float(e.confidence or 0.0), 3),
+            "reason": e.reason or "",
+        })
+    return _finalize_virtual(spec, rows)
+
+
+_VIRTUAL_PROVIDERS = {
+    "vector_search": _execute_vector_search,
+    "graph_query": _execute_graph_query,
+}
+
+
 async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
     """Compile the spec to one SQL query and return the FULL dataset."""
     source = SOURCES[spec.source]
     problems = validate_spec(spec)
     if problems:
         raise ValueError("; ".join(problems))
+
+    if spec.source in VIRTUAL_SOURCES:
+        return await _VIRTUAL_PROVIDERS[spec.source](db, spec)
 
     columns = list(spec.columns) or [
         ColumnSpec(field=f) for f in source.default_columns
@@ -876,21 +1156,34 @@ async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
     cap = min(spec.limit or MAX_ROWS, MAX_ROWS)
     stmt = stmt.limit(cap)
 
+    # Writable sources carry a hidden primary key per row so the grid can route
+    # cell edits back to the right entity (through the approval gate).
+    wb = WRITEBACK.get(spec.source)
+    pk_expr = _pk_expr(spec.source)
+    if pk_expr is not None:
+        stmt = stmt.add_columns(pk_expr.label("__pk"))
+
     result = await db.execute(stmt)
     field_defs = [source.fields[k] for k in keys]
-    rows = [
-        {
+    n = len(keys)
+    rows = []
+    for row in result.all():
+        data = {
             fd.key: _format_value(value, fd.type)
-            for fd, value in zip(field_defs, row, strict=True)
+            for fd, value in zip(field_defs, row[:n], strict=True)
         }
-        for row in result.all()
-    ]
+        if pk_expr is not None:
+            pk_val = row[n]
+            data["__pk"] = str(pk_val) if pk_val is not None else None
+        rows.append(data)
 
+    editable = wb.editable if wb is not None else frozenset()
     out_columns = [
         {
             "key": fd.key,
             "header": col.header or fd.header,
             "type": fd.type,
+            "editable": fd.key in editable,
         }
         for col, fd in zip(columns, field_defs, strict=True)
     ]

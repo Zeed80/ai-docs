@@ -77,6 +77,7 @@ RISKY_CAPABILITY_ACTIONS = {
     "learning_rule_activate",
     "table_apply_diff",
     "table_import_excel",
+    "spec_table_cell_edit",
     "ai_config_set",
 }
 

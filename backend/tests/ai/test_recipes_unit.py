@@ -60,3 +60,38 @@ def test_render_args_substitutes_nested():
 def test_render_args_keeps_unknown_slots_intact():
     args = recipes.render_args({"q": "{{user.unknown}}"}, {})
     assert args == {"q": "{{user.unknown}}"}
+
+
+# ── Table macros: which table actions may enter recipes ──────────────────────
+
+
+def test_table_macro_gate_contract():
+    """Spreadsheet/table chains are recordable; the writeback edit is gated."""
+    gates = recipes._gate_actions_map()
+    # The approval-gated cell edit must never enter a recipe.
+    assert "spec_table_cell_edit" in gates.get("workspace", set())
+    # Sheet building blocks are recordable; only delete is gated (out of recipes).
+    assert gates.get("sheets", set()) == {"delete"}
+    assert "create" not in gates.get("sheets", set())
+    assert "patch_cells" not in gates.get("sheets", set())
+    # Read/build/export table actions are not gated either.
+    assert "table_query" not in gates.get("analytics", set())
+    assert "table_export_excel" not in gates.get("analytics", set())
+
+
+def test_sheet_macro_chain_dataflow_sheet_id():
+    """A create→patch sheet macro links sheet_id as a step reference (reproducible)."""
+    steps = [
+        {"capability": "sheets", "action": "create",
+         "args_template": {"action": "create", "title": "Отчёт"}},
+        {"capability": "sheets", "action": "patch_cells",
+         "args_template": {"action": "patch_cells", "sheet_id": "SID",
+                           "edits": [{"row": 0, "col": "A", "value": 1}]}},
+    ]
+    step_results = [{"sheet_id": "SID"}, {"status": "patched"}]
+    templated, _slots = recipes.parameterize_steps(
+        steps, "сделай лист отчёта", step_results
+    )
+    # The runtime sheet_id became a data-flow reference, not an orphan literal.
+    assert templated[1]["args_template"]["sheet_id"] == "{{step.0.sheet_id}}"
+    assert recipes.is_reproducible(templated, "сделай лист отчёта")

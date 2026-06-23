@@ -1,17 +1,17 @@
 "use client";
 
-import {
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getSortedRowModel,
-  SortingState,
-  useReactTable,
-} from "@tanstack/react-table";
-import { useMemo, useState } from "react";
-import type { CanvasColumn } from "@/lib/canvas-context";
+// Thin wrapper over the shared DataGrid — keeps the canvas toolbar
+// (filter / copy / CSV / Excel export) while delegating the grid itself to the
+// unified component so spec-tables get resize, formatting and (later) editing
+// for free.
+
+import { useState } from "react";
+import { DataGrid } from "@/components/grid/DataGrid";
+import { displayValue } from "@/components/grid/format";
+import type { GridColumn } from "@/components/grid/types";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
+import type { CanvasColumn } from "@/lib/canvas-context";
 
 const API = getApiBaseUrl();
 
@@ -23,52 +23,18 @@ interface CanvasTableProps {
   blockId?: string;
 }
 
-function isMoneyKey(key: string) {
-  const normalized = key.toLowerCase();
-  return (
-    normalized === "amount" ||
-    normalized === "total_amount" ||
-    normalized === "subtotal" ||
-    normalized === "subtotal_amount" ||
-    normalized === "tax_amount" ||
-    normalized === "unit_price" ||
-    normalized === "paid_amount" ||
-    normalized.endsWith("_amount") ||
-    normalized.endsWith("_price")
-  );
-}
-
-function formatNumberValue(value: unknown, fractionDigits = 4) {
-  if (value == null || value === "") return "—";
-  const text = String(value).replace(/\s/g, "").replace(",", ".");
-  const number = Number(text);
-  if (!Number.isFinite(number)) return String(value);
-  return new Intl.NumberFormat("ru-RU", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: fractionDigits,
-  }).format(number);
-}
-
-function formatMoneyValue(value: unknown) {
-  if (value == null || value === "") return "—";
-  const text = String(value).replace(/\s/g, "").replace(",", ".");
-  const number = Number(text);
-  if (!Number.isFinite(number)) return String(value);
-  return new Intl.NumberFormat("ru-RU", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(number);
-}
-
-function displayValue(value: unknown, column: CanvasColumn) {
-  if (value == null) return "—";
-  if (isMoneyKey(column.key)) return formatMoneyValue(value);
-  if (column.type === "number") return formatNumberValue(value);
-  return String(value);
+function toGridColumns(columns: CanvasColumn[]): GridColumn[] {
+  return columns.map((c) => ({
+    key: c.key,
+    header: c.header,
+    type: c.type,
+    width: c.width,
+    editable: c.editable,
+  }));
 }
 
 function exportCsv(
-  columns: CanvasColumn[],
+  columns: GridColumn[],
   rows: Record<string, unknown>[],
   filename: string,
 ) {
@@ -94,86 +60,12 @@ function exportCsv(
   URL.revokeObjectURL(url);
 }
 
-function copyTsv(columns: CanvasColumn[], rows: Record<string, unknown>[]) {
+function copyTsv(columns: GridColumn[], rows: Record<string, unknown>[]) {
   const header = columns.map((c) => c.header).join("\t");
   const body = rows
     .map((row) => columns.map((c) => displayValue(row[c.key], c)).join("\t"))
     .join("\n");
   navigator.clipboard.writeText(header + "\n" + body).catch(() => {});
-}
-
-function getAction(value: unknown): {
-  href?: string;
-  label?: string;
-  confirm?: string;
-  method?: string;
-} {
-  if (typeof value === "string") return { href: value };
-  if (!value || typeof value !== "object") return {};
-  const record = value as Record<string, unknown>;
-  return {
-    href: typeof record.href === "string" ? record.href : undefined,
-    label: typeof record.label === "string" ? record.label : undefined,
-    confirm: typeof record.confirm === "string" ? record.confirm : undefined,
-    method: typeof record.method === "string" ? record.method : undefined,
-  };
-}
-
-function ActionCell({
-  value,
-  type,
-}: {
-  value: unknown;
-  type: CanvasColumn["type"];
-}) {
-  const [status, setStatus] = useState<"idle" | "pending" | "done" | "error">(
-    "idle",
-  );
-  const action = getAction(value);
-  if (!action.href) return <span className="text-slate-500">—</span>;
-
-  if (type === "delete") {
-    async function runDelete() {
-      if (action.confirm && !window.confirm(action.confirm)) return;
-      setStatus("pending");
-      try {
-        const res = await fetch(action.href!, {
-          method: action.method || "DELETE",
-        });
-        setStatus(res.ok ? "done" : "error");
-      } catch {
-        setStatus("error");
-      }
-    }
-
-    return (
-      <button
-        onClick={runDelete}
-        disabled={status === "pending" || status === "done"}
-        className="text-red-300 hover:text-red-200 disabled:text-slate-500 underline"
-      >
-        {status === "pending"
-          ? "Удаляю..."
-          : status === "done"
-            ? "Удалено"
-            : status === "error"
-              ? "Ошибка"
-              : action.label || "Удалить"}
-      </button>
-    );
-  }
-
-  return (
-    <a
-      href={action.href}
-      download={type === "download" ? true : undefined}
-      target={type === "link" ? "_blank" : undefined}
-      rel={type === "link" ? "noopener" : undefined}
-      className="text-blue-300 hover:text-blue-200 underline"
-    >
-      {action.label || (type === "download" ? "Скачать" : action.href)}
-    </a>
-  );
 }
 
 async function exportWorkspaceBlock(blockId: string, format: "xlsx" | "csv") {
@@ -208,50 +100,54 @@ export function CanvasTable({
   fill = false,
   blockId,
 }: CanvasTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
-
-  const tableColumns = useMemo(
-    () =>
-      columns.map((col) => ({
-        id: col.key,
-        accessorKey: col.key,
-        header: col.header,
-        size: col.width,
-        cell: (info: { getValue: () => unknown }) => {
-          const v = info.getValue();
-          if (["link", "download", "delete"].includes(col.type || "")) {
-            return <ActionCell value={v} type={col.type} />;
-          }
-          if (v == null) return <span className="text-slate-500">—</span>;
-          return (
-            <span
-              className={`whitespace-pre-line ${
-                isMoneyKey(col.key) || col.type === "number"
-                  ? "tabular-nums text-slate-100"
-                  : ""
-              }`}
-            >
-              {displayValue(v, col)}
-            </span>
-          );
-        },
-      })),
-    [columns],
-  );
-
-  const table = useReactTable({
-    data: rows,
-    columns: tableColumns,
-    state: { sorting, globalFilter },
-    onSortingChange: setSorting,
-    onGlobalFilterChange: setGlobalFilter,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-  });
-
+  const [notice, setNotice] = useState<string | null>(null);
+  const gridColumns = toGridColumns(columns);
   const filename = title || "таблица";
+
+  // Editable spec-tables: a committed cell files an approval-gated edit.
+  const hasEditable = Boolean(blockId) && gridColumns.some((c) => c.editable);
+  const onCellCommit = hasEditable
+    ? async (edit: {
+        field: string;
+        value: unknown;
+        rowPk?: string | number;
+      }) => {
+        if (edit.rowPk == null) {
+          setNotice("Не удалось определить строку для записи.");
+          throw new Error("no row pk");
+        }
+        const res = await mutFetch(
+          `${API}/api/workspace/agent/spec-table/cell-edit`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              canvas_id: blockId,
+              row_pk: String(edit.rowPk),
+              field: edit.field,
+              value: edit.value,
+            }),
+          },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data?.status === "error") {
+          setNotice(data?.message || "Ошибка записи правки.");
+          throw new Error(data?.message || "cell edit failed");
+        }
+        setNotice(data?.message || "Правка отправлена на подтверждение.");
+      }
+    : undefined;
+
+  const filteredCount = globalFilter
+    ? rows.filter((row) =>
+        gridColumns.some((c) =>
+          String(row[c.key] ?? "")
+            .toLowerCase()
+            .includes(globalFilter.toLowerCase()),
+        ),
+      ).length
+    : rows.length;
 
   return (
     <div className={`space-y-2 ${fill ? "flex h-full min-h-0 flex-col" : ""}`}>
@@ -260,91 +156,53 @@ export function CanvasTable({
           value={globalFilter}
           onChange={(e) => setGlobalFilter(e.target.value)}
           placeholder="Фильтр..."
-          className="flex-1 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500"
+          className="flex-1 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
         />
         <button
-          onClick={() => copyTsv(columns, rows)}
+          onClick={() => copyTsv(gridColumns, rows)}
           title="Копировать как таблицу"
-          className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded text-slate-300"
+          className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-600"
         >
           Копировать
         </button>
         <button
           onClick={() =>
-            blockId ? exportWorkspaceBlock(blockId, "csv") : exportCsv(columns, rows, filename)
+            blockId
+              ? exportWorkspaceBlock(blockId, "csv")
+              : exportCsv(gridColumns, rows, filename)
           }
-          className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded text-slate-300"
+          className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-600"
         >
           CSV
         </button>
         <button
           onClick={() => blockId && exportWorkspaceBlock(blockId, "xlsx")}
           disabled={!blockId}
-          className="px-2 py-1 text-xs bg-emerald-700 hover:bg-emerald-600 rounded text-white"
+          className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600"
         >
           Excel
         </button>
       </div>
 
-      <div
-        className={`overflow-auto rounded-md border border-slate-700 bg-slate-950 ${
-          fill ? "min-h-0 flex-1" : "max-h-[60vh]"
-        }`}
-      >
-        <table className="w-full border-collapse text-left text-xs">
-          <thead className="sticky top-0 z-10 bg-slate-800">
-            {table.getHeaderGroups().map((hg) => (
-              <tr key={hg.id}>
-                {hg.headers.map((h) => (
-                  <th
-                    key={h.id}
-                    onClick={h.column.getToggleSortingHandler()}
-                    className="cursor-pointer select-none whitespace-nowrap border border-slate-600 px-3 py-2 font-semibold text-slate-100 hover:bg-slate-700"
-                    style={{ width: h.column.columnDef.size }}
-                  >
-                    {flexRender(h.column.columnDef.header, h.getContext())}
-                    {h.column.getIsSorted() === "asc" && (
-                      <span className="ml-1 opacity-60">↑</span>
-                    )}
-                    {h.column.getIsSorted() === "desc" && (
-                      <span className="ml-1 opacity-60">↓</span>
-                    )}
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
-          <tbody>
-            {table.getRowModel().rows.map((row, idx) => (
-              <tr
-                key={row.id}
-                className={
-                  idx % 2 === 0
-                    ? "bg-slate-950 hover:bg-slate-900"
-                    : "bg-slate-900 hover:bg-slate-800"
-                }
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <td
-                    key={cell.id}
-                    className="border border-slate-700 px-3 py-2 align-top text-slate-200"
-                  >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {table.getRowModel().rows.length === 0 && (
-          <div className="text-center py-6 text-slate-500 text-xs">
-            Нет данных
-          </div>
-        )}
-      </div>
+      <DataGrid
+        columns={gridColumns}
+        rows={rows}
+        storageKey={null}
+        globalFilter={globalFilter}
+        fill={fill}
+        spreadsheetMode
+        onCellCommit={onCellCommit}
+        getRowPk={(row) => (row.__pk as string | undefined) ?? undefined}
+      />
+
+      {notice && (
+        <div className="rounded bg-slate-800 px-2 py-1 text-xs text-amber-300">
+          {notice}
+        </div>
+      )}
 
       <div className="text-xs text-slate-500">
-        {table.getFilteredRowModel().rows.length} из {rows.length} строк
+        {filteredCount} из {rows.length} строк
       </div>
     </div>
   );

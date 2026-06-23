@@ -19,7 +19,10 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import uuid
+
 from app.core.chat_bus import chat_bus
+from app.db.models import Approval, ApprovalActionType, DraftAction
 from app.db.session import get_db
 from app.domain.table_spec import (
     SOURCES,
@@ -29,6 +32,7 @@ from app.domain.table_spec import (
     execute_spec,
     parse_patch_command,
     validate_spec,
+    writeback_for,
 )
 from app.domain.workspace import get_workspace_block, upsert_workspace_block
 
@@ -201,6 +205,97 @@ async def patch_spec_table(
             spec=spec.model_dump(mode="json"),
         )
     return await _render_and_publish(db, payload.canvas_id, new_spec, note=note)
+
+
+class SpecTableCellEditRequest(BaseModel):
+    canvas_id: str = DEFAULT_CANVAS
+    row_pk: str
+    field: str
+    value: Any = None
+    requested_by: str | None = None
+
+
+class SpecTableCellEditResponse(BaseModel):
+    status: str
+    message: str
+    approval_id: str | None = None
+
+
+@router.post("/agent/spec-table/cell-edit", response_model=SpecTableCellEditResponse)
+async def edit_spec_table_cell(
+    payload: SpecTableCellEditRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SpecTableCellEditResponse:
+    """Skill: workspace.spec_table_cell_edit — Queue a cell edit for approval.
+
+    Draft-first: the edit is NOT written to the DB here. It files a DraftAction
+    routed through the ``table.apply_diff`` approval gate; the change is applied
+    only once a human approves it (see approvals._execute_approved_action).
+    """
+    block = get_workspace_block(payload.canvas_id)
+    if not block or not isinstance(block.get("spec"), dict):
+        return SpecTableCellEditResponse(
+            status="error",
+            message="Блок не найден или не является spec-таблицей.",
+        )
+    source_key = str(block["spec"].get("source", ""))
+    wb = writeback_for(source_key)
+    if wb is None:
+        return SpecTableCellEditResponse(
+            status="error",
+            message=f"Источник «{source_key}» доступен только для чтения.",
+        )
+    if payload.field not in wb.editable:
+        return SpecTableCellEditResponse(
+            status="error",
+            message=(
+                f"Поле «{payload.field}» нередактируемо. "
+                f"Редактируемые: {', '.join(sorted(wb.editable))}."
+            ),
+        )
+    try:
+        entity_id = uuid.UUID(str(payload.row_pk))
+    except (ValueError, TypeError):
+        return SpecTableCellEditResponse(
+            status="error", message="Некорректный идентификатор строки."
+        )
+
+    approval = Approval(
+        action_type=ApprovalActionType.table_apply_diff,
+        entity_type=wb.entity_type,
+        entity_id=entity_id,
+        requested_by=payload.requested_by or "sveta",
+        context={
+            "source": source_key,
+            "field": payload.field,
+            "value": payload.value,
+            "title": block.get("title"),
+        },
+    )
+    db.add(approval)
+    await db.flush()
+
+    draft = DraftAction(
+        action_type="table.apply_diff",
+        entity_type=wb.entity_type,
+        entity_id=entity_id,
+        draft_data={
+            "source": source_key,
+            "field": payload.field,
+            "value": payload.value,
+        },
+        approval_id=approval.id,
+    )
+    db.add(draft)
+    await db.commit()
+
+    return SpecTableCellEditResponse(
+        status="pending_approval",
+        message=(
+            f"Правка поля «{payload.field}» отправлена на подтверждение."
+        ),
+        approval_id=str(approval.id),
+    )
 
 
 @router.get("/agent/spec-table/catalog")
