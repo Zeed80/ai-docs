@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import json
+import re
 import uuid
 
 from app.core.chat_bus import chat_bus
@@ -66,6 +67,55 @@ class SpecTableRequest(BaseModel):
     limit: Any = None
 
 
+def _maybe_json(value: Any) -> Any:
+    """json.loads a string, else return the value unchanged."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return value
+    return value
+
+
+def _coerce_spec_fields(spec: dict[str, Any]) -> dict[str, Any]:
+    """Normalise sub-fields a weak/thinking model tends to mangle.
+
+    Handles: columns/filters/sort/group_by arriving as JSON strings; columns as
+    a comma-separated field list or bare-string entries; numeric limit as a
+    string. Anything unrecoverable is left for validate_spec to report cleanly.
+    """
+    out = dict(spec)
+
+    cols = _maybe_json(out.get("columns"))
+    if isinstance(cols, str):
+        cols = [c.strip() for c in re.split(r"[;,\n]", cols) if c.strip()]
+    if isinstance(cols, list):
+        out["columns"] = [
+            {"field": c} if isinstance(c, str) else c for c in cols
+        ]
+    elif cols is not None:
+        out["columns"] = cols
+
+    for key in ("filters", "sort"):
+        if key in out:
+            out[key] = _maybe_json(out.get(key))
+
+    gb = _maybe_json(out.get("group_by"))
+    if isinstance(gb, str):
+        gb = [g.strip() for g in re.split(r"[;,\n]", gb) if g.strip()]
+    if gb is not None:
+        out["group_by"] = gb
+
+    lim = out.get("limit")
+    if isinstance(lim, str):
+        try:
+            out["limit"] = int(lim.strip())
+        except ValueError:
+            out.pop("limit", None)
+
+    return out
+
+
 def _effective_spec(payload: "SpecTableRequest") -> dict[str, Any] | None:
     """Reconstruct a spec dict from whatever shape the model produced."""
     raw = payload.spec
@@ -74,15 +124,15 @@ def _effective_spec(payload: "SpecTableRequest") -> dict[str, Any] | None:
             raw = json.loads(raw)
         except (ValueError, TypeError):
             raw = None
-    if isinstance(raw, dict):
-        return raw
-    # Flattened form: assemble from recognised top-level fields.
-    assembled: dict[str, Any] = {}
-    for key in ("source", "columns", "filters", "sort", "group_by", "limit"):
-        val = getattr(payload, key, None)
-        if val is not None:
-            assembled[key] = val
-    return assembled or None
+    if not isinstance(raw, dict):
+        # Flattened form: assemble from recognised top-level fields.
+        assembled: dict[str, Any] = {}
+        for key in ("source", "columns", "filters", "sort", "group_by", "limit"):
+            val = getattr(payload, key, None)
+            if val is not None:
+                assembled[key] = val
+        raw = assembled or None
+    return _coerce_spec_fields(raw) if isinstance(raw, dict) else None
 
 
 class SpecTablePatchRequest(BaseModel):

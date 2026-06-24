@@ -336,6 +336,31 @@ async def test_api_tolerates_flattened_and_string_specs(client, seeded):
 
 
 @pytest.mark.asyncio
+async def test_api_tolerates_stringified_subfields(client, seeded):
+    """Thinking models JSON-stringify columns/filters or send bare field names."""
+    import json as _json
+
+    # columns/filters as JSON strings, limit as string.
+    resp = await client.post("/api/workspace/agent/spec-table", json={
+        "spec": {
+            "source": "invoice_items",
+            "columns": _json.dumps([{"field": "description"}, {"field": "unit_price"}]),
+            "filters": _json.dumps([{"field": "description", "op": "smart", "value": "фрезы"}]),
+            "limit": "100",
+        },
+    })
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "published"
+
+    # columns as a comma-separated list of bare field names.
+    resp = await client.post("/api/workspace/agent/spec-table", json={
+        "spec": {"source": "invoice_items", "columns": "description, unit_price"},
+    })
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "published"
+
+
+@pytest.mark.asyncio
 async def test_api_patch_unrecognized_command(client, seeded):
     await client.post("/api/workspace/agent/spec-table", json={
         "spec": _user_spec().model_dump(mode="json"),
