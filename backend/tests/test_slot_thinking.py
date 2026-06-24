@@ -98,3 +98,25 @@ async def test_router_resolves_per_task_thinking(routing_mem_store, monkeypatch)
         )
     )
     assert captured_thinking["value"] is True
+
+
+def test_reasoning_disable_params_covers_ollama():
+    """Ollama tool-call path must actually emit a thinking-off knob (regression:
+    it returned {} so disabled-thinking never reached the model)."""
+    from app.ai.agent_loop import _reasoning_disable_params
+
+    ollama = _reasoning_disable_params("ollama")
+    assert ollama.get("chat_template_kwargs") == {"enable_thinking": False}
+    assert ollama.get("think") is False
+
+    # llamacpp / vllm use the Qwen3 template kwarg.
+    assert _reasoning_disable_params("llamacpp") == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+    assert _reasoning_disable_params("vllm") == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+
+    # Strict endpoints without a known knob stay empty (avoid 400s).
+    assert _reasoning_disable_params("lmstudio") == {}
+    assert _reasoning_disable_params("openai_compatible") == {}

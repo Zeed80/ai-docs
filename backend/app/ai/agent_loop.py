@@ -791,7 +791,15 @@ def _provider_instance_extra(provider: str) -> dict[str, Any]:
 
 
 def _reasoning_disable_params(provider: str) -> dict[str, Any]:
-    if provider == "llamacpp":
+    # Ollama and llama.cpp both serve Qwen3-family templates over the
+    # OpenAI-compatible endpoint; the CoT switch is the template kwarg
+    # ``enable_thinking`` (Ollama also accepts ``think``). Without this the
+    # tool-call path left thinking ON even when the role had it disabled, so the
+    # model wrapped its tool args in <think>… and mangled the JSON.
+    if provider == "ollama":
+        # Ollama is lenient and ignores unknown fields, so send both knobs.
+        return {"chat_template_kwargs": {"enable_thinking": False}, "think": False}
+    if provider in ("llamacpp", "vllm"):
         return {"chat_template_kwargs": {"enable_thinking": False}}
     if provider == "openrouter":
         return {"reasoning": {"enabled": False}}
