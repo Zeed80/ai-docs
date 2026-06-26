@@ -19,8 +19,11 @@ def test_registry_loads_baseline_models() -> None:
     assert embedding.supports_batching is True
     reranker = registry.get_model("local_reranker_openai_compatible")
     assert "rerank" in {modality.value for modality in reranker.modalities}
+    # Reranking is LLM-as-reranker (generate+logprobs): dedicated reranker GGUFs
+    # are broken on Ollama 0.30.x, so the route falls back to small instruct models.
     assert registry.get_route(AITask.RERANKING).fallback_chain == [
-        "local_reranker_ollama",
+        "gemma4_e2b_ollama",
+        "qwen3_5_9b_ollama",
     ]
 
 

@@ -35,6 +35,7 @@ class AuditCode(StrEnum):
     EMPTY_ANSWER = "empty_answer"                        # no text and no workspace output
     UNGROUNDED_ANSWER = "ungrounded_answer"              # factual answer with no data tool call
     SEMANTIC_SUSPECT = "semantic_suspect"                # semantic audit doubts the answer
+    INTENT_MISMATCH = "intent_mismatch"                  # published artifact doesn't match the request
 
 
 Severity = Literal["blocking", "advisory"]
@@ -60,6 +61,7 @@ RETRYABLE: frozenset[AuditCode] = frozenset({
     AuditCode.FILTER_MISSING,
     AuditCode.FILTER_MISMATCH,
     AuditCode.EMPTY_ANSWER,
+    AuditCode.INTENT_MISMATCH,
 })
 
 # Issues that signal a genuinely missing capability (feed the builder flow).

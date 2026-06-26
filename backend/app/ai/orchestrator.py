@@ -602,6 +602,15 @@ class AgentOrchestrator:
             repaired = await self._try_execute_planned_workspace_tool(plan, audit, config)
             if repaired:
                 audit = await self._audit_turn(plan, config)
+        # Adaptive-by-risk: a cheap (desktop) turn that STILL has an empty/mismatched
+        # table after retries must not ship a blank board silently — be honest and
+        # invite a one-line clarification instead.
+        if (
+            not audit.passed
+            and _has_code(audit.issues, AuditCode.INTENT_MISMATCH)
+            and risk_class(plan) == "cheap"
+        ):
+            await self._explain_intent_mismatch(plan, content)
         # Semantic correctness check on the settled answer (advisory; runs once).
         await self._run_semantic_audit(plan, config, audit)
         # Reactive self-refine: only when the auditor flagged a generative answer.
@@ -1846,12 +1855,73 @@ class AgentOrchestrator:
                 ))
                 break
 
+        # ── Intent-match on the published artifact ─────────────────────────────
+        # Publishing an EMPTY table to the desktop for a show/list request is the
+        # core "опубликовал не то" bug: the user asked to see data and got a blank
+        # board. Deterministic and cheap; the semantic critic (below) catches
+        # subtler content mismatches (wrong source/columns). Excludes `count`
+        # (0 is a valid answer) and gated actions (no desktop table there).
+        if plan.workspace.required and plan.intent in _LISTING_INTENTS:
+            published = _last_published_table(self._trace)
+            if published is not None and published.get("total") == 0:
+                issues.append(AuditIssue(
+                    code=AuditCode.INTENT_MISMATCH,
+                    message=(
+                        "На Рабочий стол опубликована ПУСТАЯ таблица — по запросу "
+                        "ничего не найдено. Проверь источник и фильтры (условия "
+                        "могут пересекаться как И вместо ИЛИ) или уточни запрос."
+                    ),
+                    context={"total": 0, "spec": published.get("spec")},
+                ))
+
         return AuditReport(
             passed=not _blocking_issues(issues),
             issues=issues,
             workspace_verified=workspace_verified,
             final_channel=plan.workspace.channel,
         )
+
+    def _published_table_brief(self) -> str:
+        """Compact snapshot of the published spec-table for the semantic critic:
+        source, columns, grouping/filters, row count and a few sample rows — so
+        the critic judges the actual artifact, not just the chat text."""
+        pub = _last_published_table(self._trace)
+        if not pub:
+            return ""
+        spec = pub.get("spec") or {}
+        cols = [c.get("header") or c.get("field") for c in (spec.get("columns") or [])]
+        parts: list[str] = [f"источник={spec.get('source')}", f"колонки={cols}"]
+        if spec.get("group_by"):
+            parts.append(f"группировка={spec.get('group_by')}")
+        if spec.get("filters"):
+            parts.append(f"фильтры={spec.get('filters')}")
+        parts.append(f"строк={pub.get('total')}")
+        try:
+            block = get_workspace_block(str(pub.get("canvas_id") or ""))
+            sample = ((block or {}).get("rows") or [])[:3]
+            if sample:
+                parts.append(f"примеры={sample}")
+        except Exception:
+            pass
+        return "; ".join(str(p) for p in parts)[:800]
+
+    async def _explain_intent_mismatch(self, plan: OrchestratorPlan, content: str) -> None:
+        """When a cheap (desktop) turn still has an empty/mismatched table after
+        retries, be honest instead of leaving a blank board: say what was searched
+        and invite a one-line clarification (adaptive-by-risk: no silent garbage)."""
+        pub = _last_published_table(self._trace)
+        spec = (pub or {}).get("spec") or {}
+        filters = spec.get("filters") or []
+        src = spec.get("source") or "данные"
+        await self._outer_send({
+            "type": "text",
+            "content": (
+                f"По запросу «{content[:120]}» в источнике «{src}» ничего не нашлось "
+                f"(фильтры: {filters or 'без фильтров'}). Я не стал публиковать пустую "
+                "таблицу как ответ. Уточните условие (период, поставщика, формулировку) "
+                "— и я перестрою."
+            ),
+        })
 
     async def _run_semantic_audit(
         self,
@@ -1900,11 +1970,15 @@ class AgentOrchestrator:
         self._llm_calls += 1
 
         tools_used = ", ".join(sorted(set(self._trace.tool_calls))) or "нет"
+        table_brief = self._published_table_brief()
         prompt = (
             f"Задача пользователя: {plan.goal[:400]}\n"
             f"Использованные инструменты: {tools_used}\n"
-            f"Ответ агента:\n{final_text[:1500]}\n\n"
-            "Ответ по существу решает задачу пользователя? "
+            + (f"Опубликованная таблица: {table_brief}\n" if table_brief else "")
+            + f"Ответ агента:\n{final_text[:1500]}\n\n"
+            "Решает ли РЕЗУЛЬТАТ (таблица и/или текст) задачу именно так, как "
+            "просили — тот источник, нужные колонки/группировка/фильтры, не пустой "
+            "и не данные другого запроса? "
             'Верни строго JSON: {"ok": true|false, "reason": "<кратко на русском>"}'
         )
         try:
@@ -2936,6 +3010,46 @@ def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str
     if plan.workspace.required:
         lines.append("- Результат должен быть опубликован в Рабочий стол (не только текст в чат).")
     return "\n".join(lines)
+
+
+# ── Risk classification (adaptive-by-risk behaviour) ───────────────────────────
+# Cheap/reversible artifacts (a table on the desktop) can be (re)built freely and
+# self-corrected. Expensive/external actions (approval gates: email.send,
+# invoice.approve, anomaly.resolve, table.apply_diff) must never be shipped on a
+# mismatch — they require explicit human confirmation first.
+_GATED_SKILL_MARKERS = (
+    "email.send", "email__send",
+    "invoice.approve", "invoice__approve",
+    "anomaly.resolve", "anomaly__resolve",
+    "table.apply_diff", "table__apply_diff",
+)
+
+
+def risk_class(plan: OrchestratorPlan) -> str:
+    """'gated' for expensive/external/approval-gated actions, else 'cheap'."""
+    skills = " ".join(plan.worker.recommended_skills or []).lower()
+    if any(marker in skills for marker in _GATED_SKILL_MARKERS):
+        return "gated"
+    return "cheap"
+
+
+# Intents that must yield ≥1 row on the desktop — an empty published table is the
+# "опубликовал не то" bug. ``count`` is excluded (0 is a valid count answer).
+_LISTING_INTENTS = frozenset({"analytical_table", "invoice_list", "table_edit"})
+
+
+def _last_published_table(trace: "_TurnTrace") -> dict[str, Any] | None:
+    """Latest spec-table publish result in the trace (what the user actually sees)."""
+    out: dict[str, Any] | None = None
+    for item in trace.tool_results:
+        r = item.get("result")
+        if (
+            isinstance(r, dict)
+            and r.get("status") == "published"
+            and isinstance(r.get("spec"), dict)
+        ):
+            out = r
+    return out
 
 
 def _fallback_capability_draft(
