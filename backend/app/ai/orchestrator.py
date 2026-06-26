@@ -1001,7 +1001,7 @@ class AgentOrchestrator:
         # Phase 3 — learn this correction against the request that built the table,
         # so a future identical request applies the fix without being corrected.
         if is_correction(content) and self._last_spec_request:
-            record_correction(self._last_spec_request, spec.source, content)
+            await record_correction(self._last_spec_request, spec.source, content)
         answer = str(result.get("message") or "Готово.")
         await self._outer_send({"type": "text", "content": answer})
         try:
@@ -1147,10 +1147,10 @@ class AgentOrchestrator:
 
         # Phase 3 — learning: replay corrections learned for THIS request, and (if
         # this turn is itself a correction) learn it against the previous request.
-        learned = learned_ops_for(content, spec.source)
+        learned = await learned_ops_for(content, spec.source)
         if is_correction(content):
             if self._last_spec_request:
-                record_correction(self._last_spec_request, spec.source, content)
+                await record_correction(self._last_spec_request, spec.source, content)
         else:
             self._last_spec_request, self._last_spec_source = content, spec.source
 

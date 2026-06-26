@@ -56,27 +56,69 @@ def test_correction_to_ops_empty_for_noise():
     assert corrections.correction_to_ops("invoice_items", "ну такое, не очень") == []
 
 
-# ── record + replay roundtrip ──────────────────────────────────────────────────
+# ── record + replay roundtrip (offline: Redis exact path, vector helpers no-op) ──
 
-def test_record_then_replay_same_request(monkeypatch):
+async def _no_upsert(*a, **k):
+    return None
+
+
+async def _no_search(*a, **k):
+    return []
+
+
+@pytest.mark.asyncio
+async def test_record_then_replay_same_request(monkeypatch):
     fake = _FakeRedis()
     monkeypatch.setattr(corrections, "_redis", lambda: fake)
+    monkeypatch.setattr(corrections, "_vector_upsert", _no_upsert)
+    monkeypatch.setattr(corrections, "_vector_search", _no_search)
 
     prev = "выведи все фрезы по поставщику"
-    learned = corrections.record_correction(prev, "invoice_items", "нет, группируй по дате")
+    learned = await corrections.record_correction(prev, "invoice_items", "нет, группируй по дате")
     assert any(o.op == "set_group_by" and o.field == "invoice_date" for o in learned)
 
-    # Same request later → learned ops replayed.
-    replay = corrections.learned_ops_for(prev, "invoice_items")
+    # Same request later → learned ops replayed via Redis exact key.
+    replay = await corrections.learned_ops_for(prev, "invoice_items")
     assert any(o.op == "set_group_by" and o.field == "invoice_date" for o in replay)
 
-    # A DIFFERENT request must not pick up this correction.
-    assert corrections.learned_ops_for("покажи склад", "invoice_items") == []
+    # A DIFFERENT request must not pick up this correction (exact miss → vector no-op).
+    assert await corrections.learned_ops_for("покажи склад", "invoice_items") == []
 
 
-def test_record_correction_with_no_ops_stores_nothing(monkeypatch):
+@pytest.mark.asyncio
+async def test_vector_replay_generalises_to_similar_request(monkeypatch):
+    """Vector path returns a learned correction for a SIMILAR (not identical)
+    request — the Redis exact key misses but the similarity search hits."""
     fake = _FakeRedis()
     monkeypatch.setattr(corrections, "_redis", lambda: fake)
-    out = corrections.record_correction("запрос", "invoice_items", "спасибо, отлично")
+
+    captured: dict = {}
+
+    async def fake_upsert(point_id, source, ops_json, text):
+        captured["source"] = source
+        captured["ops_json"] = ops_json
+
+    async def fake_search(request, source):
+        if captured.get("source") == source and "фрез" in request:
+            return corrections._ops_from_json(captured["ops_json"])
+        return []
+
+    monkeypatch.setattr(corrections, "_vector_upsert", fake_upsert)
+    monkeypatch.setattr(corrections, "_vector_search", fake_search)
+
+    await corrections.record_correction(
+        "выведи все фрезы по поставщику", "invoice_items", "нет, группируй по дате")
+    # Different phrasing, same intent → exact miss, vector hit.
+    replay = await corrections.learned_ops_for(
+        "покажи фрезы в разрезе поставщиков", "invoice_items")
+    assert any(o.op == "set_group_by" and o.field == "invoice_date" for o in replay)
+
+
+@pytest.mark.asyncio
+async def test_record_correction_with_no_ops_stores_nothing(monkeypatch):
+    fake = _FakeRedis()
+    monkeypatch.setattr(corrections, "_redis", lambda: fake)
+    monkeypatch.setattr(corrections, "_vector_upsert", _no_upsert)
+    out = await corrections.record_correction("запрос", "invoice_items", "спасибо, отлично")
     assert out == []
     assert fake.store == {}

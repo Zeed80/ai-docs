@@ -33,6 +33,7 @@ from app.domain.table_spec import (
     apply_patch,
     execute_spec,
     parse_patch_command,
+    repair_spec_to_catalog,
     validate_spec,
     writeback_for,
 )
@@ -235,6 +236,19 @@ async def publish_spec_table(
         )
     if payload.title:
         spec = spec.model_copy(update={"title": payload.title})
+    # Ground a near-miss spec in the catalog before validation (heal source/field
+    # names rather than rejecting), and tell the user what was adjusted.
+    had_columns = bool(spec.columns)
+    spec, repairs = repair_spec_to_catalog(spec)
+    if had_columns and not spec.columns:
+        return SpecTableResponse(
+            status="error", canvas_id=payload.canvas_id, total=0, shown=0,
+            message=(
+                "Ни одно из указанных полей не найдено в каталоге источника "
+                f"«{spec.source}» (" + "; ".join(repairs) + "). "
+                "Справочник полей: action=spec_table_catalog."
+            ),
+        )
     problems = validate_spec(spec)
     if problems:
         return SpecTableResponse(
@@ -244,7 +258,8 @@ async def publish_spec_table(
                 + ". Справочник полей: action=spec_table_catalog."
             ),
         )
-    return await _render_and_publish(db, payload.canvas_id, spec)
+    note = ("Привёл к каталогу: " + "; ".join(repairs)) if repairs else ""
+    return await _render_and_publish(db, payload.canvas_id, spec, note=note)
 
 
 @router.post("/agent/spec-table/patch", response_model=SpecTableResponse)

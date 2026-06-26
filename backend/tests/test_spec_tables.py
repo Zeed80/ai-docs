@@ -468,6 +468,36 @@ async def test_documents_source(db_session, seeded):
     assert result.rows[0]["status"] == "ingested"
 
 
+def test_repair_spec_heals_source_and_field_synonyms():
+    """Near-miss source/field names are mapped to catalog keys, not rejected."""
+    spec = ts.TableSpec(source="счета", columns=[
+        ts.ColumnSpec(field="поставщик"), ts.ColumnSpec(field="сумма")])
+    repaired, notes = ts.repair_spec_to_catalog(spec)
+    assert repaired.source == "invoices"
+    fields = [c.field for c in repaired.columns]
+    assert "supplier_name" in fields and "total_amount" in fields
+    assert notes  # changes are reported
+
+
+def test_repair_spec_drops_unknown_keeps_known():
+    spec = ts.TableSpec(source="invoices", columns=[
+        ts.ColumnSpec(field="invoice_number"), ts.ColumnSpec(field="ляляля")])
+    repaired, notes = ts.repair_spec_to_catalog(spec)
+    fields = [c.field for c in repaired.columns]
+    assert fields == ["invoice_number"]
+    assert any("ляляля" in n for n in notes)
+
+
+@pytest.mark.asyncio
+async def test_repair_applied_in_execute_spec(db_session, seeded):
+    """A spec with a synonym source/field executes after catalog grounding."""
+    spec = ts.TableSpec(source="счета", columns=[
+        ts.ColumnSpec(field="поставщик"), ts.ColumnSpec(field="номер счета")])
+    res = await ts.execute_spec(db_session, spec)
+    assert res.total == 3
+    assert "supplier_name" in {c["key"] for c in res.columns}
+
+
 @pytest.mark.asyncio
 async def test_grouped_aggregate_functions(db_session, seeded):
     """avg/min/max/count/sum по unit_price в разрезе поставщика на реальных позициях.

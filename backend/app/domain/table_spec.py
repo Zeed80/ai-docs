@@ -972,6 +972,92 @@ def validate_spec(spec: TableSpec) -> list[str]:
     return problems
 
 
+def _resolve_source(name: str) -> str | None:
+    """Map a free/near-miss source name to a catalog key via synonyms."""
+    n = (name or "").strip().lower()
+    if n in SOURCES:
+        return n
+    for key, src in SOURCES.items():
+        cands = {key.lower(), src.title.lower(), *(s.lower() for s in src.synonyms)}
+        if n in cands:
+            return key
+    for key, src in SOURCES.items():
+        for s in (key, src.title, *src.synonyms):
+            s = (s or "").lower()
+            if s and (n in s or s in n) and min(len(n), len(s)) >= 4:
+                return key
+    return None
+
+
+def repair_spec_to_catalog(spec: TableSpec) -> tuple[TableSpec, list[str]]:
+    """Heal a worker-produced spec against the whitelisted catalog: map a near-miss
+    source/field name to its catalog key (via synonyms + morphology-aware
+    ``resolve_field``), drop the truly unresolvable. Returns (spec, change-notes).
+    Deterministic — keeps the agent grounded so a slightly-off spec is honoured,
+    not 422'd or silently mis-executed."""
+    notes: list[str] = []
+    src_key = spec.source if spec.source in SOURCES else _resolve_source(spec.source)
+    if src_key is None:
+        return spec, notes  # validate_spec will reject with a helpful message
+    spec = spec.model_copy(deep=True)
+    if src_key != spec.source:
+        notes.append(f"источник «{spec.source}» → «{src_key}»")
+        spec.source = src_key
+    source = SOURCES[src_key]
+
+    def _heal(field: str, header: str | None = None) -> str | None:
+        if field in source.fields:
+            return field
+        fd = resolve_field(source, field) or (
+            resolve_field(source, header) if header else None)
+        return fd.key if fd else None
+
+    new_cols: list[ColumnSpec] = []
+    for col in spec.columns:
+        healed = _heal(col.field, col.header)
+        if healed is None:
+            notes.append(f"убрал неизвестную колонку «{col.field}»")
+        else:
+            if healed != col.field:
+                notes.append(f"колонка «{col.field}» → «{source.fields[healed].header}»")
+            new_cols.append(col.model_copy(update={"field": healed}))
+    spec.columns = new_cols
+
+    new_filters: list[FilterSpec] = []
+    for flt in spec.filters:
+        if flt.op == "smart":
+            new_filters.append(flt)
+            continue
+        healed = _heal(flt.field)
+        if healed is None:
+            notes.append(f"убрал неизвестный фильтр «{flt.field}»")
+        else:
+            if healed != flt.field:
+                notes.append(f"фильтр «{flt.field}» → «{source.fields[healed].header}»")
+            new_filters.append(flt.model_copy(update={"field": healed}))
+    spec.filters = new_filters
+
+    new_sort: list[SortSpec] = []
+    for srt in spec.sort:
+        healed = _heal(srt.field)
+        if healed is not None:
+            if healed != srt.field:
+                notes.append(f"сортировка «{srt.field}» → «{source.fields[healed].header}»")
+            new_sort.append(srt.model_copy(update={"field": healed}))
+    spec.sort = new_sort
+
+    new_gb: list[str] = []
+    for gb in spec.group_by:
+        healed = _heal(gb)
+        if healed is not None:
+            if healed != gb:
+                notes.append(f"группировка «{gb}» → «{source.fields[healed].header}»")
+            new_gb.append(healed)
+    spec.group_by = new_gb
+
+    return spec, notes
+
+
 def _filter_value(spec: TableSpec, field: str) -> str | None:
     for flt in spec.filters:
         if flt.field == field and flt.value not in (None, ""):
@@ -1192,10 +1278,14 @@ async def _execute_grouped(
 
 async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
     """Compile the spec to one SQL query and return the FULL dataset."""
-    source = SOURCES[spec.source]
+    # Ground the spec in the catalog first — a near-miss source/field name is
+    # healed (not 422'd), keeping the agent honest. validate_spec runs before the
+    # SOURCES lookup so an unresolvable source returns a helpful error, not KeyError.
+    spec, _repairs = repair_spec_to_catalog(spec)
     problems = validate_spec(spec)
     if problems:
         raise ValueError("; ".join(problems))
+    source = SOURCES[spec.source]
 
     if spec.source in VIRTUAL_SOURCES:
         return await _VIRTUAL_PROVIDERS[spec.source](db, spec)
