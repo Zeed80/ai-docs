@@ -505,6 +505,34 @@ def test_repair_heals_numeric_and_search_filters():
     assert sp3.filters[0].field == "description" and sp3.filters[0].op == "smart"
 
 
+def test_is_spec_table_request():
+    """Table verb + catalog reference → table request; doc-content/chat → not."""
+    assert ts.is_spec_table_request("слушай покажи чё там по фрезам и сгруппируй по поставщику")
+    assert ts.is_spec_table_request("покажи все счета")
+    assert ts.is_spec_table_request("сравни цены фрез по поставщику")
+    assert not ts.is_spec_table_request("о чём это письмо")
+    assert not ts.is_spec_table_request("напомни что было с поставщиком")
+    assert not ts.is_spec_table_request("привет, как дела")
+
+
+def test_reconcile_recovers_dropped_item_filter():
+    """«выведи фрезы по поставщику» → group supplier + recovered smart «фрезы»;
+    source-words and already-filtered specs are left alone."""
+    base = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="supplier_name")])
+    ops, _ = ts.reconcile_ops(base, "выведи все фрезы по поставщику")
+    flt = [o.filter for o in ops if o.op == "add_filter"]
+    assert flt and flt[0].field == "description" and flt[0].op == "smart" and flt[0].value == "фрезы"
+    # A source-type word is the dataset, not an item → no filter.
+    assert not [o for o in ts.reconcile_ops(base, "покажи позиции по поставщику")[0]
+                if o.op == "add_filter"]
+    # Already-filtered spec → не дублируем.
+    filtered = ts.TableSpec(source="invoice_items",
+        columns=[ts.ColumnSpec(field="supplier_name")],
+        filters=[ts.FilterSpec(field="description", op="smart", value="фрезы")])
+    assert not [o for o in ts.reconcile_ops(filtered, "выведи фрезы по поставщику")[0]
+                if o.op == "add_filter"]
+
+
 def test_reconcile_bare_trailing_grouping():
     """«фрезы по поставщику» groups; «по поставщику ИНАТЕК» / «по описанию» do not."""
     base = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="supplier_name")])

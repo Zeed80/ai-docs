@@ -972,6 +972,36 @@ def validate_spec(spec: TableSpec) -> list[str]:
     return problems
 
 
+_TABLE_VERBS = (
+    "покажи", "показать", "выведи", "вывести", "выбери", "отбери", "сравни",
+    "сравнить", "сгруппир", "объедини", "посчитай", "сосчитай", "таблиц",
+    "сколько", "средн", "в разрезе", "по каждому", "построй", "список",
+)
+_DOC_CONTENT_MARKERS = (
+    "о чём", "о чем", "напомни", "найди похож", "перескажи", "краткое содержан",
+    "текст письма", "что написано", "суть документа", "расскажи про", "对",
+)
+
+
+def is_spec_table_request(text: str) -> bool:
+    """Catalog-grounded: a clear request to BUILD A TABLE over structured data —
+    a table verb plus a reference to a catalog source/field — and NOT a
+    document-content question. Lets the orchestrator force structured grounding
+    so an obvious table request is never answered via slow RAG."""
+    t = (text or "").lower()
+    if any(m in t for m in _DOC_CONTENT_MARKERS):
+        return False
+    if not any(v in t for v in _TABLE_VERBS):
+        return False
+    for src in SOURCES.values():
+        if any(s.lower() in t for s in (src.title, *src.synonyms)):
+            return True
+        for fd in src.fields.values():
+            if any(syn.lower() in t for syn in (fd.header, *fd.synonyms)):
+                return True
+    return False
+
+
 def _resolve_source(name: str) -> str | None:
     """Map a free/near-miss source name to a catalog key via synonyms."""
     n = (name or "").strip().lower()
@@ -1767,6 +1797,44 @@ _PRIMARY_NUMBER_FIELD = {
 }
 
 
+# «выведи ВСЕ ФРЕЗЫ по поставщику» — the object between the verb and «по/за/…».
+_ITEM_OBJ_RE = re.compile(
+    r"(?:покажи|показать|выведи|вывести|выбери|отбери|дай|нужн\w+)\s+"
+    r"(?:все\s+|весь\s+|вся\s+|всю\s+|мне\s+|нам\s+)*"
+    r"(?P<obj>[\wё][\wё\s-]*?)\s+(?:по\s|за\s|с\s|из\s|от\s|у\s|в\s+разрезе)"
+)
+
+
+def _recover_item_filter(source: SourceDef, text: str, spec: TableSpec) -> str | None:
+    """Recover the item the user filtered on but the worker dropped («выведи
+    фрезы по поставщику» built without the фрезы filter). Conservative: only
+    item-bearing sources, only when NO text filter is present, and never the
+    source's own name («покажи позиции по…»)."""
+    if source.key not in ("invoice_items", "warehouse"):
+        return None
+    ptf = source.primary_text_field
+    if not ptf:
+        return None
+    if any((f.op == "smart") or (f.field == ptf and f.op == "contains") for f in spec.filters):
+        return None
+    m = _ITEM_OBJ_RE.search(text)
+    if not m:
+        return None
+    obj = " ".join(
+        w for w in m.group("obj").split() if w not in _STOP_TOKENS and len(w) >= 3
+    ).strip()
+    if len(obj) < 4:
+        return None
+    low = obj.lower()
+    # Never filter by a source-type word («счета», «документы», «позиции»…) —
+    # that's the dataset, not an item within it.
+    source_words = {w.lower() for src in SOURCES.values()
+                    for w in (src.key, src.title, *src.synonyms)}
+    if any(low == w or w in low for w in source_words):
+        return None
+    return obj
+
+
 def _detect_agg_intent(text: str) -> str | None:
     for agg, rx in _AGG_RES:
         if rx.search(text):
@@ -1845,5 +1913,14 @@ def reconcile_ops(spec: TableSpec, user_text: str) -> tuple[list[PatchOp], list[
         ):
             ops.append(PatchOp(op="set_agg", field=num_fd.key, agg=agg))
             notes.append(f"«{num_fd.header}» — {_AGG_LABEL[agg]}")
+
+    # Recover a dropped item filter, but only for a grouped «<item> по <dim>»
+    # request — the clean case where the item clearly precedes «по».
+    if grouped:
+        item = _recover_item_filter(source, text, spec)
+        if item:
+            ops.append(PatchOp(op="add_filter", filter=FilterSpec(
+                field=source.primary_text_field or "description", op="smart", value=item)))
+            notes.append(f"фильтр по «{item}»")
 
     return ops, notes

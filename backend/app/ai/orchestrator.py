@@ -865,8 +865,15 @@ class AgentOrchestrator:
         Everything else builds a plan and runs the worker (the catch-all).
         """
         self._turn_grounding = decision.grounding
-        # Flow-status / count — secretary answers from live data (0 LLM). On a
-        # cache miss it returns False and we fall through to a specialist.
+        # Deterministic override: an unmistakable table request over catalog data
+        # («покажи фрезы по поставщику») must be built from SQL, never answered via
+        # slow RAG — even if the LLM router guessed grounding="rag". Suppresses the
+        # RAG tools downstream (structured_only gate).
+        if self._turn_grounding != "structured":
+            from app.domain.table_spec import is_spec_table_request
+            if is_spec_table_request(content):
+                self._turn_grounding = "structured"
+                logger.info("grounding_forced_structured", content=content[:80])
         if decision.intent in ("flow_status", "count"):
             if await self._answer_flow_status_directly(content, config, turn_started_at):
                 return
