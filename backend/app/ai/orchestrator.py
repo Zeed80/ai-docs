@@ -803,6 +803,22 @@ class AgentOrchestrator:
         # silently drop to chat whenever the model hiccups (e.g. a reasoning
         # model that ignores the JSON schema). This is degraded mode, not the
         # hot path: the heuristic only runs here, never on a successful route.
+        # A DEFAULTED shell (specialist / conf 0.0 / no tools) means the model
+        # ignored the schema — it is NOT a real classification and must not be
+        # dispatched as a blind chat specialist. Rescue an obvious table request
+        # deterministically (catalog-grounded), else treat as unavailable and
+        # degrade to the heuristic planner.
+        if decision is not None and turn_router._looks_defaulted(decision):
+            from app.domain.table_spec import is_spec_table_request
+            if is_spec_table_request(content):
+                decision = decision.model_copy(update={
+                    "intent": "analytical_table", "output_channel": "workspace",
+                    "grounding": "structured", "confidence": 0.5})
+                source = "rescued_table"
+                logger.info("router_defaulted_rescued_table", content=content[:80])
+            else:
+                decision = None  # → heuristic planner below
+
         self._route_unavailable = decision is None
         if decision is None:
             decision = turn_router.safe_default_decision(content)
