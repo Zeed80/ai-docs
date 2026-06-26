@@ -989,6 +989,34 @@ def _resolve_source(name: str) -> str | None:
     return None
 
 
+def _heal_filter(source: SourceDef, flt: "FilterSpec") -> "FilterSpec | None":
+    """Heal an off-catalog non-smart filter. Crucially, a numeric pseudo-field
+    («amount_min», «сумма_от», «min_total») maps to the primary numeric field
+    with gte/lte, and a search pseudo-field («search_text», «query») becomes a
+    smart filter on the primary text — so the constraint is NOT silently lost."""
+    fd = resolve_field(source, flt.field)
+    if fd:
+        return flt.model_copy(update={"field": fd.key})
+    raw = (flt.field or "").lower()
+    if any(k in raw for k in ("search", "query", "keyword", "текст", "поиск")):
+        return flt.model_copy(update={
+            "field": source.primary_text_field or "description", "op": "smart"})
+    op = flt.op
+    if re.search(r"(_min\b|_от\b|_from\b|^min[_ ]|^от[_ ])", raw):
+        op = "gte"
+    elif re.search(r"(_max\b|_до\b|_to\b|^max[_ ]|^до[_ ])", raw):
+        op = "lte"
+    base = re.sub(r"(_min|_max|_от|_до|_from|_to|^min_|^max_|^от_|^до_)", "", raw).strip()
+    healed = resolve_field(source, base)
+    if healed is None and any(
+        w in raw for w in ("amount", "sum", "сумм", "total", "итог", "price",
+                           "цен", "qty", "кол", "quant", "stoim", "стоим")):
+        healed = _primary_number_field(source, base)
+    if healed is not None:
+        return flt.model_copy(update={"field": healed.key, "op": op})
+    return None
+
+
 def repair_spec_to_catalog(spec: TableSpec) -> tuple[TableSpec, list[str]]:
     """Heal a worker-produced spec against the whitelisted catalog: map a near-miss
     source/field name to its catalog key (via synonyms + morphology-aware
@@ -1028,13 +1056,16 @@ def repair_spec_to_catalog(spec: TableSpec) -> tuple[TableSpec, list[str]]:
         if flt.op == "smart":
             new_filters.append(flt)
             continue
-        healed = _heal(flt.field)
-        if healed is None:
-            notes.append(f"убрал неизвестный фильтр «{flt.field}»")
+        healed_flt = _heal_filter(source, flt)
+        if healed_flt is None:
+            # A dropped FILTER returns wrong (unfiltered) data — surface it loudly.
+            notes.append(f"⚠ убрал неизвестный фильтр «{flt.field}»")
         else:
-            if healed != flt.field:
-                notes.append(f"фильтр «{flt.field}» → «{source.fields[healed].header}»")
-            new_filters.append(flt.model_copy(update={"field": healed}))
+            if (healed_flt.field, healed_flt.op) != (flt.field, flt.op):
+                tail = f" ({healed_flt.op})" if healed_flt.op != flt.op else ""
+                notes.append(
+                    f"фильтр «{flt.field}» → «{source.fields[healed_flt.field].header}»{tail}")
+            new_filters.append(healed_flt)
     spec.filters = new_filters
 
     new_sort: list[SortSpec] = []
@@ -1696,6 +1727,16 @@ _GROUP_RE2 = re.compile(
 # Bare «по X» / «в разрезе X» — counted as grouping ONLY under an aggregate or
 # comparison intent (otherwise "по" is too ambiguous to mean grouping).
 _GROUP_BARE_RE = re.compile(r"(?:в\s+разрезе|по)\s+(?P<what>[\w-]+)")
+# «… по <dim>» at the END of the request («фрезы по поставщику») — a grouping
+# even without «сгруппируй»/agg, but only when <dim> is a categorical/date
+# dimension. End-anchored so «по поставщику ИНАТЕК» (a filter) does NOT match.
+_GROUP_TAIL_RE = re.compile(r"\bпо\s+(?P<what>[A-Za-zА-Яа-яЁё-]+)\s*$")
+
+
+def _is_dimension(source: SourceDef, fd: FieldDef) -> bool:
+    """A low-cardinality grouping dimension (supplier/date/status/…), not the
+    item description or a numeric measure."""
+    return fd.type in ("text", "date") and fd.key != source.primary_text_field
 
 
 def _resolve_noun(source: SourceDef, raw: str) -> FieldDef | None:
@@ -1773,6 +1814,14 @@ def reconcile_ops(spec: TableSpec, user_text: str) -> tuple[list[PatchOp], list[
         bm = _GROUP_BARE_RE.search(text)
         if bm:
             group_fd = _resolve_noun(source, bm.group("what"))
+    # «фрезы по поставщику» — trailing «по <dimension>» is a grouping even without
+    # an explicit «сгруппируй»/aggregate, when the field is a real dimension.
+    if group_fd is None:
+        tm = _GROUP_TAIL_RE.search(text)
+        if tm:
+            cand = _resolve_noun(source, tm.group("what"))
+            if cand and _is_dimension(source, cand):
+                group_fd = cand
     if group_fd and group_fd.key not in spec.group_by:
         ops.append(PatchOp(op="set_group_by", field=group_fd.key))
         notes.append(f"группировка по «{group_fd.header}»")

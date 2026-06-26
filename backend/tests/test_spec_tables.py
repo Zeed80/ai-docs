@@ -488,6 +488,36 @@ def test_repair_spec_drops_unknown_keeps_known():
     assert any("ляляля" in n for n in notes)
 
 
+def test_repair_heals_numeric_and_search_filters():
+    """A dropped FILTER returns wrong data — numeric/search pseudo-fields heal."""
+    sp, _ = ts.repair_spec_to_catalog(ts.TableSpec(source="invoices",
+        columns=[ts.ColumnSpec(field="supplier_name")],
+        filters=[ts.FilterSpec(field="amount_min", op="gte", value=100000)]))
+    assert [(f.field, f.op, f.value) for f in sp.filters] == [("total_amount", "gte", 100000)]
+    # eq on a *_от pseudo-field becomes gte; search_text → smart on primary text.
+    sp2, _ = ts.repair_spec_to_catalog(ts.TableSpec(source="invoices",
+        columns=[ts.ColumnSpec(field="supplier_name")],
+        filters=[ts.FilterSpec(field="сумма_от", op="eq", value=5000)]))
+    assert sp2.filters[0].field == "total_amount" and sp2.filters[0].op == "gte"
+    sp3, _ = ts.repair_spec_to_catalog(ts.TableSpec(source="invoice_items",
+        columns=[ts.ColumnSpec(field="supplier_name")],
+        filters=[ts.FilterSpec(field="search_text", op="contains", value="фреза")]))
+    assert sp3.filters[0].field == "description" and sp3.filters[0].op == "smart"
+
+
+def test_reconcile_bare_trailing_grouping():
+    """«фрезы по поставщику» groups; «по поставщику ИНАТЕК» / «по описанию» do not."""
+    base = ts.TableSpec(source="invoice_items", columns=[ts.ColumnSpec(field="supplier_name")])
+    ops, _ = ts.reconcile_ops(base, "выведи все фрезы по поставщику")
+    assert any(o.op == "set_group_by" and o.field == "supplier_name" for o in ops)
+    ops2, _ = ts.reconcile_ops(base, "покажи счета по дате")
+    assert any(o.op == "set_group_by" and o.field == "invoice_date" for o in ops2)
+    # A trailing value (a filter, not grouping) must NOT group.
+    assert ts.reconcile_ops(base, "счета по поставщику ИНАТЕК")[0] == []
+    # The item description is the primary text, not a grouping dimension.
+    assert ts.reconcile_ops(base, "покажи фрезы по описанию")[0] == []
+
+
 @pytest.mark.asyncio
 async def test_repair_applied_in_execute_spec(db_session, seeded):
     """A spec with a synonym source/field executes after catalog grounding."""
