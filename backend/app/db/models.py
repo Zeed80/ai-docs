@@ -136,7 +136,20 @@ class Document(UUIDPrimaryKey, TimestampMixin, Base):
         GUID(), ForeignKey("departments.id"), nullable=True, index=True
     )
 
+    # Project / construction-object binding as first-class fields (nullable:
+    # legacy/unassigned docs allowed). Enables SQL filtering & grouping by
+    # project/object and metadata-filtered vector retrieval — beyond the graph.
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("projects.id"), nullable=True, index=True
+    )
+    object_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("site_objects.id"), nullable=True, index=True
+    )
+
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    project: Mapped["Project | None"] = relationship()
+    site_object: Mapped["SiteObject | None"] = relationship()
 
     # Relationships
     versions: Mapped[list["DocumentVersion"]] = relationship(back_populates="document")
@@ -145,6 +158,39 @@ class Document(UUIDPrimaryKey, TimestampMixin, Base):
     links: Mapped[list["DocumentLink"]] = relationship(
         back_populates="document", foreign_keys="DocumentLink.document_id"
     )
+
+
+class Project(UUIDPrimaryKey, TimestampMixin, Base):
+    """Construction/manufacturing project. Documents bind to a project so the
+    workspace can filter and group by it (e.g. «счета по проекту X»)."""
+
+    __tablename__ = "projects"
+    __table_args__ = (
+        UniqueConstraint("normalized_name", name="uq_projects_normalized_name"),
+    )
+
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    # Lowercased/trimmed name for case-insensitive dedup (get-or-create).
+    normalized_name: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
+    code: Mapped[str | None] = mapped_column(String(100), index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+
+
+class SiteObject(UUIDPrimaryKey, TimestampMixin, Base):
+    """Object/site within a project (building, unit, equipment line)."""
+
+    __tablename__ = "site_objects"
+    __table_args__ = (
+        UniqueConstraint("normalized_name", name="uq_site_objects_normalized_name"),
+    )
+
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("projects.id"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
+    code: Mapped[str | None] = mapped_column(String(100), index=True)
+    description: Mapped[str | None] = mapped_column(Text)
 
 
 class DocumentVersion(UUIDPrimaryKey, TimestampMixin, Base):

@@ -38,6 +38,8 @@ from app.db.models import (
     InvoiceLine,
     Party,
     PaymentSchedule,
+    Project,
+    SiteObject,
 )
 
 logger = structlog.get_logger()
@@ -249,6 +251,10 @@ SOURCES: dict[str, SourceDef] = {
                      ("страниц", "страницы", "кол-во страниц")),
             FieldDef("doc_type_confidence", "Уверенность", "number",
                      ("уверенность", "достоверность", "confidence")),
+            FieldDef("project", "Проект", "text",
+                     ("проект", "проекту", "проекта", "стройка", "объект строительства")),
+            FieldDef("object", "Объект", "text",
+                     ("объект", "объекту", "объекта", "площадка", "узел")),
         ),
         default_columns=("file_name", "doc_type", "status", "created_at"),
     ),
@@ -576,6 +582,8 @@ def _documents_exprs() -> dict[str, Any]:
         "source_channel": Document.source_channel,
         "page_count": Document.page_count,
         "doc_type_confidence": Document.doc_type_confidence,
+        "project": Project.name,
+        "object": SiteObject.name,
     }
 
 
@@ -656,7 +664,12 @@ def _base_stmt(source_key: str, exprs: dict[str, Any], keys: list[str]) -> Selec
     if source_key == "warehouse":
         return select(*cols).select_from(InventoryItem)
     if source_key == "documents":
-        return select(*cols).select_from(Document)
+        return (
+            select(*cols)
+            .select_from(Document)
+            .outerjoin(Project, Document.project_id == Project.id)
+            .outerjoin(SiteObject, Document.object_id == SiteObject.id)
+        )
     if source_key == "payments":
         return (
             select(*cols)

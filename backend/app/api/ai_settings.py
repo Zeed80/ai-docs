@@ -45,7 +45,11 @@ _DEFAULT_CONFIG = {
     # qwen3-embedding:8b via Ollama (4.4 GB, 4096-dim) — best quality for 24 GB VRAM.
     # Runs AFTER OCR completes (sequential pipeline), so no VRAM conflict.
     "embedding_model": "qwen3_embedding_8b_ollama",
-    "reranker_model": "local_reranker_ollama",
+    # LLM-as-reranker: a generate-capable model judges (query, document) pairs via
+    # yes/no logprobs (true cross-encoder). Dedicated reranker GGUFs (qwen3-reranker,
+    # bge-reranker) are broken on Ollama 0.30.x (zero vectors / crash), so we use a
+    # small fast instruct model. See OllamaProvider.rerank.
+    "reranker_model": "gemma4_e2b_ollama",
     "verify_model_1": settings.ollama_model_ocr,
     "verify_model_1_provider": "ollama",
     # Auto-approval gate: an invoice is auto-approved when the confidence of its

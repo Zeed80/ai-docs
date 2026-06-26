@@ -469,6 +469,41 @@ async def test_documents_source(db_session, seeded):
 
 
 @pytest.mark.asyncio
+async def test_documents_project_object_filter(db_session, seeded):
+    """project/object resolve to canonical rows and filter documents (0 LLM)."""
+    from app.domain.projects import get_or_create_object, get_or_create_project
+
+    pid = await get_or_create_project(db_session, "Цех №5")
+    oid = await get_or_create_object(db_session, "Линия покраски", project_id=pid)
+    # get-or-create is idempotent and case-insensitive.
+    assert await get_or_create_project(db_session, " цех №5 ") == pid
+
+    # Tag the first seeded document.
+    from sqlalchemy import select as sa_select
+    docs = (await db_session.execute(
+        sa_select(Document).order_by(Document.file_name)
+    )).scalars().all()
+    docs[0].project_id = pid
+    docs[0].object_id = oid
+    await db_session.flush()
+
+    spec = ts.TableSpec(
+        source="documents",
+        columns=[
+            ts.ColumnSpec(field="file_name"),
+            ts.ColumnSpec(field="project"),
+            ts.ColumnSpec(field="object"),
+        ],
+        filters=[ts.FilterSpec(field="project", op="contains", value="цех")],
+    )
+    result = await ts.execute_spec(db_session, spec)
+    assert result.total == 1
+    assert result.rows[0]["file_name"] == "INV-001.pdf"
+    assert result.rows[0]["project"] == "Цех №5"
+    assert result.rows[0]["object"] == "Линия покраски"
+
+
+@pytest.mark.asyncio
 async def test_payments_source_with_supplier_join(db_session, seeded):
     from datetime import UTC, datetime
 

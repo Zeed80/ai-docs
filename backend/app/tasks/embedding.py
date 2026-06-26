@@ -183,6 +183,9 @@ async def _embed_document(document_id: str) -> dict:
                         "embedding_model": profile.model_key,
                         "text_preview": chunk.text[:500],
                         "has_context_prefix": bool(prefix),
+                        # Project/object tags for metadata-filtered vector recall.
+                        **({"project_id": str(doc.project_id)} if doc.project_id else {}),
+                        **({"object_id": str(doc.object_id)} if doc.object_id else {}),
                     },
                 )
             if chunks:

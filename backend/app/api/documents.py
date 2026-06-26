@@ -621,6 +621,8 @@ async def ingest_document(
     auto_process: bool = Query(True),
     auto_verify: bool = Query(False),
     manual_doc_type_override: bool = Query(False),
+    project: str | None = Query(None, description="Project name to bind (get-or-create)"),
+    site_object: str | None = Query(None, description="Object/site name to bind (get-or-create)"),
     db: AsyncSession = Depends(get_db),
     current_user: UserInfo = Depends(get_current_user),
 ):
@@ -732,6 +734,14 @@ async def ingest_document(
         effective_confidence = 0.9
         effective_source = fast_source
 
+    # Resolve optional project / construction-object tags to canonical rows.
+    project_id = None
+    object_id = None
+    if project or site_object:
+        from app.domain.projects import get_or_create_object, get_or_create_project
+        project_id = await get_or_create_project(db, project)
+        object_id = await get_or_create_object(db, site_object, project_id=project_id)
+
     initial_status = DocumentStatus.ingested if is_allowed else DocumentStatus.suspicious
     initial_metadata: dict | None = None
     if (requested_doc_type and manual_doc_type_override) or auto_verify:
@@ -757,6 +767,8 @@ async def ingest_document(
         doc_type_confidence=effective_confidence,
         metadata_=initial_metadata,
         owner_sub=current_user.sub,
+        project_id=project_id,
+        object_id=object_id,
     )
     db.add(doc)
     await db.flush()

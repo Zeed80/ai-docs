@@ -601,9 +601,11 @@ routes:
     fallback_chain: ["qwen3_embedding_8b_ollama", "local_embedding_ollama"]
     manual_review_fallback: false
   reranking:
-    required_modalities: ["rerank"]
+    # LLM-as-reranker via generate+logprobs (dedicated reranker GGUFs broken on
+    # Ollama 0.30.x). gemma4:e2b is fast/small and co-resident with the worker.
+    required_modalities: ["text"]
     local_only: true
-    fallback_chain: ["local_reranker_ollama"]
+    fallback_chain: ["gemma4_e2b_ollama", "qwen3_5_9b_ollama"]
     manual_review_fallback: true
   classification:
     required_modalities: ["text"]

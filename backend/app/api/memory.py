@@ -965,6 +965,13 @@ async def _try_rerank_hits(query: str, hits: list[MemorySearchHit]) -> list[Memo
             )
         )
         scores = response.scores or []
+        # Skip degenerate rerankers: empty scores, or a constant value across all
+        # documents (e.g. a reranker GGUF that returns zero vectors → 0.5 for
+        # everything). Applying these via max() would only inflate/flatten the RRF
+        # ranking, never improve it.
+        usable = [float(s) for s in scores[: len(hits)]]
+        if not usable or (max(usable) - min(usable)) < 1e-6:
+            return hits
         reranked: list[MemorySearchHit] = []
         for index, hit in enumerate(hits):
             if index >= len(scores):
