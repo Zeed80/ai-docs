@@ -902,6 +902,16 @@ class AgentOrchestrator:
                 return
             if await self._try_spec_table_patch_directly(content, config, turn_started_at):
                 return
+            # Neither a sheet nor a spec-table patch applied → there is no table to
+            # edit (a mis-route, e.g. «выведи фрезы по поставщику» classified as
+            # table_edit). Build a fresh analytical table instead of running a
+            # confused "edit" plan that targets the wrong source.
+            if _latest_spec_block() is None:
+                decision = decision.model_copy(update={
+                    "intent": "analytical_table", "output_channel": "workspace",
+                    "grounding": "structured"})
+                self._turn_grounding = "structured"
+                logger.info("table_edit_without_table_downgraded", content=content[:80])
 
         # Learned recipes — same machinery as the legacy path, gated by a
         # tool-shaped intent instead of a keyword workspace check.
