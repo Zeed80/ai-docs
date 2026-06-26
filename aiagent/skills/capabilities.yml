@@ -342,6 +342,9 @@ capabilities:
         task="<что показать на естественном языке>", limit?. Генерируется
         валидированный SELECT (только чтение, без DML/DDL), данные из реальной БД.
         Предпочитай spec_table; sql_table — для нестандартных срезов.
+      - compare_table_data — сравнить два уже опубликованных блока/листа:
+        left_canvas_id, right_canvas_id, key_fields?, compare_fields?, canvas_id?.
+        Результат публикуется как diff-таблица на Рабочий стол.
       - get_block — прочитать блок. supplier_lookup — поиск поставщиков.
         verify — проверить блок.
       canvas_id по умолчанию "agent:spec-table"; тот же id обновляет ту же таблицу.
@@ -353,7 +356,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "spec_table (ГЛАВНЫЙ: таблица по спецификации, полные данные из SQL; источники включают vector_search и graph_query) | spec_table_patch (правка spec-таблицы: ops или command) | spec_table_catalog | spec_table_cell_edit (правка ячейки с записью в БД, approval-gated: row_pk/field/value) | sql_table (свободный валидированный SELECT: task) | invoice_pivot (группировки) | invoice_table | invoice_items_table | general (данные не из БД) | get_block | supplier_lookup | verify"
+          description: "spec_table (ГЛАВНЫЙ: таблица по спецификации, полные данные из SQL; источники включают vector_search и graph_query) | spec_table_patch (правка spec-таблицы: ops или command) | spec_table_catalog | spec_table_cell_edit (правка ячейки с записью в БД, approval-gated: row_pk/field/value) | sql_table (свободный валидированный SELECT: task) | compare_table_data (diff двух workspace-блоков) | invoice_pivot (группировки) | invoice_table | invoice_items_table | general (данные не из БД) | get_block | supplier_lookup | verify"
         canvas_id:
           type: string
           description: "ID canvas-блока. По умолчанию 'agent:spec-table'; тот же id обновляет ту же таблицу."
@@ -386,6 +389,18 @@ capabilities:
         limit:
           type: integer
           description: "Для sql_table: максимум строк (по умолчанию 200)"
+        left_canvas_id:
+          type: string
+          description: "Для compare_table_data: левый блок/лист"
+        right_canvas_id:
+          type: string
+          description: "Для compare_table_data: правый блок/лист"
+        key_fields:
+          type: array
+          description: "Для compare_table_data: поля ключа сравнения"
+        compare_fields:
+          type: array
+          description: "Для compare_table_data: поля значений для сравнения"
       required: [action]
 
   - name: sheets
@@ -419,7 +434,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "create | from_spec | from_template | templates | get | list | patch_cells | add_row | add_column | set_formula | rename_column | delete"
+          description: "create | from_spec | from_template | templates | get | list | patch_cells | add_row | add_column | set_formula | rename_column | merge_cells | unmerge_cells | delete"
         sheet_id:
           type: string
           description: "UUID листа (для get/patch_cells/add_row/add_column/set_formula/delete)"
@@ -458,7 +473,25 @@ capabilities:
           description: "set_formula: ключ столбца"
         row:
           type: integer
-          description: "set_formula: индекс строки (без него — на весь столбец)"
+          description: "set_formula: индекс строки (без него — на весь столбец); unmerge_cells: строка ячейки внутри объединения"
+        start_row:
+          type: integer
+          description: "merge_cells: первая строка диапазона"
+        end_row:
+          type: integer
+          description: "merge_cells: последняя строка диапазона"
+        start_col:
+          type: string
+          description: "merge_cells: первый столбец диапазона"
+        end_col:
+          type: string
+          description: "merge_cells: последний столбец диапазона"
+        merge_id:
+          type: string
+          description: "unmerge_cells: id объединения (альтернатива row+col)"
+        col:
+          type: string
+          description: "unmerge_cells: столбец ячейки внутри объединения"
         before:
           type: string
           description: "add_column: вставить перед этим столбцом"
@@ -478,7 +511,8 @@ capabilities:
       Семантический и полнотекстовый поиск по всем данным системы:
       документам, счетам, памяти агента, поставщикам. Используй когда
       нужно найти что-то по смыслу запроса, а не по точным фильтрам.
-      Также преобразует естественный язык в SQL-запросы.
+      Также преобразует естественный язык в SQL-запросы и выполняет
+      внешний web-поиск через настроенный backend provider.
     path: /api/agent/cap/search
     method: POST
     gate_actions: []
@@ -487,10 +521,21 @@ capabilities:
       properties:
         action:
           type: string
-          description: "hybrid | nl | nl_to_query | explain | similar | saved_queries"
+          description: "hybrid | nl | nl_to_query | web | explain | similar | saved_queries"
         query:
           type: string
-          description: "Поисковый запрос на естественном языке"
+          description: "Поисковый запрос на естественном языке или web-запрос"
+        limit:
+          type: integer
+          description: "Количество результатов для web/hybrid поиска"
+        recency_days:
+          type: integer
+          description: "Для action=web: искать только свежие результаты за N дней"
+        domains:
+          type: array
+          items:
+            type: string
+          description: "Для action=web: ограничить поиск доменами поставщиков/каталогов"
         entity_type:
           type: string
           description: "Тип сущности для similar-поиска: invoice, document, supplier"
@@ -507,6 +552,18 @@ capabilities:
       Память агента: поиск по сохранённым фактам и историческим данным,
       объяснение с доказательствами из документов, перестройка индекса,
       многошаговый обход графа знаний (связи поставщик↔счёт↔аномалия↔согласование).
+      Для обычного RAG-контекста сначала используй action=query: он возвращает
+      компактный evidence_pack и графовый контекст; search/explain оставлены для
+      совместимости и диагностики. Если нашёл полезный факт из session-памяти,
+      используй action=promote — это создаст reviewable project-memory proposal.
+      Для просмотра очереди предложений используй action=promotion_list, для
+      самопроверки качества предложения — action=promotion_evaluate
+      (provenance/duplicate/confidence checks). Решение approve/reject принимает
+      человек в GUI — у агента нет действия decide.
+      Если для web research нужны каталоги/источники поставщиков, используй
+      action=source_list; если подходящего источника нет и web provider
+      настроен — action=source_discover сам найдёт кандидатов и создаст
+      reviewable proposals. Если URL уже известен, используй action=source_propose.
       Для реляционных вопросов ("что связано с этим поставщиком", "цепочка
       согласования по этому счёту") вызывай neighborhood/path сам, не спрашивай
       разрешения искать — это твоя прямая задача.
@@ -518,10 +575,40 @@ capabilities:
       properties:
         action:
           type: string
-          description: "search | explain | reindex | embeddings_stats | neighborhood | path"
+          description: "query | search | explain | promote | promotion_list | promotion_evaluate | source_propose | source_list | source_discover | reindex | embeddings_stats | neighborhood | path"
         query:
           type: string
-          description: "Запрос для поиска или объяснения"
+          description: "Запрос для RAG-памяти, поиска или объяснения"
+        session_id:
+          type: string
+          description: "Для action=query/search: ID текущей сессии, чтобы видеть только свою session-память плюс project/global"
+        include_graph:
+          type: boolean
+          description: "Для action=query: включить graph_nodes/graph_edges в ответ"
+        source_fact_id:
+          type: string
+          description: "Для action=promote: ID session/chat fact, который нужно предложить как project memory"
+        title:
+          type: string
+          description: "Для action=promote/source_propose: заголовок факта или источника"
+        summary:
+          type: string
+          description: "Для action=promote: проверяемая формулировка факта"
+        url:
+          type: string
+          description: "Для action=source_propose: URL каталога, сайта поставщика или справочного источника"
+        supplier_name:
+          type: string
+          description: "Для action=source_propose: поставщик, к которому относится источник"
+        source_type:
+          type: string
+          description: "Для action=source_propose/source_list/source_discover: supplier_catalog | price_list | reference | manufacturer"
+        rationale:
+          type: string
+          description: "Для action=source_propose: зачем агенту нужен этот источник"
+        entity_id:
+          type: string
+          description: "Для action=promotion_evaluate: ID proposed fact"
         node_id:
           type: string
           description: "Для action=neighborhood: ID узла графа (KnowledgeNode), вокруг которого искать связи"
@@ -570,7 +657,7 @@ capabilities:
             bom_stock_check | bom_purchase_request |
             ntd_list | ntd_get | ntd_run_check | ntd_findings |
             learning_suggest | learning_rule_list | learning_rule_create |
-            learning_rule_activate | correction_record
+            learning_rule_activate | learning_rule_reject | correction_record
         entity_id:
           type: string
           description: "ID сущности (плана, нормы, BOM, ресурса, правила)"
@@ -623,10 +710,14 @@ capabilities:
 
   - name: agent_control
     description: >
-      Управление агентом: создание задач для AI-отдела, предложение новых
+      Управление агентом: предложение и создание задач для AI-отдела, предложение новых
       capabilities когда текущих не хватает, статус автономии и плагинов,
       проверка статуса approval-запросов. Используй когда запрос выходит
-      за рамки существующих capabilities или нужна фоновая задача.
+      за рамки существующих capabilities или нужна фоновая задача. Если агент
+      сам инициативно видит полезную работу, используй action=task_propose;
+      action=task_create — только при явной команде или после разрешения.
+      Утверждение и запуск proposed-задач (decide/run) — за человеком в GUI; у
+      агента нет этих действий и он не запускает собственные предложения сам.
       Настройки авто-обработки: action=ai_config_get — прочитать текущий порог
       авто-утверждения (auto_approve_confidence_threshold, 0–1) и включено ли
       авто-утверждение (auto_verify_enabled); action=ai_config_set [GATE] —
@@ -641,10 +732,13 @@ capabilities:
       properties:
         action:
           type: string
-          description: "task_create | capability_propose | capability_status | approval_list | approval_status | config_status | ai_config_get | ai_config_set"
+          description: "task_create | task_propose | capability_propose | capability_status | approval_list | approval_status | config_status | ai_config_get | ai_config_set"
         body:
           type: object
-          description: "Данные для task_create: title, description, skills; для capability_propose: name, description, gap; для ai_config_set: auto_approve_confidence_threshold (0–1) и/или auto_verify_enabled (bool)"
+          description: "Данные для task_create/task_propose: objective, description, role, rationale, suggested_trigger; для capability_propose: name, description, gap; для ai_config_set: auto_approve_confidence_threshold (0–1) и/или auto_verify_enabled (bool)"
+        entity_id:
+          type: string
+          description: "Для approval_status: ID approval-запроса"
       required: [action]
 
   - name: vault

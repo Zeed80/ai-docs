@@ -51,6 +51,22 @@ async def test_store_chat_turn(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
+    assert data["scope"] == "session"
+    assert data["kind"] == "chat_turn"
+    assert data["metadata"]["requested_scope"] == "project"
+    assert data["metadata"]["scope_policy"] == "chat_turn_demoted_to_session"
+
+
+@pytest.mark.asyncio
+async def test_store_chat_turn_project_scope_requires_trusted_metadata(client: AsyncClient):
+    resp = await client.post("/api/memory/chat-turn", json={
+        "user_text": "Это проверенный факт проекта",
+        "assistant_text": "Факт можно использовать повторно.",
+        "scope": "project",
+        "metadata": {"trusted": True},
+    })
+    assert resp.status_code == 200
+    data = resp.json()
     assert data["scope"] == "project"
     assert data["kind"] == "chat_turn"
 

@@ -91,7 +91,7 @@ def _is_due(schedule: str, last_run_at: datetime | None, now: datetime) -> bool:
 # ── Headless agent turn ────────────────────────────────────────────────────────
 
 
-async def _run_headless_turn(prompt: str) -> tuple[bool, str]:
+async def run_headless_agent_turn(prompt: str) -> tuple[bool, str]:
     """Run one agent turn without a WebSocket; returns (ok, final_text)."""
     from app.ai.agent_loop import AgentSession
 
@@ -118,6 +118,10 @@ async def _run_headless_turn(prompt: str) -> tuple[bool, str]:
     if errors:
         text = (text + "\n\n[errors] " + "; ".join(errors))[:_MAX_OUTPUT_CHARS]
     return ok, text
+
+
+async def _run_headless_turn(prompt: str) -> tuple[bool, str]:
+    return await run_headless_agent_turn(prompt)
 
 
 async def _dispatch() -> int:

@@ -1,6 +1,7 @@
 "use client";
 
 import { getWsUrl } from "@/lib/ws-url";
+import { getActiveWorkspaceContext } from "@/lib/workspace-context";
 
 export interface AgentWsMessage extends Record<string, unknown> {
   type: string;
@@ -10,6 +11,8 @@ export interface AgentWsMessage extends Record<string, unknown> {
   args?: Record<string, unknown>;
   result?: unknown;
   preview?: string;
+  approval_id?: string;
+  db_id?: string;
 }
 
 export interface AgentWsResolvedConfig {
@@ -52,14 +55,23 @@ export function buildAgentUserMessage(
     type: "message",
     content,
     session_id: sessionId ?? undefined,
+    workspace_context: getActiveWorkspaceContext(),
     attachments:
       attachments && attachments.length > 0 ? attachments : undefined,
     reasoning_mode: reasoningMode ?? "normal",
   };
 }
 
-export function buildAgentApprovalMessage(approved: boolean): Record<string, unknown> {
-  return { type: approved ? "approve" : "reject" };
+export function buildAgentApprovalMessage(
+  approved: boolean,
+  approvalId?: string,
+  dbId?: string,
+): Record<string, unknown> {
+  return {
+    type: approved ? "approve" : "reject",
+    approval_id: approvalId,
+    db_id: dbId,
+  };
 }
 
 export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
@@ -174,6 +186,8 @@ export function normalizeAgentMessages(raw: unknown): AgentWsMessage[] {
         ),
         args: (payload.args ?? data.args ?? {}) as Record<string, unknown>,
         preview: String(payload.preview ?? data.preview ?? ""),
+        approval_id: String(payload.approval_id ?? data.approval_id ?? ""),
+        db_id: String(payload.db_id ?? data.db_id ?? ""),
       },
     ];
   }

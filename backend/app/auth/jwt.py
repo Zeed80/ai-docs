@@ -533,3 +533,32 @@ def require_role(*roles: UserRole):
         )
 
     return check
+
+
+def is_service_account(user: UserInfo) -> bool:
+    """The internal agent service identity must not stand in for a human reviewer."""
+    return user.sub == "agent-service" or "agents" in (user.groups or [])
+
+
+def require_human_role(*roles: UserRole):
+    """Like ``require_role`` but rejects the agent service account.
+
+    Decisions that approve/run the agent's own proposals (task decide/run,
+    memory promotion/source decide) are the human-in-the-loop boundary. The
+    agent authenticates as admin via the service key, so a plain role check is
+    not enough — these endpoints must be reachable only by a real operator.
+    """
+    role_check = require_role(*roles)
+
+    async def check(user: UserInfo = Depends(role_check)) -> UserInfo:
+        if is_service_account(user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "This decision requires a human operator; the agent service "
+                    "account cannot approve or run its own proposals."
+                ),
+            )
+        return user
+
+    return check

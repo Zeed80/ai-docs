@@ -30,6 +30,16 @@ export interface GridColumn {
 
 export type GridRow = Record<string, unknown>;
 
+export interface GridCellMerge {
+  id: string;
+  start_row: number;
+  end_row: number;
+  start_col: string;
+  end_col: string;
+  start_col_index?: number;
+  end_col_index?: number;
+}
+
 // Column layout preferences — generalised from invoices' ColumnPrefs so any
 // grid can persist order / visibility / widths under its own storage key.
 export interface GridPrefs {

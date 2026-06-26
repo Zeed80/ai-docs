@@ -119,7 +119,13 @@ async def chat_ws(ws: WebSocket) -> None:
                     session_id=active_session_id,
                     role="approval",
                     content=f"Approval request: {data.get('tool')}",
-                    metadata={"args": data.get("args"), "preview": data.get("preview")},
+                    metadata={
+                        "args": data.get("args"),
+                        "preview": data.get("preview"),
+                        "approval_id": data.get("approval_id"),
+                        "db_id": data.get("db_id"),
+                        "tool": data.get("tool"),
+                    },
                 )
                 await db.commit()
             return
@@ -290,8 +296,17 @@ async def chat_ws(ws: WebSocket) -> None:
                     assistant_buffer = []
                     raw_rm = data.get("reasoning_mode", "normal")
                     rm = raw_rm if raw_rm in ("normal", "strict") else "normal"
+                    workspace_context = (
+                        data.get("workspace_context")
+                        if isinstance(data.get("workspace_context"), dict)
+                        else {}
+                    )
                     current_turn = asyncio.create_task(
-                        active_agent_session.on_user_message(content, reasoning_mode=rm)
+                        active_agent_session.on_user_message(
+                            content,
+                            reasoning_mode=rm,
+                            workspace_context=workspace_context,
+                        )
                     )
 
             elif msg_type == "stop":
@@ -300,11 +315,35 @@ async def chat_ws(ws: WebSocket) -> None:
 
             elif msg_type == "approve":
                 if active_agent_session is not None:
-                    await active_agent_session.on_approval(True)
+                    await active_agent_session.on_approval(
+                        True,
+                        approval_id=(
+                            str(data.get("approval_id"))
+                            if data.get("approval_id") is not None
+                            else None
+                        ),
+                        db_id=(
+                            str(data.get("db_id"))
+                            if data.get("db_id") is not None
+                            else None
+                        ),
+                    )
 
             elif msg_type == "reject":
                 if active_agent_session is not None:
-                    await active_agent_session.on_approval(False)
+                    await active_agent_session.on_approval(
+                        False,
+                        approval_id=(
+                            str(data.get("approval_id"))
+                            if data.get("approval_id") is not None
+                            else None
+                        ),
+                        db_id=(
+                            str(data.get("db_id"))
+                            if data.get("db_id") is not None
+                            else None
+                        ),
+                    )
 
     except WebSocketDisconnect:
         logger.info("ws_chat_disconnected")

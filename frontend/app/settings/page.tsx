@@ -187,8 +187,13 @@ interface AgentControlPlaneStatus {
   plugins_total: number;
   plugins_enabled: number;
   tasks_open: number;
+  tasks_proposed: number;
+  tasks_running: number;
   crons_enabled: number;
   memory_facts_total: number;
+  memory_promotions_pending: number;
+  web_sources_proposed: number;
+  learning_rules_proposed: number;
   mcp_servers_total: number;
   capability_proposals_open: number;
 }
@@ -283,6 +288,42 @@ interface AgentTask {
   role: string;
   status: string;
   output: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+interface MemoryFact {
+  id: string;
+  scope: string;
+  kind: string;
+  title: string;
+  summary: string;
+  source: string;
+  confidence: number;
+  pinned: boolean;
+  metadata?: Record<string, unknown> | null;
+}
+
+interface MemoryPromotionEvaluation {
+  fact_id: string;
+  status: string;
+  passed: boolean;
+  checks: Array<{ name: string; passed: boolean; message?: string }>;
+  diagnostics: string[];
+}
+
+interface LearningRule {
+  id: string;
+  rule_type: string;
+  entity_type: string;
+  field_name: string;
+  match_old_value: string | null;
+  replacement_value: string | null;
+  confidence: number;
+  occurrences: number;
+  status: string;
+  suggested_by: string;
+  metadata?: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -573,6 +614,12 @@ export default function SettingsPage() {
   const [agentTeams, setAgentTeams] = useState<AgentTeam[]>([]);
   const [agentCrons, setAgentCrons] = useState<AgentCron[]>([]);
   const [agentPlugins, setAgentPlugins] = useState<AgentPlugin[]>([]);
+  const [memoryPromotions, setMemoryPromotions] = useState<MemoryFact[]>([]);
+  const [webSources, setWebSources] = useState<MemoryFact[]>([]);
+  const [learningRules, setLearningRules] = useState<LearningRule[]>([]);
+  const [memoryPromotionEvaluations, setMemoryPromotionEvaluations] = useState<
+    Record<string, MemoryPromotionEvaluation>
+  >({});
   const [agentSkillFilter, setAgentSkillFilter] = useState("");
   const selectAllSkillsRef = useRef<HTMLInputElement | null>(null);
   const agentSkillToggleRefs = useRef<Array<HTMLInputElement | null>>([]);
@@ -788,16 +835,34 @@ export default function SettingsPage() {
 
   async function loadAgentWorkRegistry() {
     try {
-      const [tasksR, teamsR, cronsR, pluginsR] = await Promise.all([
+      const [
+        tasksR,
+        teamsR,
+        cronsR,
+        pluginsR,
+        promotionsR,
+        sourcesR,
+        learningRulesR,
+      ] =
+        await Promise.all([
         fetch(`${API}/api/agent/tasks`),
         fetch(`${API}/api/agent/teams`),
         fetch(`${API}/api/agent/cron`),
         mutFetch(`${API}/api/agent/plugins`),
+        fetch(`${API}/api/memory/promotions?status=pending`),
+        fetch(`${API}/api/memory/sources?status=proposed`),
+        fetch(`${API}/api/technology/learning-rules?status=proposed`),
       ]);
       setAgentTasks(tasksR.ok ? await tasksR.json() : []);
       setAgentTeams(teamsR.ok ? await teamsR.json() : []);
       setAgentCrons(cronsR.ok ? await cronsR.json() : []);
       setAgentPlugins(pluginsR.ok ? await pluginsR.json() : []);
+      setMemoryPromotions(promotionsR.ok ? await promotionsR.json() : []);
+      setWebSources(sourcesR.ok ? await sourcesR.json() : []);
+      const learningPayload = learningRulesR.ok
+        ? await learningRulesR.json()
+        : { items: [] };
+      setLearningRules(learningPayload.items ?? []);
     } catch {
       // keep previous state on network error
     }
@@ -819,6 +884,161 @@ export default function SettingsPage() {
       body: JSON.stringify({ enabled: enable }),
     });
     await loadAgentWorkRegistry();
+  }
+
+  async function decideAgentTask(taskId: string, approved: boolean) {
+    setAgentSaving(true);
+    setAgentError(null);
+    try {
+      const response = await mutFetch(`${API}/api/agent/tasks/${taskId}/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved, decided_by: "user" }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await loadAgentControlPlane();
+      await loadAgentWorkRegistry();
+      setAgentSaved(true);
+      setTimeout(() => setAgentSaved(false), 2000);
+    } catch (error) {
+      setAgentError(
+        error instanceof Error ? error.message : "Не удалось принять решение",
+      );
+    } finally {
+      setAgentSaving(false);
+    }
+  }
+
+  async function runAgentTask(taskId: string) {
+    setAgentSaving(true);
+    setAgentError(null);
+    try {
+      const response = await mutFetch(`${API}/api/agent/tasks/${taskId}/run`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await loadAgentControlPlane();
+      await loadAgentRuntime();
+      await loadAgentWorkRegistry();
+      setAgentSaved(true);
+      setTimeout(() => setAgentSaved(false), 2000);
+    } catch (error) {
+      setAgentError(
+        error instanceof Error ? error.message : "Не удалось запустить задачу",
+      );
+    } finally {
+      setAgentSaving(false);
+    }
+  }
+
+  async function evaluateMemoryPromotion(factId: string) {
+    setAgentSaving(true);
+    setAgentError(null);
+    try {
+      const response = await fetch(
+        `${API}/api/memory/promotions/${factId}/evaluate`,
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const evaluation = await response.json();
+      setMemoryPromotionEvaluations((prev) => ({
+        ...prev,
+        [factId]: evaluation,
+      }));
+    } catch (error) {
+      setAgentError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось проверить факт памяти",
+      );
+    } finally {
+      setAgentSaving(false);
+    }
+  }
+
+  async function decideMemoryPromotion(factId: string, approved: boolean) {
+    setAgentSaving(true);
+    setAgentError(null);
+    try {
+      const response = await mutFetch(
+        `${API}/api/memory/promotions/${factId}/decide`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved, decided_by: "user" }),
+        },
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await loadAgentControlPlane();
+      await loadAgentRuntime();
+      await loadAgentWorkRegistry();
+      setAgentSaved(true);
+      setTimeout(() => setAgentSaved(false), 2000);
+    } catch (error) {
+      setAgentError(
+        error instanceof Error ? error.message : "Не удалось обновить память",
+      );
+    } finally {
+      setAgentSaving(false);
+    }
+  }
+
+  async function decideWebSource(sourceId: string, approved: boolean) {
+    setAgentSaving(true);
+    setAgentError(null);
+    try {
+      const response = await mutFetch(
+        `${API}/api/memory/sources/${sourceId}/decide`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved, decided_by: "user" }),
+        },
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await loadAgentControlPlane();
+      await loadAgentRuntime();
+      await loadAgentWorkRegistry();
+      setAgentSaved(true);
+      setTimeout(() => setAgentSaved(false), 2000);
+    } catch (error) {
+      setAgentError(
+        error instanceof Error ? error.message : "Не удалось обновить источник",
+      );
+    } finally {
+      setAgentSaving(false);
+    }
+  }
+
+  async function decideLearningRule(ruleId: string, approved: boolean) {
+    setAgentSaving(true);
+    setAgentError(null);
+    try {
+      const response = approved
+        ? await mutFetch(`${API}/api/technology/learning-rules/${ruleId}/activate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ activated_by: "user" }),
+          })
+        : await mutFetch(`${API}/api/technology/learning-rules/${ruleId}/reject`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rejected_by: "user" }),
+          });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await loadAgentControlPlane();
+      await loadAgentRuntime();
+      await loadAgentWorkRegistry();
+      setAgentSaved(true);
+      setTimeout(() => setAgentSaved(false), 2000);
+    } catch (error) {
+      setAgentError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось обновить правило обучения",
+      );
+    } finally {
+      setAgentSaving(false);
+    }
   }
 
   async function loadTgStatus() {
@@ -1530,11 +1750,30 @@ export default function SettingsPage() {
                         <div className="mt-2 space-y-1 text-slate-400">
                           <div>Tasks: {agentControlPlane.tasks_open}</div>
                           <div>
+                            Proposed tasks:{" "}
+                            {agentControlPlane.tasks_proposed ?? 0}
+                          </div>
+                          <div>
+                            Running tasks: {agentControlPlane.tasks_running ?? 0}
+                          </div>
+                          <div>
                             Plugins: {agentControlPlane.plugins_enabled}/
                             {agentControlPlane.plugins_total}
                           </div>
                           <div>
                             Memory facts: {agentControlPlane.memory_facts_total}
+                          </div>
+                          <div>
+                            Memory review:{" "}
+                            {agentControlPlane.memory_promotions_pending ?? 0}
+                          </div>
+                          <div>
+                            Web sources:{" "}
+                            {agentControlPlane.web_sources_proposed ?? 0}
+                          </div>
+                          <div>
+                            Learning rules:{" "}
+                            {agentControlPlane.learning_rules_proposed ?? 0}
                           </div>
                           <div>
                             Capabilities:{" "}
@@ -1637,6 +1876,7 @@ export default function SettingsPage() {
                             ![
                               "completed",
                               "failed",
+                              "rejected",
                               "stopped",
                               "done",
                             ].includes(t.status ?? ""),
@@ -1677,6 +1917,40 @@ export default function SettingsPage() {
                                     <span className="ml-auto flex-shrink-0 text-slate-500">
                                       {t.role}
                                     </span>
+                                    {t.status === "proposed" && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          disabled={agentSaving}
+                                          onClick={() =>
+                                            decideAgentTask(t.id, true)
+                                          }
+                                          className="rounded bg-emerald-900/40 px-1.5 py-0.5 text-[10px] text-emerald-300 hover:bg-emerald-900/60 disabled:opacity-50"
+                                        >
+                                          Разрешить
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={agentSaving}
+                                          onClick={() =>
+                                            decideAgentTask(t.id, false)
+                                          }
+                                          className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                                        >
+                                          Отклонить
+                                        </button>
+                                      </>
+                                    )}
+                                    {t.status === "created" && (
+                                      <button
+                                        type="button"
+                                        disabled={agentSaving}
+                                        onClick={() => runAgentTask(t.id)}
+                                        className="rounded bg-blue-900/40 px-1.5 py-0.5 text-[10px] text-blue-300 hover:bg-blue-900/60 disabled:opacity-50"
+                                      >
+                                        Запуск
+                                      </button>
+                                    )}
                                   </li>
                                 ))}
                                 {activeTasks.length > 5 && (
@@ -1803,6 +2077,219 @@ export default function SettingsPage() {
                       )}
                     </div>
                   </div>
+
+                  {(memoryPromotions.length > 0 ||
+                    webSources.length > 0 ||
+                    learningRules.length > 0) && (
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                      {memoryPromotions.length > 0 && (
+                        <div className="rounded-md border border-emerald-800/50 bg-emerald-950/20 p-3 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium text-emerald-200">
+                              Memory promotions
+                            </span>
+                            <span className="rounded bg-emerald-900/50 px-1.5 py-0.5 text-emerald-200">
+                              {memoryPromotions.length} ожидают
+                            </span>
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {memoryPromotions.slice(0, 5).map((fact) => {
+                              const evaluation =
+                                memoryPromotionEvaluations[fact.id];
+                              return (
+                                <div
+                                  key={fact.id}
+                                  className="rounded border border-emerald-900/60 bg-slate-950/40 p-3"
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="truncate font-medium text-emerald-100">
+                                        {fact.title}
+                                      </div>
+                                      <div className="mt-1 line-clamp-2 text-slate-400">
+                                        {fact.summary}
+                                      </div>
+                                      {evaluation && (
+                                        <div
+                                          className={`mt-2 inline-flex rounded px-1.5 py-0.5 ${evaluation.passed ? "bg-emerald-900/50 text-emerald-200" : "bg-red-950 text-red-300"}`}
+                                        >
+                                          {evaluation.passed
+                                            ? "checks passed"
+                                            : evaluation.diagnostics.join(", ")}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap justify-end gap-2">
+                                      <button
+                                        type="button"
+                                        disabled={agentSaving}
+                                        onClick={() =>
+                                          evaluateMemoryPromotion(fact.id)
+                                        }
+                                        className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                                      >
+                                        Проверить
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={agentSaving}
+                                        onClick={() =>
+                                          decideMemoryPromotion(fact.id, true)
+                                        }
+                                        className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-50"
+                                      >
+                                        Разрешить
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={agentSaving}
+                                        onClick={() =>
+                                          decideMemoryPromotion(fact.id, false)
+                                        }
+                                        className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
+                                      >
+                                        Отклонить
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {webSources.length > 0 && (
+                        <div className="rounded-md border border-cyan-800/50 bg-cyan-950/20 p-3 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium text-cyan-200">
+                              Web sources
+                            </span>
+                            <span className="rounded bg-cyan-900/50 px-1.5 py-0.5 text-cyan-200">
+                              {webSources.length} ожидают
+                            </span>
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {webSources.slice(0, 5).map((source) => {
+                              const url = String(source.metadata?.url ?? "");
+                              const sourceType = String(
+                                source.metadata?.source_type ?? "source",
+                              );
+                              return (
+                                <div
+                                  key={source.id}
+                                  className="rounded border border-cyan-900/60 bg-slate-950/40 p-3"
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="truncate font-medium text-cyan-100">
+                                          {source.title}
+                                        </span>
+                                        <span className="rounded bg-cyan-900/50 px-1.5 py-0.5 text-cyan-200">
+                                          {sourceType}
+                                        </span>
+                                      </div>
+                                      <div className="mt-1 truncate text-slate-400">
+                                        {url || source.summary}
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-wrap justify-end gap-2">
+                                      <button
+                                        type="button"
+                                        disabled={agentSaving}
+                                        onClick={() =>
+                                          decideWebSource(source.id, true)
+                                        }
+                                        className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-50"
+                                      >
+                                        Разрешить
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={agentSaving}
+                                        onClick={() =>
+                                          decideWebSource(source.id, false)
+                                        }
+                                        className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
+                                      >
+                                        Отклонить
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {learningRules.length > 0 && (
+                        <div className="rounded-md border border-violet-800/50 bg-violet-950/20 p-3 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium text-violet-200">
+                              Learning rules
+                            </span>
+                            <span className="rounded bg-violet-900/50 px-1.5 py-0.5 text-violet-200">
+                              {learningRules.length} ожидают
+                            </span>
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {learningRules.slice(0, 5).map((rule) => (
+                              <div
+                                key={rule.id}
+                                className="rounded border border-violet-900/60 bg-slate-950/40 p-3"
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="truncate font-medium text-violet-100">
+                                        {rule.field_name}
+                                      </span>
+                                      <span className="rounded bg-violet-900/50 px-1.5 py-0.5 text-violet-200">
+                                        {rule.rule_type}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 line-clamp-2 text-slate-400">
+                                      {rule.replacement_value ||
+                                        rule.match_old_value ||
+                                        rule.entity_type}
+                                    </div>
+                                    <div className="mt-2 text-slate-500">
+                                      confidence {rule.confidence} ·{" "}
+                                      {rule.occurrences} cases
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-wrap justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      disabled={agentSaving}
+                                      onClick={() =>
+                                        decideLearningRule(rule.id, true)
+                                      }
+                                      className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-50"
+                                    >
+                                      Активировать
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={agentSaving}
+                                      onClick={() =>
+                                        decideLearningRule(rule.id, false)
+                                      }
+                                      className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
+                                    >
+                                      Отклонить
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {agentConfigProposals.length > 0 && (
                     <div className="rounded-md border border-amber-800/50 bg-amber-950/20 p-3">

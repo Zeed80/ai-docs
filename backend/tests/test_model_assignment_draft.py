@@ -88,7 +88,42 @@ async def test_assignment_draft_validate_does_not_apply(
     assert resp.status_code == 200
     data = resp.json()
     assert data["diff"]
+    slot = next(s for s in data["slots"] if s["slot"] == "structured_extraction")
+    assert slot["model"] == "qwen3_5_9b_ollama"
+    assert slot["current_model"] == before
+    assert slot["required_modality"] == "text"
+    assert slot["thinking_supported_by_slot"] is True
+    assert slot["thinking_supported_by_model"] is True
+    assert "thinking_effective" in slot
     assert tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).primary == before
+
+
+@pytest.mark.asyncio
+async def test_slots_endpoint_uses_full_assignment_shape(client: AsyncClient):
+    resp = await client.get("/api/providers/slots")
+    assert resp.status_code == 200
+    data = resp.json()
+    structured = next(s for s in data if s["slot"] == "structured_extraction")
+    assert structured["required_modality"] == "text"
+    assert "current_model" in structured
+    assert "thinking_supported_by_slot" in structured
+    assert "thinking_effective" in structured
+
+
+@pytest.mark.asyncio
+async def test_slot_smoke_dry_run_is_non_mutating(client: AsyncClient, routing_mem_store):
+    before = tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).model_dump()
+    resp = await client.post(
+        "/api/providers/slots/structured_extraction/smoke",
+        json={"model": "qwen3_5_9b_ollama", "thinking": False},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["dry_run"] is True
+    assert data["model"] == "qwen3_5_9b_ollama"
+    assert data["thinking_requested"] is False
+    assert tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).model_dump() == before
 
 
 @pytest.mark.asyncio

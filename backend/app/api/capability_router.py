@@ -10,8 +10,10 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.ai.agent_config import get_builtin_agent_config
 from app.ai.capability_manifest import load_capability_manifest
-from app.ai.policy_engine import classify_capability_action_risk
+from app.ai.policy_engine import check_tool_execution, classify_capability_action_risk
+from app.config import settings
 
 router = APIRouter(tags=["capabilities"])
 
@@ -147,6 +149,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "general":                   ("POST", "/api/workspace/agent/generated/general",            []),
         # Guarded free SQL (SELECT-only, validated) when no spec source fits.
         "sql_table":                 ("POST", "/api/workspace/agent/generated/sql-table",          []),
+        "compare_table_data":        ("POST", "/api/workspace/agent/compare-table-data",           []),
         "supplier_lookup":           ("POST", "/api/workspace/agent/generated/supplier_lookup",    []),
         "verify":                    ("POST", "/api/workspace/agent/verify-block",                 []),
         "get_block":                 ("GET",  "/api/workspace/blocks/{canvas_id}",                 ["canvas_id"]),
@@ -161,6 +164,8 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "add_column":  ("POST",   "/api/workspace/sheets/{sheet_id}/add-column",     ["sheet_id"]),
         "set_formula":   ("POST",   "/api/workspace/sheets/{sheet_id}/set-formula",   ["sheet_id"]),
         "rename_column": ("POST",   "/api/workspace/sheets/{sheet_id}/rename-column", ["sheet_id"]),
+        "merge_cells":   ("POST",   "/api/workspace/sheets/{sheet_id}/merge-cells",   ["sheet_id"]),
+        "unmerge_cells": ("POST",   "/api/workspace/sheets/{sheet_id}/unmerge-cells", ["sheet_id"]),
         "delete":        ("DELETE", "/api/workspace/sheets/{sheet_id}",               ["sheet_id"]),
         "from_spec":     ("POST",   "/api/workspace/sheets/from-spec",                []),
         "from_template": ("POST",   "/api/workspace/sheets/from-template",            []),
@@ -170,13 +175,23 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "hybrid":        ("POST", "/api/search/hybrid",                             []),
         "nl":            ("POST", "/api/search/nl",                                 []),
         "nl_to_query":   ("POST", "/api/search/nl-to-query",                        []),
+        "web":           ("POST", "/api/web-search/query",                          []),
         "explain":       ("POST", "/api/memory/explain",                            []),
         "similar":       ("GET",  "/api/search/similar/{entity_type}/{entity_id}",  ["entity_type", "entity_id"]),
         "saved_queries": ("GET",  "/api/search/saved-queries",                      []),
     },
     "memory": {
+        "query":            ("POST", "/api/memory/query",                    []),
         "search":           ("POST", "/api/memory/search",                   []),
         "explain":          ("POST", "/api/memory/explain",                  []),
+        "promote":          ("POST", "/api/memory/promotions",               []),
+        "promotion_list":    ("GET",  "/api/memory/promotions",               []),
+        "promotion_evaluate": ("POST", "/api/memory/promotions/{entity_id}/evaluate", ["entity_id"]),
+        "promotion_decide":  ("POST", "/api/memory/promotions/{entity_id}/decide", ["entity_id"]),
+        "source_propose":   ("POST", "/api/memory/sources/propose",          []),
+        "source_list":      ("GET",  "/api/memory/sources",                  []),
+        "source_discover":  ("POST", "/api/memory/sources/discover",         []),
+        "source_decide":    ("POST", "/api/memory/sources/{entity_id}/decide", ["entity_id"]),
         "reindex":          ("POST", "/api/memory/reindex",                  []),
         "embeddings_stats": ("GET",  "/api/memory/embeddings/stats",         []),
         # Multi-hop graph traversal — relational questions ("что связано с
@@ -213,6 +228,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "learning_rule_list":            ("GET",   "/api/technology/learning-rules",                                   []),
         "learning_rule_create":          ("POST",  "/api/technology/learning-rules",                                   []),
         "learning_rule_activate":        ("POST",  "/api/technology/learning-rules/{entity_id}/activate",              ["entity_id"]),
+        "learning_rule_reject":          ("POST",  "/api/technology/learning-rules/{entity_id}/reject",                ["entity_id"]),
         "correction_record":             ("POST",  "/api/technology/corrections",                                      []),
         "process_plan_draft_from_document": ("POST", "/api/technology/process-plans/draft-from-document",             []),
     },
@@ -252,6 +268,9 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
     },
     "agent_control": {
         "task_create":         ("POST", "/api/agent/tasks",                    []),
+        "task_propose":        ("POST", "/api/agent/tasks/propose",            []),
+        "task_decide":         ("POST", "/api/agent/tasks/{entity_id}/decide", ["entity_id"]),
+        "task_run":            ("POST", "/api/agent/tasks/{entity_id}/run",    ["entity_id"]),
         "capability_propose":  ("POST", "/api/agent/capabilities/propose",     []),
         "capability_status":   ("GET",  "/api/agent/capabilities/status",      []),
         "approval_list":       ("GET",  "/api/approvals/pending",              []),
@@ -425,6 +444,76 @@ def _validate_capability_contract(
         )
 
 
+def _capability_gate_actions(capability_name: str) -> set[str]:
+    """Return approval-gated actions from the reviewed manifest."""
+    manifest = load_capability_manifest()
+    capability = manifest.by_name.get(capability_name)
+    if capability is None:
+        return set()
+    return set(capability.gate_actions or [])
+
+
+def _request_has_internal_approval(request: Request) -> bool:
+    """Accept approval proof only from the internal agent transport.
+
+    In production the service key is the trust boundary. The internal marker is
+    kept for local/dev environments where AGENT_SERVICE_KEY may be empty.
+    """
+    if request.headers.get("X-Agent-Approval") != "granted":
+        return False
+    if settings.agent_service_key:
+        return request.headers.get("X-API-Key") == settings.agent_service_key
+    return request.headers.get("X-Internal-Agent") == "1"
+
+
+def _enforce_capability_policy(
+    capability_name: str,
+    action: str,
+    body: dict,
+    request: Request,
+) -> None:
+    """Apply the same risk/approval policy at the HTTP dispatcher boundary."""
+    config = get_builtin_agent_config()
+    gate_actions = _capability_gate_actions(capability_name)
+    approval_gates = set(config.approval_gates)
+
+    if action in gate_actions:
+        approval_gates.add(capability_name)
+        if not _request_has_internal_approval(request):
+            raise HTTPException(
+                status_code=423,
+                detail={
+                    "error_code": "approval_required",
+                    "message": (
+                        f"Action '{capability_name}.{action}' requires an "
+                        "approved internal agent execution."
+                    ),
+                    "capability": capability_name,
+                    "action": action,
+                    "required_approval": True,
+                },
+            )
+
+    decision = check_tool_execution(
+        skill_name=capability_name,
+        args={"action": action, **body},
+        config=config,
+        approval_gates=approval_gates,
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error_code": "policy_blocked",
+                "message": decision.reason,
+                "capability": capability_name,
+                "action": action,
+                "risk_level": decision.risk_level,
+                "required_approval": decision.required_approval,
+            },
+        )
+
+
 @router.post("/cap/vault")
 async def dispatch_vault(request: Request) -> JSONResponse:
     """Vault capability: retrieve paginated data from a previous large tool result.
@@ -499,6 +588,8 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
         body.update(body.pop("filters"))
     if "body" in body and isinstance(body["body"], dict):
         body.update(body.pop("body"))
+
+    _enforce_capability_policy(capability_name, action, body, request)
 
     result = await _proxy(method, path_tpl, path_params, body, base_url)
     return JSONResponse(content=result)

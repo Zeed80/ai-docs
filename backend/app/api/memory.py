@@ -4,13 +4,17 @@ import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.ai_settings import get_ai_config
+from app.api.web_search import WebSearchRequest, execute_web_search
+from app.auth.jwt import require_human_role
+from app.auth.models import UserInfo, UserRole
 from app.db.models import (
     ChatMessage,
     ChatMessageAttachment,
@@ -34,6 +38,9 @@ from app.domain.graph import (
     MemoryEmbeddingStatsResponse,
     MemoryExplainRequest,
     MemoryExplainResponse,
+    MemoryEvidenceItem,
+    MemoryQueryRequest,
+    MemoryQueryResponse,
     MemoryReindexItem,
     MemoryReindexRequest,
     MemoryReindexResponse,
@@ -65,7 +72,7 @@ class MemoryChatTurnRequest(BaseModel):
     user_text: str = Field("", max_length=12000)
     assistant_text: str = Field("", max_length=12000)
     session_id: str | None = None
-    scope: str = "project"
+    scope: str = "session"
     confidence: float = Field(0.7, ge=0.0, le=1.0)
     metadata: dict | None = None
 
@@ -77,6 +84,54 @@ class MemoryPinRequest(BaseModel):
     kind: str = "pinned_fact"
     confidence: float = Field(1.0, ge=0.0, le=1.0)
     metadata: dict | None = None
+
+
+class MemoryPromotionRequest(BaseModel):
+    source_fact_id: uuid.UUID | None = None
+    title: str | None = Field(default=None, max_length=500)
+    summary: str | None = None
+    confidence: float = Field(0.8, ge=0.0, le=1.0)
+    metadata: dict | None = None
+
+
+class MemoryPromotionDecision(BaseModel):
+    approved: bool
+    decided_by: str = Field("user", min_length=1, max_length=100)
+    comment: str | None = None
+
+
+class MemoryPromotionEvaluation(BaseModel):
+    fact_id: uuid.UUID
+    status: str
+    passed: bool
+    checks: list[dict]
+    diagnostics: list[str] = []
+
+
+class WebSourceProposalRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    url: str = Field(..., min_length=1, max_length=2000)
+    supplier_name: str | None = Field(default=None, max_length=300)
+    source_type: str = Field("supplier_catalog", min_length=1, max_length=120)
+    rationale: str | None = None
+    domains: list[str] | None = None
+    metadata: dict | None = None
+
+
+class WebSourceDecision(BaseModel):
+    approved: bool
+    decided_by: str = Field("user", min_length=1, max_length=100)
+    comment: str | None = None
+
+
+class WebSourceDiscoveryRequest(BaseModel):
+    query: str | None = Field(default=None, max_length=500)
+    supplier_name: str | None = Field(default=None, max_length=300)
+    source_type: str = Field("supplier_catalog", min_length=1, max_length=120)
+    domains: list[str] | None = None
+    limit: int = Field(5, ge=1, le=20)
+    recency_days: int | None = Field(default=None, ge=1, le=3650)
+    rationale: str | None = None
 
 
 class MemoryFactOut(BaseModel):
@@ -91,6 +146,31 @@ class MemoryFactOut(BaseModel):
     metadata_: dict | None = Field(None, serialization_alias="metadata")
 
     model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class WebSourceDiscoveryResponse(BaseModel):
+    query: str
+    provider: str
+    proposed: list[MemoryFactOut]
+    skipped_existing: int = 0
+    diagnostics: list[str] = []
+
+
+def _normalize_chat_turn_scope(scope: str | None, metadata: dict | None) -> tuple[str, dict]:
+    """Keep raw chat turns scoped to the session unless explicitly promoted.
+
+    Project/global memory should represent reviewed knowledge, not every model
+    utterance. Callers that deliberately promote a turn must mark metadata with
+    ``trusted`` or ``promoted``.
+    """
+    normalized_metadata = dict(metadata or {})
+    requested_scope = (scope or "session").strip() or "session"
+    trusted = normalized_metadata.get("trusted") is True or normalized_metadata.get("promoted") is True
+    if requested_scope in {"project", "global"} and not trusted:
+        normalized_metadata["requested_scope"] = requested_scope
+        normalized_metadata["scope_policy"] = "chat_turn_demoted_to_session"
+        return "session", normalized_metadata
+    return requested_scope, normalized_metadata
 
 
 @router.post("/search", response_model=MemorySearchResponse)
@@ -178,14 +258,15 @@ async def store_chat_turn_memory(
         ]
         if part
     )
+    scope, metadata = _normalize_chat_turn_scope(payload.scope, payload.metadata)
     fact = MemoryFact(
-        scope=payload.scope,
+        scope=scope,
         kind="chat_turn",
         title=title,
         summary=summary[:4000],
         source="chat",
         confidence=payload.confidence,
-        metadata_={"session_id": payload.session_id, **(payload.metadata or {})},
+        metadata_={"session_id": payload.session_id, **metadata},
     )
     db.add(fact)
     await db.commit()
@@ -210,6 +291,352 @@ async def pin_memory_fact(
         metadata_=payload.metadata,
     )
     db.add(fact)
+    await db.commit()
+    await db.refresh(fact)
+    return fact
+
+
+@router.post("/promotions", response_model=MemoryFactOut)
+async def propose_memory_promotion(
+    payload: MemoryPromotionRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MemoryFact:
+    """Promote session evidence into a reviewable project-memory proposal."""
+    source_fact: MemoryFact | None = None
+    if payload.source_fact_id:
+        source_fact = await db.get(MemoryFact, payload.source_fact_id)
+        if not source_fact:
+            raise HTTPException(status_code=404, detail="Source memory fact not found")
+    title = payload.title or (source_fact.title if source_fact else None)
+    summary = payload.summary or (source_fact.summary if source_fact else None)
+    if not title or not summary:
+        raise HTTPException(
+            status_code=400,
+            detail="title/summary are required when source_fact_id is not provided",
+        )
+    metadata = {
+        "promotion_status": "pending",
+        "source": "memory_promotion",
+        **(payload.metadata or {}),
+    }
+    if source_fact:
+        metadata.update({
+            "source_fact_id": str(source_fact.id),
+            "source_scope": source_fact.scope,
+            "source_kind": source_fact.kind,
+        })
+    fact = MemoryFact(
+        scope="project",
+        kind="proposed_fact",
+        title=title,
+        summary=summary,
+        source="memory_promotion",
+        confidence=payload.confidence,
+        pinned=False,
+        metadata_=metadata,
+    )
+    db.add(fact)
+    await db.commit()
+    await db.refresh(fact)
+    return fact
+
+
+@router.get("/promotions", response_model=list[MemoryFactOut])
+async def list_memory_promotions(
+    status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> list[MemoryFact]:
+    status_to_kind = {
+        "pending": "proposed_fact",
+        "proposed": "proposed_fact",
+        "approved": "verified_fact",
+        "verified": "verified_fact",
+        "rejected": "rejected_fact",
+    }
+    kinds = {"proposed_fact", "verified_fact", "rejected_fact"}
+    if status:
+        kind = status_to_kind.get(status)
+        if not kind:
+            raise HTTPException(status_code=400, detail="Unsupported promotion status")
+        kinds = {kind}
+    query = (
+        select(MemoryFact)
+        .where(
+            MemoryFact.source == "memory_promotion",
+            MemoryFact.kind.in_(sorted(kinds)),
+        )
+        .order_by(MemoryFact.created_at.desc())
+        .limit(200)
+    )
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+@router.post("/promotions/{fact_id}/evaluate", response_model=MemoryPromotionEvaluation)
+async def evaluate_memory_promotion(
+    fact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> MemoryPromotionEvaluation:
+    """Evaluate a proposed project-memory fact before approval."""
+    fact = await db.get(MemoryFact, fact_id)
+    if not fact:
+        raise HTTPException(status_code=404, detail="Memory promotion not found")
+    if fact.kind not in {"proposed_fact", "verified_fact", "rejected_fact"}:
+        raise HTTPException(status_code=400, detail="Memory fact is not a promotion")
+
+    metadata = dict(fact.metadata_ or {})
+    checks: list[dict] = []
+
+    has_provenance = bool(metadata.get("source_fact_id") or metadata.get("source_document_id") or metadata.get("url"))
+    checks.append({
+        "name": "provenance",
+        "passed": has_provenance,
+        "message": "Has source_fact_id/source_document_id/url" if has_provenance else "Missing provenance",
+    })
+
+    summary_ok = 20 <= len((fact.summary or "").strip()) <= 4000
+    checks.append({
+        "name": "summary_length",
+        "passed": summary_ok,
+        "message": "Summary length is within bounds" if summary_ok else "Summary is too short or too long",
+    })
+
+    confidence_ok = fact.confidence >= 0.5
+    checks.append({
+        "name": "confidence",
+        "passed": confidence_ok,
+        "message": "Confidence is acceptable" if confidence_ok else "Confidence is below 0.5",
+    })
+
+    duplicate_query = select(MemoryFact).where(
+        MemoryFact.id != fact.id,
+        MemoryFact.scope == "project",
+        MemoryFact.kind.in_(["verified_fact", "pinned_fact"]),
+        MemoryFact.title == fact.title,
+    ).limit(1)
+    duplicate = (await db.execute(duplicate_query)).scalars().first()
+    checks.append({
+        "name": "duplicate_title",
+        "passed": duplicate is None,
+        "message": "No verified duplicate title" if duplicate is None else f"Duplicate: {duplicate.id}",
+    })
+
+    passed = all(bool(item["passed"]) for item in checks)
+    diagnostics = [] if passed else [
+        str(item["name"]) for item in checks if not item["passed"]
+    ]
+    metadata["last_evaluation"] = {
+        "passed": passed,
+        "checks": checks,
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    fact.metadata_ = metadata
+    await db.commit()
+    await db.refresh(fact)
+
+    return MemoryPromotionEvaluation(
+        fact_id=fact.id,
+        status=str(metadata.get("promotion_status") or fact.kind),
+        passed=passed,
+        checks=checks,
+        diagnostics=diagnostics,
+    )
+
+
+@router.post("/promotions/{fact_id}/decide", response_model=MemoryFactOut)
+async def decide_memory_promotion(
+    fact_id: uuid.UUID,
+    payload: MemoryPromotionDecision,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_human_role(UserRole.admin)),
+) -> MemoryFact:
+    fact = await db.get(MemoryFact, fact_id)
+    if not fact:
+        raise HTTPException(status_code=404, detail="Memory promotion not found")
+    if fact.kind not in {"proposed_fact", "verified_fact", "rejected_fact"}:
+        raise HTTPException(status_code=400, detail="Memory fact is not a promotion")
+    metadata = dict(fact.metadata_ or {})
+    metadata.update({
+        "promotion_status": "approved" if payload.approved else "rejected",
+        "decided_by": payload.decided_by,
+        "decision_comment": payload.comment,
+        "decided_at": datetime.now(timezone.utc).isoformat(),
+    })
+    fact.metadata_ = metadata
+    if payload.approved:
+        fact.kind = "verified_fact"
+        fact.pinned = True
+        fact.last_verified_at = datetime.now(timezone.utc)
+    else:
+        fact.kind = "rejected_fact"
+        fact.pinned = False
+    await db.commit()
+    await db.refresh(fact)
+    return fact
+
+
+@router.post("/sources/propose", response_model=MemoryFactOut)
+async def propose_web_source(
+    payload: WebSourceProposalRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MemoryFact:
+    """Register a reviewable external source for future web research."""
+    metadata = {
+        "source_status": "proposed",
+        "url": payload.url,
+        "supplier_name": payload.supplier_name,
+        "source_type": payload.source_type,
+        "rationale": payload.rationale,
+        "domains": payload.domains or [],
+        **(payload.metadata or {}),
+    }
+    fact = MemoryFact(
+        scope="project",
+        kind="web_source",
+        title=payload.title,
+        summary=payload.rationale or payload.url,
+        source="web_source_registry",
+        confidence=0.8,
+        pinned=False,
+        metadata_=metadata,
+    )
+    db.add(fact)
+    await db.commit()
+    await db.refresh(fact)
+    return fact
+
+
+@router.get("/sources", response_model=list[MemoryFactOut])
+async def list_web_sources(
+    status: str | None = None,
+    source_type: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> list[MemoryFact]:
+    query = select(MemoryFact).where(MemoryFact.kind == "web_source")
+    if status:
+        query = query.where(MemoryFact.metadata_["source_status"].as_string() == status)
+    if source_type:
+        query = query.where(MemoryFact.metadata_["source_type"].as_string() == source_type)
+    result = await db.execute(query.order_by(MemoryFact.created_at.desc()).limit(200))
+    return list(result.scalars().all())
+
+
+def _source_discovery_query(payload: WebSourceDiscoveryRequest) -> str:
+    if payload.query:
+        return payload.query
+    if not payload.supplier_name:
+        raise HTTPException(
+            status_code=400,
+            detail="query or supplier_name is required",
+        )
+    source_hint = {
+        "supplier_catalog": "официальный каталог",
+        "price_list": "прайс лист",
+        "manufacturer": "сайт производителя каталог",
+        "reference": "официальный справочник",
+    }.get(payload.source_type, payload.source_type)
+    return f"{payload.supplier_name} {source_hint}"
+
+
+def _domain_from_url(url: str) -> str | None:
+    host = urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
+
+
+@router.post("/sources/discover", response_model=WebSourceDiscoveryResponse)
+async def discover_web_sources(
+    payload: WebSourceDiscoveryRequest,
+    db: AsyncSession = Depends(get_db),
+) -> WebSourceDiscoveryResponse:
+    """Use configured web search to create reviewable source proposals."""
+    query = _source_discovery_query(payload)
+    search = await execute_web_search(
+        WebSearchRequest(
+            query=query,
+            limit=payload.limit,
+            recency_days=payload.recency_days,
+            domains=payload.domains,
+            intent="source_discovery",
+        )
+    )
+    proposed: list[MemoryFact] = []
+    skipped_existing = 0
+    for result in search.results:
+        existing = await db.scalar(
+            select(MemoryFact.id)
+            .where(
+                MemoryFact.kind == "web_source",
+                MemoryFact.metadata_["url"].as_string() == result.url,
+            )
+            .limit(1)
+        )
+        if existing:
+            skipped_existing += 1
+            continue
+        domain = _domain_from_url(result.url)
+        metadata = {
+            "source_status": "proposed",
+            "url": result.url,
+            "supplier_name": payload.supplier_name,
+            "source_type": payload.source_type,
+            "rationale": payload.rationale
+            or f"Discovered by web search for: {query}",
+            "domains": [domain] if domain else [],
+            "discovery_query": query,
+            "discovery_provider": search.provider,
+            "web_snippet": result.snippet,
+            "published_at": result.published_at,
+        }
+        fact = MemoryFact(
+            scope="project",
+            kind="web_source",
+            title=result.title or result.url,
+            summary=result.snippet or result.url,
+            source="web_source_discovery",
+            confidence=0.6,
+            pinned=False,
+            metadata_=metadata,
+        )
+        db.add(fact)
+        proposed.append(fact)
+    await db.commit()
+    for fact in proposed:
+        await db.refresh(fact)
+    diagnostics = list(search.diagnostics)
+    if skipped_existing:
+        diagnostics.append(f"skipped_existing:{skipped_existing}")
+    return WebSourceDiscoveryResponse(
+        query=query,
+        provider=search.provider,
+        proposed=proposed,
+        skipped_existing=skipped_existing,
+        diagnostics=diagnostics,
+    )
+
+
+@router.post("/sources/{source_id}/decide", response_model=MemoryFactOut)
+async def decide_web_source(
+    source_id: uuid.UUID,
+    payload: WebSourceDecision,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_human_role(UserRole.admin)),
+) -> MemoryFact:
+    fact = await db.get(MemoryFact, source_id)
+    if not fact or fact.kind != "web_source":
+        raise HTTPException(status_code=404, detail="Web source proposal not found")
+    metadata = dict(fact.metadata_ or {})
+    metadata.update({
+        "source_status": "approved" if payload.approved else "rejected",
+        "decided_by": payload.decided_by,
+        "decision_comment": payload.comment,
+        "decided_at": datetime.now(timezone.utc).isoformat(),
+    })
+    fact.metadata_ = metadata
+    fact.pinned = bool(payload.approved)
+    if payload.approved:
+        fact.last_verified_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(fact)
     return fact
@@ -400,10 +827,22 @@ async def _search_memory_facts(
             MemoryFact.kind.ilike(pattern),
         )
     )
-    if payload.scope:
+    if payload.scope == "session":
+        safe_scopes = [MemoryFact.scope.in_(["project", "global"])]
+        if payload.session_id:
+            safe_scopes.append(
+                and_(
+                    MemoryFact.scope == "session",
+                    MemoryFact.metadata_["session_id"].as_string() == payload.session_id,
+                )
+            )
+        query = query.where(or_(*safe_scopes))
+    elif payload.scope:
         query = query.where(
             or_(MemoryFact.scope == payload.scope, MemoryFact.scope == "global")
         )
+    else:
+        query = query.where(MemoryFact.scope.in_(["project", "global"]))
     result = await db.execute(
         query.order_by(MemoryFact.pinned.desc(), MemoryFact.created_at.desc()).limit(payload.limit)
     )
@@ -774,6 +1213,8 @@ async def explain_memory(
             query=payload.query,
             node_types=payload.node_types,
             document_id=payload.document_id,
+            scope=payload.scope,
+            session_id=payload.session_id,
             limit=payload.limit,
             retrieval_mode=payload.retrieval_mode,
             include_explain=payload.include_explain,
@@ -831,6 +1272,54 @@ async def explain_memory(
         edges=list(edges_by_id.values()),
         evidence=list(evidence_by_id.values()),
         total_hits=search_response.total,
+    )
+
+
+@router.post("/query", response_model=MemoryQueryResponse)
+async def query_memory(
+    payload: MemoryQueryRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MemoryQueryResponse:
+    """Agent-facing RAG contract: compact evidence pack plus optional graph context."""
+    explained = await explain_memory(
+        MemoryExplainRequest(
+            query=payload.query,
+            document_id=payload.document_id,
+            node_types=payload.node_types,
+            scope=payload.scope,
+            session_id=payload.session_id,
+            limit=payload.limit,
+            neighborhood_depth=payload.neighborhood_depth,
+            include_explain=True,
+        ),
+        db,
+    )
+    evidence_pack: list[MemoryEvidenceItem] = []
+    seen: set[tuple[str, uuid.UUID]] = set()
+    for hit in explained.hits:
+        key = (hit.kind, hit.id)
+        if key in seen:
+            continue
+        seen.add(key)
+        evidence_pack.append(
+            MemoryEvidenceItem(
+                kind=hit.kind,
+                id=hit.id,
+                title=hit.title,
+                summary=hit.summary,
+                source=hit.source,
+                score=hit.score,
+                source_document_id=hit.source_document_id,
+                evidence_text=hit.evidence.text if hit.evidence else None,
+                evidence_page=hit.evidence.page_number if hit.evidence else None,
+            )
+        )
+    return MemoryQueryResponse(
+        query=payload.query,
+        evidence_pack=evidence_pack,
+        graph_nodes=explained.nodes if payload.include_graph else [],
+        graph_edges=explained.edges if payload.include_graph else [],
+        diagnostics=[] if evidence_pack else ["memory_query_empty"],
     )
 
 

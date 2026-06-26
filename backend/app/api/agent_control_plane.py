@@ -41,8 +41,9 @@ from app.db.models import (
     MemoryEmbeddingRecord,
     MemoryFact,
     RecipeSkill,
+    TechnologyLearningRule,
 )
-from app.auth.jwt import require_role
+from app.auth.jwt import require_human_role, require_role
 from app.auth.models import UserInfo, UserRole
 from app.db.session import get_db
 
@@ -72,8 +73,13 @@ class AgentControlPlaneStatus(BaseModel):
     plugins_total: int
     plugins_enabled: int
     tasks_open: int
+    tasks_proposed: int = 0
+    tasks_running: int = 0
     crons_enabled: int
     memory_facts_total: int
+    memory_promotions_pending: int = 0
+    web_sources_proposed: int = 0
+    learning_rules_proposed: int = 0
     mcp_servers_total: int
     capability_proposals_open: int
 
@@ -176,6 +182,21 @@ class AgentTaskCreate(BaseModel):
     role: str = "worker"
     team_id: uuid.UUID | None = None
     metadata: dict | None = None
+
+
+class AgentTaskPropose(BaseModel):
+    objective: str = Field(..., min_length=1)
+    description: str | None = None
+    role: str = "worker"
+    rationale: str | None = None
+    suggested_trigger: str | None = None
+    metadata: dict | None = None
+
+
+class AgentTaskDecision(BaseModel):
+    approved: bool
+    decided_by: str = "user"
+    comment: str | None = None
 
 
 class AgentTaskOut(BaseModel):
@@ -497,6 +518,30 @@ async def _create_agent_task(payload: AgentTaskCreate, db: AsyncSession) -> Agen
     return task
 
 
+async def _propose_agent_task(payload: AgentTaskPropose, db: AsyncSession) -> AgentTask:
+    metadata = {
+        "proposal_kind": "agent_task",
+        "approval_required": True,
+        "source": "agent_control.task_propose",
+        **(payload.metadata or {}),
+    }
+    if payload.rationale:
+        metadata["rationale"] = payload.rationale
+    if payload.suggested_trigger:
+        metadata["suggested_trigger"] = payload.suggested_trigger
+    task = AgentTask(
+        objective=payload.objective,
+        description=payload.description,
+        role=payload.role,
+        status="proposed",
+        metadata_=metadata,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
 async def _create_capability_proposal(
     payload: CapabilityProposalCreate,
     db: AsyncSession,
@@ -533,12 +578,34 @@ async def control_plane_status(db: AsyncSession = Depends(get_db)) -> AgentContr
     tasks_open = await db.scalar(
         select(func.count())
         .select_from(AgentTask)
-        .where(AgentTask.status.notin_(["completed", "failed", "stopped"]))
+        .where(AgentTask.status.notin_(["completed", "failed", "rejected", "stopped"]))
+    )
+    tasks_proposed = await db.scalar(
+        select(func.count()).select_from(AgentTask).where(AgentTask.status == "proposed")
+    )
+    tasks_running = await db.scalar(
+        select(func.count()).select_from(AgentTask).where(AgentTask.status == "running")
     )
     crons_enabled = await db.scalar(
         select(func.count()).select_from(AgentCron).where(AgentCron.enabled.is_(True))
     )
     memory_total = await db.scalar(select(func.count()).select_from(MemoryFact))
+    memory_promotions_pending = await db.scalar(
+        select(func.count()).select_from(MemoryFact).where(MemoryFact.kind == "proposed_fact")
+    )
+    web_sources_proposed = await db.scalar(
+        select(func.count())
+        .select_from(MemoryFact)
+        .where(
+            MemoryFact.kind == "web_source",
+            MemoryFact.metadata_["source_status"].as_string() == "proposed",
+        )
+    )
+    learning_rules_proposed = await db.scalar(
+        select(func.count())
+        .select_from(TechnologyLearningRule)
+        .where(TechnologyLearningRule.status == "proposed")
+    )
     capability_open = await db.scalar(
         select(func.count())
         .select_from(CapabilityProposal)
@@ -559,8 +626,13 @@ async def control_plane_status(db: AsyncSession = Depends(get_db)) -> AgentContr
         plugins_total=int(plugin_total or 0),
         plugins_enabled=int(plugin_enabled or 0),
         tasks_open=int(tasks_open or 0),
+        tasks_proposed=int(tasks_proposed or 0),
+        tasks_running=int(tasks_running or 0),
         crons_enabled=int(crons_enabled or 0),
         memory_facts_total=int(memory_total or 0),
+        memory_promotions_pending=int(memory_promotions_pending or 0),
+        web_sources_proposed=int(web_sources_proposed or 0),
+        learning_rules_proposed=int(learning_rules_proposed or 0),
         mcp_servers_total=len(config.mcp_servers or []),
         capability_proposals_open=int(capability_open or 0),
     )
@@ -800,6 +872,93 @@ async def create_agent_task_tool(
 ) -> AgentTask:
     """Skill: task.create — Create an agent work item."""
     return await _create_agent_task(payload, db)
+
+
+@router.post("/tasks/propose", response_model=AgentTaskOut)
+async def propose_agent_task_tool(
+    payload: AgentTaskPropose,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_role(UserRole.admin)),
+) -> AgentTask:
+    """Skill: task.propose — Propose autonomous work without executing it."""
+    return await _propose_agent_task(payload, db)
+
+
+@router.post("/tasks/{task_id}/decide", response_model=AgentTaskOut)
+async def decide_agent_task(
+    task_id: uuid.UUID,
+    payload: AgentTaskDecision,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_human_role(UserRole.admin)),
+) -> AgentTask:
+    """Approve/reject an autonomous task proposal."""
+    task = await db.get(AgentTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Agent task not found")
+    if task.status != "proposed":
+        raise HTTPException(status_code=409, detail=f"Task is not proposed (status={task.status})")
+    metadata = dict(task.metadata_ or {})
+    metadata.update({
+        "decision_status": "approved" if payload.approved else "rejected",
+        "decided_by": payload.decided_by,
+        "decision_comment": payload.comment,
+        "decided_at": datetime.now(timezone.utc).isoformat(),
+    })
+    task.metadata_ = metadata
+    task.status = "created" if payload.approved else "rejected"
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+@router.post("/tasks/{task_id}/run", response_model=AgentTaskOut)
+async def run_agent_task(
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_human_role(UserRole.admin)),
+) -> AgentTask:
+    """Run an approved autonomous task once through the headless agent executor."""
+    task = await db.get(AgentTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Agent task not found")
+    if task.status != "created":
+        raise HTTPException(status_code=409, detail=f"Task is not runnable (status={task.status})")
+
+    started_at = datetime.now(timezone.utc)
+    metadata = dict(task.metadata_ or {})
+    metadata.update({
+        "run_status": "running",
+        "run_started_at": started_at.isoformat(),
+    })
+    task.metadata_ = metadata
+    task.status = "running"
+    await db.commit()
+    await db.refresh(task)
+
+    prompt = task.objective
+    if task.description:
+        prompt = f"{task.objective}\n\nКонтекст задачи:\n{task.description}"
+    try:
+        from app.tasks.agent_cron import run_headless_agent_turn
+
+        ok, output = await run_headless_agent_turn(prompt)
+    except Exception as exc:
+        ok = False
+        output = f"Task execution failed: {exc}"
+
+    finished_at = datetime.now(timezone.utc)
+    metadata = dict(task.metadata_ or {})
+    metadata.update({
+        "run_status": "completed" if ok else "failed",
+        "run_finished_at": finished_at.isoformat(),
+        "run_duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+    })
+    task.metadata_ = metadata
+    task.status = "completed" if ok else "failed"
+    task.output = output or None
+    await db.commit()
+    await db.refresh(task)
+    return task
 
 
 @router.get("/tasks", response_model=list[AgentTaskOut])

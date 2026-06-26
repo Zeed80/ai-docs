@@ -251,6 +251,7 @@ class MemorySearchRequest(BaseModel):
     node_types: list[str] | None = None
     document_id: uuid.UUID | None = None
     scope: str | None = None
+    session_id: str | None = None
     limit: int = Field(50, ge=1, le=500)
     cursor: str | None = None
     intent: str | None = None
@@ -297,6 +298,8 @@ class MemoryExplainRequest(BaseModel):
     query: str = Field(..., min_length=1)
     document_id: uuid.UUID | None = None
     node_types: list[str] | None = None
+    scope: str | None = None
+    session_id: str | None = None
     limit: int = Field(50, ge=1, le=500)
     neighborhood_depth: int = Field(1, ge=0, le=2)
     retrieval_mode: Literal[
@@ -317,6 +320,37 @@ class MemoryExplainResponse(BaseModel):
     edges: list[KnowledgeEdgeOut]
     evidence: list[EvidenceSpanOut]
     total_hits: int
+
+
+class MemoryQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    document_id: uuid.UUID | None = None
+    node_types: list[str] | None = None
+    scope: str | None = None
+    session_id: str | None = None
+    limit: int = Field(12, ge=1, le=100)
+    neighborhood_depth: int = Field(1, ge=0, le=2)
+    include_graph: bool = True
+
+
+class MemoryEvidenceItem(BaseModel):
+    kind: str
+    id: uuid.UUID
+    title: str
+    summary: str | None = None
+    source: str
+    score: float
+    source_document_id: uuid.UUID | None = None
+    evidence_text: str | None = None
+    evidence_page: int | None = None
+
+
+class MemoryQueryResponse(BaseModel):
+    query: str
+    evidence_pack: list[MemoryEvidenceItem]
+    graph_nodes: list[KnowledgeNodeOut] = []
+    graph_edges: list[KnowledgeEdgeOut] = []
+    diagnostics: list[str] = []
 
 
 class MemoryEmbeddingRebuildRequest(BaseModel):

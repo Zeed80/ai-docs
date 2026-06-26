@@ -52,6 +52,8 @@ interface ChatMessage {
   result?: unknown;
   status?: "calling" | "done" | "pending" | "approved" | "rejected";
   preview?: string;
+  approvalId?: string;
+  dbId?: string;
   toolsUsedInTurn?: string[];
   actionChips?: ActionChip[];
   attachments?: {
@@ -665,7 +667,15 @@ export function AssistantPanel() {
         autoApproveRef.current &&
         wsRef.current?.readyState === WebSocket.OPEN
       ) {
-        wsRef.current.send(JSON.stringify(buildAgentApprovalMessage(true)));
+        const requestApprovalId =
+          typeof data.approval_id === "string" && data.approval_id
+            ? data.approval_id
+            : undefined;
+        const requestDbId =
+          typeof data.db_id === "string" && data.db_id ? data.db_id : undefined;
+        wsRef.current.send(
+          JSON.stringify(buildAgentApprovalMessage(true, requestApprovalId, requestDbId)),
+        );
         setMessages((prev) => [
           ...prev,
           {
@@ -674,6 +684,8 @@ export function AssistantPanel() {
             tool: data.tool as string,
             args: data.args as Record<string, unknown>,
             preview: data.preview as string,
+            approvalId: requestApprovalId,
+            dbId: requestDbId,
             status: "approved",
           },
         ]);
@@ -688,6 +700,12 @@ export function AssistantPanel() {
           tool: data.tool as string,
           args: data.args as Record<string, unknown>,
           preview: data.preview as string,
+          approvalId:
+            typeof data.approval_id === "string" && data.approval_id
+              ? data.approval_id
+              : undefined,
+          dbId:
+            typeof data.db_id === "string" && data.db_id ? data.db_id : undefined,
           status: "pending",
         },
       ]);
@@ -981,7 +999,9 @@ export function AssistantPanel() {
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     if (!approved) autoApproveRef.current = false;
-    wsRef.current.send(JSON.stringify(buildAgentApprovalMessage(approved)));
+    wsRef.current.send(
+      JSON.stringify(buildAgentApprovalMessage(approved, msg?.approvalId, msg?.dbId)),
+    );
     setMessages((prev) =>
       prev.map((m) =>
         m.id === msgId

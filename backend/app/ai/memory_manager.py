@@ -110,20 +110,19 @@ class MemoryManager:
         body: dict[str, Any] = {
             "query": query[:500],
             "limit": _MEMORY_PAGE_SIZE,
-            "retrieval_mode": "auto_hybrid",
-            "need_full_coverage": False,
-            "include_explain": False,
+            "include_graph": True,
         }
         if session_id:
             body["session_id"] = session_id
+            body["scope"] = "session"
         resp = await client.post(
-            f"{self._base_url}/api/memory/search",
+            f"{self._base_url}/api/memory/query",
             json=body,
         )
         if resp.status_code != 200:
             return []
         data = resp.json()
-        return [h for h in (data.get("hits") or []) if isinstance(h, dict)]
+        return [h for h in (data.get("evidence_pack") or []) if isinstance(h, dict)]
 
     async def sync_turn(
         self,
@@ -147,7 +146,8 @@ class MemoryManager:
                         "user_text": user_text,
                         "assistant_text": assistant_text,
                         "session_id": session_id or None,
-                        "scope": "project",
+                        "scope": "session",
+                        "metadata": {"source": "agent_auto_memory"},
                     },
                 )
         except Exception as exc:

@@ -231,6 +231,11 @@ class LearningRuleActivateRequest(BaseModel):
     comment: str | None = None
 
 
+class LearningRuleRejectRequest(BaseModel):
+    rejected_by: str = Field(..., min_length=1, max_length=100)
+    comment: str | None = None
+
+
 class LearningRuleOut(LearningRuleCreate):
     id: uuid.UUID
     activated_by: str | None = None

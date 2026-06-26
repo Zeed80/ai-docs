@@ -659,6 +659,194 @@ class WorkspaceSqlTableRequest(BaseModel):
     limit: int = 200
 
 
+class WorkspaceCompareTableRequest(BaseModel):
+    left_canvas_id: str
+    right_canvas_id: str
+    canvas_id: str = "agent:table-compare"
+    title: str | None = None
+    key_fields: list[str] | None = None
+    compare_fields: list[str] | None = None
+
+
+def _block_rows(block: dict[str, Any] | None) -> list[dict[str, Any]]:
+    rows = block.get("rows") if isinstance(block, dict) else None
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def _block_columns(block: dict[str, Any] | None) -> list[str]:
+    columns = block.get("columns") if isinstance(block, dict) else None
+    if isinstance(columns, list):
+        keys = [str(c.get("key")) for c in columns if isinstance(c, dict) and c.get("key")]
+        if keys:
+            return keys
+    rows = _block_rows(block)
+    keys: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in keys and not key.startswith("__"):
+                keys.append(key)
+    return keys
+
+
+def _as_number(value: Any) -> float | None:
+    if isinstance(value, (int, float, Decimal)):
+        return float(value)
+    if isinstance(value, str):
+        raw = value.replace(" ", "").replace(",", ".")
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _pick_compare_keys(
+    left_block: dict[str, Any],
+    right_block: dict[str, Any],
+    requested: list[str] | None,
+) -> list[str]:
+    common = [k for k in _block_columns(left_block) if k in set(_block_columns(right_block))]
+    if requested:
+        keys = [k for k in requested if k in common]
+        if keys:
+            return keys
+    for candidate in ("id", "__pk", "sku", "invoice_number", "name", "description", "key"):
+        if candidate in common:
+            return [candidate]
+    return common[:1]
+
+
+@router.post("/agent/compare-table-data", response_model=WorkspaceToolResponse)
+async def compare_table_data(
+    payload: WorkspaceCompareTableRequest,
+) -> WorkspaceToolResponse:
+    """Skill: workspace.compare_table_data — Compare two Workspace tables/sheets."""
+    left = get_workspace_block(payload.left_canvas_id)
+    right = get_workspace_block(payload.right_canvas_id)
+    if not left or not right:
+        missing = payload.left_canvas_id if not left else payload.right_canvas_id
+        return WorkspaceToolResponse(
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
+            message=f"Не найден блок для сравнения: {missing}",
+        )
+    left_rows = _block_rows(left)
+    right_rows = _block_rows(right)
+    key_fields = _pick_compare_keys(left, right, payload.key_fields)
+    if not key_fields:
+        return WorkspaceToolResponse(
+            status="error",
+            canvas_id=payload.canvas_id,
+            total=0,
+            shown=0,
+            message="Не удалось выбрать общий ключ сравнения.",
+        )
+    common_fields = [
+        k for k in _block_columns(left)
+        if k in set(_block_columns(right)) and k not in key_fields and not k.startswith("__")
+    ]
+    compare_fields = (
+        [k for k in (payload.compare_fields or []) if k in common_fields]
+        or common_fields[:12]
+    )
+
+    def key_for(row: dict[str, Any]) -> tuple[str, ...]:
+        return tuple(str(row.get(k) or "") for k in key_fields)
+
+    left_by_key = {key_for(row): row for row in left_rows}
+    right_by_key = {key_for(row): row for row in right_rows}
+    rows: list[dict[str, Any]] = []
+    for key in sorted(set(left_by_key) | set(right_by_key)):
+        lrow = left_by_key.get(key)
+        rrow = right_by_key.get(key)
+        label = " / ".join(key)
+        if lrow is None:
+            rows.append({
+                "key": label,
+                "field": "",
+                "left_value": None,
+                "right_value": "есть",
+                "delta": None,
+                "delta_pct": None,
+                "status": "added",
+                "explanation": "Строка есть только справа",
+            })
+            continue
+        if rrow is None:
+            rows.append({
+                "key": label,
+                "field": "",
+                "left_value": "есть",
+                "right_value": None,
+                "delta": None,
+                "delta_pct": None,
+                "status": "removed",
+                "explanation": "Строка есть только слева",
+            })
+            continue
+        for field in compare_fields:
+            lv = lrow.get(field)
+            rv = rrow.get(field)
+            if lv == rv:
+                continue
+            ln = _as_number(lv)
+            rn = _as_number(rv)
+            delta = rn - ln if ln is not None and rn is not None else None
+            delta_pct = round((delta / ln) * 100, 2) if delta is not None and ln else None
+            rows.append({
+                "key": label,
+                "field": field,
+                "left_value": lv,
+                "right_value": rv,
+                "delta": round(delta, 4) if delta is not None else None,
+                "delta_pct": delta_pct,
+                "status": "changed",
+                "explanation": "Значение отличается",
+            })
+
+    columns = [
+        {"key": "key", "header": "Ключ", "type": "text"},
+        {"key": "field", "header": "Поле", "type": "text"},
+        {"key": "left_value", "header": "Слева", "type": "text"},
+        {"key": "right_value", "header": "Справа", "type": "text"},
+        {"key": "delta", "header": "Delta", "type": "number"},
+        {"key": "delta_pct", "header": "Delta %", "type": "number"},
+        {"key": "status", "header": "Статус", "type": "text"},
+        {"key": "explanation", "header": "Пояснение", "type": "text"},
+    ]
+    title = payload.title or f"Сравнение: {left.get('title') or payload.left_canvas_id} ↔ {right.get('title') or payload.right_canvas_id}"
+    block = {
+        "id": payload.canvas_id,
+        "type": "table",
+        "title": title,
+        "columns": columns,
+        "rows": rows,
+        "source": "workspace.compare_table_data",
+        "compare": {
+            "left_canvas_id": payload.left_canvas_id,
+            "right_canvas_id": payload.right_canvas_id,
+            "key_fields": key_fields,
+            "compare_fields": compare_fields,
+        },
+    }
+    stored = upsert_workspace_block(payload.canvas_id, block)
+    await chat_bus.publish({
+        "type": "workspace.updated",
+        "canvas_id": payload.canvas_id,
+        "block": stored,
+    })
+    return WorkspaceToolResponse(
+        status="published",
+        canvas_id=payload.canvas_id,
+        total=len(rows),
+        shown=len(rows),
+        message=f"Опубликовал сравнение: {len(rows)} отличий, ключ: {', '.join(key_fields)}.",
+        filters={},
+    )
+
+
 @router.post("/agent/generated/sql-table", response_model=WorkspaceToolResponse)
 async def publish_sql_table(
     payload: WorkspaceSqlTableRequest,

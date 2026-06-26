@@ -39,6 +39,7 @@ import { EditableCell } from "./EditableCell";
 import {
   FALLBACK_GRID_WIDTH,
   type GridCellEdit,
+  type GridCellMerge,
   type GridColumn,
   type GridRow,
   MIN_GRID_COLUMN_WIDTH,
@@ -87,6 +88,8 @@ export interface DataGridProps {
   spreadsheetMode?: boolean;
   /** Rename a column header (double-click the header to edit). */
   onRenameColumn?: (key: string, header: string) => void | Promise<void>;
+  /** Sheet-only visual merges. Coordinates are physical row/column positions. */
+  merges?: GridCellMerge[];
   fill?: boolean;
 }
 
@@ -203,6 +206,7 @@ export function DataGrid({
   getEditValue,
   spreadsheetMode = false,
   onRenameColumn,
+  merges = [],
   fill = false,
 }: DataGridProps) {
   const allKeys = useMemo(() => columns.map((c) => c.key), [columns]);
@@ -328,6 +332,40 @@ export function DataGrid({
   };
 
   const headerGroup = table.getHeaderGroups()[0];
+  const visibleColumns = headerGroup.headers.map((header) => header.column.id);
+  const mergeByStart = useMemo(() => {
+    const starts = new Map<string, GridCellMerge & { colSpan: number; rowSpan: number }>();
+    for (const merge of merges) {
+      const startCol = visibleColumns.indexOf(merge.start_col);
+      const endCol = visibleColumns.indexOf(merge.end_col);
+      if (startCol < 0 || endCol < 0) continue;
+      const from = Math.min(startCol, endCol);
+      const to = Math.max(startCol, endCol);
+      starts.set(`${merge.start_row}:${visibleColumns[from]}`, {
+        ...merge,
+        start_col: visibleColumns[from],
+        end_col: visibleColumns[to],
+        colSpan: to - from + 1,
+        rowSpan: merge.end_row - merge.start_row + 1,
+      });
+    }
+    return starts;
+  }, [merges, visibleColumns]);
+  const coveredCells = useMemo(() => {
+    const covered = new Set<string>();
+    for (const merge of mergeByStart.values()) {
+      const startCol = visibleColumns.indexOf(merge.start_col);
+      const endCol = visibleColumns.indexOf(merge.end_col);
+      for (let r = merge.start_row; r <= merge.end_row; r += 1) {
+        for (let c = startCol; c <= endCol; c += 1) {
+          const key = `${r}:${visibleColumns[c]}`;
+          if (r === merge.start_row && c === startCol) continue;
+          covered.add(key);
+        }
+      }
+    }
+    return covered;
+  }, [mergeByStart, visibleColumns]);
 
   const totalWidth = enableResize
     ? table.getTotalSize() + (spreadsheetMode ? GUTTER_WIDTH : 0)
@@ -404,15 +442,22 @@ export function DataGrid({
                 {idx + 1}
               </td>
             )}
-            {row.getVisibleCells().map((cell) => (
-              <td
-                key={cell.id}
-                style={{ width: cell.column.getSize() }}
-                className="overflow-hidden border border-slate-700 px-3 py-1.5 align-top text-slate-200"
-              >
-                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-              </td>
-            ))}
+            {row.getVisibleCells().map((cell) => {
+              const cellKey = `${row.index}:${cell.column.id}`;
+              if (coveredCells.has(cellKey)) return null;
+              const merge = mergeByStart.get(cellKey);
+              return (
+                <td
+                  key={cell.id}
+                  rowSpan={merge?.rowSpan}
+                  colSpan={merge?.colSpan}
+                  style={{ width: cell.column.getSize() }}
+                  className="overflow-hidden border border-slate-700 px-3 py-1.5 align-top text-slate-200"
+                >
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </td>
+              );
+            })}
           </tr>
         ))}
       </tbody>

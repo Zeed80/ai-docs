@@ -55,6 +55,17 @@ export interface CanvasBlock {
   // sheet (ad-hoc editable spreadsheet)
   sheet_id?: string;
   raw_rows?: Record<string, unknown>[];
+  layout?: {
+    merges?: Array<{
+      id: string;
+      start_row: number;
+      end_row: number;
+      start_col: string;
+      end_col: string;
+      start_col_index?: number;
+      end_col_index?: number;
+    }>;
+  };
   // image
   url?: string;
   alt?: string;

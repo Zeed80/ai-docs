@@ -92,10 +92,16 @@ class _Executor:
     def set_active_role(self, role):
         return None
 
+    def set_excluded_tools(self, tools):
+        return None
+
+    def set_workspace_expected(self, expected):
+        return None
+
     def record_external_turn(self, user_text, assistant_text):
         self.external_turns.append((user_text, assistant_text))
 
-    async def on_approval(self, a):
+    async def on_approval(self, a, approval_id=None, db_id=None):
         return None
 
     async def on_user_message(self, content):

@@ -14,6 +14,8 @@ from app.api.providers_api import (
     _SLOT_THINKING_AGENT_FIELDS,
     _SLOT_THINKING_TASKS,
     _apply_slot_thinking,
+    _registry,
+    _slot_thinking_state,
     _slot_supports_thinking,
 )
 
@@ -68,6 +70,43 @@ def test_apply_slot_thinking_agent_field_tristate(monkeypatch):
     assert captured["fast_disable_thinking"] is False  # reasoning ON → disable=False
     _apply_slot_thinking("agent_fast", None)
     assert captured["fast_disable_thinking"] is None    # default
+
+
+def test_slot_thinking_state_reports_effective_source(routing_mem_store):
+    registry = _registry()
+    _apply_slot_thinking("structured_extraction", None)
+    state = _slot_thinking_state("structured_extraction", registry, "qwen3_5_9b_ollama")
+    assert state["thinking_supported_by_slot"] is True
+    assert state["thinking_supported_by_model"] is True
+    assert state["thinking_effective"] is False
+    assert state["thinking_source"] == "model"
+
+    _apply_slot_thinking("structured_extraction", True)
+    state = _slot_thinking_state("structured_extraction", registry, "qwen3_5_9b_ollama")
+    assert state["thinking_override"] is True
+    assert state["thinking_effective"] is True
+    assert state["thinking_source"] == "slot"
+
+
+def test_slot_thinking_state_flags_unknown_disable_knob(routing_mem_store):
+    from app.ai.schemas import ModelCapability, ModelStatus, Modality, ProviderKind
+
+    registry = _registry()
+    registry.models["lmstudio_thinker_test"] = ModelCapability(
+        name="lmstudio_thinker_test",
+        provider=ProviderKind.LMSTUDIO,
+        provider_model="thinker",
+        status=ModelStatus.PRODUCTION,
+        modalities={Modality.TEXT},
+        thinking_supported=True,
+        thinking_enabled=False,
+        local_only=True,
+    )
+
+    state = _slot_thinking_state("agent_fast", registry, "lmstudio_thinker_test")
+    assert state["thinking_effective"] is False
+    assert state["thinking_disable_supported"] is False
+    assert state["thinking_warning"]
 
 
 @pytest.mark.asyncio

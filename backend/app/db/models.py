@@ -759,6 +759,7 @@ class WorkspaceSheet(UUIDPrimaryKey, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(300), nullable=False, default="Лист")
     columns: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     rows: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    layout: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
 # ── Normalization Rules ─────────────────────────────────────────────────────

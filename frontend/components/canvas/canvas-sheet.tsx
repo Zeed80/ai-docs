@@ -28,6 +28,23 @@ function refresh() {
   window.dispatchEvent(new Event("workspace-blocks-updated"));
 }
 
+function columnKeyByLetter(columns: GridColumn[], letters: string): string | null {
+  let idx = 0;
+  for (const ch of letters.toUpperCase()) {
+    idx = idx * 26 + (ch.charCodeAt(0) - 64);
+  }
+  idx -= 1;
+  return columns[idx]?.key ?? null;
+}
+
+function parseCellRef(columns: GridColumn[], value: string) {
+  const m = value.trim().match(/^([A-Z]+)([1-9][0-9]*)$/i);
+  if (!m) return null;
+  const col = columnKeyByLetter(columns, m[1]);
+  if (!col) return null;
+  return { row: Number(m[2]) - 1, col };
+}
+
 export function CanvasSheet({
   block,
   fill = false,
@@ -69,6 +86,29 @@ export function CanvasSheet({
     await call("/add-column", { key, header, formula });
   }
 
+  async function mergeCells() {
+    const range = window.prompt("Диапазон для объединения:", "A1:B1");
+    const m = range?.match(/^\s*([A-Z]+[1-9][0-9]*)\s*:\s*([A-Z]+[1-9][0-9]*)\s*$/i);
+    if (!m) return;
+    const start = parseCellRef(columns, m[1]);
+    const end = parseCellRef(columns, m[2]);
+    if (!start || !end) return;
+    await call("/merge-cells", {
+      start_row: start.row,
+      end_row: end.row,
+      start_col: start.col,
+      end_col: end.col,
+    });
+  }
+
+  async function unmergeCells() {
+    const cell = window.prompt("Ячейка внутри объединения:", "A1");
+    if (!cell) return;
+    const ref = parseCellRef(columns, cell);
+    if (!ref) return;
+    await call("/unmerge-cells", { row: ref.row, col: ref.col });
+  }
+
   if (!sheetId) {
     return (
       <div className="text-xs text-slate-500">Лист не инициализирован.</div>
@@ -92,6 +132,20 @@ export function CanvasSheet({
         >
           + Столбец
         </button>
+        <button
+          onClick={mergeCells}
+          disabled={busy}
+          className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-600 disabled:opacity-50"
+        >
+          Объединить
+        </button>
+        <button
+          onClick={unmergeCells}
+          disabled={busy}
+          className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-600 disabled:opacity-50"
+        >
+          Разъединить
+        </button>
         <span className="text-xs text-slate-500">
           Формулы: =A1*B1, =SUM(A1:A10), =ROUND(quantity*price,2)
         </span>
@@ -103,6 +157,8 @@ export function CanvasSheet({
         storageKey={null}
         fill={fill}
         spreadsheetMode
+        enableSort={false}
+        merges={block.layout?.merges ?? []}
         onCellCommit={async (edit) => {
           const ok = await call("/patch-cells", {
             edits: [{ row: edit.rowIndex, col: edit.field, value: edit.value }],

@@ -114,7 +114,7 @@ def check_capability_contract(
 ) -> tuple[list[str], list[str], dict[str, int]]:
     """Validate broad capability-mode contract against the Python dispatcher."""
     try:
-        from app.api.capability_router import _DISPATCH
+        from app.api.capability_router import _DISPATCH, _SPECIAL_CAPABILITIES
         from app.ai.capability_manifest import load_capability_manifest
         from app.ai.policy_engine import classify_capability_action_risk
     except Exception as exc:  # pragma: no cover - import failure is surfaced to CLI
@@ -136,7 +136,8 @@ def check_capability_contract(
     if missing_in_yaml:
         errors.append(f"dispatcher capabilities missing from capabilities.yml: {missing_in_yaml}")
 
-    missing_in_dispatcher = sorted(yaml_caps - dispatcher_caps)
+    special_caps = set(_SPECIAL_CAPABILITIES)
+    missing_in_dispatcher = sorted(yaml_caps - dispatcher_caps - special_caps)
     if missing_in_dispatcher:
         errors.append(f"capabilities.yml references unknown dispatcher capabilities: {missing_in_dispatcher}")
 

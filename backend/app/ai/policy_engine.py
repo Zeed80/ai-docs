@@ -116,6 +116,8 @@ def classify_capability_action_risk(action: str | None) -> str:
     normalized = str(action or "").strip()
     if not normalized:
         return "low"
+    if normalized == "learning_rule_reject":
+        return "low"
     if normalized in RISKY_CAPABILITY_ACTIONS:
         return "high"
     if normalized.startswith(("delete_", "bulk_", "approve_", "reject_", "send_")):

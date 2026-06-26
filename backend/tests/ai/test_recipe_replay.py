@@ -41,10 +41,13 @@ class FakeExecutor:
     def set_excluded_tools(self, names) -> None:
         return None
 
+    def set_workspace_expected(self, expected: bool) -> None:
+        return None
+
     def record_external_turn(self, user_text: str, assistant_text: str) -> None:
         return None
 
-    async def on_approval(self, approved: bool):
+    async def on_approval(self, approved: bool, approval_id=None, db_id=None):
         return None
 
     async def on_user_message(self, content: str):

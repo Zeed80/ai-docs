@@ -121,7 +121,17 @@ _OPERATIONAL_POLICY = """
   параметрами без явной причины. Получил результат → сформулируй ответ.
 - Capability gap: если нужного инструмента нет — вызови capability.propose
   с описанием и планом реализации.
-- Память автоматическая: используй memory.search с retrieval_mode=auto_hybrid.
+- Память автоматическая: для RAG сначала используй memory.query. Для связей
+  между сущностями используй memory.neighborhood/path. Если из session-памяти
+  нашёл полезный проверяемый факт — создай reviewable proposal через
+  memory.promote, не записывай его сразу в project/global.
+- Инициативность: если для задачи нужны внешние каталоги, прайсы или сайты
+  поставщиков, сначала проверь memory.source_list. Если источника нет — создай
+  предложение через memory.source_propose с URL/доменом и rationale. Если видишь
+  полезную самостоятельную работу, но она не была прямо поручена, создай
+  agent_control.task_propose вместо молчания или самовольного запуска.
+- Решения approve/reject и запуск proposed-задач/источников/фактов (decide/run)
+  принимает человек в GUI. У тебя нет этих действий — ты только предлагаешь.
 """.strip()
 
 
@@ -557,6 +567,8 @@ async def _execute_skill(
     skill: dict,
     args: dict,
     config: BuiltinAgentConfig,
+    *,
+    approval_granted: bool = False,
 ) -> dict:
     method = skill["method"].upper()
     path = skill["path"]
@@ -581,6 +593,8 @@ async def _execute_skill(
     for attempt in range(max_retries):
         try:
             _hdrs = _internal_headers()
+            if approval_granted:
+                _hdrs["X-Agent-Approval"] = "granted"
             async with httpx.AsyncClient(timeout=float(timeout)) as client:
                 if method == "GET":
                     resp = await client.get(url, params=query_args, headers=_hdrs)
@@ -1445,6 +1459,7 @@ class AgentSession:
         self._tools, self._skill_map = _load_agent_skills(expose_filter=exposed if exposed else None)
         self._system = _load_system_prompt(self._config)
         self._approval_gates = set(self._config.approval_gates)
+        self._pending_approval_id: str | None = None
 
         from app.ai.context_compressor import ContextCompressor
         self._compressor = ContextCompressor(
@@ -1640,7 +1655,19 @@ class AgentSession:
             "append": append,
         })
 
-    async def on_approval(self, approved: bool) -> None:
+    async def on_approval(
+        self,
+        approved: bool,
+        approval_id: str | None = None,
+        db_id: str | None = None,
+    ) -> None:
+        if self._pending_approval_id and approval_id != self._pending_approval_id:
+            await self._send({
+                "type": "approval_ignored",
+                "approval_id": approval_id,
+                "message": "Approval decision does not match the active request.",
+            })
+            return
         if self._approval_future and not self._approval_future.done():
             self._approval_future.set_result(approved)
 
@@ -1651,11 +1678,14 @@ class AgentSession:
         confirm a learned shortcut before it has earned silent trust. Times out
         to False (defer to the normal path) so a missing user never blocks.
         """
+        approval_id = str(uuid.uuid4())
+        self._pending_approval_id = approval_id
         self._approval_future = asyncio.get_event_loop().create_future()
         await self._send({
             "type": "approval_request",
             "tool": "recipe_replay",
             "preview": prompt,
+            "approval_id": approval_id,
             **(meta or {}),
         })
         try:
@@ -1666,6 +1696,8 @@ class AgentSession:
         except (asyncio.TimeoutError, TimeoutError):
             self._approval_future = None
             return False
+        finally:
+            self._pending_approval_id = None
 
     def _remember_latest_turn(self, delivered_text: str) -> None:
         if not self._config.memory_enabled or not delivered_text:
@@ -2193,6 +2225,7 @@ class AgentSession:
             await self._send({"type": "tool_result", "tool": fn_name, "result": result})
             return fn_name, result, tc_id
 
+        approval_granted = False
         if original_name in current_gates:
             asyncio.create_task(self._log_action(
                 iteration=iteration,
@@ -2211,9 +2244,15 @@ class AgentSession:
                 result: dict = {"status": "rejected", "message": "Отклонено пользователем"}
                 await self._send({"type": "tool_result", "tool": fn_name, "result": result})
                 return fn_name, result, tc_id
+            approval_granted = True
 
         if skill:
-            result = await _execute_skill(skill, args, self._config)
+            result = await _execute_skill(
+                skill,
+                args,
+                self._config,
+                approval_granted=approval_granted,
+            )
         else:
             available = sorted(self._skill_map.keys())[:30]
             result = {
@@ -2309,9 +2348,21 @@ class AgentSession:
             db_id = await _create_db_approval(skill_name, args)
         except Exception as exc:
             log_degraded("agent_loop.approval_create", exc, skill=skill_name)
+        if _approval_action_type_for(skill_name, args) and not db_id:
+            await self._send({
+                "type": "approval_error",
+                "tool": skill_name,
+                "message": (
+                    "Durable approval record was not created; gated action "
+                    "is blocked fail-closed."
+                ),
+            })
+            return False
 
         approved = False
         max_attempts = 2
+        approval_id = str(uuid.uuid4())
+        self._pending_approval_id = approval_id
         for attempt in range(1, max_attempts + 1):
             self._approval_future = asyncio.get_event_loop().create_future()
             await self._send({
@@ -2319,6 +2370,7 @@ class AgentSession:
                 "tool": skill_name,
                 "args": args,
                 "preview": preview,
+                "approval_id": approval_id,
                 "db_id": db_id,
                 "attempt": attempt,
                 "max_attempts": max_attempts,
@@ -2352,6 +2404,7 @@ class AgentSession:
                         ),
                     })
         self._approval_future = None
+        self._pending_approval_id = None
 
         if db_id:
             try:
@@ -2391,7 +2444,7 @@ class AgentSession:
             return
         try:
             context = await asyncio.wait_for(
-                _load_memory_context(latest_user, self._config),
+                self._memory_mgr.prefetch(latest_user, session_id=self._session_id),
                 timeout=12.0,
             )
         except asyncio.TimeoutError:
@@ -2412,41 +2465,6 @@ class AgentSession:
             content_text=context[:2000],
         ))
         self._trim_history()
-
-
-async def _load_memory_context(query: str, config: BuiltinAgentConfig) -> str:
-    try:
-        async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-            resp = await client.post(
-                f"{config.backend_url.rstrip('/')}/api/memory/search",
-                json={
-                    "query": query,
-                    "limit": 8,
-                    "retrieval_mode": "auto_hybrid",
-                    "need_full_coverage": False,
-                    "include_explain": False,
-                },
-                headers=_internal_headers(),
-            )
-        if resp.status_code >= 400:
-            return ""
-        hits = resp.json().get("hits") or []
-    except Exception as exc:
-        log_degraded("agent_loop.memory_search", exc)
-        return ""
-
-    lines: list[str] = []
-    used_chars = 0
-    for index, hit in enumerate(hits, start=1):
-        title = str(hit.get("title") or hit.get("kind") or "memory")
-        summary = str(hit.get("summary") or "")[:300]
-        source = str(hit.get("source") or "memory")
-        line = f"{index}. [{source}] {title}: {summary}".strip()
-        if used_chars + len(line) > 2400:
-            break
-        lines.append(line)
-        used_chars += len(line)
-    return "\n".join(lines)
 
 
 def _extract_list_count(payload: Any) -> int:
@@ -2533,10 +2551,37 @@ _APPROVAL_ACTION_TYPE_MAP: dict[str, str] = {
     "tech.learning_rule_activate": "tech.learning_rule_activate",
 }
 
+_CAPABILITY_APPROVAL_ACTION_TYPE_MAP: dict[tuple[str, str], str] = {
+    ("invoices", "approve"): "invoice.approve",
+    ("invoices", "reject"): "invoice.reject",
+    ("invoices", "bulk_delete"): "invoice.bulk_delete",
+    ("email", "send"): "email.send",
+    ("anomalies", "resolve"): "anomaly.resolve",
+    ("normalization", "activate_rule"): "norm.activate_rule",
+    ("analytics", "compare_decide"): "compare.decide",
+    ("analytics", "table_apply_diff"): "table.apply_diff",
+    ("warehouse", "confirm_receipt"): "warehouse.confirm_receipt",
+    ("payments", "mark_paid"): "payment.mark_paid",
+    ("procurement", "send_rfq"): "procurement.send_rfq",
+    ("tech", "bom_approve"): "bom.approve",
+    ("tech", "bom_purchase_request"): "bom.create_purchase_request",
+    ("tech", "process_plan_approve"): "tech.process_plan_approve",
+    ("tech", "norm_estimate_approve"): "tech.norm_estimate_approve",
+    ("tech", "learning_rule_activate"): "tech.learning_rule_activate",
+}
+
+
+def _approval_action_type_for(skill_name: str, args: dict) -> str | None:
+    action = str(args.get("action") or "")
+    return (
+        _APPROVAL_ACTION_TYPE_MAP.get(skill_name)
+        or _CAPABILITY_APPROVAL_ACTION_TYPE_MAP.get((skill_name, action))
+    )
+
 
 async def _create_db_approval(skill_name: str, args: dict) -> str | None:
     """Create an Approval record in DB and return its ID."""
-    action_type = _APPROVAL_ACTION_TYPE_MAP.get(skill_name)
+    action_type = _approval_action_type_for(skill_name, args)
     if not action_type:
         return None  # DB enum doesn't support this gate yet (Этап 10)
 
@@ -2559,7 +2604,7 @@ async def _create_db_approval(skill_name: str, args: dict) -> str | None:
     except ValueError:
         entity_id = str(uuid.uuid4())
 
-    entity_type = skill_name.split(".")[0]
+    entity_type = action_type.split(".", 1)[0]
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(

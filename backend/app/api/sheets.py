@@ -49,6 +49,12 @@ def _default_columns(n: int = 3) -> list[dict]:
     ]
 
 
+def _layout(sheet: WorkspaceSheet) -> dict:
+    layout = sheet.layout if isinstance(sheet.layout, dict) else {}
+    merges = layout.get("merges")
+    return {**layout, "merges": merges if isinstance(merges, list) else []}
+
+
 async def _publish(db: AsyncSession, sheet: WorkspaceSheet) -> dict:
     """Evaluate formulas and publish the sheet as a workspace block."""
     columns = list(sheet.columns or [])
@@ -63,6 +69,7 @@ async def _publish(db: AsyncSession, sheet: WorkspaceSheet) -> dict:
         "rows": computed_rows,
         # Raw (un-evaluated) rows so the editor can show formulas on focus.
         "raw_rows": list(sheet.rows or []),
+        "layout": _layout(sheet),
         "source": "workspace.sheet",
     }
     stored = upsert_workspace_block(_canvas_id(sheet.id), block)
@@ -136,6 +143,19 @@ class RenameColumnRequest(BaseModel):
     header: str
 
 
+class MergeCellsRequest(BaseModel):
+    start_row: int
+    end_row: int
+    start_col: str
+    end_col: str
+
+
+class UnmergeCellsRequest(BaseModel):
+    merge_id: str | None = None
+    row: int | None = None
+    col: str | None = None
+
+
 class FromSpecRequest(BaseModel):
     canvas_id: str
     title: str | None = None
@@ -166,6 +186,51 @@ def _resp(sheet: WorkspaceSheet, status: str = "ok") -> SheetResponse:
         rows=len(sheet.rows or []),
         columns=len(sheet.columns or []),
     )
+
+
+def _column_index(columns: list[dict], key: str) -> int | None:
+    for idx, col in enumerate(columns):
+        if col.get("key") == key:
+            return idx
+    return None
+
+
+def _merge_intersects(a: dict, b: dict) -> bool:
+    return not (
+        int(a["end_row"]) < int(b["start_row"])
+        or int(a["start_row"]) > int(b["end_row"])
+        or int(a["end_col_index"]) < int(b["start_col_index"])
+        or int(a["start_col_index"]) > int(b["end_col_index"])
+    )
+
+
+def _normalise_merge(
+    columns: list[dict],
+    payload: MergeCellsRequest,
+) -> dict:
+    start_idx = _column_index(columns, payload.start_col)
+    end_idx = _column_index(columns, payload.end_col)
+    if start_idx is None:
+        raise HTTPException(400, f"Нет столбца «{payload.start_col}»")
+    if end_idx is None:
+        raise HTTPException(400, f"Нет столбца «{payload.end_col}»")
+    start_row = min(payload.start_row, payload.end_row)
+    end_row = max(payload.start_row, payload.end_row)
+    start_col_index = min(start_idx, end_idx)
+    end_col_index = max(start_idx, end_idx)
+    if start_row < 0:
+        raise HTTPException(400, "Отрицательный индекс строки")
+    if start_row == end_row and start_col_index == end_col_index:
+        raise HTTPException(400, "Диапазон объединения должен содержать больше одной ячейки")
+    return {
+        "id": f"merge:{uuid.uuid4()}",
+        "start_row": start_row,
+        "end_row": end_row,
+        "start_col": columns[start_col_index]["key"],
+        "end_col": columns[end_col_index]["key"],
+        "start_col_index": start_col_index,
+        "end_col_index": end_col_index,
+    }
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -232,6 +297,7 @@ async def get_sheet(
         "columns": sheet.columns,
         "rows": computed,
         "raw_rows": sheet.rows,
+        "layout": _layout(sheet),
     }
 
 
@@ -359,6 +425,64 @@ async def rename_column(
     await db.refresh(sheet)
     await _publish(db, sheet)
     return _resp(sheet, "renamed")
+
+
+@router.post("/sheets/{sheet_id}/merge-cells", response_model=SheetResponse)
+async def merge_cells(
+    sheet_id: uuid.UUID,
+    payload: MergeCellsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SheetResponse:
+    """Skill: sheets.merge_cells — Merge a rectangular cell range in a sheet."""
+    sheet = await _load(db, sheet_id)
+    columns = list(sheet.columns or [])
+    merge = _normalise_merge(columns, payload)
+    layout = _layout(sheet)
+    merges = [dict(m) for m in layout.get("merges", []) if isinstance(m, dict)]
+    for existing in merges:
+        if _merge_intersects(existing, merge):
+            raise HTTPException(400, "Диапазон пересекается с уже объединёнными ячейками")
+    layout["merges"] = [*merges, merge]
+    sheet.layout = layout
+    await db.commit()
+    await db.refresh(sheet)
+    await _publish(db, sheet)
+    return _resp(sheet, "merged")
+
+
+@router.post("/sheets/{sheet_id}/unmerge-cells", response_model=SheetResponse)
+async def unmerge_cells(
+    sheet_id: uuid.UUID,
+    payload: UnmergeCellsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SheetResponse:
+    """Skill: sheets.unmerge_cells — Remove a merge by id or by covered cell."""
+    sheet = await _load(db, sheet_id)
+    columns = list(sheet.columns or [])
+    col_idx = _column_index(columns, payload.col) if payload.col else None
+    layout = _layout(sheet)
+    kept: list[dict] = []
+    removed = False
+    for merge in [m for m in layout.get("merges", []) if isinstance(m, dict)]:
+        match_id = payload.merge_id and merge.get("id") == payload.merge_id
+        match_cell = (
+            payload.row is not None
+            and col_idx is not None
+            and int(merge["start_row"]) <= payload.row <= int(merge["end_row"])
+            and int(merge["start_col_index"]) <= col_idx <= int(merge["end_col_index"])
+        )
+        if match_id or match_cell:
+            removed = True
+            continue
+        kept.append(dict(merge))
+    if not removed:
+        raise HTTPException(400, "Объединение не найдено")
+    layout["merges"] = kept
+    sheet.layout = layout
+    await db.commit()
+    await db.refresh(sheet)
+    await _publish(db, sheet)
+    return _resp(sheet, "unmerged")
 
 
 @router.delete("/sheets/{sheet_id}", response_model=SheetResponse)

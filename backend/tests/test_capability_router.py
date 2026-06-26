@@ -94,6 +94,61 @@ async def test_dispatch_with_path_params(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_risky_gate_action_requires_internal_approval(client: AsyncClient, monkeypatch):
+    from app.ai.capability_manifest import CapabilityDefinition, CapabilityManifest
+    from app.api import capability_router
+
+    manifest = CapabilityManifest(
+        capabilities=[CapabilityDefinition(name="invoices", gate_actions=["approve"])]
+    )
+    monkeypatch.setattr(capability_router, "load_capability_manifest", lambda: manifest)
+    monkeypatch.setattr(capability_router.settings, "agent_service_key", "", raising=False)
+    proxy_mock = AsyncMock(return_value={"ok": True})
+
+    with patch("app.api.capability_router._proxy", new=proxy_mock):
+        r = await client.post(
+            "/api/agent/cap/invoices",
+            json={
+                "action": "approve",
+                "invoice_id": "00000000-0000-0000-0000-000000000001",
+            },
+        )
+
+    assert r.status_code == 423
+    detail = r.json()["detail"]
+    assert detail["error_code"] == "approval_required"
+    assert detail["required_approval"] is True
+    proxy_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_internal_approved_gate_action_dispatches(client: AsyncClient, monkeypatch):
+    from app.ai.capability_manifest import CapabilityDefinition, CapabilityManifest
+    from app.api import capability_router
+
+    manifest = CapabilityManifest(
+        capabilities=[CapabilityDefinition(name="invoices", gate_actions=["approve"])]
+    )
+    monkeypatch.setattr(capability_router, "load_capability_manifest", lambda: manifest)
+    monkeypatch.setattr(capability_router.settings, "agent_service_key", "", raising=False)
+    proxy_mock = AsyncMock(return_value={"ok": True})
+
+    with patch("app.api.capability_router._proxy", new=proxy_mock):
+        r = await client.post(
+            "/api/agent/cap/invoices",
+            json={
+                "action": "approve",
+                "invoice_id": "00000000-0000-0000-0000-000000000001",
+            },
+            headers={"X-Internal-Agent": "1", "X-Agent-Approval": "granted"},
+        )
+
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    proxy_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_dispatch_rejects_missing_path_params(client: AsyncClient):
     r = await client.post("/api/agent/cap/documents", json={"action": "get"})
 
@@ -142,3 +197,60 @@ async def test_dispatch_flattens_body_field(client: AsyncClient):
     assert r.status_code == 200
     call_body = proxy_mock.call_args[0][3]
     assert call_body.get("amount") == 100
+
+
+@pytest.mark.asyncio
+async def test_search_web_action_dispatches_to_web_search_adapter(client: AsyncClient):
+    proxy_mock = AsyncMock(return_value={"results": [], "provider": "custom"})
+    with patch("app.api.capability_router._proxy", new=proxy_mock):
+        r = await client.post(
+            "/api/agent/cap/search",
+            json={"action": "web", "query": "каталог поставщика", "limit": 3},
+        )
+
+    assert r.status_code == 200
+    method, path, _params, body, _base = proxy_mock.call_args[0]
+    assert method == "POST"
+    assert path == "/api/web-search/query"
+    assert body["query"] == "каталог поставщика"
+
+
+@pytest.mark.asyncio
+async def test_memory_source_discover_action_dispatches(client: AsyncClient):
+    proxy_mock = AsyncMock(return_value={"proposed": [], "provider": "custom"})
+    with patch("app.api.capability_router._proxy", new=proxy_mock):
+        r = await client.post(
+            "/api/agent/cap/memory",
+            json={
+                "action": "source_discover",
+                "supplier_name": "АКМЕ",
+                "source_type": "supplier_catalog",
+            },
+        )
+
+    assert r.status_code == 200
+    method, path, _params, body, _base = proxy_mock.call_args[0]
+    assert method == "POST"
+    assert path == "/api/memory/sources/discover"
+    assert body["supplier_name"] == "АКМЕ"
+
+
+@pytest.mark.asyncio
+async def test_learning_rule_reject_action_dispatches(client: AsyncClient):
+    proxy_mock = AsyncMock(return_value={"status": "rejected"})
+    with patch("app.api.capability_router._proxy", new=proxy_mock):
+        r = await client.post(
+            "/api/agent/cap/tech",
+            json={
+                "action": "learning_rule_reject",
+                "entity_id": "rule-1",
+                "rejected_by": "tester",
+            },
+        )
+
+    assert r.status_code == 200
+    method, path, params, body, _base = proxy_mock.call_args[0]
+    assert method == "POST"
+    assert path == "/api/technology/learning-rules/{entity_id}/reject"
+    assert params == ["entity_id"]
+    assert body["entity_id"] == "rule-1"

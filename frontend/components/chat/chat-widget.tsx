@@ -28,6 +28,8 @@ interface ChatMessage {
   status?: "calling" | "done" | "pending" | "approved" | "rejected";
   // approval gate
   preview?: string;
+  approvalId?: string;
+  dbId?: string;
   // tools used during the turn that produced this assistant message
   toolsUsedInTurn?: string[];
 }
@@ -198,6 +200,12 @@ export function ChatWidget() {
           tool: data.tool as string,
           args: data.args as Record<string, unknown>,
           preview: data.preview as string,
+          approvalId:
+            typeof data.approval_id === "string" && data.approval_id
+              ? data.approval_id
+              : undefined,
+          dbId:
+            typeof data.db_id === "string" && data.db_id ? data.db_id : undefined,
           status: "pending",
         },
       ]);
@@ -321,7 +329,7 @@ export function ChatWidget() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(
       JSON.stringify(
-        buildAgentApprovalMessage(approved),
+        buildAgentApprovalMessage(approved, msg?.approvalId, msg?.dbId),
       ),
     );
     setMessages((prev) =>

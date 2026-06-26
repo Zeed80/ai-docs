@@ -53,6 +53,19 @@ const LOCAL_PROVIDERS = [
   "openai_compatible",
   "lmstudio",
 ];
+const THINKING_DISABLE_SUPPORTED_PROVIDERS = [
+  "ollama",
+  "llamacpp",
+  "vllm",
+  "openrouter",
+  "ollama_cloud",
+  "openai",
+  "groq",
+  "xai",
+  "dashscope",
+  "qwen",
+  "cerebras",
+];
 
 interface ProviderStatus {
   running: boolean;
@@ -2413,10 +2426,19 @@ interface SlotItem {
   label: string;
   hint: string;
   model: string | null;
+  current_model?: string | null;
   local_only: boolean;
   required_modality?: string | null; // capability the slot needs (backend = source)
   thinking_capable?: boolean; // slot supports a per-assignment reasoning toggle
   thinking_enabled?: boolean | null; // current override (null = model default)
+  thinking_supported_by_slot?: boolean;
+  thinking_supported_by_model?: boolean;
+  thinking_model_default?: boolean | null;
+  thinking_override?: boolean | null;
+  thinking_effective?: boolean | null;
+  thinking_source?: "slot" | "model" | "unsupported";
+  thinking_disable_supported?: boolean;
+  thinking_warning?: string | null;
 }
 interface AssignmentIssue {
   slot: string;
@@ -2548,6 +2570,7 @@ function AssignmentTab() {
       });
       if (r.ok) {
         const d = await r.json();
+        setSlots(d.slots || []);
         setDiff(d.diff || []);
         setWarnings(d.warnings || []);
         setErrors(d.errors || []);
@@ -2704,6 +2727,17 @@ function AssignmentTab() {
   };
   const modelByKey = (key: string | null) =>
     key ? models.find((m) => m.key === key) : undefined;
+  const providerCanDisableThinking = (provider?: string) =>
+    !provider || THINKING_DISABLE_SUPPORTED_PROVIDERS.includes(provider);
+  const thinkingText = (
+    effective: boolean | null | undefined,
+    source: string | undefined,
+  ) => {
+    if (effective === null || effective === undefined) return "не поддерживается";
+    const state = effective ? "вкл" : "выкл";
+    const src = source === "slot" ? "слот" : "модель";
+    return `${state} · ${src}`;
+  };
 
   if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
 
@@ -2738,7 +2772,12 @@ function AssignmentTab() {
             disabled={!dirty || busy !== null}
             onClick={() => {
               setDraft(
-                Object.fromEntries(slots.map((s) => [s.slot, s.model ?? null])),
+                Object.fromEntries(
+                  slots.map((s) => [
+                    s.slot,
+                    s.current_model ?? s.model ?? null,
+                  ]),
+                ),
               );
               setDiff([]);
               setWarnings([]);
@@ -2821,13 +2860,43 @@ function AssignmentTab() {
             </div>
             <div className="p-4 space-y-3">
               {gslots.map((s) => {
-                const chosen = modelByKey(s.model);
+                const chosen = modelByKey(s.current_model ?? s.model);
                 const draftValue = draft[s.slot] ?? "";
                 const draftChosen = modelByKey(draftValue);
+                const slotSupportsThinking =
+                  s.thinking_supported_by_slot ?? s.thinking_capable ?? false;
+                const selectedSupportsThinking =
+                  !!draftChosen?.thinking_supported ||
+                  (!draftChosen && !!s.thinking_supported_by_model);
+                const thinkingOverride =
+                  s.thinking_override ?? s.thinking_enabled ?? null;
+                const selectedModelDefault =
+                  draftChosen?.thinking_enabled ??
+                  s.thinking_model_default ??
+                  false;
+                const selectedThinkingCapable =
+                  slotSupportsThinking && selectedSupportsThinking;
+                const effectiveThinking = selectedThinkingCapable
+                  ? thinkingOverride ?? selectedModelDefault
+                  : null;
+                const thinkingSource = !selectedThinkingCapable
+                  ? "unsupported"
+                  : thinkingOverride === null
+                    ? "model"
+                    : "slot";
+                const disableSupported = providerCanDisableThinking(
+                  draftChosen?.provider,
+                );
+                const thinkingWarning =
+                  selectedThinkingCapable &&
+                  effectiveThinking === false &&
+                  !disableSupported
+                    ? "API этого провайдера может игнорировать выключение reasoning"
+                    : s.thinking_warning;
                 return (
                   <div
                     key={s.slot}
-                    className="grid grid-cols-1 sm:grid-cols-[200px_1fr] gap-2 sm:items-center"
+                    className="grid grid-cols-1 sm:grid-cols-[200px_1fr] gap-2 sm:items-start"
                   >
                     <div className="min-w-0">
                       <div className="text-sm text-slate-200">{s.label}</div>
@@ -2848,37 +2917,54 @@ function AssignmentTab() {
                           черновик
                         </span>
                       )}
-                      {s.thinking_capable && (
-                        <label
-                          className="flex items-center gap-1.5 text-xs text-slate-300 whitespace-nowrap"
-                          title="Режим рассуждения (chain-of-thought) ДЛЯ ЭТОГО НАЗНАЧЕНИЯ — одну модель можно использовать с рассуждением в одном слоте и без в другом"
-                        >
-                          размышление
-                          <select
-                            className="rounded border border-slate-600 bg-slate-900 px-1 py-0.5 text-xs text-slate-200"
-                            value={
-                              s.thinking_enabled === true
-                                ? "on"
-                                : s.thinking_enabled === false
-                                  ? "off"
-                                  : "default"
-                            }
-                            onChange={(e) =>
-                              setSlotThinking(
-                                s.slot,
-                                e.target.value === "on"
-                                  ? true
-                                  : e.target.value === "off"
-                                    ? false
-                                    : null,
-                              )
-                            }
-                          >
-                            <option value="default">по умолчанию</option>
-                            <option value="on">вкл</option>
-                            <option value="off">выкл</option>
-                          </select>
-                        </label>
+                      {slotSupportsThinking && (
+                        <div className="flex flex-col items-end gap-1 text-xs text-slate-300">
+                          {selectedThinkingCapable ? (
+                            <label
+                              className="flex items-center gap-1.5 whitespace-nowrap"
+                              title="Override режима рассуждения для этого назначения. Одна модель может думать в одном слоте и не думать в другом."
+                            >
+                              слот
+                              <select
+                                className="rounded border border-slate-600 bg-slate-900 px-1 py-0.5 text-xs text-slate-200"
+                                value={
+                                  thinkingOverride === true
+                                    ? "on"
+                                    : thinkingOverride === false
+                                      ? "off"
+                                      : "default"
+                                }
+                                onChange={(e) =>
+                                  setSlotThinking(
+                                    s.slot,
+                                    e.target.value === "on"
+                                      ? true
+                                      : e.target.value === "off"
+                                        ? false
+                                        : null,
+                                  )
+                                }
+                              >
+                                <option value="default">модель</option>
+                                <option value="on">вкл</option>
+                                <option value="off">выкл</option>
+                              </select>
+                            </label>
+                          ) : (
+                            <span className="text-slate-600 whitespace-nowrap">
+                              reasoning недоступен
+                            </span>
+                          )}
+                          <span className="text-slate-500 whitespace-nowrap">
+                            эффективно:{" "}
+                            {thinkingText(effectiveThinking, thinkingSource)}
+                          </span>
+                          {thinkingWarning && (
+                            <span className="max-w-52 text-right text-amber-400">
+                              {thinkingWarning}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -2968,7 +3054,7 @@ function AssignmentTab() {
                               toggleThinking(m.key, e.target.checked)
                             }
                           />
-                          Рассуждение
+                          По умолчанию модели
                         </label>
                       ) : (
                         <span className="text-xs text-slate-600">без CoT</span>

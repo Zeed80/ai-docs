@@ -179,3 +179,24 @@ async def test_create_learning_rule(client: AsyncClient):
     assert resp.status_code == 201
     data = resp.json()
     assert "id" in data
+
+
+@pytest.mark.asyncio
+async def test_reject_learning_rule(client: AsyncClient):
+    created = await client.post("/api/technology/learning-rules", json={
+        "entity_type": "agent",
+        "field_name": "behavior",
+        "replacement_value": "Не применять это правило.",
+        "confidence": 0.7,
+    })
+    assert created.status_code == 201
+
+    rejected = await client.post(
+        f"/api/technology/learning-rules/{created.json()['id']}/reject",
+        json={"rejected_by": "tester", "comment": "bad rule"},
+    )
+
+    assert rejected.status_code == 200
+    data = rejected.json()
+    assert data["status"] == "rejected"
+    assert data["metadata"]["rejected_by"] == "tester"

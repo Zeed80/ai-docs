@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -267,6 +268,7 @@ class AgentOrchestrator:
         # _aux_llm_calls — budgeted quality calls (semantic audit, refine).
         self._llm_calls: int = 0
         self._aux_llm_calls: int = 0
+        self._workspace_context: dict[str, Any] = {}
         self._executor = AgentSession(self._send_from_executor)
 
     def hydrate_history(self, messages: list[dict[str, str]]) -> None:
@@ -277,12 +279,25 @@ class AgentOrchestrator:
     def _recent_dialogue(self) -> list[dict[str, str]]:
         return self._executor.recent_dialogue(limit=20)
 
-    async def on_approval(self, approved: bool) -> None:
-        await self._executor.on_approval(approved)
+    async def on_approval(
+        self,
+        approved: bool,
+        approval_id: str | None = None,
+        db_id: str | None = None,
+    ) -> None:
+        await self._executor.on_approval(
+            approved,
+            approval_id=approval_id,
+            db_id=db_id,
+        )
 
     async def on_user_message(
-        self, content: str, reasoning_mode: str = "normal"
+        self,
+        content: str,
+        reasoning_mode: str = "normal",
+        workspace_context: dict[str, Any] | None = None,
     ) -> None:
+        self._workspace_context = workspace_context if isinstance(workspace_context, dict) else {}
         config = get_builtin_agent_config()
         if not config.department_enabled:
             # No department planning → clear any stale per-turn overrides.
@@ -305,6 +320,20 @@ class AgentOrchestrator:
         tier = score_complexity(content, context_tokens=context_tokens)
         self._tier = tier
         self._turn_grounding = "none"  # reset per turn; router sets it below
+
+        # Learned recipes are deterministic plans. Check them before the LLM
+        # turn router so trusted repeated tasks run with 0 planner calls.
+        if config.use_turn_router:
+            from app.ai.turn_router import safe_default_decision
+
+            recipe_result = await self._try_recipe_for_turn(
+                content,
+                config,
+                turn_started_at,
+                safe_default_decision(content),
+            )
+            if recipe_result is True:
+                return
 
         # LLM-first routing: one structured-output generation classifies the turn
         # by meaning (no `marker in text`). Dispatches deterministic executors by
@@ -338,6 +367,8 @@ class AgentOrchestrator:
         # Spec-table edits: a recognised Russian edit command on an existing
         # spec table («добавь столбец с НДС перед суммой», «отсортируй по…»,
         # «покажи только…») is applied deterministically — 0 LLM, мгновенно.
+        if await self._try_sheet_edit_directly(content, config, turn_started_at):
+            return
         if await self._try_spec_table_patch_directly(content, config, turn_started_at):
             return
 
@@ -654,7 +685,8 @@ class AgentOrchestrator:
             )
             # Channel-drift guard: don't replay a workspace recipe on a chat turn.
             rec_channel = getattr(recipe, "output_channel", None)
-            if rec_channel and rec_channel != decision.output_channel:
+            router_confident = decision.confidence >= float(config.turn_router_min_confidence)
+            if rec_channel and rec_channel != decision.output_channel and router_confident:
                 gate_ok, gate_reason = False, "channel_drift"
             if slots is not None and gate_ok:
                 if await self._replay_recipe(
@@ -755,10 +787,22 @@ class AgentOrchestrator:
         ``_normalize_model_plan`` resolve the specialised canvas and inject the
         matching workspace skill so a table turn still lands on the desktop.
         """
+        from app.ai.turn_router import safe_default_decision
+
+        recipe_hint = await self._try_recipe_for_turn(
+            content,
+            config,
+            turn_started_at,
+            safe_default_decision(content),
+        )
+        if recipe_hint is True:
+            return
+        recipe_hint = recipe_hint or ""
+
         plan = _normalize_model_plan(self._plan_turn(content), content)
         self._plan_source = "heuristic"
         await self._run_planned_turn(
-            content, plan, config, turn_started_at, reasoning_mode
+            content, plan, config, turn_started_at, reasoning_mode, recipe_hint
         )
 
     async def _dispatch_decision(
@@ -786,6 +830,8 @@ class AgentOrchestrator:
         # gates intent (killing the old "и…"/"добавь…" false-positives); the
         # regex parser only extracts the operation. False → not a real patch.
         if decision.intent == "table_edit":
+            if await self._try_sheet_edit_directly(content, config, turn_started_at):
+                return
             if await self._try_spec_table_patch_directly(content, config, turn_started_at):
                 return
 
@@ -966,6 +1012,100 @@ class AgentOrchestrator:
         chips = route_table.chips_for("table_patch", content, workspace_required=True)
         await self._outer_send({"type": "done", "action_chips": chips})
         return True
+
+    async def _try_sheet_edit_directly(
+        self,
+        content: str,
+        config: BuiltinAgentConfig,
+        turn_started_at: float,
+    ) -> bool:
+        """Apply recognised edits to the active WorkspaceSheet.
+
+        This protects the user's mental model: when the active surface is a
+        scratch sheet, "добавь строку" or "объедини A1:B1" must not patch an
+        older spec-table that happens to be the latest SQL table in workspace.
+        """
+        surface = self._active_tabular_surface()
+        if surface.get("kind") != "sheet":
+            return False
+        sheet_id = str(surface.get("sheet_id") or "").strip()
+        if not sheet_id:
+            block_id = str(surface.get("id") or "")
+            block = get_workspace_block(block_id) if block_id else None
+            sheet_id = str((block or {}).get("sheet_id") or "")
+        if not sheet_id:
+            return False
+        block = get_workspace_block(f"sheet:{sheet_id}") or get_workspace_block(str(surface.get("id") or ""))
+        columns = block.get("columns") if isinstance(block, dict) else None
+        column_keys = [
+            str(c.get("key"))
+            for c in columns or []
+            if isinstance(c, dict) and c.get("key")
+        ]
+        parsed = _parse_sheet_edit_command(content, column_keys)
+        if parsed is None:
+            return False
+
+        self._workspace_before = _workspace_updated_at_snapshot()
+        await self._outer_send({
+            "type": "orchestrator.status",
+            "content": "Секретарь: правка листа распознана — применяю к активной таблице.",
+            "plan_source": "sheet_patch",
+            "degraded": False,
+        })
+        action, path, body, label = parsed
+        await self._record_orchestrator_tool_event({
+            "type": "tool_call",
+            "tool": "sheets",
+            "args": {"action": action, "sheet_id": sheet_id, **body},
+        })
+        try:
+            async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                resp = await client.post(
+                    f"{config.backend_url.rstrip('/')}/api/workspace/sheets/{sheet_id}{path}",
+                    json=body,
+                    headers=_agent_headers(),
+                )
+            result = resp.json() if resp.content else {}
+        except Exception as exc:
+            log_degraded("orchestrator.sheet_patch", exc)
+            return False
+        if resp.status_code >= 400:
+            await self._record_orchestrator_tool_event({
+                "type": "tool_result",
+                "tool": "sheets",
+                "result": {"error": result.get("detail") or f"HTTP {resp.status_code}"},
+            })
+            return False
+        await self._record_orchestrator_tool_event({
+            "type": "tool_result",
+            "tool": "sheets",
+            "result": result,
+        })
+        await self._outer_send({"type": "text", "content": label})
+        try:
+            self._executor.record_external_turn(content, label)
+        except Exception as exc:
+            log_degraded("orchestrator.sheet_patch_record_turn", exc)
+        duration_ms = int((time.time() - turn_started_at) * 1000)
+        logger.info(
+            "agent_turn_complete",
+            intent="sheet_patch",
+            plan_source="sheet_patch",
+            tools_called=["sheets"],
+            tool_count=1,
+            audit_passed=True,
+            retries=0,
+            llm_calls=0,
+            aux_llm_calls=0,
+            duration_ms=duration_ms,
+        )
+        await self._outer_send({"type": "done", "action_chips": []})
+        return True
+
+    def _active_tabular_surface(self) -> dict[str, Any]:
+        surface = self._workspace_context.get("active_tabular_surface")
+        return surface if isinstance(surface, dict) else {}
 
     async def _reconcile_spec_table(self, content: str, config: BuiltinAgentConfig) -> None:
         """Enforce grouping/sort from the request that the worker's spec missed.
@@ -2570,6 +2710,126 @@ def _registry_model_name(model_name: str | None) -> str | None:
     for key, cap in models.items():
         if getattr(cap, "provider_model", None) == model_name:
             return key
+    return None
+
+
+_CELL_REF_RE = re.compile(r"^([A-Z]+)([1-9][0-9]*)$", re.IGNORECASE)
+_MERGE_RANGE_RE = re.compile(
+    r"(?:объедин\w*|merge)\s+(?P<start>[A-Z]+[1-9][0-9]*)\s*[:\-]\s*(?P<end>[A-Z]+[1-9][0-9]*)",
+    re.IGNORECASE,
+)
+_UNMERGE_CELL_RE = re.compile(
+    r"(?:разъедин\w*|сними\s+объедин\w*|unmerge)\s+(?P<cell>[A-Z]+[1-9][0-9]*)",
+    re.IGNORECASE,
+)
+_ADD_SHEET_COLUMN_RE = re.compile(
+    r"добав\w*\s+(?:столбец|колонк\w*)\s+(?P<header>.+?)(?:\s+с\s+формулой\s+(?P<formula>=?.+))?$",
+    re.IGNORECASE,
+)
+_SET_SHEET_FORMULA_RE = re.compile(
+    r"(?:задай|установи|поставь)\s+формул\w*\s+(?P<formula>=?\S.+?)\s+(?:в|для)\s+(?P<cell>[A-Z]+[1-9][0-9]*|[A-Za-z_][A-Za-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+
+def _col_index_to_letter(index: int) -> str:
+    n = index
+    label = ""
+    while True:
+        label = chr(65 + (n % 26)) + label
+        n = n // 26 - 1
+        if n < 0:
+            return label
+
+
+def _cell_ref(cell: str, column_keys: list[str]) -> tuple[int, str] | None:
+    m = _CELL_REF_RE.match(cell.strip())
+    if not m:
+        return None
+    letters, row_s = m.groups()
+    idx = 0
+    for ch in letters.upper():
+        idx = idx * 26 + (ord(ch) - 64)
+    idx -= 1
+    if idx < 0 or idx >= len(column_keys):
+        return None
+    return int(row_s) - 1, column_keys[idx]
+
+
+def _sheet_column_key(header: str, existing: list[str]) -> str:
+    raw = re.sub(r"[^A-Za-z0-9_]+", "_", header.strip()).strip("_").lower()
+    if not raw:
+        raw = _col_index_to_letter(len(existing))
+    key = raw
+    i = 2
+    while key in existing:
+        key = f"{raw}_{i}"
+        i += 1
+    return key
+
+
+def _parse_sheet_edit_command(
+    text: str,
+    column_keys: list[str],
+) -> tuple[str, str, dict[str, Any], str] | None:
+    t = " ".join(text.strip().split())
+    low = t.lower()
+    if re.search(r"добав\w*\s+строк", low):
+        return "add_row", "/add-row", {"count": 1}, "Добавил строку в активный лист."
+
+    if m := _MERGE_RANGE_RE.search(t):
+        start = _cell_ref(m.group("start"), column_keys)
+        end = _cell_ref(m.group("end"), column_keys)
+        if not start or not end:
+            return None
+        return (
+            "merge_cells",
+            "/merge-cells",
+            {
+                "start_row": start[0],
+                "end_row": end[0],
+                "start_col": start[1],
+                "end_col": end[1],
+            },
+            f"Объединил диапазон {m.group('start').upper()}:{m.group('end').upper()} в активном листе.",
+        )
+
+    if m := _UNMERGE_CELL_RE.search(t):
+        ref = _cell_ref(m.group("cell"), column_keys)
+        if not ref:
+            return None
+        return (
+            "unmerge_cells",
+            "/unmerge-cells",
+            {"row": ref[0], "col": ref[1]},
+            f"Снял объединение для {m.group('cell').upper()} в активном листе.",
+        )
+
+    if m := _SET_SHEET_FORMULA_RE.search(t):
+        formula = m.group("formula")
+        target = m.group("cell")
+        ref = _cell_ref(target, column_keys)
+        if ref:
+            body = {"row": ref[0], "column": ref[1], "formula": formula}
+        elif target in column_keys:
+            body = {"column": target, "formula": formula}
+        else:
+            return None
+        return "set_formula", "/set-formula", body, "Обновил формулу в активном листе."
+
+    if m := _ADD_SHEET_COLUMN_RE.search(t):
+        header = m.group("header").strip(" .")
+        # Avoid treating "добавь столбец перед суммой" as a literal column named
+        # "перед суммой"; spec-table patch can handle positional DB fields.
+        if header.lower().startswith(("перед ", "после ")):
+            return None
+        key = _sheet_column_key(header, column_keys)
+        body: dict[str, Any] = {"key": key, "header": header, "type": "text"}
+        if m.group("formula"):
+            body["formula"] = m.group("formula")
+            body["type"] = "number"
+        return "add_column", "/add-column", body, f"Добавил столбец «{header}» в активный лист."
+
     return None
 
 

@@ -89,8 +89,13 @@ const controlPlane = {
   plugins_total: 0,
   plugins_enabled: 0,
   tasks_open: 0,
+  tasks_proposed: 1,
+  tasks_running: 0,
   crons_enabled: 0,
   memory_facts_total: 0,
+  memory_promotions_pending: 1,
+  web_sources_proposed: 1,
+  learning_rules_proposed: 1,
   mcp_servers_total: 0,
   capability_proposals_open: 1,
 };
@@ -132,9 +137,69 @@ const capabilityProposal = {
   created_at: "2026-05-06T12:00:00Z",
 };
 
+const proposedTask = {
+  id: "33333333-3333-4333-8333-333333333333",
+  objective: "Проверить каталог АКМЕ",
+  description: "Найти обновленный каталог поставщика",
+  role: "researcher",
+  status: "proposed",
+  output: null,
+  metadata: { proposal_kind: "web_research" },
+  created_at: "2026-05-06T12:00:00Z",
+};
+
+const memoryPromotion = {
+  id: "44444444-4444-4444-8444-444444444444",
+  scope: "project",
+  kind: "proposed_fact",
+  title: "АКМЕ публикует каталог",
+  summary: "Поставщик АКМЕ публикует каталог крепежа на официальном сайте.",
+  source: "memory_promotion",
+  confidence: 0.8,
+  pinned: false,
+  metadata: { promotion_status: "pending", url: "https://example.com/acme" },
+};
+
+const webSource = {
+  id: "55555555-5555-4555-8555-555555555555",
+  scope: "project",
+  kind: "web_source",
+  title: "АКМЕ каталог",
+  summary: "https://example.com/acme/catalog",
+  source: "web_source_registry",
+  confidence: 0.8,
+  pinned: false,
+  metadata: {
+    source_status: "proposed",
+    url: "https://example.com/acme/catalog",
+    source_type: "supplier_catalog",
+  },
+};
+
+const learningRule = {
+  id: "66666666-6666-4666-8666-666666666666",
+  rule_type: "behavior",
+  entity_type: "agent",
+  field_name: "supplier_catalog_search",
+  match_old_value: null,
+  replacement_value: "Сначала проверяй официальный каталог поставщика.",
+  confidence: 0.8,
+  occurrences: 2,
+  status: "proposed",
+  suggested_by: "e2e",
+  metadata: {},
+  created_at: "2026-05-06T12:00:00Z",
+};
+
 async function mockSettingsApi(page: Page, calls: string[]) {
   let configProposalOpen = true;
   let capability = { ...capabilityProposal };
+  let task: Omit<typeof proposedTask, "output"> & { output: string | null } = {
+    ...proposedTask,
+  };
+  let memoryPromotionOpen = true;
+  let webSourceOpen = true;
+  let learningRuleOpen = true;
 
   await page.route("**/api/**", async (route: Route) => {
     const request = route.request();
@@ -243,11 +308,105 @@ async function mockSettingsApi(page: Page, calls: string[]) {
         },
       });
     }
-    if (url.pathname === "/api/agent/tasks") return route.fulfill({ json: [] });
+    if (url.pathname === "/api/agent/tasks") {
+      return route.fulfill({
+        json: task.status === "completed" ? [] : [task],
+      });
+    }
+    if (
+      url.pathname === `/api/agent/tasks/${proposedTask.id}/decide` &&
+      request.method() === "POST"
+    ) {
+      const body = await request.postDataJSON();
+      task = {
+        ...task,
+        status: body.approved ? "created" : "rejected",
+      };
+      return route.fulfill({ json: task });
+    }
+    if (
+      url.pathname === `/api/agent/tasks/${proposedTask.id}/run` &&
+      request.method() === "POST"
+    ) {
+      task = { ...task, status: "completed", output: "done" };
+      return route.fulfill({ json: task });
+    }
     if (url.pathname === "/api/agent/teams") return route.fulfill({ json: [] });
     if (url.pathname === "/api/agent/cron") return route.fulfill({ json: [] });
     if (url.pathname === "/api/agent/plugins")
       return route.fulfill({ json: [] });
+    if (
+      url.pathname === "/api/memory/promotions" &&
+      request.method() === "GET"
+    ) {
+      return route.fulfill({
+        json: memoryPromotionOpen ? [memoryPromotion] : [],
+      });
+    }
+    if (
+      url.pathname ===
+        `/api/memory/promotions/${memoryPromotion.id}/evaluate` &&
+      request.method() === "GET"
+    ) {
+      return route.fulfill({
+        json: {
+          fact_id: memoryPromotion.id,
+          status: "pending",
+          passed: true,
+          checks: [{ name: "provenance", passed: true }],
+          diagnostics: [],
+        },
+      });
+    }
+    if (
+      url.pathname === `/api/memory/promotions/${memoryPromotion.id}/decide` &&
+      request.method() === "POST"
+    ) {
+      memoryPromotionOpen = false;
+      return route.fulfill({
+        json: { ...memoryPromotion, kind: "verified_fact", pinned: true },
+      });
+    }
+    if (url.pathname === "/api/memory/sources" && request.method() === "GET") {
+      return route.fulfill({ json: webSourceOpen ? [webSource] : [] });
+    }
+    if (
+      url.pathname === `/api/memory/sources/${webSource.id}/decide` &&
+      request.method() === "POST"
+    ) {
+      webSourceOpen = false;
+      return route.fulfill({
+        json: { ...webSource, pinned: true },
+      });
+    }
+    if (
+      url.pathname === "/api/technology/learning-rules" &&
+      request.method() === "GET"
+    ) {
+      return route.fulfill({
+        json: { items: learningRuleOpen ? [learningRule] : [], total: learningRuleOpen ? 1 : 0 },
+      });
+    }
+    if (
+      url.pathname ===
+        `/api/technology/learning-rules/${learningRule.id}/activate` &&
+      request.method() === "POST"
+    ) {
+      learningRuleOpen = false;
+      return route.fulfill({
+        json: { ...learningRule, status: "active" },
+      });
+    }
+    if (
+      url.pathname ===
+        `/api/technology/learning-rules/${learningRule.id}/reject` &&
+      request.method() === "POST"
+    ) {
+      learningRuleOpen = false;
+      return route.fulfill({
+        json: { ...learningRule, status: "rejected" },
+      });
+    }
     if (url.pathname === "/api/ai/config") return route.fulfill({ json: {} });
     if (url.pathname === "/api/ai/config/status") {
       return route.fulfill({
@@ -390,5 +549,59 @@ test("settings control plane runs sandbox and approves capability proposal", asy
   );
   expect(calls).toContain(
     `POST /api/agent/capabilities/${capabilityProposal.id}/decide`,
+  );
+});
+
+test("settings control plane reviews agent tasks memory and web sources", async ({
+  page,
+  context,
+}) => {
+  const calls: string[] = [];
+  await setAuthCookie(context);
+  await mockSettingsApi(page, calls);
+
+  await page.goto("/settings");
+
+  const taskPanel = page.getByText("Задачи агента").locator("../..");
+  await expect(taskPanel.getByText("Проверить каталог АКМЕ")).toBeVisible();
+  await taskPanel.getByRole("button", { name: "Разрешить" }).click();
+  await taskPanel.getByRole("button", { name: "Запуск" }).click();
+
+  const memoryPanel = page.getByText("Memory promotions").locator("../..");
+  await expect(
+    memoryPanel.getByText("АКМЕ публикует каталог", { exact: true }),
+  ).toBeVisible();
+  await memoryPanel.getByRole("button", { name: "Проверить" }).click();
+  await expect(memoryPanel.getByText("checks passed")).toBeVisible();
+  await memoryPanel.getByRole("button", { name: "Разрешить" }).click();
+  await expect(
+    memoryPanel.getByText("АКМЕ публикует каталог", { exact: true }),
+  ).toBeHidden();
+
+  const webPanel = page.getByText("Web sources").locator("../..");
+  await expect(webPanel.getByText("АКМЕ каталог")).toBeVisible();
+  await webPanel.getByRole("button", { name: "Разрешить" }).click();
+  await expect(webPanel.getByText("АКМЕ каталог")).toBeHidden();
+
+  const learningPanel = page.getByText("Learning rules").locator("../..");
+  await expect(
+    learningPanel.getByText("supplier_catalog_search"),
+  ).toBeVisible();
+  await learningPanel.getByRole("button", { name: "Активировать" }).click();
+  await expect(
+    learningPanel.getByText("supplier_catalog_search"),
+  ).toBeHidden();
+
+  expect(calls).toContain(`POST /api/agent/tasks/${proposedTask.id}/decide`);
+  expect(calls).toContain(`POST /api/agent/tasks/${proposedTask.id}/run`);
+  expect(calls).toContain(
+    `GET /api/memory/promotions/${memoryPromotion.id}/evaluate`,
+  );
+  expect(calls).toContain(
+    `POST /api/memory/promotions/${memoryPromotion.id}/decide`,
+  );
+  expect(calls).toContain(`POST /api/memory/sources/${webSource.id}/decide`);
+  expect(calls).toContain(
+    `POST /api/technology/learning-rules/${learningRule.id}/activate`,
   );
 });

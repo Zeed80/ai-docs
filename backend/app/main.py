@@ -75,6 +75,7 @@ from app.api import (
     tool_catalog,
     cases,
     warehouse,
+    web_search,
     workspace,
     workspace_export,
     spec_tables,
@@ -324,6 +325,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router, prefix="/api/audit", tags=["audit"], dependencies=_auth)
     app.include_router(auto_approval.router, prefix="/api/auto-approval-rules", tags=["auto-approval"], dependencies=_auth)
     app.include_router(search.router, prefix="/api/search", tags=["search"], dependencies=_auth)
+    app.include_router(web_search.router, prefix="/api/web-search", tags=["web-search"], dependencies=_auth)
     app.include_router(normalization.router, prefix="/api/normalization", tags=["normalization"], dependencies=_auth)
     app.include_router(tables.router, prefix="/api/tables", tags=["tables"], dependencies=_auth)
     app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"], dependencies=_auth)

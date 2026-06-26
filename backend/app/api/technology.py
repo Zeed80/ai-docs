@@ -62,6 +62,7 @@ from app.domain.technology import (
     LearningRuleCreate,
     LearningRuleListResponse,
     LearningRuleOut,
+    LearningRuleRejectRequest,
     NormEstimateApproveRequest,
     NormEstimateCreate,
     NormEstimateOut,
@@ -938,6 +939,39 @@ async def activate_learning_rule(
         entity_type="technology_learning_rule",
         entity_id=rule.id,
         details={"activated_by": payload.activated_by},
+    )
+    await db.commit()
+    await db.refresh(rule)
+    return rule
+
+
+@router.post("/learning-rules/{rule_id}/reject", response_model=LearningRuleOut)
+async def reject_learning_rule(
+    rule_id: uuid.UUID,
+    payload: LearningRuleRejectRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reject a proposed learning rule so it leaves the review queue."""
+    rule = await db.get(TechnologyLearningRule, rule_id)
+    if not rule:
+        raise HTTPException(404, "Learning rule not found")
+    if rule.status == "active":
+        raise HTTPException(400, "Active learning rule cannot be rejected")
+    rule.status = "rejected"
+    metadata = dict(rule.metadata_ or {})
+    metadata.update({
+        "rejected_by": payload.rejected_by,
+        "rejected_at": datetime.now(UTC).isoformat(),
+    })
+    if payload.comment:
+        metadata["rejection_comment"] = payload.comment
+    rule.metadata_ = metadata
+    await log_action(
+        db,
+        action="tech.learning_rule_reject",
+        entity_type="technology_learning_rule",
+        entity_id=rule.id,
+        details={"rejected_by": payload.rejected_by},
     )
     await db.commit()
     await db.refresh(rule)

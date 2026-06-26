@@ -11,6 +11,10 @@ import type { CanvasBlock } from "@/lib/canvas-context";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
 import { useAgentName } from "@/lib/agent-name";
+import {
+  getActiveTabularSurface,
+  setActiveTabularSurface,
+} from "@/lib/workspace-context";
 
 const API = getApiBaseUrl();
 
@@ -35,8 +39,31 @@ function BlockView({
     onDeleted();
   }
 
+  function activateBlock() {
+    if (block.type === "sheet" && block.sheet_id) {
+      setActiveTabularSurface({
+        id: block.id,
+        kind: "sheet",
+        title: block.title,
+        sheet_id: block.sheet_id,
+        write_policy: "scratch",
+      });
+    } else if (block.type === "table") {
+      setActiveTabularSurface({
+        id: block.id,
+        kind: "spec_table",
+        title: block.title,
+        write_policy: "approval",
+      });
+    }
+  }
+
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900">
+    <section
+      onFocusCapture={activateBlock}
+      onMouseDown={activateBlock}
+      className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900"
+    >
       <div className="flex items-center justify-between border-b border-slate-700 bg-slate-800 px-3 py-2">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold text-slate-100">
@@ -96,6 +123,29 @@ export function AgentWorkspaceBlocks({
   // so the user isn't left staring at an empty panel wondering where it went.
   const [pending, setPending] = useState(false);
 
+  const activateSurfaceForBlock = useCallback((block: CanvasBlock | null) => {
+    if (!block) {
+      setActiveTabularSurface(null);
+      return;
+    }
+    if (block.type === "sheet" && block.sheet_id) {
+      setActiveTabularSurface({
+        id: block.id,
+        kind: "sheet",
+        title: block.title,
+        sheet_id: block.sheet_id,
+        write_policy: "scratch",
+      });
+    } else if (block.type === "table") {
+      setActiveTabularSurface({
+        id: block.id,
+        kind: "spec_table",
+        title: block.title,
+        write_policy: "approval",
+      });
+    }
+  }, []);
+
   const load = useCallback(async () => {
     const res = await fetch(`${API}/api/workspace/blocks`, {
       cache: "no-store",
@@ -105,9 +155,17 @@ export function AgentWorkspaceBlocks({
       return;
     }
     const data = (await res.json()) as WorkspaceResponse;
-    setBlocks(data.items ?? []);
+    const items = data.items ?? [];
+    setBlocks(items);
+    const active = getActiveTabularSurface();
+    if (!active || !items.some((item) => item.id === active.id)) {
+      activateSurfaceForBlock(
+        items.find((item) => item.type === "sheet" || item.type === "table") ??
+          null,
+      );
+    }
     setLoading(false);
-  }, []);
+  }, [activateSurfaceForBlock]);
 
   async function clearBlocks() {
     await mutFetch(`${API}/api/workspace/blocks`, { method: "DELETE" }).catch(

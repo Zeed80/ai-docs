@@ -53,6 +53,19 @@ async def test_agent_config_roundtrip_survives_flush(db_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_model_thinking_override_roundtrip_survives_flush(db_session, captured_redis):
+    await store.persist_model_override(
+        db_session,
+        model_key="qwen3_5_9b_ollama",
+        thinking_enabled=True,
+    )
+    await db_session.commit()
+    await store.hydrate_runtime_cache(db_session)
+
+    assert captured_redis[store.THINKING_OVERLAY_KEY]["qwen3_5_9b_ollama"] is True
+
+
+@pytest.mark.asyncio
 async def test_catalog_upsert_is_idempotent(db_session, captured_redis):
     # Two writes of the same model_key must not raise (ON CONFLICT DO UPDATE).
     for vmodel in ("gemma4:e2b", "gemma4:e2b-v2"):

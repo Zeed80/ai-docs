@@ -144,3 +144,44 @@ async def test_patch_unknown_column_rejected(client):
         "edits": [{"row": 0, "col": "ZZZ", "value": 1}],
     })
     assert bad.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_sheet_merge_unmerge_cells(client):
+    resp = await client.post("/api/workspace/sheets/create", json={
+        "title": "Merge",
+        "columns": [
+            {"key": "A", "header": "A", "type": "text"},
+            {"key": "B", "header": "B", "type": "text"},
+        ],
+        "rows": [{"A": "left", "B": "right"}],
+    })
+    sheet_id = resp.json()["sheet_id"]
+
+    merged = await client.post(f"/api/workspace/sheets/{sheet_id}/merge-cells", json={
+        "start_row": 0,
+        "end_row": 0,
+        "start_col": "A",
+        "end_col": "B",
+    })
+    assert merged.status_code == 200
+    got = (await client.get(f"/api/workspace/sheets/{sheet_id}")).json()
+    merges = got["layout"]["merges"]
+    assert len(merges) == 1
+    assert merges[0]["start_col"] == "A" and merges[0]["end_col"] == "B"
+
+    overlap = await client.post(f"/api/workspace/sheets/{sheet_id}/merge-cells", json={
+        "start_row": 0,
+        "end_row": 0,
+        "start_col": "A",
+        "end_col": "B",
+    })
+    assert overlap.status_code == 400
+
+    unmerged = await client.post(f"/api/workspace/sheets/{sheet_id}/unmerge-cells", json={
+        "row": 0,
+        "col": "A",
+    })
+    assert unmerged.status_code == 200
+    got = (await client.get(f"/api/workspace/sheets/{sheet_id}")).json()
+    assert got["layout"]["merges"] == []

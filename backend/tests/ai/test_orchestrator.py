@@ -46,7 +46,7 @@ class FakeExecutor:
     async def request_confirmation(self, *args, **kwargs):
         return True
 
-    async def on_approval(self, approved: bool):
+    async def on_approval(self, approved: bool, approval_id=None, db_id=None):
         return None
 
     async def on_user_message(self, content: str):

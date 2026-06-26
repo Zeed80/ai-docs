@@ -647,11 +647,20 @@ class SlotOut(BaseModel):
     group: str
     label: str
     hint: str
-    model: str | None              # catalog key
+    model: str | None              # catalog key currently shown by this response (current or draft)
+    current_model: str | None = None  # catalog key actually applied right now
     local_only: bool               # cloud models forbidden for this slot
     required_modality: str | None = None  # capability the slot needs (UI ⚠ source)
-    thinking_capable: bool = False        # assigned model supports reasoning AND slot allows toggle
-    thinking_enabled: bool | None = None  # per-assignment override (None = model default)
+    thinking_capable: bool = False        # compatibility alias: slot + selected model support reasoning
+    thinking_enabled: bool | None = None  # compatibility alias: per-assignment override
+    thinking_supported_by_slot: bool = False
+    thinking_supported_by_model: bool = False
+    thinking_model_default: bool | None = None
+    thinking_override: bool | None = None
+    thinking_effective: bool | None = None
+    thinking_source: str = "unsupported"  # slot | model | unsupported
+    thinking_disable_supported: bool = True
+    thinking_warning: str | None = None
 
 
 # local_only=True → конфиденциальные задачи (содержимое документов), облако
@@ -705,6 +714,20 @@ _SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_large": ["builder_disable_thinking"],
 }
 
+_THINKING_DISABLE_SUPPORTED_PROVIDERS = {
+    "ollama",
+    "llamacpp",
+    "vllm",
+    "openrouter",
+    "ollama_cloud",
+    "openai",
+    "groq",
+    "xai",
+    "dashscope",
+    "qwen",
+    "cerebras",
+}
+
 
 def _key_for_raw(registry, raw: str | None) -> str | None:
     """Map a raw provider_model name (or key) to its catalog key."""
@@ -745,18 +768,6 @@ def _slot_current_model(slot: str, registry) -> str | None:
     if slot == "agent_large":
         return _key_for_raw(registry, cfg.builder_model)
     return None
-
-
-@router.get("/slots", response_model=list[SlotOut], dependencies=_admin)
-async def get_slots() -> list[SlotOut]:
-    registry = _registry()
-    return [
-        SlotOut(
-            slot=slot, group=group, label=label, hint=hint,
-            model=_slot_current_model(slot, registry), local_only=local_only,
-        )
-        for slot, group, label, hint, local_only in _SLOTS
-    ]
 
 
 class SlotWrite(BaseModel):
@@ -800,52 +811,113 @@ def _slot_supports_thinking(slot: str) -> bool:
     return slot in _SLOT_THINKING_TASKS or slot in _SLOT_THINKING_AGENT_FIELDS
 
 
-def _slot_thinking_get(slot: str, registry, model_key: str | None) -> tuple[bool, bool | None]:
-    """(thinking_capable, thinking_enabled) for a slot.
-
-    thinking_capable = slot allows a toggle AND the assigned model can reason.
-    thinking_enabled = current per-assignment override (None = model default).
-    """
+def _slot_thinking_override(slot: str) -> bool | None:
+    """Current per-assignment reasoning override. None = model default."""
     if not _slot_supports_thinking(slot):
-        return False, None
-    cap = registry.models.get(model_key) if model_key else None
-    capable = bool(cap and cap.thinking_supported)
-    enabled: bool | None = None
+        return None
     if slot in _SLOT_THINKING_AGENT_FIELDS:
         from app.ai.agent_config import get_builtin_agent_config
         cfg = get_builtin_agent_config()
         field = _SLOT_THINKING_AGENT_FIELDS[slot][0]
         disable = getattr(cfg, field, None)
-        enabled = None if disable is None else (not disable)
-    elif slot in _SLOT_THINKING_TASKS:
+        return None if disable is None else (not disable)
+    if slot in _SLOT_THINKING_TASKS:
         from app.ai.schemas import AITask
         from app.ai.task_routing import get_routing_for
         try:
-            enabled = get_routing_for(AITask(_SLOT_THINKING_TASKS[slot][0])).thinking
+            return get_routing_for(AITask(_SLOT_THINKING_TASKS[slot][0])).thinking
         except (ValueError, KeyError):
-            enabled = None
-    return capable, enabled
+            return None
+    return None
 
 
-def _build_slot_out(slot: str, group: str, label: str, hint: str, local_only: bool, model: str | None, registry=None) -> SlotOut:
-    """SlotOut with single-source required_modality + per-assignment thinking."""
-    capable, enabled = (False, None)
-    if registry is not None:
-        capable, enabled = _slot_thinking_get(slot, registry, model)
+def _slot_thinking_state(slot: str, registry, model_key: str | None) -> dict[str, Any]:
+    """Effective reasoning state for the selected model in a slot."""
+    slot_supported = _slot_supports_thinking(slot)
+    cap = registry.models.get(model_key) if model_key else None
+    model_supported = bool(cap and cap.thinking_supported)
+    model_default = cap.thinking_enabled if cap and cap.thinking_supported else None
+    override = _slot_thinking_override(slot)
+    if not slot_supported or not model_supported:
+        effective = None
+        source = "unsupported"
+    elif override is not None:
+        effective = override
+        source = "slot"
+    else:
+        effective = bool(model_default)
+        source = "model"
+    provider = cap.provider.value if cap else None
+    disable_supported = (
+        provider in _THINKING_DISABLE_SUPPORTED_PROVIDERS
+        if provider
+        else True
+    )
+    warning = None
+    if slot_supported and model_supported and effective is False and not disable_supported:
+        warning = (
+            "У этого провайдера нет известного API-параметра для выключения reasoning; "
+            "сервер может проигнорировать override."
+        )
+    return {
+        "thinking_capable": slot_supported and model_supported,
+        "thinking_enabled": override,
+        "thinking_supported_by_slot": slot_supported,
+        "thinking_supported_by_model": model_supported,
+        "thinking_model_default": model_default,
+        "thinking_override": override,
+        "thinking_effective": effective,
+        "thinking_source": source,
+        "thinking_disable_supported": disable_supported,
+        "thinking_warning": warning,
+    }
+
+
+def _build_slot_out(
+    slot: str,
+    group: str,
+    label: str,
+    hint: str,
+    local_only: bool,
+    model: str | None,
+    registry,
+    *,
+    current_model: str | None | object = ...,
+) -> SlotOut:
+    """SlotOut with single-source required_modality + effective reasoning state."""
+    applied = _slot_current_model(slot, registry) if current_model is ... else current_model
+    thinking = _slot_thinking_state(slot, registry, model)
     return SlotOut(
         slot=slot, group=group, label=label, hint=hint,
-        model=model, local_only=local_only,
+        model=model,
+        current_model=applied,
+        local_only=local_only,
         required_modality=_SLOT_MODALITY.get(slot),
-        thinking_capable=capable, thinking_enabled=enabled,
+        **thinking,
     )
 
 
-def _all_slots_out(model_of, registry=None) -> list[SlotOut]:
+def _all_slots_out(model_of, registry) -> list[SlotOut]:
     """Build every SlotOut; `model_of(slot)` returns the assigned model key."""
     return [
-        _build_slot_out(slot, group, label, hint, local_only, model_of(slot), registry)
+        _build_slot_out(
+            slot,
+            group,
+            label,
+            hint,
+            local_only,
+            model_of(slot),
+            registry,
+            current_model=_slot_current_model(slot, registry),
+        )
         for slot, group, label, hint, local_only in _SLOTS
     ]
+
+
+@router.get("/slots", response_model=list[SlotOut], dependencies=_admin)
+async def get_slots() -> list[SlotOut]:
+    registry = _registry()
+    return _all_slots_out(lambda s: _slot_current_model(s, registry), registry)
 
 
 def _slot_affected(slot: str) -> list[str]:
@@ -1297,6 +1369,26 @@ class SlotThinkingWrite(BaseModel):
     enabled: bool | None  # None → model default; True/False → force on/off for this slot
 
 
+class SlotSmokeIn(BaseModel):
+    model: str | None = None
+    thinking: bool | None = None
+    dry_run: bool = True
+
+
+class SlotSmokeOut(BaseModel):
+    ok: bool
+    slot: str
+    model: str | None
+    provider: str | None = None
+    provider_model: str | None = None
+    dry_run: bool = True
+    thinking_requested: bool | None = None
+    thinking_payload_supported: bool = True
+    latency_ms: int | None = None
+    warnings: list[AssignmentIssue] = []
+    error: str | None = None
+
+
 def _apply_slot_thinking(slot: str, enabled: bool | None) -> None:
     """Set per-assignment reasoning for a slot (task_routing + agent_config).
 
@@ -1335,3 +1427,155 @@ async def set_slot_thinking(
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
     return {"ok": True, "slot": slot, "thinking_enabled": payload.enabled}
+
+
+def _slot_smoke_task(slot: str) -> AITask:
+    if slot == "agent_fast":
+        return AITask.ORCHESTRATOR_PLANNING
+    affected = [item for item in _slot_affected(slot) if "." not in item]
+    for item in affected:
+        try:
+            return AITask(item)
+        except ValueError:
+            continue
+    return AITask.CLASSIFICATION
+
+
+@router.post("/slots/{slot}/smoke", response_model=SlotSmokeOut, dependencies=_admin)
+async def smoke_slot_assignment(
+    slot: str,
+    payload: SlotSmokeIn,
+    db: AsyncSession = Depends(get_db),
+) -> SlotSmokeOut:
+    """Validate a slot/model pair and optionally run one tiny provider call.
+
+    ``dry_run`` is intentionally true by default: the endpoint resolves catalog,
+    policy, loaded-node and reasoning-payload state without spending tokens or
+    changing any assignment. Passing ``dry_run=false`` performs a short live call.
+    """
+    import time as _time
+
+    registry = _registry()
+    meta = _slot_meta(slot)
+    if meta is None:
+        raise HTTPException(404, f"Unknown slot: {slot}")
+    model_key = payload.model or _slot_current_model(slot, registry)
+    if not model_key:
+        return SlotSmokeOut(ok=False, slot=slot, model=None, error="No model selected")
+    cap = registry.models.get(model_key)
+    if cap is None:
+        return SlotSmokeOut(ok=False, slot=slot, model=model_key, error="Unknown model")
+
+    loaded = await _loaded_index()
+    warnings: list[AssignmentIssue] = []
+    if bool(meta[4]) and not cap.local_only:
+        return SlotSmokeOut(
+            ok=False,
+            slot=slot,
+            model=model_key,
+            provider=cap.provider.value,
+            provider_model=cap.provider_model,
+            error="Confidential slot allows only local models",
+        )
+    required = _SLOT_MODALITY.get(slot)
+    if required and required not in {m.value for m in cap.modalities}:
+        warnings.append(
+            AssignmentIssue(
+                slot=slot,
+                model=model_key,
+                code="modality_mismatch",
+                message=f"Модель не заявляет capability '{required}'",
+            )
+        )
+    is_loaded = cap.provider in _LOCAL_KINDS and _loaded_node_for(cap, loaded) is not None
+    if cap.provider in _LOCAL_KINDS and not is_loaded:
+        warnings.append(
+            AssignmentIssue(
+                slot=slot,
+                model=model_key,
+                code="not_loaded",
+                message="Модель не найдена ни на одном локальном узле сейчас",
+            )
+        )
+    thinking_state = _slot_thinking_state(slot, registry, model_key)
+    thinking_requested = (
+        payload.thinking
+        if payload.thinking is not None
+        else thinking_state["thinking_effective"]
+    )
+    thinking_payload_supported = bool(thinking_state["thinking_disable_supported"])
+    if thinking_state["thinking_warning"]:
+        warnings.append(
+            AssignmentIssue(
+                slot=slot,
+                model=model_key,
+                code="thinking_disable_not_guaranteed",
+                message=thinking_state["thinking_warning"],
+            )
+        )
+
+    if payload.dry_run:
+        return SlotSmokeOut(
+            ok=True,
+            slot=slot,
+            model=model_key,
+            provider=cap.provider.value,
+            provider_model=cap.provider_model,
+            dry_run=True,
+            thinking_requested=thinking_requested,
+            thinking_payload_supported=thinking_payload_supported,
+            warnings=warnings,
+        )
+
+    from app.ai.router import ai_router
+    from app.ai.schemas import AIRequest, ChatMessage
+
+    task = _slot_smoke_task(slot)
+    request = AIRequest(
+        task=task,
+        messages=[ChatMessage(role="user", content="Ответь коротко: ok")],
+        input_text="ok",
+        confidential=bool(meta[4]),
+        allow_cloud=not cap.local_only,
+        preferred_model=model_key,
+        thinking=thinking_requested,
+        metadata={"documents": ["ok", "other"]} if task == AITask.RERANKING else {},
+    )
+    started = _time.perf_counter()
+    try:
+        response = await ai_router.run(request)
+    except Exception as exc:  # noqa: BLE001
+        return SlotSmokeOut(
+            ok=False,
+            slot=slot,
+            model=model_key,
+            provider=cap.provider.value,
+            provider_model=cap.provider_model,
+            dry_run=False,
+            thinking_requested=thinking_requested,
+            thinking_payload_supported=thinking_payload_supported,
+            latency_ms=int((_time.perf_counter() - started) * 1000),
+            warnings=warnings,
+            error=str(exc),
+        )
+    if response.model != cap.provider_model:
+        warnings.append(
+            AssignmentIssue(
+                slot=slot,
+                model=model_key,
+                code="smoke_used_fallback",
+                message=f"Smoke ушёл на fallback model '{response.model}'",
+            )
+        )
+    return SlotSmokeOut(
+        ok=bool(response.text or response.data or response.embedding or response.scores),
+        slot=slot,
+        model=model_key,
+        provider=response.provider.value,
+        provider_model=response.model,
+        dry_run=False,
+        thinking_requested=thinking_requested,
+        thinking_payload_supported=thinking_payload_supported,
+        latency_ms=int((_time.perf_counter() - started) * 1000),
+        warnings=warnings,
+    )
