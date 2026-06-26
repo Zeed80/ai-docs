@@ -156,6 +156,24 @@ class SkillScore:
         return self.success + self.fail
 
 
+def rank_skills_by_success(skills: list[str]) -> list[str]:
+    """Reorder candidate skills by learned success rate (best first), so the
+    executor's preferred order reflects what actually worked. Skills with too
+    little history (<2 outcomes) stay neutral; ties keep their original order
+    (stable). Deterministic link from feedback memory to routing."""
+    if not skills:
+        return skills
+    scored = {s.name: s for s in get_skill_scores(skills)}
+
+    def _rate(name: str) -> float:
+        s = scored.get(name)
+        if s is None or s.total < 2:
+            return 0.5  # neutral — not enough evidence to promote or demote
+        return s.success_rate
+
+    return sorted(skills, key=lambda name: -_rate(name))
+
+
 def get_skill_scores(skills: list[str]) -> list[SkillScore]:
     """Return SkillScore objects for the given skill names."""
     try:

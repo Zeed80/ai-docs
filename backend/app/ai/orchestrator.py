@@ -54,7 +54,12 @@ from app.ai.model_tier import (
     should_use_cod,
 )
 from app.ai.corrections import is_correction, learned_ops_for, record_correction
-from app.ai.orchestrator_memory import TurnFeedback, build_tool_preference_hint, record_turn_feedback
+from app.ai.orchestrator_memory import (
+    TurnFeedback,
+    build_tool_preference_hint,
+    rank_skills_by_success,
+    record_turn_feedback,
+)
 from app.ai.policy_engine import check_tool_execution
 from app.ai import route_table
 from app.ai.router import ai_router
@@ -260,6 +265,8 @@ class AgentOrchestrator:
         # Persists across turns (one orchestrator per chat session).
         self._last_spec_request: str = ""
         self._last_spec_source: str = ""
+        # Last successfully-replayed recipe — penalised if the user corrects it.
+        self._last_recipe_id: str = ""
         self._plan_source: str = "heuristic"
         # Set by _decide_turn: True when the LLM router produced no usable
         # decision (degrade to the heuristic planner this turn).
@@ -326,6 +333,10 @@ class AgentOrchestrator:
         tier = score_complexity(content, context_tokens=context_tokens)
         self._tier = tier
         self._turn_grounding = "none"  # reset per turn; router sets it below
+
+        # Phase 3 — if the user is correcting the result of a just-replayed recipe,
+        # penalise that recipe so the fail-rate retire logic demotes it.
+        await self._penalise_recipe_on_correction(content)
 
         # Learned recipes are deterministic plans. Check them before the LLM
         # turn router so trusted repeated tasks run with 0 planner calls.
@@ -535,6 +546,20 @@ class AgentOrchestrator:
         worker-run + audit + recipe + telemetry tail lives in exactly one place.
         """
         tier = self._tier
+        # Phase 2 — adaptive clarify: a gated (expensive/external) action with an
+        # ambiguous target asks BEFORE acting instead of guessing. Cheap turns are
+        # never gated here — they build the best result and show assumptions.
+        question = needs_clarification(content, plan)
+        if question is not None:
+            await self._outer_send({"type": "text", "content": question})
+            await self._outer_send({"type": "done", "action_chips": []})
+            return
+        # Phase 3 — order the worker's candidate skills by learned success so the
+        # historically-reliable tool is tried first (deterministic link from the
+        # feedback memory to routing).
+        if plan.worker.recommended_skills:
+            plan.worker.recommended_skills = rank_skills_by_success(
+                plan.worker.recommended_skills)
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
 
@@ -1332,7 +1357,22 @@ class AgentOrchestrator:
             pass
         chips = route_table.chips_for("recipe_replay", content, workspace_required=True)
         await self._outer_send({"type": "done", "action_chips": chips})
+        # Remember the replayed recipe so a follow-up correction can demote it.
+        self._last_recipe_id = str(recipe.id)
         return True
+
+    async def _penalise_recipe_on_correction(self, content: str) -> None:
+        """A recipe whose result the user corrects is not trustworthy — record a
+        failure so the fail-rate retire logic demotes it. No-op otherwise."""
+        if not (self._last_recipe_id and is_correction(content)):
+            return
+        try:
+            from app.ai import recipes as _recipes_pen
+            await _recipes_pen.record_outcome(self._last_recipe_id, success=False)
+            logger.info("recipe_penalised_by_correction", recipe=self._last_recipe_id)
+        except Exception as exc:
+            log_degraded("orchestrator.recipe_penalty", exc)
+        self._last_recipe_id = ""
 
     def _maybe_record_recipe(self, content: str, plan: OrchestratorPlan, audit: AuditReport) -> None:
         """Schedule recording of a successful turn as a draft recipe.
@@ -3062,6 +3102,47 @@ def risk_class(plan: OrchestratorPlan) -> str:
     if any(marker in skills for marker in _GATED_SKILL_MARKERS):
         return "gated"
     return "cheap"
+
+
+# Vague references that signal the gated action's target is unclear.
+_VAGUE_REFS = ("ему", "им", "ей", "его", "её", "это", "этот", "этому", "тому",
+               "туда", "там", "тем", "той")
+
+
+def _has_concrete_target(text: str) -> bool:
+    """True when a gated request names a concrete target (number, quote, org,
+    or a mid-sentence proper noun) rather than relying on context."""
+    import re as _re
+    if _re.search(r"\d", text):
+        return True
+    if any(q in text for q in ('"', "«", "»", "'")):
+        return True
+    if _re.search(r"\b(ООО|АО|ЗАО|ПАО|ИП|ОАО)\b", text):
+        return True
+    words = text.split()
+    return any(i > 0 and w[:1].isupper() for i, w in enumerate(words))
+
+
+def needs_clarification(content: str, plan: OrchestratorPlan) -> str | None:
+    """Adaptive-by-risk: for an EXPENSIVE/external (gated) action that is
+    ambiguous about its target, return a clarifying question so the agent asks
+    BEFORE acting instead of guessing. Cheap actions never reach here (they
+    build the best result + show assumptions)."""
+    if risk_class(plan) != "gated":
+        return None
+    t = (content or "").strip().lower()
+    if not t:
+        return None
+    padded = f" {t} "
+    vague = any(f" {ref} " in padded for ref in _VAGUE_REFS)
+    no_target_short = (not _has_concrete_target(content)) and len(t.split()) <= 6
+    if vague or no_target_short:
+        return (
+            "Это внешнее/важное действие, и я не хочу выполнить его не так. "
+            "Уточните, пожалуйста, к кому/чему оно относится "
+            "(поставщик, номер счёта или документа)?"
+        )
+    return None
 
 
 # Intents that must yield ≥1 row on the desktop — an empty published table is the
