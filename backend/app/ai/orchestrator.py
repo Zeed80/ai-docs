@@ -1197,7 +1197,7 @@ class AgentOrchestrator:
         published block if it lacks them. Structural guarantee — independent of
         whether the worker model honoured the multi-clause request.
         """
-        from app.domain.table_spec import TableSpec, reconcile_ops
+        from app.domain.table_spec import TableSpec, correct_category_error, reconcile_ops
 
         block = _latest_spec_block()
         if not block:
@@ -1207,6 +1207,27 @@ class AgentOrchestrator:
             spec = TableSpec.model_validate(block["spec"])
         except Exception:
             return
+
+        # Category-error correction: the worker built e.g. suppliers.name ~ «фреза»
+        # (a term that matches no supplier but matches invoice items). Rebuild on
+        # invoice_items and republish before the normal grouping/sort reconcile.
+        try:
+            from app.db.session import _get_session_factory
+            async with _get_session_factory()() as _db:
+                corrected = await correct_category_error(_db, spec, content)
+            if corrected is not None:
+                args = {"canvas_id": canvas_id, "spec": corrected.model_dump(mode="json")}
+                async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
+                    resp = await client.post(
+                        f"{config.backend_url.rstrip('/')}/api/workspace/agent/spec-table",
+                        json=args, headers=_agent_headers())
+                if resp.status_code < 400 and (resp.json() or {}).get("status") == "published":
+                    spec = corrected
+                    await self._outer_send({"type": "text", "content":
+                        "Поправил: искал товар в позициях счетов, а не в названиях поставщиков."})
+                    logger.info("category_error_corrected", canvas=canvas_id, term=str(corrected.filters))
+        except Exception as exc:
+            log_degraded("orchestrator.category_correction", exc)
 
         # Phase 3 — learning: replay corrections learned for THIS request, and (if
         # this turn is itself a correction) learn it against the previous request.

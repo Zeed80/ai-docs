@@ -505,6 +505,25 @@ def test_repair_heals_numeric_and_search_filters():
     assert sp3.filters[0].field == "description" and sp3.filters[0].op == "smart"
 
 
+@pytest.mark.asyncio
+async def test_correct_category_error_suppliers_to_items(db_session, seeded):
+    """suppliers.name ~ «фреза» (matches no supplier, matches items) → rebuilt on
+    invoice_items with a smart description filter + supplier grouping."""
+    bad = ts.TableSpec(source="suppliers",
+        columns=[ts.ColumnSpec(field="name")],
+        filters=[ts.FilterSpec(field="name", op="smart", value="фреза")])
+    fixed = await ts.correct_category_error(db_session, bad, "выведи все фрезы по поставщику")
+    assert fixed is not None
+    assert fixed.source == "invoice_items"
+    assert fixed.group_by == ["supplier_name"]
+    assert any(f.field == "description" and f.op == "smart" and f.value == "фреза"
+               for f in fixed.filters)
+    # A real supplier-name filter must be left alone.
+    ok = ts.TableSpec(source="suppliers", columns=[ts.ColumnSpec(field="name")],
+        filters=[ts.FilterSpec(field="name", op="contains", value="Ромашка")])
+    assert await ts.correct_category_error(db_session, ok, "поставщики Ромашка") is None
+
+
 def test_is_spec_table_request():
     """Table verb + catalog reference → table request; doc-content/chat → not."""
     assert ts.is_spec_table_request("слушай покажи чё там по фрезам и сгруппируй по поставщику")

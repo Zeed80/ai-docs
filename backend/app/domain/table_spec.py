@@ -983,6 +983,46 @@ _DOC_CONTENT_MARKERS = (
 )
 
 
+async def correct_category_error(
+    db: AsyncSession, spec: TableSpec, user_text: str
+) -> TableSpec | None:
+    """Fix a category error: a spec on ``suppliers`` filtering NAME by a term that
+    matches NO supplier but DOES match invoice line items («выведи фрезы по
+    поставщику» built as suppliers.name ~ «фреза»). Data-driven (not a lexicon):
+    rebuild on ``invoice_items`` with a smart filter on the item description, and
+    group by supplier when the request says so. Returns None when not applicable."""
+    if spec.source != "suppliers":
+        return None
+    vals = [
+        str(f.value) for f in spec.filters
+        if f.field == "name" and f.op in ("smart", "contains") and f.value
+    ]
+    for v in vals:
+        term = v.strip().strip("%").strip()
+        if len(term) < 3:
+            continue
+        sup_n = (await db.execute(
+            select(func.count(Party.id)).where(Party.name.ilike(f"%{term}%"))
+        )).scalar() or 0
+        if sup_n:
+            continue  # a legitimate supplier-name filter — leave it
+        item_n = (await db.execute(
+            select(func.count(InvoiceLine.id)).where(InvoiceLine.description.ilike(f"%{term}%"))
+        )).scalar() or 0
+        if not item_n:
+            continue  # not an item term either — don't touch
+        group_by = ["supplier_name"] if re.search(r"поставщик", (user_text or "").lower()) else []
+        cols = [ColumnSpec(field=f) for f in
+                ("supplier_name", "description", "quantity", "unit_price", "amount")]
+        return TableSpec(
+            source="invoice_items", title=spec.title or "Позиции счетов",
+            columns=cols,
+            filters=[FilterSpec(field="description", op="smart", value=term)],
+            group_by=group_by,
+        )
+    return None
+
+
 def is_spec_table_request(text: str) -> bool:
     """Catalog-grounded: a clear request to BUILD A TABLE over structured data —
     a table verb plus a reference to a catalog source/field — and NOT a
