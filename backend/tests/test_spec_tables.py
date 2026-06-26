@@ -469,6 +469,75 @@ async def test_documents_source(db_session, seeded):
 
 
 @pytest.mark.asyncio
+async def test_grouped_aggregate_functions(db_session, seeded):
+    """avg/min/max/count/sum по unit_price в разрезе поставщика на реальных позициях.
+    Ромашка: 800/40/30 (3 позиции); Лютик: 2500 (1)."""
+    async def agg_map(agg):
+        spec = ts.TableSpec(
+            source="invoice_items",
+            columns=[ts.ColumnSpec(field="supplier_name"),
+                     ts.ColumnSpec(field="unit_price", agg=agg)],
+            group_by=["supplier_name"],
+        )
+        res = await ts.execute_spec(db_session, spec)
+        return {r["supplier_name"]: r["unit_price"] for r in res.rows}
+
+    assert (await agg_map("sum"))["ООО Ромашка"] == 870
+    assert (await agg_map("avg"))["ООО Ромашка"] == 290
+    assert (await agg_map("min"))["ООО Ромашка"] == 30
+    assert (await agg_map("max"))["ООО Ромашка"] == 800
+    assert (await agg_map("count"))["ООО Ромашка"] == 3
+    assert (await agg_map("avg"))["АО Лютик"] == 2500
+
+
+def test_columnspec_agg_lenient_aliases():
+    assert ts.ColumnSpec(field="unit_price", agg="average").agg == "avg"
+    assert ts.ColumnSpec(field="unit_price", agg="средн").agg == "avg"
+    assert ts.ColumnSpec(field="unit_price", agg="максимум").agg == "max"
+    assert ts.ColumnSpec(field="unit_price", agg="junk").agg is None
+
+
+def test_reconcile_compare_prices_sets_group_and_avg():
+    """«сравни цены фрез по поставщику» → group_by supplier + avg(unit_price)."""
+    spec = ts.TableSpec(source="invoice_items",
+                        columns=[ts.ColumnSpec(field="description"),
+                                 ts.ColumnSpec(field="unit_price")])
+    ops, notes = ts.reconcile_ops(spec, "сравни цены фрез по поставщику")
+    by = {o.op: o for o in ops}
+    assert by["set_group_by"].field == "supplier_name"
+    assert by["set_agg"].field == "unit_price" and by["set_agg"].agg == "avg"
+    patched = ts.apply_patch(spec, ops)
+    assert any(c.field == "unit_price" and c.agg == "avg" for c in patched.columns)
+
+
+def test_reconcile_min_price_and_group_synonym():
+    """«минимальная цена в разрезе поставщиков» → group synonym + min."""
+    spec = ts.TableSpec(source="invoice_items",
+                        columns=[ts.ColumnSpec(field="unit_price")])
+    ops, _ = ts.reconcile_ops(spec, "минимальная цена в разрезе поставщиков")
+    by = {o.op: o for o in ops}
+    assert by["set_group_by"].field == "supplier_name"
+    assert by["set_agg"].agg == "min"
+
+
+def test_reconcile_count_per_supplier():
+    spec = ts.TableSpec(source="invoice_items",
+                        columns=[ts.ColumnSpec(field="unit_price")])
+    ops, _ = ts.reconcile_ops(spec, "сколько позиций по каждому поставщику")
+    by = {o.op: o for o in ops}
+    assert by["set_group_by"].field == "supplier_name"
+    assert by["set_agg"].agg == "count"
+
+
+def test_reconcile_agg_skipped_without_grouping():
+    """Агрегат без группировки не навязывается (пусть решает воркер)."""
+    spec = ts.TableSpec(source="invoice_items",
+                        columns=[ts.ColumnSpec(field="unit_price")])
+    ops, _ = ts.reconcile_ops(spec, "покажи среднюю цену фрез")
+    assert not any(o.op == "set_agg" for o in ops)
+
+
+@pytest.mark.asyncio
 async def test_smart_then_added_filter_unions_not_intersects(db_session, seeded):
     """'покажи фрезы' (smart) + 'добавь сверло' (contains on same field) must
     UNION (фрезы OR сверло), not AND to an empty set."""

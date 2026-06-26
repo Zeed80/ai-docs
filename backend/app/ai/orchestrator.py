@@ -1157,6 +1157,13 @@ class AgentOrchestrator:
                 "type": "tool_result", "tool": "workspace", "result": result,
             })
             logger.info("spec_table_reconciled", canvas=canvas_id, notes=notes)
+            # Adaptive-by-risk (cheap action): surface what was inferred from the
+            # request so the user sees the assumptions and can correct them.
+            if notes:
+                await self._outer_send({
+                    "type": "text",
+                    "content": "Уточнил по запросу: " + "; ".join(notes) + ".",
+                })
 
     async def _replay_recipe(
         self,

@@ -23,7 +23,9 @@ from typing import Any, Literal
 
 import structlog
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import Select, Text, and_, case, cast, distinct, func, literal, or_, select
+from sqlalchemy import (
+    Numeric, Select, Text, and_, case, cast, distinct, func, literal, or_, select,
+)
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +55,21 @@ MAX_ROWS = 5000  # hard cap on rendered rows; `total` is always the true count
 class ColumnSpec(BaseModel):
     field: str
     header: str | None = None
+    # Aggregate function applied to this column under group_by (avg/min/max for
+    # «сравни цены / средняя / самая дешёвая», count for «сколько»). None → the
+    # default: SUM for numbers, string_agg(distinct) for text.
+    agg: Literal["sum", "avg", "min", "max", "count"] | None = None
+
+    @field_validator("agg", mode="before")
+    @classmethod
+    def _lenient_agg(cls, value: Any) -> str | None:
+        v = str(value).strip().lower() if value is not None else None
+        aliases = {"average": "avg", "mean": "avg", "minimum": "min",
+                   "maximum": "max", "summa": "sum", "сумма": "sum",
+                   "средн": "avg", "минимум": "min", "максимум": "max"}
+        if v in {"sum", "avg", "min", "max", "count"}:
+            return v
+        return aliases.get(v)
 
     @field_validator("header", mode="before")
     @classmethod
@@ -1126,12 +1143,18 @@ async def _execute_grouped(
         e = exprs[col.field]
         if col.field in group_keys:
             select_cols.append(e.label(col.field))
-        elif fd.type == "number":
-            select_cols.append(func.sum(e).label(col.field))
-        else:
+            continue
+        agg = col.agg or ("sum" if fd.type == "number" else "concat")
+        if agg == "concat":
             select_cols.append(
                 func.string_agg(distinct(cast(e, Text)), literal("; ")).label(col.field)
             )
+        elif agg == "count":
+            select_cols.append(func.count(e).label(col.field))
+        elif agg == "avg":
+            select_cols.append(func.round(cast(func.avg(e), Numeric), 2).label(col.field))
+        else:  # sum / min / max
+            select_cols.append(getattr(func, agg)(e).label(col.field))
 
     stmt = _base_stmt(spec.source, exprs, keys, select_cols=select_cols)
     for cond in where_conds:
@@ -1305,7 +1328,7 @@ class PatchOp(BaseModel):
     op: Literal[
         "add_column", "remove_column", "move_column",
         "set_sort", "add_filter", "clear_filters", "set_limit",
-        "set_group_by",
+        "set_group_by", "set_agg",
     ]
     field: str | None = None
     header: str | None = None
@@ -1314,6 +1337,7 @@ class PatchOp(BaseModel):
     dir: Literal["asc", "desc"] = "asc"
     filter: FilterSpec | None = None
     limit: int | None = None
+    agg: Literal["sum", "avg", "min", "max", "count"] | None = None
 
 
 def apply_patch(spec: TableSpec, ops: list[PatchOp]) -> TableSpec:
@@ -1377,6 +1401,14 @@ def apply_patch(spec: TableSpec, ops: list[PatchOp]) -> TableSpec:
             spec.filters = []
         elif op.op == "set_limit":
             spec.limit = op.limit
+        elif op.op == "set_agg":
+            if not op.field or op.field not in source.fields:
+                raise ValueError(f"unknown agg field {op.field!r}")
+            idx = _index_of(op.field)
+            if idx is None:
+                spec.columns.append(ColumnSpec(field=op.field, agg=op.agg))
+            else:
+                spec.columns[idx] = spec.columns[idx].model_copy(update={"agg": op.agg})
     return spec
 
 
@@ -1566,6 +1598,66 @@ def parse_patch_command(text: str, spec: TableSpec) -> ParsedCommand | None:
     return None
 
 
+# Grouping synonyms beyond «сгруппируй/объедини по X»: «в разрезе поставщиков»,
+# «по каждому поставщику».
+_GROUP_RE2 = re.compile(
+    r"(?:в\s+разрезе|по\s+кажд\w+|разрез\w*\s+по)\s+(?P<what>[\w]+(?:\s+[\w]+){0,2})"
+)
+# Bare «по X» / «в разрезе X» — counted as grouping ONLY under an aggregate or
+# comparison intent (otherwise "по" is too ambiguous to mean grouping).
+_GROUP_BARE_RE = re.compile(r"(?:в\s+разрезе|по)\s+(?P<what>[\w-]+)")
+
+
+def _resolve_noun(source: SourceDef, raw: str) -> FieldDef | None:
+    """resolve_field with a plural/genitive fallback («поставщиков» → «поставщик»)."""
+    fd = resolve_field(source, raw)
+    if fd:
+        return fd
+    raw = (raw or "").strip()
+    for suf in ("ами", "ями", "ов", "ев", "ах", "ям", "ам", "ей", "и", "ы", "у", "е", "а"):
+        if raw.endswith(suf) and len(raw) - len(suf) >= 4:
+            fd = resolve_field(source, raw[: -len(suf)])
+            if fd:
+                return fd
+    return None
+
+# Aggregate-function intent → applied to a numeric column under grouping.
+_AGG_LABEL = {"avg": "среднее", "min": "минимум", "max": "максимум",
+              "sum": "сумма", "count": "количество"}
+_AGG_RES: list[tuple[str, re.Pattern]] = [
+    ("avg", re.compile(r"средн|в\s+среднем|сравн\w*\s+цен")),
+    ("min", re.compile(r"минимальн|наименьш|дешевл|дешёв|деше\w*\s+всег")),
+    ("max", re.compile(r"максимальн|наибольш|дорож|дорог")),
+    ("count", re.compile(r"скольк\w+|количеств\w+|число\s+поз")),
+]
+_PRIMARY_NUMBER_FIELD = {
+    "invoice_items": "unit_price", "invoices": "total_amount",
+    "payments": "amount", "warehouse": "current_qty",
+}
+
+
+def _detect_agg_intent(text: str) -> str | None:
+    for agg, rx in _AGG_RES:
+        if rx.search(text):
+            return agg
+    return None
+
+
+def _primary_number_field(source: SourceDef, text: str) -> FieldDef | None:
+    """Numeric field the aggregate targets — explicit noun first, else per-source
+    default (цена/сумма), else the first numeric field."""
+    for noun in ("цена", "цены", "цену", "сумма", "суммы", "стоимость",
+                 "количество", "кол-во"):
+        if noun in text:
+            fd = resolve_field(source, noun)
+            if fd and fd.type == "number":
+                return fd
+    key = _PRIMARY_NUMBER_FIELD.get(source.key)
+    if key and key in source.fields:
+        return source.fields[key]
+    return next((fd for fd in source.fields.values() if fd.type == "number"), None)
+
+
 def reconcile_ops(spec: TableSpec, user_text: str) -> tuple[list[PatchOp], list[str]]:
     """Deterministically derive grouping/sort the user asked for but the worker
     LLM may have dropped from a multi-clause request.
@@ -1582,12 +1674,18 @@ def reconcile_ops(spec: TableSpec, user_text: str) -> tuple[list[PatchOp], list[
     ops: list[PatchOp] = []
     notes: list[str] = []
 
-    gm = _GROUP_RE.search(text)
-    if gm:
-        fd = resolve_field(source, gm.group("what"))
-        if fd and fd.key not in spec.group_by:
-            ops.append(PatchOp(op="set_group_by", field=fd.key))
-            notes.append(f"группировка по «{fd.header}»")
+    agg = _detect_agg_intent(text)
+    gm = _GROUP_RE.search(text) or _GROUP_RE2.search(text)
+    group_fd = _resolve_noun(source, gm.group("what")) if gm else None
+    # Contextual bare grouping: «сравни цены по поставщику» — only when there is an
+    # aggregate/comparison intent, so an unrelated «по» never forces grouping.
+    if group_fd is None and (agg or "сравн" in text):
+        bm = _GROUP_BARE_RE.search(text)
+        if bm:
+            group_fd = _resolve_noun(source, bm.group("what"))
+    if group_fd and group_fd.key not in spec.group_by:
+        ops.append(PatchOp(op="set_group_by", field=group_fd.key))
+        notes.append(f"группировка по «{group_fd.header}»")
 
     sm = _SORT_INLINE_RE.search(text)
     if sm:
@@ -1597,5 +1695,16 @@ def reconcile_ops(spec: TableSpec, user_text: str) -> tuple[list[PatchOp], list[
             direction = "desc" if "убыв" in dir_str else "asc"
             ops.append(PatchOp(op="set_sort", field=fd.key, dir=direction))
             notes.append(f"сортировка по «{fd.header}»")
+
+    # Aggregate-function intent (средняя/минимальная/максимальная цена, сравни
+    # цены, сколько). Only meaningful when the table is — or becomes — grouped.
+    grouped = bool(spec.group_by) or any(o.op == "set_group_by" for o in ops)
+    if agg and grouped:
+        num_fd = _primary_number_field(source, text)
+        if num_fd and not any(
+            c.field == num_fd.key and c.agg == agg for c in spec.columns
+        ):
+            ops.append(PatchOp(op="set_agg", field=num_fd.key, agg=agg))
+            notes.append(f"«{num_fd.header}» — {_AGG_LABEL[agg]}")
 
     return ops, notes
