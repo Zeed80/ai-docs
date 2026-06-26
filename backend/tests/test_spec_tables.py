@@ -469,6 +469,46 @@ async def test_documents_source(db_session, seeded):
 
 
 @pytest.mark.asyncio
+async def test_smart_then_added_filter_unions_not_intersects(db_session, seeded):
+    """'покажи фрезы' (smart) + 'добавь сверло' (contains on same field) must
+    UNION (фрезы OR сверло), not AND to an empty set."""
+    spec = ts.TableSpec(
+        source="invoice_items",
+        columns=[ts.ColumnSpec(field="description")],
+        filters=[
+            ts.FilterSpec(field="description", op="smart", value="фрезы"),
+            ts.FilterSpec(field="description", op="contains", value="сверло"),
+        ],
+    )
+    res = await ts.execute_spec(db_session, spec)
+    descs = " | ".join(r["description"] for r in res.rows)
+    assert res.total >= 3  # 2 фрезы + 1 сверло (not 0)
+    assert "Фреза концевая" in descs and "Фреза дисковая" in descs
+    assert "Сверло" in descs
+
+
+@pytest.mark.asyncio
+async def test_grouped_aggregation_one_row_per_supplier(db_session, seeded):
+    """'Выведи фрезы и сгруппируй по поставщику' → one row per supplier with the
+    supplier's milling items aggregated into a single text cell."""
+    spec = ts.TableSpec(
+        source="invoice_items",
+        columns=[ts.ColumnSpec(field="supplier_name"), ts.ColumnSpec(field="description")],
+        filters=[ts.FilterSpec(field="description", op="smart", value="фрезы")],
+        group_by=["supplier_name"],
+    )
+    res = await ts.execute_spec(db_session, spec)
+    # Romashka (Фреза концевая) and Lutik (Фреза дисковая) — one row each.
+    assert res.total == 2
+    assert len(res.rows) == 2
+    by_supplier = {r["supplier_name"]: r["description"] for r in res.rows}
+    assert "Фреза концевая" in by_supplier["ООО Ромашка"]
+    assert "Фреза дисковая" in by_supplier["АО Лютик"]
+    # Non-milling items (Болт, Сверло) are filtered out of the aggregate.
+    assert "Болт" not in by_supplier["ООО Ромашка"]
+
+
+@pytest.mark.asyncio
 async def test_documents_project_object_filter(db_session, seeded):
     """project/object resolve to canonical rows and filter documents (0 LLM)."""
     from app.domain.projects import get_or_create_object, get_or_create_project

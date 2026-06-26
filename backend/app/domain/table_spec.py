@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 import structlog
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import Select, Text, and_, case, cast, func, literal, or_, select
+from sqlalchemy import Select, Text, and_, case, cast, distinct, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -646,8 +646,15 @@ def _drawings_exprs() -> dict[str, Any]:
     }
 
 
-def _base_stmt(source_key: str, exprs: dict[str, Any], keys: list[str]) -> Select:
-    cols = [exprs[k].label(k) for k in keys]
+def _base_stmt(
+    source_key: str,
+    exprs: dict[str, Any],
+    keys: list[str],
+    select_cols: list[Any] | None = None,
+) -> Select:
+    # ``select_cols`` overrides the default per-key columns (used by aggregating
+    # group_by to select group keys + aggregate expressions over the same joins).
+    cols = select_cols if select_cols is not None else [exprs[k].label(k) for k in keys]
     if source_key == "invoices":
         return select(*cols).select_from(Invoice).outerjoin(
             Party, Invoice.supplier_id == Party.id
@@ -1089,6 +1096,77 @@ _VIRTUAL_PROVIDERS = {
 }
 
 
+# Columns that are already SQL aggregates (string_agg/count subqueries) — they
+# cannot be re-aggregated, so a grouped spec containing them falls back to the
+# detail-row clustering mode instead of true GROUP BY.
+_AGG_SKIP_COLUMNS: dict[str, set[str]] = {
+    "invoices": {"items_list", "items_count"},
+}
+
+
+def _can_aggregate(source_key: str, keys: list[str]) -> bool:
+    skip = _AGG_SKIP_COLUMNS.get(source_key, set())
+    return not any(k in skip for k in keys)
+
+
+async def _execute_grouped(
+    db: AsyncSession,
+    spec: TableSpec,
+    source: SourceDef,
+    columns: list[ColumnSpec],
+    keys: list[str],
+    exprs: dict[str, Any],
+    where_conds: list[Any],
+) -> TableResult:
+    """One row per group: group key(s) + string_agg(distinct) / SUM aggregates."""
+    field_defs = [source.fields[k] for k in keys]
+    group_keys = [g for g in spec.group_by if g in exprs]
+    select_cols: list[Any] = []
+    for col, fd in zip(columns, field_defs, strict=True):
+        e = exprs[col.field]
+        if col.field in group_keys:
+            select_cols.append(e.label(col.field))
+        elif fd.type == "number":
+            select_cols.append(func.sum(e).label(col.field))
+        else:
+            select_cols.append(
+                func.string_agg(distinct(cast(e, Text)), literal("; ")).label(col.field)
+            )
+
+    stmt = _base_stmt(spec.source, exprs, keys, select_cols=select_cols)
+    for cond in where_conds:
+        stmt = stmt.where(cond)
+    group_exprs = [exprs[g] for g in group_keys]
+    stmt = stmt.group_by(*group_exprs)
+
+    total = (
+        await db.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar() or 0
+
+    for g in group_exprs:
+        stmt = stmt.order_by(g.asc())
+    cap = min(spec.limit or MAX_ROWS, MAX_ROWS)
+    stmt = stmt.limit(cap)
+
+    result = await db.execute(stmt)
+    n = len(keys)
+    rows = [
+        {
+            fd.key: _format_value(value, fd.type)
+            for fd, value in zip(field_defs, row[:n], strict=True)
+        }
+        for row in result.all()
+    ]
+    out_columns = [
+        {"key": fd.key, "header": col.header or fd.header, "type": fd.type, "editable": False}
+        for col, fd in zip(columns, field_defs, strict=True)
+    ]
+    return TableResult(
+        columns=out_columns, rows=rows, total=int(total),
+        truncated=int(total) > len(rows),
+    )
+
+
 async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
     """Compile the spec to one SQL query and return the FULL dataset."""
     source = SOURCES[spec.source]
@@ -1119,12 +1197,15 @@ async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
     # substrings" which is an impossible/empty condition for distinct values).
     # Different fields AND together (narrowing), same as before.
     field_conds: dict[str, list[Any]] = {}
-    smart_conds: list[Any] = []
+    primary_text = source.primary_text_field or "description"
     for flt in spec.filters:
         if flt.op == "smart":
             cond = await _smart_text_condition(db, spec.source, str(flt.value or ""))
             if cond is not None:
-                smart_conds.append(cond)
+                # Smart filters operate on the primary text field. Group them with
+                # same-field contains filters so a follow-up "добавь резцы" UNIONs
+                # (фрезы OR резцы) instead of AND-ing to an empty result.
+                field_conds.setdefault(primary_text, []).append(cond)
             continue
         expr = exprs[flt.field]
         cond = None
@@ -1145,9 +1226,18 @@ async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
             cond = expr.in_(values)
         if cond is not None:
             field_conds.setdefault(flt.field, []).append(cond)
+    where_conds: list[Any] = []
     for conds in field_conds.values():
-        stmt = stmt.where(conds[0] if len(conds) == 1 else or_(*conds))
-    for cond in smart_conds:
+        where_conds.append(conds[0] if len(conds) == 1 else or_(*conds))
+
+    # Aggregating group_by: collapse to ONE row per group — the group key plus,
+    # for each other column, a string_agg of distinct text values (e.g. all of a
+    # supplier's milling items in one cell) or a SUM for numbers. "Выведи фрезы и
+    # сгруппируй по поставщику" → two columns: поставщик | его фрезы.
+    if spec.group_by and _can_aggregate(spec.source, keys):
+        return await _execute_grouped(db, spec, source, columns, keys, exprs, where_conds)
+
+    for cond in where_conds:
         stmt = stmt.where(cond)
 
     # True total BEFORE any limit — the full-data guarantee.
