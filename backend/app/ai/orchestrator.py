@@ -53,6 +53,7 @@ from app.ai.model_tier import (
     score_complexity,
     should_use_cod,
 )
+from app.ai.corrections import is_correction, learned_ops_for, record_correction
 from app.ai.orchestrator_memory import TurnFeedback, build_tool_preference_hint, record_turn_feedback
 from app.ai.policy_engine import check_tool_execution
 from app.ai import route_table
@@ -254,6 +255,11 @@ class AgentOrchestrator:
         self._outer_send = send
         self._trace = _TurnTrace()
         self._workspace_before: dict[str, str] = {}
+        # Phase 3 (learning): the request that built the current spec-table, so a
+        # follow-up correction can be learned against it and replayed later.
+        # Persists across turns (one orchestrator per chat session).
+        self._last_spec_request: str = ""
+        self._last_spec_source: str = ""
         self._plan_source: str = "heuristic"
         # Set by _decide_turn: True when the LLM router produced no usable
         # decision (degrade to the heuristic planner this turn).
@@ -992,6 +998,10 @@ class AgentOrchestrator:
         await self._record_orchestrator_tool_event({
             "type": "tool_result", "tool": "workspace", "result": result,
         })
+        # Phase 3 — learn this correction against the request that built the table,
+        # so a future identical request applies the fix without being corrected.
+        if is_correction(content) and self._last_spec_request:
+            record_correction(self._last_spec_request, spec.source, content)
         answer = str(result.get("message") or "Готово.")
         await self._outer_send({"type": "text", "content": answer})
         try:
@@ -1134,7 +1144,21 @@ class AgentOrchestrator:
             spec = TableSpec.model_validate(block["spec"])
         except Exception:
             return
+
+        # Phase 3 — learning: replay corrections learned for THIS request, and (if
+        # this turn is itself a correction) learn it against the previous request.
+        learned = learned_ops_for(content, spec.source)
+        if is_correction(content):
+            if self._last_spec_request:
+                record_correction(self._last_spec_request, spec.source, content)
+        else:
+            self._last_spec_request, self._last_spec_source = content, spec.source
+
         ops, notes = reconcile_ops(spec, content)
+        for lo in learned:
+            if not any(o.op == lo.op and o.field == lo.field and o.agg == lo.agg for o in ops):
+                ops.append(lo)
+                notes.append("учтено прежнее уточнение")
         if not ops:
             return
         args = {
