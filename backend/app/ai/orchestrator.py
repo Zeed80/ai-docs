@@ -605,10 +605,15 @@ class AgentOrchestrator:
         )
         self._llm_calls += 1
         await self._executor.on_user_message(content)
-        # Deterministically enforce grouping/sort the request asked for but the
-        # worker may have dropped (e.g. «объедини по поставщикам»). Reliable —
-        # does not depend on model compliance.
-        if plan.workspace.canvas_id == "agent:spec-table":
+        # Deterministically enforce grouping/sort/aggregates the request asked for
+        # but the worker may have dropped (e.g. «сгруппируй по поставщику»). Fires
+        # whenever a spec-table was actually published this turn — not only when the
+        # PLAN's canvas was agent:spec-table (the worker often publishes there while
+        # the plan guessed another canvas, which previously skipped reconcile).
+        if (
+            plan.workspace.canvas_id == "agent:spec-table"
+            or bool(self._trace.workspace_events)
+        ):
             await self._reconcile_spec_table(content, config)
         audit = await self._audit_turn(plan, config)
         retry_count = 0
