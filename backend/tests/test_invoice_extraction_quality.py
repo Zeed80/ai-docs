@@ -40,6 +40,10 @@ from pathlib import Path
 import httpx
 import pytest
 
+# Heavy live regression: real Ollama OCR/extraction over sample invoices.
+# Excluded from the default fast suite (`make test`); run via `make test-live`.
+pytestmark = [pytest.mark.live, pytest.mark.slow]
+
 # ── File selection ───────────────────────────────────────────────────────────
 
 _INVOICES_DIR = Path(__file__).parent.parent.parent / "example-invoices"

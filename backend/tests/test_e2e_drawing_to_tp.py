@@ -37,6 +37,10 @@ from typing import Any
 import httpx
 import pytest
 
+# Heavy live E2E: real stack (Ollama VLM + Postgres via docker exec) drawing→TP.
+# Excluded from the default fast suite (`make test`); run via `make test-live`.
+pytestmark = [pytest.mark.live, pytest.mark.slow]
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 BASE_URL = "http://localhost"
