@@ -14,6 +14,7 @@ const TABS = [
   { href: "/settings/auto-approval", label: "Авто-утверждение" },
   { href: "/settings/recipes", label: "Рецепты" },
   { href: "/settings/models", label: "Модели" },
+  { href: "/settings/comfyui", label: "ComfyUI" },
   { href: "/settings/mobile-app", label: "Приложение" },
 ] as const;
 

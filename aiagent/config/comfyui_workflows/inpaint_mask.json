@@ -1,0 +1,34 @@
+{
+  "key": "inpaint_mask",
+  "title": "Правка области по маске (Qwen-Image-Edit + маска)",
+  "description": "Закрасить кистью область на изображении и заменить/дорисовать только её по инструкции — остальное не трогается. Qwen-Image-Edit 2511 + Lightning, денойз ограничен маской (SetLatentNoiseMask).",
+  "category": "inpaint",
+  "operation": "inpaint",
+  "inject_map": {
+    "prompt": {"node": "76", "input": "prompt"},
+    "negative": {"node": "77", "input": "prompt"},
+    "image": {"node": "78", "input": "image"},
+    "mask": {"node": "79", "input": "image"},
+    "seed": {"node": "3", "input": "seed"}
+  },
+  "params_schema": {
+    "seed": {"type": "int", "default": 0, "label": "Seed (0 = случайный)"},
+    "steps": {"type": "int", "default": 4, "min": 1, "max": 30, "label": "Шаги"},
+    "denoise": {"type": "float", "default": 1.0, "min": 0.1, "max": 1.0, "label": "Сила правки"}
+  },
+  "graph": {
+    "37": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_edit_2511_fp8mixed.safetensors", "weight_dtype": "default"}},
+    "40": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["37", 0], "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors", "strength_model": 1.0}},
+    "38": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image"}},
+    "39": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+    "78": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
+    "79": {"class_type": "LoadImageMask", "inputs": {"image": "mask.png", "channel": "red"}},
+    "76": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "", "clip": ["38", 0], "vae": ["39", 0], "image1": ["78", 0]}},
+    "77": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "", "clip": ["38", 0], "vae": ["39", 0], "image1": ["78", 0]}},
+    "88": {"class_type": "VAEEncode", "inputs": {"pixels": ["78", 0], "vae": ["39", 0]}},
+    "89": {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["88", 0], "mask": ["79", 0]}},
+    "3": {"class_type": "KSampler", "inputs": {"seed": 0, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["40", 0], "positive": ["76", 0], "negative": ["77", 0], "latent_image": ["89", 0]}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
+    "60": {"class_type": "SaveImage", "inputs": {"filename_prefix": "studio_inpaint", "images": ["8", 0]}}
+  }
+}

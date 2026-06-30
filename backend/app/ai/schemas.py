@@ -13,6 +13,7 @@ class ProviderKind(str, Enum):
     VLLM = "vllm"
     OPENAI_COMPATIBLE = "openai_compatible"
     LMSTUDIO = "lmstudio"
+    COMFYUI = "comfyui"  # Image generation/editing server (not an LLM chat provider)
     # Cloud — native integrations
     CLOUD_PROVIDER = "cloud_provider"
     ANTHROPIC = "anthropic"

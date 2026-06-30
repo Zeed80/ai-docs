@@ -12,6 +12,9 @@ x-backend-env: &backend-env
   QDRANT_URL: http://qdrant:6333
   QDRANT_API_KEY: ${QDRANT_API_KEY:-}
   OLLAMA_URL: ${OLLAMA_URL:-http://host-gateway:11434}
+  # ComfyUI (image studio). Defaults to a host-deployed ComfyUI reachable via the
+  # host-gateway alias; override with COMFYUI_URL for an external node.
+  COMFYUI_URL: ${COMFYUI_URL:-http://host-gateway:8188}
   OLLAMA_MODEL_REASONING: ${OLLAMA_MODEL_REASONING:-qwen3.5:9b}
   OLLAMA_MODEL_OCR: ${OLLAMA_MODEL_OCR:-gemma4:e4b}
   APP_ENV: ${APP_ENV:-development}
@@ -201,6 +204,33 @@ services:
       OLLAMA_NUM_PARALLEL: "1"
     # Reachable internally as http://ollama:11434. Host port published only in dev
     # (docker-compose.dev.yml) — never exposed in production.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - app
+
+  # === ComfyUI — image generation / editing (drawings studio) ===
+  # Optional, opt-in. Bring up with:  docker compose --profile comfyui up -d
+  # Reachable internally as http://comfyui:8188 (no published port — on-prem only;
+  # confidential drawings never leave the local network). The backend manages
+  # this container (status/install/update) via /api/comfyui-admin.
+  # Override the image via COMFYUI_IMAGE; mount your installed models/output into
+  # the named volumes (paths depend on the chosen image — adjust if needed).
+  comfyui:
+    image: ${COMFYUI_IMAGE:-yanwk/comfyui-boot:latest}
+    profiles:
+      - comfyui
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - comfyui_models:/root/ComfyUI/models
+      - comfyui_output:/root/ComfyUI/output
     deploy:
       resources:
         reservations:
@@ -713,6 +743,8 @@ volumes:
   ollama_data:
   llamacpp_models:
   vllm_models:
+  comfyui_models:
+  comfyui_output:
   traefik_acme:
   authentik_db_data:
   authentik_media:

@@ -1,0 +1,28 @@
+{
+  "key": "cleanup_to_drawing",
+  "title": "Очистка: фото → чистый чертёж (Qwen-Image-Edit)",
+  "description": "Превратить снимок/скан детали в чистый чёрно-белый технический линейный чертёж: убрать фон и шум, сделать линии чёткими. Промпт не требуется — инструкция зашита. Qwen-Image-Edit 2511 + Lightning.",
+  "category": "process",
+  "operation": "cleanup",
+  "inject_map": {
+    "image": {"node": "78", "input": "image"},
+    "seed": {"node": "3", "input": "seed"}
+  },
+  "params_schema": {
+    "seed": {"type": "int", "default": 0, "label": "Seed (0 = случайный)"},
+    "steps": {"type": "int", "default": 4, "min": 1, "max": 30, "label": "Шаги"}
+  },
+  "graph": {
+    "37": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_edit_2511_fp8mixed.safetensors", "weight_dtype": "default"}},
+    "40": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["37", 0], "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors", "strength_model": 1.0}},
+    "38": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image"}},
+    "39": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+    "78": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
+    "76": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "convert this into a clean black and white technical line drawing, crisp sharp outlines, remove background, remove noise and shadows, white background, engineering blueprint style", "clip": ["38", 0], "vae": ["39", 0], "image1": ["78", 0]}},
+    "77": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "color, blur, shadows, noise, photo background", "clip": ["38", 0], "vae": ["39", 0], "image1": ["78", 0]}},
+    "88": {"class_type": "VAEEncode", "inputs": {"pixels": ["78", 0], "vae": ["39", 0]}},
+    "3": {"class_type": "KSampler", "inputs": {"seed": 0, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["40", 0], "positive": ["76", 0], "negative": ["77", 0], "latent_image": ["88", 0]}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
+    "60": {"class_type": "SaveImage", "inputs": {"filename_prefix": "studio_cleanup", "images": ["8", 0]}}
+  }
+}

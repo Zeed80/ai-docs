@@ -3019,3 +3019,78 @@ class ModelAssignmentRevision(UUIDPrimaryKey, TimestampMixin, Base):
     after_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     diff: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     warnings: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+
+# ── Image studio (ComfyUI generation/editing) ────────────────────────────────
+
+
+class ImageGenStatus(str, enum.Enum):
+    queued = "queued"
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
+class ComfyWorkflow(UUIDPrimaryKey, TimestampMixin, Base):
+    """Editable ComfyUI workflow template (the studio's workflow library).
+
+    ``graph`` is the ComfyUI API-format JSON; ``inject_map`` maps logical keys
+    (prompt/negative/image/mask/seed/width/height) to ``{node, input}`` targets so
+    the engine can inject user values without the user touching the raw graph.
+    Builtins are seeded from ``aiagent/config/comfyui_workflows/`` and may be
+    duplicated/edited by users; user rows have ``is_builtin=False``.
+    """
+
+    __tablename__ = "comfyui_workflows"
+    __table_args__ = (Index("ix_comfyui_workflows_category", "category"),)
+
+    key: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(60), nullable=False, default="edit")
+    # edit | generate | inpaint | outpaint | process | compose
+    operation: Mapped[str] = mapped_column(String(60), nullable=False, default="edit")
+    graph: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    inject_map: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    params_schema: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    thumbnail_path: Mapped[str | None] = mapped_column(String(1000))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    owner_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+
+
+class ImageGeneration(UUIDPrimaryKey, TimestampMixin, Base):
+    """One generation/edit job + its result (draft-first version node).
+
+    ``parent_id`` chains iterations (edit-of-result); ``accepted`` marks a draft
+    the human kept. Files (sources, mask, result, thumbnail) live in MinIO and
+    are referenced by storage path.
+    """
+
+    __tablename__ = "image_generations"
+    __table_args__ = (
+        Index("ix_image_generations_owner_status", "owner_sub", "status"),
+    )
+
+    owner_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    operation: Mapped[str] = mapped_column(String(60), nullable=False, default="edit")
+    workflow_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("comfyui_workflows.id"), nullable=True
+    )
+    status: Mapped[ImageGenStatus] = mapped_column(
+        Enum(ImageGenStatus), default=ImageGenStatus.queued, nullable=False, index=True
+    )
+    prompt: Mapped[str | None] = mapped_column(Text)
+    negative_prompt: Mapped[str | None] = mapped_column(Text)
+    params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    source_image_paths: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    mask_path: Mapped[str | None] = mapped_column(String(1000))
+    result_path: Mapped[str | None] = mapped_column(String(1000))
+    thumbnail_path: Mapped[str | None] = mapped_column(String(1000))
+    comfyui_prompt_id: Mapped[str | None] = mapped_column(String(200))
+    celery_task_id: Mapped[str | None] = mapped_column(String(200))
+    error: Mapped[str | None] = mapped_column(Text)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("image_generations.id"), nullable=True, index=True
+    )
+    accepted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

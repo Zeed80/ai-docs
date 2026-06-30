@@ -16,6 +16,11 @@ providers:
     base_url: "http://localhost:8080"
     timeout_seconds: 180
     is_local: true
+  comfyui:
+    base_url: "http://comfyui:8188"
+    timeout_seconds: 300
+    is_local: true
+    notes: "ComfyUI image generation/editing server (drawings studio). Not an LLM chat provider. Optional compose service: docker compose --profile comfyui up"
   openrouter:
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"

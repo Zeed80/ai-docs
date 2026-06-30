@@ -280,6 +280,15 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "ai_config_get":       ("GET",   "/api/ai/config",                     []),
         "ai_config_set":       ("PATCH", "/api/ai/config",                     []),
     },
+    "image_studio": {
+        "generate":       ("POST",  "/api/image-gen/generate",                  []),
+        "list":           ("GET",   "/api/image-gen",                           []),
+        "get":            ("GET",   "/api/image-gen/{generation_id}",           ["generation_id"]),
+        "accept":         ("POST",  "/api/image-gen/{generation_id}/accept",    ["generation_id"]),
+        "iterate":        ("POST",  "/api/image-gen/{generation_id}/iterate",   ["generation_id"]),
+        "prompt_help":    ("POST",  "/api/image-gen/prompt-help",               []),
+        "list_workflows": ("GET",   "/api/image-gen/workflows/list",            []),
+    },
 }
 
 

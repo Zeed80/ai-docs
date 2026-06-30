@@ -425,6 +425,27 @@ routes:
     workspace_required: false
     skills: ["tech.generate_tp_from_drawing", "tech.process_plan_list"]
 
+  - intent: image_studio
+    role: engineer
+    keywords:
+      - "нарисуй"
+      - "сгенерируй изображение"
+      - "сгенерируй картинк"
+      - "сгенерируй эскиз"
+      - "сгенерируй схему"
+      - "создай эскиз"
+      - "создай чертеж"
+      - "отредактируй чертеж"
+      - "отредактируй изображение"
+      - "отредактируй фото"
+      - "перерисуй"
+      - "убери на изображении"
+      - "добавь на изображении"
+      - "дорисуй"
+    workspace_required: false
+    default_canvas: "agent:image-studio"
+    skills: ["image_studio.generate", "image_studio.prompt_help"]
+
 # ── Fallback-правила выбора canvas (когда маршрут не дал canvas_id) ──────────
 
 fallback_canvas_rules:
@@ -525,6 +546,10 @@ chips:
     keywords: ["сравни"]
     items:
       - { label: "Сравнение КП", action: navigate, target: "/compare" }
+  - intents: [image_studio]
+    keywords: ["нарисуй", "сгенерируй", "перерисуй", "эскиз", "чертеж"]
+    items:
+      - { label: "Открыть в студии", action: navigate, target: "/studio" }
   - intents: [calendar]
     keywords: ["напомни", "срок"]
     items:

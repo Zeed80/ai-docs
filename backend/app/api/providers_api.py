@@ -46,6 +46,7 @@ _LOCAL_KINDS = {
     ProviderKind.LLAMACPP,
     ProviderKind.OPENAI_COMPATIBLE,
     ProviderKind.LMSTUDIO,
+    ProviderKind.COMFYUI,
 }
 
 _admin = [Depends(require_role(UserRole.admin))]
@@ -266,6 +267,10 @@ async def test_provider(instance_id: str, db: AsyncSession = Depends(get_db)) ->
                 resp = await client.get(f"{base}/api/tags")
                 resp.raise_for_status()
                 model_count = len(resp.json().get("models", []))
+            elif kind == ProviderKind.COMFYUI:
+                # ComfyUI exposes no /models; /system_stats confirms it's alive.
+                resp = await client.get(f"{base}/system_stats")
+                resp.raise_for_status()
             else:
                 headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
                 url = base if base.endswith("/v1") else f"{base}/v1"

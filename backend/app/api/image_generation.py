@@ -1,0 +1,492 @@
+"""Image studio API — generate/edit raster images (drawings) via ComfyUI.
+
+Draft-first: ``POST /generate`` queues a Celery job and returns the record
+immediately; the result arrives asynchronously (poll ``GET /{id}`` or wait for
+the mobile push). No approval gate — generated images are version drafts the
+human keeps (``/accept``) or re-iterates (``/iterate``).
+
+Also exposes the editable workflow library (``/workflows*``) and a prompt helper
+(``/prompt-help``) that turns a rough RU description into a precise prompt.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from typing import Any
+
+import structlog
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo
+from app.db.models import ComfyWorkflow, Document, ImageGeneration, ImageGenStatus
+from app.db.session import get_db
+from app.storage import download_file, upload_file
+
+router = APIRouter()
+logger = structlog.get_logger()
+
+_SOURCE_PREFIX = "image-gen-src"
+
+
+# ── Schemas ──────────────────────────────────────────────────────────────────
+
+
+class GenerateRequest(BaseModel):
+    operation: str = Field(default="edit")  # edit | generate | inpaint | cleanup
+    prompt: str | None = None
+    negative_prompt: str | None = None
+    workflow_id: uuid.UUID | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+    # Images already in MinIO (e.g. uploaded via /upload-source) and/or documents.
+    source_image_paths: list[str] = Field(default_factory=list)
+    source_document_ids: list[uuid.UUID] = Field(default_factory=list)
+    mask_path: str | None = None
+
+
+class WorkflowIn(BaseModel):
+    key: str
+    title: str
+    description: str | None = None
+    category: str = "edit"
+    operation: str = "edit"
+    graph: dict[str, Any] = Field(default_factory=dict)
+    inject_map: dict[str, Any] = Field(default_factory=dict)
+    params_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowPatch(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    category: str | None = None
+    operation: str | None = None
+    graph: dict[str, Any] | None = None
+    inject_map: dict[str, Any] | None = None
+    params_schema: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class PromptHelpRequest(BaseModel):
+    description: str
+    operation: str = "edit"
+    source_document_id: uuid.UUID | None = None
+
+
+def _gen_out(gen: ImageGeneration) -> dict:
+    return {
+        "id": str(gen.id),
+        "operation": gen.operation,
+        "status": gen.status.value if hasattr(gen.status, "value") else gen.status,
+        "prompt": gen.prompt,
+        "negative_prompt": gen.negative_prompt,
+        "params": gen.params or {},
+        "source_image_paths": gen.source_image_paths or [],
+        "mask_path": gen.mask_path,
+        "has_result": bool(gen.result_path),
+        "error": gen.error,
+        "parent_id": str(gen.parent_id) if gen.parent_id else None,
+        "accepted": gen.accepted,
+        "workflow_id": str(gen.workflow_id) if gen.workflow_id else None,
+        "created_at": gen.created_at.isoformat() if gen.created_at else None,
+    }
+
+
+def _wf_out(wf: ComfyWorkflow) -> dict:
+    return {
+        "id": str(wf.id),
+        "key": wf.key,
+        "title": wf.title,
+        "description": wf.description,
+        "category": wf.category,
+        "operation": wf.operation,
+        "graph": wf.graph or {},
+        "inject_map": wf.inject_map or {},
+        "params_schema": wf.params_schema or {},
+        "enabled": wf.enabled,
+        "is_builtin": wf.is_builtin,
+    }
+
+
+# ── Source upload (UI helper) ────────────────────────────────────────────────
+
+
+@router.post("/upload-source")
+async def upload_source(
+    file: UploadFile = File(...),
+    kind: str = Form("source"),  # source | mask
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Store a source/mask image in MinIO; returns its path for /generate."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "Пустой файл")
+    ext = "png"
+    if file.filename and "." in file.filename:
+        ext = file.filename.rsplit(".", 1)[-1].lower()[:5]
+    path = f"{_SOURCE_PREFIX}/{user.sub}/{uuid.uuid4().hex}.{ext}"
+    upload_file(content, path, file.content_type or "image/png")
+    return {"path": path}
+
+
+# ── Generate / list / get ────────────────────────────────────────────────────
+
+
+@router.post("/generate")
+async def generate(
+    body: GenerateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    source_paths = list(body.source_image_paths)
+    for doc_id in body.source_document_ids:
+        doc = await db.get(Document, doc_id)
+        if doc and doc.storage_path:
+            source_paths.append(doc.storage_path)
+
+    if body.operation in ("edit", "inpaint", "cleanup") and not source_paths:
+        raise HTTPException(400, "Для этой операции нужно исходное изображение.")
+    if body.operation == "generate" and not (body.prompt or "").strip():
+        raise HTTPException(400, "Для генерации нужно текстовое описание (prompt).")
+
+    gen = ImageGeneration(
+        owner_sub=user.sub,
+        operation=body.operation,
+        workflow_id=body.workflow_id,
+        status=ImageGenStatus.queued,
+        prompt=body.prompt,
+        negative_prompt=body.negative_prompt,
+        params=body.params or {},
+        source_image_paths=source_paths,
+        mask_path=body.mask_path,
+    )
+    db.add(gen)
+    await db.commit()
+    await db.refresh(gen)
+
+    _enqueue(str(gen.id))
+    return _gen_out(gen)
+
+
+def _enqueue(generation_id: str) -> None:
+    try:
+        from app.tasks.image_generation import run_image_generation
+
+        run_image_generation.delay(generation_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("image_gen_enqueue_failed", generation_id=generation_id, error=str(exc))
+
+
+@router.get("")
+async def list_generations(
+    limit: int = 60,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    rows = (
+        await db.execute(
+            select(ImageGeneration)
+            .where(ImageGeneration.owner_sub == user.sub)
+            .order_by(ImageGeneration.created_at.desc())
+            .limit(min(limit, 200))
+            .offset(offset)
+        )
+    ).scalars().all()
+    return {"items": [_gen_out(g) for g in rows]}
+
+
+@router.get("/{generation_id}")
+async def get_generation(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    gen = await db.get(ImageGeneration, generation_id)
+    if not gen or gen.owner_sub != user.sub:
+        raise HTTPException(404, "Не найдено")
+    return _gen_out(gen)
+
+
+@router.get("/{generation_id}/result")
+async def get_result(
+    generation_id: uuid.UUID,
+    thumb: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> Response:
+    gen = await db.get(ImageGeneration, generation_id)
+    if not gen or gen.owner_sub != user.sub:
+        raise HTTPException(404, "Не найдено")
+    path = (gen.thumbnail_path if thumb else gen.result_path) or gen.result_path
+    if not path:
+        raise HTTPException(404, "Результат ещё не готов")
+    data = download_file(path)
+    return Response(content=data, media_type="image/png")
+
+
+@router.get("/{generation_id}/source")
+async def get_source(
+    generation_id: uuid.UUID,
+    index: int = 0,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> Response:
+    gen = await db.get(ImageGeneration, generation_id)
+    if not gen or gen.owner_sub != user.sub:
+        raise HTTPException(404, "Не найдено")
+    paths = gen.source_image_paths or []
+    if index >= len(paths):
+        raise HTTPException(404, "Источник не найден")
+    data = download_file(paths[index])
+    return Response(content=data, media_type="image/png")
+
+
+# ── Accept / iterate / delete ────────────────────────────────────────────────
+
+
+@router.post("/{generation_id}/accept")
+async def accept_generation(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    gen = await db.get(ImageGeneration, generation_id)
+    if not gen or gen.owner_sub != user.sub:
+        raise HTTPException(404, "Не найдено")
+    if gen.status != ImageGenStatus.done:
+        raise HTTPException(400, "Можно принять только готовый результат.")
+    gen.accepted = True
+    await db.commit()
+    return _gen_out(gen)
+
+
+@router.post("/{generation_id}/iterate")
+async def iterate_generation(
+    generation_id: uuid.UUID,
+    body: GenerateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    parent = await db.get(ImageGeneration, generation_id)
+    if not parent or parent.owner_sub != user.sub:
+        raise HTTPException(404, "Не найдено")
+    if not parent.result_path:
+        raise HTTPException(400, "У исходной генерации нет результата для итерации.")
+
+    gen = ImageGeneration(
+        owner_sub=user.sub,
+        operation=body.operation or "edit",
+        workflow_id=body.workflow_id or parent.workflow_id,
+        status=ImageGenStatus.queued,
+        prompt=body.prompt,
+        negative_prompt=body.negative_prompt,
+        params=body.params or {},
+        source_image_paths=[parent.result_path],
+        parent_id=parent.id,
+    )
+    db.add(gen)
+    await db.commit()
+    await db.refresh(gen)
+    _enqueue(str(gen.id))
+    return _gen_out(gen)
+
+
+@router.delete("/{generation_id}")
+async def delete_generation(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    gen = await db.get(ImageGeneration, generation_id)
+    if not gen or gen.owner_sub != user.sub:
+        raise HTTPException(404, "Не найдено")
+    await db.delete(gen)
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Workflow library ─────────────────────────────────────────────────────────
+
+
+@router.get("/workflows/list")
+async def list_workflows(
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    rows = (
+        await db.execute(
+            select(ComfyWorkflow)
+            .where(
+                (ComfyWorkflow.is_builtin.is_(True))
+                | (ComfyWorkflow.owner_sub == user.sub)
+                | (ComfyWorkflow.owner_sub.is_(None))
+            )
+            .order_by(ComfyWorkflow.category, ComfyWorkflow.title)
+        )
+    ).scalars().all()
+    return {"items": [_wf_out(w) for w in rows]}
+
+
+@router.post("/workflows")
+async def create_workflow(
+    body: WorkflowIn,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    wf = ComfyWorkflow(
+        key=body.key,
+        title=body.title,
+        description=body.description,
+        category=body.category,
+        operation=body.operation,
+        graph=body.graph,
+        inject_map=body.inject_map,
+        params_schema=body.params_schema,
+        is_builtin=False,
+        enabled=True,
+        owner_sub=user.sub,
+    )
+    db.add(wf)
+    await db.commit()
+    await db.refresh(wf)
+    return _wf_out(wf)
+
+
+@router.post("/workflows/{workflow_id}/duplicate")
+async def duplicate_workflow(
+    workflow_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    src = await db.get(ComfyWorkflow, workflow_id)
+    if not src:
+        raise HTTPException(404, "Не найдено")
+    wf = ComfyWorkflow(
+        key=f"{src.key}_copy_{uuid.uuid4().hex[:6]}",
+        title=f"{src.title} (копия)",
+        description=src.description,
+        category=src.category,
+        operation=src.operation,
+        graph=src.graph,
+        inject_map=src.inject_map,
+        params_schema=src.params_schema,
+        is_builtin=False,
+        enabled=True,
+        owner_sub=user.sub,
+    )
+    db.add(wf)
+    await db.commit()
+    await db.refresh(wf)
+    return _wf_out(wf)
+
+
+@router.patch("/workflows/{workflow_id}")
+async def patch_workflow(
+    workflow_id: uuid.UUID,
+    body: WorkflowPatch,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    wf = await db.get(ComfyWorkflow, workflow_id)
+    if not wf:
+        raise HTTPException(404, "Не найдено")
+    if wf.is_builtin:
+        raise HTTPException(400, "Встроенный воркфлоу нельзя править — сделайте копию.")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(wf, field, value)
+    await db.commit()
+    await db.refresh(wf)
+    return _wf_out(wf)
+
+
+@router.delete("/workflows/{workflow_id}")
+async def delete_workflow(
+    workflow_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    wf = await db.get(ComfyWorkflow, workflow_id)
+    if not wf:
+        raise HTTPException(404, "Не найдено")
+    if wf.is_builtin:
+        raise HTTPException(400, "Встроенный воркфлоу нельзя удалить (только выключить).")
+    await db.delete(wf)
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Prompt helper ────────────────────────────────────────────────────────────
+
+_PROMPT_HELP_SYSTEM = (
+    "Ты — помощник инженера-технолога. Преврати грубое описание задачи в точный, "
+    "лаконичный промпт для генерации/редактирования технического изображения "
+    "(чертёж, оснастка, деталь, схема установки на станке). Верни JSON "
+    '{"prompt": "...", "negative_prompt": "..."} без пояснений. Промпт — конкретный, '
+    "с упоминанием вида (вид сверху/сбоку/изометрия), стиля (технический линейный "
+    "чертёж / эскиз / 3D-рендер) и важных деталей. negative_prompt — что исключить "
+    "(размытие, лишние объекты, цветной фон и т.п.)."
+)
+
+
+@router.post("/prompt-help")
+async def prompt_help(
+    body: PromptHelpRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Expand a rough RU description into a precise ComfyUI prompt (local LLM)."""
+    grounding = ""
+    if body.source_document_id:
+        # Best-effort: ground the prompt in what the attached drawing shows.
+        doc = await db.get(Document, body.source_document_id)
+        if doc and getattr(doc, "summary", None):
+            grounding = f"\nКонтекст приложенного изображения: {doc.summary[:600]}"
+
+    user_msg = (
+        f"Операция: {body.operation}. Описание задачи: {body.description}{grounding}"
+    )
+    try:
+        from app.ai.router import AIRouter
+        from app.ai.schemas import AIRequest, AITask, ChatMessage
+
+        resp = await AIRouter().run(
+            AIRequest(
+                task=AITask.ENGINEERING_REASONING,
+                messages=[
+                    ChatMessage(role="system", content=_PROMPT_HELP_SYSTEM),
+                    ChatMessage(role="user", content=user_msg),
+                ],
+                confidential=True,
+                allow_cloud=False,
+            )
+        )
+        text = (resp.text or "").strip()
+        parsed = _extract_json(text)
+        if parsed:
+            return {
+                "prompt": parsed.get("prompt", "").strip(),
+                "negative_prompt": parsed.get("negative_prompt", "").strip(),
+            }
+        # Fall back to using the raw text as the prompt.
+        return {"prompt": text or body.description, "negative_prompt": ""}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("prompt_help_failed", error=str(exc))
+        return {"prompt": body.description, "negative_prompt": "", "fallback": True}
+
+
+def _extract_json(text: str) -> dict | None:
+    if not text:
+        return None
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start : end + 1])
+    except Exception:  # noqa: BLE001
+        return None

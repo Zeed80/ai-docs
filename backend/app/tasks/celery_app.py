@@ -175,3 +175,4 @@ from app.tasks import tp_generation as _tp_generation  # noqa: F401
 from app.tasks import agent_cron as _agent_cron  # noqa: F401
 from app.tasks import graph_memory as _graph_memory  # noqa: F401
 from app.tasks import graph_analytics as _graph_analytics  # noqa: F401
+from app.tasks import image_generation as _image_generation  # noqa: F401

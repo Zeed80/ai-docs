@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     llamacpp_model: str = "/models/model.gguf"
     llamacpp_ctx_size: int = 16384   # 16 384 / parallel(2) = 8 192 tokens per slot
     llamacpp_kv_cache_type: str = "q8_0"
+
+    # ComfyUI (image generation / editing — drawings studio). On-prem only.
+    # Default targets the optional compose service; override: COMFYUI_URL=http://host:8188
+    comfyui_url: str = "http://comfyui:8188"
     llamacpp_n_gpu_layers: int = -1   # -1 = all layers on GPU
     llamacpp_parallel: int = 2        # 2 slots × 8 192 tokens; was 4 (too many, caused OOM)
     llamacpp_flash_attn: bool = True

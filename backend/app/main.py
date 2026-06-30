@@ -84,6 +84,8 @@ from app.api import (
 from app.api import admin as admin_api
 from app.api import devices as devices_api
 from app.api import mobile_build as mobile_build_api
+from app.api import image_generation as image_generation_api
+from app.api import comfyui_admin as comfyui_admin_api
 from app.api import admin_graph as admin_graph_api
 from app.api import maintenance as maintenance_api
 from app.api import dynamic_skill_runner
@@ -165,6 +167,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await seed_builtin_templates(db)
     except Exception as exc:
         logger.warning("email_templates_seed_failed", error=str(exc))
+
+    try:
+        from app.db.seeds.comfyui_workflows import seed_builtin_workflows
+        from app.db.session import _get_session_factory
+        async with _get_session_factory()() as db:
+            await seed_builtin_workflows(db)
+    except Exception as exc:
+        logger.warning("comfyui_workflows_seed_failed", error=str(exc))
 
     if not settings.auth_enabled:
         logger.warning(
@@ -386,6 +396,8 @@ def create_app() -> FastAPI:
     app.include_router(comments_api.router, prefix="/api/comments", tags=["comments"], dependencies=_auth)
     app.include_router(devices_api.router, prefix="/api/devices", tags=["devices"], dependencies=_auth)
     app.include_router(mobile_build_api.router, prefix="/api/mobile-build", tags=["mobile-build"], dependencies=_auth)
+    app.include_router(image_generation_api.router, prefix="/api/image-gen", tags=["image-studio"], dependencies=_auth)
+    app.include_router(comfyui_admin_api.router, prefix="/api/comfyui-admin", tags=["image-studio"], dependencies=_auth)
 
     # ── Public mobile-app distribution (no auth) ──────────────────────────────
     # APK + version.json are served at /download; assetlinks.json for Android App Links.

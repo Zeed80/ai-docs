@@ -72,6 +72,7 @@ const NAV_REF = [
 
 const NAV_ENGINEERING = [
   { href: "/drawings", icon: "drafting-compass", key: "drawings" },
+  { href: "/studio", icon: "image-studio", key: "studio" },
   { href: "/technology", icon: "cpu", key: "technology" },
   { href: "/catalogs", icon: "tool-catalog", key: "catalogs" },
 ] as const;
@@ -376,6 +377,21 @@ function Icon({ name }: { name: string }) {
           strokeLinejoin="round"
           strokeWidth={2}
           d="M9 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2h-4M9 3V1m0 2v2m6-2V1m0 2v2M9 7h6M9 11h6M9 15h4"
+        />
+      </svg>
+    ),
+    "image-studio": (
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
         />
       </svg>
     ),

@@ -741,6 +741,62 @@ capabilities:
           description: "Для approval_status: ID approval-запроса"
       required: [action]
 
+  - name: image_studio
+    description: >
+      Создание и редактирование изображений (чертежей, оснастки, деталей, схем
+      установки на станке, эскизов для писем) через ComfyUI. Результат —
+      черновик-версия (draft-first), человек принимает или перегенерирует.
+      action=generate: создать или отредактировать изображение. Передай
+      operation ("generate" — с нуля по тексту; "edit" — правка приложенного
+      изображения по инструкции; "inpaint" — правка области по маске; "cleanup" —
+      очистка/апскейл фото в чертёж), prompt (что нужно), и для edit/inpaint/cleanup —
+      source_document_ids (ID документа-изображения из системы) либо
+      source_image_paths. Опционально workflow_id и params (seed/steps/cfg).
+      action=prompt_help: помочь сформулировать промпт по грубому описанию
+      (description, operation) — верни prompt+negative_prompt пользователю.
+      action=list: история генераций; action=get: статус по generation_id
+      (status: queued|running|done|failed, has_result);
+      action=accept: пометить готовый результат принятым (generation_id);
+      action=iterate: новая правка поверх результата (generation_id, prompt);
+      action=list_workflows: доступные шаблоны воркфлоу по категориям.
+      Генерация асинхронная — после generate проверяй get по generation_id.
+    path: /api/agent/cap/image_studio
+    method: POST
+    gate_actions: []
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "generate | list | get | accept | iterate | prompt_help | list_workflows"
+        operation:
+          type: string
+          description: "Для generate: generate | edit | inpaint | cleanup"
+        prompt:
+          type: string
+          description: "Текстовое описание/инструкция для генерации или правки"
+        negative_prompt:
+          type: string
+          description: "Что исключить из изображения"
+        description:
+          type: string
+          description: "Для prompt_help: грубое описание задачи на русском"
+        source_document_ids:
+          type: array
+          description: "ID документов-изображений как источник (для edit/inpaint/cleanup)"
+          items:
+            type: string
+        workflow_id:
+          type: string
+          description: "ID шаблона воркфлоу (опционально, иначе выбирается по operation)"
+        generation_id:
+          type: string
+          description: "ID генерации (для get, accept, iterate)"
+        params:
+          type: object
+          description: "Параметры: seed, steps, cfg, denoise, width, height"
+      required: [action]
+
   - name: vault
     description: >
       Получить данные из временного хранилища по vault_ref из предыдущего ответа.

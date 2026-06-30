@@ -35,6 +35,7 @@ _ENV_URL_OVERRIDE = {
     ProviderKind.OLLAMA: "OLLAMA_URL",
     ProviderKind.VLLM: "VLLM_URL",
     ProviderKind.LLAMACPP: "LLAMACPP_URL",
+    ProviderKind.COMFYUI: "COMFYUI_URL",
 }
 
 # Static fallback base_urls (mirror model_registry.yaml providers section).
@@ -42,6 +43,7 @@ _YAML_DEFAULT_URL = {
     ProviderKind.OLLAMA: lambda: settings.ollama_url,
     ProviderKind.LLAMACPP: lambda: settings.llamacpp_url,
     ProviderKind.VLLM: lambda: os.environ.get("VLLM_URL", "http://localhost:8000"),
+    ProviderKind.COMFYUI: lambda: settings.comfyui_url,
     ProviderKind.OPENAI_COMPATIBLE: lambda: "http://localhost:8080",
     ProviderKind.ANTHROPIC: lambda: "https://api.anthropic.com",
     ProviderKind.OPENROUTER: lambda: "https://openrouter.ai/api/v1",
@@ -62,6 +64,7 @@ _LOCAL_KINDS = {
     ProviderKind.LLAMACPP,
     ProviderKind.OPENAI_COMPATIBLE,
     ProviderKind.LMSTUDIO,
+    ProviderKind.COMFYUI,
 }
 
 # Lazily-loaded provider defaults from the YAML registry (base_url + api_key_env).

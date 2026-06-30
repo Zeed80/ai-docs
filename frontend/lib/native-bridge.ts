@@ -246,6 +246,52 @@ export async function scanDocument(): Promise<File[]> {
   return pickFilesWeb({ accept: "image/*", capture: "environment" });
 }
 
+/**
+ * Pick an image from the camera OR the gallery (image studio). Unlike
+ * scanDocument (camera-only), this lets the user choose an existing photo —
+ * the @capacitor/camera plugin already supports both via the `source` param,
+ * so no extra plugin is needed. Falls back to a web file picker in the browser.
+ */
+export async function pickImage(
+  source: "CAMERA" | "PHOTOS" = "PHOTOS",
+): Promise<File[]> {
+  const camera = plugin("Camera");
+  if (camera?.getPhoto) {
+    try {
+      const photo = await camera.getPhoto({
+        quality: 90,
+        allowEditing: false,
+        resultType: "base64",
+        source,
+        saveToGallery: false,
+      });
+      if (photo?.base64String) {
+        return [b64ToFile(photo.base64String, `image-${Date.now()}.jpg`)];
+      }
+      if (photo?.dataUrl) {
+        return [b64ToFile(photo.dataUrl, `image-${Date.now()}.jpg`)];
+      }
+      if (photo?.webPath || photo?.path) {
+        return [
+          await uriToFile(
+            (photo.webPath || photo.path) as string,
+            `image-${Date.now()}.jpg`,
+          ),
+        ];
+      }
+      return [];
+    } catch (e) {
+      console.warn("camera pickImage cancelled/failed", e);
+      return [];
+    }
+  }
+  return pickFilesWeb({
+    accept: "image/*",
+    capture: source === "CAMERA" ? "environment" : undefined,
+    multiple: false,
+  });
+}
+
 /** Open a web file picker (used as a fallback and on desktop). */
 export function pickFilesWeb(opts?: {
   accept?: string;

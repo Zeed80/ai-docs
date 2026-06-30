@@ -344,10 +344,12 @@ prompts:
       capabilities: [invoices, payments, documents, suppliers, normalization, analytics]
     engineer:
       prompt: ./prompts/role-engineer.md
-      capabilities: [documents, tech, analytics]
+      capabilities: [documents, tech, analytics, image_studio]
+      default_canvases: ["agent:image-studio"]
     technologist:
       prompt: ./prompts/role-technologist.md
-      capabilities: [tech, documents, analytics]
+      capabilities: [tech, documents, analytics, image_studio]
+      default_canvases: ["agent:image-studio"]
     memory_researcher:
       prompt: ./prompts/role-memory-researcher.md
       capabilities: [documents, analytics]
