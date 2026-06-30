@@ -77,6 +77,13 @@ class PromptHelpRequest(BaseModel):
     source_document_id: uuid.UUID | None = None
 
 
+class TechDrawRequest(BaseModel):
+    # Either a free-text description (→ LLM → spec) or a ready spec.
+    description: str | None = None
+    spec: dict[str, Any] | None = None
+    view: str = "front"  # front (2D drawing) | isometric (3D pictorial)
+
+
 def _gen_out(gen: ImageGeneration) -> dict:
     return {
         "id": str(gen.id),
@@ -477,6 +484,81 @@ async def prompt_help(
     except Exception as exc:  # noqa: BLE001
         logger.warning("prompt_help_failed", error=str(exc))
         return {"prompt": body.description, "negative_prompt": "", "fallback": True}
+
+
+async def _nl_to_spec(description: str) -> dict:
+    """LLM turns a NL part description into a TechDraw spec (local, confidential)."""
+    from app.ai.router import AIRouter
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
+    from app.ai.techdraw import SPEC_SYSTEM_PROMPT
+
+    resp = await AIRouter().run(
+        AIRequest(
+            task=AITask.ENGINEERING_REASONING,
+            messages=[
+                ChatMessage(role="system", content=SPEC_SYSTEM_PROMPT),
+                ChatMessage(role="user", content=description),
+            ],
+            confidential=True,
+            allow_cloud=False,
+        )
+    )
+    spec = _extract_json((resp.text or "").strip())
+    if not spec:
+        raise HTTPException(422, "Не удалось построить спецификацию из описания.")
+    return spec
+
+
+@router.post("/techdraw")
+async def techdraw(
+    body: TechDrawRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Generate an EXACT technical drawing (deterministic vector render).
+
+    Unlike ComfyUI generation, dimensions/tolerances/roughness are drawn by code,
+    so the result is metrically exact and the text is real. Accepts a free-text
+    description (→ LLM → spec) or a ready spec. Renders PNG + DXF synchronously.
+    """
+    from app.ai.techdraw import render_spec_to_dxf, render_spec_to_png
+
+    spec = body.spec
+    if spec is None:
+        if not (body.description or "").strip():
+            raise HTTPException(400, "Нужно описание или готовая спецификация.")
+        spec = await _nl_to_spec(body.description)
+
+    try:
+        png = render_spec_to_png(spec, scale=2.0, view=body.view)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, f"Не удалось построить чертёж: {exc}")
+
+    gen = ImageGeneration(
+        owner_sub=user.sub,
+        operation="techdraw",
+        status=ImageGenStatus.done,
+        prompt=body.description,
+        params={"spec": spec, "view": body.view},
+        source_image_paths=[],
+    )
+    db.add(gen)
+    await db.flush()
+
+    base = f"{_SOURCE_PREFIX.replace('-src', '')}/{user.sub}/{gen.id}"
+    result_path = f"{base}.png"
+    upload_file(png, result_path, "image/png")
+    gen.result_path = result_path
+    gen.thumbnail_path = result_path
+    try:
+        dxf = render_spec_to_dxf(spec)
+        upload_file(dxf, f"{base}.dxf", "application/dxf")
+        gen.params = {**gen.params, "dxf_path": f"{base}.dxf"}
+    except Exception:  # noqa: BLE001
+        pass
+    await db.commit()
+    await db.refresh(gen)
+    return _gen_out(gen)
 
 
 def _extract_json(text: str) -> dict | None:

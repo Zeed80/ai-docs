@@ -8,6 +8,7 @@ import {
   Operation,
   generate,
   promptHelp,
+  techDraw,
   uploadSource,
 } from "@/lib/studio-api";
 
@@ -36,7 +37,30 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const maskRef = useRef<MaskCanvasHandle>(null);
 
+  // Exact technical drawing (deterministic ЕСКД render, not diffusion).
+  const [techMode, setTechMode] = useState(false);
+  const [techDesc, setTechDesc] = useState("");
+  const [techView, setTechView] = useState<"front" | "isometric">("front");
+
   const op = OPERATIONS.find((o) => o.key === operation)!;
+
+  async function submitTech() {
+    if (!techDesc.trim()) {
+      setErr("Опишите деталь с размерами/допусками.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await techDraw(techDesc, techView);
+      setTechDesc("");
+      onSubmitted();
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function setSource(file: File | null) {
     setSourceFile(file);
@@ -113,146 +137,207 @@ export default function StudioComposer({ onSubmitted }: Props) {
 
   return (
     <div className="space-y-4">
-      {/* Operation tabs */}
-      <div className="flex flex-wrap gap-1">
-        {OPERATIONS.map((o) => (
-          <button
-            key={o.key}
-            onClick={() => setOperation(o.key)}
-            className={`px-3 py-1.5 rounded text-sm ${
-              operation === o.key
-                ? "bg-sky-600 text-white"
-                : "bg-white/5 text-zinc-300 hover:bg-white/10"
-            }`}
-          >
-            {o.label}
-          </button>
-        ))}
+      {/* Mode: diffusion (image) vs exact technical drawing (ЕСКД) */}
+      <div className="grid grid-cols-2 gap-1 p-1 rounded bg-white/5">
+        <button
+          onClick={() => setTechMode(false)}
+          className={`px-3 py-1.5 rounded text-sm ${!techMode ? "bg-sky-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+        >
+          Изображение (AI)
+        </button>
+        <button
+          onClick={() => setTechMode(true)}
+          className={`px-3 py-1.5 rounded text-sm ${techMode ? "bg-emerald-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+        >
+          Точный чертёж (ЕСКД)
+        </button>
       </div>
 
-      {/* Source image */}
-      {op.needsSource && (
-        <div>
-          <div className="flex flex-wrap gap-2 mb-2">
-            <label className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm cursor-pointer">
-              Выбрать файл
-              <input
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) setSource(f);
-                }}
-              />
-            </label>
-            {isNative() && (
-              <>
-                <button
-                  onClick={pickFromCamera}
-                  className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
-                >
-                  Снять фото
-                </button>
-                <button
-                  onClick={pickFromGallery}
-                  className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
-                >
-                  Из галереи
-                </button>
-              </>
-            )}
-            {sourceFile && (
-              <button
-                onClick={() => setSource(null)}
-                className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-sm text-zinc-400"
-              >
-                Убрать
-              </button>
-            )}
-          </div>
-          {sourcePreview &&
-            (operation === "inpaint" ? (
-              <MaskCanvas ref={maskRef} imageUrl={sourcePreview} />
-            ) : (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={sourcePreview}
-                alt="источник"
-                className="max-h-64 rounded border border-white/10"
-              />
-            ))}
-        </div>
-      )}
-
-      {/* Prompt (not needed for pure cleanup) */}
-      {operation !== "cleanup" && (
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-xs text-zinc-500">
-              {operation === "generate" ? "Что сгенерировать" : "Что изменить"}
-            </label>
-            <button
-              onClick={helpWithPrompt}
-              disabled={helping || !prompt.trim()}
-              className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-40"
-            >
-              {helping ? "Света думает…" : "✨ Помочь с промптом"}
-            </button>
-          </div>
+      {techMode && (
+        <div className="space-y-3">
+          <p className="text-xs text-zinc-500">
+            Детерминированный векторный чертёж: точные размеры, допуски
+            (квалитеты), шероховатость Ra и ГОСТ-штамп. Поддержаны вал и
+            плита/фланец.
+          </p>
           <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            rows={3}
-            placeholder={
-              operation === "generate"
-                ? "эскиз кондуктора для сверления фланца, технический линейный чертёж, вид сверху"
-                : "убери фаску, добавь размер 40h7, перерисуй вид сверху"
-            }
+            value={techDesc}
+            onChange={(e) => setTechDesc(e.target.value)}
+            rows={5}
+            placeholder="Ступенчатый вал: резьба M24×2 длиной 25; шейка ⌀45 h6 длиной 60, Ra 0.8; ⌀35 k6 длиной 40; материал Сталь 40Х"
             className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
           />
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-zinc-500">Вид:</span>
+            {(["front", "isometric"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setTechView(v)}
+                className={`px-3 py-1 rounded text-sm ${techView === v ? "bg-emerald-600 text-white" : "bg-white/5 text-zinc-300 hover:bg-white/10"}`}
+              >
+                {v === "front" ? "2D чертёж" : "3D изометрия"}
+              </button>
+            ))}
+          </div>
+          {err && <div className="text-xs text-red-400">{err}</div>}
+          <button
+            onClick={submitTech}
+            disabled={busy}
+            className="w-full px-4 py-2.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium disabled:opacity-50"
+          >
+            {busy ? "Черчение…" : "Начертить"}
+          </button>
         </div>
       )}
 
-      <details className="text-sm">
-        <summary className="text-xs text-zinc-500 cursor-pointer">
-          Дополнительно
-        </summary>
-        <div className="mt-2 space-y-2">
+      {!techMode && (
+        <>
+          {/* Operation tabs */}
+          <div className="flex flex-wrap gap-1">
+            {OPERATIONS.map((o) => (
+              <button
+                key={o.key}
+                onClick={() => setOperation(o.key)}
+                className={`px-3 py-1.5 rounded text-sm ${
+                  operation === o.key
+                    ? "bg-sky-600 text-white"
+                    : "bg-white/5 text-zinc-300 hover:bg-white/10"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Source image */}
+          {op.needsSource && (
+            <div>
+              <div className="flex flex-wrap gap-2 mb-2">
+                <label className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm cursor-pointer">
+                  Выбрать файл
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) setSource(f);
+                    }}
+                  />
+                </label>
+                {isNative() && (
+                  <>
+                    <button
+                      onClick={pickFromCamera}
+                      className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
+                    >
+                      Снять фото
+                    </button>
+                    <button
+                      onClick={pickFromGallery}
+                      className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
+                    >
+                      Из галереи
+                    </button>
+                  </>
+                )}
+                {sourceFile && (
+                  <button
+                    onClick={() => setSource(null)}
+                    className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-sm text-zinc-400"
+                  >
+                    Убрать
+                  </button>
+                )}
+              </div>
+              {sourcePreview &&
+                (operation === "inpaint" ? (
+                  <MaskCanvas ref={maskRef} imageUrl={sourcePreview} />
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={sourcePreview}
+                    alt="источник"
+                    className="max-h-64 rounded border border-white/10"
+                  />
+                ))}
+            </div>
+          )}
+
+          {/* Prompt (not needed for pure cleanup) */}
           {operation !== "cleanup" && (
             <div>
-              <label className="text-xs text-zinc-500">Negative prompt</label>
-              <input
-                value={negative}
-                onChange={(e) => setNegative(e.target.value)}
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs text-zinc-500">
+                  {operation === "generate"
+                    ? "Что сгенерировать"
+                    : "Что изменить"}
+                </label>
+                <button
+                  onClick={helpWithPrompt}
+                  disabled={helping || !prompt.trim()}
+                  className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-40"
+                >
+                  {helping ? "Света думает…" : "✨ Помочь с промптом"}
+                </button>
+              </div>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={3}
+                placeholder={
+                  operation === "generate"
+                    ? "эскиз кондуктора для сверления фланца, технический линейный чертёж, вид сверху"
+                    : "убери фаску, добавь размер 40h7, перерисуй вид сверху"
+                }
                 className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
-                placeholder="размытие, лишние объекты, цветной фон"
               />
             </div>
           )}
-          <div>
-            <label className="text-xs text-zinc-500">
-              Seed (0 = случайный)
-            </label>
-            <input
-              type="number"
-              value={seed}
-              onChange={(e) => setSeed(e.target.value)}
-              className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
-            />
-          </div>
-        </div>
-      </details>
 
-      {err && <div className="text-xs text-red-400">{err}</div>}
+          <details className="text-sm">
+            <summary className="text-xs text-zinc-500 cursor-pointer">
+              Дополнительно
+            </summary>
+            <div className="mt-2 space-y-2">
+              {operation !== "cleanup" && (
+                <div>
+                  <label className="text-xs text-zinc-500">
+                    Negative prompt
+                  </label>
+                  <input
+                    value={negative}
+                    onChange={(e) => setNegative(e.target.value)}
+                    className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                    placeholder="размытие, лишние объекты, цветной фон"
+                  />
+                </div>
+              )}
+              <div>
+                <label className="text-xs text-zinc-500">
+                  Seed (0 = случайный)
+                </label>
+                <input
+                  type="number"
+                  value={seed}
+                  onChange={(e) => setSeed(e.target.value)}
+                  className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                />
+              </div>
+            </div>
+          </details>
 
-      <button
-        onClick={submit}
-        disabled={busy}
-        className="w-full px-4 py-2.5 rounded bg-sky-600 hover:bg-sky-500 text-white font-medium disabled:opacity-50"
-      >
-        {busy ? "Отправка…" : "Сгенерировать"}
-      </button>
+          {err && <div className="text-xs text-red-400">{err}</div>}
+
+          <button
+            onClick={submit}
+            disabled={busy}
+            className="w-full px-4 py-2.5 rounded bg-sky-600 hover:bg-sky-500 text-white font-medium disabled:opacity-50"
+          >
+            {busy ? "Отправка…" : "Сгенерировать"}
+          </button>
+        </>
+      )}
     </div>
   );
 }

@@ -288,6 +288,7 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "iterate":        ("POST",  "/api/image-gen/{generation_id}/iterate",   ["generation_id"]),
         "prompt_help":    ("POST",  "/api/image-gen/prompt-help",               []),
         "list_workflows": ("GET",   "/api/image-gen/workflows/list",            []),
+        "techdraw":       ("POST",  "/api/image-gen/techdraw",                  []),
     },
 }
 

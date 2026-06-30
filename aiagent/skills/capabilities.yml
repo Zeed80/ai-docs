@@ -759,7 +759,14 @@ capabilities:
       action=accept: пометить готовый результат принятым (generation_id);
       action=iterate: новая правка поверх результата (generation_id, prompt);
       action=list_workflows: доступные шаблоны воркфлоу по категориям.
-      Генерация асинхронная — после generate проверяй get по generation_id.
+      action=techdraw: построить ТОЧНЫЙ технический чертёж (ЕСКД) с реальными
+      размерами, допусками (квалитеты), шероховатостью (Ra) и ГОСТ-штампом —
+      детерминированный векторный рендер (НЕ диффузия). Используй для запросов
+      «начерти вал/фланец/плиту с точными размерами»: передай description
+      (описание детали с размерами/допусками/Ra/материалом). Результат точный и
+      синхронный (status сразу done). Для точных чертежей предпочитай techdraw,
+      а generate (диффузия) — для эскизов/иллюстраций без точных размеров.
+      Генерация (generate/edit) асинхронная — после неё проверяй get по generation_id.
     path: /api/agent/cap/image_studio
     method: POST
     gate_actions: []
@@ -768,7 +775,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "generate | list | get | accept | iterate | prompt_help | list_workflows"
+          description: "generate | techdraw | list | get | accept | iterate | prompt_help | list_workflows"
         operation:
           type: string
           description: "Для generate: generate | edit | inpaint | cleanup"

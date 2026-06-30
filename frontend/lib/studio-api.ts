@@ -122,6 +122,18 @@ export async function deleteGeneration(id: string): Promise<void> {
   await jsonOrThrow(res);
 }
 
+export async function techDraw(
+  description: string,
+  view: "front" | "isometric" = "front",
+): Promise<Generation> {
+  const res = await mutFetch(`${BASE}/techdraw`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description, view }),
+  });
+  return jsonOrThrow<Generation>(res);
+}
+
 export async function promptHelp(
   description: string,
   operation: Operation,
