@@ -404,6 +404,28 @@ async def list_models() -> dict:
     }
 
 
+@router.get("/models/search", dependencies=_admin)
+async def search_models(q: str) -> dict:
+    """Full-text search over the ComfyUI-Manager catalog (500+ models).
+
+    ``/models`` only surfaces the small curated ``_STUDIO_RECOMMENDED`` list;
+    this opens the whole Manager DB for one-off finds (e.g. ControlNet/LoRA
+    variants for a specific base architecture) without hardcoding every model.
+    """
+    db = await _manager_model_db()
+    terms = [t for t in q.lower().split() if t]
+    if not terms:
+        return {"items": []}
+    hits = []
+    for entry in db.values():
+        haystack = " ".join(
+            str(entry.get(f, "")) for f in ("name", "filename", "description", "base", "type")
+        ).lower()
+        if all(t in haystack for t in terms):
+            hits.append(entry)
+    return {"items": hits[:50], "total": len(hits)}
+
+
 class ModelInstallRequest(BaseModel):
     filename: str | None = None
     entry: dict | None = None  # a full ComfyUI-Manager model entry (optional)

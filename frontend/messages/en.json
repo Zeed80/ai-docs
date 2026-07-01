@@ -342,5 +342,110 @@
     "x": "Select",
     "?": "Help",
     "ctrl_k": "Command Palette"
+  },
+  "studio": {
+    "title": "Image Studio",
+    "subtitle": "Create and edit drawings, tooling and diagrams via ComfyUI",
+    "tab_studio": "Studio",
+    "tab_workflows": "Workflows",
+    "tab_settings": "Settings",
+    "composer": {
+      "mode_image": "Image (AI)",
+      "mode_techdraw": "Exact drawing (ESKD)",
+      "tech_hint": "Deterministic vector drawing: exact dimensions, tolerances (quality grades), Ra roughness and a GOST title block. Shaft, plate/flange and assembly are supported.",
+      "tech_placeholder": "Stepped shaft: M24×2 thread, 25mm long; Ø45 h6 neck, 60mm long, Ra 0.8; Ø35 k6, 40mm long; material Steel 40Kh",
+      "tech_view_label": "View:",
+      "tech_view_front": "2D drawing",
+      "tech_view_iso": "3D isometric",
+      "tech_error_empty": "Describe the part with dimensions/tolerances.",
+      "tech_submit": "Draw",
+      "tech_submit_busy": "Drawing…",
+      "link_summary": "Attach to a document/case (optional)",
+      "link_doc_placeholder": "Document ID",
+      "link_case_placeholder": "Case ID",
+      "op_edit": "Edit",
+      "op_generate": "Generate",
+      "op_inpaint": "Area (mask)",
+      "op_cleanup": "Cleanup/drawing",
+      "pick_file": "Choose file",
+      "take_photo": "Take photo",
+      "from_gallery": "From gallery",
+      "remove_source": "Remove",
+      "source_alt": "source",
+      "prompt_label_generate": "What to generate",
+      "prompt_label_edit": "What to change",
+      "help_prompt": "✨ Help with the prompt",
+      "help_prompt_busy": "Thinking…",
+      "placeholder_generate": "drilling jig sketch for a flange, technical line drawing, top view",
+      "placeholder_edit": "remove the chamfer, add a 40h7 dimension, redraw the top view",
+      "advanced": "Advanced",
+      "negative_prompt_label": "Negative prompt",
+      "negative_prompt_placeholder": "blur, extra objects, colored background",
+      "seed_label": "Seed (0 = random)",
+      "error_need_source": "Attach an image for this operation.",
+      "error_need_prompt": "Describe what to generate.",
+      "error_need_mask": "Paint the area to edit on the image.",
+      "submit": "Generate",
+      "submit_busy": "Submitting…"
+    },
+    "gallery": {
+      "empty": "Nothing generated yet. Describe the task on the left and click \"Generate\".",
+      "result_alt": "result"
+    },
+    "status": {
+      "queued": "Queued",
+      "running": "Generating…",
+      "done": "Done",
+      "failed": "Failed",
+      "accepted_suffix": " · accepted"
+    },
+    "detail": {
+      "accept": "Accept",
+      "download": "Download",
+      "delete": "Delete",
+      "source_label": "Source",
+      "result_label": "Result",
+      "iterate_label": "Refine the result (iteration)",
+      "iterate_placeholder": "e.g.: remove the shadow, sharpen the lines",
+      "iterate_submit": "Generate iteration",
+      "doc_badge": "Document: {id}",
+      "case_badge": "Case: {id}"
+    },
+    "workflow": {
+      "loading": "Loading workflows…",
+      "category": {
+        "edit": "Edit",
+        "generate": "Generate",
+        "inpaint": "Inpaint",
+        "outpaint": "Outpaint",
+        "process": "Process",
+        "compose": "Compose"
+      },
+      "builtin": "built-in",
+      "select_hint": "Select a workflow on the left to see its graph and settings.",
+      "duplicate": "Duplicate",
+      "enable": "Enable",
+      "disable": "Disable",
+      "delete": "Delete",
+      "builtin_readonly": "Built-in workflows can't be edited. Make a copy to change the graph.",
+      "graph_json": "Graph (API JSON)"
+    },
+    "models": {
+      "title": "Models",
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "offline": "ComfyUI is unavailable. {error}",
+      "installed_summary": "{count} models installed. Recommendations below are tuned for an RTX 3090 24GB (fp8 / lightning) and work with the agent's model.",
+      "downloading": "Downloading: {done}/{total}…",
+      "installed_check": "installed ✓",
+      "download": "Download",
+      "not_in_catalog": "not in catalog"
+    },
+    "mask": {
+      "brush": "Brush",
+      "clear": "Clear mask",
+      "painted": "Area selected",
+      "not_painted": "Paint the area to edit"
+    }
   }
 }

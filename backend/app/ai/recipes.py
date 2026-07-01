@@ -108,6 +108,24 @@ def _gate_actions_map() -> dict[str, set[str]]:
         return {}
 
 
+def _non_recipeable_actions_map() -> dict[str, set[str]]:
+    """capability name → set of actions excluded from self-learning recipes.
+
+    A distinct axis from gate_actions: not about needing human approval, but
+    about reproducibility. Replaying a diffusion-generation step (fresh random
+    seed each run) as if it deterministically reproduced the original result
+    would be a silent correctness bug, not a safety one — this is why it's
+    checked separately rather than folded into gate_actions.
+    """
+    try:
+        from app.ai.capability_manifest import load_capability_manifest
+
+        return load_capability_manifest().non_recipeable_actions
+    except Exception as exc:
+        log_degraded("recipes.non_recipeable_map", exc)
+        return {}
+
+
 # ── Parameterization ───────────────────────────────────────────────────────────
 
 _DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\b")
@@ -557,6 +575,7 @@ async def record_candidate(
     if not steps or len(steps) < _MIN_STEPS or len(steps) > _MAX_STEPS:
         return False
     gates = _gate_actions_map()
+    non_recipeable = _non_recipeable_actions_map()
     for step in steps:
         cap = str(step.get("capability") or "")
         action = str(step.get("action") or "")
@@ -564,6 +583,8 @@ async def record_candidate(
             return False
         if action and action in gates.get(cap, set()):
             return False  # approval-gated actions never enter recipes
+        if action and action in non_recipeable.get(cap, set()):
+            return False  # e.g. non-deterministic diffusion generation
 
     templated_steps, param_slots = parameterize_steps(steps, user_text, step_results)
 

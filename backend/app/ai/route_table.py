@@ -285,6 +285,26 @@ def is_supplier_grouping_request(text: str) -> bool:
     return extract_supplier_name(text) is None
 
 
+def is_techdraw_request(text: str) -> bool:
+    """Точный ЕСКД-чертёж (techdraw, детерминированный рендер) vs diffusion-эскиз.
+
+    AND-семантика: деталь-существительное + признак точности (допуск/ГОСТ/
+    размеры/разрез/...), либо самодостаточная фраза ("точный чертёж") без
+    существительного. Используется маршрутизатором, чтобы «начерти вал 50h6»
+    уходило в capability action=techdraw, а «нарисуй эскиз установки» — в
+    диффузионную генерацию (image_studio.generate).
+    """
+    cfg = _table().get("image_studio_techdraw") or {}
+    t = normalize(text)
+    has_standalone = any(kw in t for kw in cfg.get("standalone_markers") or [])
+    if has_standalone:
+        return True
+    has_part = any(kw in t for kw in cfg.get("part_nouns") or [])
+    has_precision = any(kw in t for kw in cfg.get("precision_markers") or [])
+    has_chertezh = "чертеж" in t or "начерти" in t
+    return has_precision and (has_part or has_chertezh)
+
+
 # ── Canvas/skill mappings (audit + direct repair) ──────────────────────────────
 
 

@@ -211,6 +211,50 @@ def test_orchestrator_treats_column_edit_as_workspace_request(monkeypatch):
     assert plan.workspace.canvas_id == "agent:invoice-items-grouped"
 
 
+def test_orchestrator_plan_turn_prefers_techdraw_for_precise_part_request(monkeypatch):
+    config = BuiltinAgentConfig(
+        department_enabled=True,
+        audit_enabled=True,
+        model="mock-model",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
+        exposed_skills=[],
+    )
+    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
+    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
+
+    async def capture(message: dict):
+        return None
+
+    session = AgentOrchestrator(capture)
+    plan = session._plan_turn("начерти вал 50h6 длиной 120 с шероховатостью Ra0.8")
+
+    assert plan.intent == "image_studio"
+    assert plan.worker.recommended_skills[0] == "image_studio.techdraw"
+
+
+def test_orchestrator_plan_turn_keeps_generate_for_plain_sketch(monkeypatch):
+    config = BuiltinAgentConfig(
+        department_enabled=True,
+        audit_enabled=True,
+        model="mock-model",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
+        exposed_skills=[],
+    )
+    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
+    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
+
+    async def capture(message: dict):
+        return None
+
+    session = AgentOrchestrator(capture)
+    plan = session._plan_turn("нарисуй эскиз установки детали на станке")
+
+    assert plan.intent == "image_studio"
+    assert "image_studio.techdraw" not in plan.worker.recommended_skills
+
+
 def test_orchestrator_targets_latest_open_table_for_vague_followup(monkeypatch):
     clear_workspace_blocks()
     upsert_workspace_block(

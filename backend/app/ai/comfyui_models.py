@@ -35,6 +35,7 @@ MODEL_NODE_INPUTS: dict[str, tuple[str, str]] = {
     "LoraLoader": ("lora_name", "loras"),
     "LoraLoaderModelOnly": ("lora_name", "loras"),
     "UpscaleModelLoader": ("model_name", "upscale_models"),
+    "ControlNetLoader": ("control_net_name", "controlnet"),
 }
 
 

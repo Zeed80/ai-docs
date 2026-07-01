@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.ai import recipes
 
 
@@ -77,6 +79,31 @@ def test_table_macro_gate_contract():
     # Read/build/export table actions are not gated either.
     assert "table_query" not in gates.get("analytics", set())
     assert "table_export_excel" not in gates.get("analytics", set())
+
+
+def test_image_studio_non_recipeable_contract():
+    """Diffusion generation is non-deterministic (fresh seed) — never a recipe step,
+    even though it isn't approval-gated (gate_actions stays empty for it)."""
+    gates = recipes._gate_actions_map()
+    non_recipeable = recipes._non_recipeable_actions_map()
+    assert "accept_techdraw" in gates.get("image_studio", set())
+    assert {"generate", "iterate", "accept", "accept_techdraw"} <= non_recipeable.get("image_studio", set())
+
+
+@pytest.mark.asyncio
+async def test_record_candidate_rejects_non_recipeable_image_studio_step(monkeypatch):
+    monkeypatch.setattr(recipes, "is_reproducible", lambda *a, **k: True)
+    steps = [
+        {"capability": "documents", "action": "list", "args_template": {}},
+        {"capability": "image_studio", "action": "generate", "args_template": {"prompt": "эскиз"}},
+    ]
+    recorded = await recipes.record_candidate(
+        user_text="нарисуй эскиз кондуктора",
+        role="engineer",
+        intent="image_studio",
+        steps=steps,
+    )
+    assert recorded is False
 
 
 def test_sheet_macro_chain_dataflow_sheet_id():

@@ -149,6 +149,70 @@ async def test_internal_approved_gate_action_dispatches(client: AsyncClient, mon
 
 
 @pytest.mark.asyncio
+async def test_image_studio_accept_techdraw_requires_approval(client: AsyncClient, monkeypatch):
+    """Real catalog (not a stub manifest): accept_techdraw is gated, accept is not."""
+    from app.api import capability_router
+
+    monkeypatch.setattr(capability_router.settings, "agent_service_key", "", raising=False)
+    proxy_mock = AsyncMock(return_value={"ok": True})
+
+    with patch("app.api.capability_router._proxy", new=proxy_mock):
+        r = await client.post(
+            "/api/agent/cap/image_studio",
+            json={
+                "action": "accept_techdraw",
+                "generation_id": "00000000-0000-0000-0000-000000000001",
+            },
+        )
+
+    assert r.status_code == 423
+    assert r.json()["detail"]["error_code"] == "approval_required"
+    proxy_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_image_studio_accept_techdraw_dispatches_with_approval(client: AsyncClient, monkeypatch):
+    from app.api import capability_router
+
+    monkeypatch.setattr(capability_router.settings, "agent_service_key", "", raising=False)
+    proxy_mock = AsyncMock(return_value={"ok": True})
+
+    with patch("app.api.capability_router._proxy", new=proxy_mock):
+        r = await client.post(
+            "/api/agent/cap/image_studio",
+            json={
+                "action": "accept_techdraw",
+                "generation_id": "00000000-0000-0000-0000-000000000001",
+            },
+            headers={"X-Internal-Agent": "1", "X-Agent-Approval": "granted"},
+        )
+
+    assert r.status_code == 200
+    proxy_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_image_studio_plain_accept_is_not_gated(client: AsyncClient, monkeypatch):
+    """Diffusion accept must NOT require approval — only accept_techdraw does."""
+    from app.api import capability_router
+
+    monkeypatch.setattr(capability_router.settings, "agent_service_key", "", raising=False)
+    proxy_mock = AsyncMock(return_value={"ok": True})
+
+    with patch("app.api.capability_router._proxy", new=proxy_mock):
+        r = await client.post(
+            "/api/agent/cap/image_studio",
+            json={
+                "action": "accept",
+                "generation_id": "00000000-0000-0000-0000-000000000001",
+            },
+        )
+
+    assert r.status_code == 200
+    proxy_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_dispatch_rejects_missing_path_params(client: AsyncClient):
     r = await client.post("/api/agent/cap/documents", json={"action": "get"})
 

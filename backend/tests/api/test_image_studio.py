@@ -4,6 +4,17 @@ from __future__ import annotations
 
 import pytest
 
+VALID_SHAFT = {
+    "type": "shaft",
+    "segments": [{"diameter": 45, "length": 60, "tolerance": "h6", "roughness": 0.8}],
+    "title": {"name": "Вал"},
+}
+INVALID_SHAFT = {
+    "type": "shaft",
+    "segments": [{"diameter": 45, "length": 60, "roughness": 0.9}],
+    "title": {"name": "Вал"},
+}
+
 
 @pytest.mark.asyncio
 async def test_workflows_seeded_and_listed(client, db_session):
@@ -79,3 +90,139 @@ async def test_duplicate_then_delete_builtin_copy(client, db_session):
     assert blocked.status_code == 400
     ok = await client.request("DELETE", f"/api/image-gen/workflows/{copy['id']}")
     assert ok.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_techdraw_direct_spec_valid_renders(client):
+    resp = await client.post("/api/image-gen/techdraw", json={"spec": VALID_SHAFT})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "done"
+    assert body["operation"] == "techdraw"
+    assert body["has_result"] is True
+
+
+@pytest.mark.asyncio
+async def test_techdraw_direct_spec_invalid_returns_422_with_reason(client):
+    resp = await client.post("/api/image-gen/techdraw", json={"spec": INVALID_SHAFT})
+    assert resp.status_code == 422
+    assert "RA_INVALID" in resp.text or "0.9" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_techdraw_description_repairs_after_one_invalid_attempt(client, monkeypatch):
+    from app.ai.schemas import AIResponse, AITask, ProviderKind
+
+    calls = {"n": 0}
+
+    class FakeAIRouter:
+        async def run(self, request):
+            calls["n"] += 1
+            import json
+
+            spec = INVALID_SHAFT if calls["n"] == 1 else VALID_SHAFT
+            return AIResponse(
+                task=AITask.ENGINEERING_REASONING, provider=ProviderKind.OLLAMA,
+                model="fake", text=json.dumps(spec),
+            )
+
+    monkeypatch.setattr("app.ai.router.AIRouter", FakeAIRouter)
+    resp = await client.post("/api/image-gen/techdraw", json={"description": "вал 45 h6"})
+    assert resp.status_code == 200
+    assert calls["n"] == 2  # first attempt invalid, one repair retry
+
+
+@pytest.mark.asyncio
+async def test_techdraw_description_gives_up_after_repair_fails(client, monkeypatch):
+    from app.ai.schemas import AIResponse, AITask, ProviderKind
+
+    class FakeAIRouter:
+        async def run(self, request):
+            import json
+
+            return AIResponse(
+                task=AITask.ENGINEERING_REASONING, provider=ProviderKind.OLLAMA,
+                model="fake", text=json.dumps(INVALID_SHAFT),
+            )
+
+    monkeypatch.setattr("app.ai.router.AIRouter", FakeAIRouter)
+    resp = await client.post("/api/image-gen/techdraw", json={"description": "вал 45 без Ra"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_accept_techdraw_endpoint_accepts_techdraw_result(client):
+    gen_resp = await client.post("/api/image-gen/techdraw", json={"spec": VALID_SHAFT})
+    gen_id = gen_resp.json()["id"]
+    resp = await client.post(f"/api/image-gen/{gen_id}/accept-techdraw")
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] is True
+
+
+@pytest.mark.asyncio
+async def test_accept_techdraw_endpoint_rejects_diffusion_result(client):
+    gen_resp = await client.post(
+        "/api/image-gen/generate",
+        json={"operation": "generate", "prompt": "эскиз"},
+    )
+    gen_id = gen_resp.json()["id"]
+    resp = await client.post(f"/api/image-gen/{gen_id}/accept-techdraw")
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_plain_accept_blocks_agent_service_call_for_techdraw(client, monkeypatch):
+    """Closes the loophole: an agent can't dodge the accept_techdraw gate by
+    just calling action=accept for the same techdraw generation_id."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "agent_service_key", "test-secret-key", raising=False)
+
+    gen_resp = await client.post("/api/image-gen/techdraw", json={"spec": VALID_SHAFT})
+    gen_id = gen_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/image-gen/{gen_id}/accept",
+        headers={"X-API-Key": "test-secret-key"},
+    )
+    assert resp.status_code == 423
+    assert resp.json()["detail"]["error_code"] == "approval_required"
+
+
+@pytest.mark.asyncio
+async def test_plain_accept_still_works_for_human_browser_session(client, monkeypatch):
+    """A human clicking "Принять" in the Studio UI (no service-key header) is unaffected."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "agent_service_key", "test-secret-key", raising=False)
+
+    gen_resp = await client.post("/api/image-gen/techdraw", json={"spec": VALID_SHAFT})
+    gen_id = gen_resp.json()["id"]
+
+    resp = await client.post(f"/api/image-gen/{gen_id}/accept")
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] is True
+
+
+@pytest.mark.asyncio
+async def test_techdraw_links_to_document_and_case(client, db_session):
+    from app.db.models import Document, DocumentStatus, DocumentType, WorkCase
+
+    doc = Document(
+        file_name="drawing.pdf", file_hash="techdraw-link-hash", file_size=10,
+        mime_type="application/pdf", storage_path="documents/drawing.pdf",
+        doc_type=DocumentType.other, status=DocumentStatus.approved,
+    )
+    case = WorkCase(title="Изготовление вала", created_by="tester")
+    db_session.add_all([doc, case])
+    await db_session.flush()
+
+    resp = await client.post("/api/image-gen/techdraw", json={
+        "spec": VALID_SHAFT,
+        "source_document_id": str(doc.id),
+        "case_id": str(case.id),
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source_document_id"] == str(doc.id)
+    assert body["case_id"] == str(case.id)

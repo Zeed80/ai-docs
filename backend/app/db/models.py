@@ -3094,3 +3094,9 @@ class ImageGeneration(UUIDPrimaryKey, TimestampMixin, Base):
         GUID(), ForeignKey("image_generations.id"), nullable=True, index=True
     )
     accepted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("documents.id"), nullable=True, index=True
+    )
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("work_cases.id"), nullable=True, index=True
+    )

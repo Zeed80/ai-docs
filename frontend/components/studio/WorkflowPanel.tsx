@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
 import {
@@ -10,16 +11,8 @@ import {
   patchWorkflow,
 } from "@/lib/studio-api";
 
-const CATEGORY_LABEL: Record<string, string> = {
-  edit: "Редактирование",
-  generate: "Генерация",
-  inpaint: "Inpaint",
-  outpaint: "Outpaint",
-  process: "Обработка",
-  compose: "Композиция",
-};
-
 export default function WorkflowPanel() {
+  const t = useTranslations("studio.workflow");
   const [items, setItems] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -47,7 +40,7 @@ export default function WorkflowPanel() {
   }, {});
 
   if (loading)
-    return <div className="text-sm text-zinc-500">Загрузка воркфлоу…</div>;
+    return <div className="text-sm text-zinc-500">{t("loading")}</div>;
   if (err) return <div className="text-sm text-red-400">{err}</div>;
 
   return (
@@ -56,7 +49,7 @@ export default function WorkflowPanel() {
         {Object.entries(byCategory).map(([cat, ws]) => (
           <div key={cat}>
             <h4 className="text-xs uppercase tracking-wide text-zinc-500 mb-2">
-              {CATEGORY_LABEL[cat] ?? cat}
+              {t.has(`category.${cat}`) ? t(`category.${cat}`) : cat}
             </h4>
             <div className="space-y-1">
               {ws.map((w) => (
@@ -73,7 +66,7 @@ export default function WorkflowPanel() {
                     <span className="text-zinc-200">{w.title}</span>
                     {w.is_builtin && (
                       <span className="text-[10px] text-zinc-500">
-                        встроенный
+                        {t("builtin")}
                       </span>
                     )}
                   </div>
@@ -91,9 +84,7 @@ export default function WorkflowPanel() {
 
       <div className="rounded-lg border border-white/10 p-3 bg-zinc-900/40">
         {!selected ? (
-          <div className="text-sm text-zinc-500">
-            Выберите воркфлоу слева, чтобы посмотреть граф и настройки.
-          </div>
+          <div className="text-sm text-zinc-500">{t("select_hint")}</div>
         ) : (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -115,7 +106,7 @@ export default function WorkflowPanel() {
                 }}
                 className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-xs"
               >
-                Дублировать
+                {t("duplicate")}
               </button>
               <button
                 onClick={async () => {
@@ -128,7 +119,7 @@ export default function WorkflowPanel() {
                 disabled={selected.is_builtin && false}
                 className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-xs"
               >
-                {selected.enabled ? "Выключить" : "Включить"}
+                {selected.enabled ? t("disable") : t("enable")}
               </button>
               {!selected.is_builtin && (
                 <button
@@ -139,19 +130,18 @@ export default function WorkflowPanel() {
                   }}
                   className="px-2.5 py-1 rounded bg-red-500/15 hover:bg-red-500/25 text-red-300 text-xs"
                 >
-                  Удалить
+                  {t("delete")}
                 </button>
               )}
             </div>
             {selected.is_builtin && (
               <p className="text-[11px] text-amber-400/80">
-                Встроенный воркфлоу нельзя редактировать. Сделайте копию, чтобы
-                менять граф.
+                {t("builtin_readonly")}
               </p>
             )}
             <details>
               <summary className="text-xs text-zinc-400 cursor-pointer">
-                Граф (API JSON)
+                {t("graph_json")}
               </summary>
               <pre className="mt-2 max-h-72 overflow-auto text-[11px] text-zinc-400 bg-black/40 rounded p-2">
                 {JSON.stringify(selected.graph, null, 2)}

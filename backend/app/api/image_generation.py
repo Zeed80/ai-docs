@@ -16,7 +16,7 @@ import uuid
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -47,6 +47,10 @@ class GenerateRequest(BaseModel):
     source_image_paths: list[str] = Field(default_factory=list)
     source_document_ids: list[uuid.UUID] = Field(default_factory=list)
     mask_path: str | None = None
+    # Link the generation to a document/case for traceability (optional; distinct
+    # from source_document_ids, which are used as image sources for edit/inpaint).
+    source_document_id: uuid.UUID | None = None
+    case_id: uuid.UUID | None = None
 
 
 class WorkflowIn(BaseModel):
@@ -82,6 +86,8 @@ class TechDrawRequest(BaseModel):
     description: str | None = None
     spec: dict[str, Any] | None = None
     view: str = "front"  # front (2D drawing) | isometric (3D pictorial)
+    source_document_id: uuid.UUID | None = None
+    case_id: uuid.UUID | None = None
 
 
 def _gen_out(gen: ImageGeneration) -> dict:
@@ -100,6 +106,8 @@ def _gen_out(gen: ImageGeneration) -> dict:
         "accepted": gen.accepted,
         "workflow_id": str(gen.workflow_id) if gen.workflow_id else None,
         "created_at": gen.created_at.isoformat() if gen.created_at else None,
+        "source_document_id": str(gen.source_document_id) if gen.source_document_id else None,
+        "case_id": str(gen.case_id) if gen.case_id else None,
     }
 
 
@@ -170,6 +178,8 @@ async def generate(
         params=body.params or {},
         source_image_paths=source_paths,
         mask_path=body.mask_path,
+        source_document_id=body.source_document_id,
+        case_id=body.case_id,
     )
     db.add(gen)
     await db.commit()
@@ -256,9 +266,23 @@ async def get_source(
 # ── Accept / iterate / delete ────────────────────────────────────────────────
 
 
+def _is_agent_service_call(request: Request) -> bool:
+    """True when this REST call was proxied by the internal agent capability
+    dispatcher (``X-API-Key`` matches ``AGENT_SERVICE_KEY``), as opposed to a
+    human browser session (cookie/JWT auth, no service key). Only meaningful
+    when ``agent_service_key`` is configured — same caveat as
+    ``capability_router._request_has_internal_approval``: without a
+    configured key this signal can't distinguish caller identity either.
+    """
+    from app.config import settings
+
+    return bool(settings.agent_service_key) and request.headers.get("X-API-Key") == settings.agent_service_key
+
+
 @router.post("/{generation_id}/accept")
 async def accept_generation(
     generation_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
@@ -267,6 +291,47 @@ async def accept_generation(
         raise HTTPException(404, "Не найдено")
     if gen.status != ImageGenStatus.done:
         raise HTTPException(400, "Можно принять только готовый результат.")
+    if gen.operation == "techdraw" and _is_agent_service_call(request):
+        # capabilities.yml gates "accept_techdraw" (routed to a DIFFERENT REST
+        # path below), not "accept" — an agent could otherwise dodge the gate
+        # by simply calling the ungated action name for the same id. A human
+        # clicking "Принять" in the Studio UI (no service-key header) is
+        # unaffected — their click IS the required approval.
+        raise HTTPException(
+            423,
+            {
+                "error_code": "approval_required",
+                "message": (
+                    "Приёмка точного чертежа требует подтверждения человека "
+                    "(используйте action=accept_techdraw)."
+                ),
+            },
+        )
+    gen.accepted = True
+    await db.commit()
+    return _gen_out(gen)
+
+
+@router.post("/{generation_id}/accept-techdraw")
+async def accept_techdraw_generation(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Approval-gated acceptance of an exact (techdraw) drawing.
+
+    Reachable by the agent only via the gated ``image_studio.accept_techdraw``
+    capability action (see capabilities.yml); a human can also call it
+    directly (e.g. a future dedicated UI button) with no extra ceremony —
+    gating only applies to the agent's capability dispatch, not to humans.
+    """
+    gen = await db.get(ImageGeneration, generation_id)
+    if not gen or gen.owner_sub != user.sub:
+        raise HTTPException(404, "Не найдено")
+    if gen.status != ImageGenStatus.done:
+        raise HTTPException(400, "Можно принять только готовый результат.")
+    if gen.operation != "techdraw":
+        raise HTTPException(400, "Это не точный чертёж — используйте /accept.")
     gen.accepted = True
     await db.commit()
     return _gen_out(gen)
@@ -486,27 +551,77 @@ async def prompt_help(
         return {"prompt": body.description, "negative_prompt": "", "fallback": True}
 
 
+def _validate_spec_or_raise(spec: dict) -> None:
+    """Deterministic engineering validation; 422 with the exact reason on failure."""
+    from app.ai import techdraw_validate
+
+    try:
+        issues = techdraw_validate.blocking(techdraw_validate.validate_spec(spec))
+    except Exception as exc:  # noqa: BLE001 — malformed structure (pydantic, etc.)
+        raise HTTPException(422, f"Спецификация некорректна: {exc}")
+    if issues:
+        fix_note = "; ".join(f"{i.field_path}: {i.message}" for i in issues)
+        raise HTTPException(422, f"Спецификация содержит ошибки: {fix_note}")
+
+
 async def _nl_to_spec(description: str) -> dict:
-    """LLM turns a NL part description into a TechDraw spec (local, confidential)."""
+    """LLM turns a NL part description into a TechDraw spec (local, confidential).
+
+    Validates the result deterministically (see ``techdraw_validate``); on a
+    blocking issue, retries ONCE with the exact error appended, then gives up
+    with a 422 explaining what's wrong rather than rendering a bad spec.
+    """
+    from app.ai import techdraw_validate
     from app.ai.router import AIRouter
     from app.ai.schemas import AIRequest, AITask, ChatMessage
     from app.ai.techdraw import SPEC_SYSTEM_PROMPT
+    from app.ai.techdraw_context import build_context_block
 
-    resp = await AIRouter().run(
-        AIRequest(
-            task=AITask.ENGINEERING_REASONING,
-            messages=[
-                ChatMessage(role="system", content=SPEC_SYSTEM_PROMPT),
-                ChatMessage(role="user", content=description),
-            ],
-            confidential=True,
-            allow_cloud=False,
+    system = SPEC_SYSTEM_PROMPT
+    context = build_context_block(description)
+    if context:
+        system = (
+            f"{SPEC_SYSTEM_PROMPT}\n\nСправочный контекст "
+            f"(используй эти точные значения, не выдумывай другие):\n{context}"
         )
-    )
-    spec = _extract_json((resp.text or "").strip())
+
+    async def _ask(messages: list) -> dict | None:
+        resp = await AIRouter().run(
+            AIRequest(task=AITask.ENGINEERING_REASONING, messages=messages,
+                      confidential=True, allow_cloud=False)
+        )
+        return _extract_json((resp.text or "").strip())
+
+    base_messages = [
+        ChatMessage(role="system", content=system),
+        ChatMessage(role="user", content=description),
+    ]
+    spec = await _ask(base_messages)
     if not spec:
         raise HTTPException(422, "Не удалось построить спецификацию из описания.")
-    return spec
+
+    try:
+        issues = techdraw_validate.blocking(techdraw_validate.validate_spec(spec))
+    except Exception as exc:  # noqa: BLE001
+        issues = [techdraw_validate.ValidationIssue("MALFORMED", "error", str(exc), "spec")]
+    if not issues:
+        return spec
+
+    fix_note = "; ".join(f"{i.field_path}: {i.message}" for i in issues)
+    spec2 = await _ask([
+        *base_messages,
+        ChatMessage(role="assistant", content=json.dumps(spec, ensure_ascii=False)),
+        ChatMessage(role="user", content=f"В спецификации есть ошибки, исправь и верни ЗАНОВО весь JSON: {fix_note}"),
+    ])
+    if spec2:
+        try:
+            issues2 = techdraw_validate.blocking(techdraw_validate.validate_spec(spec2))
+        except Exception:  # noqa: BLE001
+            issues2 = issues
+        if not issues2:
+            return spec2
+
+    raise HTTPException(422, f"Спецификация содержит ошибки после повторной попытки: {fix_note}")
 
 
 @router.post("/techdraw")
@@ -528,6 +643,11 @@ async def techdraw(
         if not (body.description or "").strip():
             raise HTTPException(400, "Нужно описание или готовая спецификация.")
         spec = await _nl_to_spec(body.description)
+    else:
+        # A caller-supplied spec bypasses the LLM (and its repair loop), but
+        # not engineering validation — an agent/API client can't sidestep it
+        # just by constructing the JSON itself.
+        _validate_spec_or_raise(spec)
 
     try:
         png = render_spec_to_png(spec, scale=2.0, view=body.view)
@@ -541,6 +661,8 @@ async def techdraw(
         prompt=body.description,
         params={"spec": spec, "view": body.view},
         source_image_paths=[],
+        source_document_id=body.source_document_id,
+        case_id=body.case_id,
     )
     db.add(gen)
     await db.flush()

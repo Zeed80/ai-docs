@@ -223,3 +223,32 @@ def test_filter_content_function_words_not_residual():
     """Common Russian function words don't trigger filter detection."""
     assert not route_table.has_specific_filter_content("покажи мне все счета пожалуйста")
     assert not route_table.has_specific_filter_content("выведи для нас таблицу поставщиков")
+
+
+# ── techdraw vs diffusion routing ───────────────────────────────────────────────
+
+
+def test_techdraw_request_part_plus_precision():
+    assert route_table.is_techdraw_request("начерти вал 50h6 длиной 120 с шероховатостью Ra0.8")
+
+
+def test_techdraw_request_standalone_phrase():
+    assert route_table.is_techdraw_request("сделай точный чертеж по гост")
+
+
+def test_techdraw_request_chertezh_word_alone_with_precision():
+    """No part noun, but 'чертеж' + a precision marker is still enough."""
+    assert route_table.is_techdraw_request("чертеж с допуском H7 и шероховатостью Ra0.8")
+
+
+def test_not_techdraw_request_plain_sketch():
+    assert not route_table.is_techdraw_request("нарисуй эскиз установки детали на станке")
+
+
+def test_not_techdraw_request_photo_edit():
+    assert not route_table.is_techdraw_request("отредактируй фото детали, убери фон")
+
+
+def test_not_techdraw_request_part_noun_without_precision():
+    """Mentioning a part alone (no precision marker) is still a sketch request."""
+    assert not route_table.is_techdraw_request("нарисуй вал для иллюстрации в письме")

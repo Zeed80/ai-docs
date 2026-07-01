@@ -24,6 +24,8 @@ export interface Generation {
   accepted: boolean;
   workflow_id: string | null;
   created_at: string | null;
+  source_document_id: string | null;
+  case_id: string | null;
 }
 
 export interface Workflow {
@@ -49,6 +51,9 @@ export interface GenerateInput {
   source_image_paths?: string[];
   source_document_ids?: string[];
   mask_path?: string;
+  /** Attach the result to a document/case for traceability (not an image source). */
+  source_document_id?: string;
+  case_id?: string;
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -124,12 +129,13 @@ export async function deleteGeneration(id: string): Promise<void> {
 
 export async function techDraw(
   description: string,
-  view: "front" | "isometric" = "front",
+  view: "front" | "isometric" | "section" | "half_section" = "front",
+  link?: { source_document_id?: string; case_id?: string },
 ): Promise<Generation> {
   const res = await mutFetch(`${BASE}/techdraw`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ description, view }),
+    body: JSON.stringify({ description, view, ...link }),
   });
   return jsonOrThrow<Generation>(res);
 }

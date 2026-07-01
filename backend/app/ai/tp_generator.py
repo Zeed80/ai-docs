@@ -136,7 +136,7 @@ _TPZ_TABLE: dict[str, float] = {
 
 # ── Material group detector ───────────────────────────────────────────────────
 
-def _material_group(material: str) -> str:
+def material_group(material: str) -> str:
     m = material.lower()
     if any(k in m for k in ["12х18", "нержав", "stainless", "321", "316", "304", "aisi"]):
         return "stainless"
@@ -147,6 +147,11 @@ def _material_group(material: str) -> str:
     if any(k in m for k in ["легир", "хвг", "хвф", "40х", "30хгса", "18хгт", "alloy", "chrome"]):
         return "steel_alloy"
     return "steel_carbon"
+
+
+# Backward-compatible private alias — kept so existing call sites in this file
+# (and any external ones) keep working unchanged.
+_material_group = material_group
 
 
 # ── Surface type → machining method ──────────────────────────────────────────

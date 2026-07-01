@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getApiBaseUrl } from "@/lib/api-base";
@@ -34,6 +35,7 @@ interface QueueStatus {
 }
 
 export default function ModelsSection() {
+  const t = useTranslations("studio.models");
   const [data, setData] = useState<ModelsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -111,32 +113,33 @@ export default function ModelsSection() {
   return (
     <section className="rounded-lg border border-border p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="font-medium">Модели</h3>
+        <h3 className="font-medium">{t("title")}</h3>
         <button
           onClick={load}
           className="text-xs text-muted-foreground hover:text-foreground"
         >
-          Обновить
+          {t("refresh")}
         </button>
       </div>
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Загрузка…</p>
+        <p className="text-sm text-muted-foreground">{t("loading")}</p>
       ) : !data?.online ? (
         <p className="text-sm text-amber-500">
-          ComfyUI недоступен. {data?.error}
+          {t("offline", { error: data?.error ?? "" })}
         </p>
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
-            Установлено моделей: {installedCount}. Рекомендуемые ниже подобраны
-            под RTX 3090 24 ГБ (fp8 / lightning) и работают совместно с моделью
-            агента.
+            {t("installed_summary", { count: installedCount })}
           </p>
 
           {queue && queue.is_processing && (
             <div className="text-xs text-sky-500">
-              Загрузка: {queue.done_count}/{queue.total_count}…
+              {t("downloading", {
+                done: queue.done_count,
+                total: queue.total_count,
+              })}
             </div>
           )}
 
@@ -157,7 +160,7 @@ export default function ModelsSection() {
                 <div className="shrink-0">
                   {m.installed ? (
                     <span className="text-xs text-emerald-500">
-                      установлено ✓
+                      {t("installed_check")}
                     </span>
                   ) : m.available_to_download ? (
                     <button
@@ -165,11 +168,11 @@ export default function ModelsSection() {
                       onClick={() => install(m.filename)}
                       className="px-2.5 py-1 rounded bg-primary text-primary-foreground text-xs disabled:opacity-50"
                     >
-                      {busy === m.filename ? "…" : "Скачать"}
+                      {busy === m.filename ? "…" : t("download")}
                     </button>
                   ) : (
                     <span className="text-xs text-muted-foreground">
-                      нет в каталоге
+                      {t("not_in_catalog")}
                     </span>
                   )}
                 </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import {
   forwardRef,
   useEffect,
@@ -31,6 +32,7 @@ const MaskCanvas = forwardRef<MaskCanvasHandle, Props>(function MaskCanvas(
   const imgRef = useRef<HTMLImageElement | null>(null);
   const drawing = useRef(false);
   const [brush, setBrush] = useState(36);
+  const t = useTranslations("studio.mask");
   const [painted, setPainted] = useState(false);
 
   useEffect(() => {
@@ -141,7 +143,7 @@ const MaskCanvas = forwardRef<MaskCanvasHandle, Props>(function MaskCanvas(
       />
       <div className="mt-2 flex items-center gap-3 text-xs text-zinc-400">
         <label className="flex items-center gap-2">
-          Кисть
+          {t("brush")}
           <input
             type="range"
             min={8}
@@ -159,11 +161,9 @@ const MaskCanvas = forwardRef<MaskCanvasHandle, Props>(function MaskCanvas(
             redraw();
           }}
         >
-          Очистить маску
+          {t("clear")}
         </button>
-        <span>
-          {painted ? "Область выделена" : "Закрасьте область для правки"}
-        </span>
+        <span>{painted ? t("painted") : t("not_painted")}</span>
       </div>
     </div>
   );

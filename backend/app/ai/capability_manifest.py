@@ -16,6 +16,12 @@ class CapabilityDefinition(BaseModel):
     path: str = ""
     method: str = "POST"
     gate_actions: list[str] = Field(default_factory=list)
+    # Actions excluded from self-learning recipes — a DIFFERENT axis from
+    # gate_actions: not about needing human approval, but about reproducibility.
+    # An action whose result is inherently non-deterministic (e.g. a diffusion
+    # generation with a fresh random seed each run) must never be replayed by a
+    # learned recipe as if it were the same result every time.
+    non_recipeable_actions: list[str] = Field(default_factory=list)
     parameters: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("method")
@@ -23,7 +29,7 @@ class CapabilityDefinition(BaseModel):
     def normalize_method(cls, value: str) -> str:
         return value.upper()
 
-    @field_validator("gate_actions")
+    @field_validator("gate_actions", "non_recipeable_actions")
     @classmethod
     def unique_gate_actions(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(str(action).strip() for action in value if str(action).strip()))
@@ -53,6 +59,13 @@ class CapabilityManifest(BaseModel):
     def gate_actions(self) -> dict[str, set[str]]:
         return {
             capability.name: set(capability.gate_actions)
+            for capability in self.capabilities
+        }
+
+    @property
+    def non_recipeable_actions(self) -> dict[str, set[str]]:
+        return {
+            capability.name: set(capability.non_recipeable_actions)
             for capability in self.capabilities
         }
 

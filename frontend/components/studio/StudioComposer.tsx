@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { useRef, useState } from "react";
 
 import { isNative, pickImage } from "@/lib/native-bridge";
@@ -14,18 +15,20 @@ import {
 
 import MaskCanvas, { MaskCanvasHandle } from "./MaskCanvas";
 
-const OPERATIONS: { key: Operation; label: string; needsSource: boolean }[] = [
-  { key: "edit", label: "Редактировать", needsSource: true },
-  { key: "generate", label: "Создать", needsSource: false },
-  { key: "inpaint", label: "Область (маска)", needsSource: true },
-  { key: "cleanup", label: "Очистить/чертёж", needsSource: true },
-];
+const OPERATIONS: { key: Operation; labelKey: string; needsSource: boolean }[] =
+  [
+    { key: "edit", labelKey: "op_edit", needsSource: true },
+    { key: "generate", labelKey: "op_generate", needsSource: false },
+    { key: "inpaint", labelKey: "op_inpaint", needsSource: true },
+    { key: "cleanup", labelKey: "op_cleanup", needsSource: true },
+  ];
 
 interface Props {
   onSubmitted: () => void;
 }
 
 export default function StudioComposer({ onSubmitted }: Props) {
+  const t = useTranslations("studio.composer");
   const [operation, setOperation] = useState<Operation>("edit");
   const [prompt, setPrompt] = useState("");
   const [negative, setNegative] = useState("");
@@ -42,17 +45,25 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [techDesc, setTechDesc] = useState("");
   const [techView, setTechView] = useState<"front" | "isometric">("front");
 
+  // Traceability: attach the result to a document/case (optional).
+  const [linkDocId, setLinkDocId] = useState("");
+  const [linkCaseId, setLinkCaseId] = useState("");
+  const link = {
+    source_document_id: linkDocId.trim() || undefined,
+    case_id: linkCaseId.trim() || undefined,
+  };
+
   const op = OPERATIONS.find((o) => o.key === operation)!;
 
   async function submitTech() {
     if (!techDesc.trim()) {
-      setErr("Опишите деталь с размерами/допусками.");
+      setErr(t("tech_error_empty"));
       return;
     }
     setBusy(true);
     setErr(null);
     try {
-      await techDraw(techDesc, techView);
+      await techDraw(techDesc, techView, link);
       setTechDesc("");
       onSubmitted();
     } catch (e) {
@@ -95,11 +106,11 @@ export default function StudioComposer({ onSubmitted }: Props) {
   async function submit() {
     setErr(null);
     if (op.needsSource && !sourceFile) {
-      setErr("Для этой операции приложите изображение.");
+      setErr(t("error_need_source"));
       return;
     }
     if (operation === "generate" && !prompt.trim()) {
-      setErr("Опишите, что нужно сгенерировать.");
+      setErr(t("error_need_prompt"));
       return;
     }
     setBusy(true);
@@ -110,6 +121,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
         negative_prompt: negative || undefined,
         params: { seed: Number(seed) || 0 },
         source_image_paths: [],
+        ...link,
       };
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
@@ -117,7 +129,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
       if (operation === "inpaint" && maskRef.current) {
         const blob = await maskRef.current.getMaskBlob();
         if (!blob) {
-          setErr("Закрасьте область для правки на изображении.");
+          setErr(t("error_need_mask"));
           setBusy(false);
           return;
         }
@@ -137,45 +149,64 @@ export default function StudioComposer({ onSubmitted }: Props) {
 
   return (
     <div className="space-y-4">
+      {/* Traceability: optional link to a document/case (shared by both modes) */}
+      <details className="text-sm">
+        <summary className="text-xs text-zinc-500 cursor-pointer">
+          {t("link_summary")}
+        </summary>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <input
+            value={linkDocId}
+            onChange={(e) => setLinkDocId(e.target.value)}
+            placeholder={t("link_doc_placeholder")}
+            className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+          />
+          <input
+            value={linkCaseId}
+            onChange={(e) => setLinkCaseId(e.target.value)}
+            placeholder={t("link_case_placeholder")}
+            className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+          />
+        </div>
+      </details>
+
       {/* Mode: diffusion (image) vs exact technical drawing (ЕСКД) */}
       <div className="grid grid-cols-2 gap-1 p-1 rounded bg-white/5">
         <button
           onClick={() => setTechMode(false)}
           className={`px-3 py-1.5 rounded text-sm ${!techMode ? "bg-sky-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
         >
-          Изображение (AI)
+          {t("mode_image")}
         </button>
         <button
           onClick={() => setTechMode(true)}
           className={`px-3 py-1.5 rounded text-sm ${techMode ? "bg-emerald-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
         >
-          Точный чертёж (ЕСКД)
+          {t("mode_techdraw")}
         </button>
       </div>
 
       {techMode && (
         <div className="space-y-3">
-          <p className="text-xs text-zinc-500">
-            Детерминированный векторный чертёж: точные размеры, допуски
-            (квалитеты), шероховатость Ra и ГОСТ-штамп. Поддержаны вал и
-            плита/фланец.
-          </p>
+          <p className="text-xs text-zinc-500">{t("tech_hint")}</p>
           <textarea
             value={techDesc}
             onChange={(e) => setTechDesc(e.target.value)}
             rows={5}
-            placeholder="Ступенчатый вал: резьба M24×2 длиной 25; шейка ⌀45 h6 длиной 60, Ra 0.8; ⌀35 k6 длиной 40; материал Сталь 40Х"
+            placeholder={t("tech_placeholder")}
             className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
           />
           <div className="flex items-center gap-2">
-            <span className="text-xs text-zinc-500">Вид:</span>
+            <span className="text-xs text-zinc-500">
+              {t("tech_view_label")}
+            </span>
             {(["front", "isometric"] as const).map((v) => (
               <button
                 key={v}
                 onClick={() => setTechView(v)}
                 className={`px-3 py-1 rounded text-sm ${techView === v ? "bg-emerald-600 text-white" : "bg-white/5 text-zinc-300 hover:bg-white/10"}`}
               >
-                {v === "front" ? "2D чертёж" : "3D изометрия"}
+                {v === "front" ? t("tech_view_front") : t("tech_view_iso")}
               </button>
             ))}
           </div>
@@ -185,7 +216,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
             disabled={busy}
             className="w-full px-4 py-2.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium disabled:opacity-50"
           >
-            {busy ? "Черчение…" : "Начертить"}
+            {busy ? t("tech_submit_busy") : t("tech_submit")}
           </button>
         </div>
       )}
@@ -204,7 +235,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
                     : "bg-white/5 text-zinc-300 hover:bg-white/10"
                 }`}
               >
-                {o.label}
+                {t(o.labelKey)}
               </button>
             ))}
           </div>
@@ -214,7 +245,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
             <div>
               <div className="flex flex-wrap gap-2 mb-2">
                 <label className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm cursor-pointer">
-                  Выбрать файл
+                  {t("pick_file")}
                   <input
                     type="file"
                     accept="image/*"
@@ -231,13 +262,13 @@ export default function StudioComposer({ onSubmitted }: Props) {
                       onClick={pickFromCamera}
                       className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
                     >
-                      Снять фото
+                      {t("take_photo")}
                     </button>
                     <button
                       onClick={pickFromGallery}
                       className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
                     >
-                      Из галереи
+                      {t("from_gallery")}
                     </button>
                   </>
                 )}
@@ -246,7 +277,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
                     onClick={() => setSource(null)}
                     className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-sm text-zinc-400"
                   >
-                    Убрать
+                    {t("remove_source")}
                   </button>
                 )}
               </div>
@@ -257,7 +288,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={sourcePreview}
-                    alt="источник"
+                    alt={t("source_alt")}
                     className="max-h-64 rounded border border-white/10"
                   />
                 ))}
@@ -270,15 +301,15 @@ export default function StudioComposer({ onSubmitted }: Props) {
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs text-zinc-500">
                   {operation === "generate"
-                    ? "Что сгенерировать"
-                    : "Что изменить"}
+                    ? t("prompt_label_generate")
+                    : t("prompt_label_edit")}
                 </label>
                 <button
                   onClick={helpWithPrompt}
                   disabled={helping || !prompt.trim()}
                   className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-40"
                 >
-                  {helping ? "Света думает…" : "✨ Помочь с промптом"}
+                  {helping ? t("help_prompt_busy") : t("help_prompt")}
                 </button>
               </div>
               <textarea
@@ -287,8 +318,8 @@ export default function StudioComposer({ onSubmitted }: Props) {
                 rows={3}
                 placeholder={
                   operation === "generate"
-                    ? "эскиз кондуктора для сверления фланца, технический линейный чертёж, вид сверху"
-                    : "убери фаску, добавь размер 40h7, перерисуй вид сверху"
+                    ? t("placeholder_generate")
+                    : t("placeholder_edit")
                 }
                 className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
               />
@@ -297,25 +328,25 @@ export default function StudioComposer({ onSubmitted }: Props) {
 
           <details className="text-sm">
             <summary className="text-xs text-zinc-500 cursor-pointer">
-              Дополнительно
+              {t("advanced")}
             </summary>
             <div className="mt-2 space-y-2">
               {operation !== "cleanup" && (
                 <div>
                   <label className="text-xs text-zinc-500">
-                    Negative prompt
+                    {t("negative_prompt_label")}
                   </label>
                   <input
                     value={negative}
                     onChange={(e) => setNegative(e.target.value)}
                     className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
-                    placeholder="размытие, лишние объекты, цветной фон"
+                    placeholder={t("negative_prompt_placeholder")}
                   />
                 </div>
               )}
               <div>
                 <label className="text-xs text-zinc-500">
-                  Seed (0 = случайный)
+                  {t("seed_label")}
                 </label>
                 <input
                   type="number"
@@ -334,7 +365,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
             disabled={busy}
             className="w-full px-4 py-2.5 rounded bg-sky-600 hover:bg-sky-500 text-white font-medium disabled:opacity-50"
           >
-            {busy ? "Отправка…" : "Сгенерировать"}
+            {busy ? t("submit_busy") : t("submit")}
           </button>
         </>
       )}

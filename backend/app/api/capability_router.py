@@ -289,6 +289,14 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "prompt_help":    ("POST",  "/api/image-gen/prompt-help",               []),
         "list_workflows": ("GET",   "/api/image-gen/workflows/list",            []),
         "techdraw":       ("POST",  "/api/image-gen/techdraw",                  []),
+        # Deliberately a DIFFERENT REST path than "accept": approval headers
+        # from the gate check never reach the proxied HTTP call (see _proxy),
+        # so the only way for this gate to mean anything is for the two
+        # actions to be REST-distinguishable. accept_generation() in
+        # image_generation.py additionally refuses plain /accept for a
+        # techdraw record when the caller is the internal agent service —
+        # otherwise an agent could dodge the gate by just calling "accept".
+        "accept_techdraw": ("POST", "/api/image-gen/{generation_id}/accept-techdraw", ["generation_id"]),
     },
 }
 
@@ -338,6 +346,11 @@ def validate_capability_catalog() -> list[str]:
             if gate not in actions:
                 problems.append(
                     f"gate_action '{cap.name}.{gate}' has no matching action in _DISPATCH"
+                )
+        for action in cap.non_recipeable_actions:
+            if action not in actions:
+                problems.append(
+                    f"non_recipeable_action '{cap.name}.{action}' has no matching action in _DISPATCH"
                 )
     return problems
 

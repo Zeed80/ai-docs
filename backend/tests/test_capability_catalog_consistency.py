@@ -28,3 +28,22 @@ def test_action_enum_injected_into_tool_schema():
     # The model must be able to pick a real gated action like approve on invoices.
     inv_enum = by_name["invoices"]["function"]["parameters"]["properties"]["action"]["enum"]
     assert "approve" in inv_enum
+
+
+def test_image_studio_accept_techdraw_is_gated_and_dispatched():
+    from app.ai.capability_manifest import load_capability_manifest
+
+    assert "accept_techdraw" in capability_action_map()["image_studio"]
+    manifest = load_capability_manifest()
+    image_studio = manifest.by_name["image_studio"]
+    assert "accept_techdraw" in image_studio.gate_actions
+    assert "accept" not in image_studio.gate_actions  # diffusion accept stays ungated
+
+
+def test_image_studio_diffusion_actions_are_non_recipeable():
+    from app.ai.capability_manifest import load_capability_manifest
+
+    manifest = load_capability_manifest()
+    image_studio = manifest.by_name["image_studio"]
+    non_recipeable = set(image_studio.non_recipeable_actions)
+    assert {"generate", "iterate", "accept", "accept_techdraw"} <= non_recipeable

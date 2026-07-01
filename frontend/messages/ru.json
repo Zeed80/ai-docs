@@ -342,5 +342,110 @@
     "x": "Выбрать",
     "?": "Справка",
     "ctrl_k": "Командная палитра"
+  },
+  "studio": {
+    "title": "Графическая студия",
+    "subtitle": "Создание и редактирование чертежей, оснастки и схем через ComfyUI",
+    "tab_studio": "Студия",
+    "tab_workflows": "Воркфлоу",
+    "tab_settings": "Настройки",
+    "composer": {
+      "mode_image": "Изображение (AI)",
+      "mode_techdraw": "Точный чертёж (ЕСКД)",
+      "tech_hint": "Детерминированный векторный чертёж: точные размеры, допуски (квалитеты), шероховатость Ra и ГОСТ-штамп. Поддержаны вал, плита/фланец и сборка.",
+      "tech_placeholder": "Ступенчатый вал: резьба M24×2 длиной 25; шейка ⌀45 h6 длиной 60, Ra 0.8; ⌀35 k6 длиной 40; материал Сталь 40Х",
+      "tech_view_label": "Вид:",
+      "tech_view_front": "2D чертёж",
+      "tech_view_iso": "3D изометрия",
+      "tech_error_empty": "Опишите деталь с размерами/допусками.",
+      "tech_submit": "Начертить",
+      "tech_submit_busy": "Черчение…",
+      "link_summary": "Прикрепить к документу/делу (опционально)",
+      "link_doc_placeholder": "ID документа",
+      "link_case_placeholder": "ID дела",
+      "op_edit": "Редактировать",
+      "op_generate": "Создать",
+      "op_inpaint": "Область (маска)",
+      "op_cleanup": "Очистить/чертёж",
+      "pick_file": "Выбрать файл",
+      "take_photo": "Снять фото",
+      "from_gallery": "Из галереи",
+      "remove_source": "Убрать",
+      "source_alt": "источник",
+      "prompt_label_generate": "Что сгенерировать",
+      "prompt_label_edit": "Что изменить",
+      "help_prompt": "✨ Помочь с промптом",
+      "help_prompt_busy": "Света думает…",
+      "placeholder_generate": "эскиз кондуктора для сверления фланца, технический линейный чертёж, вид сверху",
+      "placeholder_edit": "убери фаску, добавь размер 40h7, перерисуй вид сверху",
+      "advanced": "Дополнительно",
+      "negative_prompt_label": "Negative prompt",
+      "negative_prompt_placeholder": "размытие, лишние объекты, цветной фон",
+      "seed_label": "Seed (0 = случайный)",
+      "error_need_source": "Для этой операции приложите изображение.",
+      "error_need_prompt": "Опишите, что нужно сгенерировать.",
+      "error_need_mask": "Закрасьте область для правки на изображении.",
+      "submit": "Сгенерировать",
+      "submit_busy": "Отправка…"
+    },
+    "gallery": {
+      "empty": "Пока ничего не сгенерировано. Опишите задачу слева и нажмите «Сгенерировать».",
+      "result_alt": "результат"
+    },
+    "status": {
+      "queued": "В очереди",
+      "running": "Генерация…",
+      "done": "Готово",
+      "failed": "Ошибка",
+      "accepted_suffix": " · принято"
+    },
+    "detail": {
+      "accept": "Принять",
+      "download": "Скачать",
+      "delete": "Удалить",
+      "source_label": "Источник",
+      "result_label": "Результат",
+      "iterate_label": "Доработать результат (итерация)",
+      "iterate_placeholder": "например: убери тень, сделай линии чётче",
+      "iterate_submit": "Сгенерировать итерацию",
+      "doc_badge": "Документ: {id}",
+      "case_badge": "Дело: {id}"
+    },
+    "workflow": {
+      "loading": "Загрузка воркфлоу…",
+      "category": {
+        "edit": "Редактирование",
+        "generate": "Генерация",
+        "inpaint": "Inpaint",
+        "outpaint": "Outpaint",
+        "process": "Обработка",
+        "compose": "Композиция"
+      },
+      "builtin": "встроенный",
+      "select_hint": "Выберите воркфлоу слева, чтобы посмотреть граф и настройки.",
+      "duplicate": "Дублировать",
+      "enable": "Включить",
+      "disable": "Выключить",
+      "delete": "Удалить",
+      "builtin_readonly": "Встроенный воркфлоу нельзя редактировать. Сделайте копию, чтобы менять граф.",
+      "graph_json": "Граф (API JSON)"
+    },
+    "models": {
+      "title": "Модели",
+      "refresh": "Обновить",
+      "loading": "Загрузка…",
+      "offline": "ComfyUI недоступен. {error}",
+      "installed_summary": "Установлено моделей: {count}. Рекомендуемые ниже подобраны под RTX 3090 24 ГБ (fp8 / lightning) и работают совместно с моделью агента.",
+      "downloading": "Загрузка: {done}/{total}…",
+      "installed_check": "установлено ✓",
+      "download": "Скачать",
+      "not_in_catalog": "нет в каталоге"
+    },
+    "mask": {
+      "brush": "Кисть",
+      "clear": "Очистить маску",
+      "painted": "Область выделена",
+      "not_painted": "Закрасьте область для правки"
+    }
   }
 }

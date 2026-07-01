@@ -1,0 +1,42 @@
+{
+  "key": "edit_qwen_image_edit_controlnet",
+  "title": "Редактирование с ControlNet (Qwen-Image, чёткие линии)",
+  "description": "Как edit_qwen_image_edit, плюс Qwen-Image ControlNet (Union, InstantX) на canny-карте исходного изображения — для эскизов/схем установки, где важна чёткость линий и сохранение геометрии источника, а не метрическая точность (для точных чертежей используйте action=techdraw). controlnet_image подставляется бэкендом автоматически (canny по исходнику); controlnet_strength опционален (по умолчанию — из графа).",
+  "category": "edit",
+  "operation": "edit",
+  "inject_map": {
+    "prompt": {"node": "76", "input": "prompt"},
+    "negative": {"node": "77", "input": "prompt"},
+    "image": {"node": "78", "input": "image"},
+    "seed": {"node": "3", "input": "seed"},
+    "controlnet_image": {"node": "97", "input": "image"},
+    "controlnet_strength": {"node": "96", "input": "strength"}
+  },
+  "params_schema": {
+    "seed": {"type": "int", "default": 0, "label": "Seed (0 = случайный)"},
+    "steps": {"type": "int", "default": 4, "min": 1, "max": 30, "label": "Шаги"},
+    "cfg": {"type": "float", "default": 1.0, "min": 1.0, "max": 6.0, "label": "CFG"},
+    "controlnet_strength": {"type": "float", "default": 0.6, "min": 0.0, "max": 2.0, "label": "Сила ControlNet"}
+  },
+  "graph": {
+    "37": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_edit_2511_fp8mixed.safetensors", "weight_dtype": "default"}},
+    "45": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["37", 0], "shift": 3.1}},
+    "52": {"class_type": "CFGNorm", "inputs": {"model": ["45", 0], "strength": 1.0}},
+    "40": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["52", 0], "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors", "strength_model": 1.0}},
+    "38": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image"}},
+    "39": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+    "78": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
+    "90": {"class_type": "FluxKontextImageScale", "inputs": {"image": ["78", 0]}},
+    "76": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "", "clip": ["38", 0], "vae": ["39", 0], "image1": ["90", 0]}},
+    "77": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "", "clip": ["38", 0], "vae": ["39", 0], "image1": ["90", 0]}},
+    "86": {"class_type": "FluxKontextMultiReferenceLatentMethod", "inputs": {"conditioning": ["76", 0], "reference_latents_method": "index_timestep_zero"}},
+    "87": {"class_type": "FluxKontextMultiReferenceLatentMethod", "inputs": {"conditioning": ["77", 0], "reference_latents_method": "index_timestep_zero"}},
+    "88": {"class_type": "VAEEncode", "inputs": {"pixels": ["90", 0], "vae": ["39", 0]}},
+    "95": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "Qwen-Image-InstantX-ControlNet-Union.safetensors"}},
+    "97": {"class_type": "LoadImage", "inputs": {"image": "controlnet.png"}},
+    "96": {"class_type": "ControlNetApplyAdvanced", "inputs": {"positive": ["86", 0], "negative": ["87", 0], "control_net": ["95", 0], "image": ["97", 0], "strength": 0.6, "start_percent": 0.0, "end_percent": 1.0, "vae": ["39", 0]}},
+    "3": {"class_type": "KSampler", "inputs": {"seed": 0, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["40", 0], "positive": ["96", 0], "negative": ["96", 1], "latent_image": ["88", 0]}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
+    "60": {"class_type": "SaveImage", "inputs": {"filename_prefix": "studio_edit_cn", "images": ["8", 0]}}
+  }
+}

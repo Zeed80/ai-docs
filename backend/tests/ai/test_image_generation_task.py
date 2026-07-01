@@ -1,0 +1,62 @@
+"""Tests for the graceful-degradation retry logic in the Celery task.
+
+Focused on the branching this workstream added: a transient (node-unreachable)
+error retries with backoff up to ``max_retries``, then gives up and marks the
+record failed. Uses Celery's own eager-retry machinery (``.apply()``) rather
+than hand-rolling a fake bound-task ``self`` — that keeps the test honest
+about what Celery actually does with ``self.retry()``.
+"""
+
+from __future__ import annotations
+
+from app.ai.comfyui_client import ComfyUITransientError
+from app.tasks import image_generation as img_gen_task
+
+
+def test_transient_error_retries_then_gives_up_and_marks_failed(monkeypatch):
+    calls = {"n": 0}
+
+    async def _raise_transient(generation_id, task_id):
+        calls["n"] += 1
+        raise ComfyUITransientError("ComfyUI node unreachable")
+
+    monkeypatch.setattr(img_gen_task, "_run", _raise_transient)
+
+    mark_failed_calls: list[str] = []
+
+    async def _fake_mark_failed(gen_uuid, err, owner_sub=None):
+        mark_failed_calls.append(err)
+
+    monkeypatch.setattr(img_gen_task, "_mark_failed", _fake_mark_failed)
+
+    result = img_gen_task.run_image_generation.apply(
+        args=["00000000-0000-0000-0000-000000000001"]
+    ).get(disable_sync_subtasks=False)
+
+    # max_retries=3 on the task → 1 initial attempt + 3 retries = 4 calls,
+    # then give up and mark failed exactly once (not on every retry).
+    assert calls["n"] == 4
+    assert len(mark_failed_calls) == 1
+    assert "ComfyUI" in mark_failed_calls[0]
+    assert "error" in result
+
+
+def test_non_transient_error_is_not_retried(monkeypatch):
+    """The wrapper only special-cases ComfyUITransientError — anything else
+    (e.g. _run's own internal handling failing unexpectedly) fails the task
+    immediately instead of being retried."""
+
+    calls = {"n": 0}
+
+    async def _raise_final(generation_id, task_id):
+        calls["n"] += 1
+        raise RuntimeError("not a ComfyUI transient issue")
+
+    monkeypatch.setattr(img_gen_task, "_run", _raise_final)
+
+    result = img_gen_task.run_image_generation.apply(
+        args=["00000000-0000-0000-0000-000000000002"]
+    )
+
+    assert calls["n"] == 1  # no retry attempted
+    assert result.failed()

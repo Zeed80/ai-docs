@@ -36,6 +36,14 @@ class ComfyUIError(RuntimeError):
     """Raised for connection / workflow / confidentiality failures."""
 
 
+class ComfyUITransientError(ComfyUIError):
+    """Node unreachable / timed out right now — worth retrying (Celery autoretry).
+
+    Distinct from a plain ``ComfyUIError`` (e.g. missing model, rejected graph),
+    which is a final failure that retrying would not fix.
+    """
+
+
 @dataclass
 class ComfyOutput:
     filename: str
@@ -139,15 +147,18 @@ class ComfyUIClient:
         """Upload an input image; returns the server-side filename to reference."""
         files = {"image": (name, content, "application/octet-stream")}
         data = {"type": image_type, "overwrite": "true" if overwrite else "false"}
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{self.base_url}/upload/image",
-                files=files,
-                data=data,
-                headers=self._headers(),
-            )
-            resp.raise_for_status()
-            body = resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/upload/image",
+                    files=files,
+                    data=data,
+                    headers=self._headers(),
+                )
+                resp.raise_for_status()
+                body = resp.json()
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            raise ComfyUITransientError(f"ComfyUI недоступен при загрузке файла: {exc}") from exc
         # ComfyUI returns {"name": "...", "subfolder": "...", "type": "input"}
         sub = body.get("subfolder") or ""
         fname = body.get("name", name)
@@ -156,15 +167,18 @@ class ComfyUIClient:
     async def queue_workflow(self, graph: dict[str, Any]) -> str:
         """Queue an API-format graph; returns the prompt_id."""
         payload = {"prompt": graph, "client_id": self.client_id}
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{self.base_url}/prompt", json=payload, headers=self._headers()
-            )
-            if resp.status_code >= 400:
-                raise ComfyUIError(
-                    f"ComfyUI отклонил воркфлоу ({resp.status_code}): {resp.text[:500]}"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/prompt", json=payload, headers=self._headers()
                 )
-            body = resp.json()
+                if resp.status_code >= 400:
+                    raise ComfyUIError(
+                        f"ComfyUI отклонил воркфлоу ({resp.status_code}): {resp.text[:500]}"
+                    )
+                body = resp.json()
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            raise ComfyUITransientError(f"ComfyUI недоступен при постановке в очередь: {exc}") from exc
         prompt_id = body.get("prompt_id")
         if not prompt_id:
             raise ComfyUIError(f"ComfyUI не вернул prompt_id: {body}")
@@ -181,25 +195,28 @@ class ComfyUIClient:
 
         deadline = (timeout if timeout is not None else self.timeout)
         elapsed = 0.0
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            while elapsed < deadline:
-                resp = await client.get(
-                    f"{self.base_url}/history/{prompt_id}", headers=self._headers()
-                )
-                resp.raise_for_status()
-                hist = resp.json().get(prompt_id)
-                if hist:
-                    status = (hist.get("status") or {})
-                    if status.get("status_str") == "error":
-                        raise ComfyUIError(f"ComfyUI workflow error: {status}")
-                    outputs = self._extract_outputs(hist.get("outputs") or {})
-                    if outputs:
-                        return outputs
-                    # Finished but produced no images.
-                    if status.get("completed"):
-                        raise ComfyUIError("ComfyUI завершил воркфлоу без изображений.")
-                await asyncio.sleep(poll_interval)
-                elapsed += poll_interval
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                while elapsed < deadline:
+                    resp = await client.get(
+                        f"{self.base_url}/history/{prompt_id}", headers=self._headers()
+                    )
+                    resp.raise_for_status()
+                    hist = resp.json().get(prompt_id)
+                    if hist:
+                        status = (hist.get("status") or {})
+                        if status.get("status_str") == "error":
+                            raise ComfyUIError(f"ComfyUI workflow error: {status}")
+                        outputs = self._extract_outputs(hist.get("outputs") or {})
+                        if outputs:
+                            return outputs
+                        # Finished but produced no images.
+                        if status.get("completed"):
+                            raise ComfyUIError("ComfyUI завершил воркфлоу без изображений.")
+                    await asyncio.sleep(poll_interval)
+                    elapsed += poll_interval
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            raise ComfyUITransientError(f"ComfyUI недоступен во время ожидания результата: {exc}") from exc
         raise ComfyUIError(f"ComfyUI: превышено время ожидания ({deadline:.0f}s).")
 
     @staticmethod

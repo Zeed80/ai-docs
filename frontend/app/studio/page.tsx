@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import GenerationDetail from "@/components/studio/GenerationDetail";
@@ -11,6 +12,7 @@ import { Generation, getGeneration, listGenerations } from "@/lib/studio-api";
 type Tab = "studio" | "workflows";
 
 export default function StudioPage() {
+  const t = useTranslations("studio");
   const [items, setItems] = useState<Generation[]>([]);
   const [selected, setSelected] = useState<Generation | null>(null);
   const [tab, setTab] = useState<Tab>("studio");
@@ -68,12 +70,8 @@ export default function StudioPage() {
     <div className="flex flex-col h-full">
       <div className="px-6 py-4 border-b border-white/10 bg-zinc-900/60 flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-white">
-            Графическая студия
-          </h1>
-          <p className="text-xs text-zinc-500">
-            Создание и редактирование чертежей, оснастки и схем через ComfyUI
-          </p>
+          <h1 className="text-xl font-semibold text-white">{t("title")}</h1>
+          <p className="text-xs text-zinc-500">{t("subtitle")}</p>
         </div>
         <div className="flex gap-1">
           <button
@@ -84,7 +82,7 @@ export default function StudioPage() {
                 : "text-zinc-400 hover:text-white"
             }`}
           >
-            Студия
+            {t("tab_studio")}
           </button>
           <button
             onClick={() => setTab("workflows")}
@@ -94,13 +92,13 @@ export default function StudioPage() {
                 : "text-zinc-400 hover:text-white"
             }`}
           >
-            Воркфлоу
+            {t("tab_workflows")}
           </button>
           <a
             href="/settings/comfyui"
             className="px-3 py-1.5 rounded text-sm text-zinc-400 hover:text-white"
           >
-            Настройки
+            {t("tab_settings")}
           </a>
         </div>
       </div>

@@ -31,12 +31,34 @@ _RESULT_BUCKET_PREFIX = "image-gen"
 @celery_app.task(
     bind=True,
     name="image_generation.run_image_generation",
-    max_retries=0,
+    max_retries=3,
     soft_time_limit=600,   # 10 min — diffusion on a busy GPU can be slow
     time_limit=660,
 )
 def run_image_generation(self, generation_id: str) -> dict:
-    return run_async(_run(generation_id, self.request.id))
+    from app.ai.comfyui_client import ComfyUITransientError
+
+    try:
+        return run_async(_run(generation_id, self.request.id))
+    except ComfyUITransientError as exc:
+        if self.request.retries < self.max_retries:
+            backoff = min(120, (2**self.request.retries) * 10) + random.randint(0, 5)
+            logger.warning(
+                "image_gen_transient_retry",
+                generation_id=generation_id,
+                retry=self.request.retries + 1,
+                countdown=backoff,
+                error=str(exc),
+            )
+            raise self.retry(exc=exc, countdown=backoff)
+        logger.warning("image_gen_retries_exhausted", generation_id=generation_id, error=str(exc))
+        run_async(
+            _mark_failed(
+                uuid.UUID(generation_id),
+                f"ComfyUI недоступен после нескольких попыток: {exc}",
+            )
+        )
+        return {"error": str(exc)}
 
 
 def _make_thumbnail(content: bytes, max_px: int = 480) -> bytes | None:
@@ -79,11 +101,44 @@ async def _resolve_workflow(db, gen):
     return row
 
 
-async def _run(generation_id: str, task_id: str | None) -> dict:
-    from app.ai.comfyui_client import ComfyUIClient, ComfyUIError, build_workflow
+async def _mark_failed(gen_uuid: uuid.UUID, err: str, owner_sub: str | None = None) -> None:
+    """Persist a final (non-retryable) failure + best-effort push notification."""
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
     from app.services import push
+
+    factory = _get_session_factory()
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if not gen:
+            return
+        gen.status = ImageGenStatus.failed
+        gen.error = err[:2000]
+        await db.commit()
+        target_owner = owner_sub or gen.owner_sub
+        if target_owner:
+            try:
+                await push.push_to_user(
+                    db=db,
+                    user_sub=target_owner,
+                    title="Ошибка генерации изображения",
+                    body=err[:200],
+                    action_url=f"/studio?id={gen_uuid}",
+                    notification_type="image_failed",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+
+async def _run(generation_id: str, task_id: str | None) -> dict:
+    from app.ai.comfyui_client import (
+        ComfyUIClient,
+        ComfyUIError,
+        ComfyUITransientError,
+        build_workflow,
+    )
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.db.session import _get_session_factory
     from app.storage import download_file, upload_file
 
     factory = _get_session_factory()
@@ -118,6 +173,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     # ── Run on ComfyUI ───────────────────────────────────────────────────────
     try:
         client = ComfyUIClient.from_registry()
+        if not await client.health():
+            raise ComfyUITransientError(
+                "ComfyUI сервер сейчас недоступен. Попробуйте ещё раз через минуту "
+                "или обратитесь к администратору."
+            )
 
         uploaded: list[str] = []
         for idx, path in enumerate(source_paths):
@@ -129,6 +189,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if mask_path:
             mask_content = download_file(mask_path)
             mask_name = await client.upload_image(mask_content, f"mask_{generation_id}.png")
+
+        # ControlNet conditioning image (optional): only for workflows that
+        # declare it in inject_map. Preprocessing (canny) happens here, not as
+        # a ComfyUI custom node — see drawing_preprocessor.canny_edge_map.
+        controlnet_name = None
+        if "controlnet_image" in inject_map and uploaded:
+            from app.ai.drawing_preprocessor import canny_edge_map
+
+            source_content = download_file(source_paths[0])
+            edge_png = canny_edge_map(source_content)
+            controlnet_name = await client.upload_image(edge_png, f"controlnet_{generation_id}.png")
 
         seed = params.get("seed")
         if not seed:  # 0 / None → random so repeated runs differ
@@ -143,9 +214,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             values["image"] = uploaded[0]
         if mask_name:
             values["mask"] = mask_name
+        if controlnet_name:
+            values["controlnet_image"] = controlnet_name
         for key in ("width", "height", "steps", "cfg", "denoise"):
             if params.get(key) is not None:
                 values[key] = params[key]
+        if params.get("controlnet_strength") is not None:
+            values["controlnet_strength"] = params["controlnet_strength"]
 
         graph = build_workflow(graph_template, inject_map, values)
 
@@ -176,30 +251,20 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             thumb_path = f"{_RESULT_BUCKET_PREFIX}/{owner_sub or 'shared'}/{generation_id}_thumb.png"
             upload_file(thumb_bytes, thumb_path, "image/png")
 
+    except ComfyUITransientError:
+        # Node unreachable right now — let the Celery task wrapper decide
+        # retry-vs-give-up; do NOT mark the record failed yet (it may still
+        # succeed on the next attempt).
+        raise
     except Exception as exc:  # noqa: BLE001
         err = str(exc) if isinstance(exc, ComfyUIError) else f"{type(exc).__name__}: {exc}"
         logger.warning("image_gen_failed", generation_id=generation_id, error=err)
-        async with factory() as db:
-            gen = await db.get(ImageGeneration, gen_uuid)
-            if gen:
-                gen.status = ImageGenStatus.failed
-                gen.error = err[:2000]
-                await db.commit()
-                if owner_sub:
-                    try:
-                        await push.push_to_user(
-                            db=db,
-                            user_sub=owner_sub,
-                            title="Ошибка генерации изображения",
-                            body=err[:200],
-                            action_url=f"/studio?id={generation_id}",
-                            notification_type="image_failed",
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
+        await _mark_failed(gen_uuid, err, owner_sub)
         return {"error": err}
 
     # ── Persist result + notify ──────────────────────────────────────────────
+    from app.services import push
+
     async with factory() as db:
         gen = await db.get(ImageGeneration, gen_uuid)
         if gen:

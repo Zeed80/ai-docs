@@ -756,7 +756,8 @@ capabilities:
       (description, operation) — верни prompt+negative_prompt пользователю.
       action=list: история генераций; action=get: статус по generation_id
       (status: queued|running|done|failed, has_result);
-      action=accept: пометить готовый результат принятым (generation_id);
+      action=accept: пометить готовым диффузионный результат принятым (generation_id)
+      — только для operation generate/edit/inpaint/cleanup, НЕ для techdraw;
       action=iterate: новая правка поверх результата (generation_id, prompt);
       action=list_workflows: доступные шаблоны воркфлоу по категориям.
       action=techdraw: построить ТОЧНЫЙ технический чертёж (ЕСКД) с реальными
@@ -766,16 +767,23 @@ capabilities:
       (описание детали с размерами/допусками/Ra/материалом). Результат точный и
       синхронный (status сразу done). Для точных чертежей предпочитай techdraw,
       а generate (диффузия) — для эскизов/иллюстраций без точных размеров.
+      action=accept_techdraw: принять готовый ТОЧНЫЙ чертёж (generation_id) —
+      approval-gated (нужно подтверждение человека), используй ТОЛЬКО для
+      результатов operation=techdraw, не путай с обычным accept.
       Генерация (generate/edit) асинхронная — после неё проверяй get по generation_id.
+      Опционально для generate/techdraw: source_document_id/case_id — привяжи
+      результат к документу/делу для трассируемости (это НЕ то же самое, что
+      source_document_ids — те задают источник изображения для edit/inpaint).
     path: /api/agent/cap/image_studio
     method: POST
-    gate_actions: []
+    gate_actions: [accept_techdraw]
+    non_recipeable_actions: [generate, iterate, accept, accept_techdraw]
     parameters:
       type: object
       properties:
         action:
           type: string
-          description: "generate | techdraw | list | get | accept | iterate | prompt_help | list_workflows"
+          description: "generate | techdraw | list | get | accept | accept_techdraw | iterate | prompt_help | list_workflows"
         operation:
           type: string
           description: "Для generate: generate | edit | inpaint | cleanup"
@@ -802,6 +810,12 @@ capabilities:
         params:
           type: object
           description: "Параметры: seed, steps, cfg, denoise, width, height"
+        source_document_id:
+          type: string
+          description: "Опционально: ID документа, к которому относится результат (трассируемость, не источник изображения)"
+        case_id:
+          type: string
+          description: "Опционально: ID дела (WorkCase), к которому относится результат"
       required: [action]
 
   - name: vault

@@ -45,6 +45,29 @@ def test_build_workflow_skips_missing_node_gracefully():
     assert graph == {"1": {"class_type": "X", "inputs": {}}}
 
 
+def test_build_workflow_controlnet_image_optional():
+    """A workflow declaring controlnet_image in inject_map must stay valid
+    whether or not the caller supplies it — the ControlNet path is opt-in."""
+    template = {
+        "96": {"class_type": "ControlNetApplyAdvanced", "inputs": {"strength": 0.6}},
+        "97": {"class_type": "LoadImage", "inputs": {"image": "placeholder.png"}},
+    }
+    inject_map = {
+        "controlnet_image": {"node": "97", "input": "image"},
+        "controlnet_strength": {"node": "96", "input": "strength"},
+    }
+
+    without = build_workflow(template, inject_map, {})
+    assert without["97"]["inputs"]["image"] == "placeholder.png"  # untouched
+    assert without["96"]["inputs"]["strength"] == 0.6  # untouched
+
+    with_cn = build_workflow(
+        template, inject_map, {"controlnet_image": "edges.png", "controlnet_strength": 0.8}
+    )
+    assert with_cn["97"]["inputs"]["image"] == "edges.png"
+    assert with_cn["96"]["inputs"]["strength"] == 0.8
+
+
 def test_resolve_node_rejects_non_local(monkeypatch):
     monkeypatch.setattr(
         comfyui_client.provider_registry,

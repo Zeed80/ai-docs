@@ -69,3 +69,43 @@ def test_ignores_wired_inputs():
     # lora 'z' not installed and no loras advertised → reported missing,
     # but the wired 'model' input is untouched.
     assert out["2"]["inputs"]["model"] == ["1", 0]
+
+
+def test_controlnet_category_exact_match():
+    info = _object_info(["a.safetensors"], ["x"], ["y"])
+    info["ControlNetLoader"] = {
+        "input": {"required": {"control_net_name": [["qwen-image/instantx/union.safetensors"]]}}
+    }
+    graph = {
+        "9": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "qwen-image/instantx/union.safetensors"}},
+    }
+    out, missing = auto_resolve_models(graph, info)
+    assert not missing
+    assert out["9"]["inputs"]["control_net_name"] == "qwen-image/instantx/union.safetensors"
+
+
+def test_controlnet_category_substitutes_by_basename_tokens():
+    # Installed file lives in a subfolder the requested literal doesn't know about.
+    info = _object_info(["a.safetensors"], ["x"], ["y"])
+    info["ControlNetLoader"] = {
+        "input": {"required": {"control_net_name": [["qwen-image/instantx/Qwen-Image-InstantX-ControlNet-Union.safetensors"]]}}
+    }
+    graph = {
+        "9": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "Qwen-Image-InstantX-ControlNet-Union.safetensors"}},
+    }
+    out, missing = auto_resolve_models(graph, info)
+    assert not missing
+    assert out["9"]["inputs"]["control_net_name"] == (
+        "qwen-image/instantx/Qwen-Image-InstantX-ControlNet-Union.safetensors"
+    )
+
+
+def test_controlnet_category_reports_missing():
+    info = _object_info(["a.safetensors"], ["x"], ["y"])
+    info["ControlNetLoader"] = {"input": {"required": {"control_net_name": [[]]}}}
+    graph = {
+        "9": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "some_other_controlnet.safetensors"}},
+    }
+    out, missing = auto_resolve_models(graph, info)
+    assert len(missing) == 1
+    assert missing[0].category == "controlnet"

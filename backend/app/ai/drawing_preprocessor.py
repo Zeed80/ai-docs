@@ -488,6 +488,28 @@ def _img_to_png_bytes(img: Any) -> bytes:
     return buf.getvalue()
 
 
+def canny_edge_map(image_bytes: bytes, low: int = 50, high: int = 150) -> bytes:
+    """Canny edge map (PNG bytes) for a ControlNet conditioning image.
+
+    Preprocessing happens here (backend), not as a ComfyUI custom node — the
+    node pack that would do this in-graph (comfyui_controlnet_aux) isn't
+    guaranteed to be installed on the ComfyUI host, while cv2 already is (used
+    above for deskew). The edge map is uploaded as a plain image and fed into
+    ControlNetApplyAdvanced's ``image`` input.
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    arr = np.array(img)
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, low, high, apertureSize=3)
+    # ControlNet conditioning images are typically RGB (white edges on black).
+    edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+    return _img_to_png_bytes(Image.fromarray(edges_rgb))
+
+
 def _estimate_dpi(width: int, height: int) -> int:
     """Estimate effective DPI from pixel dimensions (assuming A1 sheet ~594×841mm)."""
     # A1 sheet is 594mm × 841mm

@@ -17,6 +17,7 @@ from typing import Any
 import structlog
 from sqlalchemy.orm import Session
 
+from app.ai.techdraw_reference import STANDARD_RA_SERIES as _VALID_RA_VALUES
 from app.db.models import (
     ManufacturingOperation,
     ManufacturingProcessPlan,
@@ -51,7 +52,6 @@ _CHECKS_META: dict[str, tuple[str, str, str, bool]] = {
 }
 
 _MACHINING_OPS = {"turning", "milling", "drilling", "grinding", "boring", "reaming", "honing", "broaching"}
-_VALID_RA_VALUES = {0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.3, 12.5, 25.0, 50.0, 100.0}
 
 
 def _make_check(
