@@ -90,6 +90,24 @@ class TechDrawRequest(BaseModel):
     case_id: uuid.UUID | None = None
 
 
+def _is_agent_service(user: UserInfo) -> bool:
+    """True for the trusted internal agent identity (see auth.jwt._verify_api_key).
+
+    The capability dispatcher (``/api/agent/cap/*``) never forwards the real
+    chatting user's identity to the proxied REST call — it always presents as
+    this fixed service sub (already granted ``UserRole.admin`` at the auth
+    layer). Endpoints that scope data by ``owner_sub == user.sub`` must treat
+    this identity as authorized for any owner, or every agent-mediated call
+    against image_studio (list/get/accept/iterate/delete) 404s outright —
+    that isn't a hypothetical: it reproduces on the live stack with auth on.
+    """
+    return user.sub == "agent-service"
+
+
+def _owns(gen: ImageGeneration | None, user: UserInfo) -> bool:
+    return gen is not None and (gen.owner_sub == user.sub or _is_agent_service(user))
+
+
 def _gen_out(gen: ImageGeneration) -> dict:
     return {
         "id": str(gen.id),
@@ -205,11 +223,12 @@ async def list_generations(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
+    query = select(ImageGeneration)
+    if not _is_agent_service(user):
+        query = query.where(ImageGeneration.owner_sub == user.sub)
     rows = (
         await db.execute(
-            select(ImageGeneration)
-            .where(ImageGeneration.owner_sub == user.sub)
-            .order_by(ImageGeneration.created_at.desc())
+            query.order_by(ImageGeneration.created_at.desc())
             .limit(min(limit, 200))
             .offset(offset)
         )
@@ -224,7 +243,7 @@ async def get_generation(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     gen = await db.get(ImageGeneration, generation_id)
-    if not gen or gen.owner_sub != user.sub:
+    if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     return _gen_out(gen)
 
@@ -237,7 +256,7 @@ async def get_result(
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
     gen = await db.get(ImageGeneration, generation_id)
-    if not gen or gen.owner_sub != user.sub:
+    if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     path = (gen.thumbnail_path if thumb else gen.result_path) or gen.result_path
     if not path:
@@ -254,7 +273,7 @@ async def get_source(
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
     gen = await db.get(ImageGeneration, generation_id)
-    if not gen or gen.owner_sub != user.sub:
+    if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     paths = gen.source_image_paths or []
     if index >= len(paths):
@@ -287,7 +306,7 @@ async def accept_generation(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     gen = await db.get(ImageGeneration, generation_id)
-    if not gen or gen.owner_sub != user.sub:
+    if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     if gen.status != ImageGenStatus.done:
         raise HTTPException(400, "Можно принять только готовый результат.")
@@ -326,7 +345,7 @@ async def accept_techdraw_generation(
     gating only applies to the agent's capability dispatch, not to humans.
     """
     gen = await db.get(ImageGeneration, generation_id)
-    if not gen or gen.owner_sub != user.sub:
+    if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     if gen.status != ImageGenStatus.done:
         raise HTTPException(400, "Можно принять только готовый результат.")
@@ -345,13 +364,17 @@ async def iterate_generation(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     parent = await db.get(ImageGeneration, generation_id)
-    if not parent or parent.owner_sub != user.sub:
+    if not _owns(parent, user):
         raise HTTPException(404, "Не найдено")
     if not parent.result_path:
         raise HTTPException(400, "У исходной генерации нет результата для итерации.")
 
     gen = ImageGeneration(
-        owner_sub=user.sub,
+        # Inherit the parent's owner, not the caller's — when the agent
+        # iterates on a user's behalf (see _is_agent_service), the new
+        # version must stay visible in that user's own /studio list, not get
+        # orphaned under the internal service identity.
+        owner_sub=parent.owner_sub,
         operation=body.operation or "edit",
         workflow_id=body.workflow_id or parent.workflow_id,
         status=ImageGenStatus.queued,
@@ -375,7 +398,7 @@ async def delete_generation(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     gen = await db.get(ImageGeneration, generation_id)
-    if not gen or gen.owner_sub != user.sub:
+    if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     await db.delete(gen)
     await db.commit()

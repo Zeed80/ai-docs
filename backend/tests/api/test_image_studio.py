@@ -4,6 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+# NOTE: the "agent-service" ownership-bypass tests below exercise pure helper
+# functions directly rather than going through the `client` fixture. The
+# fixture's AUTH_ENABLED=false test mode makes `get_current_user` always
+# return `_DEV_USER` regardless of headers (see auth/jwt.py), so an
+# `X-API-Key` header is silently ignored in tests — the agent-service identity
+# path is only reachable with real auth enabled. This is exactly why the bug
+# these tests guard against (agent-mediated capability calls 404 on every
+# owner-scoped image_studio endpoint, discovered via live-stack testing with
+# AUTH_ENABLED=true) was invisible to the pre-existing test suite.
+
 VALID_SHAFT = {
     "type": "shaft",
     "segments": [{"diameter": 45, "length": 60, "tolerance": "h6", "roughness": 0.8}],
@@ -226,3 +236,39 @@ async def test_techdraw_links_to_document_and_case(client, db_session):
     body = resp.json()
     assert body["source_document_id"] == str(doc.id)
     assert body["case_id"] == str(case.id)
+
+
+def _user(sub: str):
+    from app.auth.models import UserInfo
+
+    return UserInfo(sub=sub, email="x@y.z", name="t", preferred_username="t", roles=[])
+
+
+def test_is_agent_service_identifies_the_internal_service_sub():
+    from app.api.image_generation import _is_agent_service
+
+    assert _is_agent_service(_user("agent-service")) is True
+    assert _is_agent_service(_user("some-real-user-sub")) is False
+
+
+def test_owns_lets_agent_service_bypass_ownership_for_any_record():
+    """Regression test for a live-stack finding: the capability dispatcher
+
+    (`/api/agent/cap/*`) never forwards the real chatting user's identity to
+    the proxied REST call — every agent-mediated request resolves to
+    ``sub="agent-service"`` (see auth.jwt._verify_api_key). Before this fix,
+    every owner-scoped image_studio endpoint (list/get/accept/iterate/delete)
+    404'd for ANY agent-mediated call, making the whole capability
+    non-functional end-to-end whenever AUTH_ENABLED=true.
+    """
+    from app.api.image_generation import _owns
+    from app.db.models import ImageGenStatus, ImageGeneration
+
+    gen = ImageGeneration(
+        owner_sub="real-human-user", operation="techdraw",
+        status=ImageGenStatus.done, params={}, source_image_paths=[],
+    )
+    assert _owns(gen, _user("agent-service")) is True
+    assert _owns(gen, _user("real-human-user")) is True
+    assert _owns(gen, _user("a-different-human")) is False
+    assert _owns(None, _user("agent-service")) is False
