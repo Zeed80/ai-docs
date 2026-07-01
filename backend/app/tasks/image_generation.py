@@ -207,6 +207,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         uploaded: list[str] = []
         for idx, path in enumerate(source_paths):
             content = download_file(path)
+            if operation == "cleanup":
+                # Give diffusion a better-conditioned starting point for a
+                # poor-quality photo (deskew/denoise/contrast) — classical CV,
+                # not diffusion, is what can actually promise this. See
+                # drawing_cleanup.py for why the split exists at all.
+                try:
+                    from app.ai.drawing_cleanup import enhance_source_for_diffusion
+
+                    content = enhance_source_for_diffusion(content)
+                except Exception as exc:  # noqa: BLE001 — best-effort
+                    logger.warning("enhance_source_failed", generation_id=generation_id, error=str(exc))
             server_name = await client.upload_image(content, f"src_{generation_id}_{idx}.png")
             uploaded.append(server_name)
 
@@ -268,6 +279,20 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         prompt_id = await client.queue_workflow(graph)
         outputs = await client.wait_for_result(prompt_id)
         result_bytes = await client.fetch_image(outputs[0])
+
+        # Geometric regularization (cleanup only): diffusion cannot promise a
+        # line that should be straight actually comes out straight (confirmed
+        # live: hatching/contours come out wavy even with ControlNet
+        # conditioning) — binarize, strip speckle artifacts, and snap
+        # near-canonical-angle lines to mathematically straight before text
+        # gets pasted back on top. Best-effort: never fail the generation.
+        if operation == "cleanup":
+            try:
+                from app.ai.drawing_cleanup import regularize_technical_drawing
+
+                result_bytes = regularize_technical_drawing(result_bytes)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("regularize_drawing_failed", generation_id=generation_id, error=str(exc))
 
         # Text preservation (edit/cleanup only): diffusion garbles existing
         # dimension/label text on every pass (confirmed live, with or without
