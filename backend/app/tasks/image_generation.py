@@ -242,6 +242,30 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         outputs = await client.wait_for_result(prompt_id)
         result_bytes = await client.fetch_image(outputs[0])
 
+        # Text preservation (edit/cleanup only): diffusion garbles existing
+        # dimension/label text on every pass (confirmed live, with or without
+        # ControlNet) — paste the original ink back at its OCR-detected
+        # location instead of trusting the model to reproduce it. Best-effort:
+        # never fail the generation over this.
+        if operation in ("edit", "cleanup") and source_paths:
+            try:
+                from app.ai.text_preserve import composite_text_regions, detect_text_regions
+
+                source_for_ocr = download_file(source_paths[0])
+                regions = detect_text_regions(source_for_ocr)
+                if regions:
+                    from PIL import Image as _PILImage
+
+                    src_w, src_h = _PILImage.open(io.BytesIO(source_for_ocr)).size
+                    result_bytes = composite_text_regions(
+                        result_bytes, source_for_ocr, regions, src_w, src_h
+                    )
+                    logger.info(
+                        "text_preserve_applied", generation_id=generation_id, regions=len(regions)
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("text_preserve_failed", generation_id=generation_id, error=str(exc))
+
         result_path = f"{_RESULT_BUCKET_PREFIX}/{owner_sub or 'shared'}/{generation_id}.png"
         upload_file(result_bytes, result_path, "image/png")
 

@@ -29,9 +29,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Runtime deps: libxml2 for lxml, libglib for cairosvg, libffi for cryptography
+# Runtime deps: libxml2 for lxml, libglib for cairosvg, libffi for cryptography,
+# tesseract-ocr(+rus) for pytesseract (drawing balloon OCR, text-preserving edits)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libxml2 libglib2.0-0 libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
+    tesseract-ocr tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy libredwg runtime: binary + shared library

@@ -1,3 +1,10 @@
+# Third-party test drawings (external images, not ours to redistribute — see
+# test-drawings/SOURCES.md + fetch.sh for provenance/licenses and re-download)
+test-drawings/*.jpg
+test-drawings/*.jpeg
+test-drawings/*.png
+test-drawings/*.svg
+
 # Python
 __pycache__/
 *.py[cod]
