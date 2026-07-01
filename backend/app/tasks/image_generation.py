@@ -27,6 +27,31 @@ logger = structlog.get_logger()
 
 _RESULT_BUCKET_PREFIX = "image-gen"
 
+# Applied to every diffusion prompt (generate/edit/cleanup/inpaint — everything
+# that isn't the deterministic `techdraw` path). Two things diffusion won't do
+# on its own: (1) draw in ЕСКД line conventions rather than a generic "blueprint"
+# look, (2) leave off a sheet frame/title block — which it can't render legibly
+# anyway (see text_preserve.py: diffusion garbles text every time), so asking it
+# not to attempt one avoids wasted/corrupted content instead of just tolerating it.
+_ESKD_STYLE_SUFFIX = (
+    ", технический чертёж по ЕСКД: чёрно-белая линейная графика на белом фоне, "
+    "сплошные основные линии контура, тонкие сплошные линии для размеров, "
+    "штрихпунктирные осевые и центровые линии, штриховка сечений под 45°, "
+    "без рамки листа, без углового штампа, без основной надписи, без таблицы"
+)
+_ESKD_NEGATIVE_SUFFIX = (
+    "рамка листа, угловой штамп, основная надпись, таблица спецификации, "
+    "цветной фон, размытие, водяной знак"
+)
+
+
+def _apply_eskd_style(prompt: str | None, negative: str | None) -> tuple[str, str]:
+    p = (prompt or "").strip()
+    n = (negative or "").strip()
+    p = f"{p}{_ESKD_STYLE_SUFFIX}" if p else _ESKD_STYLE_SUFFIX.lstrip(", ")
+    n = f"{n}, {_ESKD_NEGATIVE_SUFFIX}" if n else _ESKD_NEGATIVE_SUFFIX
+    return p, n
+
 
 @celery_app.task(
     bind=True,
@@ -204,6 +229,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         seed = params.get("seed")
         if not seed:  # 0 / None → random so repeated runs differ
             seed = random.randint(1, 2**31 - 1)
+
+        prompt, negative = _apply_eskd_style(prompt, negative)
 
         values: dict = {
             "prompt": prompt,

@@ -48,6 +48,13 @@ class TitleBlock(BaseModel):
     sheet_count: int = 1
     sheet_format: Literal["A4", "A3", "A2", "auto"] = "auto"
     company: str = "AI-DOCS"
+    show_frame: bool = False       # ГОСТ 2.301 рамка листа + штамп формы 1 (2.104).
+                                    # По умолчанию выключено: студия/агент отдают
+                                    # только сам чертёж (вид+размеры+допуски+Ra —
+                                    # то, что реально определяет ЕСКД-соответствие
+                                    # содержания), без административного оформления
+                                    # листа. Явно включить (show_frame=True) — для
+                                    # печати на утверждённом бланке предприятия.
 
 
 class ShaftSegment(BaseModel):
@@ -134,15 +141,34 @@ def _sheet_for(title: TitleBlock, extent_mm: float) -> tdref.SheetFormat:
     return tdref.choose_sheet_format(extent_mm, prefer=prefer)
 
 
-def _new_sheet(fmt: tdref.SheetFormat):
-    """Blank sheet + ГОСТ 2.301 frame (20mm left margin, 5mm others)."""
+def _new_sheet(fmt: tdref.SheetFormat, frame: bool = False):
+    """Blank sheet, optionally with the ГОСТ 2.301 frame (20mm left margin, 5mm
+    others). ``frame=False`` (the default throughout this module) omits the
+    border — callers doing so must also skip ``_title_block`` and should call
+    ``_autocrop_png`` on the rendered PNG so the result isn't a mostly-blank
+    sheet-sized canvas."""
     dwg = svgwrite.Drawing(size=(f"{fmt.width_mm*PX}px", f"{fmt.height_mm*PX}px"),
                            viewBox=f"0 0 {fmt.width_mm} {fmt.height_mm}")
     dwg.add(dwg.rect((0, 0), (fmt.width_mm, fmt.height_mm), fill="white"))
-    dwg.add(dwg.rect((20, 5), (fmt.width_mm - 25, fmt.height_mm - 10), fill="none",
-                     stroke=LINE, stroke_width=THICK))
+    if frame:
+        dwg.add(dwg.rect((20, 5), (fmt.width_mm - 25, fmt.height_mm - 10), fill="none",
+                         stroke=LINE, stroke_width=THICK))
     g = dwg.g()
     return dwg, g
+
+
+def _avail_h(sheet: tdref.SheetFormat, show_frame: bool, extra: float) -> float:
+    """Vertical space for the drawing itself: with the frame off there's no
+    stamp to reserve room for, so the content can use (almost) the full sheet."""
+    reserve = TB_H if show_frame else 0.0
+    return sheet.height_mm - 2 * MARGIN - reserve - extra
+
+
+def _scale_note(dwg, g, x: float, y: float, scale_label: str) -> None:
+    """Scale is real ЕСКД content (ГОСТ 2.109 requires a stated scale) — when
+    the stamp is off (where it normally lives), still print it next to the
+    drawing so this information isn't silently lost."""
+    _txt(dwg, g, x, y, f"М {scale_label}", size=3.0, anchor="start")
 
 
 def _pick_scale(extent_mm: float, avail_mm: float) -> tuple[float, str]:
@@ -339,17 +365,22 @@ def _render_shaft(spec: ShaftSpec, view: str = "front") -> str:
     total_len = sum(s.length for s in spec.segments)
     max_d = max(s.diameter for s in spec.segments)
     sheet = _sheet_for(spec.title, max(total_len, max_d))
+    show_frame = spec.title.show_frame
     avail_w = sheet.width_mm - 2 * MARGIN - 30
-    avail_h = sheet.height_mm - 2 * MARGIN - TB_H - 60
+    avail_h = _avail_h(sheet, show_frame, 60)
     sf, scale_label = _pick_scale(max(total_len, max_d), min(avail_w, avail_h * 2))
 
-    dwg, g = _new_sheet(sheet)
+    dwg, g = _new_sheet(sheet, frame=show_frame)
     cx0 = 35
     cy = MARGIN + 25 + (max_d * sf) / 2
     _draw_shaft(dwg, g, spec, cx0, cy, sf, mode=view)
 
-    dwg.add(g)
-    _title_block(dwg, spec.title, scale_label, "вал", sheet)
+    if show_frame:
+        dwg.add(g)
+        _title_block(dwg, spec.title, scale_label, "вал", sheet)
+    else:
+        _scale_note(dwg, g, cx0, cy + (max_d * sf) / 2 + 32, scale_label)
+        dwg.add(g)
     return dwg.tostring()
 
 
@@ -444,15 +475,20 @@ def _draw_plate(dwg, g, spec: PlateSpec, cx: float, cy: float, sf: float,
 def _render_plate(spec: PlateSpec, view: str = "front") -> str:
     extent = spec.diameter if spec.shape == "circle" else max(spec.width, spec.height)
     sheet = _sheet_for(spec.title, extent)
-    avail = min(sheet.width_mm - 2 * MARGIN - 40, sheet.height_mm - 2 * MARGIN - TB_H - 40)
+    show_frame = spec.title.show_frame
+    avail = min(sheet.width_mm - 2 * MARGIN - 40, _avail_h(sheet, show_frame, 40))
     sf, scale_label = _pick_scale(extent, avail)
 
-    dwg, g = _new_sheet(sheet)
+    dwg, g = _new_sheet(sheet, frame=show_frame)
     cx, cy = 20 + MARGIN + (sheet.width_mm - 2 * MARGIN - 40) / 2, MARGIN + 20 + avail / 2
     _draw_plate(dwg, g, spec, cx, cy, sf, mode=view)
 
-    dwg.add(g)
-    _title_block(dwg, spec.title, scale_label, "плита", sheet)
+    if show_frame:
+        dwg.add(g)
+        _title_block(dwg, spec.title, scale_label, "плита", sheet)
+    else:
+        _scale_note(dwg, g, cx - avail / 2, cy + avail / 2 + 14, scale_label)
+        dwg.add(g)
     return dwg.tostring()
 
 
@@ -487,11 +523,12 @@ def _render_assembly(spec: AssemblySpec, view: str = "front") -> str:
     total_w, total_h = max(xs_max - xs_min, 1.0), max(ys_max - ys_min, 1.0)
 
     sheet = _sheet_for(spec.title, max(total_w, total_h))
+    show_frame = spec.title.show_frame
     avail_w = sheet.width_mm - 2 * MARGIN - 40
-    avail_h = sheet.height_mm - 2 * MARGIN - TB_H - 40
+    avail_h = _avail_h(sheet, show_frame, 40)
     sf, scale_label = _pick_scale(max(total_w, total_h), min(avail_w, avail_h))
 
-    dwg, g = _new_sheet(sheet)
+    dwg, g = _new_sheet(sheet, frame=show_frame)
     cx = 20 + MARGIN + avail_w / 2
     cy = MARGIN + 20 + avail_h / 2
 
@@ -515,10 +552,16 @@ def _render_assembly(spec: AssemblySpec, view: str = "front") -> str:
         g.add(dwg.circle((mark_x, mark_y), 3.2, fill="white", stroke=LINE, stroke_width=THIN))
         _txt(dwg, g, mark_x, mark_y + 1, comp.ref, size=3.0)
 
-    dwg.add(g)
-    if spec.bom:
-        _bom_table(dwg, spec.bom, sheet)
-    _title_block(dwg, spec.title, scale_label, "сборка", sheet)
+    if show_frame:
+        dwg.add(g)
+        if spec.bom:
+            _bom_table(dwg, spec.bom, sheet)
+        _title_block(dwg, spec.title, scale_label, "сборка", sheet)
+    else:
+        _scale_note(dwg, g, 20 + MARGIN, cy + avail_h / 2 + 14, scale_label)
+        dwg.add(g)
+        if spec.bom:
+            _bom_table(dwg, spec.bom, sheet)
     return dwg.tostring()
 
 
@@ -604,11 +647,12 @@ def _render_shaft_iso(spec: ShaftSpec) -> str:
     total_len = sum(s.length for s in spec.segments)
     max_d = max(s.diameter for s in spec.segments)
     sheet = _sheet_for(spec.title, max(total_len * 1.1, max_d))
+    show_frame = spec.title.show_frame
     avail_w = sheet.width_mm - 2 * MARGIN - 40
-    avail_h = sheet.height_mm - 2 * MARGIN - TB_H - 30
+    avail_h = _avail_h(sheet, show_frame, 30)
     sf, scale_label = _pick_scale(max(total_len * 1.1, max_d), min(avail_w, avail_h * 2.2))
 
-    dwg, g = _new_sheet(sheet)
+    dwg, g = _new_sheet(sheet, frame=show_frame)
 
     cx0 = 45
     cy = MARGIN + 30 + (max_d * sf) / 2
@@ -639,8 +683,12 @@ def _render_shaft_iso(spec: ShaftSpec) -> str:
 
     _txt(dwg, g, (cx0 + x) / 2, cy + max_d * sf / 2 + 12,
          f"Изометрия · L={total_len:g}", size=3.0)
-    dwg.add(g)
-    _title_block(dwg, spec.title, scale_label, "вал", sheet)
+    if show_frame:
+        dwg.add(g)
+        _title_block(dwg, spec.title, scale_label, "вал", sheet)
+    else:
+        _scale_note(dwg, g, cx0, cy + max_d * sf / 2 + 20, scale_label)
+        dwg.add(g)
     return dwg.tostring()
 
 
@@ -648,8 +696,9 @@ def _render_plate_iso(spec: PlateSpec) -> str:
     """Pictorial 3D view of a plate/flange: extruded prism/cylinder with depth."""
     extent = spec.diameter if spec.shape == "circle" else max(spec.width, spec.height)
     sheet = _sheet_for(spec.title, extent * 1.3)
+    show_frame = spec.title.show_frame
     sf, scale_label = _pick_scale(extent * 1.3, sheet.width_mm - 2 * MARGIN - 60)
-    dwg, g = _new_sheet(sheet)
+    dwg, g = _new_sheet(sheet, frame=show_frame)
     cx, cy = 110, 90
     depth = spec.thickness * sf
     dxv, dyv = depth * 0.7, -depth * 0.4  # iso offset
@@ -677,8 +726,12 @@ def _render_plate_iso(spec: PlateSpec) -> str:
         _txt(dwg, g, cx, cy + h / 2 + 10, f"{spec.width:g}×{spec.height:g}×{spec.thickness:g}", size=3.0)
 
     _txt(dwg, g, cx, 24, "Изометрия", size=3.0)
-    dwg.add(g)
-    _title_block(dwg, spec.title, scale_label, "плита", sheet)
+    if show_frame:
+        dwg.add(g)
+        _title_block(dwg, spec.title, scale_label, "плита", sheet)
+    else:
+        _scale_note(dwg, g, cx - extent * sf * 0.5, cy + extent * sf * 0.4, scale_label)
+        dwg.add(g)
     return dwg.tostring()
 
 
@@ -705,7 +758,11 @@ SPEC_SYSTEM_PROMPT = (
     "(0.8/1.6/3.2/6.3); thread — метрическая резьба ('M20×1.5') или '' если нет; "
     "для plate координаты отверстий x,y от центра. view может быть front|isometric|section|half_section "
     "(section/half_section — разрез со штриховкой; для показа внутренней расточки задай bore_diameter). "
-    "Подбирай реалистичные значения и материал по ГОСТ, если не заданы. Верни ОДИН JSON-объект."
+    "Подбирай реалистичные значения и материал по ГОСТ, если не заданы. "
+    "title.show_frame по умолчанию false — рамка листа и угловой штамп НЕ рисуются, отдаётся только "
+    "сам чертёж (вид, размеры, допуски, шероховатость — это и есть соответствие ЕСКД по содержанию); "
+    "укажи title.show_frame=true, только если пользователь явно просит рамку/штамп/бланк. "
+    "Верни ОДИН JSON-объект."
 )
 
 
@@ -726,11 +783,37 @@ def render_spec_to_svg(spec: dict, view: str = "front") -> str:
     raise ValueError(f"Неизвестный тип чертежа: {kind!r} (ожидается shaft|plate|assembly)")
 
 
+def _autocrop_png(png_bytes: bytes, pad_px: int = 24) -> bytes:
+    """Crop a rendered sheet-sized PNG down to its actual content — with
+    ``show_frame=False`` there's no visible sheet border to justify keeping
+    the full A4/A3/A2 canvas; the result should be just the drawing."""
+    from PIL import Image, ImageChops
+
+    img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    bg = Image.new("RGB", img.size, (255, 255, 255))
+    bbox = ImageChops.difference(img, bg).getbbox()
+    if bbox is None:
+        return png_bytes
+    x0, y0, x1, y1 = bbox
+    x0, y0 = max(0, x0 - pad_px), max(0, y0 - pad_px)
+    x1, y1 = min(img.width, x1 + pad_px), min(img.height, y1 + pad_px)
+    buf = io.BytesIO()
+    img.crop((x0, y0, x1, y1)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _spec_show_frame(spec: dict) -> bool:
+    return bool(spec.get("title", {}).get("show_frame", False))
+
+
 def render_spec_to_png(spec: dict, scale: float = 2.0, view: str = "front") -> bytes:
     import cairosvg
 
     svg = render_spec_to_svg(spec, view=view)
-    return cairosvg.svg2png(bytestring=svg.encode("utf-8"), scale=scale)
+    png = cairosvg.svg2png(bytestring=svg.encode("utf-8"), scale=scale)
+    if not _spec_show_frame(spec):
+        png = _autocrop_png(png)
+    return png
 
 
 def _dxf_draw_shaft(msp, s: ShaftSpec, ox: float = 0.0, oy: float = 0.0) -> None:

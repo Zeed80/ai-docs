@@ -60,3 +60,18 @@ def test_non_transient_error_is_not_retried(monkeypatch):
 
     assert calls["n"] == 1  # no retry attempted
     assert result.failed()
+
+
+def test_apply_eskd_style_appends_to_user_prompt():
+    prompt, negative = img_gen_task._apply_eskd_style("вал 50h6", "размытие")
+    assert prompt.startswith("вал 50h6")
+    assert "ЕСКД" in prompt
+    assert "без рамки листа" in prompt and "без углового штампа" in prompt
+    assert negative.startswith("размытие")
+    assert "угловой штамп" in negative
+
+
+def test_apply_eskd_style_handles_empty_prompt_and_negative():
+    prompt, negative = img_gen_task._apply_eskd_style(None, None)
+    assert prompt.startswith("технический чертёж по ЕСКД")
+    assert negative == img_gen_task._ESKD_NEGATIVE_SUFFIX

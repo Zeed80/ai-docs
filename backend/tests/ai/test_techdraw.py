@@ -36,7 +36,16 @@ def test_shaft_svg_has_exact_dims_and_tolerances():
     assert "Ra 0.8" in svg and "Ra 1.6" in svg
     # overall length = sum of segment lengths, computed exactly
     assert ">125<" in svg
-    # ГОСТ title block fields
+    # show_frame defaults to False: no sheet frame/stamp — just the drawing,
+    # with the scale still stated (ГОСТ 2.109 requires it even without a stamp)
+    assert "М 1:1" in svg
+    assert "Масштаб" not in svg
+    assert "Сталь 40Х ГОСТ 4543-2016" not in svg
+
+
+def test_shaft_svg_with_frame_has_gost_title_block():
+    spec = {**SHAFT, "title": {**SHAFT["title"], "show_frame": True}}
+    svg = techdraw.render_spec_to_svg(spec)
     assert "Сталь 40Х ГОСТ 4543-2016" in svg
     assert "Масштаб" in svg
 
@@ -45,6 +54,13 @@ def test_plate_svg_has_bolt_circle_and_fits():
     svg = techdraw.render_spec_to_svg(PLATE)
     assert "Ø120" in svg and "Ø40H7" in svg and "Ø90" in svg
     assert "6×Ø11H12" in svg
+    # no frame by default → part name (only ever shown in the title block) is absent
+    assert "Фланец" not in svg
+
+
+def test_plate_svg_with_frame_shows_part_name():
+    spec = {**PLATE, "title": {**PLATE["title"], "show_frame": True}}
+    svg = techdraw.render_spec_to_svg(spec)
     assert "Фланец" in svg
 
 
@@ -150,7 +166,38 @@ def test_explicit_sheet_format_honored():
 
 
 def test_title_block_new_gost_2104_fields():
-    spec = {**SHAFT, "title": {**SHAFT["title"], "mass_kg": 1.2, "litera": "У",
-                                "checked_by": "Иванов", "sheet_no": 1, "sheet_count": 1}}
+    spec = {**SHAFT, "title": {**SHAFT["title"], "show_frame": True, "mass_kg": 1.2,
+                                "litera": "У", "checked_by": "Иванов", "sheet_no": 1,
+                                "sheet_count": 1}}
     svg = techdraw.render_spec_to_svg(spec)
     assert "1.2" in svg and "У" in svg and "Иванов" in svg
+
+
+def test_png_autocrops_when_frame_is_off():
+    from PIL import Image
+    import io as _io
+
+    png_no_frame = techdraw.render_spec_to_png(SHAFT)
+    spec_framed = {**SHAFT, "title": {**SHAFT["title"], "show_frame": True}}
+    png_framed = techdraw.render_spec_to_png(spec_framed)
+
+    img_no_frame = Image.open(_io.BytesIO(png_no_frame))
+    img_framed = Image.open(_io.BytesIO(png_framed))
+    # Framed render is the full A4 sheet; frame-less is cropped to content —
+    # meaningfully smaller in both dimensions, not just a coincidence of scale.
+    assert img_no_frame.width < img_framed.width
+    assert img_no_frame.height < img_framed.height
+
+
+def test_assembly_svg_no_frame_by_default():
+    spec = {
+        "type": "assembly",
+        "components": [
+            {"ref": "1", "spec": {**PLATE, "title": {}}, "x": 0, "y": 0},
+        ],
+        "bom": [{"pos": 1, "name": "Фланец", "qty": 1}],
+        "title": {"name": "Сборка"},
+    }
+    svg = techdraw.render_spec_to_svg(spec)
+    assert "Сборка" not in svg  # part name only ever drawn in the (now-off) title block
+    assert "Фланец" in svg  # BOM table is real content, always shown
