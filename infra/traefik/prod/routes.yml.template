@@ -34,6 +34,21 @@ http:
         - rate-limit
       priority: 1
 
+    # Embedded live ComfyUI UI (studio Workflow tab, backend/app/api/comfyui_proxy.py).
+    # Needs its own router, higher priority than backend-api: it legitimately
+    # bursts 50+ requests (JS/CSS chunks) on a single page load — Traefik's
+    # `rate-limit` (average 100/s, burst 50) trips 429s on real page loads —
+    # and `security-headers`' frameDeny would break the iframe embedding
+    # outright (the app's own SAMEORIGIN header from FastAPI is enough; this
+    # route is already behind get_current_user in comfyui_proxy.py).
+    backend-comfyui-proxy:
+      rule: "PathPrefix(`/api/comfyui-proxy`)"
+      service: backend
+      entryPoints: [web, websecure]
+      tls:
+        certResolver: letsencrypt
+      priority: 150
+
     backend-api:
       rule: "PathPrefix(`/api`)"
       service: backend

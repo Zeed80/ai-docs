@@ -10,7 +10,17 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-_EXEMPT_PATH_PREFIXES = ("/api/auth/",)
+# The embedded ComfyUI UI (studio Workflow tab) makes its own POST/PUT calls
+# (settings, userdata saves, custom-node extensions) straight from ComfyUI's
+# own JS — it has no way to attach our `X-CSRF-Token` header, it doesn't know
+# this app's custom scheme exists. Confirmed live: without this exemption
+# ComfyUI's own internal requests get a blanket 403 and it never finishes
+# initializing. This isn't a bare CSRF hole: `access_token` is
+# `SameSite=Lax` (see app/api/auth.py) — cross-*site* state-changing requests
+# already don't carry the cookie at all, which is the actual threat this
+# middleware defends against; this route's own auth (get_current_user in
+# comfyui_proxy.py) still gates it the same as every other endpoint.
+_EXEMPT_PATH_PREFIXES = ("/api/auth/", "/api/comfyui-proxy/")
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):

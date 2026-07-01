@@ -427,8 +427,9 @@
       "disable": "Выключить",
       "delete": "Удалить",
       "open_in_comfyui": "Открыть в ComfyUI",
-      "opening": "Открываем…",
-      "pushed_hint": "Сохранено как «{filename}» — откройте через меню Workflow → Open в ComfyUI слева.",
+      "save_to_comfyui": "Сохранить в файлы ComfyUI",
+      "saving": "Сохраняем…",
+      "saved_hint": "Сохранено в ComfyUI как «{filename}» (появится в его собственном списке Workflow).",
       "builtin_readonly": "Встроенный воркфлоу нельзя редактировать. Сделайте копию, чтобы менять граф."
     },
     "models": {

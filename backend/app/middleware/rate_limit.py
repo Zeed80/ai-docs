@@ -19,6 +19,15 @@ _LOGIN_PATHS = {
     "/api/auth/qr-login/redeem",
 }
 
+# The embedded ComfyUI UI (Workflow tab) loads dozens of static asset files
+# (JS/CSS chunks) plus its own API/WS traffic on a single page view — that's
+# normal SPA browsing, not abuse, and would otherwise burn through the shared
+# per-IP /api/ budget in seconds (confirmed live: real browser load tripped
+# 429s on ComfyUI's own asset requests). It's still behind `get_current_user`
+# in comfyui_proxy.py, so exempting it from rate limiting doesn't open it to
+# unauthenticated abuse.
+_RATE_LIMIT_EXEMPT_PREFIXES = ("/api/comfyui-proxy/",)
+
 # In-memory fallback: tracks (ip, bucket) → count for login paths when Redis is down.
 # Deque caps at 4096 entries so it never grows unbounded.
 _FALLBACK_LOGIN_LIMIT = 10  # requests per minute per IP
@@ -35,6 +44,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path in _LOGIN_PATHS:
             limit = settings.rate_limit_login_per_minute
             key_suffix = "login"
+        elif any(path.startswith(p) for p in _RATE_LIMIT_EXEMPT_PREFIXES):
+            return await call_next(request)
         elif path.startswith("/api/"):
             limit = settings.rate_limit_api_per_minute
             key_suffix = "api"

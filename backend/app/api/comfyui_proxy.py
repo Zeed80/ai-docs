@@ -51,18 +51,89 @@ def _comfyui_base_url() -> str:
     return ComfyUIClient.from_registry().base_url
 
 
-def _inject_base_href(html: str) -> str:
+# Bridges a `postMessage` from our own parent page straight into ComfyUI's
+# own internal load path — `window.comfyAPI.app.app` is the same App
+# singleton ComfyUI itself calls `.loadApiJson(graph, name)` on when a user
+# drags an API-format JSON file onto the canvas (confirmed by reading
+# ComfyUI's own bundled JS: `if(this.isApiJson(e)){this.loadApiJson(e,r);
+# return}` in its file-drop handler) — so this is not a hack layered on top,
+# it's the exact same call ComfyUI makes for itself. Our stored
+# ``ComfyWorkflow.graph`` is already in that API/prompt format, so no
+# conversion is needed. Without this, "opening" a workflow only saves it to
+# ComfyUI's userdata folder and the user still has to go find it via
+# ComfyUI's own Workflow menu — this makes it appear on the canvas instantly.
+#
+# Served as an EXTERNAL same-origin script (not injected inline) because the
+# app's global CSP is `script-src 'self'` — a real browser blocks inline
+# `<script>` tags outright regardless of content (confirmed live: an inline
+# version silently no-op'd, browser console showed a CSP violation that
+# httpx-based testing never surfaces since it doesn't enforce CSP at all).
+#
+# `app.rootGraph` existing is NOT enough to call `loadApiJson` yet: ComfyUI
+# registers its (and every custom node pack's) node types in a staggered,
+# asynchronous process that keeps running for several seconds *after*
+# `rootGraph` is already available — calling `loadApiJson` too early silently
+# treats every node as unknown and adds nothing (confirmed live: identical
+# call succeeded with 12s of extra wait, failed with none, no exception
+# either time — `loadApiJson` doesn't surface "not ready yet" as an error).
+# So this doesn't just poll for the function to exist — it calls it, checks
+# whether the graph actually gained nodes, and retries the whole call if not.
+_BRIDGE_JS = """
+(function () {
+  function getApp() {
+    return window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app;
+  }
+  window.addEventListener("message", function (ev) {
+    if (ev.origin !== window.location.origin) return;
+    if (!ev.data || ev.data.type !== "ai-docs-load-workflow") return;
+    var graph = ev.data.graph, name = ev.data.name || "workflow";
+    var expectedCount = Object.keys(graph || {}).length;
+    (function tryLoad(retriesLeft) {
+      var app = getApp();
+      if (app && app.rootGraph && typeof app.loadApiJson === "function") {
+        try {
+          app.loadApiJson(graph, name);
+          var gotCount = app.rootGraph._nodes ? app.rootGraph._nodes.length : 0;
+          if (gotCount >= expectedCount && expectedCount > 0) return;
+        } catch (e) {
+          console.error("ai-docs-load-workflow failed", e);
+        }
+      }
+      if (retriesLeft > 0) setTimeout(function () { tryLoad(retriesLeft - 1); }, 1000);
+      else console.error("ai-docs-load-workflow: gave up after retries, node types may still be registering");
+    })(25);
+  });
+})();
+"""
+
+_BRIDGE_JS_PATH = "__bridge.js"
+
+
+def _inject_scaffolding(html: str) -> str:
     """So every relative request ComfyUI's JS makes resolves under our mount
-    point instead of the page's own origin root."""
+    point instead of the page's own origin root — plus a same-origin
+    `<script src>` for the postMessage bridge (see `_BRIDGE_JS`)."""
     import re
 
-    tag = f'<base href="{PROXY_MOUNT}/">'
+    tag = (
+        f'<base href="{PROXY_MOUNT}/">'
+        f'<script src="{PROXY_MOUNT}/{_BRIDGE_JS_PATH}"></script>'
+    )
     if "<head>" in html:
         return html.replace("<head>", f"<head>{tag}", 1)
     new_html, n = re.subn(r"(<head[^>]*>)", rf"\1{tag}", html, count=1)
     return new_html if n else tag + html
 
 
+@router.get(f"/{_BRIDGE_JS_PATH}")
+async def bridge_js(user: UserInfo = Depends(get_current_user)) -> Response:
+    return Response(content=_BRIDGE_JS, media_type="application/javascript")
+
+
+# Registered BEFORE the catch-all below: Starlette matches HTTP routes in
+# declaration order, and `/{path:path}` matches any suffix including
+# `__bridge.js` — without this ordering the catch-all would shadow it and
+# forward the request to ComfyUI instead of serving our own script.
 @router.api_route(
     "/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 )
@@ -100,7 +171,7 @@ async def proxy(
         raw = await upstream_resp.aread()
         await upstream_resp.aclose()
         await client.aclose()
-        html = _inject_base_href(raw.decode("utf-8", errors="replace"))
+        html = _inject_scaffolding(raw.decode("utf-8", errors="replace"))
         return Response(
             content=html.encode("utf-8"),
             status_code=upstream_resp.status_code,

@@ -33,6 +33,17 @@ const securityHeaders = [
   { key: "Content-Security-Policy", value: csp },
 ];
 
+// /studio embeds the live ComfyUI UI (Workflow tab) in a same-origin iframe
+// pointed at our own authenticated backend proxy (backend/app/api/
+// comfyui_proxy.py) — the site-wide `frame-src 'none'` above blocks that
+// outright (confirmed live: the iframe never even attempted a network
+// request, browser silently enforced CSP client-side). Scoped to this one
+// route only; every other page keeps the strict no-framing default.
+const studioCsp = csp.replace("frame-src 'none'", "frame-src 'self'");
+const studioHeaders = securityHeaders.map((h) =>
+  h.key === "Content-Security-Policy" ? { ...h, value: studioCsp } : h,
+);
+
 const nextConfig: NextConfig = {
   output: "standalone",
   // Allow HMR from local network so changes are visible when accessed via 192.168.x.x
@@ -43,7 +54,10 @@ const nextConfig: NextConfig = {
     "172.16.0.0/12",
   ],
   async headers() {
-    return [{ source: "/(.*)", headers: securityHeaders }];
+    return [
+      { source: "/(.*)", headers: securityHeaders },
+      { source: "/studio", headers: studioHeaders },
+    ];
   },
   // /api/* is handled by the Route Handler (runtime BACKEND_URL).
   // /ws/* uses a rewrite because Route Handlers don't support WebSocket upgrades;

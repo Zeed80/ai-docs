@@ -427,8 +427,9 @@
       "disable": "Disable",
       "delete": "Delete",
       "open_in_comfyui": "Open in ComfyUI",
-      "opening": "Opening…",
-      "pushed_hint": "Saved as \"{filename}\" — open it via Workflow → Open in ComfyUI on the left.",
+      "save_to_comfyui": "Save to ComfyUI files",
+      "saving": "Saving…",
+      "saved_hint": "Saved in ComfyUI as \"{filename}\" (shows up in its own Workflow list).",
       "builtin_readonly": "Built-in workflows can't be edited. Make a copy to change the graph."
     },
     "models": {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   COMFYUI_PROXY_URL,
@@ -19,9 +19,9 @@ export default function WorkflowPanel() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<Workflow | null>(null);
-  const [pushMsg, setPushMsg] = useState<string | null>(null);
-  const [pushing, setPushing] = useState(false);
-  const [iframeNonce, setIframeNonce] = useState(0);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   async function load() {
     setLoading(true);
@@ -44,29 +44,41 @@ export default function WorkflowPanel() {
     return acc;
   }, {});
 
-  function selectWorkflow(w: Workflow) {
-    setPushMsg(null);
-    setSelected((cur) => (cur?.id === w.id ? null : w));
+  /** Loads the graph straight onto the embedded ComfyUI canvas — no manual
+   * navigation in ComfyUI's own UI needed. Bridged via a script our proxy
+   * injects into ComfyUI's HTML (see backend/app/api/comfyui_proxy.py),
+   * which calls the same `app.loadApiJson(...)` ComfyUI itself uses when a
+   * user drags an API-format JSON file onto its canvas. */
+  function openOnCanvas(w: Workflow) {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    win.postMessage(
+      { type: "ai-docs-load-workflow", graph: w.graph, name: w.title },
+      window.location.origin,
+    );
   }
 
-  async function handlePush() {
+  function selectWorkflow(w: Workflow) {
+    setSaveMsg(null);
+    setSelected((cur) => (cur?.id === w.id ? null : w));
+    openOnCanvas(w);
+  }
+
+  async function handleSaveToComfyUI() {
     if (!selected) return;
-    setPushing(true);
-    setPushMsg(null);
+    setSaving(true);
+    setSaveMsg(null);
     try {
       const r = await pushWorkflowToComfyUI(selected.id);
-      setPushMsg(
-        t("pushed_hint", {
+      setSaveMsg(
+        t("saved_hint", {
           filename: r.filename.split("/").pop() ?? r.filename,
         }),
       );
-      // ComfyUI's own userdata cache is refreshed on reload — its Workflow
-      // browser then shows the file we just saved.
-      setIframeNonce((n) => n + 1);
     } catch (e) {
-      setPushMsg(String((e as Error).message || e));
+      setSaveMsg(String((e as Error).message || e));
     } finally {
-      setPushing(false);
+      setSaving(false);
     }
   }
 
@@ -76,7 +88,7 @@ export default function WorkflowPanel() {
           space — this is where nodes are actually visible/editable. */}
       <div className="relative flex-1 min-w-0 bg-black/20">
         <iframe
-          key={iframeNonce}
+          ref={iframeRef}
           src={COMFYUI_PROXY_URL}
           className="absolute inset-0 h-full w-full border-0"
           title="ComfyUI"
@@ -114,11 +126,17 @@ export default function WorkflowPanel() {
               )}
               <div className="flex flex-wrap gap-2">
                 <button
-                  onClick={handlePush}
-                  disabled={pushing}
-                  className="px-2.5 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 text-xs disabled:opacity-50"
+                  onClick={() => openOnCanvas(selected)}
+                  className="px-2.5 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 text-xs"
                 >
-                  {pushing ? t("opening") : t("open_in_comfyui")}
+                  {t("open_in_comfyui")}
+                </button>
+                <button
+                  onClick={handleSaveToComfyUI}
+                  disabled={saving}
+                  className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-xs disabled:opacity-50"
+                >
+                  {saving ? t("saving") : t("save_to_comfyui")}
                 </button>
                 <button
                   onClick={async () => {
@@ -154,8 +172,8 @@ export default function WorkflowPanel() {
                   </button>
                 )}
               </div>
-              {pushMsg && (
-                <p className="text-[11px] text-emerald-400">{pushMsg}</p>
+              {saveMsg && (
+                <p className="text-[11px] text-emerald-400">{saveMsg}</p>
               )}
               {selected.is_builtin && (
                 <p className="text-[11px] text-amber-400/80">

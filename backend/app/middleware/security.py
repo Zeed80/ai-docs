@@ -12,6 +12,19 @@ from starlette.responses import Response
 
 logger = structlog.get_logger()
 
+# The embedded live ComfyUI UI (studio Workflow tab) is a heavy third-party
+# SPA we don't control the internals of — it needs `eval` (ICU message-format
+# compilation in its i18n library), inline WASM (`data:` URIs) and `blob:`
+# Web Workers to function at all, confirmed live: with the app's normal CSP
+# applied, ComfyUI's own JS threw CSP violations on all three and never
+# finished booting ("ComfyApp graph accessed before initialization"). CSP
+# exists to contain OUR OWN app's content against XSS — that threat model
+# doesn't apply to a self-hosted service we already trust and gate behind
+# `get_current_user` in comfyui_proxy.py; skip it there rather than chase a
+# looser policy that both changes with every ComfyUI frontend release and
+# never guarantees full coverage of what its bundlers happen to need.
+_CSP_EXEMPT_PATH_PREFIXES = ("/api/comfyui-proxy/",)
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -35,7 +48,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         from app.config import settings
 
-        if settings.csp_enabled:
+        csp_exempt = any(
+            request.url.path.startswith(p) for p in _CSP_EXEMPT_PATH_PREFIXES
+        )
+        if settings.csp_enabled and not csp_exempt:
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 "script-src 'self'; "
