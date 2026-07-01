@@ -421,14 +421,15 @@
         "process": "Process",
         "compose": "Compose"
       },
-      "builtin": "built-in",
-      "select_hint": "Select a workflow on the left to see its graph and settings.",
+      "close": "Close",
       "duplicate": "Duplicate",
       "enable": "Enable",
       "disable": "Disable",
       "delete": "Delete",
-      "builtin_readonly": "Built-in workflows can't be edited. Make a copy to change the graph.",
-      "graph_json": "Graph (API JSON)"
+      "open_in_comfyui": "Open in ComfyUI",
+      "opening": "Opening…",
+      "pushed_hint": "Saved as \"{filename}\" — open it via Workflow → Open in ComfyUI on the left.",
+      "builtin_readonly": "Built-in workflows can't be edited. Make a copy to change the graph."
     },
     "models": {
       "title": "Models",

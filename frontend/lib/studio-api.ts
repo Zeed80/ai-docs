@@ -191,6 +191,23 @@ export async function deleteWorkflow(id: string): Promise<void> {
   await jsonOrThrow(res);
 }
 
+/** Saves this workflow's graph into ComfyUI's own userdata/workflows folder
+ * so it appears in the embedded ComfyUI UI's own Workflow browser. */
+export async function pushWorkflowToComfyUI(
+  id: string,
+): Promise<{ ok: boolean; filename: string }> {
+  const res = await mutFetch(`${BASE}/workflows/${id}/push-to-comfyui`, {
+    method: "POST",
+  });
+  return jsonOrThrow(res);
+}
+
+/** URL for the embedded live ComfyUI UI (authenticated reverse proxy — same-
+ * origin as the API, so the existing session cookie carries through
+ * automatically; must keep the trailing slash — ComfyUI's own frontend
+ * derives its API base path from `location.pathname`). */
+export const COMFYUI_PROXY_URL = `${API}/api/comfyui-proxy/`;
+
 /** URL for the result/thumbnail/source image (served by the backend, auth via cookie). */
 export function resultUrl(id: string, thumb = false): string {
   return `${BASE}/${id}/result${thumb ? "?thumb=true" : ""}`;

@@ -103,6 +103,49 @@ async def test_duplicate_then_delete_builtin_copy(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_push_workflow_to_comfyui_saves_graph_to_userdata(client, db_session, monkeypatch):
+    import httpx as httpx_mod
+
+    from app.db.seeds.comfyui_workflows import seed_builtin_workflows
+
+    await seed_builtin_workflows(db_session)
+    items = (await client.get("/api/image-gen/workflows/list")).json()["items"]
+    wf = next(w for w in items if w["key"] == "edit_qwen_image_edit")
+
+    captured = {}
+
+    def handler(request: httpx_mod.Request) -> httpx_mod.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = request.content
+        return httpx_mod.Response(200, text="workflows/edit_qwen_image_edit.json")
+
+    class _FakeAsyncClient(httpx_mod.AsyncClient):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx_mod.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    # `image_generation.py` does `import httpx` at module level, so this is
+    # the same module object it uses — no need to patch the import site too.
+    monkeypatch.setattr(httpx_mod, "AsyncClient", _FakeAsyncClient)
+
+    resp = await client.post(f"/api/image-gen/workflows/{wf['id']}/push-to-comfyui")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["filename"] == "workflows/edit_qwen_image_edit.json"
+    assert "userdata/" in captured["url"]
+    assert b"class_type" in captured["body"] or captured["body"]  # real graph JSON, not empty
+
+
+@pytest.mark.asyncio
+async def test_push_workflow_to_comfyui_returns_404_for_missing_workflow(client):
+    resp = await client.post(
+        "/api/image-gen/workflows/00000000-0000-0000-0000-000000000099/push-to-comfyui"
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_techdraw_direct_spec_valid_renders(client):
     resp = await client.post("/api/image-gen/techdraw", json={"spec": VALID_SHAFT})
     assert resp.status_code == 200

@@ -14,7 +14,9 @@ from __future__ import annotations
 import json
 import uuid
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
@@ -513,6 +515,43 @@ async def delete_workflow(
     await db.delete(wf)
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/workflows/{workflow_id}/push-to-comfyui")
+async def push_workflow_to_comfyui(
+    workflow_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Save this workflow's graph into ComfyUI's own userdata/workflows folder
+    so it shows up in the embedded ComfyUI UI's Workflow browser (the studio's
+    graph is stored in "API/prompt" format, not ComfyUI's visual-editor
+    format with node positions — ComfyUI can still open it via its own
+    "Load" dialog, it just auto-arranges nodes since no layout is saved)."""
+    import re
+
+    wf = await db.get(ComfyWorkflow, workflow_id)
+    if not wf:
+        raise HTTPException(404, "Не найдено")
+
+    slug = re.sub(r"[^a-zA-Z0-9_\-]+", "_", wf.key).strip("_") or str(workflow_id)
+    filename = f"workflows/{slug}.json"
+
+    from app.ai.comfyui_client import ComfyUIClient
+
+    client = ComfyUIClient.from_registry()
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        try:
+            resp = await http.post(
+                f"{client.base_url}/userdata/{quote(filename, safe='')}",
+                params={"overwrite": "true"},
+                json=wf.graph,
+            )
+        except httpx.RequestError as exc:
+            raise HTTPException(502, f"ComfyUI сервер сейчас недоступен: {exc}") from None
+    if resp.status_code >= 400:
+        raise HTTPException(502, f"ComfyUI отклонил сохранение: {resp.status_code} {resp.text[:200]}")
+    return {"ok": True, "filename": filename}
 
 
 # ── Prompt helper ────────────────────────────────────────────────────────────

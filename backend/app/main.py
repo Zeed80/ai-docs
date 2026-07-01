@@ -86,6 +86,7 @@ from app.api import devices as devices_api
 from app.api import mobile_build as mobile_build_api
 from app.api import image_generation as image_generation_api
 from app.api import comfyui_admin as comfyui_admin_api
+from app.api import comfyui_proxy as comfyui_proxy_api
 from app.api import admin_graph as admin_graph_api
 from app.api import maintenance as maintenance_api
 from app.api import dynamic_skill_runner
@@ -398,6 +399,12 @@ def create_app() -> FastAPI:
     app.include_router(mobile_build_api.router, prefix="/api/mobile-build", tags=["mobile-build"], dependencies=_auth)
     app.include_router(image_generation_api.router, prefix="/api/image-gen", tags=["image-studio"], dependencies=_auth)
     app.include_router(comfyui_admin_api.router, prefix="/api/comfyui-admin", tags=["image-studio"], dependencies=_auth)
+    # No router-level `dependencies=_auth` here: the proxy's own routes already
+    # call `get_current_user` explicitly (HTTP route via Depends, WS route via
+    # Depends too) — this avoids resolving the dependency twice per request
+    # and keeps the module self-contained/testable without relying on how
+    # it happens to be registered.
+    app.include_router(comfyui_proxy_api.router, prefix=comfyui_proxy_api.PROXY_MOUNT, tags=["image-studio"])
 
     # ── Public mobile-app distribution (no auth) ──────────────────────────────
     # APK + version.json are served at /download; assetlinks.json for Android App Links.
