@@ -8,7 +8,9 @@
     "prompt": {"node": "6", "input": "text"},
     "seed": {"node": "3", "input": "seed"},
     "width": {"node": "5", "input": "width"},
-    "height": {"node": "5", "input": "height"}
+    "height": {"node": "5", "input": "height"},
+    "steps": {"node": "3", "input": "steps"},
+    "cfg": {"node": "3", "input": "cfg"}
   },
   "params_schema": {
     "seed": {"type": "int", "default": 0, "label": "Seed (0 = случайный)"},

@@ -33,6 +33,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [prompt, setPrompt] = useState("");
   const [negative, setNegative] = useState("");
   const [seed, setSeed] = useState<string>("0");
+  const [quality, setQuality] = useState<"fast" | "quality">("fast");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -119,7 +120,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
         operation,
         prompt: prompt || undefined,
         negative_prompt: negative || undefined,
-        params: { seed: Number(seed) || 0 },
+        params: { seed: Number(seed) || 0, quality },
         source_image_paths: [],
         ...link,
       };
@@ -238,6 +239,38 @@ export default function StudioComposer({ onSubmitted }: Props) {
                 {t(o.labelKey)}
               </button>
             ))}
+          </div>
+
+          {/* Speed/quality tradeoff: measured live, the fast preset
+              (Lightning LoRA, 4 steps) never once performed a real edit
+              instruction across 6+ test runs — quality mode did roughly
+              half the time (diffusion sampling isn't fully seed-
+              deterministic here), at several times the generation time. */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs text-zinc-500">
+                {t("quality_label")}
+              </span>
+              <span className="text-[11px] text-zinc-600">
+                {quality === "quality"
+                  ? t("quality_hint_quality")
+                  : t("quality_hint_fast")}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-1 p-1 rounded bg-white/5">
+              <button
+                onClick={() => setQuality("fast")}
+                className={`px-3 py-1.5 rounded text-sm ${quality === "fast" ? "bg-sky-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+              >
+                {t("quality_fast")}
+              </button>
+              <button
+                onClick={() => setQuality("quality")}
+                className={`px-3 py-1.5 rounded text-sm ${quality === "quality" ? "bg-emerald-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+              >
+                {t("quality_quality")}
+              </button>
+            </div>
           </div>
 
           {/* Source image */}

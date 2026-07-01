@@ -75,3 +75,38 @@ def test_apply_eskd_style_handles_empty_prompt_and_negative():
     prompt, negative = img_gen_task._apply_eskd_style(None, None)
     assert prompt.startswith("технический чертёж по ЕСКД")
     assert negative == img_gen_task._ESKD_NEGATIVE_SUFFIX
+
+
+def test_apply_quality_preset_fast_matches_existing_workflow_defaults():
+    """"fast" must reproduce exactly what every builtin workflow already
+    ships with (steps=4, cfg=1, full Lightning LoRA) — it's a no-op for
+    anyone not opting into "quality", not a behavior change."""
+    values: dict = {}
+    img_gen_task._apply_quality_preset(values, "fast")
+    assert values == {"steps": 4, "cfg": 1.0, "lora_strength": 1.0}
+
+
+def test_apply_quality_preset_quality_disables_lightning_lora():
+    values: dict = {}
+    img_gen_task._apply_quality_preset(values, "quality")
+    assert values["lora_strength"] == 0.0
+    assert values["steps"] > 4
+    assert values["cfg"] > 1.0
+
+
+def test_apply_quality_preset_none_or_unknown_leaves_values_untouched():
+    values = {"prompt": "x"}
+    img_gen_task._apply_quality_preset(values, None)
+    assert values == {"prompt": "x"}
+    img_gen_task._apply_quality_preset(values, "ultra-mega-mode")
+    assert values == {"prompt": "x"}
+
+
+def test_apply_quality_preset_never_overrides_an_explicit_value():
+    """A user-chosen numeric steps/cfg/lora_strength always wins over the
+    named preset — the preset only fills in what's still unset."""
+    values = {"steps": 10, "cfg": 2.0}
+    img_gen_task._apply_quality_preset(values, "fast")
+    assert values["steps"] == 10  # not overwritten to the preset's 4
+    assert values["cfg"] == 2.0  # not overwritten to the preset's 1.0
+    assert values["lora_strength"] == 1.0  # unset -> filled from preset

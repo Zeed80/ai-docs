@@ -10,13 +10,17 @@
     "image": {"node": "78", "input": "image"},
     "seed": {"node": "3", "input": "seed"},
     "controlnet_image": {"node": "97", "input": "image"},
-    "controlnet_strength": {"node": "96", "input": "strength"}
+    "controlnet_strength": {"node": "96", "input": "strength"},
+    "steps": {"node": "3", "input": "steps"},
+    "cfg": {"node": "3", "input": "cfg"},
+    "lora_strength": {"node": "40", "input": "strength_model"}
   },
   "params_schema": {
     "seed": {"type": "int", "default": 0, "label": "Seed (0 = случайный)"},
     "steps": {"type": "int", "default": 4, "min": 1, "max": 30, "label": "Шаги"},
     "cfg": {"type": "float", "default": 1.0, "min": 1.0, "max": 6.0, "label": "CFG"},
-    "controlnet_strength": {"type": "float", "default": 0.6, "min": 0.0, "max": 2.0, "label": "Сила ControlNet"}
+    "controlnet_strength": {"type": "float", "default": 0.6, "min": 0.0, "max": 2.0, "label": "Сила ControlNet"},
+    "lora_strength": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "label": "Сила Lightning LoRA (0 = выключено, полное качество)"}
   },
   "graph": {
     "37": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_edit_2511_fp8mixed.safetensors", "weight_dtype": "default"}},

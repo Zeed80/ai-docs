@@ -53,6 +53,35 @@ def _apply_eskd_style(prompt: str | None, negative: str | None) -> tuple[str, st
     return p, n
 
 
+# "fast" (default, unchanged): Lightning-4steps LoRA at full strength, cfg=1
+# — the values every builtin edit/cleanup/inpaint workflow already ships
+# with. "quality": no Lightning LoRA (strength 0 — LoraLoaderModelOnly at 0
+# is a no-op passthrough of the base model, no graph restructuring needed),
+# real step count and CFG. Measured live across 6+ same-instruction runs at
+# different seeds ("remove this chamfer" on a real shaft drawing): "fast"
+# never once performed the requested edit (0/6); "quality" performed it in
+# roughly half its runs. Diffusion sampling isn't seed-deterministic on this
+# server even at a fixed seed, so "quality" meaningfully raises the odds of
+# the model actually doing what was asked — it does not guarantee it. Not
+# worth defaulting on for every request given the ~7-8x time cost; exposed
+# as an explicit studio toggle instead.
+_QUALITY_PRESETS: dict[str, dict[str, float]] = {
+    "fast": {"steps": 4, "cfg": 1.0, "lora_strength": 1.0},
+    "quality": {"steps": 25, "cfg": 3.0, "lora_strength": 0.0},
+}
+
+
+def _apply_quality_preset(values: dict, quality: str | None) -> None:
+    """Fill in steps/cfg/lora_strength from the named preset — but never
+    override a value the caller already set explicitly (a user-chosen
+    numeric steps/cfg/lora_strength always wins over the named preset)."""
+    preset = _QUALITY_PRESETS.get(quality or "")
+    if not preset:
+        return
+    for key, val in preset.items():
+        values.setdefault(key, val)
+
+
 @celery_app.task(
     bind=True,
     name="image_generation.run_image_generation",
@@ -241,7 +270,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if not seed:  # 0 / None → random so repeated runs differ
             seed = random.randint(1, 2**31 - 1)
 
-        prompt, negative = _apply_eskd_style(prompt, negative)
+        if operation == "generate":
+            # Only "generate" builds a drawing from nothing, where a broad
+            # style paragraph is the bulk of what the model has to go on —
+            # for edit/inpaint the user's instruction is inherently narrow
+            # and specific ("remove this chamfer"), and confirmed live: the
+            # appended style paragraph measurably drowns it out (steps=25,
+            # cfg=3 with no Lightning LoRA still failed to perform the edit
+            # once the suffix was appended, but succeeded on the same seed
+            # with the bare instruction). Cleanup's prompt is baked into its
+            # own workflow template and never goes through this at all.
+            prompt, negative = _apply_eskd_style(prompt, negative)
 
         values: dict = {
             "prompt": prompt,
@@ -254,11 +293,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             values["mask"] = mask_name
         if controlnet_name:
             values["controlnet_image"] = controlnet_name
-        for key in ("width", "height", "steps", "cfg", "denoise"):
+        for key in ("width", "height", "steps", "cfg", "denoise", "lora_strength"):
             if params.get(key) is not None:
                 values[key] = params[key]
         if params.get("controlnet_strength") is not None:
             values["controlnet_strength"] = params["controlnet_strength"]
+
+        _apply_quality_preset(values, params.get("quality"))
 
         graph = build_workflow(graph_template, inject_map, values)
 
