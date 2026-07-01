@@ -135,6 +135,24 @@ async def test_push_workflow_to_comfyui_saves_graph_to_userdata(client, db_sessi
     assert body["filename"] == "workflows/edit_qwen_image_edit.json"
     assert "userdata/" in captured["url"]
     assert b"class_type" in captured["body"] or captured["body"]  # real graph JSON, not empty
+    # The placeholder LoadImage filename must not be pushed verbatim — see
+    # _strip_placeholder_image_inputs (any server that lacks a real file
+    # named exactly "input.png" would show a broken thumbnail for it).
+    assert b'"input.png"' not in captured["body"]
+
+
+def test_strip_placeholder_image_inputs_removes_only_loadimage_placeholder():
+    from app.api.image_generation import _strip_placeholder_image_inputs
+
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
+        "2": {"class_type": "KSampler", "inputs": {"seed": 42}},
+    }
+    cleaned = _strip_placeholder_image_inputs(graph)
+    assert "image" not in cleaned["1"]["inputs"]
+    assert cleaned["2"]["inputs"] == {"seed": 42}
+    # original untouched (deep-copied, not mutated in place)
+    assert graph["1"]["inputs"]["image"] == "input.png"
 
 
 @pytest.mark.asyncio

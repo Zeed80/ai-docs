@@ -44,6 +44,28 @@ export default function WorkflowPanel() {
     return acc;
   }, {});
 
+  /** Our stored templates carry a placeholder filename ("input.png") in
+   * LoadImage nodes — it's never actually read at generation time (the real
+   * upload always overwrites it in build_workflow(), see comfyui_client.py),
+   * it only exists so the graph has a valid node shape. Forcing that
+   * placeholder onto the widget when we load the template for viewing/
+   * editing makes ComfyUI show a broken "file not found" thumbnail on any
+   * server that doesn't happen to have a file with that exact name. Leaving
+   * the input unset instead lets ComfyUI fall back to its own combo-widget
+   * default (the first file it actually has) — a real, loadable preview. */
+  function stripPlaceholderImageInputs(graph: Record<string, unknown>) {
+    const cloned = JSON.parse(JSON.stringify(graph)) as Record<
+      string,
+      { class_type?: string; inputs?: Record<string, unknown> }
+    >;
+    for (const node of Object.values(cloned)) {
+      if (node?.class_type === "LoadImage" && node.inputs) {
+        delete node.inputs.image;
+      }
+    }
+    return cloned;
+  }
+
   /** Loads the graph straight onto the embedded ComfyUI canvas — no manual
    * navigation in ComfyUI's own UI needed. Bridged via a script our proxy
    * injects into ComfyUI's HTML (see backend/app/api/comfyui_proxy.py),
@@ -53,7 +75,11 @@ export default function WorkflowPanel() {
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     win.postMessage(
-      { type: "ai-docs-load-workflow", graph: w.graph, name: w.title },
+      {
+        type: "ai-docs-load-workflow",
+        graph: stripPlaceholderImageInputs(w.graph),
+        name: w.title,
+      },
       window.location.origin,
     );
   }

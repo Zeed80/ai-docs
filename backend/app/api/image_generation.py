@@ -517,6 +517,25 @@ async def delete_workflow(
     return {"ok": True}
 
 
+def _strip_placeholder_image_inputs(graph: dict) -> dict:
+    """Our stored templates carry a placeholder filename ("input.png") on
+    LoadImage nodes purely so the graph has a valid shape — it's never
+    actually read at generation time (build_workflow() always overwrites it
+    with the real upload, see comfyui_client.py). Forcing that placeholder
+    onto the widget when the graph is pushed for viewing/editing in ComfyUI's
+    own UI makes it show a broken "file not found" thumbnail on any server
+    that doesn't happen to have a file with that exact name — dropping the
+    input lets ComfyUI fall back to its own combo-widget default (the first
+    file it actually has), a real, loadable preview instead."""
+    import copy
+
+    cloned = copy.deepcopy(graph)
+    for node in cloned.values():
+        if isinstance(node, dict) and node.get("class_type") == "LoadImage":
+            node.get("inputs", {}).pop("image", None)
+    return cloned
+
+
 @router.post("/workflows/{workflow_id}/push-to-comfyui")
 async def push_workflow_to_comfyui(
     workflow_id: uuid.UUID,
@@ -536,6 +555,7 @@ async def push_workflow_to_comfyui(
 
     slug = re.sub(r"[^a-zA-Z0-9_\-]+", "_", wf.key).strip("_") or str(workflow_id)
     filename = f"workflows/{slug}.json"
+    graph = _strip_placeholder_image_inputs(wf.graph)
 
     from app.ai.comfyui_client import ComfyUIClient
 
@@ -545,7 +565,7 @@ async def push_workflow_to_comfyui(
             resp = await http.post(
                 f"{client.base_url}/userdata/{quote(filename, safe='')}",
                 params={"overwrite": "true"},
-                json=wf.graph,
+                json=graph,
             )
         except httpx.RequestError as exc:
             raise HTTPException(502, f"ComfyUI сервер сейчас недоступен: {exc}") from None
