@@ -311,6 +311,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 "или обратитесь к администратору."
             )
 
+        # Ollama and ComfyUI share the one GPU. A resident LLM (Ollama keeps a
+        # model warm after agent/OCR calls — ~20GB for gemma4:31b) leaves no
+        # room for the diffusion model and the run OOMs. Evict Ollama weights
+        # first; they reload on the next inference request. Best-effort.
+        try:
+            from app.ai import gpu_lock
+
+            gpu_lock.unload_ollama()
+        except Exception:  # noqa: BLE001
+            pass
+
         uploaded: list[str] = []
         enhanced_source: bytes | None = None
         for idx, path in enumerate(source_paths):

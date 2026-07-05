@@ -137,11 +137,16 @@ def clear_stop(run_id: str) -> None:
         pass
 
 
-def unload_gpu_consumers() -> None:
-    """Politely evict models from VRAM: Ollama keep_alive=0 per loaded model,
-    ComfyUI /free. Best-effort — services stay up, only their weights leave
-    the GPU."""
+def unload_ollama() -> int:
+    """Politely evict all resident Ollama models from VRAM (keep_alive=0).
+    Best-effort — the server stays up, only weights leave the GPU; they
+    reload on the next inference request. Returns how many were unloaded.
+
+    Used both before LoRA training AND before every ComfyUI diffusion run:
+    Ollama and ComfyUI share the one card, and a resident 20GB LLM leaves no
+    room for the diffusion model → OOM (confirmed live 2026-07-05)."""
     ollama = settings.ollama_url.rstrip("/")
+    n = 0
     try:
         loaded = json.loads(
             urllib.request.urlopen(f"{ollama}/api/ps", timeout=15).read()
@@ -153,10 +158,16 @@ def unload_gpu_consumers() -> None:
                 headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=60).read()
-            logger.info("gpu_lock_unloaded_ollama_model", model=m["name"])
+            logger.info("gpu_unloaded_ollama_model", model=m["name"])
+            n += 1
     except Exception as exc:  # noqa: BLE001
-        logger.warning("gpu_lock_ollama_unload_failed", error=str(exc)[:120])
+        logger.warning("gpu_ollama_unload_failed", error=str(exc)[:120])
+    return n
 
+
+def unload_comfyui() -> None:
+    """Ask ComfyUI to free its model memory (/free). Used before LoRA
+    training; NOT before a ComfyUI run (we are about to use it)."""
     try:
         comfy = settings.comfyui_url.rstrip("/")
         req = urllib.request.Request(
@@ -165,6 +176,13 @@ def unload_gpu_consumers() -> None:
             headers={"Content-Type": "application/json"},
         )
         urllib.request.urlopen(req, timeout=30).read()
-        logger.info("gpu_lock_comfyui_freed")
+        logger.info("gpu_comfyui_freed")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("gpu_lock_comfyui_free_failed", error=str(exc)[:120])
+        logger.warning("gpu_comfyui_free_failed", error=str(exc)[:120])
+
+
+def unload_gpu_consumers() -> None:
+    """Evict BOTH Ollama and ComfyUI weights from VRAM (before LoRA training,
+    which needs the whole card)."""
+    unload_ollama()
+    unload_comfyui()
