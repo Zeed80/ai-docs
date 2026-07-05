@@ -219,6 +219,47 @@ class ComfyUIClient:
             raise ComfyUITransientError(f"ComfyUI недоступен во время ожидания результата: {exc}") from exc
         raise ComfyUIError(f"ComfyUI: превышено время ожидания ({deadline:.0f}s).")
 
+    async def stream_progress(self, prompt_id: str, on_progress) -> None:
+        """Best-effort live progress via ComfyUI's WebSocket. Calls
+        ``on_progress({"value", "max", "node"})`` for sampling steps of OUR
+        prompt and returns when it finishes/errors. Any failure is swallowed
+        — progress is a nicety; ``wait_for_result`` (HTTP poll) remains the
+        source of truth for completion. Binary preview frames are ignored."""
+        import json as _json
+
+        ws_url = (self.base_url.replace("https://", "wss://", 1)
+                  .replace("http://", "ws://", 1)) + f"/ws?clientId={self.client_id}"
+        headers = self._headers()
+        try:
+            import websockets
+
+            async with websockets.connect(
+                ws_url, additional_headers=headers or None, max_size=None,
+                open_timeout=10, ping_interval=None,
+            ) as ws:
+                async for raw in ws:
+                    if isinstance(raw, (bytes, bytearray)):
+                        continue  # preview image frame
+                    try:
+                        msg = _json.loads(raw)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    mtype = msg.get("type")
+                    data = msg.get("data") or {}
+                    if data.get("prompt_id") and data.get("prompt_id") != prompt_id:
+                        continue
+                    if mtype == "progress":
+                        on_progress({"value": data.get("value"),
+                                     "max": data.get("max"),
+                                     "node": data.get("node")})
+                    elif mtype == "executing" and data.get("node") is None:
+                        return  # our prompt finished
+                    elif mtype in ("execution_success", "execution_error",
+                                   "execution_interrupted"):
+                        return
+        except Exception as exc:  # noqa: BLE001
+            logger.info("comfyui_ws_progress_unavailable", error=str(exc)[:120])
+
     @staticmethod
     def _extract_outputs(outputs: dict[str, Any]) -> list[ComfyOutput]:
         result: list[ComfyOutput] = []

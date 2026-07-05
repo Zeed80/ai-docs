@@ -411,6 +411,7 @@
       "accept": "Accept",
       "download": "Download",
       "delete": "Delete",
+      "delete_confirm": "Delete this generation?",
       "source_label": "Source",
       "result_label": "Result",
       "iterate_label": "Refine the result (iteration)",

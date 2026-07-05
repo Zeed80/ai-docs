@@ -54,8 +54,52 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
       </div>
 
       {gen.status === "failed" && (
-        <div className="text-xs text-red-400 bg-red-500/10 rounded p-2">
+        <div className="text-xs text-red-400 bg-red-500/10 rounded p-2 whitespace-pre-wrap max-h-40 overflow-y-auto">
           {gen.error}
+        </div>
+      )}
+
+      {(gen.status === "running" || gen.status === "queued") && (
+        <div className="space-y-1">
+          <div
+            className="h-2 rounded bg-zinc-800 overflow-hidden"
+            role="progressbar"
+            aria-valuenow={gen.progress?.pct}
+          >
+            <div
+              className={`h-full bg-sky-500 ${
+                gen.progress ? "transition-all" : "animate-pulse w-1/3"
+              }`}
+              style={
+                gen.progress ? { width: `${gen.progress.pct}%` } : undefined
+              }
+            />
+          </div>
+          <div className="text-[11px] text-zinc-400">
+            {gen.status === "queued"
+              ? t("status.queued")
+              : gen.progress
+                ? `${t("status.running")} · ${gen.progress.value ?? 0}/${gen.progress.max ?? "?"} (${gen.progress.pct}%)`
+                : t("status.running")}
+          </div>
+        </div>
+      )}
+
+      {/* Delete is available for ANY generation (including failed ones with no
+          result) — moved out of the has-result action row. */}
+      {(gen.status === "failed" || gen.status === "done") && (
+        <div>
+          <button
+            disabled={busy}
+            onClick={() => {
+              if (confirm(t("detail.delete_confirm"))) {
+                run(() => deleteGeneration(gen.id).then(onClose));
+              }
+            }}
+            className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
+          >
+            {t("detail.delete")}
+          </button>
         </div>
       )}
 
@@ -125,13 +169,6 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
           >
             {t("detail.download")}
           </a>
-          <button
-            disabled={busy}
-            onClick={() => run(() => deleteGeneration(gen.id))}
-            className="px-3 py-1.5 rounded bg-red-500/15 hover:bg-red-500/25 text-red-300 text-sm disabled:opacity-50"
-          >
-            {t("detail.delete")}
-          </button>
         </div>
       )}
 

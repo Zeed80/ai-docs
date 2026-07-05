@@ -9,7 +9,13 @@ import LoraTrainingPanel from "@/components/studio/LoraTrainingPanel";
 import StudioComposer from "@/components/studio/StudioComposer";
 import WorkflowPanel from "@/components/studio/WorkflowPanel";
 import { gpuStatus } from "@/lib/lora-api";
-import { Generation, getGeneration, listGenerations } from "@/lib/studio-api";
+import {
+  clearFailedGenerations,
+  deleteGeneration,
+  Generation,
+  getGeneration,
+  listGenerations,
+} from "@/lib/studio-api";
 
 type Tab = "studio" | "workflows" | "lora";
 
@@ -35,6 +41,30 @@ export default function StudioPage() {
       setError(String((e as Error).message || e));
     }
   }, []);
+
+  const onDelete = useCallback(
+    async (g: Generation) => {
+      try {
+        await deleteGeneration(g.id);
+        setSelected((cur) => (cur?.id === g.id ? null : cur));
+        await load();
+      } catch (e) {
+        setError(String((e as Error).message || e));
+      }
+    },
+    [load],
+  );
+
+  const onClearFailed = useCallback(async () => {
+    try {
+      await clearFailedGenerations();
+      await load();
+    } catch (e) {
+      setError(String((e as Error).message || e));
+    }
+  }, [load]);
+
+  const failedCount = items.filter((g) => g.status === "failed").length;
 
   useEffect(() => {
     void load();
@@ -159,11 +189,24 @@ export default function StudioPage() {
             <StudioComposer onSubmitted={load} />
           </div>
           <div className="lg:overflow-y-auto p-4 grid xl:grid-cols-[1fr_360px] gap-4">
-            <GenerationGallery
-              items={items}
-              selectedId={selected?.id ?? null}
-              onSelect={setSelected}
-            />
+            <div>
+              {failedCount > 0 && (
+                <div className="flex justify-end mb-2">
+                  <button
+                    onClick={onClearFailed}
+                    className="text-xs text-red-300 hover:text-red-200"
+                  >
+                    Очистить ошибочные ({failedCount})
+                  </button>
+                </div>
+              )}
+              <GenerationGallery
+                items={items}
+                selectedId={selected?.id ?? null}
+                onSelect={setSelected}
+                onDelete={onDelete}
+              />
+            </div>
             {selected && (
               <div className="rounded-lg border border-white/10 p-4 bg-zinc-900/40 h-fit">
                 <GenerationDetail

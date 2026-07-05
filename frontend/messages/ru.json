@@ -411,6 +411,7 @@
       "accept": "Принять",
       "download": "Скачать",
       "delete": "Удалить",
+      "delete_confirm": "Удалить эту генерацию?",
       "source_label": "Источник",
       "result_label": "Результат",
       "iterate_label": "Доработать результат (итерация)",

@@ -111,10 +111,20 @@ def _owns(gen: ImageGeneration | None, user: UserInfo) -> bool:
 
 
 def _gen_out(gen: ImageGeneration) -> dict:
+    status = gen.status.value if hasattr(gen.status, "value") else gen.status
+    progress = None
+    if status == "running":
+        try:
+            from app.tasks.image_generation import read_progress
+
+            progress = read_progress(str(gen.id))
+        except Exception:  # noqa: BLE001
+            progress = None
     return {
         "id": str(gen.id),
         "operation": gen.operation,
-        "status": gen.status.value if hasattr(gen.status, "value") else gen.status,
+        "status": status,
+        "progress": progress,
         "prompt": gen.prompt,
         "negative_prompt": gen.negative_prompt,
         "params": gen.params or {},
@@ -393,6 +403,32 @@ async def iterate_generation(
     return _gen_out(gen)
 
 
+async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
+    """Delete a generation + its MinIO files, re-parenting any iteration
+    children to roots so the FK never blocks the delete (a failed/erroneous
+    gen must always be removable)."""
+    from sqlalchemy import update as sa_update
+
+    for path in [gen.result_path, gen.thumbnail_path, gen.mask_path,
+                 *(gen.source_image_paths or [])]:
+        if path:
+            try:
+                from app.storage import delete_file
+
+                delete_file(path)
+            except Exception:  # noqa: BLE001 — leftover file is cosmetic
+                pass
+    await db.execute(
+        sa_update(ImageGeneration)
+        .where(ImageGeneration.parent_id == gen.id)
+        .values(parent_id=None)
+    )
+    from app.tasks.image_generation import _clear_progress
+
+    _clear_progress(str(gen.id))
+    await db.delete(gen)
+
+
 @router.delete("/{generation_id}")
 async def delete_generation(
     generation_id: uuid.UUID,
@@ -402,9 +438,46 @@ async def delete_generation(
     gen = await db.get(ImageGeneration, generation_id)
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
-    await db.delete(gen)
+    await _delete_one(db, gen)
     await db.commit()
     return {"ok": True}
+
+
+class BulkDeleteBody(BaseModel):
+    ids: list[uuid.UUID] = Field(default_factory=list, max_length=500)
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_generations(
+    body: BulkDeleteBody,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Delete several generations at once (only the caller's own)."""
+    deleted = 0
+    for gid in body.ids:
+        gen = await db.get(ImageGeneration, gid)
+        if _owns(gen, user):
+            await _delete_one(db, gen)
+            deleted += 1
+    await db.commit()
+    return {"ok": True, "deleted": deleted}
+
+
+@router.post("/clear-failed")
+async def clear_failed_generations(
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """One-click cleanup of all the caller's failed generations."""
+    q = select(ImageGeneration).where(ImageGeneration.status == ImageGenStatus.failed)
+    if not _is_agent_service(user):
+        q = q.where(ImageGeneration.owner_sub == user.sub)
+    rows = (await db.execute(q)).scalars().all()
+    for gen in rows:
+        await _delete_one(db, gen)
+    await db.commit()
+    return {"ok": True, "deleted": len(rows)}
 
 
 # ── Workflow library ─────────────────────────────────────────────────────────

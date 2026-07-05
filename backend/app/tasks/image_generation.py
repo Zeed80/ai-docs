@@ -27,6 +27,51 @@ logger = structlog.get_logger()
 
 _RESULT_BUCKET_PREFIX = "image-gen"
 
+
+def _progress_key(gen_id: str) -> str:
+    return f"studio:progress:{gen_id}"
+
+
+def _write_progress(gen_id: str, value, maximum, node=None) -> None:
+    """Store live sampling progress in Redis (TTL 3m) for the UI to poll —
+    lighter than a DB write per step. Best-effort."""
+    import json
+
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        pct = int(round(100 * value / maximum)) if value and maximum else 0
+        get_sync_redis().set(
+            _progress_key(gen_id),
+            json.dumps({"value": value, "max": maximum, "pct": pct,
+                        "node": node, "ts": __import__("time").time()}),
+            ex=180,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clear_progress(gen_id: str) -> None:
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        get_sync_redis().delete(_progress_key(gen_id))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def read_progress(gen_id: str) -> dict | None:
+    """Used by the API's _gen_out to surface progress for a running gen."""
+    import json
+
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        raw = get_sync_redis().get(_progress_key(gen_id))
+        return json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001
+        return None
+
 # Applied to every diffusion prompt (generate/edit/cleanup/inpaint — everything
 # that isn't the deterministic `techdraw` path). Two things diffusion won't do
 # on its own: (1) draw in ЕСКД line conventions rather than a generic "blueprint"
@@ -169,6 +214,7 @@ async def _mark_failed(gen_uuid: uuid.UUID, err: str, owner_sub: str | None = No
         gen.status = ImageGenStatus.failed
         gen.error = err[:2000]
         await db.commit()
+        _clear_progress(str(gen_uuid))
         target_owner = owner_sub or gen.owner_sub
         if target_owner:
             try:
@@ -423,8 +469,20 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 object_info, generation_id,
             )
         else:
+            import asyncio as _asyncio
+
             prompt_id = await client.queue_workflow(graph)
-            outputs = await client.wait_for_result(prompt_id)
+            # Live progress via WS runs alongside the authoritative HTTP poll.
+            progress_task = _asyncio.create_task(
+                client.stream_progress(
+                    prompt_id,
+                    lambda p: _write_progress(generation_id, p["value"], p["max"], p["node"]),
+                )
+            )
+            try:
+                outputs = await client.wait_for_result(prompt_id)
+            finally:
+                progress_task.cancel()
             result_bytes = await client.fetch_image(outputs[0])
 
         # Size reconciliation (image-to-image ops): FluxKontextImageScale
@@ -564,6 +622,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             gen.thumbnail_path = thumb_path
             gen.comfyui_prompt_id = prompt_id
             await db.commit()
+            _clear_progress(str(gen_uuid))
             if owner_sub:
                 try:
                     await push.push_to_user(

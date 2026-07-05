@@ -9,10 +9,19 @@ const BASE = `${API}/api/image-gen`;
 export type Operation = "generate" | "edit" | "inpaint" | "cleanup";
 export type GenStatus = "queued" | "running" | "done" | "failed";
 
+export interface GenProgress {
+  value: number | null;
+  max: number | null;
+  pct: number;
+  node: string | null;
+  ts: number;
+}
+
 export interface Generation {
   id: string;
   operation: Operation;
   status: GenStatus;
+  progress: GenProgress | null;
   prompt: string | null;
   negative_prompt: string | null;
   params: Record<string, unknown>;
@@ -125,6 +134,20 @@ export async function iterateGeneration(
 export async function deleteGeneration(id: string): Promise<void> {
   const res = await mutFetch(`${BASE}/${id}`, { method: "DELETE" });
   await jsonOrThrow(res);
+}
+
+export async function bulkDeleteGenerations(ids: string[]): Promise<void> {
+  const res = await mutFetch(`${BASE}/bulk-delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  await jsonOrThrow(res);
+}
+
+export async function clearFailedGenerations(): Promise<{ deleted: number }> {
+  const res = await mutFetch(`${BASE}/clear-failed`, { method: "POST" });
+  return jsonOrThrow<{ deleted: number }>(res);
 }
 
 export async function techDraw(
