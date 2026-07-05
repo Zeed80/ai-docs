@@ -186,6 +186,28 @@ export async function listBaseModels(): Promise<{
   return res.json();
 }
 
+export interface HfTokenStatus {
+  configured: boolean;
+  masked: string;
+  source: "settings" | "env" | null;
+}
+
+export async function getHfTokenStatus(): Promise<HfTokenStatus> {
+  const res = await apiFetch(`${BASE}/hf-token`);
+  if (!res.ok) throw new Error(res.statusText);
+  return res.json();
+}
+
+export async function setHfToken(token: string): Promise<HfTokenStatus> {
+  const res = await mutFetch(`${BASE}/hf-token`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
+  return res.json();
+}
+
 export interface GpuStatus {
   training_lock: { run_id?: string } | null;
   ts: number;

@@ -82,8 +82,8 @@ HF_GATED_HELP = (
     "Модель {hf} на HuggingFace закрытая (gated). Чтобы обучать на ней:\n"
     "1) на странице https://huggingface.co/{hf} нажмите «Agree and access "
     "repository» под своим аккаунтом HuggingFace;\n"
-    "2) пропишите токен доступа HF_TOKEN=hf_… в infra/.env и перезапустите "
-    "стек.\n"
+    "2) задайте токен доступа HuggingFace в настройках студии (Настройки → "
+    "ComfyUI → Токен HuggingFace) — он хранится в зашифрованном виде.\n"
     "Модель «FLUX.2 klein 4B» — открытая, её можно обучать без токена."
 )
 
@@ -91,6 +91,61 @@ HF_GATED_HELP = (
 def base_model_info(key: str | None) -> dict:
     return LORA_BASE_MODELS.get(key or DEFAULT_BASE_MODEL,
                                 LORA_BASE_MODELS[DEFAULT_BASE_MODEL])
+
+
+# ── HuggingFace token (gated FLUX.2 models) ──────────────────────────────────
+# Stored ENCRYPTED in Redis (same pattern as the Telegram bot token: Fernet on
+# app_secret_key via secret_store) and configured through the GUI — NOT the
+# .env. The HF_TOKEN env var stays as a legacy fallback only.
+_HF_TOKEN_REDIS_KEY = "lora:config:hf_token"
+
+
+def get_hf_token() -> str | None:
+    """Resolve the HF token. Priority: encrypted value set through the UI
+    (Redis) → HF_TOKEN env (legacy fallback). Never raises."""
+    try:
+        from app.utils.redis_client import get_sync_redis
+        from app.utils.secret_store import decrypt
+
+        raw = get_sync_redis().get(_HF_TOKEN_REDIS_KEY)
+        if raw:
+            dec = decrypt(raw)
+            if dec:
+                return dec
+    except Exception:  # noqa: BLE001 — Redis down → fall back to env
+        pass
+    from app.config import settings
+
+    return getattr(settings, "hf_token", None) or None
+
+
+def set_hf_token(token: str) -> None:
+    """Persist the HF token encrypted in Redis (empty string clears it)."""
+    from app.utils.redis_client import get_sync_redis
+    from app.utils.secret_store import encrypt
+
+    get_sync_redis().set(_HF_TOKEN_REDIS_KEY, encrypt(token) if token else "")
+
+
+def hf_token_status() -> dict:
+    """UI-safe status: whether a token is configured, a masked preview, and
+    where it came from (so the .env fallback is visible)."""
+    from app.config import settings
+    from app.utils.secret_store import mask
+
+    token = get_hf_token()
+    stored_in_ui = False
+    try:
+        from app.utils.redis_client import get_sync_redis
+        from app.utils.secret_store import decrypt
+
+        stored_in_ui = bool(decrypt(get_sync_redis().get(_HF_TOKEN_REDIS_KEY) or ""))
+    except Exception:  # noqa: BLE001
+        pass
+    source = "settings" if stored_in_ui else ("env" if token else None)
+    return {"configured": bool(token),
+            "masked": mask(token, 4) if token else "",
+            "source": source}
 
 
 def eta_hours(base_model: str | None, steps: int) -> float | None:

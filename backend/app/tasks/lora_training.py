@@ -538,7 +538,6 @@ async def _train(run_id: str) -> dict:
     import yaml
 
     from app.ai import gpu_lock
-    from app.config import settings
     from app.db.models import LoraDataset, LoraRunStatus, LoraTrainingRun
     from app.db.session import _get_session_factory
     from app.storage import upload_file
@@ -715,7 +714,11 @@ async def _train(run_id: str) -> dict:
         environment = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
                        "HF_HUB_OFFLINE": "0",
                        "PYTHONUNBUFFERED": "1"}
-        hf_token = getattr(settings, "hf_token", None)
+        # Token resolved from the encrypted UI setting (Redis) with .env
+        # fallback — never hardcoded in the container definition.
+        from app.ai.lora_base_models import get_hf_token
+
+        hf_token = get_hf_token()
         if hf_token:
             environment["HF_TOKEN"] = hf_token
         container = client.containers.run(

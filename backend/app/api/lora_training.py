@@ -33,6 +33,9 @@ from app.ai.lora_base_models import (
     LORA_BASE_MODELS,
     base_model_info,
     eta_hours,
+    get_hf_token,
+    hf_token_status,
+    set_hf_token,
 )
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo, UserRole
@@ -423,6 +426,30 @@ async def base_models(user: UserInfo = Depends(get_current_user)):
     }
 
 
+class HfTokenBody(BaseModel):
+    token: str = Field(default="", max_length=400)
+
+
+@router.get("/hf-token")
+async def get_hf_token_status(user: UserInfo = Depends(get_current_user)):
+    """Whether a HuggingFace token is configured (for gated FLUX.2 models),
+    masked preview and its source (settings UI vs legacy env)."""
+    return hf_token_status()
+
+
+@router.put("/hf-token")
+async def put_hf_token(
+    body: HfTokenBody,
+    user: UserInfo = Depends(get_current_user),
+):
+    """Store the HF token encrypted (Fernet on app_secret_key, in Redis) —
+    admin only; never written to .env. Empty token clears it."""
+    if not _is_admin(user) and not _is_agent_service(user):
+        raise HTTPException(403, "Только администратор может задавать токен HuggingFace")
+    set_hf_token(body.token.strip())
+    return hf_token_status()
+
+
 @router.post("/runs")
 async def create_run(
     body: RunCreate,
@@ -436,12 +463,10 @@ async def create_run(
     info = base_model_info(body.config.base_model)
     # Pre-flight: a gated HF base model without a configured token is doomed
     # to a 401 ~10 min into the download — fail fast with actionable guidance.
-    if info.get("gated"):
+    if info.get("gated") and not get_hf_token():
         from app.ai.lora_base_models import HF_GATED_HELP
-        from app.config import settings
 
-        if not getattr(settings, "hf_token", None):
-            raise HTTPException(400, HF_GATED_HELP.format(hf=info["hf"]))
+        raise HTTPException(400, HF_GATED_HELP.format(hf=info["hf"]))
     run = LoraTrainingRun(
         owner_sub=user.sub,
         dataset_id=ds.id,
