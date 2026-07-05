@@ -82,8 +82,8 @@ HF_GATED_HELP = (
     "Модель {hf} на HuggingFace закрытая (gated). Чтобы обучать на ней:\n"
     "1) на странице https://huggingface.co/{hf} нажмите «Agree and access "
     "repository» под своим аккаунтом HuggingFace;\n"
-    "2) задайте токен доступа HuggingFace в настройках студии (Настройки → "
-    "ComfyUI → Токен HuggingFace) — он хранится в зашифрованном виде.\n"
+    "2) задайте токен доступа HuggingFace в Настройки → Модели (🤗 HuggingFace) "
+    "— он используется и для загрузки моделей, и для обучения.\n"
     "Модель «FLUX.2 klein 4B» — открытая, её можно обучать без токена."
 )
 
@@ -94,58 +94,38 @@ def base_model_info(key: str | None) -> dict:
 
 
 # ── HuggingFace token (gated FLUX.2 models) ──────────────────────────────────
-# Stored ENCRYPTED in Redis (same pattern as the Telegram bot token: Fernet on
-# app_secret_key via secret_store) and configured through the GUI — NOT the
-# .env. The HF_TOKEN env var stays as a legacy fallback only.
-_HF_TOKEN_REDIS_KEY = "lora:config:hf_token"
+# Reuses the SHARED token configured in Настройки → Модели
+# (/api/local-models/tokens, stored in Redis under "llamacpp_tokens" and used
+# for gated model downloads across providers) — no separate LoRA token to
+# avoid duplication. HF_TOKEN env stays as a legacy fallback only.
+
+
+def _shared_hf_token() -> str:
+    try:
+        from app.ai.providers.llamacpp_manager import _load_tokens
+
+        return (_load_tokens() or {}).get("huggingface") or ""
+    except Exception:  # noqa: BLE001 — Redis down / import issue → no token
+        return ""
 
 
 def get_hf_token() -> str | None:
-    """Resolve the HF token. Priority: encrypted value set through the UI
-    (Redis) → HF_TOKEN env (legacy fallback). Never raises."""
-    try:
-        from app.utils.redis_client import get_sync_redis
-        from app.utils.secret_store import decrypt
-
-        raw = get_sync_redis().get(_HF_TOKEN_REDIS_KEY)
-        if raw:
-            dec = decrypt(raw)
-            if dec:
-                return dec
-    except Exception:  # noqa: BLE001 — Redis down → fall back to env
-        pass
+    """Resolve the HF token: shared token from Настройки → Модели → HF_TOKEN
+    env (legacy fallback). Never raises."""
+    shared = _shared_hf_token()
+    if shared:
+        return shared
     from app.config import settings
 
     return getattr(settings, "hf_token", None) or None
 
 
-def set_hf_token(token: str) -> None:
-    """Persist the HF token encrypted in Redis (empty string clears it)."""
-    from app.utils.redis_client import get_sync_redis
-    from app.utils.secret_store import encrypt
-
-    get_sync_redis().set(_HF_TOKEN_REDIS_KEY, encrypt(token) if token else "")
-
-
 def hf_token_status() -> dict:
-    """UI-safe status: whether a token is configured, a masked preview, and
-    where it came from (so the .env fallback is visible)."""
-    from app.config import settings
-    from app.utils.secret_store import mask
-
+    """UI-safe status: whether a token is configured and where it came from
+    (shared settings vs legacy env). Never returns the token itself."""
     token = get_hf_token()
-    stored_in_ui = False
-    try:
-        from app.utils.redis_client import get_sync_redis
-        from app.utils.secret_store import decrypt
-
-        stored_in_ui = bool(decrypt(get_sync_redis().get(_HF_TOKEN_REDIS_KEY) or ""))
-    except Exception:  # noqa: BLE001
-        pass
-    source = "settings" if stored_in_ui else ("env" if token else None)
-    return {"configured": bool(token),
-            "masked": mask(token, 4) if token else "",
-            "source": source}
+    source = "settings" if _shared_hf_token() else ("env" if token else None)
+    return {"configured": bool(token), "source": source}
 
 
 def eta_hours(base_model: str | None, steps: int) -> float | None:

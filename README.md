@@ -173,9 +173,10 @@ OLLAMA_MODEL_REASONING=gemma4:26b
 COMFYUI_URL=http://host-gateway:8188   # узел ComfyUI для генерации/правки чертежей
 ```
 
-Токен HuggingFace для обучения на gated-моделях FLUX.2 (klein-9B, dev) задаётся
-**через GUI** (Студия → Обучение LoRA, либо Настройки) и хранится зашифрованным
-(Fernet на `APP_SECRET_KEY`), а не в `.env`. klein-4B — открытая, без токена.
+Токен HuggingFace для обучения на gated-моделях FLUX.2 (klein-9B, dev) берётся
+из общего токена **Настройки → Модели → 🤗 HuggingFace** (тот же, что для
+загрузки моделей) — задаётся через GUI, не в `.env`. klein-4B — открытая, без
+токена.
 
 Студия доступна и без ComfyUI (graceful degradation). Обучение LoRA требует GPU
 (проверено на RTX 3090 24 ГБ: Qwen-Image-Edit и FLUX.2 klein-4B) и запускает

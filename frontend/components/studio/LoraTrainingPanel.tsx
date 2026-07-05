@@ -28,7 +28,6 @@ import {
   LoraRun,
   makeWorkflow,
   previewUrl,
-  setHfToken,
   stopRun,
   uploadSource,
 } from "@/lib/lora-api";
@@ -453,74 +452,6 @@ function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ── HuggingFace token (gated FLUX.2 models) ──────────────────────────────────
-
-function HfTokenSetter({
-  status,
-  onSaved,
-}: {
-  status: HfTokenStatus | null;
-  onSaved: () => void;
-}) {
-  const [value, setValue] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const save = async (clear: boolean) => {
-    setSaving(true);
-    setErr(null);
-    try {
-      await setHfToken(clear ? "" : value);
-      setValue("");
-      onSaved();
-    } catch (e) {
-      setErr(String((e as Error).message || e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="rounded border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
-      <div className="text-[11px] text-amber-300">
-        🔒 Токен HuggingFace для закрытых моделей (FLUX.2 klein 9B, dev).
-        Хранится в зашифрованном виде на сервере, не в .env.
-      </div>
-      <div className="text-[11px] text-zinc-400">
-        {status?.configured
-          ? `Токен задан (${status.masked}${status.source === "env" ? ", из .env" : ""}).`
-          : "Токен не задан."}
-      </div>
-      <div className="flex gap-2">
-        <input
-          type="password"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="hf_…"
-          className="flex-1 bg-zinc-800 rounded px-2 py-1 text-sm text-white"
-        />
-        <button
-          onClick={() => save(false)}
-          disabled={saving || !value.trim()}
-          className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-sm text-white"
-        >
-          Сохранить
-        </button>
-        {status?.configured && status.source === "settings" && (
-          <button
-            onClick={() => save(true)}
-            disabled={saving}
-            className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-sm text-zinc-300"
-          >
-            Очистить
-          </button>
-        )}
-      </div>
-      {err && <div className="text-[11px] text-red-400">{err}</div>}
     </div>
   );
 }
@@ -992,12 +923,18 @@ export default function LoraTrainingPanel() {
             {baseInfo?.gated &&
               (hfStatus?.configured ? (
                 <p className="text-[11px] text-emerald-400">
-                  🔒 Закрытая модель — токен HuggingFace задан (
-                  {hfStatus.masked}). Не забудьте принять лицензию на странице
-                  модели.
+                  🔒 Закрытая модель — токен HuggingFace задан. Не забудьте
+                  принять лицензию на странице модели.
                 </p>
               ) : (
-                <HfTokenSetter status={hfStatus} onSaved={loadHfStatus} />
+                <p className="text-[11px] text-amber-400">
+                  🔒 Закрытая модель HuggingFace: примите лицензию на её
+                  странице и задайте токен в{" "}
+                  <a href="/settings/models" className="underline">
+                    Настройки → Модели
+                  </a>{" "}
+                  (🤗 HuggingFace). FLUX.2 klein 4B — без токена.
+                </p>
               ))}
             <label className="text-xs text-zinc-400 block">
               {t("lora_steps")} ({etaText})

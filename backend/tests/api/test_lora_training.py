@@ -167,62 +167,23 @@ async def test_gated_model_without_token_is_refused_early(client, db_session, mo
     assert resp.status_code == 200
 
 
-@pytest.mark.asyncio
-async def test_hf_token_setter_is_admin_only(client, monkeypatch):
-    """The HF token is a shared secret: viewers can read status but not set
-    it. It is stored encrypted, never returned in plaintext."""
-    from app.api import lora_training as api
-    from app.auth.jwt import get_current_user
-    from app.auth.models import UserInfo, UserRole
-    from app.main import app
-
-    saved: dict = {}
-    # Patch where the names are USED (imported into the API module), not the
-    # source module — the endpoints bound their own references at import.
-    monkeypatch.setattr(api, "set_hf_token", lambda tok: saved.update(token=tok))
-    monkeypatch.setattr(api, "hf_token_status",
-                        lambda: {"configured": bool(saved.get("token")),
-                                 "masked": "…", "source": "settings"})
-
-    app.dependency_overrides[get_current_user] = lambda: UserInfo(
-        sub="bob", email="b@x", name="Bob", preferred_username="bob",
-        roles=[UserRole.viewer])
-    try:
-        r = await client.put("/api/lora/hf-token", json={"token": "hf_secret"})
-        assert r.status_code == 403
-        assert "token" not in saved  # nothing stored
-
-        r = await client.get("/api/lora/hf-token")  # status is readable
-        assert r.status_code == 200 and "masked" in r.json()
-    finally:
-        app.dependency_overrides.pop(get_current_user, None)
-
-    # Admin (default dev user) may set it.
-    r = await client.put("/api/lora/hf-token", json={"token": "hf_secret"})
-    assert r.status_code == 200
-    assert saved["token"] == "hf_secret"
-
-
-def test_hf_token_resolver_priority(monkeypatch):
-    """UI value (encrypted in Redis) wins over the HF_TOKEN env fallback."""
+def test_hf_token_resolver_uses_shared_settings_token(monkeypatch):
+    """The token is NOT LoRA-specific: it reuses the shared HuggingFace token
+    from Настройки → Модели (llamacpp_manager._load_tokens), with the
+    HF_TOKEN env only as a legacy fallback."""
     from app.ai import lora_base_models as m
 
-    class _Fake:
-        def __init__(self, val):
-            self.val = val
-
-        def get(self, key):
-            return self.val
-
     monkeypatch.setattr("app.config.settings.hf_token", "env-token", raising=False)
-    # No UI value → env fallback.
-    monkeypatch.setattr("app.utils.redis_client.get_sync_redis", lambda: _Fake(None))
+    # No shared token → env fallback.
+    monkeypatch.setattr("app.ai.providers.llamacpp_manager._load_tokens", lambda: {})
     assert m.get_hf_token() == "env-token"
-    # UI value present → decrypted UI value wins.
-    monkeypatch.setattr("app.utils.redis_client.get_sync_redis",
-                        lambda: _Fake(__import__("app.utils.secret_store",
-                                                 fromlist=["encrypt"]).encrypt("ui-token")))
-    assert m.get_hf_token() == "ui-token"
+    assert m.hf_token_status()["source"] == "env"
+    # Shared token from settings wins.
+    monkeypatch.setattr("app.ai.providers.llamacpp_manager._load_tokens",
+                        lambda: {"huggingface": "shared-token"})
+    assert m.get_hf_token() == "shared-token"
+    st = m.hf_token_status()
+    assert st["configured"] and st["source"] == "settings"
 
 
 @pytest.mark.asyncio

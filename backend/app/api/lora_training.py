@@ -35,7 +35,6 @@ from app.ai.lora_base_models import (
     eta_hours,
     get_hf_token,
     hf_token_status,
-    set_hf_token,
 )
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo, UserRole
@@ -426,27 +425,11 @@ async def base_models(user: UserInfo = Depends(get_current_user)):
     }
 
 
-class HfTokenBody(BaseModel):
-    token: str = Field(default="", max_length=400)
-
-
 @router.get("/hf-token")
 async def get_hf_token_status(user: UserInfo = Depends(get_current_user)):
-    """Whether a HuggingFace token is configured (for gated FLUX.2 models),
-    masked preview and its source (settings UI vs legacy env)."""
-    return hf_token_status()
-
-
-@router.put("/hf-token")
-async def put_hf_token(
-    body: HfTokenBody,
-    user: UserInfo = Depends(get_current_user),
-):
-    """Store the HF token encrypted (Fernet on app_secret_key, in Redis) —
-    admin only; never written to .env. Empty token clears it."""
-    if not _is_admin(user) and not _is_agent_service(user):
-        raise HTTPException(403, "Только администратор может задавать токен HuggingFace")
-    set_hf_token(body.token.strip())
+    """Whether a HuggingFace token is configured for gated FLUX.2 models. The
+    token itself is managed in Настройки → Модели (shared across providers);
+    this only reports its presence so the panel can hint correctly."""
     return hf_token_status()
 
 
