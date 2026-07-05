@@ -167,6 +167,92 @@ async def test_gated_model_without_token_is_refused_early(client, db_session, mo
     assert resp.status_code == 200
 
 
+def _write_lora(path, rank=32, base_version="qwen_image", step=1500):
+    """Minimal valid safetensors LoRA (header only + tiny payload) for
+    inspection tests."""
+    import json
+    import struct
+
+    tensors = {
+        "diffusion_model.blocks.0.attn.lora_A.weight":
+            {"dtype": "F16", "shape": [rank, 3072], "data_offsets": [0, 2]},
+        "diffusion_model.blocks.0.attn.lora_B.weight":
+            {"dtype": "F16", "shape": [3072, rank], "data_offsets": [2, 4]},
+    }
+    meta = {"ss_base_model_version": base_version,
+            "training_info": json.dumps({"step": step, "epoch": 0}),
+            "software": json.dumps({"name": "ai-toolkit"}),
+            "ss_output_name": "my_lora"}
+    header = {**tensors, "__metadata__": meta}
+    raw = json.dumps(header).encode()
+    with open(path, "wb") as fh:
+        fh.write(struct.pack("<Q", len(raw)))
+        fh.write(raw)
+        fh.write(b"\x00" * 4)
+
+
+def test_inspect_lora_reads_rank_and_family(tmp_path):
+    from app.ai.lora_inspect import inspect_lora
+
+    p = tmp_path / "l.safetensors"
+    _write_lora(p, rank=16, base_version="qwen_image", step=1500)
+    info = inspect_lora(p)
+    assert info["ok"] and info["family"] == "qwen"
+    assert info["rank"] == 16 and info["step"] == 1500
+
+
+def test_lora_compatibility_levels(tmp_path):
+    from app.ai.lora_inspect import check_compatibility, inspect_lora
+
+    p = tmp_path / "q.safetensors"
+    _write_lora(p, rank=32, base_version="qwen_image")
+    info = inspect_lora(p)
+    # same family → ok, and suggested_rank surfaces the LoRA's rank
+    ok = check_compatibility(info, "qwen", 32)
+    assert ok["level"] == "ok" and ok["compatible"] and ok["suggested_rank"] == 32
+    # wrong family → hard error (would crash the run)
+    bad = check_compatibility(info, "flux2", 32)
+    assert bad["level"] == "error" and not bad["compatible"]
+    # no metadata → unconfirmed warning, still allowed
+    p2 = tmp_path / "third.safetensors"
+    _write_lora(p2, rank=8, base_version="")
+    warn = check_compatibility(inspect_lora(p2), "qwen", 32)
+    assert warn["level"] == "warn" and warn["compatible"]
+
+
+@pytest.mark.asyncio
+async def test_resume_lora_incompatible_is_refused(client, db_session, monkeypatch, tmp_path):
+    """create_run must reject a family-mismatched LoRA before queuing."""
+    import app.api.lora_training as api
+    from app.db.models import LoraDataset, LoraDatasetStatus
+    from app.tasks.celery_app import celery_app
+
+    monkeypatch.setattr(celery_app, "send_task",
+                        lambda *a, **k: type("T", (), {"id": "x"})())
+    lora = tmp_path / "flux.safetensors"
+    _write_lora(lora, rank=32, base_version="flux2_klein")
+
+    async def fake_resolve(ref, db, user):
+        return lora
+
+    monkeypatch.setattr(api, "_resolve_lora_source", fake_resolve)
+
+    ds = LoraDataset(name="ds", status=LoraDatasetStatus.ready, preset="drawing_cleanup",
+                     params={}, source_paths=[], stats={}, preview_paths=[],
+                     dataset_dir="/lora-data/datasets/t")
+    db_session.add(ds)
+    await db_session.commit()
+    await db_session.refresh(ds)
+
+    # Continuing a flux2 LoRA on a qwen base → 400.
+    resp = await client.post("/api/lora/runs", json={
+        "dataset_id": str(ds.id), "name": "ft",
+        "config": {"steps": 500, "base_model": "qwen_image_edit_2511"},
+        "resume_lora": "upload:flux.safetensors"})
+    assert resp.status_code == 400
+    assert "несовместима" in resp.json()["detail"].lower()
+
+
 def test_hf_token_resolver_uses_shared_settings_token(monkeypatch):
     """The token is NOT LoRA-specific: it reuses the shared HuggingFace token
     from Настройки → Модели (llamacpp_manager._load_tokens), with the

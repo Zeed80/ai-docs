@@ -53,6 +53,7 @@ logger = structlog.get_logger()
 _ALLOWED_UPLOAD_SUFFIXES = {".png", ".jpg", ".jpeg", ".dxf", ".dwg", ".pdf"}
 _COMFYUI_LORAS_DIR = pathlib.Path("/comfyui-loras")
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+_MAX_LORA_BYTES = 4 * 1024 * 1024 * 1024  # a rank-128 LoRA is ~hundreds of MB
 _PREPARING_STALE = timedelta(minutes=15)
 _QUEUED_STALE = timedelta(minutes=30)
 
@@ -163,6 +164,9 @@ class RunCreate(BaseModel):
     dataset_id: uuid.UUID
     name: str = Field(min_length=1, max_length=200)
     config: RunConfig = Field(default_factory=RunConfig)
+    # Optional: continue-training (fine-tune) an existing LoRA. A ref from
+    # GET /loras: "upload:<file>" | "run:<run_id>:<checkpoint>" | "node:<file>".
+    resume_lora: str | None = Field(default=None, max_length=400)
 
 
 def _dataset_out(ds: LoraDataset) -> dict:
@@ -425,6 +429,160 @@ async def base_models(user: UserInfo = Depends(get_current_user)):
     }
 
 
+# ── LoRA library (continue-training / fine-tune) ─────────────────────────────
+
+
+def _loras_dir(user: UserInfo) -> pathlib.Path:
+    return _data_dir() / "loras" / user.sub
+
+
+async def _resolve_lora_source(ref: str, db: AsyncSession,
+                               user: UserInfo) -> pathlib.Path:
+    """Ref → absolute source path to INSPECT (no copy). Owner-scoped."""
+    kind, _, rest = ref.partition(":")
+    if kind == "upload":
+        src = _loras_dir(user) / pathlib.PurePosixPath(rest).name
+    elif kind == "node":
+        src = _COMFYUI_LORAS_DIR / pathlib.PurePosixPath(rest).name
+    elif kind == "run":
+        run_id, _, ckpt = rest.partition(":")
+        try:
+            run = await _get_run_checked(db, uuid.UUID(run_id), user)
+        except (ValueError, HTTPException):
+            raise HTTPException(404, "Запуск LoRA не найден")
+        ckpt = pathlib.PurePosixPath(ckpt).name
+        if ckpt not in (run.checkpoints or []):
+            raise HTTPException(404, "Чекпойнта нет у запуска")
+        src = pathlib.Path(run.output_dir or "") / f"run_{run_id}" / ckpt
+    else:
+        raise HTTPException(400, f"Неизвестная ссылка на LoRA: {ref}")
+    if not src.exists():
+        raise HTTPException(404, "Файл LoRA не найден")
+    return src
+
+
+async def _prepare_resume_path(ref: str, db: AsyncSession, user: UserInfo) -> str:
+    """Ref → path RELATIVE to lora_data that the trainer container can see.
+    Node/ComfyUI LoRAs (outside the shared volume) are copied into the user's
+    loras cache so the trainer mount reaches them."""
+    src = await _resolve_lora_source(ref, db, user)
+    kind = ref.split(":", 1)[0]
+    if kind == "upload":
+        return f"loras/{user.sub}/{src.name}"
+    if kind == "run":
+        run_id = ref.split(":")[1]
+        return f"runs/{run_id}/output/run_{run_id}/{src.name}"
+    # node → copy into the shared volume
+    dest_rel = f"loras/{user.sub}/_node/{src.name}"
+    dest = _data_dir() / dest_rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+    return dest_rel
+
+
+@router.post("/loras/upload")
+async def upload_lora(
+    file: UploadFile = File(...),
+    user: UserInfo = Depends(get_current_user),
+):
+    """Upload a third-party (or exported) LoRA .safetensors to continue
+    training from. Returns its ref and inspected metadata."""
+    name = pathlib.Path(file.filename or "lora.safetensors").name
+    if not name.endswith(".safetensors"):
+        raise HTTPException(400, "Ожидается файл .safetensors")
+    safe = re.sub(r"[^\w.\-]", "_", name, flags=re.UNICODE)
+    dest = _loras_dir(user) / safe
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    try:
+        with dest.open("wb") as fh:
+            while chunk := await file.read(4 * 1024 * 1024):
+                size += len(chunk)
+                if size > _MAX_LORA_BYTES:
+                    raise HTTPException(413, "Файл LoRA слишком большой")
+                fh.write(chunk)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+
+    from app.ai.lora_inspect import inspect_lora
+
+    info = inspect_lora(dest)
+    if not info.get("ok"):
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, f"Не удалось прочитать LoRA: {info.get('error')}")
+    return {"ref": f"upload:{safe}", "label": safe, "source": "upload", **info}
+
+
+@router.get("/loras")
+async def list_loras(
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    """Available LoRAs to continue training from: uploaded files, this user's
+    finished-run checkpoints, and LoRAs deployed on the ComfyUI node. Each
+    carries inspected family/rank so the UI can flag compatibility."""
+    from app.ai.lora_inspect import inspect_lora
+
+    items: list[dict] = []
+
+    # 1. Uploaded.
+    up = _loras_dir(user)
+    if up.exists():
+        for f in sorted(up.glob("*.safetensors")):
+            items.append({"ref": f"upload:{f.name}", "label": f.name,
+                          "source": "upload", **inspect_lora(f)})
+
+    # 2. Own finished-run checkpoints.
+    q = select(LoraTrainingRun).where(
+        LoraTrainingRun.status == LoraRunStatus.done
+    ).order_by(LoraTrainingRun.created_at.desc()).limit(50)
+    if not _sees_all(user):
+        q = q.where(LoraTrainingRun.owner_sub == user.sub)
+    for run in (await db.execute(q)).scalars().all():
+        for ckpt in (run.checkpoints or []):
+            src = pathlib.Path(run.output_dir or "") / f"run_{run.id}" / ckpt
+            if not src.exists():
+                continue
+            info = inspect_lora(src)
+            items.append({
+                "ref": f"run:{run.id}:{ckpt}",
+                "label": f"{run.name} · {ckpt.split('_')[-1].replace('.safetensors', '')}",
+                "source": "run", **info,
+            })
+
+    # 3. Deployed on the ComfyUI node (shared, admin/engineer curated).
+    if _COMFYUI_LORAS_DIR.exists():
+        for f in sorted(_COMFYUI_LORAS_DIR.glob("*.safetensors")):
+            items.append({"ref": f"node:{f.name}", "label": f.name,
+                          "source": "node", **inspect_lora(f)})
+
+    return {"loras": items}
+
+
+class LoraCheckBody(BaseModel):
+    ref: str = Field(max_length=400)
+    base_model: str = DEFAULT_BASE_MODEL
+    rank: int = Field(default=32, ge=4, le=128)
+
+
+@router.post("/loras/check")
+async def check_lora(
+    body: LoraCheckBody,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    """Compatibility of a LoRA with a chosen base model + rank, for live UI
+    feedback before launching."""
+    from app.ai.lora_inspect import check_compatibility, inspect_lora
+
+    src = await _resolve_lora_source(body.ref, db, user)
+    info = inspect_lora(src)
+    family = base_model_info(body.base_model)["family"]
+    check = check_compatibility(info, family, body.rank)
+    return {"info": info, "check": check}
+
+
 @router.get("/hf-token")
 async def get_hf_token_status(user: UserInfo = Depends(get_current_user)):
     """Whether a HuggingFace token is configured for gated FLUX.2 models. The
@@ -450,11 +608,30 @@ async def create_run(
         from app.ai.lora_base_models import HF_GATED_HELP
 
         raise HTTPException(400, HF_GATED_HELP.format(hf=info["hf"]))
+
+    config = body.config.model_dump(exclude_none=True)
+
+    # Continue-training (fine-tune) an existing LoRA: verify compatibility
+    # BEFORE queuing (a family mismatch would crash the run), then resolve to
+    # a trainer-visible path and align rank to the LoRA's own rank.
+    if body.resume_lora:
+        from app.ai.lora_inspect import check_compatibility, inspect_lora
+
+        src = await _resolve_lora_source(body.resume_lora, db, user)
+        lora_info = inspect_lora(src)
+        check = check_compatibility(lora_info, info["family"], int(config.get("rank", 32)))
+        if not check["compatible"]:
+            raise HTTPException(400, "LoRA несовместима с выбранной базовой "
+                                     "моделью:\n" + "\n".join(check["reasons"]))
+        config["resume_from"] = await _prepare_resume_path(body.resume_lora, db, user)
+        if check.get("suggested_rank"):
+            config["rank"] = int(check["suggested_rank"])
+
     run = LoraTrainingRun(
         owner_sub=user.sub,
         dataset_id=ds.id,
         name=body.name,
-        config=body.config.model_dump(exclude_none=True),
+        config=config,
         base_family=info["family"],
         status=LoraRunStatus.queued,
     )

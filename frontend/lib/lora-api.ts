@@ -118,6 +118,7 @@ export async function createRun(body: {
   dataset_id: string;
   name: string;
   config: Record<string, unknown>;
+  resume_lora?: string | null;
 }): Promise<LoraRun> {
   const res = await mutFetch(`${BASE}/runs`, {
     method: "POST",
@@ -183,6 +184,61 @@ export async function listBaseModels(): Promise<{
 }> {
   const res = await apiFetch(`${BASE}/base-models`);
   if (!res.ok) throw new Error(res.statusText);
+  return res.json();
+}
+
+export interface LoraInfo {
+  ok: boolean;
+  family?: string;
+  base_model_version?: string | null;
+  rank?: number | null;
+  step?: number | null;
+  output_name?: string | null;
+  software?: string | null;
+  error?: string;
+}
+
+export interface LoraLibraryItem extends LoraInfo {
+  ref: string;
+  label: string;
+  source: "upload" | "run" | "node";
+}
+
+export interface LoraCompat {
+  level: "ok" | "warn" | "error";
+  compatible: boolean;
+  reasons: string[];
+  suggested_rank: number | null;
+}
+
+export async function listLoras(): Promise<LoraLibraryItem[]> {
+  const res = await apiFetch(`${BASE}/loras`);
+  if (!res.ok) throw new Error(res.statusText);
+  return (await res.json()).loras;
+}
+
+export async function uploadLora(file: File): Promise<LoraLibraryItem> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await mutFetch(`${BASE}/loras/upload`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
+  return res.json();
+}
+
+export async function checkLora(
+  ref: string,
+  base_model: string,
+  rank: number,
+): Promise<{ info: LoraInfo; check: LoraCompat }> {
+  const res = await mutFetch(`${BASE}/loras/check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref, base_model, rank }),
+  });
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
   return res.json();
 }
 

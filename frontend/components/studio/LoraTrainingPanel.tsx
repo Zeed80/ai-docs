@@ -11,6 +11,7 @@ import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  checkLora,
   createDataset,
   createRun,
   deleteDataset,
@@ -21,14 +22,18 @@ import {
   listBaseModels,
   listCaptionModels,
   listDatasets,
+  listLoras,
   listRuns,
   LoraBaseModel,
+  LoraCompat,
+  LoraLibraryItem,
   LoraDataset,
   LoraProgress,
   LoraRun,
   makeWorkflow,
   previewUrl,
   stopRun,
+  uploadLora,
   uploadSource,
 } from "@/lib/lora-api";
 
@@ -491,6 +496,12 @@ export default function LoraTrainingPanel() {
   const [launching, setLaunching] = useState(false);
   const [confirmLaunch, setConfirmLaunch] = useState(false);
 
+  // Fine-tune: continue training an existing LoRA
+  const [loras, setLoras] = useState<LoraLibraryItem[]>([]);
+  const [resumeLora, setResumeLora] = useState("");
+  const [compat, setCompat] = useState<LoraCompat | null>(null);
+  const [uploadingLora, setUploadingLora] = useState(false);
+
   const [captionOptions, setCaptionOptions] = useState(CAPTION_MODELS);
   const [baseModels, setBaseModels] = useState<LoraBaseModel[]>([]);
   const [hfStatus, setHfStatus] = useState<HfTokenStatus | null>(null);
@@ -498,6 +509,12 @@ export default function LoraTrainingPanel() {
   const loadHfStatus = useCallback(() => {
     getHfTokenStatus()
       .then(setHfStatus)
+      .catch(() => undefined);
+  }, []);
+
+  const loadLoras = useCallback(() => {
+    listLoras()
+      .then(setLoras)
       .catch(() => undefined);
   }, []);
 
@@ -527,7 +544,23 @@ export default function LoraTrainingPanel() {
       })
       .catch(() => undefined);
     loadHfStatus();
-  }, [loadHfStatus]);
+    loadLoras();
+  }, [loadHfStatus, loadLoras]);
+
+  // Live compatibility check when a LoRA / base model / rank changes.
+  useEffect(() => {
+    if (!resumeLora) {
+      setCompat(null);
+      return;
+    }
+    let alive = true;
+    checkLora(resumeLora, baseModel, rank)
+      .then((r) => alive && setCompat(r.check))
+      .catch(() => alive && setCompat(null));
+    return () => {
+      alive = false;
+    };
+  }, [resumeLora, baseModel, rank]);
 
   const load = useCallback(async () => {
     try {
@@ -620,14 +653,33 @@ export default function LoraTrainingPanel() {
           resolution,
           base_model: baseModel,
         },
+        resume_lora: resumeLora || null,
       });
       setRunName("");
+      setResumeLora("");
       flashNotice("Обучение поставлено в очередь. Прогресс — в списке справа.");
       await load();
     } catch (e) {
       setError(String((e as Error).message || e));
     } finally {
       setLaunching(false);
+    }
+  };
+
+  const onUploadLora = async (file: File) => {
+    setUploadingLora(true);
+    setError(null);
+    try {
+      const item = await uploadLora(file);
+      loadLoras();
+      setResumeLora(item.ref);
+      flashNotice(
+        `LoRA «${item.label}» загружена (семейство ${item.family ?? "?"}, rank ${item.rank ?? "?"}).`,
+      );
+    } catch (e) {
+      setError(String((e as Error).message || e));
+    } finally {
+      setUploadingLora(false);
     }
   };
 
@@ -981,9 +1033,84 @@ export default function LoraTrainingPanel() {
                 </select>
               </label>
             </div>
+
+            {/* Fine-tune: continue an existing LoRA */}
+            <details className="rounded border border-white/10 bg-zinc-900/40 p-2">
+              <summary className="cursor-pointer text-xs text-zinc-300">
+                Дообучить существующую LoRA (необязательно)
+              </summary>
+              <div className="mt-2 space-y-2">
+                <select
+                  value={resumeLora}
+                  onChange={(e) => setResumeLora(e.target.value)}
+                  className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm text-white"
+                >
+                  <option value="">— обучать с нуля —</option>
+                  {["run", "upload", "node"].map((src) => {
+                    const group = loras.filter((l) => l.source === src);
+                    if (!group.length) return null;
+                    const title = {
+                      run: "Свои чекпойнты",
+                      upload: "Загруженные",
+                      node: "На узле ComfyUI",
+                    }[src];
+                    return (
+                      <optgroup key={src} label={title}>
+                        {group.map((l) => (
+                          <option key={l.ref} value={l.ref}>
+                            {l.label}
+                            {l.family ? ` · ${l.family}` : ""}
+                            {l.rank ? ` · rank ${l.rank}` : ""}
+                          </option>
+                        ))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+                <label className="text-[11px] text-zinc-400 block">
+                  или загрузите .safetensors (своя/сторонняя):
+                  <input
+                    type="file"
+                    accept=".safetensors"
+                    disabled={uploadingLora}
+                    onChange={(e) =>
+                      e.target.files?.[0] && onUploadLora(e.target.files[0])
+                    }
+                    className="block text-xs text-zinc-400 mt-1"
+                  />
+                </label>
+                {compat && (
+                  <div
+                    className={`text-[11px] rounded p-2 ${
+                      compat.level === "error"
+                        ? "bg-red-500/10 text-red-300"
+                        : compat.level === "warn"
+                          ? "bg-amber-500/10 text-amber-300"
+                          : "bg-emerald-500/10 text-emerald-300"
+                    }`}
+                  >
+                    {compat.level === "error"
+                      ? "❌ Несовместима"
+                      : compat.level === "warn"
+                        ? "⚠ Совместимость не подтверждена"
+                        : "✓ Совместима"}
+                    <ul className="mt-1 list-disc list-inside space-y-0.5">
+                      {compat.reasons.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </details>
+
             <button
               onClick={() => setConfirmLaunch(true)}
-              disabled={launching || !runDatasetId}
+              disabled={
+                launching ||
+                !runDatasetId ||
+                (!!resumeLora && compat?.level === "error")
+              }
               className="w-full py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-sm text-white"
             >
               {launching ? t("lora_creating") : t("lora_start_training")}
