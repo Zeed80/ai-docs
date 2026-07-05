@@ -51,6 +51,10 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [hd, setHd] = useState(false);
   // High-quality model upscale of the result (any mode): 1 = off, 2/3/4×.
   const [upscale, setUpscale] = useState(1);
+  // Post-processing after ComfyUI (cleanup/edit). "auto" = let the workflow
+  // decide (LoRA-cleanup keeps its tuned pass); "none" = raw ComfyUI result;
+  // "text_only"/"full" opt into enhancements. Default "auto".
+  const [postprocess, setPostprocess] = useState("auto");
   useEffect(() => {
     listWorkflows()
       .then((ws) => setWorkflows(ws.filter((w) => !w.is_builtin && w.enabled)))
@@ -162,6 +166,14 @@ export default function StudioComposer({ onSubmitted }: Props) {
       }
       if (upscale > 1) {
         (input.params as Record<string, unknown>).upscale = upscale;
+      }
+      // Only send an explicit postprocess override; "auto" leaves the
+      // workflow/backend default in place.
+      if (
+        postprocess !== "auto" &&
+        (operation === "cleanup" || operation === "edit")
+      ) {
+        (input.params as Record<string, unknown>).postprocess = postprocess;
       }
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
@@ -369,6 +381,42 @@ export default function StudioComposer({ onSubmitted }: Props) {
               ))}
             </div>
           </div>
+
+          {/* Post-processing (cleanup/edit) */}
+          {(operation === "cleanup" || operation === "edit") && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-zinc-500">
+                  {t("postprocess_label")}
+                </span>
+                <span className="text-[11px] text-zinc-600">
+                  {t("postprocess_hint")}
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-1 p-1 rounded bg-white/5">
+                {(
+                  [
+                    ["auto", t("postprocess_auto")],
+                    ["none", t("postprocess_none")],
+                    ["text_only", t("postprocess_light")],
+                    ["full", t("postprocess_full")],
+                  ] as const
+                ).map(([val, label]) => (
+                  <button
+                    key={val}
+                    onClick={() => setPostprocess(val)}
+                    className={`px-2 py-1.5 rounded text-xs ${
+                      postprocess === val
+                        ? "bg-sky-600 text-white"
+                        : "text-zinc-300 hover:bg-white/10"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Source image */}
           {op.needsSource && (

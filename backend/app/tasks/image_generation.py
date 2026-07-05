@@ -588,7 +588,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # straight windows became parallelograms). Best-effort: None keeps
         # plain proportional mapping.
         source_to_result = None
-        if operation == "cleanup" and enhanced_source:
+        _pp = str(params.get("postprocess") or "none")
+        if operation == "cleanup" and enhanced_source and _pp != "none":
             try:
                 from app.ai.image_align import estimate_source_to_result
 
@@ -596,13 +597,15 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("align_failed", generation_id=generation_id, error=str(exc))
 
-        # Post-processing mode (cleanup only). "full" = the classic pipeline
-        # (binarize + vector reconstruction). "text_only" = keep the
-        # diffusion rendering as-is apart from a gentle autocontrast — the
-        # mode for trained-LoRA workflows: their output is already clean and
-        # soft-toned, and binarization visibly degrades it (confirmed by the
-        # user against raw ComfyUI output). "none" = raw diffusion.
-        postprocess = str(params.get("postprocess") or "full")
+        # Post-processing mode. "none" (DEFAULT) = the raw ComfyUI result,
+        # untouched — the safe default: on real busy sheets the classic
+        # pipeline (binarize+vectorize) and the OCR text-paste add more
+        # artifacts than they remove (user-confirmed: "куча мусора"). "full" =
+        # binarize + vector reconstruction. "text_only" = gentle autocontrast
+        # + text paste (trained-LoRA workflows opt into this via their
+        # params_schema default, which survives because the composer only
+        # sends postprocess when the user explicitly overrides "auto").
+        postprocess = str(params.get("postprocess") or "none")
         if operation == "cleanup" and postprocess == "full":
             try:
                 from app.ai.drawing_cleanup import regularize_technical_drawing
