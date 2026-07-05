@@ -86,8 +86,8 @@ def _apply_quality_preset(values: dict, quality: str | None) -> None:
     bind=True,
     name="image_generation.run_image_generation",
     max_retries=3,
-    soft_time_limit=600,   # 10 min — diffusion on a busy GPU can be slow
-    time_limit=660,
+    soft_time_limit=2400,  # HD tiled cleanup runs 4-6 diffusions (~10-20 min)
+    time_limit=2460,
 )
 def run_image_generation(self, generation_id: str) -> dict:
     from app.ai.comfyui_client import ComfyUITransientError
@@ -184,6 +184,59 @@ async def _mark_failed(gen_uuid: uuid.UUID, err: str, owner_sub: str | None = No
                 pass
 
 
+_HD_MAX_LONG_SIDE = 2600  # ~4 tiles for A4/A3 sheets; keeps runtime sane
+
+
+async def _run_hd_tiles(client, graph_template: dict, inject_map: dict, values: dict,
+                        source_bytes: bytes, object_info: dict,
+                        generation_id: str) -> tuple[bytes, str]:
+    """Upscale the sheet, diffuse it tile by tile through the SAME workflow
+    graph and stitch with seam blending. Returns (png_bytes, last_prompt_id)."""
+    import io as _io
+
+    from PIL import Image as _PILImage
+
+    from app.ai.comfyui_models import auto_resolve_models
+    from app.ai.comfyui_client import build_workflow
+    from app.ai.hd_tiles import split_tiles, stitch_tiles
+
+    src = _PILImage.open(_io.BytesIO(source_bytes)).convert("RGB")
+    scale = min(2.0, _HD_MAX_LONG_SIDE / max(src.size))
+    if scale > 1.0:
+        src = src.resize((round(src.width * scale), round(src.height * scale)),
+                         _PILImage.LANCZOS)
+    width, height = src.size
+    boxes = split_tiles(width, height)
+    logger.info("hd_tiles_start", generation_id=generation_id,
+                size=[width, height], tiles=len(boxes))
+
+    rendered = []
+    prompt_id = ""
+    for idx, box in enumerate(boxes):
+        crop = src.crop(box)
+        buf = _io.BytesIO()
+        crop.save(buf, format="PNG")
+        tile_name = await client.upload_image(buf.getvalue(),
+                                              f"hd_{generation_id}_{idx}.png")
+        tile_values = dict(values)
+        tile_values["image"] = tile_name
+        graph = build_workflow(graph_template, inject_map, tile_values)
+        graph, missing = auto_resolve_models(graph, object_info)
+        if missing:
+            raise RuntimeError(f"HD: не хватает моделей: {missing}")
+        prompt_id = await client.queue_workflow(graph)
+        outputs = await client.wait_for_result(prompt_id)
+        tile_png = await client.fetch_image(outputs[0])
+        rendered.append((box, _PILImage.open(_io.BytesIO(tile_png))))
+        logger.info("hd_tile_done", generation_id=generation_id,
+                    tile=idx + 1, total=len(boxes))
+
+    stitched = stitch_tiles(width, height, rendered)
+    out = _io.BytesIO()
+    stitched.save(out, format="PNG")
+    return out.getvalue(), prompt_id
+
+
 async def _run(generation_id: str, task_id: str | None) -> dict:
     from app.ai.comfyui_client import (
         ComfyUIClient,
@@ -219,6 +272,19 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         prompt = gen.prompt
         negative = gen.negative_prompt
         params = dict(gen.params or {})
+        # Custom workflows (trained-LoRA clones) ship their own tuned
+        # steps/cfg/strengths — the generic fast/quality preset would
+        # override them (confirmed live: "Быстро" re-enabled the Lightning
+        # LoRA node in a v2-LoRA clone via the inherited inject_map).
+        if not wf.is_builtin:
+            params.pop("quality", None)
+        # Workflow-declared parameter defaults (params_schema.*.default) fill
+        # anything the caller didn't set — this is how custom workflows (e.g.
+        # trained-LoRA clones) carry their own tuned behaviour, like
+        # postprocess="text_only", without frontend changes.
+        for key, spec in (wf.params_schema or {}).items():
+            if isinstance(spec, dict) and "default" in spec:
+                params.setdefault(key, spec["default"])
         source_paths = list(gen.source_image_paths or [])
         mask_path = gen.mask_path
         graph_template = dict(wf.graph or {})
@@ -226,6 +292,18 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
     # ── Run on ComfyUI ───────────────────────────────────────────────────────
     try:
+        # LoRA training holds the GPU exclusively — a diffusion run now would
+        # OOM the trainer. Fail fast with the human-readable reason (the AI
+        # router already does this for LLM routes; ComfyUI goes through here).
+        try:
+            from app.ai import gpu_lock
+
+            if gpu_lock.is_locked():
+                await _mark_failed(gen_uuid, gpu_lock.LOCK_MESSAGE, owner_sub)
+                return {"error": "gpu busy: lora training"}
+        except Exception:  # noqa: BLE001 — Redis hiccup must not block generation
+            pass
+
         client = ComfyUIClient.from_registry()
         if not await client.health():
             raise ComfyUITransientError(
@@ -234,19 +312,26 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             )
 
         uploaded: list[str] = []
+        enhanced_source: bytes | None = None
         for idx, path in enumerate(source_paths):
             content = download_file(path)
             if operation == "cleanup":
                 # Give diffusion a better-conditioned starting point for a
-                # poor-quality photo (deskew/denoise/contrast) — classical CV,
-                # not diffusion, is what can actually promise this. See
-                # drawing_cleanup.py for why the split exists at all.
+                # poor-quality photo (dewarp/deskew/denoise/contrast) —
+                # classical CV, not diffusion, is what can actually promise
+                # this. See drawing_cleanup.py for why the split exists at all.
                 try:
                     from app.ai.drawing_cleanup import enhance_source_for_diffusion
 
                     content = enhance_source_for_diffusion(content)
                 except Exception as exc:  # noqa: BLE001 — best-effort
                     logger.warning("enhance_source_failed", generation_id=generation_id, error=str(exc))
+                if idx == 0:
+                    # Text preservation below must OCR THIS image, not the raw
+                    # original: dewarp/deskew change the geometry, so boxes
+                    # computed against the original would land in the wrong
+                    # place on the diffusion output.
+                    enhanced_source = content
             server_name = await client.upload_image(content, f"src_{generation_id}_{idx}.png")
             uploaded.append(server_name)
 
@@ -317,41 +402,119 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 f"{names}. Скачайте их в Настройки → ComfyUI → Модели."
             )
 
-        prompt_id = await client.queue_workflow(graph)
-        outputs = await client.wait_for_result(prompt_id)
-        result_bytes = await client.fetch_image(outputs[0])
+        if params.get("hd") and operation == "cleanup" and uploaded:
+            # HD mode: 2x upscale + per-tile diffusion + seam-blended stitch.
+            # Small text/thin lines become 2x bigger for the model — detail
+            # no single ~1MP pass can render (VAE 8x latent compression).
+            hd_source = enhanced_source or download_file(source_paths[0])
+            result_bytes, prompt_id = await _run_hd_tiles(
+                client, graph_template, inject_map, dict(values), hd_source,
+                object_info, generation_id,
+            )
+        else:
+            prompt_id = await client.queue_workflow(graph)
+            outputs = await client.wait_for_result(prompt_id)
+            result_bytes = await client.fetch_image(outputs[0])
 
-        # Geometric regularization (cleanup only): diffusion cannot promise a
-        # line that should be straight actually comes out straight (confirmed
-        # live: hatching/contours come out wavy even with ControlNet
-        # conditioning) — binarize, strip speckle artifacts, and snap
-        # near-canonical-angle lines to mathematically straight before text
-        # gets pasted back on top. Best-effort: never fail the generation.
-        if operation == "cleanup":
+        # Size reconciliation (image-to-image ops): FluxKontextImageScale
+        # snaps the input to the model's resolution buckets, so the output
+        # comes back at a DIFFERENT size and aspect (+~4% measured live) —
+        # the user sees a "cropped" result next to their source, and every
+        # proportional mapping downstream (text paste) drifts. Resize the
+        # output back to the (enhanced) source frame; Flux stretches rather
+        # than crops, so the inverse resize restores geometry 1:1.
+        if operation in ("cleanup", "edit", "inpaint") and (enhanced_source or source_paths):
+            try:
+                from PIL import Image as _PILImage
+
+                ref_bytes = enhanced_source or download_file(source_paths[0])
+                ref_w, ref_h = _PILImage.open(io.BytesIO(ref_bytes)).size
+                out_img = _PILImage.open(io.BytesIO(result_bytes))
+                # Match the source's ASPECT at the diffusion's own resolution
+                # (never downscale to a small source: that visibly degraded a
+                # dense sheet — the user compared against raw ComfyUI).
+                scale = max(max(out_img.size) / max(ref_w, ref_h), 1.0)
+                target = (round(ref_w * scale), round(ref_h * scale))
+                if out_img.size != target:
+                    resized = out_img.convert("RGB").resize(target, _PILImage.LANCZOS)
+                    buf = io.BytesIO()
+                    resized.save(buf, format="PNG")
+                    result_bytes = buf.getvalue()
+                    logger.info("result_resized_to_source", generation_id=generation_id,
+                                out=list(out_img.size), target=list(target))
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.warning("result_resize_failed", generation_id=generation_id,
+                               error=str(exc))
+
+        # Affine layout estimation (cleanup only): diffusion re-layouts the
+        # sheet slightly, while the proportional text paste below assumes the
+        # output's layout matches the source's. Estimate the drift and AIM
+        # the pastes through it — never warp the clean result itself (that
+        # drags it onto the source photo's residual tilt; confirmed live:
+        # straight windows became parallelograms). Best-effort: None keeps
+        # plain proportional mapping.
+        source_to_result = None
+        if operation == "cleanup" and enhanced_source:
+            try:
+                from app.ai.image_align import estimate_source_to_result
+
+                source_to_result = estimate_source_to_result(result_bytes, enhanced_source)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("align_failed", generation_id=generation_id, error=str(exc))
+
+        # Post-processing mode (cleanup only). "full" = the classic pipeline
+        # (binarize + vector reconstruction). "text_only" = keep the
+        # diffusion rendering as-is apart from a gentle autocontrast — the
+        # mode for trained-LoRA workflows: their output is already clean and
+        # soft-toned, and binarization visibly degrades it (confirmed by the
+        # user against raw ComfyUI output). "none" = raw diffusion.
+        postprocess = str(params.get("postprocess") or "full")
+        if operation == "cleanup" and postprocess == "full":
             try:
                 from app.ai.drawing_cleanup import regularize_technical_drawing
 
-                result_bytes = regularize_technical_drawing(result_bytes)
+                result_bytes = regularize_technical_drawing(
+                    result_bytes, vectorize=params.get("vectorize") is not False
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("regularize_drawing_failed", generation_id=generation_id, error=str(exc))
+        elif operation == "cleanup" and postprocess == "text_only":
+            try:
+                from PIL import Image as _PILImage
+                from PIL import ImageOps as _PILImageOps
+
+                img = _PILImage.open(io.BytesIO(result_bytes)).convert("RGB")
+                img = _PILImageOps.autocontrast(img, cutoff=1)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                result_bytes = buf.getvalue()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("autocontrast_failed", generation_id=generation_id, error=str(exc))
 
         # Text preservation (edit/cleanup only): diffusion garbles existing
         # dimension/label text on every pass (confirmed live, with or without
         # ControlNet) — paste the original ink back at its OCR-detected
         # location instead of trusting the model to reproduce it. Best-effort:
         # never fail the generation over this.
-        if operation in ("edit", "cleanup") and source_paths:
+        if operation in ("edit", "cleanup") and source_paths and postprocess != "none":
             try:
                 from app.ai.text_preserve import composite_text_regions, detect_text_regions
 
-                source_for_ocr = download_file(source_paths[0])
+                source_for_ocr = enhanced_source or download_file(source_paths[0])
                 regions = detect_text_regions(source_for_ocr)
                 if regions:
                     from PIL import Image as _PILImage
 
                     src_w, src_h = _PILImage.open(io.BytesIO(source_for_ocr)).size
                     result_bytes = composite_text_regions(
-                        result_bytes, source_for_ocr, regions, src_w, src_h
+                        result_bytes, source_for_ocr, regions, src_w, src_h,
+                        # Always crisp for cleanup: soft photo-toned pastes on
+                        # a dense sheet read as dozens of dirty gray patches
+                        # (user-confirmed "франкенштейн"); after autocontrast
+                        # the background is near-white, so black-on-white
+                        # pastes blend fine in text_only too.
+                        binarize_ink=(operation == "cleanup"),
+                        source_to_result=source_to_result,
                     )
                     logger.info(
                         "text_preserve_applied", generation_id=generation_id, regions=len(regions)

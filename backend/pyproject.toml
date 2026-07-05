@@ -36,8 +36,10 @@ dependencies = [
     "prometheus-client>=0.21,<1",
     "docker>=7.1,<8",
     "networkx>=3.4,<4",
-    "opencv-python-headless>=4.10,<5",
+    "opencv-contrib-python-headless>=4.10,<5",
     "pytesseract>=0.3.13,<1",
+    # ezdxf's matplotlib drawing backend (LoRA dataset DXF/DWG target renders)
+    "matplotlib>=3.8,<4",
 ]
 
 [project.optional-dependencies]

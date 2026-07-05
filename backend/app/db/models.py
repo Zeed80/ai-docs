@@ -88,6 +88,7 @@ class ApprovalActionType(str, enum.Enum):
     tech_learning_rule_activate = "tech.learning_rule_activate"
     tech_process_plan_from_drawing = "tech.process_plan_from_drawing"
     agent_tool_call = "agent.tool_call"
+    lora_train = "lora.train"
 
 
 class PartyRole(str, enum.Enum):
@@ -3057,6 +3058,10 @@ class ComfyWorkflow(UUIDPrimaryKey, TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     owner_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Base-model family the graph is built for (qwen | flux2): a LoRA trained
+    # on one family silently produces garbage when loaded into the other's
+    # graph, so make-workflow matches on this.
+    base_family: Mapped[str] = mapped_column(String(30), nullable=False, default="qwen")
 
 
 class ImageGeneration(UUIDPrimaryKey, TimestampMixin, Base):
@@ -3100,3 +3105,82 @@ class ImageGeneration(UUIDPrimaryKey, TimestampMixin, Base):
     case_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("work_cases.id"), nullable=True, index=True
     )
+
+
+# ── LoRA training (studio "Обучение LoRA" tab) ──────────────────────────────
+
+
+class LoraDatasetStatus(str, enum.Enum):
+    preparing = "preparing"
+    ready = "ready"
+    failed = "failed"
+
+
+class LoraRunStatus(str, enum.Enum):
+    pending_approval = "pending_approval"
+    queued = "queued"
+    running = "running"
+    stopping = "stopping"
+    done = "done"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class LoraDataset(UUIDPrimaryKey, TimestampMixin, Base):
+    """A prepared (control, target, caption) training set for an edit-model
+    LoRA. Files live under the shared datasets volume; MinIO keeps preview
+    pairs for the UI. ``params`` records the full preparation recipe so the
+    dataset is reproducible; ``stats`` is the QA report (pair count, rejects,
+    caption model used...)."""
+
+    __tablename__ = "lora_datasets"
+
+    owner_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[LoraDatasetStatus] = mapped_column(
+        Enum(LoraDatasetStatus), default=LoraDatasetStatus.preparing, nullable=False, index=True
+    )
+    preset: Mapped[str] = mapped_column(String(60), nullable=False, default="drawing_cleanup")
+    params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    source_paths: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    dataset_dir: Mapped[str | None] = mapped_column(String(1000))
+    stats: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    preview_paths: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    celery_task_id: Mapped[str | None] = mapped_column(String(200))
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class LoraTrainingRun(UUIDPrimaryKey, TimestampMixin, Base):
+    """One training job over a LoraDataset, executed in the dedicated trainer
+    container. Queued immediately on creation (the ``lora.train`` approval
+    gate was removed 2026-07-05 by user decision — the panel shows a
+    confirmation dialog instead; ``pending_approval`` stays in the enum for
+    pre-existing rows). ``progress`` is updated live by the training task
+    (step/total/loss/eta/samples); ``checkpoints`` lists saved LoRA files."""
+
+    __tablename__ = "lora_training_runs"
+
+    owner_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("lora_datasets.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[LoraRunStatus] = mapped_column(
+        Enum(LoraRunStatus), default=LoraRunStatus.queued, nullable=False, index=True
+    )
+    config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Family of config["base_model"] (qwen | flux2), denormalized so deploy/
+    # make-workflow can match ComfyUI workflows without the catalog.
+    base_family: Mapped[str] = mapped_column(String(30), nullable=False, default="qwen")
+    progress: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    checkpoints: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    sample_paths: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # MinIO paths of the control images the validation samples are generated
+    # from — the UI shows them as the first column of the evolution grid.
+    control_paths: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    output_dir: Mapped[str | None] = mapped_column(String(1000))
+    container_id: Mapped[str | None] = mapped_column(String(200))
+    celery_task_id: Mapped[str | None] = mapped_column(String(200))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)

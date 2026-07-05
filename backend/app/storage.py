@@ -103,6 +103,19 @@ def delete_file(storage_path: str) -> None:
     logger.info("minio_delete", path=storage_path)
 
 
+def delete_prefix(prefix: str) -> int:
+    """Delete every object under ``prefix``. Returns the number removed."""
+    client = get_minio_client()
+    bucket = settings.minio_bucket
+    removed = 0
+    for obj in client.list_objects(bucket, prefix=prefix, recursive=True):
+        client.remove_object(bucket, obj.object_name)
+        removed += 1
+    if removed:
+        logger.info("minio_delete_prefix", prefix=prefix, count=removed)
+    return removed
+
+
 def file_exists(storage_path: str) -> bool:
     """Check if file exists in MinIO."""
     client = get_minio_client()

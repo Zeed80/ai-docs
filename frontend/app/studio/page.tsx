@@ -5,11 +5,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import GenerationDetail from "@/components/studio/GenerationDetail";
 import GenerationGallery from "@/components/studio/GenerationGallery";
+import LoraTrainingPanel from "@/components/studio/LoraTrainingPanel";
 import StudioComposer from "@/components/studio/StudioComposer";
 import WorkflowPanel from "@/components/studio/WorkflowPanel";
+import { gpuStatus } from "@/lib/lora-api";
 import { Generation, getGeneration, listGenerations } from "@/lib/studio-api";
 
-type Tab = "studio" | "workflows";
+type Tab = "studio" | "workflows" | "lora";
 
 export default function StudioPage() {
   const t = useTranslations("studio");
@@ -17,6 +19,7 @@ export default function StudioPage() {
   const [selected, setSelected] = useState<Generation | null>(null);
   const [tab, setTab] = useState<Tab>("studio");
   const [error, setError] = useState<string | null>(null);
+  const [gpuBusy, setGpuBusy] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -56,6 +59,22 @@ export default function StudioPage() {
     };
   }, [items, load]);
 
+  // GPU-lock banner: LoRA training makes local ComfyUI/Ollama unavailable
+  // for every studio user, not just the run's owner.
+  useEffect(() => {
+    let alive = true;
+    const check = () =>
+      gpuStatus()
+        .then((s) => alive && setGpuBusy(!!s.training_lock))
+        .catch(() => undefined);
+    void check();
+    const id = setInterval(check, 30000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
   // Deep-link from a push notification: /studio?id=...
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("id");
@@ -94,6 +113,16 @@ export default function StudioPage() {
           >
             {t("tab_workflows")}
           </button>
+          <button
+            onClick={() => setTab("lora")}
+            className={`px-3 py-1.5 rounded text-sm ${
+              tab === "lora"
+                ? "bg-white/10 text-white"
+                : "text-zinc-400 hover:text-white"
+            }`}
+          >
+            {t("tab_lora")}
+          </button>
           <a
             href="/settings/comfyui"
             className="px-3 py-1.5 rounded text-sm text-zinc-400 hover:text-white"
@@ -102,6 +131,13 @@ export default function StudioPage() {
           </a>
         </div>
       </div>
+
+      {gpuBusy && (
+        <div className="mx-6 mt-3 text-xs text-amber-300 bg-amber-500/10 rounded p-2">
+          GPU занят обучением LoRA — локальные ИИ-функции (генерация, правка,
+          очистка) временно недоступны. Облачные маршруты работают.
+        </div>
+      )}
 
       {error && (
         <div className="mx-6 mt-3 text-xs text-red-400 bg-red-500/10 rounded p-2">
@@ -112,6 +148,10 @@ export default function StudioPage() {
       {tab === "workflows" ? (
         <div className="flex-1 min-h-0">
           <WorkflowPanel />
+        </div>
+      ) : tab === "lora" ? (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <LoraTrainingPanel />
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto lg:overflow-hidden grid lg:grid-cols-[360px_1fr]">

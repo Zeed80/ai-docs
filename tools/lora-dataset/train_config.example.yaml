@@ -1,0 +1,63 @@
+# ai-toolkit (github.com/ostris/ai-toolkit) training config — cleanup-LoRA
+# for Qwen-Image-Edit-2511 on a single RTX 3090 (24GB).
+#
+# ВАЖНО: перед запуском сверить поля `model:` (особенно `arch`) со свежим
+# config/examples/ в вашей версии ai-toolkit — идентификаторы архитектуры для
+# 2511 и low-vram опции между релизами переименовывались. Значения ниже —
+# рабочая точка отсчёта, не догма.
+
+job: extension
+config:
+  name: qwen_edit_2511_cleanup_lora
+  process:
+    - type: sd_trainer
+      training_folder: output
+      device: cuda:0
+
+      network:
+        type: lora
+        linear: 32
+        linear_alpha: 32
+
+      save:
+        dtype: float16
+        save_every: 500
+        max_step_saves_to_keep: 4
+
+      datasets:
+        - folder_path: ../../datasets/lora-cleanup/images
+          control_path: ../../datasets/lora-cleanup/control
+          caption_ext: txt
+          caption_dropout_rate: 0.05
+          cache_latents_to_disk: true
+          resolution: [768]          # 24GB: начинать с 768, 1024 — если влезет
+
+      train:
+        batch_size: 1
+        steps: 4000                  # ~сутки на 3090; смотреть sample-превью
+        gradient_accumulation_steps: 2
+        gradient_checkpointing: true
+        train_unet: true
+        train_text_encoder: false
+        noise_scheduler: flowmatch
+        optimizer: adamw8bit
+        lr: 1.0e-4
+        dtype: bf16
+
+      model:
+        name_or_path: Qwen/Qwen-Image-Edit-2511
+        arch: qwen_image_edit_plus   # ← сверить с config/examples вашей версии!
+        quantize: true               # fp8 базовой модели — обязательно на 24GB
+        quantize_te: true            # + квантование текст-энкодера
+        low_vram: true
+
+      sample:
+        sampler: flowmatch
+        sample_every: 500
+        width: 768
+        height: 768
+        # Прогресс виден только на контрольном фото: положить 1-2 фото из
+        # cleanup_test_files (валидационный сет!) рядом и указать путь.
+        samples:
+          - prompt: "convert this into a clean black and white technical line drawing, crisp sharp uniform lines, remove background, remove noise and shadows, remove binding, white background. Содержимое чертежа: фасад здания с окнами"
+            ctrl_img: ./validation/IMG20250602111830.jpg

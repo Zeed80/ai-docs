@@ -162,6 +162,24 @@ def _runtime_ocr_model_and_provider() -> tuple[str, str]:
     return settings.ollama_model_ocr, "ollama"
 
 
+def _ensure_gpu_free() -> None:
+    """Refuse to trigger an Ollama model load while LoRA training holds the
+    GPU. The AI router already gates its own routes, but plenty of legacy
+    call sites hit this client directly — one of them loaded a 17GB model
+    mid-training and OOM'd the trainer (confirmed live). This is the single
+    choke point every Ollama call passes through. Best-effort: a Redis
+    hiccup must never break normal inference."""
+    try:
+        from app.ai import gpu_lock
+
+        if gpu_lock.is_locked():
+            raise RuntimeError(gpu_lock.LOCK_MESSAGE)
+    except RuntimeError:
+        raise
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def generate(
     prompt: str,
     *,
@@ -185,6 +203,7 @@ async def generate(
         max_retries: Number of retries
         format_json: Request JSON output format
     """
+    _ensure_gpu_free()
     model = model or settings.ollama_model_ocr
     breaker = _get_breaker(model)
 
@@ -444,6 +463,7 @@ async def generate_json(
 
     Falls back to regex JSON extraction if the model wraps output in markdown.
     """
+    _ensure_gpu_free()
     if model is None or provider is None:
         _model, _provider = _runtime_ocr_model_and_provider()
         model = model or _model
@@ -604,6 +624,7 @@ async def chat(
     format_json: bool = False,
 ) -> OllamaResponse:
     """Chat-style generation using Ollama /api/chat."""
+    _ensure_gpu_free()
     model = model or settings.ollama_model_reasoning
     breaker = _get_breaker(model)
 
@@ -811,6 +832,7 @@ async def chat_with_images(
         timeout_seconds: Request timeout (VLM inference is slow)
         format_json: Request JSON structured output
     """
+    _ensure_gpu_free()
     import base64
 
     effective_model = model or getattr(settings, "ollama_model_vlm", settings.ollama_model_ocr)

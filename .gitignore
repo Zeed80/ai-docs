@@ -5,6 +5,12 @@ test-drawings/*.jpeg
 test-drawings/*.png
 test-drawings/*.svg
 
+# Real photos/DWG of company drawings for cleanup-mode testing (private data)
+cleanup_test_files/
+
+# Generated LoRA training data (tools/lora-dataset — regenerate, don't commit)
+datasets/lora-cleanup*/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -391,7 +391,10 @@
       "error_need_prompt": "Опишите, что нужно сгенерировать.",
       "error_need_mask": "Закрасьте область для правки на изображении.",
       "submit": "Сгенерировать",
-      "submit_busy": "Отправка…"
+      "submit_busy": "Отправка…",
+      "workflow_label": "Воркфлоу",
+      "workflow_builtin": "Встроенный (по умолчанию)",
+      "hd_label": "HD по тайлам (экспериментально: возможны расхождения между тайлами)"
     },
     "gallery": {
       "empty": "Пока ничего не сгенерировано. Опишите задачу слева и нажмите «Сгенерировать».",
@@ -453,6 +456,33 @@
       "clear": "Очистить маску",
       "painted": "Область выделена",
       "not_painted": "Закрасьте область для правки"
-    }
+    },
+    "tab_lora": "Обучение LoRA",
+    "lora_new_dataset": "Новый датасет",
+    "lora_dataset_name": "Название датасета",
+    "lora_sources_hint": "Исходники: чертежи PNG/JPG/DXF/DWG (эталоны качества)",
+    "lora_synth_count": "Синтетика, шт",
+    "lora_per_image": "Вариантов на лист",
+    "lora_caption_model": "Модель описаний (VLM)",
+    "lora_create_dataset": "Создать датасет",
+    "lora_creating": "Создание…",
+    "lora_pairs": "Пары",
+    "lora_captioned": "С описаниями",
+    "lora_render_failed": "Не отрендерено",
+    "lora_new_run": "Новое обучение",
+    "lora_pick_dataset": "— выберите готовый датасет —",
+    "lora_run_name": "Название LoRA",
+    "lora_base_model": "Базовая модель",
+    "lora_steps": "Шагов обучения",
+    "lora_start_training": "Запустить обучение",
+    "lora_step": "шаг",
+    "lora_eta": "осталось",
+    "lora_stop": "Остановить обучение",
+    "lora_checkpoints": "Чекпойнты",
+    "lora_deploy": "На узел ComfyUI",
+    "lora_preset": "Тип обучения (пресет)",
+    "lora_make_workflow": "Воркфлоу с LoRA",
+    "lora_delete": "Удалить",
+    "lora_resolution": "Разрешение"
   }
 }

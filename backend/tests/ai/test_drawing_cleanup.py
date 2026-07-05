@@ -67,11 +67,15 @@ def test_regularize_technical_drawing_removes_isolated_speck_noise():
 def test_regularize_technical_drawing_defaults_to_no_line_snapping():
     """Line-snapping needed three rounds of live-testing fixes before it
     stopped introducing new corruption (see _snap_canonical_lines' own
-    docstring) — it must stay opt-in, not silently on for every cleanup run."""
+    docstring) — it must stay opt-in, not silently on for every cleanup run.
+    (Vector reconstruction, its replacement, defaults on — but with
+    ``vectorize=False`` the older pass must still not sneak in.)"""
     img = Image.new("RGB", (300, 300), "white")
     ImageDraw.Draw(img).ellipse([50, 50, 250, 250], outline="black", width=3)
-    default_out = regularize_technical_drawing(_png_bytes(img))
-    explicit_off_out = regularize_technical_drawing(_png_bytes(img), snap_lines=False)
+    default_out = regularize_technical_drawing(_png_bytes(img), vectorize=False)
+    explicit_off_out = regularize_technical_drawing(
+        _png_bytes(img), snap_lines=False, vectorize=False
+    )
     assert default_out == explicit_off_out
 
 
@@ -80,7 +84,7 @@ def test_regularize_technical_drawing_preserves_a_circle_with_line_snapping_on()
     d = ImageDraw.Draw(img)
     d.ellipse([50, 50, 250, 250], outline="black", width=3)
 
-    out = regularize_technical_drawing(_png_bytes(img), snap_lines=True)
+    out = regularize_technical_drawing(_png_bytes(img), snap_lines=True, vectorize=False)
     ink = _ink_mask(out)
     # A circle isn't a canonical-angle straight line — it must survive
     # roughly intact (not collapsed to a single bar, not erased). Compare
@@ -107,7 +111,7 @@ def test_regularize_technical_drawing_keeps_title_block_text_readable_with_line_
         y = int(rng.integers(330, 395))
         d.line([(x, y), (x + 3, y + 2)], fill="black", width=1)
 
-    out = regularize_technical_drawing(_png_bytes(img), snap_lines=True)
+    out = regularize_technical_drawing(_png_bytes(img), snap_lines=True, vectorize=False)
     ink = _ink_mask(out)
     title_block = ink[330:395, 430:590]
     # A single corrupted blob would fill almost the entire region; scattered
