@@ -160,6 +160,71 @@ def run_image_generation(self, generation_id: str) -> dict:
         return {"error": str(exc)}
 
 
+def _pick_upscale_model(object_info: dict) -> str | None:
+    """Choose an upscale model available on the node. Prefer a sharp
+    line-art-friendly one (UltraSharp / 4x) — ideal for technical drawings."""
+    try:
+        mn = object_info["UpscaleModelLoader"]["input"]["required"]["model_name"]
+        # ComfyUI COMBO shapes vary by version: [[opt, ...], {...}] (older) or
+        # ["COMBO", {"options": [...]}] (newer).
+        if mn and isinstance(mn[0], list):
+            models = mn[0]
+        elif len(mn) > 1 and isinstance(mn[1], dict):
+            models = mn[1].get("options") or []
+        else:
+            models = []
+    except Exception:  # noqa: BLE001
+        return None
+    if not models:
+        return None
+    for pref in ("ultrasharp", "4x", "esrgan"):
+        for m in models:
+            if pref in m.lower():
+                return m
+    return models[0]
+
+
+async def _run_upscale(client, image_bytes: bytes, factor: int,
+                       object_info: dict, generation_id: str) -> bytes:
+    """Model-based high-quality upscale of the FINAL result — mode-agnostic
+    (runs on the produced image, so it works for generate/edit/cleanup/
+    inpaint/techdraw alike). The ESRGAN model upscales at its native factor
+    (usually 4x); a Lanczos ImageScale then hits the exact requested factor.
+    Best-effort: any failure keeps the un-upscaled result."""
+    from PIL import Image as _PILImage
+
+    model_name = _pick_upscale_model(object_info)
+    if not model_name:
+        logger.warning("upscale_no_model", generation_id=generation_id)
+        return image_bytes
+
+    w, h = _PILImage.open(io.BytesIO(image_bytes)).size
+    target_w, target_h = w * factor, h * factor
+
+    _write_progress(generation_id, None, None, node="upscale")
+    name = await client.upload_image(image_bytes, f"upscale_{generation_id}.png")
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": name}},
+        "2": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": model_name}},
+        "3": {"class_type": "ImageUpscaleWithModel",
+              "inputs": {"upscale_model": ["2", 0], "image": ["1", 0]}},
+        # Lanczos-resize the model output to the EXACT requested size (the
+        # model's native factor may be 4x; this lands 2x/3x precisely and
+        # trims any rounding).
+        "4": {"class_type": "ImageScale",
+              "inputs": {"image": ["3", 0], "upscale_method": "lanczos",
+                         "width": target_w, "height": target_h, "crop": "disabled"}},
+        "5": {"class_type": "SaveImage",
+              "inputs": {"images": ["4", 0], "filename_prefix": "upscaled"}},
+    }
+    prompt_id = await client.queue_workflow(graph)
+    outputs = await client.wait_for_result(prompt_id)
+    upscaled = await client.fetch_image(outputs[0])
+    logger.info("upscaled", generation_id=generation_id, model=model_name,
+                factor=factor, from_size=[w, h], to=[target_w, target_h])
+    return upscaled
+
+
 def _make_thumbnail(content: bytes, max_px: int = 480) -> bytes | None:
     try:
         from PIL import Image
@@ -590,6 +655,20 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("text_preserve_failed", generation_id=generation_id, error=str(exc))
+
+        # High-quality upscale of the final image (any mode). Applied last so
+        # it enlarges the fully post-processed result. best-effort.
+        try:
+            factor = int(params.get("upscale", 1) or 1)
+        except (TypeError, ValueError):
+            factor = 1
+        if factor > 1:
+            try:
+                result_bytes = await _run_upscale(
+                    client, result_bytes, min(factor, 4), object_info, generation_id)
+            except Exception as exc:  # noqa: BLE001 — keep the base result
+                logger.warning("upscale_failed", generation_id=generation_id,
+                               error=str(exc)[:200])
 
         result_path = f"{_RESULT_BUCKET_PREFIX}/{owner_sub or 'shared'}/{generation_id}.png"
         upload_file(result_bytes, result_path, "image/png")

@@ -333,3 +333,22 @@ def test_owns_lets_agent_service_bypass_ownership_for_any_record():
     assert _owns(gen, _user("real-human-user")) is True
     assert _owns(gen, _user("a-different-human")) is False
     assert _owns(None, _user("agent-service")) is False
+
+
+def test_pick_upscale_model_parses_combo_shapes():
+    """object_info COMBO for the upscale model varies by ComfyUI version;
+    _pick_upscale_model must read both shapes and prefer a sharp model."""
+    from app.tasks.image_generation import _pick_upscale_model
+
+    # newer: ["COMBO", {"options": [...]}]
+    oi_new = {"UpscaleModelLoader": {"input": {"required": {
+        "model_name": ["COMBO", {"options": ["4x-UltraSharp.pth", "x2.pth"]}]}}}}
+    assert _pick_upscale_model(oi_new) == "4x-UltraSharp.pth"
+
+    # older: [[opt, ...], {...}]
+    oi_old = {"UpscaleModelLoader": {"input": {"required": {
+        "model_name": [["RealESRGAN_x4.pth", "other.pth"], {}]}}}}
+    assert _pick_upscale_model(oi_old) == "RealESRGAN_x4.pth"  # 4x preferred
+
+    # no upscaler node → None (skip gracefully)
+    assert _pick_upscale_model({}) is None

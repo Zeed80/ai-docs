@@ -49,6 +49,8 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [workflowId, setWorkflowId] = useState<string>("");
   // HD tiled cleanup — maximum quality, minutes per sheet.
   const [hd, setHd] = useState(false);
+  // High-quality model upscale of the result (any mode): 1 = off, 2/3/4×.
+  const [upscale, setUpscale] = useState(1);
   useEffect(() => {
     listWorkflows()
       .then((ws) => setWorkflows(ws.filter((w) => !w.is_builtin && w.enabled)))
@@ -157,6 +159,9 @@ export default function StudioComposer({ onSubmitted }: Props) {
       }
       if (operation === "cleanup" && hd) {
         (input.params as Record<string, unknown>).hd = true;
+      }
+      if (upscale > 1) {
+        (input.params as Record<string, unknown>).upscale = upscale;
       }
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
@@ -335,6 +340,33 @@ export default function StudioComposer({ onSubmitted }: Props) {
               >
                 {t("quality_quality")}
               </button>
+            </div>
+          </div>
+
+          {/* High-quality upscale (any mode) */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs text-zinc-500">
+                {t("upscale_label")}
+              </span>
+              <span className="text-[11px] text-zinc-600">
+                {upscale > 1 ? t("upscale_hint_on") : t("upscale_hint_off")}
+              </span>
+            </div>
+            <div className="grid grid-cols-4 gap-1 p-1 rounded bg-white/5">
+              {[1, 2, 3, 4].map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setUpscale(f)}
+                  className={`px-2 py-1.5 rounded text-sm ${
+                    upscale === f
+                      ? "bg-sky-600 text-white"
+                      : "text-zinc-300 hover:bg-white/10"
+                  }`}
+                >
+                  {f === 1 ? t("upscale_off") : `${f}×`}
+                </button>
+              ))}
             </div>
           </div>
 
