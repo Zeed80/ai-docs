@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
 
+    # LoRA training (studio tab): shared volume between worker and trainer
+    lora_data_dir: str = "/lora-data"
+    # HuggingFace token forwarded to the trainer container (FLUX.2-dev is a
+    # gated repo; klein/Qwen download without it).
+    hf_token: str | None = None
+
     # Ollama
     ollama_url: str = "http://localhost:11434"
     ollama_model_ocr: str = "gemma4:e4b"

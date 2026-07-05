@@ -38,6 +38,9 @@ services:
   celery-worker-gpu:
     restart: unless-stopped
 
+  celery-worker-lora:
+    restart: unless-stopped
+
   celery-beat:
     restart: unless-stopped
 

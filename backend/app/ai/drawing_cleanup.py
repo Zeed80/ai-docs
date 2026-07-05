@@ -37,21 +37,36 @@ _MIN_SPECK_AREA_FRACTION = 0.00003  # relative to image area; below this = noise
 
 
 def enhance_source_for_diffusion(image_bytes: bytes) -> bytes:
-    """Pre-diffusion conditioning for a poor-quality photo/scan: deskew +
+    """Pre-diffusion conditioning for a poor-quality photo/scan: perspective
+    dewarp (phone photos of a bound album are never shot square-on) + deskew +
     denoise + contrast, kept as a natural (non-binarized) image so diffusion
     still has photographic context to work with. Best-effort: returns the
-    original bytes unchanged if OpenCV isn't available or anything fails."""
+    original bytes unchanged if OpenCV isn't available or anything fails.
+
+    NOTE for callers: the output's geometry differs from the input's whenever
+    dewarp/deskew fires — anything computed against the source in pixel
+    coordinates (OCR text boxes for text_preserve!) must be computed against
+    THIS function's output, not the original photo."""
     try:
         import cv2
         import numpy as np
         from PIL import Image
 
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img = _open_on_white(image_bytes)
         arr = np.asarray(img)
 
-        # Denoise first (median blur — cheap, preserves edges better than
-        # gaussian for scan/JPEG speckle) so deskew's edge detection isn't
-        # thrown off by sensor noise.
+        # Perspective correction first: find the sheet's quad and warp it
+        # square. Confirmed live: diffusion faithfully reproduces the photo's
+        # perspective tilt (the result is a skewed sheet), and the vector
+        # regularizer can only snap lines to ЕСКД angles if the sheet's own
+        # verticals/horizontals actually run vertical/horizontal.
+        dewarped = _dewarp_sheet(arr)
+        if dewarped is not None:
+            arr = _erase_binding_blocks(dewarped)
+
+        # Denoise (median blur — cheap, preserves edges better than gaussian
+        # for scan/JPEG speckle) so deskew's edge detection isn't thrown off
+        # by sensor noise.
         arr = cv2.medianBlur(arr, 3)
 
         angle = _detect_skew_angle(arr)
@@ -75,34 +90,40 @@ def enhance_source_for_diffusion(image_bytes: bytes) -> bytes:
         return image_bytes
 
 
-def regularize_technical_drawing(image_bytes: bytes, snap_lines: bool = False) -> bytes:
-    """Post-diffusion pass: binarize, strip speckle artifacts. Best-effort:
-    returns the input unchanged if OpenCV is unavailable or anything fails.
+def regularize_technical_drawing(
+    image_bytes: bytes, snap_lines: bool = False, vectorize: bool = True
+) -> bytes:
+    """Post-diffusion pass: binarize, strip speckle artifacts, then (default)
+    rebuild every stroke via vector reconstruction — straight uniform lines
+    snapped to ЕСКД angles, perfect circles/arcs, curves redrawn 1:1. See
+    drawing_vectorize.py for the design and why it's safe to default on where
+    the older ``snap_lines`` pass wasn't: it *replaces* strokes one-to-one
+    from the skeleton instead of overpainting Hough fragments, and it
+    self-verifies coverage against the original ink, declining (falling back
+    to the plain binarized image) rather than shipping a corrupted redraw.
+    Best-effort: returns the input unchanged if OpenCV is unavailable or
+    anything fails.
 
-    ``snap_lines`` (default off): the canonical-angle line-straightening pass
-    (see ``_snap_canonical_lines``). It's implemented and unit-tested, but
-    live testing on real diffusion output kept surfacing new ways for it to
-    misfire beyond what got fixed (unrelated segments merged across gaps;
-    text/table content read as thick "lines"; and — the one that kept it off
-    by default — near-duplicate line fragments a few px apart in the same
-    offset neighborhood getting *each* redrawn, compounding into a visibly
-    thicker bar than any single measurement). Each failure mode found so far
-    has a fix in the code, but shipping a feature that has needed three
-    rounds of "found new corruption on a real drawing" isn't something to
-    default on for every user's cleanup run. Binarization + speck/gap
-    cleanup alone measurably reduces noise without this risk.
+    ``snap_lines`` (default off, superseded by ``vectorize``): the older
+    canonical-angle line-straightening pass (see ``_snap_canonical_lines``).
+    It drew corrected lines on top of the existing raster and needed three
+    rounds of live-corruption fixes without reaching trustworthy — kept only
+    as an opt-in escape hatch and for its regression tests.
     """
     try:
         import cv2
         import numpy as np
         from PIL import Image
 
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img = _open_on_white(image_bytes)
         arr = np.asarray(img)
         h, w = arr.shape[:2]
 
         gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-        gray = cv2.medianBlur(gray, 3)
+        # No pre-threshold median blur here: it erases genuine 1px strokes
+        # entirely (confirmed on a real thin-line CAD export — most of the
+        # geometry vanished), while the speckle it would have suppressed is
+        # already removed component-wise by _remove_small_specks below.
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         # `binary`: ink = 0 (black), background = 255 (white). Work with an
         # inverted mask (ink = 255) for morphology/contour conventions.
@@ -111,35 +132,19 @@ def regularize_technical_drawing(image_bytes: bytes, snap_lines: bool = False) -
         ink = _remove_small_specks(ink, w * h)
         ink = _close_small_gaps(ink)
 
+        if vectorize:
+            from app.ai.drawing_vectorize import redraw_ink
+
+            canvas = redraw_ink(ink, _text_exclusion_boxes(image_bytes, w, h))
+            if canvas is not None:
+                buf = io.BytesIO()
+                Image.fromarray(canvas).convert("RGB").save(buf, format="PNG")
+                return buf.getvalue()
+            # Declined (self-verification failed or not a line drawing) —
+            # fall through to the plain binarized output below.
+
         if snap_lines:
-            # Dense text (title block, spec table) reads geometrically almost
-            # exactly like a cluster of short axis-aligned "lines" — confirmed
-            # live: without this exclusion, line-snapping turned real characters
-            # into black blobs even with the thickness cap in place, because a
-            # row of narrow strokes can still median out to a plausible
-            # thickness. Text is already handled far more reliably elsewhere
-            # (OCR-anchored exact-pixel preservation, text_preserve.py) — reuse
-            # its detector here purely for its *locations*, to keep line-
-            # snapping away from anything it already owns.
-            text_boxes: list[tuple[int, int, int, int]] = []
-            try:
-                from app.ai.text_preserve import detect_text_regions
-
-                text_boxes = [
-                    (r.x, r.y, r.x + r.w, r.y + r.h) for r in detect_text_regions(image_bytes)
-                ]
-            except Exception as exc:  # noqa: BLE001 — nice-to-have guard, not required
-                logger.debug("regularize_text_exclusion_unavailable", error=str(exc))
-
-            # OCR isn't exhaustive (confirmed live: it missed a stylised part-name
-            # word that then got smudged) — the ГОСТ title block itself (bottom
-            # 15% × right 30%, same convention as drawing_preprocessor.py's
-            # _detect_title_block) is *always* dense text/table content, never
-            # real engineering geometry, so exclude that whole corner
-            # unconditionally as a backstop regardless of what OCR found.
-            text_boxes.append((int(w * 0.70), int(h * 0.85), w, h))
-
-            ink = _snap_canonical_lines(ink, w, h, text_boxes)
+            ink = _snap_canonical_lines(ink, w, h, _text_exclusion_boxes(image_bytes, w, h))
 
         out = np.full((h, w, 3), 255, dtype=np.uint8)
         out[ink > 0] = (0, 0, 0)
@@ -156,6 +161,195 @@ def regularize_technical_drawing(image_bytes: bytes, snap_lines: bool = False) -
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
+
+
+def _open_on_white(image_bytes: bytes):
+    """Open as RGB with any alpha composited onto WHITE. A plain
+    ``convert("RGB")`` renders transparent PNG background as black, which
+    binarization then reads as a solid sheet of ink (confirmed on real
+    transparent-background drawings: ink fraction came out 0.94-1.0)."""
+    import io as _io
+
+    from PIL import Image
+
+    img = Image.open(_io.BytesIO(image_bytes))
+    if "A" in img.getbands():
+        img = img.convert("RGBA")
+        base = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        base.alpha_composite(img)
+        return base.convert("RGB")
+    return img.convert("RGB")
+
+
+def _dewarp_sheet(arr):
+    """Find the sheet of paper in a phone photo and perspective-correct it to
+    a straight-on view (classic document-scanner dewarp). Returns the warped
+    RGB array, or None when there is no confident sheet quad — callers keep
+    the image as-is then.
+
+    Sheet detection is saturation-based: paper is near-achromatic and bright,
+    while the desk/table around it (wood, cloth) is colored. That mask is far
+    more reliable here than brightness alone — a light wooden desk passes an
+    Otsu brightness threshold but fails the saturation test."""
+    import cv2
+    import numpy as np
+
+    h, w = arr.shape[:2]
+    hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
+    mask = ((hsv[..., 1] < 70) & (hsv[..., 2] > 120)).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    sheet = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(sheet)
+    # Too small = that's not the sheet; nearly the whole frame = already a
+    # square-on scan, warping would only resample it for nothing.
+    if area < 0.35 * w * h or area > 0.97 * w * h:
+        return None
+    # Convex hull first: a real album photo's sheet contour is never a clean
+    # 4-gon — spiral-binding perforations nibble the edges and a sliver of
+    # the page behind pokes out above the binding (confirmed live: raw
+    # approxPolyDP came back 6-cornered/non-convex and dewarp never fired).
+    # The hull bridges those, then an epsilon ladder simplifies to 4 corners.
+    hull = cv2.convexHull(sheet)
+    peri = cv2.arcLength(hull, True)
+    quad = None
+    for eps_frac in (0.02, 0.03, 0.05, 0.08):
+        candidate = cv2.approxPolyDP(hull, eps_frac * peri, True)
+        if len(candidate) == 4:
+            quad = candidate
+            break
+    if quad is None or not cv2.isContourConvex(quad):
+        return None
+
+    pts = quad.reshape(4, 2).astype(np.float32)
+    sums, diffs = pts.sum(axis=1), pts[:, 1] - pts[:, 0]
+    tl, br = pts[np.argmin(sums)], pts[np.argmax(sums)]
+    tr, bl = pts[np.argmin(diffs)], pts[np.argmax(diffs)]
+    ordered = np.array([tl, tr, br, bl], dtype=np.float32)
+
+    out_w = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
+    out_h = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
+    if out_w < 200 or out_h < 200:
+        return None
+    target = np.array(
+        [[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32
+    )
+    m = cv2.getPerspectiveTransform(ordered, target)
+    warped = cv2.warpPerspective(
+        arr, m, (out_w, out_h), flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255),
+    )
+    logger.info("dewarp_applied", out_w=out_w, out_h=out_h, area_fraction=round(area / (w * h), 2))
+    return warped
+
+
+def _erase_binding_blocks(arr):
+    """Paint out spiral/comb-binding blocks along the top of a dewarped album
+    photo. The sheet quad is a convex hull, so the binding (a row of solid
+    dark rectangles) rides along at the top and survives diffusion as black
+    blocks on the clean result (confirmed live).
+
+    A row-based crop cannot work here: the binding sits out of the sheet's
+    plane, so after the perspective warp it runs *diagonally* and overlaps
+    the ГОСТ header table row-wise (confirmed live — the crop took the top
+    of the table with it). Instead, detect the individual binding blocks by
+    their unmistakable component signature — ≥5 similar SOLID dark rectangles
+    in the top zone — and whiten exactly those. Table linework/text never
+    matches: its components are thin strokes (fill ratio far below solid) or
+    the table grid (one big low-fill component)."""
+    import cv2
+    import numpy as np
+
+    h, w = arr.shape[:2]
+    zone_h = int(h * 0.18)
+    zone = arr[:zone_h]
+    # "Not paper": dark OR saturated. Binding teeth come in both — black
+    # comb spines and beige/yellow spiral coils (confirmed on real album
+    # photos: the beige coils pass a darkness test untouched, then diffusion
+    # renders them as solid black blocks anyway).
+    hsv = cv2.cvtColor(zone, cv2.COLOR_RGB2HSV)
+    gray = cv2.cvtColor(zone, cv2.COLOR_RGB2GRAY)
+    not_paper = ((gray < 100) | (hsv[..., 1] > 80)).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(not_paper, connectivity=8)
+
+    min_side, max_w, max_h = max(6, h // 120), w // 8, zone_h
+    candidates = []
+    for i in range(1, n):
+        x, y, cw, ch, area = stats[i]
+        if cw < min_side or ch < min_side or cw > max_w or ch > max_h:
+            continue
+        # Solidity: real binding teeth measure 0.40-0.45 on live photos
+        # (specular highlights punch holes in them); linework/text sits at
+        # 0.10-0.25. 0.35 splits the two with margin on both sides.
+        if area / (cw * ch) < 0.35:
+            continue
+        candidates.append((x, y, cw, ch))
+    if len(candidates) < 5:
+        return arr
+
+    # Require similar sizes (one binding = one комб of identical teeth).
+    widths = sorted(c[2] for c in candidates)
+    heights = sorted(c[3] for c in candidates)
+    med_w, med_h = widths[len(widths) // 2], heights[len(heights) // 2]
+    blocks = [
+        (x, y, cw, ch)
+        for x, y, cw, ch in candidates
+        if 0.4 * med_w <= cw <= 2.5 * med_w and 0.4 * med_h <= ch <= 2.5 * med_h
+    ]
+    if len(blocks) < 5:
+        return arr
+
+    # Binding teeth always sit along one (possibly tilted) line at the sheet
+    # edge. A dark table cell in the ГОСТ header can pass the size/solidity
+    # tests (confirmed live: two header cells got whitened) — but it can't
+    # also sit on the teeth's shared line. Keep only the collinear row.
+    centers = np.array([(x + cw / 2, y + ch / 2) for x, y, cw, ch in blocks], dtype=np.float64)
+    slope, intercept = np.polyfit(centers[:, 0], centers[:, 1], 1)
+    residuals = np.abs(centers[:, 1] - (slope * centers[:, 0] + intercept))
+    tolerance = max(15.0, 1.5 * med_h)
+    blocks = [b for b, r in zip(blocks, residuals) if r <= tolerance]
+    if len(blocks) < 5:
+        return arr
+
+    out = arr.copy()
+    pad = 3
+    for x, y, cw, ch in blocks:
+        out[max(0, y - pad):min(zone_h, y + ch + pad), max(0, x - pad):min(w, x + cw + pad)] = 255
+    logger.info("binding_blocks_erased", blocks=len(blocks))
+    return out
+
+
+def _text_exclusion_boxes(image_bytes: bytes, w: int, h: int) -> list[tuple[int, int, int, int]]:
+    """Regions any stroke-rewriting pass must keep away from. Dense text
+    (title block, spec table) reads geometrically almost exactly like a
+    cluster of short axis-aligned "lines" — confirmed live: without this
+    exclusion, line-snapping turned real characters into black blobs. Text is
+    already handled far more reliably elsewhere (OCR-anchored exact-pixel
+    preservation, text_preserve.py) — reuse its detector here purely for its
+    *locations*.
+
+    OCR isn't exhaustive (confirmed live: it missed a stylised part-name word
+    that then got smudged) — the ГОСТ title block itself (bottom 15% × right
+    30%, same convention as drawing_preprocessor.py's _detect_title_block) is
+    *always* dense text/table content, never real engineering geometry, so
+    that whole corner is excluded unconditionally as a backstop."""
+    text_boxes: list[tuple[int, int, int, int]] = []
+    try:
+        from app.ai.text_preserve import detect_text_regions
+
+        text_boxes = [
+            (r.x, r.y, r.x + r.w, r.y + r.h) for r in detect_text_regions(image_bytes)
+        ]
+    except Exception as exc:  # noqa: BLE001 — nice-to-have guard, not required
+        logger.debug("regularize_text_exclusion_unavailable", error=str(exc))
+
+    text_boxes.append((int(w * 0.70), int(h * 0.85), w, h))
+    return text_boxes
 
 
 def _detect_skew_angle(arr) -> float:

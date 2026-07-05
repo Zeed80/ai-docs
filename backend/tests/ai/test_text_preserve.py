@@ -123,3 +123,28 @@ def test_text_fidelity_score_none_when_no_regions():
     score = text_fidelity_score(b, b)
     assert score["mean_abs_diff"] is None
     assert score["region_count"] == 0
+
+
+def test_already_drawn_skips_matching_structure():
+    """Redundant-paste filter: a window frame the model already redrew must
+    not be pasted again (double exposure), while genuine text over the
+    model's pseudo-glyph mush must still be pasted."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from app.ai.text_preserve import _already_drawn
+
+    # Output canvas with a thin rectangle (the model's clean redraw).
+    out = Image.new("RGBA", (200, 120), (255, 255, 255, 255))
+    d = ImageDraw.Draw(out)
+    d.rectangle([40, 30, 160, 90], outline=(0, 0, 0), width=2)
+
+    # Crop = the same rectangle as photographed (thicker, slightly shifted).
+    crop_match = Image.new("RGB", (130, 70), "white")
+    ImageDraw.Draw(crop_match).rectangle([5, 5, 125, 65], outline="black", width=4)
+    assert _already_drawn(out, (35, 25), crop_match) is True
+
+    # Crop = real text; the canvas has unrelated mush there → must paste.
+    crop_text = Image.new("RGB", (130, 70), "white")
+    ImageDraw.Draw(crop_text).text((10, 25), "Ra 6.3 ГОСТ", fill="black")
+    assert _already_drawn(out, (35, 25), crop_text) is False

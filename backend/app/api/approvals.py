@@ -619,6 +619,11 @@ async def _execute_approved_action(approval: Approval, db: AsyncSession) -> None
         except Exception as e:
             logger.error("execute_approved_action_error", error=str(e))
 
+    # NOTE: ApprovalActionType.lora_train is no longer produced — the
+    # lora.train gate was removed 2026-07-05 (user decision): training runs
+    # queue directly from POST /api/lora/runs with a confirmation dialog in
+    # the studio panel. The enum value stays for pre-existing rows.
+
     elif approval.action_type == ApprovalActionType.table_apply_diff:
         # Spec-table cell edit: apply the linked DraftAction's writeback.
         from app.db.models import DraftAction

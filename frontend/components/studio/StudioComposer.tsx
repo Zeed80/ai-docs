@@ -1,13 +1,15 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { isNative, pickImage } from "@/lib/native-bridge";
 import {
   GenerateInput,
   Operation,
+  Workflow,
   generate,
+  listWorkflows,
   promptHelp,
   techDraw,
   uploadSource,
@@ -40,6 +42,28 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [helping, setHelping] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const maskRef = useRef<MaskCanvasHandle>(null);
+
+  // Custom (e.g. trained-LoRA) workflows for the current operation; empty
+  // value = the builtin one, so nothing changes for users without customs.
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [workflowId, setWorkflowId] = useState<string>("");
+  // HD tiled cleanup — maximum quality, minutes per sheet.
+  const [hd, setHd] = useState(false);
+  useEffect(() => {
+    listWorkflows()
+      .then((ws) => setWorkflows(ws.filter((w) => !w.is_builtin && w.enabled)))
+      .catch(() => undefined);
+  }, []);
+  const customWorkflows = workflows.filter((w) => w.operation === operation);
+  // Default to the newest custom (trained-LoRA) workflow for the operation:
+  // the user expects "очистка" to mean the best available pipeline — running
+  // the builtin because a selector was overlooked wastes the trained LoRA
+  // (confirmed live: 4 of 5 user runs went without it).
+  useEffect(() => {
+    const customs = workflows.filter((w) => w.operation === operation);
+    setWorkflowId(customs.length ? customs[0].id : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operation, workflows.length]);
 
   // Exact technical drawing (deterministic ЕСКД render, not diffusion).
   const [techMode, setTechMode] = useState(false);
@@ -124,6 +148,16 @@ export default function StudioComposer({ onSubmitted }: Props) {
         source_image_paths: [],
         ...link,
       };
+      if (workflowId) {
+        input.workflow_id = workflowId;
+        // Custom LoRA workflows carry their own tuned steps/cfg (e.g.
+        // cleanup-LoRA works at cfg=1.0/25 steps) — the fast/quality preset
+        // must not override them.
+        delete (input.params as Record<string, unknown>).quality;
+      }
+      if (operation === "cleanup" && hd) {
+        (input.params as Record<string, unknown>).hd = true;
+      }
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
       }
@@ -241,12 +275,43 @@ export default function StudioComposer({ onSubmitted }: Props) {
             ))}
           </div>
 
+          {operation === "cleanup" && (
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={hd}
+                onChange={(e) => setHd(e.target.checked)}
+              />
+              {t("hd_label")}
+            </label>
+          )}
+
+          {customWorkflows.length > 0 && (
+            <label className="block text-xs text-zinc-400">
+              {t("workflow_label")}
+              <select
+                value={workflowId}
+                onChange={(e) => setWorkflowId(e.target.value)}
+                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm text-white mt-1"
+              >
+                <option value="">{t("workflow_builtin")}</option>
+                {customWorkflows.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           {/* Speed/quality tradeoff: measured live, the fast preset
               (Lightning LoRA, 4 steps) never once performed a real edit
               instruction across 6+ test runs — quality mode did roughly
               half the time (diffusion sampling isn't fully seed-
-              deterministic here), at several times the generation time. */}
-          <div>
+              deterministic here), at several times the generation time.
+              Hidden for custom (LoRA) workflows: they carry their own tuned
+              steps/cfg and the preset would sabotage them. */}
+          <div className={workflowId ? "hidden" : undefined}>
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs text-zinc-500">
                 {t("quality_label")}

@@ -391,7 +391,10 @@
       "error_need_prompt": "Describe what to generate.",
       "error_need_mask": "Paint the area to edit on the image.",
       "submit": "Generate",
-      "submit_busy": "Submitting…"
+      "submit_busy": "Submitting…",
+      "workflow_label": "Workflow",
+      "workflow_builtin": "Builtin (default)",
+      "hd_label": "HD tiled (experimental: tiles may diverge)"
     },
     "gallery": {
       "empty": "Nothing generated yet. Describe the task on the left and click \"Generate\".",
@@ -453,6 +456,33 @@
       "clear": "Clear mask",
       "painted": "Area selected",
       "not_painted": "Paint the area to edit"
-    }
+    },
+    "tab_lora": "LoRA Training",
+    "lora_new_dataset": "New dataset",
+    "lora_dataset_name": "Dataset name",
+    "lora_sources_hint": "Sources: PNG/JPG/DXF/DWG drawings (quality targets)",
+    "lora_synth_count": "Synthetic sheets",
+    "lora_per_image": "Variants per sheet",
+    "lora_caption_model": "Caption model (VLM)",
+    "lora_create_dataset": "Create dataset",
+    "lora_creating": "Creating…",
+    "lora_pairs": "Pairs",
+    "lora_captioned": "Captioned",
+    "lora_render_failed": "Render failed",
+    "lora_new_run": "New training run",
+    "lora_pick_dataset": "— pick a ready dataset —",
+    "lora_run_name": "LoRA name",
+    "lora_base_model": "Base model",
+    "lora_steps": "Training steps",
+    "lora_start_training": "Start training",
+    "lora_step": "step",
+    "lora_eta": "eta",
+    "lora_stop": "Stop training",
+    "lora_checkpoints": "Checkpoints",
+    "lora_deploy": "To ComfyUI node",
+    "lora_preset": "Training type (preset)",
+    "lora_make_workflow": "Workflow with LoRA",
+    "lora_delete": "Delete",
+    "lora_resolution": "Resolution"
   }
 }

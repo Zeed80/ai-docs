@@ -49,6 +49,12 @@ class AIConfidentialityPolicyError(RuntimeError):
     """Raised when an AI request would violate local-only/confidential policy."""
 
 
+class AIGpuBusyError(RuntimeError):
+    """Raised when a local-GPU route is requested while the GPU is held by an
+    exclusive job (LoRA training). Fail-fast with a clear message beats
+    OOM-ing the training run; cloud routes are unaffected."""
+
+
 class AIStructuredOutputValidationError(RuntimeError):
     """Raised when a critical structured AI response does not validate."""
 
@@ -356,6 +362,20 @@ class AIRouter:
             raise AIConfidentialityPolicyError(
                 f"Cloud model {model.name} requires allow_cloud=True"
             )
+        if is_local:
+            # Soft GPU lock: while LoRA training holds the card, local
+            # inference fails fast with a human-readable reason instead of
+            # OOM-ing the training container. Best-effort — a Redis hiccup
+            # must not take down normal routing.
+            try:
+                from app.ai import gpu_lock
+
+                if gpu_lock.is_locked():
+                    raise AIGpuBusyError(gpu_lock.LOCK_MESSAGE)
+            except AIGpuBusyError:
+                raise
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _dispatch(
         self,

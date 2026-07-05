@@ -40,6 +40,8 @@ x-backend-env: &backend-env
   OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
   AUTHENTIK_API_TOKEN: ${AUTHENTIK_API_TOKEN:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  # Forwarded into LoRA trainer containers for gated HF repos (FLUX.2-dev).
+  HF_TOKEN: ${HF_TOKEN:-}
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
   DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -465,6 +467,11 @@ services:
       - ../aiagent:/aiagent:ro
       - llamacpp_models:/llamacpp-models
       - vllm_models:/vllm-models
+      # LoRA uploads/datasets shared with worker+trainer (upload API writes here);
+      # the ComfyUI node's loras dir — checkpoint deploys run in THIS container
+      # (POST /api/lora/runs/{id}/deploy), not in a worker.
+      - lora_data:/lora-data
+      - /root/comfy/ComfyUI/models/loras:/comfyui-loras
       # Backups produced from the admin GUI (maintenance API) land here.
       - backups_data:/app/backups
       # Signed mobile APK + version.json, served publicly at /download (CI/deploy writes here).
@@ -534,6 +541,10 @@ services:
       # On-demand start of vLLM/llama.cpp servers when a document task routes to
       # them (see app/ai/server_lifecycle.py). Takes effect after a worker rebuild.
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # LoRA training (studio tab): datasets/runs shared with the trainer
+      # container; the ComfyUI node's loras dir for checkpoint deploys.
+      - lora_data:/lora-data
+      - /root/comfy/ComfyUI/models/loras:/comfyui-loras
     extra_hosts:
       - "host-gateway:host-gateway"
     depends_on:
@@ -565,6 +576,38 @@ services:
     volumes:
       - ../aiagent:/aiagent:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - app
+
+  # === Celery Worker — LoRA lane (single-flight, long-running) ===
+  # Serves only the ``lora`` queue: dataset preparation (hours of VLM
+  # captioning) and training-run supervision (up to 48h per run, trainer
+  # container via docker SDK). -c 1 keeps GPU-hungry jobs naturally
+  # serialized and off the general-purpose workers. Do NOT raise -c.
+  celery-worker-lora:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app worker -l info -c 1 -Q lora -n lora@%h
+    environment:
+      <<: *backend-env
+      SKIP_DB_MIGRATE: "1"
+    volumes:
+      - ../aiagent:/aiagent:ro
+      # Trainer containers are started through the docker SDK.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Datasets/uploads/run outputs shared with the trainer container.
+      - lora_data:/lora-data
     extra_hosts:
       - "host-gateway:host-gateway"
     depends_on:
@@ -735,6 +778,17 @@ services:
       - app
 
 volumes:
+  # LoRA training data (datasets, run configs, outputs) — shared between the
+  # celery worker and on-demand trainer containers.
+  lora_data:
+  # Host HuggingFace cache (Qwen-Image-Edit-2511, ~54GB already downloaded):
+  # bind, not a fresh volume, so the trainer never re-downloads it.
+  hf_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /root/.cache/huggingface
   postgres_data:
   redis_data:
   gpu_temp_state:

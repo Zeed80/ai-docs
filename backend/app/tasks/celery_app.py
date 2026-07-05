@@ -47,6 +47,11 @@ celery_app.conf.update(
         "app.tasks.embedding.embed_document": {"queue": "gpu"},
         # name= on @celery_app.task in drawing_analysis.py — VLM, GPU-bound
         "drawing_analysis.*": {"queue": "gpu"},
+        # ── LoRA lane (worker-lora, -c 1) ────────────────────────────────────
+        # Training supervises a container for up to 48h and preparation
+        # captions for hours — neither may occupy a general-purpose slot, and
+        # a single-slot queue naturally serializes GPU-hungry jobs.
+        "lora.*": {"queue": "lora"},
         # ── CPU / IO lanes (parallel is fine — no GPU) ──────────────────────
         "app.tasks.ingest.*": {"queue": "ingest"},
         # Remaining extraction-module tasks are DB/CPU only
@@ -176,3 +181,4 @@ from app.tasks import agent_cron as _agent_cron  # noqa: F401
 from app.tasks import graph_memory as _graph_memory  # noqa: F401
 from app.tasks import graph_analytics as _graph_analytics  # noqa: F401
 from app.tasks import image_generation as _image_generation  # noqa: F401
+from app.tasks import lora_training as _lora_training  # noqa: F401
