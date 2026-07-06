@@ -94,15 +94,27 @@
         function show(id) { $(id).classList.remove("hidden"); }
         function hide(id) { $(id).classList.add("hidden"); }
 
-        function go(url) {
-          show("connecting");
-          hide("setup");
-          window.location.replace(url);
+        function normalizeUrl(v) {
+          v = (v || "").trim().replace(/\/+$/, "");
+          return /^https?:\/\//i.test(v) ? v : "https://" + v;
         }
 
-        // Probe the server before navigating, so an unreachable server lands on a
+        // Persist the server (+ optional initial path) and rebuild the activity so
+        // MainActivity loads it AS the Capacitor server — the native bridge is
+        // injected only that way (camera/biometrics/push need it). ServerConfig.set
+        // recreates the activity; the launcher JS ends here. Falls back to plain
+        // navigation only when the plugin is unavailable (e.g. a web browser).
+        async function applyServer(url, path) {
+          if (ServerConfig && ServerConfig.set) {
+            await ServerConfig.set(path ? { url: url, path: path } : { url: url });
+            return; // activity recreates → MainActivity loads server.url
+          }
+          window.location.replace(path ? new URL(path, url).href : url);
+        }
+
+        // Probe the server before applying it, so an unreachable server lands on a
         // friendly retry/change screen instead of a raw WebView error page.
-        async function connect(url) {
+        async function connect(url, path) {
           hide("setup");
           hide("unreachable");
           show("connecting");
@@ -126,14 +138,14 @@
             ok = false;
           }
           if (ok) {
-            window.location.replace(url);
+            await applyServer(url, path);
           } else {
             hide("connecting");
             show("unreachable");
-            $("retry").onclick = function () { connect(url); };
+            $("retry").onclick = function () { connect(url, path); };
             // Safety valve: the probe can still misfire on odd networks — let the
             // user open the site anyway (the WebView shows its own error if down).
-            $("proceed").onclick = function () { window.location.replace(url); };
+            $("proceed").onclick = function () { applyServer(url, path); };
           }
         }
 
@@ -143,14 +155,6 @@
             return /^http:\/\/(localhost|127\.0\.0\.1|10\.0\.2\.2)([:/]|$)/i.test(v);
           }
           return /^https:\/\/[^\s]+/i.test(v) || /^[a-z0-9.-]+\.[a-z]{2,}([/:].*)?$/i.test(v);
-        }
-
-        async function save(url) {
-          if (ServerConfig && ServerConfig.set) {
-            var res = await ServerConfig.set({ url: url });
-            return (res && res.url) || url;
-          }
-          return url;
         }
 
         function setupScreen() {
@@ -167,7 +171,9 @@
             setupScreen();
           };
 
-          // Already configured? Probe, then go to the live site.
+          // Already configured? MainActivity normally loads server.url directly,
+          // so the launcher only runs when nothing is saved. This is a safety net:
+          // probe and (re)apply so we converge on loading the live site.
           if (ServerConfig && ServerConfig.get) {
             try {
               var res = await ServerConfig.get();
@@ -184,7 +190,7 @@
               return;
             }
             try {
-              await connect(await save(v));
+              await connect(normalizeUrl(v));
             } catch (e) {
               $("err").textContent = (e && e.message) || "Не удалось сохранить адрес.";
             }
@@ -195,18 +201,17 @@
             try {
               var code = await scanQr();
               if (!code) { $("err").textContent = "QR-код не распознан."; return; }
-              // Login QR (/auth/qr-redeem?t=…): configure the server to its origin
-              // AND sign in immediately — go straight into the app, never showing
-              // the login page. Any other QR is treated as a server address.
+              // Login QR (/auth/qr-redeem?t=…): set the server to its origin AND
+              // pass the redeem path so the app opens signed-in, never showing the
+              // login page. Any other QR is treated as a plain server address.
               try {
                 var u = new URL(code);
                 if (u.pathname.indexOf("/auth/qr-redeem") === 0 && u.searchParams.get("t")) {
-                  await save(u.origin);          // persist server = origin
-                  window.location.replace(code); // → redeem → /inbox (logged in)
+                  await connect(u.origin, u.pathname + u.search);
                   return;
                 }
               } catch (e) {}
-              await connect(await save(code));
+              await connect(normalizeUrl(code));
             } catch (e) {
               $("err").textContent = (e && e.message) || "Не удалось отсканировать.";
             }

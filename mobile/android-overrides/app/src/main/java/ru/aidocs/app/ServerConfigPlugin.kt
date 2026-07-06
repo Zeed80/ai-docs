@@ -45,12 +45,20 @@ class ServerConfigPlugin : Plugin() {
         }
         val previous = prefs().getString(KEY_URL, null)
         if (previous != null && previous != url) {
-            clearMobileState(context)
+            clearMobileState(context)  // wipes cookies + pending path
         }
         prefs().edit().putString(KEY_URL, url).apply()
+        // Optional initial path (e.g. a login-QR redeem URL) to open once the
+        // server loads — stashed AFTER clearMobileState so it survives a switch.
+        val path = call.getString("path")
+        if (!path.isNullOrEmpty()) setPendingPath(context, path)
         val res = JSObject()
         res.put("url", url)
         call.resolve(res)
+        // Rebuild the activity so MainActivity loads this URL AS the Capacitor
+        // server (native bridge injected) instead of the launcher navigating to
+        // it as a foreign origin (no bridge).
+        activity?.runOnUiThread { activity?.recreate() }
     }
 
     @PluginMethod
@@ -122,6 +130,14 @@ class ServerConfigPlugin : Plugin() {
         fun setPendingPath(context: Context, path: String) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putString(KEY_PENDING_PATH, path).apply()
+        }
+
+        /** Read and clear the pending path (used by MainActivity as start path). */
+        fun consumePendingPathValue(context: Context): String? {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val p = prefs.getString(KEY_PENDING_PATH, null)
+            if (p != null) prefs.edit().remove(KEY_PENDING_PATH).apply()
+            return p
         }
 
         fun clearMobileState(context: Context) {

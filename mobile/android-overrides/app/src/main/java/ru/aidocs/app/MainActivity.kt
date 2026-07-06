@@ -9,6 +9,7 @@ import android.view.WindowManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.getcapacitor.BridgeActivity
+import com.getcapacitor.CapConfig
 
 /**
  * Main activity for the Света shell.
@@ -29,6 +30,26 @@ class MainActivity : BridgeActivity() {
         registerPlugin(ServerConfigPlugin::class.java)
         registerPlugin(AppUpdatePlugin::class.java)
         registerPlugin(AidocsPushPlugin::class.java)
+
+        // Load the runtime-selected server AS the Capacitor server so the native
+        // bridge is injected. A site opened as a "foreign" origin (via plain
+        // navigation / allowNavigation) gets NO bridge → no camera, biometrics,
+        // push. The URL still comes from ServerConfig (chosen at first launch or
+        // by QR), not baked at build time. Must be set before super.onCreate,
+        // which calls load() and reads this.config.
+        val saved = ServerConfigPlugin.savedUrl(this)
+        if (!saved.isNullOrEmpty()) {
+            val builder = CapConfig.Builder(this)
+                .setServerUrl(saved)
+                .setAndroidScheme("https")
+                .setAllowNavigation(arrayOf("*"))
+            // A pending path (login-QR redeem stashed by the launcher, or a push
+            // deep link) becomes the initial route → land signed-in / on target.
+            val pending = ServerConfigPlugin.consumePendingPathValue(this)
+            if (!pending.isNullOrEmpty()) builder.setStartPath(pending)
+            this.config = builder.create()
+        }
+
         super.onCreate(savedInstanceState)
 
         // Confidential content — block screenshots + recent-apps thumbnail.
