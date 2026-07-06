@@ -81,7 +81,7 @@ export default function GenerationGallery({
                 }}
                 title={t("detail.delete")}
                 aria-label={t("detail.delete")}
-                className="absolute top-1 right-1 z-10 w-6 h-6 rounded bg-black/60 text-red-300 hover:bg-red-500/40 opacity-0 group-hover:opacity-100 transition text-xs"
+                className="absolute top-1 right-1 z-10 w-7 h-7 sm:w-6 sm:h-6 rounded bg-black/60 text-red-300 hover:bg-red-500/40 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition text-xs"
               >
                 ✕
               </button>

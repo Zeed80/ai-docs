@@ -10,10 +10,7 @@ import {
   installUpdate,
   getAppVersion,
 } from "@/lib/native-bridge";
-import {
-  isAppLockEnabled,
-  setAppLockEnabled,
-} from "@/components/mobile/BiometricGate";
+import AppLockSettings from "@/components/mobile/AppLockSettings";
 
 const STORAGE_KEY = "notification_prefs";
 
@@ -54,7 +51,6 @@ export default function NotificationsSettingsPage() {
   const [saved, setSaved] = useState(false);
   const [native, setNative] = useState(false);
   const [devices, setDevices] = useState<DeviceOut[]>([]);
-  const [lock, setLock] = useState(true);
   const [registering, setRegistering] = useState(false);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
@@ -75,7 +71,6 @@ export default function NotificationsSettingsPage() {
   useEffect(() => {
     setPrefs(loadPrefs());
     setNative(isNative());
-    setLock(isAppLockEnabled());
     void loadDevices();
     void getServerConfig().then(setServerUrl);
     void getAppVersion().then((v) => v?.version && setAppVersion(v.version));
@@ -123,12 +118,6 @@ export default function NotificationsSettingsPage() {
     } finally {
       setRegistering(false);
     }
-  }
-
-  function toggleLock() {
-    const next = !lock;
-    setLock(next);
-    setAppLockEnabled(next);
   }
 
   function toggle(key: string) {
@@ -239,25 +228,7 @@ export default function NotificationsSettingsPage() {
               </button>
             </div>
 
-            <label className="flex items-center justify-between border-t border-border pt-4 cursor-pointer">
-              <span className="text-sm">
-                Блокировка приложения (отпечаток/лицо/PIN)
-              </span>
-              <button
-                role="switch"
-                aria-checked={lock}
-                onClick={toggleLock}
-                className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors ${
-                  lock ? "bg-primary" : "bg-muted"
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow transform transition-transform ${
-                    lock ? "translate-x-4" : "translate-x-0"
-                  }`}
-                />
-              </button>
-            </label>
+            <AppLockSettings />
 
             <div className="flex items-center justify-between border-t border-border pt-4">
               <div className="min-w-0">

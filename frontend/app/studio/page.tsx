@@ -117,15 +117,19 @@ export default function StudioPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-6 py-4 border-b border-white/10 bg-zinc-900/60 flex items-center justify-between">
+      <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-white/10 bg-zinc-900/60 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-white">{t("title")}</h1>
-          <p className="text-xs text-zinc-500">{t("subtitle")}</p>
+          <h1 className="text-lg sm:text-xl font-semibold text-white">
+            {t("title")}
+          </h1>
+          <p className="text-xs text-zinc-500 hidden sm:block">
+            {t("subtitle")}
+          </p>
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-1 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
           <button
             onClick={() => setTab("studio")}
-            className={`px-3 py-1.5 rounded text-sm ${
+            className={`shrink-0 px-3 py-1.5 rounded text-sm ${
               tab === "studio"
                 ? "bg-white/10 text-white"
                 : "text-zinc-400 hover:text-white"
@@ -135,7 +139,7 @@ export default function StudioPage() {
           </button>
           <button
             onClick={() => setTab("workflows")}
-            className={`px-3 py-1.5 rounded text-sm ${
+            className={`shrink-0 px-3 py-1.5 rounded text-sm ${
               tab === "workflows"
                 ? "bg-white/10 text-white"
                 : "text-zinc-400 hover:text-white"
@@ -145,7 +149,7 @@ export default function StudioPage() {
           </button>
           <button
             onClick={() => setTab("lora")}
-            className={`px-3 py-1.5 rounded text-sm ${
+            className={`shrink-0 px-3 py-1.5 rounded text-sm ${
               tab === "lora"
                 ? "bg-white/10 text-white"
                 : "text-zinc-400 hover:text-white"
@@ -155,7 +159,7 @@ export default function StudioPage() {
           </button>
           <a
             href="/settings/comfyui"
-            className="px-3 py-1.5 rounded text-sm text-zinc-400 hover:text-white"
+            className="shrink-0 px-3 py-1.5 rounded text-sm text-zinc-400 hover:text-white"
           >
             {t("tab_settings")}
           </a>

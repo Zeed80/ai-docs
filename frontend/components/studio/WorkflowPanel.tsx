@@ -109,16 +109,37 @@ export default function WorkflowPanel() {
   }
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="flex flex-col lg:flex-row h-full min-h-0">
       {/* Main area: the live ComfyUI node-graph editor fills all remaining
-          space — this is where nodes are actually visible/editable. */}
-      <div className="relative flex-1 min-w-0 bg-black/20">
+          space — this is where nodes are actually visible/editable. The node
+          graph is a desktop tool, so on phones we hide the iframe and keep the
+          list/actions usable instead. */}
+      <div className="relative flex-1 min-h-[30vh] min-w-0 bg-black/20">
         <iframe
           ref={iframeRef}
           src={COMFYUI_PROXY_URL}
-          className="absolute inset-0 h-full w-full border-0"
+          className="absolute inset-0 hidden h-full w-full border-0 lg:block"
           title="ComfyUI"
         />
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center lg:hidden">
+          <svg
+            className="h-8 w-8 text-zinc-600"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.6}
+              d="M4 6h16M4 12h16M4 18h10"
+            />
+          </svg>
+          <p className="text-xs text-zinc-500">
+            Визуальный редактор узлов доступен на компьютере. На телефоне можно
+            просматривать, включать и удалять воркфлоу из списка ниже.
+          </p>
+        </div>
 
         {/* Bottom drawer: selecting a workflow on the right opens its
             compact details/actions here, sliding up from the bottom edge —
@@ -211,8 +232,9 @@ export default function WorkflowPanel() {
         </div>
       </div>
 
-      {/* Right sidebar: compact workflow list, grouped by category. */}
-      <div className="w-60 shrink-0 border-l border-white/10 overflow-y-auto p-2 space-y-3">
+      {/* Right sidebar: compact workflow list, grouped by category. On phones
+          it drops below the (collapsed) editor as a short scrollable list. */}
+      <div className="w-full lg:w-60 shrink-0 border-t lg:border-t-0 lg:border-l border-white/10 max-h-56 lg:max-h-none overflow-y-auto p-2 space-y-3">
         {loading && (
           <div className="text-xs text-zinc-500 px-1">{t("loading")}</div>
         )}
