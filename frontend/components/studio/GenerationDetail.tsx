@@ -1,13 +1,16 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   Generation,
+  GenerateInput,
+  Workflow,
   acceptGeneration,
   deleteGeneration,
   iterateGeneration,
+  listWorkflows,
   resultUrl,
   sourceUrl,
 } from "@/lib/studio-api";
@@ -25,6 +28,31 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const hasSource = (gen.source_image_paths?.length ?? 0) > 0;
 
+  // Iteration = edit with an instruction. The "fast" (Lightning 4-step) preset
+  // never actually performs the edit — default to "quality" so the prompt is
+  // followed. Let custom (trained-LoRA) edit workflows carry their own config.
+  const [quality, setQuality] = useState<"fast" | "quality">("quality");
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [workflowId, setWorkflowId] = useState<string>("");
+
+  useEffect(() => {
+    listWorkflows()
+      .then((ws) =>
+        setWorkflows(
+          ws.filter(
+            (w) => !w.is_builtin && w.enabled && w.operation === "edit",
+          ),
+        ),
+      )
+      .catch(() => undefined);
+  }, []);
+  // Default to the newest custom edit workflow (as the composer does), so an
+  // iteration uses the trained pipeline rather than the generic builtin.
+  useEffect(() => {
+    setWorkflowId(workflows.length ? workflows[0].id : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflows.length]);
+
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
     setErr(null);
@@ -38,6 +66,25 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
     }
   }
 
+  async function submitIterate() {
+    const input: GenerateInput = {
+      operation: "edit",
+      prompt: iterPrompt,
+      params: {},
+    };
+    if (workflowId) {
+      input.workflow_id = workflowId;
+      // Custom LoRA workflows carry their own tuned steps/cfg — the preset must
+      // not override them (the backend also pops quality for custom workflows).
+    } else {
+      (input.params as Record<string, unknown>).quality = quality;
+    }
+    await iterateGeneration(gen.id, input);
+    setIterPrompt("");
+  }
+
+  const canAct = gen.status === "failed" || gen.status === "done";
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
@@ -47,11 +94,50 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
         </h3>
         <button
           onClick={onClose}
-          className="text-zinc-400 hover:text-white text-sm"
+          className="text-zinc-400 hover:text-white text-sm px-2 -mr-2"
         >
           ✕
         </button>
       </div>
+
+      {/* Primary actions up top so they're reachable without scrolling past the
+          (tall) result image — important on mobile where the panel is an
+          overlay. Delete is available for any generation (incl. failed). */}
+      {(gen.has_result || canAct) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {gen.has_result && !gen.accepted && (
+            <button
+              disabled={busy}
+              onClick={() => run(() => acceptGeneration(gen.id))}
+              className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm disabled:opacity-50"
+            >
+              {t("detail.accept")}
+            </button>
+          )}
+          {gen.has_result && (
+            <a
+              href={resultUrl(gen.id)}
+              download={`studio-${gen.id}.png`}
+              className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
+            >
+              {t("detail.download")}
+            </a>
+          )}
+          {canAct && (
+            <button
+              disabled={busy}
+              onClick={() => {
+                if (confirm(t("detail.delete_confirm"))) {
+                  run(() => deleteGeneration(gen.id).then(onClose));
+                }
+              }}
+              className="ml-auto text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
+            >
+              {t("detail.delete")}
+            </button>
+          )}
+        </div>
+      )}
 
       {gen.status === "failed" && (
         <div className="text-xs text-red-400 bg-red-500/10 rounded p-2 whitespace-pre-wrap max-h-40 overflow-y-auto">
@@ -82,24 +168,6 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
                 ? `${t("status.running")} · ${gen.progress.value ?? 0}/${gen.progress.max ?? "?"} (${gen.progress.pct}%)`
                 : t("status.running")}
           </div>
-        </div>
-      )}
-
-      {/* Delete is available for ANY generation (including failed ones with no
-          result) — moved out of the has-result action row. */}
-      {(gen.status === "failed" || gen.status === "done") && (
-        <div>
-          <button
-            disabled={busy}
-            onClick={() => {
-              if (confirm(t("detail.delete_confirm"))) {
-                run(() => deleteGeneration(gen.id).then(onClose));
-              }
-            }}
-            className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
-          >
-            {t("detail.delete")}
-          </button>
         </div>
       )}
 
@@ -152,28 +220,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
       {err && <div className="text-xs text-red-400">{err}</div>}
 
       {gen.has_result && (
-        <div className="flex flex-wrap gap-2">
-          {!gen.accepted && (
-            <button
-              disabled={busy}
-              onClick={() => run(() => acceptGeneration(gen.id))}
-              className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm disabled:opacity-50"
-            >
-              {t("detail.accept")}
-            </button>
-          )}
-          <a
-            href={resultUrl(gen.id)}
-            download={`studio-${gen.id}.png`}
-            className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
-          >
-            {t("detail.download")}
-          </a>
-        </div>
-      )}
-
-      {gen.has_result && (
-        <div className="border-t border-white/10 pt-3">
+        <div className="border-t border-white/10 pt-3 space-y-2">
           <label className="text-[11px] text-zinc-500">
             {t("detail.iterate_label")}
           </label>
@@ -181,21 +228,49 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
             value={iterPrompt}
             onChange={(e) => setIterPrompt(e.target.value)}
             placeholder={t("detail.iterate_placeholder")}
-            className="w-full mt-1 rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+            className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
             rows={2}
           />
+
+          {workflows.length > 0 && (
+            <select
+              value={workflowId}
+              onChange={(e) => setWorkflowId(e.target.value)}
+              className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm text-white"
+            >
+              <option value="">{t("composer.workflow_builtin")}</option>
+              {workflows.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.title}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Speed/quality — hidden for custom workflows (they carry their own
+              tuned config). "quality" is the default: "fast" won't follow the
+              edit instruction. */}
+          {!workflowId && (
+            <div className="grid grid-cols-2 gap-1 p-1 rounded bg-white/5">
+              <button
+                onClick={() => setQuality("fast")}
+                className={`px-3 py-1.5 rounded text-sm ${quality === "fast" ? "bg-sky-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+              >
+                {t("composer.quality_fast")}
+              </button>
+              <button
+                onClick={() => setQuality("quality")}
+                className={`px-3 py-1.5 rounded text-sm ${quality === "quality" ? "bg-emerald-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+              >
+                {t("composer.quality_quality")}
+              </button>
+            </div>
+          )}
+
           <button
             disabled={busy || !iterPrompt.trim()}
-            onClick={() =>
-              run(async () => {
-                await iterateGeneration(gen.id, {
-                  operation: "edit",
-                  prompt: iterPrompt,
-                });
-                setIterPrompt("");
-              })
-            }
-            className="mt-2 px-3 py-1.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-sm disabled:opacity-50"
+            onClick={() => run(submitIterate)}
+            className="w-full px-3 py-2 rounded bg-sky-600 hover:bg-sky-500 text-white text-sm disabled:opacity-50"
           >
             {t("detail.iterate_submit")}
           </button>

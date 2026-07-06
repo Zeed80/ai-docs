@@ -212,7 +212,10 @@ export default function StudioPage() {
               />
             </div>
             {selected && (
-              <div className="rounded-lg border border-white/10 p-4 bg-zinc-900/40 h-fit">
+              // Mobile: a full-screen overlay so the actions (download/accept/
+              // iterate) are reachable without scrolling past the whole gallery.
+              // Desktop (xl): the inline side panel as before.
+              <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:static xl:z-auto xl:overflow-visible xl:rounded-lg xl:border xl:border-white/10 xl:bg-zinc-900/40 xl:h-fit">
                 <GenerationDetail
                   gen={selected}
                   onChanged={load}
