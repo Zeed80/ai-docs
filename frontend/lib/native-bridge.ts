@@ -311,9 +311,7 @@ export async function scanDocument(): Promise<File[]> {
 
   // Reaching here inside the app means the native Camera plugin wasn't
   // available — surface a diagnostic so we can see what the bridge exposes.
-  if (isAndroidWebView()) {
-    alert("Камера недоступна (диагностика): " + nativeBridgeDiag());
-  }
+  diagOnce();
   // Non-native (browser): system file picker with camera-capture hint.
   return pickFilesWeb({ accept: "image/*", capture: "environment" });
 }
@@ -357,9 +355,7 @@ export async function pickImage(
       return [];
     }
   }
-  if (source === "CAMERA" && isAndroidWebView()) {
-    alert("Камера недоступна (диагностика): " + nativeBridgeDiag());
-  }
+  if (source === "CAMERA") diagOnce();
   return pickFilesWeb({
     accept: "image/*",
     capture: source === "CAMERA" ? "environment" : undefined,
@@ -431,6 +427,18 @@ function isAndroidWebView(): boolean {
   return (
     /Android/i.test(ua) && (/;\s*wv\b/.test(ua) || !!(window as any).Capacitor)
   );
+}
+
+/** Show the camera-unavailable diagnostic at most once per app session. */
+function diagOnce(): void {
+  if (!isAndroidWebView()) return;
+  try {
+    if (sessionStorage.getItem("cam_diag_shown")) return;
+    sessionStorage.setItem("cam_diag_shown", "1");
+  } catch {
+    /* ignore */
+  }
+  alert("Камера недоступна (диагностика): " + nativeBridgeDiag());
 }
 
 // ── Share / "Open with" intake ────────────────────────────────────────────────
