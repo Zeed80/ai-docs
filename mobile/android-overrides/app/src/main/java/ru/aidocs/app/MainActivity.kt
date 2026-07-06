@@ -1,14 +1,25 @@
 package ru.aidocs.app
 
 import android.Manifest
+import android.app.DownloadManager
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.util.Base64
 import android.view.WindowManager
+import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
+import android.webkit.MimeTypeMap
+import android.webkit.URLUtil
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewFeature
@@ -88,6 +99,7 @@ class MainActivity : BridgeActivity() {
     override fun load() {
         super.load()
         val b = bridge ?: return
+        wireDownloads(b.webView)
         val host = ServerConfigPlugin.savedUrl(this)
             ?.let { runCatching { URL(it).host }.getOrNull() }
             ?: return
@@ -105,6 +117,92 @@ class MainActivity : BridgeActivity() {
             }
         })
         b.webView.post { b.webView.reload() }
+    }
+
+    /**
+     * A WebView has no download handling of its own, so file "download" links do
+     * nothing. The frontend exports files as blob: URLs (createObjectURL + <a
+     * download>). We read the blob's bytes via JS → base64 → save into the public
+     * Downloads folder (MediaStore, no storage permission needed on Android 10+).
+     * Plain http(s) links go through the system DownloadManager, forwarding the
+     * session cookie so authenticated downloads work.
+     */
+    private fun wireDownloads(webView: WebView) {
+        webView.addJavascriptInterface(BlobDownloader(), "AidocsBlob")
+        webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+            try {
+                if (url.startsWith("blob:")) {
+                    webView.evaluateJavascript(blobReaderJs(url), null)
+                    return@setDownloadListener
+                }
+                val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+                val req = DownloadManager.Request(Uri.parse(url)).apply {
+                    setMimeType(mimeType)
+                    if (!userAgent.isNullOrEmpty()) addRequestHeader("User-Agent", userAgent)
+                    CookieManager.getInstance().getCookie(url)?.let { addRequestHeader("cookie", it) }
+                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                }
+                (getSystemService(DOWNLOAD_SERVICE) as DownloadManager).enqueue(req)
+                toast("Скачивание: $fileName")
+            } catch (e: Exception) {
+                toast("Не удалось скачать: ${e.message}")
+            }
+        }
+    }
+
+    /** Fetch a blob: URL in the page and hand its bytes back as a data URL. */
+    private fun blobReaderJs(url: String): String =
+        """
+        (function(){
+          try {
+            var x = new XMLHttpRequest();
+            x.open('GET', '$url', true);
+            x.responseType = 'blob';
+            x.onload = function(){
+              var r = new FileReader();
+              r.onloadend = function(){ AidocsBlob.save(r.result); };
+              r.readAsDataURL(x.response);
+            };
+            x.send();
+          } catch(e) {}
+        })();
+        """.trimIndent()
+
+    /** Receives a `data:<mime>;base64,…` string from the page and saves it. */
+    inner class BlobDownloader {
+        @JavascriptInterface
+        fun save(dataUrl: String) {
+            try {
+                val comma = dataUrl.indexOf(',')
+                if (comma < 0) return
+                val meta = dataUrl.substring(5, comma) // "<mime>;base64"
+                val mime = meta.substringBefore(';').ifEmpty { "application/octet-stream" }
+                val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
+                val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: "bin"
+                val name = "aidocs_${System.currentTimeMillis()}.$ext"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, name)
+                        put(MediaStore.Downloads.MIME_TYPE, mime)
+                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    }
+                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    uri?.let { contentResolver.openOutputStream(it)?.use { os -> os.write(bytes) } }
+                } else {
+                    val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    dir.mkdirs()
+                    java.io.File(dir, name).outputStream().use { it.write(bytes) }
+                }
+                toast("Сохранено в Загрузки: $name")
+            } catch (e: Exception) {
+                toast("Не удалось сохранить файл: ${e.message}")
+            }
+        }
+    }
+
+    private fun toast(msg: String) {
+        runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
     }
 
     /** Android 13+ requires a runtime grant for notifications to be shown. */

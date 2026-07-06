@@ -1,7 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Our app declares its own FileProvider (authority ${applicationId}.fileprovider)
+  for installing the downloaded APK. Because the app manifest wins over library
+  manifests for the same authority, this REPLACES @capacitor/camera's FileProvider
+  too — so these paths must ALSO cover what the camera plugin needs, or capturing
+  a photo fails with "Unable to create photo on disk".
+
+  Camera writes its temp photo to getExternalFilesDir(Pictures) → needs
+  external-files-path.
+-->
 <paths>
     <!-- Downloaded APK lives in the app's external cache dir; expose it to the package installer. -->
     <external-cache-path name="apk_cache" path="." />
     <cache-path name="cache" path="." />
     <files-path name="files" path="." />
+    <!-- @capacitor/camera temp photos: getExternalFilesDir(DIRECTORY_PICTURES). -->
+    <external-files-path name="external_files" path="." />
+    <external-path name="external" path="." />
 </paths>
