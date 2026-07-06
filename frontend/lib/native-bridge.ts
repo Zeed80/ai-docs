@@ -418,7 +418,7 @@ export async function registerForPush(appVersion?: string): Promise<void> {
   }
 }
 
-// ── Biometric app-lock ─────────────────────────────────────────────────────────
+// ── Biometrics ─────────────────────────────────────────────────────────────────
 
 export async function biometricAvailable(): Promise<boolean> {
   const bio = plugin("NativeBiometric");
@@ -441,6 +441,52 @@ export async function biometricVerify(
     return true;
   } catch {
     return false;
+  }
+}
+
+// ── Secure credential store (Android Keystore, guarded by biometrics) ──────────
+// Used for the quick-login secret: stored behind the OS keystore, retrieved only
+// after a successful biometric prompt. `server` scopes the entry to our origin.
+
+export async function biometricSetCredentials(
+  server: string,
+  username: string,
+  password: string,
+): Promise<boolean> {
+  const bio = plugin("NativeBiometric");
+  if (!bio?.setCredentials) return false;
+  try {
+    await bio.setCredentials({ username, password, server });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function biometricGetCredentials(
+  server: string,
+): Promise<{ username: string; password: string } | null> {
+  const bio = plugin("NativeBiometric");
+  if (!bio?.getCredentials) return null;
+  try {
+    const r = await bio.getCredentials({ server });
+    if (r?.password)
+      return { username: r.username ?? "", password: r.password };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function biometricDeleteCredentials(
+  server: string,
+): Promise<void> {
+  const bio = plugin("NativeBiometric");
+  if (!bio?.deleteCredentials) return;
+  try {
+    await bio.deleteCredentials({ server });
+  } catch {
+    /* ignore */
   }
 }
 

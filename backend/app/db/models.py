@@ -2830,6 +2830,31 @@ class DeviceRegistration(UUIDPrimaryKey, TimestampMixin, Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class DeviceUnlockCredential(UUIDPrimaryKey, TimestampMixin, Base):
+    """A durable per-device quick-login credential (fingerprint/PIN unlock).
+
+    The device keeps an opaque random secret behind the OS biometric keystore
+    (or PIN-encrypted in app storage) and presents it on launch to re-mint a
+    fresh session without re-entering the password. Only a SHA-256 hash of the
+    secret is stored server-side, so the row alone cannot log anyone in;
+    revoking (or deleting) it immediately kills the device's quick-login.
+    """
+
+    __tablename__ = "device_unlock_credentials"
+
+    # Public handle sent alongside the secret on redeem (not itself sensitive).
+    handle: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    user_sub: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    secret_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    # "biometric" | "pin" — how the device protects the secret (informational).
+    method: Mapped[str] = mapped_column(String(20), nullable=False, default="biometric")
+    label: Mapped[str | None] = mapped_column(String(120))
+    platform: Mapped[str] = mapped_column(String(20), nullable=False, default="android")
+    app_version: Mapped[str | None] = mapped_column(String(50))
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 # ── Work Cases (Cockpit) ──────────────────────────────────────────────────────
 
 

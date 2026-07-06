@@ -2,122 +2,91 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  getLockMode,
-  hasPin,
-  pinLength,
-  pinSupported,
-  verifyPin,
-} from "@/lib/app-lock";
 import PinPad from "@/components/mobile/PinPad";
+import { isNative } from "@/lib/native-bridge";
 import {
-  biometricAvailable,
-  biometricVerify,
-  isNative,
-} from "@/lib/native-bridge";
+  hasQuickLogin,
+  pinLengthHint,
+  quickLoginMethod,
+  unlockBiometric,
+  unlockPin,
+  wasUnlockedThisSession,
+} from "@/lib/quick-login";
 
 const LOCK_TIMEOUT_MS = 2 * 60 * 1000; // re-lock after 2 min in background
 
-type Method = "biometric" | "pin";
-
 /**
- * App-lock overlay for the native shell. Locks on cold start and after the app
- * has been backgrounded past the timeout. The user picks the method in settings:
- * biometric (fingerprint/face) or a numeric PIN. Biometric falls back to the PIN
- * when a PIN is also configured or when no sensor is available. This is a purely
- * local gate over the existing WebView session — not server authentication.
+ * Lock overlay for the native shell when quick-login is enrolled. It locks the
+ * already-open session on cold start and after the app has been backgrounded
+ * past the timeout, and requires a fingerprint or PIN to continue. Unlocking
+ * redeems the device credential, so it also refreshes the session. If quick-
+ * login isn't set up, this renders nothing (the login screen handles auth).
  */
 export function BiometricGate() {
   const [checking, setChecking] = useState(true);
   const [locked, setLocked] = useState(false);
-  // Which method the overlay is currently offering.
-  const [method, setMethod] = useState<Method>("biometric");
-  // Whether a PIN fallback exists (shows the "enter PIN" affordance).
-  const [pinAvailable, setPinAvailable] = useState(false);
-
+  const [method, setMethod] = useState<"biometric" | "pin">("biometric");
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState(false);
-  const expectedLen = useRef<number | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
+  const bioTried = useRef(false);
 
-  // Decide whether the lock applies and via which method.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!isNative()) {
-        setChecking(false);
-        return;
-      }
-      const mode = getLockMode();
-      const pinReady = pinSupported() && hasPin();
-      const bioReady = await biometricAvailable();
-      if (cancelled) return;
-
-      let active = false;
-      let primary: Method = "biometric";
-      if (mode === "pin" && pinReady) {
-        active = true;
-        primary = "pin";
-      } else if (mode === "biometric") {
-        if (bioReady) {
-          active = true;
-          primary = "biometric";
-        } else if (pinReady) {
-          // Chosen biometric, but no sensor — fall back to the PIN if set.
-          active = true;
-          primary = "pin";
-        }
-      }
-
-      expectedLen.current = pinLength();
-      setPinAvailable(pinReady);
-      setMethod(primary);
-      setLocked(active);
+    if (!isNative()) {
       setChecking(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
+      return;
+    }
+    // Lock on a cold start into an already-authenticated session, but not right
+    // after the login screen already unlocked us this WebView session.
+    if (hasQuickLogin() && !wasUnlockedThisSession()) {
+      setMethod(quickLoginMethod() === "pin" ? "pin" : "biometric");
+      setLocked(true);
+    }
+    setChecking(false);
   }, []);
 
-  const tryBiometric = useCallback(async () => {
-    const ok = await biometricVerify("Разблокировать AI-DOCS");
-    if (ok) {
+  const doBiometric = useCallback(async () => {
+    setUnlocking(true);
+    try {
+      await unlockBiometric();
       setLocked(false);
-      setPin("");
-    } else if (pinAvailable) {
-      // User cancelled or failed — offer the PIN pad instead of a dead end.
-      setMethod("pin");
+    } catch {
+      /* stay locked; the user can retry or use the password on the login page */
+    } finally {
+      setUnlocking(false);
     }
-  }, [pinAvailable]);
+  }, []);
 
-  // Auto-prompt biometrics when the overlay shows in biometric mode.
+  // Auto-prompt biometrics when freshly locked.
   useEffect(() => {
-    if (!checking && locked && method === "biometric") void tryBiometric();
-  }, [checking, locked, method, tryBiometric]);
+    if (!checking && locked && method === "biometric" && !bioTried.current) {
+      bioTried.current = true;
+      void doBiometric();
+    }
+  }, [checking, locked, method, doBiometric]);
 
-  // Verify the PIN as soon as it reaches the configured length.
+  // Verify the PIN once it reaches the configured length.
   useEffect(() => {
-    if (method !== "pin" || !expectedLen.current) return;
-    if (pin.length < expectedLen.current) return;
+    if (!locked || method !== "pin") return;
+    const len = pinLengthHint();
+    if (!len || pin.length < len) return;
     let cancelled = false;
-    void verifyPin(pin).then((ok) => {
-      if (cancelled) return;
-      if (ok) {
-        setLocked(false);
-        setPin("");
-        setPinError(false);
-      } else {
+    setUnlocking(true);
+    void unlockPin(pin)
+      .then(() => !cancelled && setLocked(false))
+      .catch(() => {
+        if (cancelled) return;
         setPinError(true);
         setTimeout(() => {
           setPin("");
           setPinError(false);
         }, 600);
-      }
-    });
+      })
+      .finally(() => !cancelled && setUnlocking(false));
     return () => {
       cancelled = true;
     };
-  }, [pin, method]);
+  }, [pin, locked, method]);
 
   // Re-lock when returning from the background after the timeout.
   useEffect(() => {
@@ -126,13 +95,15 @@ export function BiometricGate() {
     function onVisibility() {
       if (document.visibilityState === "hidden") {
         hiddenAt = Date.now();
-      } else if (hiddenAt && Date.now() - hiddenAt > LOCK_TIMEOUT_MS) {
-        const mode = getLockMode();
-        if (mode !== "off") {
-          setPin("");
-          setMethod(mode === "pin" ? "pin" : "biometric");
-          setLocked(true);
-        }
+      } else if (
+        hiddenAt &&
+        Date.now() - hiddenAt > LOCK_TIMEOUT_MS &&
+        hasQuickLogin()
+      ) {
+        bioTried.current = false;
+        setPin("");
+        setMethod(quickLoginMethod() === "pin" ? "pin" : "biometric");
+        setLocked(true);
       }
     }
     document.addEventListener("visibilitychange", onVisibility);
@@ -145,7 +116,12 @@ export function BiometricGate() {
     <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-8 bg-slate-950 px-6 text-slate-100">
       {method === "biometric" ? (
         <>
-          <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-slate-800">
+          <button
+            onClick={doBiometric}
+            disabled={unlocking}
+            aria-label="Разблокировать по отпечатку"
+            className="flex h-20 w-20 items-center justify-center rounded-2xl bg-slate-800 active:bg-slate-700 disabled:opacity-60"
+          >
             <svg
               className="h-10 w-10 text-sky-400"
               fill="none"
@@ -159,24 +135,10 @@ export function BiometricGate() {
                 d="M12 11c-3 0-5 1.8-5 4v3h10v-3c0-2.2-2-4-5-4zm0-1a3 3 0 100-6 3 3 0 000 6z"
               />
             </svg>
-          </div>
-          <p className="text-sm text-slate-400">Приложение заблокировано</p>
-          <button
-            type="button"
-            onClick={tryBiometric}
-            className="rounded-lg bg-sky-500 px-6 py-2.5 text-sm font-medium text-white"
-          >
-            Разблокировать
           </button>
-          {pinAvailable && (
-            <button
-              type="button"
-              onClick={() => setMethod("pin")}
-              className="text-sm text-slate-400 hover:text-slate-200"
-            >
-              Ввести PIN-код
-            </button>
-          )}
+          <p className="text-sm text-slate-400">
+            {unlocking ? "Проверка…" : "Приложите палец для входа"}
+          </p>
         </>
       ) : (
         <>
@@ -189,20 +151,12 @@ export function BiometricGate() {
               setPinError(false);
               setPin(v);
             }}
-            dots={expectedLen.current ?? undefined}
+            dots={pinLengthHint() ?? undefined}
             error={pinError}
+            disabled={unlocking}
           />
         </>
       )}
     </div>
   );
-}
-
-// Back-compat helpers (used by settings). Kept so existing imports don't break.
-export function isAppLockEnabled(): boolean {
-  return getLockMode() !== "off";
-}
-
-export function setAppLockEnabled(): void {
-  // No-op: superseded by the lock-mode selector in settings.
 }

@@ -2,55 +2,68 @@
 
 import { useEffect, useState } from "react";
 
-import {
-  clearPin,
-  getLockMode,
-  hasPin,
-  LockMode,
-  PIN_MAX_LEN,
-  PIN_MIN_LEN,
-  pinSupported,
-  setLockMode,
-  setPin as storePin,
-} from "@/lib/app-lock";
 import PinPad from "@/components/mobile/PinPad";
 import { biometricAvailable } from "@/lib/native-bridge";
+import {
+  cryptoSupported,
+  disableQuickLogin,
+  enableBiometric,
+  enablePin,
+  PIN_MAX_LEN,
+  PIN_MIN_LEN,
+  QuickLoginMethod,
+  quickLoginMethod,
+} from "@/lib/quick-login";
 
 type SetupStep = "enter" | "confirm";
 
 /**
- * Lock-method chooser for the mobile app: off, biometric or a numeric PIN.
- * Picking "PIN" walks the user through a two-step set/confirm before the mode
- * takes effect, so a lock is never armed without a working credential.
+ * Quick-login management for the mobile app: enable fingerprint or a PIN so the
+ * password isn't asked on every launch. Enrolling requires the current
+ * (password) session — the server issues a device secret that the phone keeps
+ * behind biometrics / PIN encryption.
  */
 export default function AppLockSettings() {
-  const [mode, setMode] = useState<LockMode>("off");
+  const [method, setMethod] = useState<QuickLoginMethod | null>(null);
   const [bioOk, setBioOk] = useState(false);
-  const [pinSet, setPinSet] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // PIN setup dialog state.
+  // PIN setup dialog.
   const [setup, setSetup] = useState<SetupStep | null>(null);
   const [entry, setEntry] = useState("");
   const [first, setFirst] = useState("");
   const [setupErr, setSetupErr] = useState<string | null>(null);
 
   useEffect(() => {
-    setMode(getLockMode());
-    setPinSet(hasPin());
+    setMethod(quickLoginMethod());
     void biometricAvailable().then(setBioOk);
   }, []);
 
-  function choose(next: LockMode) {
-    if (next === "biometric" && !bioOk) return;
-    if (next === "pin" && !pinSet) {
-      openSetup();
-      return;
+  async function turnOnBiometric() {
+    setError(null);
+    setBusy(true);
+    try {
+      await enableBiometric();
+      setMethod("biometric");
+    } catch (e) {
+      setError(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
     }
-    setLockMode(next);
-    setMode(next);
   }
 
-  function openSetup() {
+  async function turnOff() {
+    setBusy(true);
+    try {
+      await disableQuickLogin();
+      setMethod(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openPinSetup() {
     setEntry("");
     setFirst("");
     setSetupErr(null);
@@ -81,86 +94,95 @@ export default function AppLockSettings() {
       setEntry("");
       return;
     }
-    await storePin(first);
-    setPinSet(true);
-    setLockMode("pin");
-    setMode("pin");
-    cancelSetup();
-  }
-
-  function removePin() {
-    clearPin();
-    setPinSet(false);
-    if (getLockMode() === "pin") {
-      setLockMode("off");
-      setMode("off");
+    setBusy(true);
+    try {
+      await enablePin(first);
+      setMethod("pin");
+      cancelSetup();
+    } catch (e) {
+      setSetupErr(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
     }
   }
 
-  const options: {
-    key: LockMode;
+  const rows: {
+    key: QuickLoginMethod;
     label: string;
     hint?: string;
     disabled?: boolean;
+    onEnable: () => void;
   }[] = [
-    { key: "off", label: "Выключена" },
     {
       key: "biometric",
       label: "Отпечаток / лицо",
       hint: bioOk ? undefined : "Недоступно на этом устройстве",
-      disabled: !bioOk,
+      disabled: !bioOk || busy,
+      onEnable: turnOnBiometric,
     },
     {
       key: "pin",
       label: "PIN-код",
-      hint: pinSet ? "PIN задан" : "Задать PIN",
-      disabled: !pinSupported(),
+      disabled: !cryptoSupported() || busy,
+      onEnable: openPinSetup,
     },
   ];
 
   return (
     <div className="border-t border-border pt-4">
-      <div className="text-sm font-medium mb-1">Блокировка приложения</div>
+      <div className="text-sm font-medium mb-1">Быстрый вход</div>
       <p className="text-xs text-muted-foreground mb-3">
-        Защита входа в приложение. Не заменяет вход на сервер.
+        Вход по отпечатку или PIN вместо пароля. Первый вход — паролем, затем
+        приложение запоминает вас на этом устройстве.
       </p>
 
       <div className="space-y-2">
-        {options.map((o) => (
-          <label
-            key={o.key}
-            className={`flex items-center justify-between rounded-md border px-3 py-2 ${
-              o.disabled ? "opacity-50" : "cursor-pointer hover:bg-muted/50"
-            } ${mode === o.key ? "border-primary bg-primary/5" : "border-border"}`}
-          >
-            <span className="flex items-center gap-2 text-sm">
-              <input
-                type="radio"
-                name="lock-mode"
-                checked={mode === o.key}
-                disabled={o.disabled}
-                onChange={() => choose(o.key)}
-                className="accent-primary"
-              />
-              {o.label}
-            </span>
-            {o.hint && (
-              <span className="text-xs text-muted-foreground">{o.hint}</span>
-            )}
-          </label>
-        ))}
+        {rows.map((r) => {
+          const active = method === r.key;
+          return (
+            <div
+              key={r.key}
+              className={`flex items-center justify-between rounded-md border px-3 py-2 ${
+                active ? "border-primary bg-primary/5" : "border-border"
+              } ${r.disabled && !active ? "opacity-50" : ""}`}
+            >
+              <span className="text-sm">
+                {r.label}
+                {r.hint && (
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {r.hint}
+                  </span>
+                )}
+              </span>
+              {active ? (
+                <span className="text-xs font-medium text-primary">
+                  Включено
+                </span>
+              ) : (
+                <button
+                  onClick={r.onEnable}
+                  disabled={r.disabled}
+                  className="text-xs font-medium text-primary hover:underline disabled:opacity-50 disabled:no-underline"
+                >
+                  Включить
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      {pinSet && (
-        <div className="mt-3 flex gap-4 text-xs">
-          <button onClick={openSetup} className="text-primary hover:underline">
-            Изменить PIN
-          </button>
-          <button onClick={removePin} className="text-red-500 hover:underline">
-            Удалить PIN
-          </button>
-        </div>
+      {method && (
+        <button
+          onClick={turnOff}
+          disabled={busy}
+          className="mt-3 text-xs text-red-500 hover:underline disabled:opacity-50"
+        >
+          Выключить быстрый вход
+        </button>
       )}
+
+      {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
 
       {setup && (
         <div className="fixed inset-0 z-[110] flex flex-col items-center justify-center gap-6 bg-slate-950/95 px-6 text-slate-100">
@@ -174,6 +196,7 @@ export default function AppLockSettings() {
               setEntry(v);
             }}
             error={!!setupErr}
+            disabled={busy}
           />
           {setupErr && <p className="text-xs text-red-400">{setupErr}</p>}
           <div className="flex items-center gap-4">
@@ -185,10 +208,10 @@ export default function AppLockSettings() {
             </button>
             <button
               onClick={setup === "enter" ? submitEnter : submitConfirm}
-              disabled={entry.length < PIN_MIN_LEN}
+              disabled={entry.length < PIN_MIN_LEN || busy}
               className="rounded-lg bg-sky-500 px-6 py-2 text-sm font-medium text-white disabled:opacity-40"
             >
-              {setup === "enter" ? "Далее" : "Готово"}
+              {setup === "enter" ? "Далее" : busy ? "Сохранение…" : "Готово"}
             </button>
           </div>
           <p className="text-[11px] text-slate-500">

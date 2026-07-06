@@ -344,6 +344,179 @@ async def qr_login_redeem(payload: QrRedeemRequest, request: Request) -> Respons
     return resp
 
 
+# ── Device quick-login (biometric / PIN) ─────────────────────────────────────
+#
+# The device stores an opaque random secret behind the OS biometric keystore, or
+# PIN-encrypted in app storage, and presents it on launch to re-mint a session
+# without the password. Only the secret's hash is stored server-side; deleting or
+# revoking the row instantly kills that device's quick-login. Enrolling requires
+# an authenticated session (proves the password was entered at least once);
+# redeeming is public (the secret is the proof) and — like the rest of /api/auth
+# — CSRF-exempt.
+
+
+class DeviceUnlockEnrollRequest(BaseModel):
+    method: str = "biometric"  # "biometric" | "pin" (how the device guards it)
+    label: str | None = None
+    platform: str = "android"
+    app_version: str | None = None
+
+
+class DeviceUnlockRedeemRequest(BaseModel):
+    handle: str
+    secret: str
+
+
+class DeviceUnlockRevokeRequest(BaseModel):
+    handle: str | None = None  # None → revoke all of the caller's credentials
+
+
+def _hash_unlock_secret(secret: str) -> str:
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+@router.post("/device-unlock/enroll")
+async def device_unlock_enroll(
+    payload: DeviceUnlockEnrollRequest,
+    request: Request,
+    user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Register a quick-login credential for the caller's device. Returns the
+    one-time `secret` (shown only here) which the device must store securely."""
+    from app.db.models import DeviceUnlockCredential
+
+    method = payload.method if payload.method in ("biometric", "pin") else "biometric"
+    handle = secrets.token_urlsafe(24)
+    secret = secrets.token_urlsafe(32)
+    cred = DeviceUnlockCredential(
+        handle=handle,
+        user_sub=user.sub,
+        secret_hash=_hash_unlock_secret(secret),
+        method=method,
+        label=payload.label,
+        platform=payload.platform,
+        app_version=payload.app_version,
+    )
+    db.add(cred)
+    await db.commit()
+    logger.info("device_unlock_enrolled", user=user.sub, method=method)
+    return {"handle": handle, "secret": secret}
+
+
+@router.post("/device-unlock/redeem")
+async def device_unlock_redeem(
+    payload: DeviceUnlockRedeemRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Redeem a device secret: set a fresh session cookie without the password."""
+    from app.auth.jwt import current_session_epoch, mint_local_session
+    from app.db.models import DeviceUnlockCredential, User
+
+    res = await db.execute(
+        select(DeviceUnlockCredential).where(
+            DeviceUnlockCredential.handle == payload.handle
+        )
+    )
+    cred = res.scalar_one_or_none()
+    ok = (
+        cred is not None
+        and not cred.revoked
+        and secrets.compare_digest(
+            cred.secret_hash, _hash_unlock_secret(payload.secret)
+        )
+    )
+    if not ok:
+        logger.warning(
+            "device_unlock_rejected",
+            ip=_request_ip(request),
+            handle_hash=_token_hash(payload.handle),
+            reason="invalid_or_revoked",
+        )
+        raise HTTPException(status_code=401, detail="Быстрый вход недоступен — войдите паролем")
+
+    ures = await db.execute(select(User).where(User.sub == cred.user_sub))
+    u = ures.scalar_one_or_none()
+    if u is None or not u.is_active:
+        logger.warning("device_unlock_rejected", user=cred.user_sub, reason="user_inactive")
+        raise HTTPException(status_code=401, detail="Учётная запись недоступна — войдите паролем")
+
+    epoch = await current_session_epoch(cred.user_sub)
+    ttl_seconds = max(3600, settings.qr_login_session_ttl_minutes * 60)
+    session_jwt = mint_local_session(
+        sub=cred.user_sub,
+        email=u.email,
+        name=u.name,
+        preferred_username=u.preferred_username,
+        groups=[],  # role resolved from DB at verify time
+        ttl_seconds=ttl_seconds,
+        session_epoch=epoch,
+    )
+
+    from datetime import datetime, timezone
+
+    cred.last_used_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    is_production = settings.app_env == "production"
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(
+        key="access_token",
+        value=session_jwt,
+        path="/",
+        httponly=True,
+        secure=is_production,
+        samesite="lax",
+        max_age=_token_max_age(session_jwt),
+    )
+    logger.info("device_unlock_redeemed", user=cred.user_sub, ip=_request_ip(request))
+    return resp
+
+
+@router.get("/device-unlock/status")
+async def device_unlock_status(
+    user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """How many active quick-login credentials the caller has (for settings UI)."""
+    from app.db.models import DeviceUnlockCredential
+
+    res = await db.execute(
+        select(DeviceUnlockCredential).where(
+            DeviceUnlockCredential.user_sub == user.sub,
+            DeviceUnlockCredential.revoked == False,  # noqa: E712
+        )
+    )
+    creds = res.scalars().all()
+    return {"count": len(creds)}
+
+
+@router.post("/device-unlock/revoke")
+async def device_unlock_revoke(
+    payload: DeviceUnlockRevokeRequest,
+    user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Revoke one (by handle) or all of the caller's quick-login credentials."""
+    from app.db.models import DeviceUnlockCredential
+
+    stmt = select(DeviceUnlockCredential).where(
+        DeviceUnlockCredential.user_sub == user.sub,
+        DeviceUnlockCredential.revoked == False,  # noqa: E712
+    )
+    if payload.handle:
+        stmt = stmt.where(DeviceUnlockCredential.handle == payload.handle)
+    res = await db.execute(stmt)
+    n = 0
+    for cred in res.scalars().all():
+        cred.revoked = True
+        n += 1
+    await db.commit()
+    logger.info("device_unlock_revoked", user=user.sub, count=n)
+    return {"revoked": n}
+
+
 @router.post("/logout")
 async def logout(
     request: Request,

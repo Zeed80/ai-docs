@@ -13,6 +13,7 @@ import {
 } from "@/lib/native-bridge";
 import { setPendingShare } from "@/lib/mobile-share-store";
 import { BiometricGate } from "@/components/mobile/BiometricGate";
+import { QuickLoginPrompt } from "@/components/mobile/QuickLoginPrompt";
 
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? undefined;
 
@@ -93,6 +94,7 @@ export function MobileChrome() {
   return (
     <>
       <BiometricGate />
+      <QuickLoginPrompt />
 
       {update && !dismissed && (
         <div className="fixed inset-x-0 top-0 z-[60] bg-sky-600 px-4 py-2 text-sm text-white">

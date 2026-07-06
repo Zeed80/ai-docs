@@ -1,6 +1,6 @@
 "use client";
 
-import { PIN_MAX_LEN } from "@/lib/app-lock";
+import { PIN_MAX_LEN } from "@/lib/quick-login";
 
 interface Props {
   value: string;
