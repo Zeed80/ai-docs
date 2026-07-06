@@ -23,6 +23,25 @@
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <!-- Android 11+ (API 30+) package visibility: without this, resolveActivity()
+         for the camera/gallery intents returns null and @capacitor/camera can't
+         launch the system camera (falls back to the file picker). -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.VIDEO_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.GET_CONTENT" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.PICK" />
+            <data android:mimeType="image/*" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"

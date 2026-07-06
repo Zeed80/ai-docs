@@ -18,6 +18,20 @@ type Cap = {
   getPlatform?: () => string;
   convertFileSrc?: (url: string) => string;
   Plugins?: Record<string, any>;
+  // Low-level bridge, injected by native-bridge.js on every Capacitor page.
+  nativePromise?: (
+    pluginName: string,
+    methodName: string,
+    options?: unknown,
+  ) => Promise<any>;
+  addListener?: (
+    pluginName: string,
+    eventName: string,
+    cb: (...args: any[]) => void,
+  ) => any;
+  removeListener?: (pluginName: string, ...args: any[]) => void;
+  // Native-advertised plugin list (present when the bridge injects it).
+  PluginHeaders?: { name: string }[];
 };
 
 function cap(): Cap | undefined {
@@ -25,8 +39,61 @@ function cap(): Cap | undefined {
   return (window as any).Capacitor as Cap | undefined;
 }
 
+// Proxies built over the low-level bridge, cached per plugin name.
+const _nativeProxies = new Map<string, any>();
+
+/**
+ * Resolve a native plugin.
+ *
+ * This bundle ships NO `@capacitor/*` JS, so `Capacitor.Plugins` (whose proxies
+ * are created by @capacitor/core's registerPlugin) is empty on the remote-loaded
+ * site — only the low-level bridge (`Capacitor.nativePromise`) is injected there.
+ * Reading `Capacitor.Plugins[name]` therefore always returned undefined and every
+ * native call silently fell through to the web fallback (most visibly: the camera
+ * opened the gallery). We build a proxy over `nativePromise` to reach the native
+ * plugin directly. Falls back to a genuine JS-registered plugin if one exists.
+ */
 function plugin<T = any>(name: string): T | undefined {
-  return cap()?.Plugins?.[name] as T | undefined;
+  const c = cap();
+  if (!c) return undefined;
+
+  const direct = c.Plugins?.[name];
+  if (direct) return direct as T;
+
+  const np = c.nativePromise;
+  if (typeof np !== "function") return undefined;
+
+  // If the native side advertises its plugins, respect that so a genuinely
+  // absent plugin still triggers the web/no-op fallback instead of hanging.
+  const headers = c.PluginHeaders;
+  if (Array.isArray(headers) && !headers.some((h) => h?.name === name)) {
+    return undefined;
+  }
+
+  if (!_nativeProxies.has(name)) {
+    _nativeProxies.set(
+      name,
+      new Proxy(
+        {},
+        {
+          get(_t, prop) {
+            const method = String(prop);
+            if (method === "then") return undefined; // not a thenable
+            if (method === "addListener" && typeof c.addListener === "function")
+              return (event: string, cb: (...a: any[]) => void) =>
+                c.addListener!(name, event, cb);
+            if (
+              method === "removeListener" &&
+              typeof c.removeListener === "function"
+            )
+              return (...a: any[]) => c.removeListener!(name, ...a);
+            return (options?: unknown) => np(name, method, options ?? {});
+          },
+        },
+      ),
+    );
+  }
+  return _nativeProxies.get(name) as T;
 }
 
 export function isNative(): boolean {
