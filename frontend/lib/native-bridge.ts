@@ -305,6 +305,7 @@ export async function scanDocument(): Promise<File[]> {
       // User cancelled or camera error — do NOT fall back to a gallery/file
       // picker (that's what caused the "opens gallery then hangs" report).
       console.warn("camera getPhoto cancelled/failed", e);
+      cameraError(e);
       return [];
     }
   }
@@ -352,6 +353,7 @@ export async function pickImage(
       return [];
     } catch (e) {
       console.warn("camera pickImage cancelled/failed", e);
+      cameraError(e);
       return [];
     }
   }
@@ -427,6 +429,21 @@ function isAndroidWebView(): boolean {
   return (
     /Android/i.test(ua) && (/;\s*wv\b/.test(ua) || !!(window as any).Capacitor)
   );
+}
+
+/** Surface a real camera error (not a user cancel) once per session, so a
+ * silent native failure ("nothing happens on tap") becomes visible. */
+function cameraError(e: unknown): void {
+  const msg = String((e as Error)?.message || e || "");
+  if (/cancel|denied|user/i.test(msg)) return; // user dismissed — not an error
+  if (!isAndroidWebView()) return;
+  try {
+    if (sessionStorage.getItem("cam_err_shown")) return;
+    sessionStorage.setItem("cam_err_shown", "1");
+  } catch {
+    /* ignore */
+  }
+  alert("Ошибка камеры: " + (msg || "неизвестно") + "\n" + nativeBridgeDiag());
 }
 
 /** Show the camera-unavailable diagnostic at most once per app session. */

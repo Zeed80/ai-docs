@@ -6,10 +6,16 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewFeature
 import com.getcapacitor.BridgeActivity
+import com.getcapacitor.BridgeWebViewClient
 import com.getcapacitor.CapConfig
+import java.net.URL
 
 /**
  * Main activity for the Света shell.
@@ -65,6 +71,40 @@ class MainActivity : BridgeActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleDeepLink(intent)
+    }
+
+    /**
+     * With server.url set, Capacitor routes EVERY request to that host through its
+     * local-server proxy (re-fetches server-side), which breaks cookies/session,
+     * file downloads and streaming (SSE). The native bridge, however, is injected
+     * separately via addDocumentStartJavaScript (modern WebViews), independent of
+     * that proxy. So we swap in a WebViewClient that bypasses the proxy for our own
+     * server — the site then loads directly (everything works) while the bridge
+     * (camera/biometrics/push) stays injected. Gated on DOCUMENT_START_SCRIPT: if
+     * unsupported (old WebView) the bridge would come from the proxy, so we leave
+     * the proxy in place (no regression). Requires one reload so the initial page
+     * (already started via the proxy) re-fetches directly.
+     */
+    override fun load() {
+        super.load()
+        val b = bridge ?: return
+        val host = ServerConfigPlugin.savedUrl(this)
+            ?.let { runCatching { URL(it).host }.getOrNull() }
+            ?: return
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+
+        b.setWebViewClient(object : BridgeWebViewClient(b) {
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: WebResourceRequest,
+            ): WebResourceResponse? {
+                if (request.url.host?.equals(host, ignoreCase = true) == true) {
+                    return null // load our server directly, not through the proxy
+                }
+                return super.shouldInterceptRequest(view, request)
+            }
+        })
+        b.webView.post { b.webView.reload() }
     }
 
     /** Android 13+ requires a runtime grant for notifications to be shown. */

@@ -55,4 +55,10 @@ subprojects {
 GRADLE
 fi
 
+# 6. Expose androidx.webkit to the app module (MainActivity uses WebViewFeature
+#    to gate the proxy-bypass WebViewClient). Capacitor bundles 1.14.0.
+if ! grep -q "androidx.webkit:webkit" android/app/build.gradle; then
+  sed -i 's#^dependencies {#dependencies {\n    implementation "androidx.webkit:webkit:1.14.0"#' android/app/build.gradle
+fi
+
 echo "android/ prepared (Kotlin enabled, minSdk 28, compileSdk 36, overrides applied)."
