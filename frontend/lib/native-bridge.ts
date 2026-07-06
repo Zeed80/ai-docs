@@ -309,6 +309,11 @@ export async function scanDocument(): Promise<File[]> {
     }
   }
 
+  // Reaching here inside the app means the native Camera plugin wasn't
+  // available — surface a diagnostic so we can see what the bridge exposes.
+  if (isAndroidWebView()) {
+    alert("Камера недоступна (диагностика): " + nativeBridgeDiag());
+  }
   // Non-native (browser): system file picker with camera-capture hint.
   return pickFilesWeb({ accept: "image/*", capture: "environment" });
 }
@@ -352,6 +357,9 @@ export async function pickImage(
       return [];
     }
   }
+  if (source === "CAMERA" && isAndroidWebView()) {
+    alert("Камера недоступна (диагностика): " + nativeBridgeDiag());
+  }
   return pickFilesWeb({
     accept: "image/*",
     capture: source === "CAMERA" ? "environment" : undefined,
@@ -372,9 +380,57 @@ export function pickFilesWeb(opts?: {
     input.multiple = opts?.multiple ?? true;
     if (opts?.accept) input.accept = opts.accept;
     if (opts?.capture) input.setAttribute("capture", opts.capture);
-    input.onchange = () => resolve(input.files ? Array.from(input.files) : []);
+
+    let settled = false;
+    const finish = (files: File[]) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("focus", onFocus);
+      resolve(files);
+    };
+    const onChange = () => finish(input.files ? Array.from(input.files) : []);
+    // Cancel handling: if the picker is dismissed without a choice, `change`
+    // never fires and the caller would hang forever (stuck spinner). The window
+    // regains focus on dismissal — give `change` a beat, then resolve empty.
+    const onFocus = () =>
+      setTimeout(() => {
+        if (!input.files || input.files.length === 0) finish([]);
+      }, 1000);
+
+    input.addEventListener("change", onChange);
+    input.addEventListener("cancel", () => finish([])); // modern browsers
+    window.addEventListener("focus", onFocus);
     input.click();
   });
+}
+
+/** One-line snapshot of what the Capacitor native bridge exposes at runtime.
+ * Used to diagnose why a native plugin (e.g. Camera) isn't reachable. */
+export function nativeBridgeDiag(): string {
+  const c =
+    typeof window !== "undefined" ? (window as any).Capacitor : undefined;
+  if (!c) return "Capacitor: НЕТ (window.Capacitor undefined)";
+  const plugins = c.Plugins ? Object.keys(c.Plugins) : [];
+  const headers = Array.isArray(c.PluginHeaders)
+    ? c.PluginHeaders.map((h: any) => h?.name)
+    : null;
+  return [
+    `platform=${c.getPlatform?.() ?? "?"}`,
+    `native=${c.isNativePlatform?.() ?? "?"}`,
+    `nativePromise=${typeof c.nativePromise}`,
+    `nativeCallback=${typeof c.nativeCallback}`,
+    `Plugins=[${plugins.join(",")}]`,
+    `Headers=${headers ? "[" + headers.join(",") + "]" : "нет"}`,
+  ].join(" ");
+}
+
+/** True inside an Android WebView (the app shell), false in a normal browser. */
+function isAndroidWebView(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  return (
+    /Android/i.test(ua) && (/;\s*wv\b/.test(ua) || !!(window as any).Capacitor)
+  );
 }
 
 // ── Share / "Open with" intake ────────────────────────────────────────────────
