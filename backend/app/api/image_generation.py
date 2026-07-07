@@ -34,7 +34,6 @@ from app.db.models import (
     ImageGenStatus,
     StudioJob,
     StudioJobKind,
-    StudioJobStatus,
 )
 from app.db.session import get_db
 from app.services import studio_queue
@@ -568,6 +567,7 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
     """Delete a generation + its MinIO files, re-parenting any iteration
     children to roots so the FK never blocks the delete (a failed/erroneous
     gen must always be removable)."""
+    from sqlalchemy import delete as sa_delete
     from sqlalchemy import update as sa_update
 
     for path in [gen.result_path, gen.thumbnail_path, gen.mask_path,
@@ -584,16 +584,7 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
         .where(ImageGeneration.parent_id == gen.id)
         .values(parent_id=None)
     )
-    await db.execute(
-        sa_update(StudioJob)
-        .where(StudioJob.generation_id == gen.id)
-        .values(
-            generation_id=None,
-            status=StudioJobStatus.cancelled,
-            error="Связанная генерация удалена.",
-            finished_at=datetime.now(timezone.utc),
-        )
-    )
+    await db.execute(sa_delete(StudioJob).where(StudioJob.generation_id == gen.id))
     from app.tasks.image_generation import _clear_progress
 
     _clear_progress(str(gen.id))

@@ -427,9 +427,47 @@ async def test_delete_generation_detaches_studio_job(client, db_session):
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     assert await db_session.get(ImageGeneration, gen.id) is None
-    await db_session.refresh(job)
-    assert job.generation_id is None
-    assert job.status == StudioJobStatus.cancelled
+    assert await db_session.get(type(job), job.id) is None
+
+
+@pytest.mark.asyncio
+async def test_studio_queue_list_cleans_done_and_cancelled_jobs(client, db_session):
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.services import studio_queue
+
+    jobs = []
+    for idx, status in enumerate(
+        [
+            studio_queue.StudioJobStatus.done,
+            studio_queue.StudioJobStatus.cancelled,
+            studio_queue.StudioJobStatus.failed,
+        ]
+    ):
+        gen = ImageGeneration(
+            owner_sub="dev-user",
+            operation="generate",
+            status=ImageGenStatus.done if status != studio_queue.StudioJobStatus.failed else ImageGenStatus.failed,
+            prompt=f"job-{idx}",
+            params={},
+            source_image_paths=[],
+        )
+        db_session.add(gen)
+        await db_session.flush()
+        job = await studio_queue.create_image_job(db_session, gen, title=f"job-{idx}")
+        job.status = status
+        jobs.append(job)
+    await db_session.commit()
+
+    resp = await client.get("/api/studio/queue")
+
+    assert resp.status_code == 200
+    returned_ids = {item["id"] for item in resp.json()["items"]}
+    assert str(jobs[0].id) not in returned_ids
+    assert str(jobs[1].id) not in returned_ids
+    assert str(jobs[2].id) in returned_ids
+    assert await db_session.get(type(jobs[0]), jobs[0].id) is None
+    assert await db_session.get(type(jobs[1]), jobs[1].id) is None
+    assert await db_session.get(type(jobs[2]), jobs[2].id) is not None
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -32,6 +32,10 @@ FINAL_STATUSES = {
     StudioJobStatus.cancelled,
     StudioJobStatus.done,
     StudioJobStatus.failed,
+}
+CLEANUP_STATUSES = {
+    StudioJobStatus.cancelled,
+    StudioJobStatus.done,
 }
 
 CONTROL_REDIS_KEY = "studio:queue:control"
@@ -486,6 +490,21 @@ async def retry_failed_job(db: AsyncSession, job: StudioJob) -> None:
         "status": _status_value(job.status),
         "owner_sub": job.owner_sub,
     })
+
+
+async def cleanup_terminal_jobs(db: AsyncSession) -> int:
+    """Remove queue rows that should no longer be visible in the product queue.
+
+    Failed jobs stay as dead-letter records so operators can inspect/retry them.
+    Successful and cancelled jobs are already represented by the linked
+    ImageGeneration/LoraTrainingRun status, so keeping them in the queue makes
+    the UI look stuck.
+    """
+    result = await db.execute(delete(StudioJob).where(StudioJob.status.in_(CLEANUP_STATUSES)))
+    deleted = int(result.rowcount or 0)
+    if deleted:
+        await publish_queue_event({"type": "jobs_cleaned", "deleted": deleted})
+    return deleted
 
 
 async def bulk_cancel_pending(

@@ -74,6 +74,8 @@ async def list_queue(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
+    if await studio_queue.cleanup_terminal_jobs(db):
+        await db.commit()
     q = select(StudioJob)
     if mine or not _can_see_all(user):
         q = q.where(StudioJob.owner_sub == user.sub)
@@ -113,6 +115,8 @@ async def queue_stats(
 ) -> dict:
     if not _can_manage_queue(user):
         raise HTTPException(403, "Недостаточно прав для просмотра метрик очереди")
+    if await studio_queue.cleanup_terminal_jobs(db):
+        await db.commit()
     return await studio_queue.queue_stats(db)
 
 
