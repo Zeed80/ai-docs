@@ -1,0 +1,38 @@
+{
+  "key": "generate_flux2",
+  "title": "Генерация по описанию (FLUX.2 klein 9B)",
+  "description": "Создать изображение с нуля по тексту на модели FLUX.2 (klein 9B, текст-энкодер Qwen3-8B, VAE flux2). Качественная линейная графика/эскизы; медленнее быстрого Qwen-AIO, но точнее следует описанию. Размер выбирается в композере. Модели подбираются под установленные на сервере.",
+  "category": "generate",
+  "operation": "generate",
+  "base_family": "flux2",
+  "inject_map": {
+    "prompt": {"node": "pos", "input": "text"},
+    "seed": {"node": "noise", "input": "noise_seed"},
+    "width": [{"node": "empty", "input": "width"}, {"node": "sig", "input": "width"}],
+    "height": [{"node": "empty", "input": "height"}, {"node": "sig", "input": "height"}],
+    "steps": {"node": "sig", "input": "steps"},
+    "guidance": {"node": "guide", "input": "guidance"}
+  },
+  "params_schema": {
+    "seed": {"type": "int", "default": 0, "label": "Seed (0 = случайный)"},
+    "steps": {"type": "int", "default": 20, "min": 1, "max": 50, "label": "Шаги"},
+    "guidance": {"type": "float", "default": 4.0, "min": 1.0, "max": 10.0, "label": "Guidance (FLUX)"},
+    "width": {"type": "int", "default": 1024, "label": "Ширина"},
+    "height": {"type": "int", "default": 1024, "label": "Высота"}
+  },
+  "graph": {
+    "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux-2-klein-9b-kv-fp8.safetensors", "weight_dtype": "default"}},
+    "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_8b_fp8mixed.safetensors", "type": "flux2"}},
+    "vae": {"class_type": "VAELoader", "inputs": {"vae_name": "flux2-vae.safetensors"}},
+    "pos": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["clip", 0]}},
+    "guide": {"class_type": "FluxGuidance", "inputs": {"conditioning": ["pos", 0], "guidance": 4.0}},
+    "empty": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+    "noise": {"class_type": "RandomNoise", "inputs": {"noise_seed": 0}},
+    "ksel": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+    "sig": {"class_type": "Flux2Scheduler", "inputs": {"steps": 20, "width": 1024, "height": 1024}},
+    "guider": {"class_type": "BasicGuider", "inputs": {"model": ["unet", 0], "conditioning": ["guide", 0]}},
+    "samp": {"class_type": "SamplerCustomAdvanced", "inputs": {"noise": ["noise", 0], "guider": ["guider", 0], "sampler": ["ksel", 0], "sigmas": ["sig", 0], "latent_image": ["empty", 0]}},
+    "dec": {"class_type": "VAEDecode", "inputs": {"samples": ["samp", 0], "vae": ["vae", 0]}},
+    "save": {"class_type": "SaveImage", "inputs": {"filename_prefix": "studio_generate_flux2", "images": ["dec", 0]}}
+  }
+}

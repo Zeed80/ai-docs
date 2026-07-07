@@ -1,0 +1,41 @@
+{
+  "key": "inpaint_flux2",
+  "title": "Правка области по маске (FLUX.2 klein 9B)",
+  "description": "Закрасить кистью область и заменить/дорисовать только её по инструкции — остальное не трогается. FLUX.2 (klein 9B, энкодер Qwen3-8B) + InpaintModelConditioning (шум только внутри маски). Без масштабирования входа — выход совпадает с исходником по размеру.",
+  "category": "inpaint",
+  "operation": "inpaint",
+  "base_family": "flux2",
+  "inject_map": {
+    "prompt": {"node": "pos", "input": "text"},
+    "image": {"node": "load", "input": "image"},
+    "mask": {"node": "maskimg", "input": "image"},
+    "seed": {"node": "noise", "input": "noise_seed"},
+    "steps": {"node": "sig", "input": "steps"},
+    "denoise": {"node": "sig", "input": "denoise"},
+    "guidance": {"node": "guide", "input": "guidance"}
+  },
+  "params_schema": {
+    "seed": {"type": "int", "default": 0, "label": "Seed (0 = случайный)"},
+    "steps": {"type": "int", "default": 20, "min": 1, "max": 50, "label": "Шаги"},
+    "denoise": {"type": "float", "default": 1.0, "min": 0.1, "max": 1.0, "label": "Сила правки"},
+    "guidance": {"type": "float", "default": 4.0, "min": 1.0, "max": 10.0, "label": "Guidance (FLUX)"}
+  },
+  "graph": {
+    "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux-2-klein-9b-kv-fp8.safetensors", "weight_dtype": "default"}},
+    "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_8b_fp8mixed.safetensors", "type": "flux2"}},
+    "vae": {"class_type": "VAELoader", "inputs": {"vae_name": "flux2-vae.safetensors"}},
+    "load": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
+    "maskimg": {"class_type": "LoadImageMask", "inputs": {"image": "mask.png", "channel": "red"}},
+    "pos": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["clip", 0]}},
+    "neg": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["pos", 0]}},
+    "inp": {"class_type": "InpaintModelConditioning", "inputs": {"positive": ["pos", 0], "negative": ["neg", 0], "vae": ["vae", 0], "pixels": ["load", 0], "mask": ["maskimg", 0], "noise_mask": true}},
+    "guide": {"class_type": "FluxGuidance", "inputs": {"conditioning": ["inp", 0], "guidance": 4.0}},
+    "guider": {"class_type": "BasicGuider", "inputs": {"model": ["unet", 0], "conditioning": ["guide", 0]}},
+    "noise": {"class_type": "RandomNoise", "inputs": {"noise_seed": 0}},
+    "ksel": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+    "sig": {"class_type": "BasicScheduler", "inputs": {"model": ["unet", 0], "scheduler": "simple", "steps": 20, "denoise": 1.0}},
+    "samp": {"class_type": "SamplerCustomAdvanced", "inputs": {"noise": ["noise", 0], "guider": ["guider", 0], "sampler": ["ksel", 0], "sigmas": ["sig", 0], "latent_image": ["inp", 2]}},
+    "dec": {"class_type": "VAEDecode", "inputs": {"samples": ["samp", 0], "vae": ["vae", 0]}},
+    "save": {"class_type": "SaveImage", "inputs": {"filename_prefix": "studio_inpaint_flux2", "images": ["dec", 0]}}
+  }
+}

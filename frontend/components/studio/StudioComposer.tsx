@@ -27,6 +27,16 @@ const OPERATIONS: { key: Operation; labelKey: string; needsSource: boolean }[] =
     { key: "cleanup", labelKey: "op_cleanup", needsSource: true },
   ];
 
+// Output size presets for text→image modes (generate / eskd-diffusion). All
+// dims are multiples of 16 (EmptyFlux2LatentImage/EmptySD3LatentImage step).
+const SIZE_PRESETS: { labelKey: string; w: number; h: number }[] = [
+  { labelKey: "size_square", w: 1024, h: 1024 },
+  { labelKey: "size_a4_portrait", w: 896, h: 1280 },
+  { labelKey: "size_a4_landscape", w: 1280, h: 896 },
+  { labelKey: "size_3_2", w: 1216, h: 832 },
+  { labelKey: "size_16_9", w: 1344, h: 768 },
+];
+
 interface Props {
   onSubmitted: () => void;
 }
@@ -76,15 +86,32 @@ export default function StudioComposer({ onSubmitted }: Props) {
   // decide (LoRA-cleanup keeps its tuned pass); "none" = raw ComfyUI result;
   // "text_only"/"full" opt into enhancements. Default "auto".
   const [postprocess, setPostprocess] = useState("auto");
+  // Output size for text→image modes: index into SIZE_PRESETS, or -1 = custom.
+  const [sizePreset, setSizePreset] = useState(0);
+  const [customW, setCustomW] = useState("1024");
+  const [customH, setCustomH] = useState("1024");
 
   // Active operation the selector filters on: the diffusion op, or "eskd" in
   // the exact-drawing mode.
   const activeOp: Operation = techMode ? "eskd" : operation;
   const optsForOp = workflows.filter((w) => w.operation === activeOp);
   const selectedWorkflow = workflows.find((w) => w.id === workflowId) ?? null;
-  // A custom (non-builtin, e.g. trained-LoRA) workflow carries its own tuned
-  // steps/cfg/strengths — the fast/quality preset must not override it.
-  const isCustomSelected = !!selectedWorkflow && !selectedWorkflow.is_builtin;
+  // The fast/quality preset (Lightning-4steps LoRA ↔ full quality) is only
+  // meaningful for workflows that actually have a Lightning LoRA node — i.e.
+  // the Qwen-Image-Edit builtins whose inject_map exposes lora_strength. FLUX.2
+  // builtins and custom LoRA clones carry their own tuned steps, so hide it.
+  const showQuality =
+    !!selectedWorkflow &&
+    selectedWorkflow.is_builtin &&
+    !!(selectedWorkflow.inject_map as Record<string, unknown>)?.lora_strength;
+
+  function effectiveSize(): { width: number; height: number } {
+    const preset = SIZE_PRESETS[sizePreset];
+    if (preset) return { width: preset.w, height: preset.h };
+    const clamp = (n: number) =>
+      Math.min(2048, Math.max(256, Math.round((Number(n) || 1024) / 16) * 16));
+    return { width: clamp(Number(customW)), height: clamp(Number(customH)) };
+  }
 
   async function reloadWorkflows(): Promise<Workflow[]> {
     const ws = (await listWorkflows()).filter((w) => w.enabled);
@@ -163,10 +190,11 @@ export default function StudioComposer({ onSubmitted }: Props) {
       if (workflowId) {
         // A diffusion ЕСКД pipeline was chosen instead of the exact vector
         // render — the description acts as the prompt (operation "eskd").
+        const { width, height } = effectiveSize();
         const input: GenerateInput = {
           operation: "eskd",
           prompt: techDesc,
-          params: { seed: Number(seed) || 0 },
+          params: { seed: Number(seed) || 0, width, height },
           source_image_paths: [],
           workflow_id: workflowId,
           ...link,
@@ -233,18 +261,23 @@ export default function StudioComposer({ onSubmitted }: Props) {
         operation,
         prompt: prompt || undefined,
         negative_prompt: negative || undefined,
-        params: { seed: Number(seed) || 0, quality },
+        params: { seed: Number(seed) || 0 },
         source_image_paths: [],
         ...link,
       };
       if (workflowId) {
         input.workflow_id = workflowId;
       }
-      // Custom LoRA workflows carry their own tuned steps/cfg (e.g.
-      // cleanup-LoRA works at cfg=1.0/25 steps) — the fast/quality preset
-      // must not override them; a builtin still honours the preset.
-      if (isCustomSelected) {
-        delete (input.params as Record<string, unknown>).quality;
+      // The fast/quality preset only applies to Lightning-LoRA workflows; other
+      // builtins (FLUX.2) and custom clones carry their own tuned steps.
+      if (showQuality) {
+        (input.params as Record<string, unknown>).quality = quality;
+      }
+      // Output size (text→image only): generate mode picks a format/custom W×H.
+      if (operation === "generate") {
+        const { width, height } = effectiveSize();
+        (input.params as Record<string, unknown>).width = width;
+        (input.params as Record<string, unknown>).height = height;
       }
       if (operation === "cleanup" && hd) {
         (input.params as Record<string, unknown>).hd = true;
@@ -282,6 +315,63 @@ export default function StudioComposer({ onSubmitted }: Props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Output-size picker for text→image modes: standard formats + custom W×H. */
+  function sizePicker() {
+    const custom = sizePreset < 0;
+    return (
+      <div>
+        <div className="mb-1 text-xs text-zinc-500">{t("size_label")}</div>
+        <div className="flex flex-wrap gap-1">
+          {SIZE_PRESETS.map((p, i) => (
+            <button
+              key={p.labelKey}
+              onClick={() => setSizePreset(i)}
+              className={`px-2 py-1 rounded text-xs ${
+                sizePreset === i
+                  ? "bg-sky-600 text-white"
+                  : "bg-white/5 text-zinc-300 hover:bg-white/10"
+              }`}
+            >
+              {t(p.labelKey)} · {p.w}×{p.h}
+            </button>
+          ))}
+          <button
+            onClick={() => setSizePreset(-1)}
+            className={`px-2 py-1 rounded text-xs ${
+              custom
+                ? "bg-sky-600 text-white"
+                : "bg-white/5 text-zinc-300 hover:bg-white/10"
+            }`}
+          >
+            {t("size_custom")}
+          </button>
+        </div>
+        {custom && (
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="number"
+              step={16}
+              value={customW}
+              onChange={(e) => setCustomW(e.target.value)}
+              placeholder={t("size_w")}
+              className="w-24 rounded bg-zinc-900 border border-white/10 p-1.5 text-sm text-zinc-200"
+            />
+            <span className="text-zinc-500">×</span>
+            <input
+              type="number"
+              step={16}
+              value={customH}
+              onChange={(e) => setCustomH(e.target.value)}
+              placeholder={t("size_h")}
+              className="w-24 rounded bg-zinc-900 border border-white/10 p-1.5 text-sm text-zinc-200"
+            />
+            <span className="text-[11px] text-zinc-600">{t("size_hint")}</span>
+          </div>
+        )}
+      </div>
+    );
   }
 
   /** Workflow (pipeline) picker shared by every mode. `withSentinel` adds the
@@ -402,6 +492,8 @@ export default function StudioComposer({ onSubmitted }: Props) {
             placeholder={t("tech_placeholder")}
             className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
           />
+          {/* Size applies to a diffusion ЕСКД pipeline (text→image). */}
+          {workflowId && sizePicker()}
           {/* View is meaningful only for the deterministic vector render. */}
           {!workflowId && (
             <div className="flex items-center gap-2">
@@ -480,6 +572,9 @@ export default function StudioComposer({ onSubmitted }: Props) {
           {/* Workflow (pipeline) selector — every diffusion mode. */}
           {workflowSelector(false)}
 
+          {/* Output size — creation (text→image) only. */}
+          {operation === "generate" && sizePicker()}
+
           {operation === "cleanup" && (
             <label className="flex items-center gap-2 text-xs text-zinc-400">
               <input
@@ -496,9 +591,9 @@ export default function StudioComposer({ onSubmitted }: Props) {
               instruction across 6+ test runs — quality mode did roughly
               half the time (diffusion sampling isn't fully seed-
               deterministic here), at several times the generation time.
-              Hidden for custom (LoRA) workflows: they carry their own tuned
-              steps/cfg and the preset would sabotage them. */}
-          <div className={isCustomSelected ? "hidden" : undefined}>
+              Shown only for Lightning-LoRA builtins (see showQuality); FLUX.2
+              builtins and custom clones carry their own tuned steps. */}
+          <div className={showQuality ? undefined : "hidden"}>
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs text-zinc-500">
                 {t("quality_label")}

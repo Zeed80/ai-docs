@@ -1,7 +1,7 @@
 {
   "key": "edit_qwen_image_edit",
   "title": "Редактирование по инструкции (Qwen-Image-Edit 2511, быстрый)",
-  "description": "Правка приложенного чертежа/фото по текстовой инструкции: «убери фаску», «добавь размер 40h7», «перерисуй вид сверху». Qwen-Image-Edit 2511 + Lightning-4steps LoRA (fp8, 4 шага). Корректная топология ComfyUI: ModelSamplingAuraFlow + CFGNorm + FluxKontextImageScale + ReferenceLatent. Модели подбираются автоматически под установленные на сервере.",
+  "description": "Правка приложенного чертежа/фото по текстовой инструкции: «убери фаску», «добавь размер 40h7», «перерисуй вид сверху». Qwen-Image-Edit 2511 + Lightning-4steps LoRA (fp8, 4 шага). Топология ComfyUI: ModelSamplingAuraFlow + CFGNorm + ReferenceLatent. Вход кодируется без масштабирования — выход совпадает с исходником (без обрезки). Модели подбираются автоматически под установленные на сервере.",
   "category": "edit",
   "operation": "edit",
   "inject_map": {
@@ -27,12 +27,11 @@
     "38": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image"}},
     "39": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
     "78": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
-    "90": {"class_type": "FluxKontextImageScale", "inputs": {"image": ["78", 0]}},
-    "76": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "", "clip": ["38", 0], "vae": ["39", 0], "image1": ["90", 0]}},
-    "77": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "", "clip": ["38", 0], "vae": ["39", 0], "image1": ["90", 0]}},
+    "76": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "", "clip": ["38", 0], "vae": ["39", 0], "image1": ["78", 0]}},
+    "77": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"prompt": "", "clip": ["38", 0], "vae": ["39", 0], "image1": ["78", 0]}},
     "86": {"class_type": "FluxKontextMultiReferenceLatentMethod", "inputs": {"conditioning": ["76", 0], "reference_latents_method": "index_timestep_zero"}},
     "87": {"class_type": "FluxKontextMultiReferenceLatentMethod", "inputs": {"conditioning": ["77", 0], "reference_latents_method": "index_timestep_zero"}},
-    "88": {"class_type": "VAEEncode", "inputs": {"pixels": ["90", 0], "vae": ["39", 0]}},
+    "88": {"class_type": "VAEEncode", "inputs": {"pixels": ["78", 0], "vae": ["39", 0]}},
     "3": {"class_type": "KSampler", "inputs": {"seed": 0, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["40", 0], "positive": ["86", 0], "negative": ["87", 0], "latent_image": ["88", 0]}},
     "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
     "60": {"class_type": "SaveImage", "inputs": {"filename_prefix": "studio_edit", "images": ["8", 0]}}

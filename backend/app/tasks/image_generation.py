@@ -500,7 +500,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             values["mask"] = mask_name
         if controlnet_name:
             values["controlnet_image"] = controlnet_name
-        for key in ("width", "height", "steps", "cfg", "denoise", "lora_strength"):
+        for key in ("width", "height", "steps", "cfg", "denoise",
+                    "lora_strength", "guidance"):
             if params.get(key) is not None:
                 values[key] = params[key]
         if params.get("controlnet_strength") is not None:

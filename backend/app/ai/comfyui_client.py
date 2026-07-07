@@ -78,21 +78,25 @@ def build_workflow(
     """Produce a ready-to-queue API graph by injecting values into the template.
 
     ``inject_map`` maps a logical key (``prompt``/``negative``/``image``/``mask``/
-    ``seed``/``width``/``height``/...) to ``{"node": <id>, "input": <name>}``.
-    Only keys present (and non-None) in ``values`` are injected, so a template
-    keeps its defaults for everything the caller doesn't override.
+    ``seed``/``width``/``height``/...) to ``{"node": <id>, "input": <name>}``, or
+    to a LIST of such targets when one value must land in several nodes (e.g.
+    FLUX.2 t2i feeds width/height to BOTH EmptyFlux2LatentImage and
+    Flux2Scheduler). Only keys present (and non-None) in ``values`` are injected,
+    so a template keeps its defaults for everything the caller doesn't override.
     """
     graph = copy.deepcopy(graph_template)
     for key, target in (inject_map or {}).items():
         if key not in values or values[key] is None:
             continue
-        node_id = str(target.get("node", ""))
-        input_name = target.get("input", "")
-        node = graph.get(node_id)
-        if not node_id or not input_name or not isinstance(node, dict):
-            logger.warning("comfyui_inject_skip", key=key, node=node_id, input=input_name)
-            continue
-        node.setdefault("inputs", {})[input_name] = values[key]
+        targets = target if isinstance(target, list) else [target]
+        for tgt in targets:
+            node_id = str(tgt.get("node", ""))
+            input_name = tgt.get("input", "")
+            node = graph.get(node_id)
+            if not node_id or not input_name or not isinstance(node, dict):
+                logger.warning("comfyui_inject_skip", key=key, node=node_id, input=input_name)
+                continue
+            node.setdefault("inputs", {})[input_name] = values[key]
     return graph
 
 

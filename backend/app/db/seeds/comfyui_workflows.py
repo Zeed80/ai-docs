@@ -36,7 +36,7 @@ def _workflow_dir() -> Path:
 
 _FIELDS = (
     "title", "description", "category", "operation",
-    "graph", "inject_map", "params_schema",
+    "graph", "inject_map", "params_schema", "base_family",
 )
 
 
@@ -99,6 +99,7 @@ async def seed_builtin_workflows(db) -> None:
                     graph=tpl.get("graph", {}),
                     inject_map=tpl.get("inject_map", {}),
                     params_schema=tpl.get("params_schema", {}),
+                    base_family=tpl.get("base_family", "qwen"),
                 )
             )
             changed = True

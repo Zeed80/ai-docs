@@ -1,0 +1,37 @@
+{
+  "key": "cleanup_flux2",
+  "title": "Очистка: фото → чистый чертёж (FLUX.2 klein 9B)",
+  "description": "Превратить снимок/скан детали в чистый чёрно-белый технический линейный чертёж на FLUX.2 (klein 9B, энкодер Qwen3-8B). Инструкция зашита, промпт не требуется. Reference-latent, вход кодируется напрямую — выход совпадает с исходником по размеру (без обрезки).",
+  "category": "process",
+  "operation": "cleanup",
+  "base_family": "flux2",
+  "inject_map": {
+    "image": {"node": "load", "input": "image"},
+    "seed": {"node": "noise", "input": "noise_seed"},
+    "steps": {"node": "sig", "input": "steps"},
+    "guidance": {"node": "guide", "input": "guidance"}
+  },
+  "params_schema": {
+    "seed": {"type": "int", "default": 0, "label": "Seed (0 = случайный)"},
+    "steps": {"type": "int", "default": 20, "min": 1, "max": 50, "label": "Шаги"},
+    "guidance": {"type": "float", "default": 4.0, "min": 1.0, "max": 10.0, "label": "Guidance (FLUX)"},
+    "vectorize": {"type": "bool", "default": true, "label": "Векторная регуляризация (прямые линии, чёткие окружности; выключить при артефактах)"}
+  },
+  "graph": {
+    "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux-2-klein-9b-kv-fp8.safetensors", "weight_dtype": "default"}},
+    "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_8b_fp8mixed.safetensors", "type": "flux2"}},
+    "vae": {"class_type": "VAELoader", "inputs": {"vae_name": "flux2-vae.safetensors"}},
+    "load": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
+    "enc": {"class_type": "VAEEncode", "inputs": {"pixels": ["load", 0], "vae": ["vae", 0]}},
+    "pos": {"class_type": "CLIPTextEncode", "inputs": {"text": "convert this into a clean black and white technical line drawing, crisp sharp outlines, remove background, remove noise and shadows, white background, engineering blueprint style", "clip": ["clip", 0]}},
+    "ref": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["pos", 0], "latent": ["enc", 0]}},
+    "guide": {"class_type": "FluxGuidance", "inputs": {"conditioning": ["ref", 0], "guidance": 4.0}},
+    "noise": {"class_type": "RandomNoise", "inputs": {"noise_seed": 0}},
+    "ksel": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+    "sig": {"class_type": "BasicScheduler", "inputs": {"model": ["unet", 0], "scheduler": "simple", "steps": 20, "denoise": 1.0}},
+    "guider": {"class_type": "BasicGuider", "inputs": {"model": ["unet", 0], "conditioning": ["guide", 0]}},
+    "samp": {"class_type": "SamplerCustomAdvanced", "inputs": {"noise": ["noise", 0], "guider": ["guider", 0], "sampler": ["ksel", 0], "sigmas": ["sig", 0], "latent_image": ["enc", 0]}},
+    "dec": {"class_type": "VAEDecode", "inputs": {"samples": ["samp", 0], "vae": ["vae", 0]}},
+    "save": {"class_type": "SaveImage", "inputs": {"filename_prefix": "studio_cleanup_flux2", "images": ["dec", 0]}}
+  }
+}
