@@ -93,14 +93,17 @@ restart:
 # ──────────────────────────────────────────────────────────────────────────────
 # Production
 # ──────────────────────────────────────────────────────────────────────────────
+# Plain production start/rebuild must not auto-enable embedded model-server
+# profiles persisted in infra/.env. vLLM/llama.cpp are started on demand by
+# provider/model activation, or explicitly with --profile.
 prod:
-	docker compose $(COMPOSE_PROD) up
+	COMPOSE_PROFILES= docker compose $(COMPOSE_PROD) up
 
 prod-bg:
-	docker compose $(COMPOSE_PROD) up -d
+	COMPOSE_PROFILES= docker compose $(COMPOSE_PROD) up -d
 
 prod-build:
-	docker compose $(COMPOSE_PROD) up -d --build
+	COMPOSE_PROFILES= docker compose $(COMPOSE_PROD) up -d --build
 
 prod-down:
 	docker compose $(COMPOSE_PROD) down
