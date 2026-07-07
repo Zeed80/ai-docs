@@ -7,21 +7,26 @@ import GenerationDetail from "@/components/studio/GenerationDetail";
 import GenerationGallery from "@/components/studio/GenerationGallery";
 import LoraTrainingPanel from "@/components/studio/LoraTrainingPanel";
 import StudioComposer from "@/components/studio/StudioComposer";
+import StudioQueuePanel from "@/components/studio/StudioQueuePanel";
 import WorkflowPanel from "@/components/studio/WorkflowPanel";
 import { gpuStatus } from "@/lib/lora-api";
 import {
   clearFailedGenerations,
   deleteGeneration,
   Generation,
+  getStudioJob,
   getGeneration,
   listGenerations,
+  listStudioQueue,
+  StudioJob,
 } from "@/lib/studio-api";
 
-type Tab = "studio" | "workflows" | "lora";
+type Tab = "studio" | "queue" | "workflows" | "lora";
 
 export default function StudioPage() {
   const t = useTranslations("studio");
   const [items, setItems] = useState<Generation[]>([]);
+  const [jobs, setJobs] = useState<StudioJob[]>([]);
   const [selected, setSelected] = useState<Generation | null>(null);
   const [tab, setTab] = useState<Tab>("studio");
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +36,9 @@ export default function StudioPage() {
   const load = useCallback(async () => {
     try {
       const data = await listGenerations();
+      const queue = await listStudioQueue();
       setItems(data);
+      setJobs(queue);
       setError(null);
       // Keep the open detail fresh.
       setSelected((cur) =>
@@ -65,6 +72,9 @@ export default function StudioPage() {
   }, [load]);
 
   const failedCount = items.filter((g) => g.status === "failed").length;
+  const activeJobs = jobs.some((j) =>
+    ["queued", "waiting_resource", "running", "cancel_requested"].includes(j.status),
+  );
 
   useEffect(() => {
     void load();
@@ -75,9 +85,9 @@ export default function StudioPage() {
     const pending = items.some(
       (g) => g.status === "queued" || g.status === "running",
     );
-    if (pending && !pollRef.current) {
+    if ((pending || activeJobs) && !pollRef.current) {
       pollRef.current = setInterval(load, 2500);
-    } else if (!pending && pollRef.current) {
+    } else if (!pending && !activeJobs && pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
@@ -87,7 +97,7 @@ export default function StudioPage() {
         pollRef.current = null;
       }
     };
-  }, [items, load]);
+  }, [items, activeJobs, load]);
 
   // GPU-lock banner: LoRA training makes local ComfyUI/Ollama unavailable
   // for every studio user, not just the run's owner.
@@ -107,7 +117,20 @@ export default function StudioPage() {
 
   // Deep-link from a push notification: /studio?id=...
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("id");
+    const params = new URLSearchParams(window.location.search);
+    const jobId = params.get("job");
+    if (jobId) {
+      getStudioJob(jobId)
+        .then((job) => {
+          if (job.generation_id) return getGeneration(job.generation_id);
+          setTab("queue");
+          return null;
+        })
+        .then((g) => g && setSelected(g))
+        .catch(() => undefined);
+      return;
+    }
+    const id = params.get("id");
     if (id) {
       getGeneration(id)
         .then((g) => setSelected(g))
@@ -136,6 +159,16 @@ export default function StudioPage() {
             }`}
           >
             {t("tab_studio")}
+          </button>
+          <button
+            onClick={() => setTab("queue")}
+            className={`shrink-0 px-3 py-1.5 rounded text-sm ${
+              tab === "queue"
+                ? "bg-white/10 text-white"
+                : "text-zinc-400 hover:text-white"
+            }`}
+          >
+            {t("tab_queue")}
           </button>
           <button
             onClick={() => setTab("workflows")}
@@ -179,7 +212,30 @@ export default function StudioPage() {
         </div>
       )}
 
-      {tab === "workflows" ? (
+      {tab === "queue" ? (
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="mx-auto max-w-3xl">
+            <StudioQueuePanel
+              jobs={jobs}
+              onChanged={load}
+              onOpenGeneration={(id) => {
+                getGeneration(id)
+                  .then((g) => setSelected(g))
+                  .catch(() => undefined);
+                }}
+            />
+          </div>
+          {selected && (
+            <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:left-auto xl:w-[420px] xl:border-l xl:border-white/10">
+              <GenerationDetail
+                gen={selected}
+                onChanged={load}
+                onClose={() => setSelected(null)}
+              />
+            </div>
+          )}
+        </div>
+      ) : tab === "workflows" ? (
         <div className="flex-1 min-h-0">
           <WorkflowPanel />
         </div>
@@ -194,6 +250,17 @@ export default function StudioPage() {
           </div>
           <div className="lg:overflow-y-auto p-4 grid xl:grid-cols-[1fr_360px] gap-4">
             <div>
+              <div className="mb-4">
+                <StudioQueuePanel
+                  jobs={jobs}
+                  onChanged={load}
+                  onOpenGeneration={(id) => {
+                    getGeneration(id)
+                      .then((g) => setSelected(g))
+                      .catch(() => undefined);
+                  }}
+                />
+              </div>
               {failedCount > 0 && (
                 <div className="flex justify-end mb-2">
                   <button

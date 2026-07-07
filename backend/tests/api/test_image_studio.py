@@ -76,10 +76,15 @@ async def test_generate_creates_queued_record(client):
     gen = resp.json()
     assert gen["status"] == "queued"
     assert gen["operation"] == "generate"
+    assert gen["job_id"]
 
     got = await client.get(f"/api/image-gen/{gen['id']}")
     assert got.status_code == 200
     assert got.json()["id"] == gen["id"]
+
+    queue = await client.get("/api/studio/queue")
+    assert queue.status_code == 200
+    assert any(j["generation_id"] == gen["id"] for j in queue.json()["items"])
 
 
 @pytest.mark.asyncio
@@ -361,6 +366,40 @@ def test_owns_lets_agent_service_bypass_ownership_for_any_record():
     assert _owns(gen, _user("real-human-user")) is True
     assert _owns(gen, _user("a-different-human")) is False
     assert _owns(None, _user("agent-service")) is False
+
+
+@pytest.mark.asyncio
+async def test_studio_queue_cancel_marks_generation_cancelled(client, db_session, monkeypatch):
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.services import studio_queue
+    from app.tasks.celery_app import celery_app
+
+    revoked: list[str] = []
+    monkeypatch.setattr(celery_app.control, "revoke", lambda tid, **kw: revoked.append(tid))
+
+    gen = ImageGeneration(
+        owner_sub="dev-user",
+        operation="generate",
+        status=ImageGenStatus.queued,
+        prompt="эскиз",
+        params={},
+        source_image_paths=[],
+    )
+    db_session.add(gen)
+    await db_session.flush()
+    job = await studio_queue.create_image_job(db_session, gen, title="эскиз")
+    job.celery_task_id = "celery-123"
+    await db_session.commit()
+    await db_session.refresh(gen)
+    await db_session.refresh(job)
+
+    resp = await client.post(f"/api/studio/queue/{job.id}/cancel")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
+    assert revoked == ["celery-123"]
+    await db_session.refresh(gen)
+    assert gen.status == ImageGenStatus.cancelled
 
 
 def test_pick_upscale_model_parses_combo_shapes():

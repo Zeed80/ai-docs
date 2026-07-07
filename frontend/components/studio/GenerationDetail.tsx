@@ -8,6 +8,7 @@ import {
   GenerateInput,
   Workflow,
   acceptGeneration,
+  artifactUrl,
   deleteGeneration,
   iterateGeneration,
   listWorkflows,
@@ -34,6 +35,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   const [quality, setQuality] = useState<"fast" | "quality">("quality");
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [workflowId, setWorkflowId] = useState<string>("");
+  const hasDxf = typeof gen.params?.dxf_path === "string";
 
   useEffect(() => {
     listWorkflows()
@@ -83,7 +85,8 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
     setIterPrompt("");
   }
 
-  const canAct = gen.status === "failed" || gen.status === "done";
+  const canAct =
+    gen.status === "failed" || gen.status === "done" || gen.status === "cancelled";
 
   return (
     <div className="flex flex-col gap-3">
@@ -121,6 +124,15 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
               className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
             >
               {t("detail.download")}
+            </a>
+          )}
+          {hasDxf && (
+            <a
+              href={artifactUrl(gen.id, "dxf")}
+              download={`studio-${gen.id}.dxf`}
+              className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
+            >
+              {t("detail.download_dxf")}
             </a>
           )}
           {canAct && (

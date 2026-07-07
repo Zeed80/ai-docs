@@ -347,6 +347,7 @@
     "title": "Графическая студия",
     "subtitle": "Создание и редактирование чертежей, оснастки и схем через ComfyUI",
     "tab_studio": "Студия",
+    "tab_queue": "Очередь",
     "tab_workflows": "Воркфлоу",
     "tab_settings": "Настройки",
     "composer": {
@@ -430,13 +431,37 @@
     "status": {
       "queued": "В очереди",
       "running": "Генерация…",
+      "cancelled": "Отменено",
       "done": "Готово",
       "failed": "Ошибка",
       "accepted_suffix": " · принято"
     },
+    "queue": {
+      "title": "Очередь задач",
+      "empty": "Активных задач нет.",
+      "active_count": "Активных: {count}",
+      "no_active": "Нет активных",
+      "position": "место {position}",
+      "cancel": "Отменить",
+      "cancel_busy": "Отмена…",
+      "kind": {
+        "image_generation": "Генерация изображения",
+        "lora_training": "Обучение LoRA"
+      },
+      "status": {
+        "queued": "В очереди",
+        "waiting_resource": "Ждет GPU",
+        "running": "В работе",
+        "cancel_requested": "Отменяется",
+        "cancelled": "Отменено",
+        "done": "Готово",
+        "failed": "Ошибка"
+      }
+    },
     "detail": {
       "accept": "Принять",
       "download": "Скачать",
+      "download_dxf": "Скачать DXF",
       "delete": "Удалить",
       "delete_confirm": "Удалить эту генерацию?",
       "source_label": "Источник",

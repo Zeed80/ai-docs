@@ -23,7 +23,7 @@ services:
     environment:
       AIAGENT_ROOT: /aiagent
 
-  # GPU lane in dev: source-mounted, strictly sequential single-flight worker.
+  # GPU/studio lane in dev: source-mounted, strictly sequential single-flight worker.
   celery-worker-gpu:
     build:
       context: ../backend
@@ -31,7 +31,7 @@ services:
     volumes:
       - ../backend:/app
       - ../aiagent:/aiagent:ro
-    command: celery -A app.tasks.celery_app worker -l debug -c 1 -Q gpu -n gpu@%h
+    command: celery -A app.tasks.celery_app worker -l debug -c 1 -Q gpu,studio -n gpu@%h
     environment:
       AIAGENT_ROOT: /aiagent
 

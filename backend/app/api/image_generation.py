@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -25,22 +26,27 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import get_current_user
-from app.auth.models import UserInfo
+from app.auth.models import UserInfo, UserRole
 from app.db.models import ComfyWorkflow, Document, ImageGeneration, ImageGenStatus
 from app.db.session import get_db
+from app.services import studio_queue
 from app.storage import download_file, upload_file
 
 router = APIRouter()
 logger = structlog.get_logger()
 
 _SOURCE_PREFIX = "image-gen-src"
+_ALLOWED_OPERATIONS = {"edit", "generate", "inpaint", "cleanup", "eskd"}
+_ALLOWED_UPLOAD_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp", "application/octet-stream"}
+_ALLOWED_UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp"}
+_MAX_SOURCE_BYTES = 50 * 1024 * 1024
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
 
 
 class GenerateRequest(BaseModel):
-    operation: str = Field(default="edit")  # edit | generate | inpaint | cleanup
+    operation: Literal["edit", "generate", "inpaint", "cleanup", "eskd"] = "edit"
     prompt: str | None = None
     negative_prompt: str | None = None
     workflow_id: uuid.UUID | None = None
@@ -87,7 +93,7 @@ class TechDrawRequest(BaseModel):
     # Either a free-text description (→ LLM → spec) or a ready spec.
     description: str | None = None
     spec: dict[str, Any] | None = None
-    view: str = "front"  # front (2D drawing) | isometric (3D pictorial)
+    view: Literal["front", "isometric", "section", "half_section"] = "front"
     source_document_id: uuid.UUID | None = None
     case_id: uuid.UUID | None = None
 
@@ -106,8 +112,55 @@ def _is_agent_service(user: UserInfo) -> bool:
     return user.sub == "agent-service"
 
 
+def _is_admin(user: UserInfo) -> bool:
+    return UserRole.admin in (user.roles or [])
+
+
+def _can_use_studio(user: UserInfo) -> bool:
+    return _is_admin(user) or any(
+        role in (user.roles or [])
+        for role in (UserRole.engineer, UserRole.technologist, UserRole.manager)
+    ) or _is_agent_service(user)
+
+
+def _can_manage_workflows(user: UserInfo) -> bool:
+    return _is_admin(user) or UserRole.engineer in (user.roles or []) or _is_agent_service(user)
+
+
 def _owns(gen: ImageGeneration | None, user: UserInfo) -> bool:
     return gen is not None and (gen.owner_sub == user.sub or _is_agent_service(user))
+
+
+def _can_access_document(doc: Document | None, user: UserInfo) -> bool:
+    return doc is not None and (
+        getattr(doc, "owner_sub", None) in (None, user.sub)
+        or _is_admin(user)
+        or UserRole.manager in (user.roles or [])
+        or _is_agent_service(user)
+    )
+
+
+def _can_read_workflow(wf: ComfyWorkflow | None, user: UserInfo) -> bool:
+    return wf is not None and (
+        wf.is_builtin
+        or wf.owner_sub in (None, user.sub)
+        or _can_manage_workflows(user)
+    )
+
+
+def _can_mutate_workflow(wf: ComfyWorkflow | None, user: UserInfo) -> bool:
+    return wf is not None and (wf.owner_sub == user.sub or _can_manage_workflows(user))
+
+
+def _validate_source_path(path: str, user: UserInfo) -> str:
+    if not path or path.startswith("/") or ".." in path.split("/"):
+        raise HTTPException(400, "Недопустимый путь исходного изображения.")
+    if _is_agent_service(user):
+        return path
+    expected = f"{_SOURCE_PREFIX}/{user.sub}/"
+    if not path.startswith(expected):
+        raise HTTPException(403, "Исходное изображение не принадлежит текущему пользователю.")
+    return path
 
 
 def _gen_out(gen: ImageGeneration) -> dict:
@@ -134,6 +187,11 @@ def _gen_out(gen: ImageGeneration) -> dict:
         "error": gen.error,
         "parent_id": str(gen.parent_id) if gen.parent_id else None,
         "accepted": gen.accepted,
+        "accepted_by": gen.accepted_by,
+        "accepted_at": gen.accepted_at.isoformat() if gen.accepted_at else None,
+        "quality_rating": gen.quality_rating,
+        "issue_tags": gen.issue_tags or [],
+        "review_notes": gen.review_notes,
         "workflow_id": str(gen.workflow_id) if gen.workflow_id else None,
         "created_at": gen.created_at.isoformat() if gen.created_at else None,
         "source_document_id": str(gen.source_document_id) if gen.source_document_id else None,
@@ -154,6 +212,7 @@ def _wf_out(wf: ComfyWorkflow) -> dict:
         "params_schema": wf.params_schema or {},
         "enabled": wf.enabled,
         "is_builtin": wf.is_builtin,
+        "owner_sub": wf.owner_sub,
     }
 
 
@@ -167,12 +226,23 @@ async def upload_source(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     """Store a source/mask image in MinIO; returns its path for /generate."""
+    if not _can_use_studio(user):
+        raise HTTPException(403, "Недостаточно прав для графической студии")
+    if kind not in {"source", "mask"}:
+        raise HTTPException(400, "kind должен быть source или mask")
+    ctype = (file.content_type or "").split(";")[0].lower()
+    if ctype and ctype not in _ALLOWED_UPLOAD_TYPES:
+        raise HTTPException(400, "Поддержаны только PNG, JPEG и WebP изображения.")
     content = await file.read()
     if not content:
         raise HTTPException(400, "Пустой файл")
+    if len(content) > _MAX_SOURCE_BYTES:
+        raise HTTPException(413, "Изображение слишком большое для графической студии.")
     ext = "png"
     if file.filename and "." in file.filename:
         ext = file.filename.rsplit(".", 1)[-1].lower()[:5]
+    if ext not in _ALLOWED_UPLOAD_EXTS:
+        raise HTTPException(400, "Поддержаны только PNG, JPEG и WebP изображения.")
     path = f"{_SOURCE_PREFIX}/{user.sub}/{uuid.uuid4().hex}.{ext}"
     upload_file(content, path, file.content_type or "image/png")
     return {"path": path}
@@ -187,11 +257,31 @@ async def generate(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
-    source_paths = list(body.source_image_paths)
+    if not _can_use_studio(user):
+        raise HTTPException(403, "Недостаточно прав для графической студии")
+
+    wf = None
+    if body.workflow_id:
+        wf = await db.get(ComfyWorkflow, body.workflow_id)
+        if not _can_read_workflow(wf, user):
+            raise HTTPException(404, "Воркфлоу не найден")
+        if not wf.enabled:
+            raise HTTPException(400, "Воркфлоу выключен")
+        if wf.operation != body.operation:
+            raise HTTPException(400, "Воркфлоу не подходит для выбранной операции")
+
+    source_paths = [_validate_source_path(path, user) for path in body.source_image_paths]
     for doc_id in body.source_document_ids:
         doc = await db.get(Document, doc_id)
+        if not _can_access_document(doc, user):
+            raise HTTPException(404, "Документ-источник не найден")
         if doc and doc.storage_path:
             source_paths.append(doc.storage_path)
+
+    if body.source_document_id:
+        doc = await db.get(Document, body.source_document_id)
+        if not _can_access_document(doc, user):
+            raise HTTPException(404, "Документ для связи не найден")
 
     if body.operation in ("edit", "inpaint", "cleanup") and not source_paths:
         raise HTTPException(400, "Для этой операции нужно исходное изображение.")
@@ -214,20 +304,35 @@ async def generate(
         case_id=body.case_id,
     )
     db.add(gen)
+    await db.flush()
+    job = await studio_queue.create_image_job(db, gen, title=body.prompt or body.operation)
     await db.commit()
     await db.refresh(gen)
+    await db.refresh(job)
 
-    _enqueue(str(gen.id))
-    return _gen_out(gen)
+    task_id = _enqueue(str(gen.id))
+    if task_id:
+        job.celery_task_id = task_id
+        gen.celery_task_id = task_id
+        await db.commit()
+    out = _gen_out(gen)
+    out["job_id"] = str(job.id)
+    return out
 
 
-def _enqueue(generation_id: str) -> None:
+def _enqueue(generation_id: str) -> str | None:
     try:
+        from app.config import settings
+        from app.tasks.celery_app import celery_app
         from app.tasks.image_generation import run_image_generation
 
-        run_image_generation.delay(generation_id)
+        if settings.app_env == "test" and celery_app.conf.task_always_eager:
+            return None
+        task = run_image_generation.apply_async(args=[generation_id], queue="studio")
+        return task.id
     except Exception as exc:  # noqa: BLE001
         logger.warning("image_gen_enqueue_failed", generation_id=generation_id, error=str(exc))
+        return None
 
 
 @router.get("")
@@ -296,6 +401,24 @@ async def get_source(
     return Response(content=data, media_type="image/png")
 
 
+@router.get("/{generation_id}/artifact")
+async def get_artifact(
+    generation_id: uuid.UUID,
+    kind: Literal["dxf"] = "dxf",
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> Response:
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    path = (gen.params or {}).get(f"{kind}_path")
+    if not path:
+        raise HTTPException(404, "Артефакт не найден")
+    data = download_file(path)
+    media_type = "application/dxf" if kind == "dxf" else "application/octet-stream"
+    return Response(content=data, media_type=media_type)
+
+
 # ── Accept / iterate / delete ────────────────────────────────────────────────
 
 
@@ -341,6 +464,8 @@ async def accept_generation(
             },
         )
     gen.accepted = True
+    gen.accepted_by = user.sub
+    gen.accepted_at = datetime.now(timezone.utc)
     await db.commit()
     return _gen_out(gen)
 
@@ -366,6 +491,8 @@ async def accept_techdraw_generation(
     if gen.operation != "techdraw":
         raise HTTPException(400, "Это не точный чертёж — используйте /accept.")
     gen.accepted = True
+    gen.accepted_by = user.sub
+    gen.accepted_at = datetime.now(timezone.utc)
     await db.commit()
     return _gen_out(gen)
 
@@ -382,6 +509,14 @@ async def iterate_generation(
         raise HTTPException(404, "Не найдено")
     if not parent.result_path:
         raise HTTPException(400, "У исходной генерации нет результата для итерации.")
+    if body.workflow_id:
+        wf = await db.get(ComfyWorkflow, body.workflow_id)
+        if not _can_read_workflow(wf, user):
+            raise HTTPException(404, "Воркфлоу не найден")
+        if not wf.enabled:
+            raise HTTPException(400, "Воркфлоу выключен")
+        if wf.operation != (body.operation or "edit"):
+            raise HTTPException(400, "Воркфлоу не подходит для выбранной операции")
 
     gen = ImageGeneration(
         # Inherit the parent's owner, not the caller's — when the agent
@@ -399,10 +534,19 @@ async def iterate_generation(
         parent_id=parent.id,
     )
     db.add(gen)
+    await db.flush()
+    job = await studio_queue.create_image_job(db, gen, title=body.prompt or "Итерация")
     await db.commit()
     await db.refresh(gen)
-    _enqueue(str(gen.id))
-    return _gen_out(gen)
+    await db.refresh(job)
+    task_id = _enqueue(str(gen.id))
+    if task_id:
+        job.celery_task_id = task_id
+        gen.celery_task_id = task_id
+        await db.commit()
+    out = _gen_out(gen)
+    out["job_id"] = str(job.id)
+    return out
 
 
 async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
@@ -510,6 +654,8 @@ async def create_workflow(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
+    if not _can_manage_workflows(user):
+        raise HTTPException(403, "Недостаточно прав для создания воркфлоу")
     wf = ComfyWorkflow(
         key=body.key,
         title=body.title,
@@ -536,8 +682,10 @@ async def duplicate_workflow(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     src = await db.get(ComfyWorkflow, workflow_id)
-    if not src:
+    if not _can_read_workflow(src, user):
         raise HTTPException(404, "Не найдено")
+    if not _can_manage_workflows(user) and not src.is_builtin and src.owner_sub != user.sub:
+        raise HTTPException(403, "Недостаточно прав для копирования воркфлоу")
     wf = ComfyWorkflow(
         key=f"{src.key}_copy_{uuid.uuid4().hex[:6]}",
         title=f"{src.title} (копия)",
@@ -565,10 +713,12 @@ async def patch_workflow(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     wf = await db.get(ComfyWorkflow, workflow_id)
-    if not wf:
+    if not _can_mutate_workflow(wf, user):
         raise HTTPException(404, "Не найдено")
     if wf.is_builtin:
         raise HTTPException(400, "Встроенный воркфлоу нельзя править — сделайте копию.")
+    if not _can_manage_workflows(user) and wf.owner_sub != user.sub:
+        raise HTTPException(403, "Недостаточно прав для изменения воркфлоу")
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(wf, field, value)
     await db.commit()
@@ -583,10 +733,12 @@ async def delete_workflow(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     wf = await db.get(ComfyWorkflow, workflow_id)
-    if not wf:
+    if not _can_mutate_workflow(wf, user):
         raise HTTPException(404, "Не найдено")
     if wf.is_builtin:
         raise HTTPException(400, "Встроенный воркфлоу нельзя удалить (только выключить).")
+    if not _can_manage_workflows(user) and wf.owner_sub != user.sub:
+        raise HTTPException(403, "Недостаточно прав для удаления воркфлоу")
     await db.delete(wf)
     await db.commit()
     return {"ok": True}
@@ -625,8 +777,10 @@ async def push_workflow_to_comfyui(
     import re
 
     wf = await db.get(ComfyWorkflow, workflow_id)
-    if not wf:
+    if not _can_read_workflow(wf, user):
         raise HTTPException(404, "Не найдено")
+    if not _can_manage_workflows(user):
+        raise HTTPException(403, "Недостаточно прав для публикации воркфлоу в ComfyUI")
 
     slug = re.sub(r"[^a-zA-Z0-9_\-]+", "_", wf.key).strip("_") or str(workflow_id)
     filename = f"workflows/{slug}.json"
@@ -672,10 +826,14 @@ async def prompt_help(
     user: UserInfo = Depends(get_current_user),
 ) -> dict:
     """Expand a rough RU description into a precise ComfyUI prompt (local LLM)."""
+    if body.operation not in _ALLOWED_OPERATIONS:
+        raise HTTPException(400, "Неизвестная операция графической студии")
     grounding = ""
     if body.source_document_id:
         # Best-effort: ground the prompt in what the attached drawing shows.
         doc = await db.get(Document, body.source_document_id)
+        if not _can_access_document(doc, user):
+            raise HTTPException(404, "Документ не найден")
         if doc and getattr(doc, "summary", None):
             grounding = f"\nКонтекст приложенного изображения: {doc.summary[:600]}"
 
@@ -797,6 +955,13 @@ async def techdraw(
     description (→ LLM → spec) or a ready spec. Renders PNG + DXF synchronously.
     """
     from app.ai.techdraw import render_spec_to_dxf, render_spec_to_png
+
+    if not _can_use_studio(user):
+        raise HTTPException(403, "Недостаточно прав для графической студии")
+    if body.source_document_id:
+        doc = await db.get(Document, body.source_document_id)
+        if not _can_access_document(doc, user):
+            raise HTTPException(404, "Документ для связи не найден")
 
     spec = body.spec
     if spec is None:

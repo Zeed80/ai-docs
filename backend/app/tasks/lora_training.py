@@ -540,6 +540,7 @@ async def _train(run_id: str) -> dict:
     from app.ai import gpu_lock
     from app.db.models import LoraDataset, LoraRunStatus, LoraTrainingRun
     from app.db.session import _get_session_factory
+    from app.services import studio_queue
     from app.storage import upload_file
 
     factory = _get_session_factory()
@@ -554,9 +555,19 @@ async def _train(run_id: str) -> dict:
                           LoraRunStatus.failed):
             # Stopped/decided while queued (stop_run revokes best-effort; this
             # is the second line of defense) or a stale redelivery.
+            job = await studio_queue.job_for_lora_run(db, run_uuid)
+            if run.status == LoraRunStatus.cancelled:
+                await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
+            elif run.status == LoraRunStatus.done:
+                await studio_queue.mark_job_done(db, job)
+            else:
+                await studio_queue.mark_job_failed(db, job, error=run.error or "LoRA training failed")
+            await db.commit()
             return {"skipped": run.status.value}
         if run.status == LoraRunStatus.stopping:
             run.status = LoraRunStatus.cancelled
+            job = await studio_queue.job_for_lora_run(db, run_uuid)
+            await studio_queue.mark_job_cancelled(db, job, error="Задача отменена до запуска.")
             await db.commit()
             return {"skipped": "stopped before start"}
         # Redelivery guard: with a long-running task the Redis broker's
@@ -572,6 +583,8 @@ async def _train(run_id: str) -> dict:
         if not ds or not ds.dataset_dir:
             run.status = LoraRunStatus.failed
             run.error = "Датасет не готов."
+            job = await studio_queue.job_for_lora_run(db, run_uuid)
+            await studio_queue.mark_job_failed(db, job, error=run.error)
             await db.commit()
             return {"error": "dataset not ready"}
         config = dict(run.config or {})
@@ -587,6 +600,8 @@ async def _train(run_id: str) -> dict:
                 progress = dict(run.progress or {})
                 progress.update(phase="ожидание GPU", ts=time.time())
                 run.progress = progress
+                job = await studio_queue.job_for_lora_run(db, run_uuid)
+                await studio_queue.mark_job_waiting(db, job, reason=gpu_lock.LOCK_MESSAGE)
                 await db.commit()
         celery_app.send_task("lora.run_training", args=[run_id], countdown=120)
         logger.info("lora_training_gpu_busy_requeued", run_id=run_id)
@@ -600,6 +615,8 @@ async def _train(run_id: str) -> dict:
         run.status = LoraRunStatus.running
         run.started_at = run.started_at or _dt.datetime.now(tz=_dt.timezone.utc)
         run.output_dir = str(_data_dir() / "runs" / run_id / "output")
+        job = await studio_queue.job_for_lora_run(db, run_uuid)
+        await studio_queue.mark_job_running(db, job, task_id=run.celery_task_id)
         await db.commit()
 
     run_dir = _data_dir() / "runs" / run_id
@@ -813,6 +830,7 @@ async def _train(run_id: str) -> dict:
         await _flush_progress(factory, run_uuid, run_dir, progress,
                               known_samples, upload_file, run_id)
         final_status = None
+        job_id: str | None = None
         async with factory() as db:
             run = await db.get(LoraTrainingRun, run_uuid)
             if run.status == LoraRunStatus.stopping or gpu_lock.stop_requested(run_id):
@@ -824,6 +842,14 @@ async def _train(run_id: str) -> dict:
                 tail = container.logs(tail=30).decode("utf-8", "replace")
                 run.error = _friendly_error(tail, config.get("base_model"))
             run.finished_at = _dt.datetime.now(tz=_dt.timezone.utc)
+            job = await studio_queue.job_for_lora_run(db, run_uuid)
+            job_id = str(job.id) if job else None
+            if run.status == LoraRunStatus.done:
+                await studio_queue.mark_job_done(db, job)
+            elif run.status == LoraRunStatus.cancelled:
+                await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
+            else:
+                await studio_queue.mark_job_failed(db, job, error=run.error or "LoRA training failed")
             final_status = run.status
             owner = run.owner_sub
             run_name = run.name
@@ -841,7 +867,7 @@ async def _train(run_id: str) -> dict:
                         if final_status == LoraRunStatus.done
                         else f"Обучение LoRA: {final_status.value}",
                         body=f"«{run_name}»: {final_status.value}. Чекпойнты — в студии.",
-                        action_url="/studio",
+                        action_url=f"/studio?job={job_id}" if job_id else "/studio",
                         notification_type="lora_training",
                     )
             except Exception:  # noqa: BLE001
@@ -855,6 +881,8 @@ async def _train(run_id: str) -> dict:
                 run.status = LoraRunStatus.failed
                 run.error = str(exc)[:2000]
                 run.finished_at = _dt.datetime.now(tz=_dt.timezone.utc)
+                job = await studio_queue.job_for_lora_run(db, run_uuid)
+                await studio_queue.mark_job_failed(db, job, error=run.error)
                 await db.commit()
         return {"error": str(exc)}
     finally:
@@ -877,6 +905,7 @@ async def _train(run_id: str) -> dict:
 async def _flush_progress(factory, run_uuid, run_dir: pathlib.Path, progress: dict,
                           known_samples: set, upload_file, run_id: str) -> None:
     from app.db.models import LoraTrainingRun
+    from app.services import studio_queue
 
     output = run_dir / "output" / f"run_{run_id}"
     checkpoints = sorted(p.name for p in output.glob("*.safetensors")) if output.exists() else []
@@ -909,4 +938,7 @@ async def _flush_progress(factory, run_uuid, run_dir: pathlib.Path, progress: di
         run.checkpoints = checkpoints
         if new_sample_paths:
             run.sample_paths = list(run.sample_paths or []) + new_sample_paths
+        job = await studio_queue.job_for_lora_run(db, run_uuid)
+        if job:
+            job.progress = dict(progress)
         await db.commit()

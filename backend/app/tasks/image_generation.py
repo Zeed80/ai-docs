@@ -28,6 +28,10 @@ logger = structlog.get_logger()
 _RESULT_BUCKET_PREFIX = "image-gen"
 
 
+class StudioResourceBusy(RuntimeError):
+    """A shared studio resource is busy; retry without marking the job failed."""
+
+
 def _progress_key(gen_id: str) -> str:
     return f"studio:progress:{gen_id}"
 
@@ -139,6 +143,16 @@ def run_image_generation(self, generation_id: str) -> dict:
 
     try:
         return run_async(_run(generation_id, self.request.id))
+    except StudioResourceBusy as exc:
+        backoff = 90 + random.randint(0, 30)
+        logger.info(
+            "image_gen_waiting_resource_retry",
+            generation_id=generation_id,
+            retry=self.request.retries + 1,
+            countdown=backoff,
+            error=str(exc),
+        )
+        raise self.retry(exc=exc, countdown=backoff, max_retries=None)
     except ComfyUITransientError as exc:
         if self.request.retries < self.max_retries:
             backoff = min(120, (2**self.request.retries) * 10) + random.randint(0, 5)
@@ -248,8 +262,9 @@ async def _resolve_workflow(db, gen):
 
     if gen.workflow_id:
         wf = await db.get(ComfyWorkflow, gen.workflow_id)
-        if wf:
+        if wf and (wf.is_builtin or wf.owner_sub in (None, gen.owner_sub)):
             return wf
+        return None
     # Fall back to the first enabled workflow matching the operation.
     row = (
         await db.execute(
@@ -269,6 +284,7 @@ async def _mark_failed(gen_uuid: uuid.UUID, err: str, owner_sub: str | None = No
     """Persist a final (non-retryable) failure + best-effort push notification."""
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
+    from app.services import studio_queue
     from app.services import push
 
     factory = _get_session_factory()
@@ -278,6 +294,8 @@ async def _mark_failed(gen_uuid: uuid.UUID, err: str, owner_sub: str | None = No
             return
         gen.status = ImageGenStatus.failed
         gen.error = err[:2000]
+        job = await studio_queue.job_for_generation(db, gen_uuid)
+        await studio_queue.mark_job_failed(db, job, error=err)
         await db.commit()
         _clear_progress(str(gen_uuid))
         target_owner = owner_sub or gen.owner_sub
@@ -288,7 +306,7 @@ async def _mark_failed(gen_uuid: uuid.UUID, err: str, owner_sub: str | None = No
                     user_sub=target_owner,
                     title="Ошибка генерации изображения",
                     body=err[:200],
-                    action_url=f"/studio?id={gen_uuid}",
+                    action_url=f"/studio?job={job.id}" if job else f"/studio?id={gen_uuid}",
                     notification_type="image_failed",
                 )
             except Exception:  # noqa: BLE001
@@ -296,6 +314,37 @@ async def _mark_failed(gen_uuid: uuid.UUID, err: str, owner_sub: str | None = No
 
 
 _HD_MAX_LONG_SIDE = 2600  # ~4 tiles for A4/A3 sheets; keeps runtime sane
+
+
+async def _is_cancelled(gen_uuid: uuid.UUID) -> bool:
+    from app.db.models import ImageGeneration, ImageGenStatus, StudioJobStatus
+    from app.db.session import _get_session_factory
+    from app.services import studio_queue
+
+    factory = _get_session_factory()
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen and gen.status == ImageGenStatus.cancelled:
+            return True
+        job = await studio_queue.job_for_generation(db, gen_uuid)
+        return bool(job and job.status in {StudioJobStatus.cancel_requested, StudioJobStatus.cancelled})
+
+
+async def _mark_cancelled(gen_uuid: uuid.UUID, reason: str = "Задача отменена пользователем.") -> None:
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.db.session import _get_session_factory
+    from app.services import studio_queue
+
+    factory = _get_session_factory()
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen:
+            gen.status = ImageGenStatus.cancelled
+            gen.error = reason
+        job = await studio_queue.job_for_generation(db, gen_uuid)
+        await studio_queue.mark_job_cancelled(db, job, error=reason)
+        await db.commit()
+        _clear_progress(str(gen_uuid))
 
 
 async def _run_hd_tiles(client, graph_template: dict, inject_map: dict, values: dict,
@@ -357,6 +406,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     )
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
+    from app.services import studio_queue
     from app.storage import download_file, upload_file
 
     factory = _get_session_factory()
@@ -367,15 +417,48 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         gen = await db.get(ImageGeneration, gen_uuid)
         if not gen:
             return {"error": "generation not found"}
+        job = await studio_queue.job_for_generation(db, gen_uuid)
+        job_status = job.status.value if job and hasattr(job.status, "value") else (str(job.status) if job else None)
+        if gen.status == ImageGenStatus.cancelled or (
+            job_status in {"cancel_requested", "cancelled"}
+        ):
+            await _mark_cancelled(gen_uuid)
+            return {"cancelled": True}
         wf = await _resolve_workflow(db, gen)
         if not wf:
             gen.status = ImageGenStatus.failed
             gen.error = "Не найден воркфлоу для операции."
+            await studio_queue.mark_job_failed(db, job, error=gen.error)
             await db.commit()
             return {"error": "no workflow"}
 
+        try:
+            from app.ai import gpu_lock
+
+            if gpu_lock.is_locked():
+                gen.status = ImageGenStatus.queued
+                await studio_queue.mark_job_waiting(db, job, reason=gpu_lock.LOCK_MESSAGE)
+                await db.commit()
+                raise StudioResourceBusy(gpu_lock.LOCK_MESSAGE)
+        except StudioResourceBusy:
+            raise
+        except Exception:  # noqa: BLE001 — Redis hiccup must not block generation
+            pass
+
         gen.status = ImageGenStatus.running
         gen.celery_task_id = task_id
+        gen.workflow_snapshot = {
+            "id": str(wf.id),
+            "key": wf.key,
+            "title": wf.title,
+            "operation": wf.operation,
+            "base_family": wf.base_family,
+            "is_builtin": wf.is_builtin,
+            "graph": wf.graph or {},
+            "inject_map": wf.inject_map or {},
+            "params_schema": wf.params_schema or {},
+        }
+        await studio_queue.mark_job_running(db, job, task_id=task_id)
         await db.commit()
 
         owner_sub = gen.owner_sub
@@ -403,18 +486,6 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
     # ── Run on ComfyUI ───────────────────────────────────────────────────────
     try:
-        # LoRA training holds the GPU exclusively — a diffusion run now would
-        # OOM the trainer. Fail fast with the human-readable reason (the AI
-        # router already does this for LLM routes; ComfyUI goes through here).
-        try:
-            from app.ai import gpu_lock
-
-            if gpu_lock.is_locked():
-                await _mark_failed(gen_uuid, gpu_lock.LOCK_MESSAGE, owner_sub)
-                return {"error": "gpu busy: lora training"}
-        except Exception:  # noqa: BLE001 — Redis hiccup must not block generation
-            pass
-
         client = ComfyUIClient.from_registry()
         if not await client.health():
             raise ComfyUITransientError(
@@ -538,6 +609,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             import asyncio as _asyncio
 
             prompt_id = await client.queue_workflow(graph)
+            async with factory() as db:
+                gen = await db.get(ImageGeneration, gen_uuid)
+                if gen:
+                    gen.comfyui_prompt_id = prompt_id
+                    await db.commit()
             # Live progress via WS runs alongside the authoritative HTTP poll.
             progress_task = _asyncio.create_task(
                 client.stream_progress(
@@ -550,6 +626,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             finally:
                 progress_task.cancel()
             result_bytes = await client.fetch_image(outputs[0])
+
+        if await _is_cancelled(gen_uuid):
+            await _mark_cancelled(gen_uuid)
+            return {"cancelled": True}
 
         # Size reconciliation (image-to-image ops): FluxKontextImageScale
         # snaps the input to the model's resolution buckets, so the output
@@ -689,6 +769,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # succeed on the next attempt).
         raise
     except Exception as exc:  # noqa: BLE001
+        if await _is_cancelled(gen_uuid):
+            await _mark_cancelled(gen_uuid)
+            return {"cancelled": True}
         err = str(exc) if isinstance(exc, ComfyUIError) else f"{type(exc).__name__}: {exc}"
         logger.warning("image_gen_failed", generation_id=generation_id, error=err)
         await _mark_failed(gen_uuid, err, owner_sub)
@@ -700,10 +783,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     async with factory() as db:
         gen = await db.get(ImageGeneration, gen_uuid)
         if gen:
+            if gen.status == ImageGenStatus.cancelled:
+                job = await studio_queue.job_for_generation(db, gen_uuid)
+                await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
+                await db.commit()
+                return {"cancelled": True}
             gen.status = ImageGenStatus.done
             gen.result_path = result_path
             gen.thumbnail_path = thumb_path
             gen.comfyui_prompt_id = prompt_id
+            job = await studio_queue.job_for_generation(db, gen_uuid)
+            await studio_queue.mark_job_done(db, job)
             await db.commit()
             _clear_progress(str(gen_uuid))
             if owner_sub:
@@ -713,7 +803,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         user_sub=owner_sub,
                         title="Изображение готово",
                         body="Результат доступен в Графической студии.",
-                        action_url=f"/studio?id={generation_id}",
+                        action_url=f"/studio?job={job.id}" if job else f"/studio?id={generation_id}",
                         notification_type="image_ready",
                     )
                 except Exception:  # noqa: BLE001

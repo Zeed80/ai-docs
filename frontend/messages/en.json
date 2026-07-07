@@ -347,6 +347,7 @@
     "title": "Image Studio",
     "subtitle": "Create and edit drawings, tooling and diagrams via ComfyUI",
     "tab_studio": "Studio",
+    "tab_queue": "Queue",
     "tab_workflows": "Workflows",
     "tab_settings": "Settings",
     "composer": {
@@ -430,13 +431,37 @@
     "status": {
       "queued": "Queued",
       "running": "Generating…",
+      "cancelled": "Cancelled",
       "done": "Done",
       "failed": "Failed",
       "accepted_suffix": " · accepted"
     },
+    "queue": {
+      "title": "Task queue",
+      "empty": "No active tasks.",
+      "active_count": "Active: {count}",
+      "no_active": "No active tasks",
+      "position": "position {position}",
+      "cancel": "Cancel",
+      "cancel_busy": "Cancelling…",
+      "kind": {
+        "image_generation": "Image generation",
+        "lora_training": "LoRA training"
+      },
+      "status": {
+        "queued": "Queued",
+        "waiting_resource": "Waiting for GPU",
+        "running": "Running",
+        "cancel_requested": "Cancelling",
+        "cancelled": "Cancelled",
+        "done": "Done",
+        "failed": "Failed"
+      }
+    },
     "detail": {
       "accept": "Accept",
       "download": "Download",
+      "download_dxf": "Download DXF",
       "delete": "Delete",
       "delete_confirm": "Delete this generation?",
       "source_label": "Source",

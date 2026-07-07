@@ -188,6 +188,16 @@ class ComfyUIClient:
             raise ComfyUIError(f"ComfyUI не вернул prompt_id: {body}")
         return prompt_id
 
+    async def interrupt(self) -> bool:
+        """Best-effort stop for the currently executing ComfyUI prompt."""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(f"{self.base_url}/interrupt", headers=self._headers())
+                return resp.status_code < 400
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("comfyui_interrupt_failed", base_url=self.base_url, error=str(exc))
+            return False
+
     async def wait_for_result(
         self,
         prompt_id: str,

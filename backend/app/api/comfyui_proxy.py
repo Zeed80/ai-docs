@@ -22,11 +22,11 @@ import asyncio
 
 import httpx
 import structlog
-from fastapi import APIRouter, Depends, Request, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from starlette.responses import Response, StreamingResponse
 
 from app.auth.jwt import get_current_user
-from app.auth.models import UserInfo
+from app.auth.models import UserInfo, UserRole
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -43,6 +43,45 @@ _STRIP_RESPONSE_HEADERS = {
     "content-length", "content-encoding", "connection", "transfer-encoding",
     "keep-alive", "x-frame-options", "content-security-policy",
 }
+_ALLOWED_PATH_PREFIXES = (
+    "",
+    "__bridge.js",
+    "api/",
+    "assets/",
+    "extensions/",
+    "scripts/",
+    "lib/",
+    "static/",
+    "web/",
+    "models/",
+    "userdata/",
+    "upload/",
+    "history/",
+    "view",
+    "prompt",
+    "queue",
+    "interrupt",
+    "settings",
+    "system_stats",
+    "object_info",
+    "user.css",
+    "favicon",
+)
+
+
+def _can_access_proxy(user: UserInfo) -> bool:
+    return (
+        user.sub == "agent-service"
+        or UserRole.admin in (user.roles or [])
+        or UserRole.engineer in (user.roles or [])
+    )
+
+
+def _path_allowed(path: str) -> bool:
+    cleaned = path.lstrip("/")
+    if ".." in cleaned.split("/"):
+        return False
+    return any(cleaned == p.rstrip("/") or cleaned.startswith(p) for p in _ALLOWED_PATH_PREFIXES)
 
 
 def _comfyui_base_url() -> str:
@@ -127,6 +166,8 @@ def _inject_scaffolding(html: str) -> str:
 
 @router.get(f"/{_BRIDGE_JS_PATH}")
 async def bridge_js(user: UserInfo = Depends(get_current_user)) -> Response:
+    if not _can_access_proxy(user):
+        raise HTTPException(403, "Недостаточно прав для ComfyUI")
     return Response(content=_BRIDGE_JS, media_type="application/javascript")
 
 
@@ -142,6 +183,10 @@ async def proxy(
     request: Request,
     user: UserInfo = Depends(get_current_user),
 ):
+    if not _can_access_proxy(user):
+        return Response(content="Недостаточно прав для ComfyUI.", status_code=403, media_type="text/plain")
+    if not _path_allowed(path):
+        return Response(content="Путь ComfyUI не разрешен прокси.", status_code=403, media_type="text/plain")
     base_url = _comfyui_base_url()
     upstream_url = f"{base_url}/{path}"
     body = await request.body()
@@ -202,6 +247,9 @@ async def proxy_ws(
     see ``app.auth.jwt``) — FastAPI closes the socket with an auth error
     automatically if the dependency raises."""
     await websocket.accept()
+    if not _can_access_proxy(user):
+        await websocket.close(code=1008)
+        return
 
     import websockets
 

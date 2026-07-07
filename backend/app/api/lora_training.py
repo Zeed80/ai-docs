@@ -45,6 +45,7 @@ from app.db.models import (
     LoraTrainingRun,
 )
 from app.db.session import get_db
+from app.services import studio_queue
 from app.storage import download_file
 
 router = APIRouter()
@@ -79,6 +80,13 @@ def _is_admin(user: UserInfo) -> bool:
 
 def _sees_all(user: UserInfo) -> bool:
     return _is_admin(user) or _is_agent_service(user)
+
+
+def _can_train_lora(user: UserInfo) -> bool:
+    return _is_agent_service(user) or _is_admin(user) or any(
+        role in (user.roles or [])
+        for role in (UserRole.engineer, UserRole.technologist)
+    )
 
 
 def _can_access(obj: LoraDataset | LoraTrainingRun | None, user: UserInfo) -> bool:
@@ -280,6 +288,8 @@ async def upload_source(
     file: UploadFile = File(...),
     user: UserInfo = Depends(get_current_user),
 ):
+    if not _can_train_lora(user):
+        raise HTTPException(403, "Недостаточно прав для подготовки LoRA")
     suffix = pathlib.Path(file.filename or "src").suffix.lower()
     if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
         raise HTTPException(400, f"Неподдерживаемый формат: {suffix}. "
@@ -340,6 +350,8 @@ async def create_dataset(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ):
+    if not _can_train_lora(user):
+        raise HTTPException(403, "Недостаточно прав для подготовки LoRA")
     if body.preset == "drawing_edit" and body.source_paths:
         raise HTTPException(400, "Пресет «Правки чертежей» обучается только на "
                                  "синтетических парах — загруженные файлы не используются.")
@@ -487,6 +499,8 @@ async def upload_lora(
 ):
     """Upload a third-party (or exported) LoRA .safetensors to continue
     training from. Returns its ref and inspected metadata."""
+    if not _can_train_lora(user):
+        raise HTTPException(403, "Недостаточно прав для загрузки LoRA")
     name = pathlib.Path(file.filename or "lora.safetensors").name
     if not name.endswith(".safetensors"):
         raise HTTPException(400, "Ожидается файл .safetensors")
@@ -597,6 +611,8 @@ async def create_run(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ):
+    if not _can_train_lora(user):
+        raise HTTPException(403, "Недостаточно прав для запуска обучения LoRA")
     ds = await _get_dataset_checked(db, body.dataset_id, user)
     if ds.status != LoraDatasetStatus.ready:
         raise HTTPException(409, "Датасет ещё не готов")
@@ -637,16 +653,21 @@ async def create_run(
     )
     db.add(run)
     await db.flush()
+    job = await studio_queue.create_lora_job(db, run, title=body.name)
 
     from app.tasks.celery_app import celery_app
 
     task = celery_app.send_task("lora.run_training", args=[str(run.id)])
     run.celery_task_id = task.id
+    job.celery_task_id = task.id
     await db.commit()
     await db.refresh(run)
+    await db.refresh(job)
     logger.info("lora_training_queued", run_id=str(run.id), user=user.sub,
                 base_model=body.config.base_model)
-    return _run_out(run)
+    out = _run_out(run)
+    out["job_id"] = str(job.id)
+    return out
 
 
 @router.get("/runs")
@@ -680,6 +701,7 @@ async def stop_run(
     user: UserInfo = Depends(get_current_user),
 ):
     run = await _get_run_checked(db, run_id, user)
+    job = await studio_queue.job_for_lora_run(db, run_id)
     if run.status == LoraRunStatus.queued:
         # Not started yet: revoke the task and cancel outright. The revoke is
         # best-effort (the task may start this very second) — _train re-checks
@@ -693,11 +715,13 @@ async def stop_run(
                 logger.warning("lora_revoke_failed", run_id=str(run_id),
                                error=str(exc)[:120])
         run.status = LoraRunStatus.cancelled
+        await studio_queue.mark_job_cancelled(db, job, error="Задача отменена пользователем.")
         await db.commit()
         return {"ok": True, "status": run.status.value}
     if run.status != LoraRunStatus.running:
         raise HTTPException(409, f"Нельзя остановить запуск в статусе {run.status.value}")
     run.status = LoraRunStatus.stopping
+    await studio_queue.mark_job_cancel_requested(db, job)
     await db.commit()
     # Redis flag: the supervisor's refresher thread sees it within a minute
     # even when the trainer is in a silent phase (logs stalled).
@@ -744,6 +768,8 @@ async def deploy_checkpoint(
 ):
     """Copy a finished checkpoint into the ComfyUI node's loras folder (host
     bind mount) so cleanup/edit workflows can reference it."""
+    if not _can_train_lora(user):
+        raise HTTPException(403, "Недостаточно прав для публикации LoRA")
     run = await _get_run_checked(db, run_id, user)
     lora_name = await _deploy(run, checkpoint)
     return {"ok": True, "lora_name": lora_name,
@@ -773,6 +799,8 @@ async def make_workflow(
     clone ships the measured working point (Lightning off, steps=25, cfg=1.0
     — see project memory: cfg 3 makes the v2 LoRA drop the sheet frame and
     drift the layout)."""
+    if not _can_train_lora(user):
+        raise HTTPException(403, "Недостаточно прав для создания workflow из LoRA")
     run = await _get_run_checked(db, run_id, user)
     lora_name = await _deploy(run, body.checkpoint)
     family = run.base_family or "qwen"

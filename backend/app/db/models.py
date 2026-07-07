@@ -3053,8 +3053,24 @@ class ModelAssignmentRevision(UUIDPrimaryKey, TimestampMixin, Base):
 class ImageGenStatus(str, enum.Enum):
     queued = "queued"
     running = "running"
+    cancelled = "cancelled"
     done = "done"
     failed = "failed"
+
+
+class StudioJobStatus(str, enum.Enum):
+    queued = "queued"
+    waiting_resource = "waiting_resource"
+    running = "running"
+    cancel_requested = "cancel_requested"
+    cancelled = "cancelled"
+    done = "done"
+    failed = "failed"
+
+
+class StudioJobKind(str, enum.Enum):
+    image_generation = "image_generation"
+    lora_training = "lora_training"
 
 
 class ComfyWorkflow(UUIDPrimaryKey, TimestampMixin, Base):
@@ -3124,12 +3140,57 @@ class ImageGeneration(UUIDPrimaryKey, TimestampMixin, Base):
         GUID(), ForeignKey("image_generations.id"), nullable=True, index=True
     )
     accepted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    accepted_by: Mapped[str | None] = mapped_column(String(255))
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    quality_rating: Mapped[int | None] = mapped_column(SmallInteger)
+    issue_tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    review_notes: Mapped[str | None] = mapped_column(Text)
+    workflow_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("documents.id"), nullable=True, index=True
     )
     case_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("work_cases.id"), nullable=True, index=True
     )
+
+
+class StudioJob(UUIDPrimaryKey, TimestampMixin, Base):
+    """Unified queue ledger for long-running studio work.
+
+    Celery still performs execution, but this table is the product-facing source
+    of queue position, ownership, cancellation and mobile push/deeplink state.
+    """
+
+    __tablename__ = "studio_jobs"
+    __table_args__ = (
+        Index("ix_studio_jobs_owner_status", "owner_sub", "status"),
+        Index("ix_studio_jobs_resource_status", "resource", "status"),
+        Index("ix_studio_jobs_priority_created", "priority", "created_at"),
+    )
+
+    owner_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    kind: Mapped[StudioJobKind] = mapped_column(Enum(StudioJobKind), nullable=False, index=True)
+    status: Mapped[StudioJobStatus] = mapped_column(
+        Enum(StudioJobStatus), default=StudioJobStatus.queued, nullable=False, index=True
+    )
+    resource: Mapped[str] = mapped_column(String(80), nullable=False, default="comfyui", index=True)
+    title: Mapped[str | None] = mapped_column(String(300))
+    priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    generation_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("image_generations.id"), nullable=True, index=True
+    )
+    lora_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("lora_training_runs.id"), nullable=True, index=True
+    )
+    celery_task_id: Mapped[str | None] = mapped_column(String(200))
+    progress: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error: Mapped[str | None] = mapped_column(Text)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # ── LoRA training (studio "Обучение LoRA" tab) ──────────────────────────────

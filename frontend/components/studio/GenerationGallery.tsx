@@ -7,6 +7,7 @@ import { Generation, resultUrl } from "@/lib/studio-api";
 const STATUS_COLOR: Record<string, string> = {
   queued: "text-amber-400",
   running: "text-sky-400",
+  cancelled: "text-zinc-500",
   done: "text-emerald-400",
   failed: "text-red-400",
 };
@@ -28,6 +29,7 @@ export default function GenerationGallery({
   const statusLabel: Record<string, string> = {
     queued: t("status.queued"),
     running: t("status.running"),
+    cancelled: t("status.cancelled"),
     done: t("status.done"),
     failed: t("status.failed"),
   };

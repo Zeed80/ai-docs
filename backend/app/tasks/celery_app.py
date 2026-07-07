@@ -47,6 +47,11 @@ celery_app.conf.update(
         "app.tasks.embedding.embed_document": {"queue": "gpu"},
         # name= on @celery_app.task in drawing_analysis.py — VLM, GPU-bound
         "drawing_analysis.*": {"queue": "gpu"},
+        # ComfyUI studio jobs are GPU/VRAM-bound too. They get their own logical
+        # queue for product-level queueing, but the single GPU worker consumes it
+        # alongside gpu/gpu_priority so heavy image work never lands on the
+        # general-purpose Celery worker.
+        "image_generation.*": {"queue": "studio"},
         # ── LoRA lane (worker-lora, -c 1) ────────────────────────────────────
         # Training supervises a container for up to 48h and preparation
         # captions for hours — neither may occupy a general-purpose slot, and

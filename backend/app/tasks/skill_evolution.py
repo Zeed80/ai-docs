@@ -7,11 +7,12 @@ Scheduled by Celery beat:
 from __future__ import annotations
 
 import asyncio
-import logging
+
+import structlog
 
 from app.tasks.celery_app import celery_app
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 @celery_app.task(
@@ -25,8 +26,8 @@ def evolve_failing_skills(self) -> None:  # type: ignore[override]
     """Scan Redis for underperforming skills and trigger improvement."""
     try:
         asyncio.run(_run_evolution())
-    except Exception as exc:
-        logger.error("skill_evolution_task_failed", exc_info=exc)
+    except Exception:
+        logger.error("skill_evolution_task_failed", exc_info=True)
 
 
 async def _run_evolution() -> None:
@@ -57,8 +58,8 @@ def evaluate_shadow_tests(self) -> None:  # type: ignore[override]
     """Check A/B shadow test results and promote winners or rollback losers."""
     try:
         asyncio.run(_run_evaluation())
-    except Exception as exc:
-        logger.error("skill_shadow_evaluation_failed", exc_info=exc)
+    except Exception:
+        logger.error("skill_shadow_evaluation_failed", exc_info=True)
 
 
 async def _run_evaluation() -> None:

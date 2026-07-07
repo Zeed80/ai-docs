@@ -9,7 +9,16 @@ const BASE = `${API}/api/image-gen`;
 // "eskd" = text→image ЕСКД-styled diffusion (alternative to the deterministic
 // techDraw() vector render, which is not a ComfyUI operation).
 export type Operation = "generate" | "edit" | "inpaint" | "cleanup" | "eskd";
-export type GenStatus = "queued" | "running" | "done" | "failed";
+export type GenStatus = "queued" | "running" | "cancelled" | "done" | "failed";
+export type StudioJobStatus =
+  | "queued"
+  | "waiting_resource"
+  | "running"
+  | "cancel_requested"
+  | "cancelled"
+  | "done"
+  | "failed";
+export type StudioJobKind = "image_generation" | "lora_training";
 
 export interface GenProgress {
   value: number | null;
@@ -21,6 +30,7 @@ export interface GenProgress {
 
 export interface Generation {
   id: string;
+  job_id?: string;
   operation: Operation;
   status: GenStatus;
   progress: GenProgress | null;
@@ -33,10 +43,39 @@ export interface Generation {
   error: string | null;
   parent_id: string | null;
   accepted: boolean;
+  accepted_by?: string | null;
+  accepted_at?: string | null;
+  quality_rating?: number | null;
+  issue_tags?: string[];
+  review_notes?: string | null;
   workflow_id: string | null;
   created_at: string | null;
   source_document_id: string | null;
   case_id: string | null;
+}
+
+export interface StudioJob {
+  id: string;
+  kind: StudioJobKind;
+  status: StudioJobStatus;
+  resource: string;
+  title: string | null;
+  priority: number;
+  position: number | null;
+  eta_seconds: number | null;
+  owner_sub: string | null;
+  created_at: string | null;
+  queued_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  cancel_requested_at: string | null;
+  generation_id: string | null;
+  lora_run_id: string | null;
+  linked_status: string | null;
+  progress: GenProgress | Record<string, unknown> | null;
+  error: string | null;
+  can_cancel: boolean;
+  meta: Record<string, unknown>;
 }
 
 export interface Workflow {
@@ -152,6 +191,24 @@ export async function clearFailedGenerations(): Promise<{ deleted: number }> {
   return jsonOrThrow<{ deleted: number }>(res);
 }
 
+export async function listStudioQueue(): Promise<StudioJob[]> {
+  const res = await apiFetch(`${API}/api/studio/queue`);
+  const body = await jsonOrThrow<{ items: StudioJob[] }>(res);
+  return body.items;
+}
+
+export async function getStudioJob(id: string): Promise<StudioJob> {
+  const res = await apiFetch(`${API}/api/studio/jobs/${id}`);
+  return jsonOrThrow<StudioJob>(res);
+}
+
+export async function cancelStudioJob(id: string): Promise<StudioJob> {
+  const res = await mutFetch(`${API}/api/studio/queue/${id}/cancel`, {
+    method: "POST",
+  });
+  return jsonOrThrow<StudioJob>(res);
+}
+
 export async function techDraw(
   description: string,
   view: "front" | "isometric" | "section" | "half_section" = "front",
@@ -240,4 +297,8 @@ export function resultUrl(id: string, thumb = false): string {
 
 export function sourceUrl(id: string, index = 0): string {
   return `${BASE}/${id}/source?index=${index}`;
+}
+
+export function artifactUrl(id: string, kind: "dxf"): string {
+  return `${BASE}/${id}/artifact?kind=${encodeURIComponent(kind)}`;
 }

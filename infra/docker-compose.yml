@@ -558,8 +558,8 @@ services:
       - app
 
   # === Celery Worker — GPU lane (STRICTLY sequential) ===
-  # Serves only the ``gpu`` queue with concurrency 1, so every GPU-bound step
-  # (classify / OCR+extract / verify / embed / drawing VLM) runs one at a time
+  # Serves the GPU-bound queues with concurrency 1, so every GPU-bound step
+  # (classify / OCR+extract / verify / embed / drawing VLM / studio image jobs) runs one at a time
   # and pipeline steps of different documents never overlap on the GPU. Do NOT
   # raise -c above 1 and do NOT add replicas: that would reintroduce GPU
   # contention. (A Redis single-flight lock in app/tasks/gpu_lock.py guards the
@@ -569,7 +569,7 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    command: celery -A app.tasks.celery_app worker -l info -c 1 -Q gpu_priority,gpu -n gpu@%h
+    command: celery -A app.tasks.celery_app worker -l info -c 1 -Q gpu_priority,gpu,studio -n gpu@%h
     environment:
       <<: *backend-env
       SKIP_DB_MIGRATE: "1"
