@@ -58,7 +58,7 @@ export default function StudioPage() {
       setError(null);
       // Keep the open detail fresh.
       setSelected((cur) =>
-        cur ? (data.find((g) => g.id === cur.id) ?? cur) : cur,
+        cur ? (data.find((g) => g.id === cur.id) ?? null) : cur,
       );
     } catch (e) {
       setError(String((e as Error).message || e));

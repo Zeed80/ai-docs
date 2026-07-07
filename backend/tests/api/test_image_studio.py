@@ -403,6 +403,36 @@ async def test_studio_queue_cancel_marks_generation_cancelled(client, db_session
 
 
 @pytest.mark.asyncio
+async def test_delete_generation_detaches_studio_job(client, db_session):
+    from app.db.models import ImageGeneration, ImageGenStatus, StudioJobStatus
+    from app.services import studio_queue
+
+    gen = ImageGeneration(
+        owner_sub="dev-user",
+        operation="generate",
+        status=ImageGenStatus.done,
+        prompt="удалить",
+        params={},
+        source_image_paths=[],
+        result_path="image-gen/result.png",
+    )
+    db_session.add(gen)
+    await db_session.flush()
+    job = await studio_queue.create_image_job(db_session, gen, title="удалить")
+    job.status = StudioJobStatus.done
+    await db_session.commit()
+
+    resp = await client.delete(f"/api/image-gen/{gen.id}")
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert await db_session.get(ImageGeneration, gen.id) is None
+    await db_session.refresh(job)
+    assert job.generation_id is None
+    assert job.status == StudioJobStatus.cancelled
+
+
+@pytest.mark.asyncio
 async def test_studio_queue_stats_exposes_limits_and_counts(client):
     resp = await client.post(
         "/api/image-gen/generate",

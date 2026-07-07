@@ -140,7 +140,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
               disabled={busy}
               onClick={() => {
                 if (confirm(t("detail.delete_confirm"))) {
-                  run(() => deleteGeneration(gen.id).then(onClose));
+                  run(() => deleteGeneration(gen.id).then(onChanged).then(onClose));
                 }
               }}
               className="ml-auto text-xs text-red-300 hover:text-red-200 disabled:opacity-50"

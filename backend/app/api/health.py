@@ -15,9 +15,9 @@ import httpx
 import structlog
 from fastapi import APIRouter
 
+from app.ai import provider_registry
 from app.ai.router import ai_router
 from app.ai.schemas import ProviderKind
-from app.config import settings
 
 logger = structlog.get_logger()
 
@@ -77,21 +77,51 @@ async def _check_anthropic(api_key: str | None) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+async def _check_comfyui(base_url: str) -> dict[str, Any]:
+    """Hit ComfyUI's native health-ish endpoint instead of OpenAI /models."""
+    try:
+        start = time.perf_counter()
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(f"{base_url.rstrip('/')}/system_stats")
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+        return {"ok": resp.status_code < 400, "status": resp.status_code, "latency_ms": elapsed_ms}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _effective_provider_base_url(kind: ProviderKind, fallback: str) -> str:
+    if kind in {
+        ProviderKind.OLLAMA,
+        ProviderKind.LLAMACPP,
+        ProviderKind.VLLM,
+        ProviderKind.OPENAI_COMPATIBLE,
+        ProviderKind.LMSTUDIO,
+        ProviderKind.COMFYUI,
+    }:
+        try:
+            nodes = provider_registry.list_instances(kind)
+            if nodes:
+                return nodes[0].base_url
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("ai_provider_endpoint_resolve_failed", provider=kind.value, error=str(exc))
+    return fallback
+
+
 @router.get("/health/ai")
 async def ai_health() -> dict[str, Any]:
     """Check connectivity for all registered AI providers."""
     results: dict[str, Any] = {}
 
     for kind, config in ai_router.registry.providers.items():
-        base_url = str(config.base_url or "").rstrip("/")
+        base_url = _effective_provider_base_url(kind, str(config.base_url or "")).rstrip("/")
         api_key_env = config.api_key_env or ""
         api_key = os.environ.get(api_key_env) if api_key_env else None
 
         try:
             if kind == ProviderKind.OLLAMA:
-                # Use the runtime env URL, not the registry default (localhost vs host-gateway)
-                effective_url = settings.ollama_url or base_url
-                result = await _check_ollama(effective_url)
+                result = await _check_ollama(base_url)
+            elif kind == ProviderKind.COMFYUI:
+                result = await _check_comfyui(base_url)
             elif kind == ProviderKind.ANTHROPIC:
                 result = await _check_anthropic(api_key)
             else:

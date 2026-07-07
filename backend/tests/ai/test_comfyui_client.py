@@ -119,5 +119,7 @@ def test_builtin_workflow_templates_are_consistent():
         assert data.get("key") and data.get("graph") and data.get("inject_map")
         graph = data["graph"]
         for key, target in data["inject_map"].items():
-            node = str(target["node"])
-            assert node in graph, f"{path.name}: inject '{key}' → unknown node {node}"
+            targets = target if isinstance(target, list) else [target]
+            for item in targets:
+                node = str(item["node"])
+                assert node in graph, f"{path.name}: inject '{key}' -> unknown node {node}"

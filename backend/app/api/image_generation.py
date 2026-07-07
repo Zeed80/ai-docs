@@ -27,7 +27,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo, UserRole
-from app.db.models import ComfyWorkflow, Document, ImageGeneration, ImageGenStatus, StudioJobKind
+from app.db.models import (
+    ComfyWorkflow,
+    Document,
+    ImageGeneration,
+    ImageGenStatus,
+    StudioJob,
+    StudioJobKind,
+    StudioJobStatus,
+)
 from app.db.session import get_db
 from app.services import studio_queue
 from app.storage import download_file, upload_file
@@ -575,6 +583,16 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
         sa_update(ImageGeneration)
         .where(ImageGeneration.parent_id == gen.id)
         .values(parent_id=None)
+    )
+    await db.execute(
+        sa_update(StudioJob)
+        .where(StudioJob.generation_id == gen.id)
+        .values(
+            generation_id=None,
+            status=StudioJobStatus.cancelled,
+            error="Связанная генерация удалена.",
+            finished_at=datetime.now(timezone.utc),
+        )
     )
     from app.tasks.image_generation import _clear_progress
 

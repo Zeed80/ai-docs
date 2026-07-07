@@ -33,7 +33,7 @@ WORKDIR /app
 # tesseract-ocr(+rus) for pytesseract (drawing balloon OCR, text-preserving edits)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libxml2 libglib2.0-0 libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
-    tesseract-ocr tesseract-ocr-rus \
+    gosu tesseract-ocr tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy libredwg runtime: binary + shared library
@@ -45,6 +45,11 @@ COPY pyproject.toml .
 RUN pip install --no-cache-dir .
 
 COPY . .
+
+RUN groupadd --gid 10001 appuser \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir -p /app/backups /releases /lora-data \
+    && chown -R appuser:appuser /app /releases /lora-data
 
 RUN chmod +x entrypoint.sh
 

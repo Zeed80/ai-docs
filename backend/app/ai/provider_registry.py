@@ -161,6 +161,30 @@ def _default_instance(kind: ProviderKind) -> ResolvedProvider:
     )
 
 
+def _env_override_url(kind: ProviderKind, base_url: str) -> str:
+    """Let compose/env fix local default hostnames saved from another runtime.
+
+    A user may deliberately register a remote provider node; do not clobber
+    those. We only replace empty/local-default hosts such as ``localhost`` or
+    the optional compose service name ``comfyui``.
+    """
+    env_url = _ENV_URL_OVERRIDE.get(kind)
+    override = os.environ.get(env_url or "", "").strip() if env_url else ""
+    if not override:
+        return base_url
+    if not base_url:
+        return override
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(base_url).hostname or "").lower()
+    except Exception:
+        host = ""
+    if host in {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", kind.value}:
+        return override
+    return base_url
+
+
 def _row_to_resolved(row: dict) -> ResolvedProvider | None:
     try:
         kind = ProviderKind(row["kind"])
@@ -170,6 +194,8 @@ def _row_to_resolved(row: dict) -> ResolvedProvider | None:
     if not base:
         # Inherit the default base_url (incl. env override) for this kind.
         base = _default_instance(kind).base_url
+    else:
+        base = _env_override_url(kind, base)
     api_key = decrypt(row.get("api_key_encrypted")) or _env_key_for(kind)
     return ResolvedProvider(
         kind=kind,
