@@ -76,6 +76,39 @@ def test_png_and_dxf_export():
     assert b"SECTION" in dxf and b"ENTITIES" in dxf  # valid DXF
 
 
+def test_dxf_uses_millimeters_and_real_dimensions():
+    import io
+    import ezdxf
+
+    spec = {
+        "type": "shaft",
+        "segments": [{"diameter": 50, "length": 50, "roughness": 1.6}],
+        "title": {},
+    }
+    doc = ezdxf.read(io.StringIO(techdraw.render_spec_to_dxf(spec).decode("utf-8")))
+
+    assert doc.header.get("$INSUNITS") == 4  # millimeters, not meters
+    dims = list(doc.modelspace().query("DIMENSION"))
+    assert len(dims) >= 3
+    assert {d.dxf.text for d in dims} >= {"50", "Ø50"}
+
+    object_lines = [e for e in doc.modelspace().query("LINE") if e.dxf.layer == "OBJECT"]
+    xs = [p for line in object_lines for p in (line.dxf.start.x, line.dxf.end.x)]
+    ys = [p for line in object_lines for p in (line.dxf.start.y, line.dxf.end.y)]
+    assert max(xs) - min(xs) == pytest.approx(50)
+    assert max(ys) - min(ys) == pytest.approx(50)
+
+
+def test_plate_dxf_has_hole_and_bolt_circle_dimensions():
+    import io
+    import ezdxf
+
+    doc = ezdxf.read(io.StringIO(techdraw.render_spec_to_dxf(PLATE).decode("utf-8")))
+    dim_texts = {d.dxf.text for d in doc.modelspace().query("DIMENSION")}
+    assert {"Ø120", "Ø40H7", "Ø90"} <= dim_texts
+    assert any((t.dxf.text or "").startswith("6xØ11H12") for t in doc.modelspace().query("TEXT"))
+
+
 def test_unknown_type_raises():
     with pytest.raises(ValueError):
         techdraw.render_spec_to_svg({"type": "spaceship"})

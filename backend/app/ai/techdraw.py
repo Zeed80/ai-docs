@@ -25,9 +25,12 @@ import math
 from typing import Literal
 
 import svgwrite
+import structlog
 from pydantic import BaseModel, Field
 
 from app.ai import techdraw_reference as tdref
+
+logger = structlog.get_logger()
 
 # ── Spec models ──────────────────────────────────────────────────────────────
 
@@ -816,59 +819,214 @@ def render_spec_to_png(spec: dict, scale: float = 2.0, view: str = "front") -> b
     return png
 
 
+def _dxf_dim_override() -> dict:
+    return {
+        "dimtxt": 3.5,
+        "dimasz": 2.5,
+        "dimexo": 1.0,
+        "dimexe": 1.5,
+        "dimdli": 7.0,
+        "dimclrd": 7,
+        "dimclre": 7,
+        "dimclrt": 7,
+        "dimtad": 1,
+        "dimzin": 8,
+    }
+
+
+def _dxf_render_dim(dim) -> None:
+    try:
+        dim.render()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("techdraw_dxf_dimension_render_failed", error=str(exc))
+
+
+def _dxf_text(msp, text: str, at: tuple[float, float], height: float = 3.5,
+              layer: str = "ANNOTATION", rotation: float = 0.0) -> None:
+    entity = msp.add_text(text, height=height, dxfattribs={"layer": layer, "rotation": rotation})
+    entity.set_placement(at)
+
+
+def _dxf_roughness(msp, x: float, y: float, ra: float) -> None:
+    attrs = {"layer": "ROUGHNESS"}
+    msp.add_line((x, y), (x - 2.5, y + 4.3), dxfattribs=attrs)
+    msp.add_line((x, y), (x + 5.0, y - 4.3), dxfattribs=attrs)
+    msp.add_line((x + 5.0, y - 4.3), (x + 11.0, y - 4.3), dxfattribs=attrs)
+    _dxf_text(msp, f"Ra {ra:g}", (x + 5.5, y - 8.0), height=2.8, layer="ROUGHNESS")
+
+
 def _dxf_draw_shaft(msp, s: ShaftSpec, ox: float = 0.0, oy: float = 0.0) -> None:
     x = ox
     cy = oy
     prev_h = None
+    max_d = max(seg.diameter for seg in s.segments)
+    dim_base_y = cy - max_d / 2 - 14
+    total_len = sum(seg.length for seg in s.segments)
+
     for seg in s.segments:
         w, h = seg.length, seg.diameter
         top, bot = cy + h / 2, cy - h / 2
-        msp.add_line((x, top), (x + w, top))
-        msp.add_line((x, bot), (x + w, bot))
+        msp.add_line((x, top), (x + w, top), dxfattribs={"layer": "OBJECT"})
+        msp.add_line((x, bot), (x + w, bot), dxfattribs={"layer": "OBJECT"})
         if prev_h is None or abs(prev_h - h) > 1e-9:
             yy = max((prev_h or h) / 2, h / 2)
-            msp.add_line((x, cy - yy), (x, cy + yy))
+            msp.add_line((x, cy - yy), (x, cy + yy), dxfattribs={"layer": "OBJECT"})
         if seg.bore_diameter:
             bh = seg.bore_diameter
-            msp.add_line((x, cy + bh / 2), (x + w, cy + bh / 2))
-            msp.add_line((x, cy - bh / 2), (x + w, cy - bh / 2))
+            msp.add_line((x, cy + bh / 2), (x + w, cy + bh / 2), dxfattribs={"layer": "CENTER"})
+            msp.add_line((x, cy - bh / 2), (x + w, cy - bh / 2), dxfattribs={"layer": "CENTER"})
         thread_spec = tdref.parse_thread(seg.thread) if seg.thread else None
         if thread_spec:
             minor = tdref.minor_diameter_mm(thread_spec)
-            msp.add_line((x, cy + minor / 2), (x + w, cy + minor / 2))
-            msp.add_line((x, cy - minor / 2), (x + w, cy - minor / 2))
-        msp.add_text(_dim_label(seg.diameter, seg.tolerance, "⌀"),
-                     height=h * 0.12 + 1).set_placement((x + w / 2, top + 3))
+            msp.add_line((x, cy + minor / 2), (x + w, cy + minor / 2), dxfattribs={"layer": "CENTER"})
+            msp.add_line((x, cy - minor / 2), (x + w, cy - minor / 2), dxfattribs={"layer": "CENTER"})
+
+        # ГОСТ-style dimensions: real DIMENSION entities, not decorative text.
+        _dxf_render_dim(msp.add_linear_dim(
+            base=(x, dim_base_y),
+            p1=(x, bot),
+            p2=(x + w, bot),
+            text=f"{seg.length:g}",
+            angle=0,
+            override=_dxf_dim_override(),
+            dxfattribs={"layer": "DIM"},
+        ))
+        dia_text = seg.thread or _dim_label(seg.diameter, seg.tolerance, "⌀")
+        _dxf_render_dim(msp.add_linear_dim(
+            base=(x + w / 2 + 6, cy),
+            p1=(x + w / 2, bot),
+            p2=(x + w / 2, top),
+            text=dia_text,
+            angle=90,
+            override=_dxf_dim_override(),
+            dxfattribs={"layer": "DIM"},
+        ))
+        if seg.roughness is not None:
+            _dxf_roughness(msp, x + w / 2 + 8, top + 8, seg.roughness)
         prev_h = h
         x += w
-    msp.add_line((x, cy - prev_h / 2), (x, cy + prev_h / 2))
+    msp.add_line((x, cy - prev_h / 2), (x, cy + prev_h / 2), dxfattribs={"layer": "OBJECT"})
+    msp.add_line((ox - 6, cy), (ox + total_len + 6, cy), dxfattribs={"layer": "CENTER"})
+    _dxf_render_dim(msp.add_linear_dim(
+        base=(ox, dim_base_y - 10),
+        p1=(ox, cy - max_d / 2),
+        p2=(ox + total_len, cy - max_d / 2),
+        text=f"{total_len:g}",
+        angle=0,
+        override=_dxf_dim_override(),
+        dxfattribs={"layer": "DIM"},
+    ))
 
 
 def _dxf_draw_plate(msp, s: PlateSpec, ox: float = 0.0, oy: float = 0.0) -> None:
     if s.shape == "circle":
-        msp.add_circle((ox, oy), s.diameter / 2)
+        msp.add_circle((ox, oy), s.diameter / 2, dxfattribs={"layer": "OBJECT"})
+        _dxf_render_dim(msp.add_diameter_dim(
+            center=(ox, oy),
+            radius=s.diameter / 2,
+            angle=35,
+            text=_dim_label(s.diameter, "", "⌀"),
+            override=_dxf_dim_override(),
+            dxfattribs={"layer": "DIM"},
+        ))
+        extent = s.diameter
     else:
         msp.add_lwpolyline(
             [(ox - s.width / 2, oy - s.height / 2), (ox + s.width / 2, oy - s.height / 2),
              (ox + s.width / 2, oy + s.height / 2), (ox - s.width / 2, oy + s.height / 2)],
+            dxfattribs={"layer": "OBJECT"},
             close=True,
         )
+        extent = max(s.width, s.height)
+        _dxf_render_dim(msp.add_linear_dim(
+            base=(ox - s.width / 2, oy - s.height / 2 - 12),
+            p1=(ox - s.width / 2, oy - s.height / 2),
+            p2=(ox + s.width / 2, oy - s.height / 2),
+            text=f"{s.width:g}",
+            angle=0,
+            override=_dxf_dim_override(),
+            dxfattribs={"layer": "DIM"},
+        ))
+        _dxf_render_dim(msp.add_linear_dim(
+            base=(ox + s.width / 2 + 12, oy - s.height / 2),
+            p1=(ox + s.width / 2, oy - s.height / 2),
+            p2=(ox + s.width / 2, oy + s.height / 2),
+            text=f"{s.height:g}",
+            angle=90,
+            override=_dxf_dim_override(),
+            dxfattribs={"layer": "DIM"},
+        ))
+    msp.add_line((ox - extent / 2 - 5, oy), (ox + extent / 2 + 5, oy), dxfattribs={"layer": "CENTER"})
+    msp.add_line((ox, oy - extent / 2 - 5), (ox, oy + extent / 2 + 5), dxfattribs={"layer": "CENTER"})
     for hole in s.holes:
-        msp.add_circle((ox + hole.x, oy + hole.y), hole.diameter / 2)
+        center = (ox + hole.x, oy + hole.y)
+        msp.add_circle(center, hole.diameter / 2, dxfattribs={"layer": "OBJECT"})
+        _dxf_render_dim(msp.add_diameter_dim(
+            center=center,
+            radius=hole.diameter / 2,
+            angle=45,
+            text=_dim_label(hole.diameter, hole.tolerance, "⌀"),
+            override=_dxf_dim_override(),
+            dxfattribs={"layer": "DIM"},
+        ))
     if s.bolt_circle_d > 0 and s.bolt_circle_n > 0:
+        msp.add_circle((ox, oy), s.bolt_circle_d / 2, dxfattribs={"layer": "CENTER"})
         for i in range(s.bolt_circle_n):
             ang = 2 * math.pi * i / s.bolt_circle_n
             msp.add_circle(
                 (ox + s.bolt_circle_d / 2 * math.cos(ang), oy + s.bolt_circle_d / 2 * math.sin(ang)),
                 s.bolt_hole_d / 2,
+                dxfattribs={"layer": "OBJECT"},
             )
+        _dxf_render_dim(msp.add_diameter_dim(
+            center=(ox, oy),
+            radius=s.bolt_circle_d / 2,
+            angle=135,
+            text=_dim_label(s.bolt_circle_d, "", "⌀"),
+            override=_dxf_dim_override(),
+            dxfattribs={"layer": "DIM"},
+        ))
+        _dxf_text(msp, f"{s.bolt_circle_n}x{_dim_label(s.bolt_hole_d, s.bolt_hole_tol, '⌀')}",
+                  (ox - s.bolt_circle_d / 2, oy + s.bolt_circle_d / 2 + 8), height=3.0)
+    side_x = ox + extent / 2 + 28
+    side_h = s.diameter if s.shape == "circle" else s.height
+    msp.add_lwpolyline(
+        [(side_x, oy - side_h / 2), (side_x + s.thickness, oy - side_h / 2),
+         (side_x + s.thickness, oy + side_h / 2), (side_x, oy + side_h / 2)],
+        close=True,
+        dxfattribs={"layer": "OBJECT"},
+    )
+    _dxf_render_dim(msp.add_linear_dim(
+        base=(side_x, oy - side_h / 2 - 10),
+        p1=(side_x, oy - side_h / 2),
+        p2=(side_x + s.thickness, oy - side_h / 2),
+        text=_dim_label(s.thickness, s.thickness_tol),
+        angle=0,
+        override=_dxf_dim_override(),
+        dxfattribs={"layer": "DIM"},
+    ))
+    if s.roughness is not None:
+        _dxf_roughness(msp, side_x - 12, oy + side_h / 2 + 8, s.roughness)
 
 
 def render_spec_to_dxf(spec: dict) -> bytes:
-    """Export exact geometry to DXF (CAD-editable). Lines/circles + dimension text."""
+    """Export exact geometry to DXF (CAD-editable), 1 drawing unit = 1 mm."""
     import ezdxf
+    from ezdxf import units
 
     doc = ezdxf.new("R2010", setup=True)
+    doc.units = units.MM
+    doc.header["$INSUNITS"] = units.MM
+    doc.header["$MEASUREMENT"] = 1
+    for name, color, linetype in (
+        ("OBJECT", 7, "CONTINUOUS"),
+        ("CENTER", 3, "CENTER"),
+        ("DIM", 2, "CONTINUOUS"),
+        ("ANNOTATION", 7, "CONTINUOUS"),
+        ("ROUGHNESS", 1, "CONTINUOUS"),
+    ):
+        if name not in doc.layers:
+            doc.layers.add(name, color=color, linetype=linetype)
     msp = doc.modelspace()
     kind = spec.get("type")
     if kind == "shaft":

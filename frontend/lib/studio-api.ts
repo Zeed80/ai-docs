@@ -9,6 +9,7 @@ const BASE = `${API}/api/image-gen`;
 // "eskd" = text→image ЕСКД-styled diffusion (alternative to the deterministic
 // techDraw() vector render, which is not a ComfyUI operation).
 export type Operation = "generate" | "edit" | "inpaint" | "cleanup" | "eskd";
+export type TechDrawView = "front" | "isometric" | "section" | "half_section";
 export type GenStatus = "queued" | "running" | "cancelled" | "done" | "failed";
 export type StudioJobStatus =
   | "queued"
@@ -290,7 +291,7 @@ export async function bulkCancelStudioQueue(input: {
 
 export async function techDraw(
   description: string,
-  view: "front" | "isometric" | "section" | "half_section" = "front",
+  view: TechDrawView = "front",
   link?: { source_document_id?: string; case_id?: string },
 ): Promise<Generation> {
   const res = await mutFetch(`${BASE}/techdraw`, {

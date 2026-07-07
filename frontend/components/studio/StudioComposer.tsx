@@ -7,6 +7,7 @@ import { isNative, pickImage } from "@/lib/native-bridge";
 import {
   GenerateInput,
   Operation,
+  TechDrawView,
   Workflow,
   duplicateWorkflow,
   generate,
@@ -58,7 +59,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
   // Exact technical drawing (deterministic ЕСКД render, not diffusion).
   const [techMode, setTechMode] = useState(false);
   const [techDesc, setTechDesc] = useState("");
-  const [techView, setTechView] = useState<"front" | "isometric">("front");
+  const [techView, setTechView] = useState<TechDrawView>("front");
 
   // Traceability: attach the result to a document/case (optional).
   const [linkDocId, setLinkDocId] = useState("");
@@ -496,19 +497,21 @@ export default function StudioComposer({ onSubmitted }: Props) {
           {workflowId && sizePicker()}
           {/* View is meaningful only for the deterministic vector render. */}
           {!workflowId && (
-            <div className="flex items-center gap-2">
+            <div className="space-y-1">
               <span className="text-xs text-zinc-500">
                 {t("tech_view_label")}
               </span>
-              {(["front", "isometric"] as const).map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setTechView(v)}
-                  className={`px-3 py-1 rounded text-sm ${techView === v ? "bg-emerald-600 text-white" : "bg-white/5 text-zinc-300 hover:bg-white/10"}`}
-                >
-                  {v === "front" ? t("tech_view_front") : t("tech_view_iso")}
-                </button>
-              ))}
+              <div className="grid grid-cols-2 gap-1 p-1 rounded bg-white/5 sm:grid-cols-4">
+                {(["front", "section", "half_section", "isometric"] as const).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setTechView(v)}
+                    className={`px-2 py-1.5 rounded text-sm ${techView === v ? "bg-emerald-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+                  >
+                    {t(`tech_view_${v}`)}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {/* Upscale applies to the diffusion ЕСКД result too. */}
