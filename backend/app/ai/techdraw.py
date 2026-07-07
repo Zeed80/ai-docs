@@ -185,11 +185,22 @@ def _pick_scale(extent_mm: float, avail_mm: float) -> tuple[float, str]:
 
 
 def _arrow(dwg, g, x, y, ang):
-    a = 2.2
-    for s in (0.4, -0.4):
-        dx = a * math.cos(ang + s)
-        dy = a * math.sin(ang + s)
-        g.add(dwg.line((x, y), (x - dx, y - dy), stroke=LINE, stroke_width=THIN))
+    # ЕСКД dimension arrows are closed arrowheads, not architectural ticks.
+    length = 3.2
+    half_w = 0.9
+    ux, uy = math.cos(ang), math.sin(ang)
+    px, py = -uy, ux
+    base_x, base_y = x - length * ux, y - length * uy
+    g.add(dwg.polygon(
+        [
+            (x, y),
+            (base_x + half_w * px, base_y + half_w * py),
+            (base_x - half_w * px, base_y - half_w * py),
+        ],
+        fill=LINE,
+        stroke=LINE,
+        stroke_width=0.15,
+    ))
 
 
 def _txt(dwg, g, x, y, s, size=3.0, anchor="middle", rot=0):
@@ -201,11 +212,18 @@ def _txt(dwg, g, x, y, s, size=3.0, anchor="middle", rot=0):
 
 
 def _roughness_symbol(dwg, g, x, y, ra: float):
-    """ГОСТ 2.309 roughness tick (√) with Ra value, apex at (x,y)."""
-    g.add(dwg.line((x, y), (x - 2.5, y + 4.3), stroke=LINE, stroke_width=THIN))
-    g.add(dwg.line((x, y), (x + 5.0, y - 4.3), stroke=LINE, stroke_width=THIN))
-    g.add(dwg.line((x + 5.0, y - 4.3), (x + 11.0, y - 4.3), stroke=LINE, stroke_width=THIN))
-    _txt(dwg, g, x + 8.0, y - 5.0, f"Ra {ra:g}", size=2.6)
+    """ГОСТ 2.309-style roughness mark with a shelf and Ra value.
+
+    ``(x, y)`` is the symbol apex on/near the referenced surface. SVG has a
+    downward-positive y axis, so the mark rises by subtracting y.
+    """
+    p1 = (x - 3.0, y - 6.0)
+    p2 = (x + 7.0, y - 12.0)
+    p3 = (x + 17.0, y - 12.0)
+    g.add(dwg.line((x, y), p1, stroke=LINE, stroke_width=THIN))
+    g.add(dwg.line((x, y), p2, stroke=LINE, stroke_width=THIN))
+    g.add(dwg.line(p2, p3, stroke=LINE, stroke_width=THIN))
+    _txt(dwg, g, x + 11.5, y - 14.0, f"Ra {ra:g}", size=2.6)
 
 
 def _hatch_rect(dwg, g, x0: float, y0: float, x1: float, y1: float,
@@ -831,6 +849,7 @@ def _dxf_dim_override() -> dict:
         "dimclrt": 7,
         "dimtad": 1,
         "dimzin": 8,
+        "dimblk": "_CLOSEDFILLED",
     }
 
 
@@ -849,10 +868,14 @@ def _dxf_text(msp, text: str, at: tuple[float, float], height: float = 3.5,
 
 def _dxf_roughness(msp, x: float, y: float, ra: float) -> None:
     attrs = {"layer": "ROUGHNESS"}
-    msp.add_line((x, y), (x - 2.5, y + 4.3), dxfattribs=attrs)
-    msp.add_line((x, y), (x + 5.0, y - 4.3), dxfattribs=attrs)
-    msp.add_line((x + 5.0, y - 4.3), (x + 11.0, y - 4.3), dxfattribs=attrs)
-    _dxf_text(msp, f"Ra {ra:g}", (x + 5.5, y - 8.0), height=2.8, layer="ROUGHNESS")
+    # DXF uses upward-positive y; mirror the SVG roughness mark vertically.
+    p1 = (x - 3.0, y + 6.0)
+    p2 = (x + 7.0, y + 12.0)
+    p3 = (x + 17.0, y + 12.0)
+    msp.add_line((x, y), p1, dxfattribs=attrs)
+    msp.add_line((x, y), p2, dxfattribs=attrs)
+    msp.add_line(p2, p3, dxfattribs=attrs)
+    _dxf_text(msp, f"Ra {ra:g}", (x + 7.5, y + 14.0), height=2.8, layer="ROUGHNESS")
 
 
 def _dxf_draw_shaft(msp, s: ShaftSpec, ox: float = 0.0, oy: float = 0.0) -> None:

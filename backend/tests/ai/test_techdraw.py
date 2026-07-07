@@ -99,6 +99,40 @@ def test_dxf_uses_millimeters_and_real_dimensions():
     assert max(ys) - min(ys) == pytest.approx(50)
 
 
+def test_dxf_dimensions_use_closed_arrowheads_not_ticks():
+    import io
+    import ezdxf
+
+    spec = {
+        "type": "shaft",
+        "segments": [{"diameter": 50, "length": 50, "roughness": 1.6}],
+        "title": {},
+    }
+    doc = ezdxf.read(io.StringIO(techdraw.render_spec_to_dxf(spec).decode("utf-8")))
+    arrow_blocks: list[str] = []
+    for dim in doc.modelspace().query("DIMENSION"):
+        block = doc.blocks.get(dim.dxf.geometry)
+        arrow_blocks.extend(
+            entity.dxf.name
+            for entity in block
+            if entity.dxftype() == "INSERT" and entity.dxf.layer == "DIM"
+        )
+
+    assert arrow_blocks
+    assert "_ARCHTICK" not in arrow_blocks
+    assert set(arrow_blocks) == {"_CLOSEDFILLED"}
+
+
+def test_svg_dimension_arrows_are_closed_polygons():
+    svg = techdraw.render_spec_to_svg({
+        "type": "shaft",
+        "segments": [{"diameter": 50, "length": 50, "roughness": 1.6}],
+        "title": {},
+    })
+    assert "<polygon" in svg
+    assert "Ra 1.6" in svg
+
+
 def test_plate_dxf_has_hole_and_bolt_circle_dimensions():
     import io
     import ezdxf
