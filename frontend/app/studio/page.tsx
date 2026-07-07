@@ -9,6 +9,7 @@ import LoraTrainingPanel from "@/components/studio/LoraTrainingPanel";
 import StudioComposer from "@/components/studio/StudioComposer";
 import StudioQueuePanel from "@/components/studio/StudioQueuePanel";
 import WorkflowPanel from "@/components/studio/WorkflowPanel";
+import { getApiBaseUrl } from "@/lib/api-base";
 import { gpuStatus } from "@/lib/lora-api";
 import {
   clearFailedGenerations,
@@ -16,9 +17,12 @@ import {
   Generation,
   getStudioJob,
   getGeneration,
+  getStudioQueueStats,
   listGenerations,
   listStudioQueue,
   StudioJob,
+  StudioJobKind,
+  StudioQueueStats,
 } from "@/lib/studio-api";
 
 type Tab = "studio" | "queue" | "workflows" | "lora";
@@ -27,6 +31,10 @@ export default function StudioPage() {
   const t = useTranslations("studio");
   const [items, setItems] = useState<Generation[]>([]);
   const [jobs, setJobs] = useState<StudioJob[]>([]);
+  const [queueStats, setQueueStats] = useState<StudioQueueStats | null>(null);
+  const [queueStatusFilter, setQueueStatusFilter] = useState("");
+  const [queueKindFilter, setQueueKindFilter] = useState<StudioJobKind | "">("");
+  const [queueMineOnly, setQueueMineOnly] = useState(false);
   const [selected, setSelected] = useState<Generation | null>(null);
   const [tab, setTab] = useState<Tab>("studio");
   const [error, setError] = useState<string | null>(null);
@@ -36,9 +44,17 @@ export default function StudioPage() {
   const load = useCallback(async () => {
     try {
       const data = await listGenerations();
-      const queue = await listStudioQueue();
+      const queue = await listStudioQueue({
+        status: queueStatusFilter,
+        kind: queueKindFilter,
+        mine: queueMineOnly,
+        limit: 120,
+      });
       setItems(data);
       setJobs(queue);
+      getStudioQueueStats()
+        .then(setQueueStats)
+        .catch(() => setQueueStats(null));
       setError(null);
       // Keep the open detail fresh.
       setSelected((cur) =>
@@ -47,7 +63,7 @@ export default function StudioPage() {
     } catch (e) {
       setError(String((e as Error).message || e));
     }
-  }, []);
+  }, [queueKindFilter, queueMineOnly, queueStatusFilter]);
 
   const onDelete = useCallback(
     async (g: Generation) => {
@@ -78,6 +94,24 @@ export default function StudioPage() {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
+    const url = `${getApiBaseUrl()}/api/studio/queue/events`;
+    let source: EventSource | null = null;
+    try {
+      source = new EventSource(url, { withCredentials: true });
+      source.addEventListener("queue", () => void load());
+      source.addEventListener("error", () => {
+        source?.close();
+        source = null;
+      });
+    } catch {
+      source = null;
+    }
+    return () => {
+      source?.close();
+    };
   }, [load]);
 
   // Poll while any generation is still running.
@@ -217,6 +251,16 @@ export default function StudioPage() {
           <div className="mx-auto max-w-3xl">
             <StudioQueuePanel
               jobs={jobs}
+              stats={queueStats}
+              filterStatus={queueStatusFilter}
+              filterKind={queueKindFilter}
+              onlyMine={queueMineOnly}
+              isOperator={!!queueStats}
+              onFilterChange={(next) => {
+                setQueueStatusFilter(next.status ?? "");
+                setQueueKindFilter(next.kind ?? "");
+                setQueueMineOnly(!!next.mine);
+              }}
               onChanged={load}
               onOpenGeneration={(id) => {
                 getGeneration(id)
@@ -253,6 +297,16 @@ export default function StudioPage() {
               <div className="mb-4">
                 <StudioQueuePanel
                   jobs={jobs}
+                  stats={queueStats}
+                  filterStatus={queueStatusFilter}
+                  filterKind={queueKindFilter}
+                  onlyMine={queueMineOnly}
+                  isOperator={!!queueStats}
+                  onFilterChange={(next) => {
+                    setQueueStatusFilter(next.status ?? "");
+                    setQueueKindFilter(next.kind ?? "");
+                    setQueueMineOnly(!!next.mine);
+                  }}
                   onChanged={load}
                   onOpenGeneration={(id) => {
                     getGeneration(id)

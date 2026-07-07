@@ -75,7 +75,29 @@ export interface StudioJob {
   progress: GenProgress | Record<string, unknown> | null;
   error: string | null;
   can_cancel: boolean;
+  can_retry?: boolean;
   meta: Record<string, unknown>;
+}
+
+export interface StudioQueueStats {
+  control: {
+    paused: boolean;
+    drain: boolean;
+    reason: string | null;
+    updated_at: string | null;
+    updated_by: string | null;
+  };
+  limits: {
+    global_active: number;
+    per_user_active: number;
+    operator_active: number;
+  };
+  totals: Record<string, number>;
+  active: number;
+  by_resource: Record<string, Record<string, number>>;
+  by_kind: Record<string, Record<string, number>>;
+  avg_wait_seconds_24h: number | null;
+  avg_runtime_seconds_24h: number | null;
 }
 
 export interface Workflow {
@@ -191,10 +213,39 @@ export async function clearFailedGenerations(): Promise<{ deleted: number }> {
   return jsonOrThrow<{ deleted: number }>(res);
 }
 
-export async function listStudioQueue(): Promise<StudioJob[]> {
-  const res = await apiFetch(`${API}/api/studio/queue`);
+export async function listStudioQueue(params?: {
+  status?: string;
+  kind?: StudioJobKind | "";
+  mine?: boolean;
+  limit?: number;
+}): Promise<StudioJob[]> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.kind) qs.set("kind", params.kind);
+  if (params?.mine) qs.set("mine", "true");
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await apiFetch(`${API}/api/studio/queue${suffix}`);
   const body = await jsonOrThrow<{ items: StudioJob[] }>(res);
   return body.items;
+}
+
+export async function getStudioQueueStats(): Promise<StudioQueueStats> {
+  const res = await apiFetch(`${API}/api/studio/queue/stats`);
+  return jsonOrThrow<StudioQueueStats>(res);
+}
+
+export async function setStudioQueueControl(input: {
+  paused?: boolean;
+  drain?: boolean;
+  reason?: string | null;
+}): Promise<StudioQueueStats["control"]> {
+  const res = await mutFetch(`${API}/api/studio/queue/control`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow<StudioQueueStats["control"]>(res);
 }
 
 export async function getStudioJob(id: string): Promise<StudioJob> {
@@ -207,6 +258,34 @@ export async function cancelStudioJob(id: string): Promise<StudioJob> {
     method: "POST",
   });
   return jsonOrThrow<StudioJob>(res);
+}
+
+export async function retryStudioJob(id: string): Promise<StudioJob> {
+  const res = await mutFetch(`${API}/api/studio/queue/${id}/retry`, {
+    method: "POST",
+  });
+  return jsonOrThrow<StudioJob>(res);
+}
+
+export async function setStudioJobPriority(id: string, priority: number): Promise<StudioJob> {
+  const res = await mutFetch(`${API}/api/studio/queue/${id}/priority`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ priority }),
+  });
+  return jsonOrThrow<StudioJob>(res);
+}
+
+export async function bulkCancelStudioQueue(input: {
+  resource?: string;
+  owner_sub?: string;
+} = {}): Promise<{ cancelled: number }> {
+  const res = await mutFetch(`${API}/api/studio/queue/bulk-cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow<{ cancelled: number }>(res);
 }
 
 export async function techDraw(

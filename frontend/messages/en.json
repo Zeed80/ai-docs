@@ -442,8 +442,33 @@
       "active_count": "Active: {count}",
       "no_active": "No active tasks",
       "position": "position {position}",
+      "eta": "ETA {eta}",
       "cancel": "Cancel",
       "cancel_busy": "Cancelling…",
+      "retry": "Retry",
+      "priority": "OK",
+      "metrics": {
+        "active": "Active",
+        "wait": "Avg wait",
+        "runtime": "Avg runtime"
+      },
+      "filters": {
+        "all": "All statuses",
+        "active": "Active",
+        "failed": "Failed",
+        "done": "Done",
+        "cancelled": "Cancelled",
+        "any_kind": "All kinds",
+        "mine": "Mine"
+      },
+      "controls": {
+        "pause": "Pause",
+        "resume": "Resume",
+        "drain": "Drain",
+        "stop_drain": "Stop drain",
+        "cancel_pending": "Cancel pending",
+        "restricted": "Queue is restricted by an operator"
+      },
       "kind": {
         "image_generation": "Image generation",
         "lora_training": "LoRA training"

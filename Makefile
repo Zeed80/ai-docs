@@ -5,6 +5,7 @@
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
         test test-cov e2e regression agent-regression agent-test agent-ws-smoke \
+        studio-queue-smoke \
         turboquant-benchmark turboquant-quality \
         lint lint-fix \
         skills aiagent-contract \
@@ -63,6 +64,7 @@ help:
 	@echo "    make e2e              — Playwright E2E tests"
 	@echo "    make regression       — manifest regression checks"
 	@echo "    make agent-test       — AiAgent scenario tests"
+	@echo "    make studio-queue-smoke — read-only concurrent studio queue API smoke"
 	@echo "    make lint             — ruff + eslint"
 	@echo "    make lint-fix         — ruff autofix"
 	@echo ""
@@ -207,6 +209,9 @@ agent-test:
 
 agent-ws-smoke:
 	node scripts/check_agent_ws_adapter.js
+
+studio-queue-smoke:
+	python3 scripts/studio_queue_load_smoke.py
 
 turboquant-benchmark:
 	python3 scripts/turboquant_benchmark.py --baseline-model "$${BASELINE_MODEL}" --turboquant-model "$${TURBOQUANT_MODEL}" --baseline-url "$${BASELINE_URL:-http://localhost:8000}" --turboquant-url "$${TURBOQUANT_URL:-http://localhost:8001}"

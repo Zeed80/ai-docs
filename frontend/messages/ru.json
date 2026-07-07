@@ -442,8 +442,33 @@
       "active_count": "Активных: {count}",
       "no_active": "Нет активных",
       "position": "место {position}",
+      "eta": "ETA {eta}",
       "cancel": "Отменить",
       "cancel_busy": "Отмена…",
+      "retry": "Повторить",
+      "priority": "OK",
+      "metrics": {
+        "active": "Активные",
+        "wait": "Среднее ожидание",
+        "runtime": "Среднее выполнение"
+      },
+      "filters": {
+        "all": "Все статусы",
+        "active": "Активные",
+        "failed": "Ошибки",
+        "done": "Готовые",
+        "cancelled": "Отменённые",
+        "any_kind": "Все типы",
+        "mine": "Мои"
+      },
+      "controls": {
+        "pause": "Пауза",
+        "resume": "Возобновить",
+        "drain": "Drain",
+        "stop_drain": "Снять drain",
+        "cancel_pending": "Отменить pending",
+        "restricted": "Очередь ограничена оператором"
+      },
       "kind": {
         "image_generation": "Генерация изображения",
         "lora_training": "Обучение LoRA"

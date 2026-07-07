@@ -43,6 +43,7 @@ from app.db.models import (
     LoraDatasetStatus,
     LoraRunStatus,
     LoraTrainingRun,
+    StudioJobKind,
 )
 from app.db.session import get_db
 from app.services import studio_queue
@@ -642,6 +643,13 @@ async def create_run(
         config["resume_from"] = await _prepare_resume_path(body.resume_lora, db, user)
         if check.get("suggested_rank"):
             config["rank"] = int(check["suggested_rank"])
+
+    await studio_queue.ensure_can_enqueue(
+        db,
+        owner_sub=user.sub,
+        kind=StudioJobKind.lora_training,
+        roles=user.roles,
+    )
 
     run = LoraTrainingRun(
         owner_sub=user.sub,

@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo, UserRole
-from app.db.models import ComfyWorkflow, Document, ImageGeneration, ImageGenStatus
+from app.db.models import ComfyWorkflow, Document, ImageGeneration, ImageGenStatus, StudioJobKind
 from app.db.session import get_db
 from app.services import studio_queue
 from app.storage import download_file, upload_file
@@ -289,6 +289,13 @@ async def generate(
     # deterministic /techdraw render) — same input contract as "generate".
     if body.operation in ("generate", "eskd") and not (body.prompt or "").strip():
         raise HTTPException(400, "Для генерации нужно текстовое описание (prompt).")
+
+    await studio_queue.ensure_can_enqueue(
+        db,
+        owner_sub=user.sub,
+        kind=StudioJobKind.image_generation,
+        roles=user.roles,
+    )
 
     gen = ImageGeneration(
         owner_sub=user.sub,

@@ -402,6 +402,85 @@ async def test_studio_queue_cancel_marks_generation_cancelled(client, db_session
     assert gen.status == ImageGenStatus.cancelled
 
 
+@pytest.mark.asyncio
+async def test_studio_queue_stats_exposes_limits_and_counts(client):
+    resp = await client.post(
+        "/api/image-gen/generate",
+        json={"operation": "generate", "prompt": "очередь для метрик"},
+    )
+    assert resp.status_code == 200
+
+    stats = await client.get("/api/studio/queue/stats")
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["limits"]["global_active"] >= 1
+    assert body["active"] >= 1
+    assert body["by_kind"]["image_generation"]["queued"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_studio_queue_pause_rejects_new_generation(client):
+    paused = await client.patch(
+        "/api/studio/queue/control",
+        json={"paused": True, "reason": "maintenance"},
+    )
+    assert paused.status_code == 200
+    try:
+        resp = await client.post(
+            "/api/image-gen/generate",
+            json={"operation": "generate", "prompt": "не ставить"},
+        )
+        assert resp.status_code == 503
+        assert "maintenance" in resp.text
+    finally:
+        await client.patch(
+            "/api/studio/queue/control",
+            json={"paused": False, "drain": False, "reason": None},
+        )
+
+
+@pytest.mark.asyncio
+async def test_studio_queue_retry_failed_generation(client, db_session, monkeypatch):
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.services import studio_queue
+    from app.tasks.celery_app import celery_app
+
+    class _Task:
+        id = "retry-task-1"
+
+    monkeypatch.setattr(
+        celery_app,
+        "send_task",
+        lambda *args, **kwargs: _Task(),
+    )
+
+    gen = ImageGeneration(
+        owner_sub="dev-user",
+        operation="generate",
+        status=ImageGenStatus.failed,
+        prompt="повтор",
+        params={},
+        source_image_paths=[],
+        error="boom",
+    )
+    db_session.add(gen)
+    await db_session.flush()
+    job = await studio_queue.create_image_job(db_session, gen, title="повтор")
+    job.status = studio_queue.StudioJobStatus.failed
+    job.error = "boom"
+    await db_session.commit()
+
+    resp = await client.post(f"/api/studio/queue/{job.id}/retry")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["can_retry"] is False
+    await db_session.refresh(gen)
+    assert gen.status == ImageGenStatus.queued
+    assert gen.celery_task_id == "retry-task-1"
+
+
 def test_pick_upscale_model_parses_combo_shapes():
     """object_info COMBO for the upscale model varies by ComfyUI version;
     _pick_upscale_model must read both shapes and prefer a sharp model."""
