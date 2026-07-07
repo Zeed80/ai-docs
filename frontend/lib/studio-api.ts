@@ -6,7 +6,9 @@ import { apiFetch, mutFetch } from "@/lib/auth";
 const API = getApiBaseUrl();
 const BASE = `${API}/api/image-gen`;
 
-export type Operation = "generate" | "edit" | "inpaint" | "cleanup";
+// "eskd" = text→image ЕСКД-styled diffusion (alternative to the deterministic
+// techDraw() vector render, which is not a ComfyUI operation).
+export type Operation = "generate" | "edit" | "inpaint" | "cleanup" | "eskd";
 export type GenStatus = "queued" | "running" | "done" | "failed";
 
 export interface GenProgress {

@@ -83,6 +83,34 @@ async def test_generate_creates_queued_record(client):
 
 
 @pytest.mark.asyncio
+async def test_generate_eskd_requires_prompt(client):
+    # "eskd" is a text→image ЕСКД-styled diffusion op — same prompt contract as
+    # "generate", so an empty prompt is a 400.
+    resp = await client.post(
+        "/api/image-gen/generate",
+        json={"operation": "eskd", "prompt": ""},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_generate_eskd_creates_queued_record_without_source(client):
+    # Unlike edit/inpaint/cleanup, an eskd job needs no source image.
+    resp = await client.post(
+        "/api/image-gen/generate",
+        json={
+            "operation": "eskd",
+            "prompt": "чертёж кронштейна, вид спереди",
+            "params": {"seed": 3},
+        },
+    )
+    assert resp.status_code == 200
+    gen = resp.json()
+    assert gen["status"] == "queued"
+    assert gen["operation"] == "eskd"
+
+
+@pytest.mark.asyncio
 async def test_duplicate_then_delete_builtin_copy(client, db_session):
     from app.db.seeds.comfyui_workflows import seed_builtin_workflows
 

@@ -477,8 +477,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if not seed:  # 0 / None → random so repeated runs differ
             seed = random.randint(1, 2**31 - 1)
 
-        if operation == "generate":
-            # Only "generate" builds a drawing from nothing, where a broad
+        if operation in ("generate", "eskd"):
+            # "generate"/"eskd" build a drawing from nothing, where a broad
             # style paragraph is the bulk of what the model has to go on —
             # for edit/inpaint the user's instruction is inherently narrow
             # and specific ("remove this chamfer"), and confirmed live: the

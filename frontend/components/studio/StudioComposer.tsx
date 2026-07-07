@@ -8,8 +8,10 @@ import {
   GenerateInput,
   Operation,
   Workflow,
+  duplicateWorkflow,
   generate,
   listWorkflows,
+  patchWorkflow,
   promptHelp,
   techDraw,
   uploadSource,
@@ -43,34 +45,6 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const maskRef = useRef<MaskCanvasHandle>(null);
 
-  // Custom (e.g. trained-LoRA) workflows for the current operation; empty
-  // value = the builtin one, so nothing changes for users without customs.
-  const [workflows, setWorkflows] = useState<Workflow[]>([]);
-  const [workflowId, setWorkflowId] = useState<string>("");
-  // HD tiled cleanup — maximum quality, minutes per sheet.
-  const [hd, setHd] = useState(false);
-  // High-quality model upscale of the result (any mode): 1 = off, 2/3/4×.
-  const [upscale, setUpscale] = useState(1);
-  // Post-processing after ComfyUI (cleanup/edit). "auto" = let the workflow
-  // decide (LoRA-cleanup keeps its tuned pass); "none" = raw ComfyUI result;
-  // "text_only"/"full" opt into enhancements. Default "auto".
-  const [postprocess, setPostprocess] = useState("auto");
-  useEffect(() => {
-    listWorkflows()
-      .then((ws) => setWorkflows(ws.filter((w) => !w.is_builtin && w.enabled)))
-      .catch(() => undefined);
-  }, []);
-  const customWorkflows = workflows.filter((w) => w.operation === operation);
-  // Default to the newest custom (trained-LoRA) workflow for the operation:
-  // the user expects "очистка" to mean the best available pipeline — running
-  // the builtin because a selector was overlooked wastes the trained LoRA
-  // (confirmed live: 4 of 5 user runs went without it).
-  useEffect(() => {
-    const customs = workflows.filter((w) => w.operation === operation);
-    setWorkflowId(customs.length ? customs[0].id : "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [operation, workflows.length]);
-
   // Exact technical drawing (deterministic ЕСКД render, not diffusion).
   const [techMode, setTechMode] = useState(false);
   const [techDesc, setTechDesc] = useState("");
@@ -84,7 +58,99 @@ export default function StudioComposer({ onSubmitted }: Props) {
     case_id: linkCaseId.trim() || undefined,
   };
 
+  // Every mode now exposes a workflow (pipeline) selector. We load ALL enabled
+  // workflows once and filter by the active operation, so builtins are
+  // selectable too — e.g. the ControlNet edit variant that was previously
+  // unreachable. ЕСКД mode maps to operation "eskd" plus a sentinel entry ("")
+  // that means the deterministic vector render.
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [workflowId, setWorkflowId] = useState<string>("");
+  // Inline rename after a quick "make my own copy".
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  // HD tiled cleanup — maximum quality, minutes per sheet.
+  const [hd, setHd] = useState(false);
+  // High-quality model upscale of the result (any mode): 1 = off, 2/3/4×.
+  const [upscale, setUpscale] = useState(1);
+  // Post-processing after ComfyUI (cleanup/edit). "auto" = let the workflow
+  // decide (LoRA-cleanup keeps its tuned pass); "none" = raw ComfyUI result;
+  // "text_only"/"full" opt into enhancements. Default "auto".
+  const [postprocess, setPostprocess] = useState("auto");
+
+  // Active operation the selector filters on: the diffusion op, or "eskd" in
+  // the exact-drawing mode.
+  const activeOp: Operation = techMode ? "eskd" : operation;
+  const optsForOp = workflows.filter((w) => w.operation === activeOp);
+  const selectedWorkflow = workflows.find((w) => w.id === workflowId) ?? null;
+  // A custom (non-builtin, e.g. trained-LoRA) workflow carries its own tuned
+  // steps/cfg/strengths — the fast/quality preset must not override it.
+  const isCustomSelected = !!selectedWorkflow && !selectedWorkflow.is_builtin;
+
+  async function reloadWorkflows(): Promise<Workflow[]> {
+    const ws = (await listWorkflows()).filter((w) => w.enabled);
+    setWorkflows(ws);
+    return ws;
+  }
+
+  useEffect(() => {
+    reloadWorkflows().catch(() => undefined);
+  }, []);
+
+  // Default selection when the mode (or the loaded list) changes:
+  //  • ЕСКД → the deterministic vector render ("") is the recommended default;
+  //  • diffusion modes → the newest custom pipeline if any (users expect
+  //    "очистка" to mean the best available pipeline — running the builtin
+  //    because a selector was overlooked wastes a trained LoRA), else the
+  //    first builtin for the operation.
+  useEffect(() => {
+    setRenaming(null);
+    if (techMode) {
+      setWorkflowId("");
+      return;
+    }
+    const opts = workflows.filter((w) => w.operation === operation);
+    const custom = opts.find((w) => !w.is_builtin);
+    setWorkflowId(custom ? custom.id : (opts[0]?.id ?? ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operation, techMode, workflows.length]);
+
   const op = OPERATIONS.find((o) => o.key === operation)!;
+
+  /** Quick "make my own copy": duplicate the selected builtin (or the first
+   * builtin for this operation) — the copy inherits a correct inject_map, so
+   * it runs immediately. Then offer inline rename. For deeper changes (import
+   * a ComfyUI JSON, remap nodes) users go to the Workflows tab. */
+  async function addOwnWorkflow() {
+    setErr(null);
+    const base =
+      (selectedWorkflow && selectedWorkflow.is_builtin && selectedWorkflow) ||
+      optsForOp.find((w) => w.is_builtin);
+    if (!base) {
+      setErr(t("workflow_add_need_import"));
+      return;
+    }
+    try {
+      const copy = await duplicateWorkflow(base.id);
+      await reloadWorkflows();
+      setWorkflowId(copy.id);
+      setRenaming(copy.id);
+      setRenameValue(copy.title);
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    }
+  }
+
+  async function saveRename() {
+    if (!renaming) return;
+    try {
+      await patchWorkflow(renaming, { title: renameValue.trim() || undefined });
+      await reloadWorkflows();
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setRenaming(null);
+    }
+  }
 
   async function submitTech() {
     if (!techDesc.trim()) {
@@ -94,7 +160,24 @@ export default function StudioComposer({ onSubmitted }: Props) {
     setBusy(true);
     setErr(null);
     try {
-      await techDraw(techDesc, techView, link);
+      if (workflowId) {
+        // A diffusion ЕСКД pipeline was chosen instead of the exact vector
+        // render — the description acts as the prompt (operation "eskd").
+        const input: GenerateInput = {
+          operation: "eskd",
+          prompt: techDesc,
+          params: { seed: Number(seed) || 0 },
+          source_image_paths: [],
+          workflow_id: workflowId,
+          ...link,
+        };
+        if (upscale > 1) {
+          (input.params as Record<string, unknown>).upscale = upscale;
+        }
+        await generate(input);
+      } else {
+        await techDraw(techDesc, techView, link);
+      }
       setTechDesc("");
       onSubmitted();
     } catch (e) {
@@ -156,9 +239,11 @@ export default function StudioComposer({ onSubmitted }: Props) {
       };
       if (workflowId) {
         input.workflow_id = workflowId;
-        // Custom LoRA workflows carry their own tuned steps/cfg (e.g.
-        // cleanup-LoRA works at cfg=1.0/25 steps) — the fast/quality preset
-        // must not override them.
+      }
+      // Custom LoRA workflows carry their own tuned steps/cfg (e.g.
+      // cleanup-LoRA works at cfg=1.0/25 steps) — the fast/quality preset
+      // must not override them; a builtin still honours the preset.
+      if (isCustomSelected) {
         delete (input.params as Record<string, unknown>).quality;
       }
       if (operation === "cleanup" && hd) {
@@ -197,6 +282,71 @@ export default function StudioComposer({ onSubmitted }: Props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Workflow (pipeline) picker shared by every mode. `withSentinel` adds the
+   * deterministic-vector default at the top (ЕСКД mode only). */
+  function workflowSelector(withSentinel: boolean) {
+    const hasOptions = withSentinel || optsForOp.length > 0;
+    if (!hasOptions) return null;
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-xs text-zinc-500">{t("workflow_label")}</label>
+          <button
+            type="button"
+            onClick={addOwnWorkflow}
+            className="text-xs text-sky-400 hover:text-sky-300"
+          >
+            {t("workflow_add_own")}
+          </button>
+        </div>
+        <select
+          value={workflowId}
+          onChange={(e) => setWorkflowId(e.target.value)}
+          className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm text-white"
+        >
+          {withSentinel && <option value="">{t("eskd_vector_default")}</option>}
+          {optsForOp.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.is_builtin ? w.title : `★ ${w.title}`}
+            </option>
+          ))}
+        </select>
+        {renaming && renaming === workflowId && (
+          <div className="mt-1.5 flex gap-1">
+            <input
+              value={renameValue}
+              autoFocus
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveRename();
+                if (e.key === "Escape") setRenaming(null);
+              }}
+              placeholder={t("workflow_rename_placeholder")}
+              className="flex-1 rounded bg-zinc-900 border border-white/10 px-2 py-1 text-sm text-zinc-200"
+            />
+            <button
+              onClick={saveRename}
+              className="px-2 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white text-xs"
+            >
+              {t("workflow_rename_save")}
+            </button>
+            <button
+              onClick={() => setRenaming(null)}
+              className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs"
+            >
+              {t("workflow_rename_cancel")}
+            </button>
+          </div>
+        )}
+        {selectedWorkflow?.description && renaming !== workflowId && (
+          <p className="mt-1 text-[11px] text-zinc-600">
+            {selectedWorkflow.description}
+          </p>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -240,7 +390,11 @@ export default function StudioComposer({ onSubmitted }: Props) {
 
       {techMode && (
         <div className="space-y-3">
-          <p className="text-xs text-zinc-500">{t("tech_hint")}</p>
+          {/* ЕСКД pipeline: exact vector (default) or a diffusion ЕСКД workflow */}
+          {workflowSelector(true)}
+          <p className="text-xs text-zinc-500">
+            {workflowId ? t("eskd_diffusion_hint") : t("tech_hint")}
+          </p>
           <textarea
             value={techDesc}
             onChange={(e) => setTechDesc(e.target.value)}
@@ -248,20 +402,51 @@ export default function StudioComposer({ onSubmitted }: Props) {
             placeholder={t("tech_placeholder")}
             className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
           />
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-zinc-500">
-              {t("tech_view_label")}
-            </span>
-            {(["front", "isometric"] as const).map((v) => (
-              <button
-                key={v}
-                onClick={() => setTechView(v)}
-                className={`px-3 py-1 rounded text-sm ${techView === v ? "bg-emerald-600 text-white" : "bg-white/5 text-zinc-300 hover:bg-white/10"}`}
-              >
-                {v === "front" ? t("tech_view_front") : t("tech_view_iso")}
-              </button>
-            ))}
-          </div>
+          {/* View is meaningful only for the deterministic vector render. */}
+          {!workflowId && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-500">
+                {t("tech_view_label")}
+              </span>
+              {(["front", "isometric"] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setTechView(v)}
+                  className={`px-3 py-1 rounded text-sm ${techView === v ? "bg-emerald-600 text-white" : "bg-white/5 text-zinc-300 hover:bg-white/10"}`}
+                >
+                  {v === "front" ? t("tech_view_front") : t("tech_view_iso")}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Upscale applies to the diffusion ЕСКД result too. */}
+          {workflowId && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-zinc-500">
+                  {t("upscale_label")}
+                </span>
+                <span className="text-[11px] text-zinc-600">
+                  {upscale > 1 ? t("upscale_hint_on") : t("upscale_hint_off")}
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-1 p-1 rounded bg-white/5">
+                {[1, 2, 3, 4].map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setUpscale(f)}
+                    className={`px-2 py-1.5 rounded text-sm ${
+                      upscale === f
+                        ? "bg-sky-600 text-white"
+                        : "text-zinc-300 hover:bg-white/10"
+                    }`}
+                  >
+                    {f === 1 ? t("upscale_off") : `${f}×`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {err && <div className="text-xs text-red-400">{err}</div>}
           <button
             onClick={submitTech}
@@ -292,6 +477,9 @@ export default function StudioComposer({ onSubmitted }: Props) {
             ))}
           </div>
 
+          {/* Workflow (pipeline) selector — every diffusion mode. */}
+          {workflowSelector(false)}
+
           {operation === "cleanup" && (
             <label className="flex items-center gap-2 text-xs text-zinc-400">
               <input
@@ -303,24 +491,6 @@ export default function StudioComposer({ onSubmitted }: Props) {
             </label>
           )}
 
-          {customWorkflows.length > 0 && (
-            <label className="block text-xs text-zinc-400">
-              {t("workflow_label")}
-              <select
-                value={workflowId}
-                onChange={(e) => setWorkflowId(e.target.value)}
-                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm text-white mt-1"
-              >
-                <option value="">{t("workflow_builtin")}</option>
-                {customWorkflows.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-
           {/* Speed/quality tradeoff: measured live, the fast preset
               (Lightning LoRA, 4 steps) never once performed a real edit
               instruction across 6+ test runs — quality mode did roughly
@@ -328,7 +498,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
               deterministic here), at several times the generation time.
               Hidden for custom (LoRA) workflows: they carry their own tuned
               steps/cfg and the preset would sabotage them. */}
-          <div className={workflowId ? "hidden" : undefined}>
+          <div className={isCustomSelected ? "hidden" : undefined}>
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs text-zinc-500">
                 {t("quality_label")}

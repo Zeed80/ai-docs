@@ -195,7 +195,9 @@ async def generate(
 
     if body.operation in ("edit", "inpaint", "cleanup") and not source_paths:
         raise HTTPException(400, "Для этой операции нужно исходное изображение.")
-    if body.operation == "generate" and not (body.prompt or "").strip():
+    # "eskd" is a text→image ЕСКД-styled generation (diffusion alternative to the
+    # deterministic /techdraw render) — same input contract as "generate".
+    if body.operation in ("generate", "eskd") and not (body.prompt or "").strip():
         raise HTTPException(400, "Для генерации нужно текстовое описание (prompt).")
 
     gen = ImageGeneration(
