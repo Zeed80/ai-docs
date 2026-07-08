@@ -77,6 +77,10 @@ const ESKD_STYLE_SUFFIX =
   "без рамки листа, без углового штампа, без основной надписи, без таблицы";
 const ESKD_STYLE_MARKER = "технический чертёж по ЕСКД";
 
+function generationLabel(id: string): string {
+  return `ID ${id.slice(0, 8)}`;
+}
+
 function readPrefs(): StudioComposerPrefs {
   if (typeof window === "undefined") return {};
   try {
@@ -104,6 +108,8 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
   const [sourceGenerationId, setSourceGenerationId] = useState<string>("");
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+  const [previewGenerationId, setPreviewGenerationId] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [helping, setHelping] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -165,6 +171,13 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
     !!selectedWorkflow &&
     selectedWorkflow.is_builtin &&
     !!(selectedWorkflow.inject_map as Record<string, unknown>)?.lora_strength;
+  const previewGeneration =
+    generatedSources.find((g) => g.id === previewGenerationId) ??
+    generatedSources.find((g) => g.id === sourceGenerationId) ??
+    generatedSources[0] ??
+    null;
+  const selectedGeneration =
+    generatedSources.find((g) => g.id === sourceGenerationId) ?? null;
 
   function effectiveSize(): { width: number; height: number } {
     const preset = SIZE_PRESETS[sizePreset];
@@ -502,6 +515,8 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
     setSourceFile(null);
     if (sourcePreview?.startsWith("blob:")) URL.revokeObjectURL(sourcePreview);
     setSourcePreview(id ? resultUrl(id) : null);
+    setPreviewGenerationId(id);
+    setSourcePickerOpen(false);
   }
 
   function clearSource() {
@@ -517,6 +532,15 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
     const files = await pickImage("CAMERA");
     if (files.length) setSource(files[0]);
   }
+
+  useEffect(() => {
+    if (!sourcePickerOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSourcePickerOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sourcePickerOpen]);
 
   async function helpWithPrompt() {
     if (!prompt.trim()) return;
@@ -819,6 +843,138 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
           <div className="text-[11px] text-emerald-400">{paramSaveMsg}</div>
         )}
       </div>
+    );
+  }
+
+  function generatedSourcePicker() {
+    if (generatedSources.length === 0) return null;
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            setPreviewGenerationId(sourceGenerationId || generatedSources[0]?.id || "");
+            setSourcePickerOpen(true);
+          }}
+          className="min-w-0 flex-1 rounded bg-white/10 px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-white/20 sm:flex-none"
+          aria-label={t("generated_source_label")}
+        >
+          {sourceGenerationId
+            ? `${t("generated_source_selected")} ${generationLabel(sourceGenerationId)}`
+            : t("generated_source_placeholder")}
+        </button>
+
+        {sourcePickerOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 sm:items-center sm:p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("generated_source_label")}
+            onClick={() => setSourcePickerOpen(false)}
+          >
+            <div
+              className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-t-lg border border-white/10 bg-zinc-950 shadow-2xl sm:rounded-lg"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+                <div>
+                  <div className="text-sm font-medium text-zinc-100">
+                    {t("generated_source_label")}
+                  </div>
+                  {previewGeneration && (
+                    <div className="text-[11px] text-zinc-500">
+                      {generationLabel(previewGeneration.id)}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSourcePickerOpen(false)}
+                  className="rounded px-2 py-1 text-sm text-zinc-400 hover:bg-white/10 hover:text-white"
+                  aria-label={t("generated_source_close")}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto p-3 md:grid-cols-[minmax(0,1fr)_260px]">
+                <div className="flex min-h-[260px] items-center justify-center rounded border border-white/10 bg-zinc-900">
+                  {previewGeneration?.has_result ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={resultUrl(previewGeneration.id)}
+                      alt={`${t("gallery.result_alt")} ${generationLabel(previewGeneration.id)}`}
+                      className="max-h-[58vh] w-full object-contain"
+                    />
+                  ) : (
+                    <div className="px-4 text-center text-sm text-zinc-500">
+                      {previewGeneration
+                        ? t("generated_source_no_result")
+                        : t("generated_source_empty")}
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid max-h-56 grid-cols-3 gap-2 overflow-y-auto pr-1 md:max-h-[58vh] md:grid-cols-2">
+                  {generatedSources.map((g) => {
+                    const active = previewGeneration?.id === g.id;
+                    return (
+                      <button
+                        type="button"
+                        key={g.id}
+                        onClick={() => setPreviewGenerationId(g.id)}
+                        className={`overflow-hidden rounded border text-left ${
+                          active
+                            ? "border-sky-500 ring-1 ring-sky-500"
+                            : "border-white/10 hover:border-white/30"
+                        }`}
+                      >
+                        <div className="aspect-square bg-zinc-900">
+                          {g.has_result ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={resultUrl(g.id, true)}
+                              alt={`${t("gallery.result_alt")} ${generationLabel(g.id)}`}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center text-[11px] text-zinc-500">
+                              {t(`status.${g.status}`)}
+                            </div>
+                          )}
+                        </div>
+                        <div className="px-1.5 py-1 text-[11px] text-zinc-300">
+                          {generationLabel(g.id)}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 border-t border-white/10 px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => setSourcePickerOpen(false)}
+                  className="rounded bg-white/10 px-3 py-1.5 text-sm text-zinc-200 hover:bg-white/20"
+                >
+                  {t("generated_source_cancel")}
+                </button>
+                <button
+                  type="button"
+                  disabled={!previewGeneration?.has_result}
+                  onClick={() => previewGeneration && setGeneratedSource(previewGeneration.id)}
+                  className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+                >
+                  {previewGeneration
+                    ? `${t("generated_source_use")} ${generationLabel(previewGeneration.id)}`
+                    : t("generated_source_use")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
     );
   }
 
@@ -1133,21 +1289,7 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                     </button>
                   </>
                 )}
-                {generatedSources.length > 0 && (
-                  <select
-                    value={sourceGenerationId}
-                    onChange={(e) => setGeneratedSource(e.target.value)}
-                    className="min-w-0 flex-1 rounded bg-zinc-800 px-2 py-1.5 text-sm text-white sm:flex-none"
-                    aria-label={t("generated_source_label")}
-                  >
-                    <option value="">{t("generated_source_placeholder")}</option>
-                    {generatedSources.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.prompt || g.operation} · {g.id.slice(0, 8)}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                {generatedSourcePicker()}
                 {(sourceFile || sourceGenerationId) && (
                   <button
                     onClick={clearSource}
@@ -1157,17 +1299,25 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                   </button>
                 )}
               </div>
-              {sourcePreview &&
-                (operation === "inpaint" ? (
-                  <MaskCanvas ref={maskRef} imageUrl={sourcePreview} />
-                ) : (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={sourcePreview}
-                    alt={t("source_alt")}
-                    className="max-h-64 rounded border border-white/10"
-                  />
-                ))}
+              {sourcePreview && (
+                <div className="space-y-1">
+                  {selectedGeneration && (
+                    <div className="text-[11px] text-zinc-500">
+                      {generationLabel(selectedGeneration.id)}
+                    </div>
+                  )}
+                  {operation === "inpaint" ? (
+                    <MaskCanvas ref={maskRef} imageUrl={sourcePreview} />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={sourcePreview}
+                      alt={t("source_alt")}
+                      className="max-h-64 rounded border border-white/10"
+                    />
+                  )}
+                </div>
+              )}
             </div>
           )}
 

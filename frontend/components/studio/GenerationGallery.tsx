@@ -4,6 +4,10 @@ import { useTranslations } from "next-intl";
 
 import { Generation, resultUrl } from "@/lib/studio-api";
 
+function generationLabel(id: string): string {
+  return `ID ${id.slice(0, 8)}`;
+}
+
 const STATUS_COLOR: Record<string, string> = {
   queued: "text-amber-400",
   running: "text-sky-400",
@@ -63,7 +67,7 @@ export default function GenerationGallery({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={resultUrl(g.id, true)}
-                alt={g.prompt ?? t("gallery.result_alt")}
+                alt={`${t("gallery.result_alt")} ${generationLabel(g.id)}`}
                 className="w-full h-full object-cover bg-zinc-900"
               />
             ) : (
@@ -108,7 +112,7 @@ export default function GenerationGallery({
                 {g.accepted ? t("status.accepted_suffix") : ""}
               </div>
               <div className="text-[11px] text-zinc-300 line-clamp-1">
-                {g.prompt || g.operation}
+                {generationLabel(g.id)}
               </div>
             </div>
           </div>
