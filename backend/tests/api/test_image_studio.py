@@ -137,6 +137,29 @@ async def test_generate_creates_queued_record(client):
 
 
 @pytest.mark.asyncio
+async def test_generate_truncates_queue_title_for_long_prompt(client):
+    prompt = "Убери со здания текстуру кирпича и удали дерево и забор. " * 20
+
+    resp = await client.post(
+        "/api/image-gen/generate",
+        json={
+            "operation": "generate",
+            "prompt": prompt,
+        },
+    )
+
+    assert resp.status_code == 200
+    gen = resp.json()
+    assert gen["prompt"] == prompt
+
+    queue = await client.get("/api/studio/queue")
+    assert queue.status_code == 200
+    job = next(j for j in queue.json()["items"] if j["generation_id"] == gen["id"])
+    assert len(job["title"]) <= 300
+    assert job["title"].endswith("…")
+
+
+@pytest.mark.asyncio
 async def test_generate_eskd_requires_prompt(client):
     # "eskd" is a text→image ЕСКД-styled diffusion op — same prompt contract as
     # "generate", so an empty prompt is a 400.

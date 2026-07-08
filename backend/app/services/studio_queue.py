@@ -43,6 +43,7 @@ EVENT_REDIS_CHANNEL = "studio:queue:events"
 MAX_ACTIVE_GLOBAL = 30
 MAX_ACTIVE_PER_USER = 4
 MAX_ACTIVE_PER_ADMIN = 12
+MAX_TITLE_LEN = 300
 DEFAULT_JOB_SECONDS = {
     StudioJobKind.image_generation: 180,
     StudioJobKind.lora_training: 8 * 3600,
@@ -68,6 +69,13 @@ def _image_status_value(status: ImageGenStatus | str | None) -> str | None:
 
 def _kind_value(kind: StudioJobKind | str) -> str:
     return kind.value if hasattr(kind, "value") else str(kind)
+
+
+def _job_title(value: str | None, fallback: str) -> str:
+    title = (value or fallback or "Задача").strip()
+    if len(title) <= MAX_TITLE_LEN:
+        return title
+    return f"{title[: MAX_TITLE_LEN - 1].rstrip()}…"
 
 
 def _control_defaults() -> dict[str, Any]:
@@ -192,7 +200,7 @@ async def create_image_job(
         kind=StudioJobKind.image_generation,
         status=StudioJobStatus.queued,
         resource="comfyui",
-        title=title or gen.prompt or gen.operation,
+        title=_job_title(title or gen.prompt, gen.operation),
         priority=priority,
         generation_id=gen.id,
         meta={"operation": gen.operation},
@@ -220,7 +228,7 @@ async def create_lora_job(
         kind=StudioJobKind.lora_training,
         status=StudioJobStatus.queued,
         resource="lora_training",
-        title=title or run.name,
+        title=_job_title(title, run.name),
         priority=priority,
         lora_run_id=run.id,
         meta={"base_family": run.base_family},
