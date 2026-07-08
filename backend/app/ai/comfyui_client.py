@@ -57,45 +57,137 @@ def _node_inputs(node: Any) -> dict[str, Any]:
     return {}
 
 
+def _generic_text_input_names() -> tuple[str, ...]:
+    return (
+        "prompt",
+        "text",
+        "string",
+        "text_l",
+        "text_g",
+        "clip_l",
+        "clip_g",
+        "t5xxl",
+        "text_positive",
+        "text_negative",
+        "positive_text",
+        "negative_text",
+    )
+
+
+def _looks_like_text_class(class_type: str) -> bool:
+    cls = class_type.lower()
+    return (
+        "textencode" in cls
+        or "text_encode" in cls
+        or "cliptext" in cls
+        or "prompt" in cls
+        or cls.startswith("text")
+        or cls.endswith("text")
+    )
+
+
 def _looks_like_text_node(node: Any) -> bool:
     if not isinstance(node, dict):
         return False
     cls = str(node.get("class_type") or "").lower()
     inputs = _node_inputs(node)
     return (
-        "text" in cls
-        or "clip" in cls
-        or any(k in inputs for k in ("prompt", "text", "string"))
+        _looks_like_text_class(cls)
+        or any(k in inputs for k in _generic_text_input_names())
     )
+
+
+def _looks_like_short_negative_prompt(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped or len(stripped) > 260:
+        return False
+    negative_tokens = (
+        "worst",
+        "bad",
+        "blur",
+        "blurry",
+        "artifact",
+        "artifacts",
+        "low quality",
+        "deformed",
+        "noise",
+        "noisy",
+        "shadow",
+        "shadows",
+        "лишн",
+        "размыт",
+        "артефакт",
+        "шум",
+        "тень",
+    )
+    return any(token in stripped for token in negative_tokens)
 
 
 def _looks_negative_text_node(node: Any) -> bool:
     inputs = _node_inputs(node)
-    text = str(inputs.get("prompt") or inputs.get("text") or inputs.get("string") or "").lower()
+    text = " ".join(
+        str(inputs.get(name) or "")
+        for name in _generic_text_input_names()
+        if isinstance(inputs.get(name), str)
+    ).lower()
     cls = str(node.get("class_type") or "").lower() if isinstance(node, dict) else ""
-    return any(
-        token in f"{cls} {text}"
-        for token in (
-            "negative",
-            "worst",
-            "bad",
-            "blur",
-            "artifact",
-            "low quality",
-            "deformed",
-            "лишн",
-            "размыт",
-            "артефакт",
-        )
-    )
+    haystack = f"{cls} {text}"
+    if any(token in haystack for token in ("negative", "negative_prompt", "neg prompt", "негатив")):
+        return True
+    if any(token in cls for token in ("negative", "negprompt")):
+        return True
+    return _looks_like_short_negative_prompt(text)
 
 
 def _fallback_text_input(node: Any) -> str:
     inputs = _node_inputs(node)
-    for name in ("prompt", "text", "string"):
+    for name in _preferred_text_inputs(node):
         if name in inputs:
             return name
-    return ""
+    return _preferred_text_inputs(node)[0]
+
+
+def _preferred_text_inputs(node: Any) -> tuple[str, ...]:
+    """Return likely real text input names for this ComfyUI text node.
+
+    Old imported visual workflows in this product sometimes stored Qwen Image
+    Edit text nodes with ``inputs.text`` because the visual widget parser did
+    not know the node's real API input is ``prompt``. At runtime we normalize
+    both old and new workflows by writing to the actual input for known node
+    families and cleaning stale aliases that would otherwise leave the template
+    prompt active.
+    """
+    cls = str(node.get("class_type") or "").lower() if isinstance(node, dict) else ""
+    if "qwen" in cls and "text" in cls:
+        return ("prompt", "text", "string")
+    if "cliptextencode" in cls:
+        return ("text", "prompt", "string")
+    inputs = _node_inputs(node)
+    existing = tuple(
+        name
+        for name in _generic_text_input_names()
+        if name in inputs and not isinstance(inputs.get(name), (list, dict))
+    )
+    if existing:
+        return existing + tuple(name for name in _generic_text_input_names() if name not in existing)
+    return _generic_text_input_names()
+
+
+def _set_text_value(node: Any, value: Any) -> str:
+    inputs = _node_inputs(node)
+    input_name = _preferred_text_inputs(node)[0]
+    inputs[input_name] = value
+    # Drop stale aliases created by earlier import heuristics for known text
+    # node families. This keeps the API graph from carrying both an old
+    # template prompt and the user's replacement under different names.
+    cls = str(node.get("class_type") or "").lower() if isinstance(node, dict) else ""
+    if "qwen" in cls and "text" in cls and input_name == "prompt":
+        inputs.pop("text", None)
+        inputs.pop("string", None)
+    elif "cliptextencode" in cls and input_name == "text":
+        inputs.pop("prompt", None)
+        inputs.pop("string", None)
+    return input_name
 
 
 def _fallback_inject_text(
@@ -122,10 +214,7 @@ def _fallback_inject_text(
     if not candidates:
         return
     node_id, node = candidates[0]
-    input_name = _fallback_text_input(node)
-    if not input_name:
-        return
-    _node_inputs(node)[input_name] = value
+    input_name = _set_text_value(node, value)
     logger.info("comfyui_prompt_fallback_injected", key=key, node=str(node_id), input=input_name)
 
 
@@ -140,13 +229,58 @@ def _targets_for_key(
     return [t for t in targets if isinstance(t, dict)]
 
 
+def _is_link_value(value: Any) -> bool:
+    return isinstance(value, list) and len(value) >= 1 and not isinstance(value[0], (list, dict))
+
+
+def _downstream_role_score(graph: dict[str, Any], source_id: str, role: str) -> int:
+    queue: list[tuple[str, int]] = [(source_id, 0)]
+    visited: set[str] = set()
+    score = 0
+    while queue:
+        node_id, depth = queue.pop(0)
+        if node_id in visited or depth > 5:
+            continue
+        visited.add(node_id)
+        for target_id, node in graph.items():
+            for input_name, value in _node_inputs(node).items():
+                if not _is_link_value(value) or str(value[0]) != node_id:
+                    continue
+                lowered = str(input_name).lower()
+                if lowered == role or role in lowered:
+                    score += max(20, 120 - depth * 20)
+                if str(target_id) not in visited:
+                    queue.append((str(target_id), depth + 1))
+    return score
+
+
 def _negative_text_node_ids(
     graph: dict[str, Any],
     inject_map: dict[str, Any],
 ) -> set[str]:
-    out = {str(t.get("node", "")) for t in _targets_for_key(inject_map, "negative") if t.get("node")}
+    out: set[str] = set()
     text_nodes = [(node_id, node) for node_id, node in graph.items() if _looks_like_text_node(node)]
-    out.update(str(node_id) for node_id, node in text_nodes if _looks_negative_text_node(node))
+    if len(text_nodes) <= 1:
+        return set()
+    text_node_ids = {str(node_id) for node_id, _node in text_nodes}
+    for target in _targets_for_key(inject_map, "negative"):
+        node_id = str(target.get("node", ""))
+        if not node_id or node_id not in text_node_ids:
+            continue
+        positive_score = _downstream_role_score(graph, node_id, "positive")
+        negative_score = _downstream_role_score(graph, node_id, "negative")
+        if positive_score > negative_score:
+            logger.warning("comfyui_negative_map_ignored_positive_node", node=node_id)
+            continue
+        out.add(node_id)
+    for node_id, node in text_nodes:
+        node_id_str = str(node_id)
+        positive_score = _downstream_role_score(graph, node_id_str, "positive")
+        negative_score = _downstream_role_score(graph, node_id_str, "negative")
+        if negative_score > positive_score:
+            out.add(node_id_str)
+        elif positive_score == negative_score and _looks_negative_text_node(node):
+            out.add(node_id_str)
     # Common ComfyUI shape: positive text encode followed by negative text encode.
     # Imported workflows often lose that mapping; keep the second text node from
     # being overwritten by the user's positive prompt.
@@ -167,15 +301,12 @@ def _replace_text_nodes(
     for node_id, node in graph.items():
         if not _looks_like_text_node(node):
             continue
-        is_negative = str(node_id) in negative_node_ids or _looks_negative_text_node(node)
+        is_negative = str(node_id) in negative_node_ids
         if key == "prompt" and is_negative:
             continue
         if key == "negative" and not is_negative:
             continue
-        input_name = _fallback_text_input(node)
-        if not input_name:
-            continue
-        _node_inputs(node)[input_name] = value
+        _set_text_value(node, value)
         changed += 1
     if changed:
         logger.info("comfyui_text_nodes_replaced", key=key, count=changed)
@@ -226,6 +357,20 @@ def build_workflow(
             node = graph.get(node_id)
             if not node_id or not input_name or not isinstance(node, dict):
                 logger.warning("comfyui_inject_skip", key=key, node=node_id, input=input_name)
+                continue
+            if key in {"prompt", "negative"}:
+                if not _looks_like_text_node(node):
+                    logger.warning(
+                        "comfyui_text_inject_skip_non_text_node",
+                        key=key,
+                        node=node_id,
+                        input=input_name,
+                        class_type=node.get("class_type"),
+                    )
+                # Text prompts are injected below by a graph-aware pass. Direct
+                # map injection is intentionally skipped here because old
+                # imported workflows may point prompt/negative at sampler
+                # conditioning inputs or at the wrong text node.
                 continue
             node.setdefault("inputs", {})[input_name] = values[key]
     negative_node_ids = _negative_text_node_ids(graph, inject_map)

@@ -86,9 +86,61 @@ function inputKeys(node: ComfyNode | undefined): string[] {
   return Object.keys(node?.inputs || {});
 }
 
+const GENERIC_TEXT_INPUTS = [
+  "prompt",
+  "text",
+  "string",
+  "text_l",
+  "text_g",
+  "clip_l",
+  "clip_g",
+  "t5xxl",
+  "text_positive",
+  "text_negative",
+  "positive_text",
+  "negative_text",
+];
+
 function firstInput(node: ComfyNode, candidates: string[]): string {
   const keys = inputKeys(node);
   return candidates.find((k) => keys.includes(k)) || "";
+}
+
+function isLinkValue(value: unknown): value is [string, number] {
+  return Array.isArray(value) && value.length >= 1 && typeof value[0] !== "object";
+}
+
+function looksLikeTextClass(classType: string): boolean {
+  const c = classType.toLowerCase();
+  return (
+    c.includes("textencode")
+    || c.includes("text_encode")
+    || c.includes("cliptext")
+    || c.includes("prompt")
+    || c.startsWith("text")
+    || c.endsWith("text")
+  );
+}
+
+function isTextNode(node: ComfyNode): boolean {
+  const c = lowerClass(node);
+  return looksLikeTextClass(c) || Boolean(firstInput(node, textInputCandidates(node)));
+}
+
+function textInputCandidates(node: ComfyNode): string[] {
+  const cls = lowerClass(node);
+  if (cls.includes("qwen") && cls.includes("text")) {
+    return ["prompt", "text", "string"];
+  }
+  if (cls.includes("cliptextencode")) {
+    return ["text", "prompt", "string"];
+  }
+  const inputs = node.inputs || {};
+  const existing = GENERIC_TEXT_INPUTS.filter((name) => {
+    const value = inputs[name];
+    return value !== undefined && !Array.isArray(value) && (typeof value !== "object" || value === null);
+  });
+  return [...existing, ...GENERIC_TEXT_INPUTS.filter((name) => !existing.includes(name))];
 }
 
 function setIfInput(
@@ -103,9 +155,89 @@ function setIfInput(
   if (input) map[key] = { node: nodeId, input };
 }
 
+function hasUsableInput(graph: Record<string, ComfyNode>, target: InjectTarget, candidates?: string[]): boolean {
+  const node = graph[target.node];
+  if (!node || !target.input) return false;
+  if (candidates && !candidates.includes(target.input)) return false;
+  return inputKeys(node).includes(target.input);
+}
+
 function looksNegativeText(node: ComfyNode): boolean {
-  const text = String(node.inputs?.text || node.inputs?.string || "").toLowerCase();
-  return /negative|worst|bad|blur|artifact|low quality|deformed|лишн|размыт|артефакт/.test(text);
+  const inputs = node.inputs || {};
+  const text = GENERIC_TEXT_INPUTS
+    .map((name) => (typeof inputs[name] === "string" ? inputs[name] : ""))
+    .join(" ")
+    .toLowerCase()
+    .trim();
+  const cls = lowerClass(node);
+  if (/negative|negative_prompt|neg prompt|негатив/.test(`${cls} ${text}`)) return true;
+  if (/negative|negprompt/.test(cls)) return true;
+  if (!text || text.length > 260) return false;
+  return /worst|bad|blur|blurry|artifact|artifacts|low quality|deformed|noise|noisy|shadow|shadows|лишн|размыт|артефакт|шум|тень/.test(text);
+}
+
+function textValue(node: ComfyNode): string {
+  const inputs = node.inputs || {};
+  const input = firstInput(node, textInputCandidates(node));
+  const value = input ? inputs[input] : undefined;
+  return typeof value === "string" ? value : "";
+}
+
+function downstreamRoleScore(
+  graph: Record<string, ComfyNode>,
+  sourceId: string,
+  role: "positive" | "negative",
+): number {
+  const queue: Array<{ id: string; depth: number }> = [{ id: sourceId, depth: 0 }];
+  const visited = new Set<string>();
+  let score = 0;
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || visited.has(current.id) || current.depth > 5) continue;
+    visited.add(current.id);
+    for (const [targetId, node] of Object.entries(graph)) {
+      for (const [input, value] of Object.entries(node.inputs || {})) {
+        if (!isLinkValue(value) || String(value[0]) !== current.id) continue;
+        const inputName = input.toLowerCase();
+        if (inputName === role || inputName.includes(role)) {
+          score += Math.max(20, 120 - current.depth * 20);
+        }
+        if (!visited.has(targetId)) queue.push({ id: targetId, depth: current.depth + 1 });
+      }
+    }
+  }
+  return score;
+}
+
+function pickTextRoles(graph: Record<string, ComfyNode>): {
+  positive?: [string, ComfyNode];
+  negative?: [string, ComfyNode];
+} {
+  const textNodes = Object.entries(graph).filter(([, n]) => isTextNode(n));
+  if (!textNodes.length) return {};
+  if (textNodes.length === 1) return { positive: textNodes[0] };
+
+  const ranked = textNodes.map(([id, node], index) => {
+    const directPositive = downstreamRoleScore(graph, id, "positive");
+    const directNegative = downstreamRoleScore(graph, id, "negative");
+    const text = textValue(node).trim();
+    return {
+      id,
+      node,
+      index,
+      positiveScore: directPositive - directNegative + (text ? 8 : 0),
+      negativeScore: directNegative - directPositive + (looksNegativeText(node) ? 30 : 0) + (text ? 0 : 2),
+    };
+  });
+
+  const positive = [...ranked].sort((a, b) => b.positiveScore - a.positiveScore || a.index - b.index)[0];
+  const negative = [...ranked]
+    .filter((item) => item.id !== positive.id)
+    .sort((a, b) => b.negativeScore - a.negativeScore || a.index - b.index)[0];
+  return {
+    positive: positive ? [positive.id, positive.node] : undefined,
+    negative: negative ? [negative.id, negative.node] : undefined,
+  };
 }
 
 function widgetInputsForNode(
@@ -118,8 +250,10 @@ function widgetInputsForNode(
   const type = String(node.type || node.class_type || "");
   const low = type.toLowerCase();
   const out: Record<string, unknown> = {};
-  if (low.includes("cliptextencode") || low.includes("text")) {
-    if (values[0] !== undefined) out.text = values[0];
+  if (looksLikeTextClass(low)) {
+    if (values[0] !== undefined) {
+      out[low.includes("qwen") && low.includes("text") ? "prompt" : "text"] = values[0];
+    }
   } else if (low.includes("ksampler")) {
     const names = ["seed", "control_after_generate", "steps", "cfg", "sampler_name", "scheduler", "denoise"];
     names.forEach((name, idx) => {
@@ -183,6 +317,16 @@ function normalizeWorkflowJson(obj: unknown): Record<string, ComfyNode> | null {
         }
       }
     }
+    if (
+      Array.isArray(node.widgets_values) &&
+      node.widgets_values[0] !== undefined &&
+      !GENERIC_TEXT_INPUTS.some((name) => inputs[name] !== undefined)
+    ) {
+      const textInput = uiInputs
+        .map((inp) => String(inp.name ?? ""))
+        .find((name) => GENERIC_TEXT_INPUTS.includes(name));
+      if (textInput) inputs[textInput] = node.widgets_values[0];
+    }
     apiGraph[id] = { class_type: type, inputs };
   }
   return Object.keys(apiGraph).length ? apiGraph : null;
@@ -193,17 +337,9 @@ function normalizeWorkflowJson(obj: unknown): Record<string, ComfyNode> | null {
 function autodetectMap(graph: Record<string, ComfyNode>): InjectMap {
   const map = emptyInjectMap();
   const entries = Object.entries(graph);
-  const textNodes = entries.filter(([, n]) => {
-    const c = lowerClass(n);
-    return c.includes("cliptextencode") || c.includes("text") || firstInput(n, ["text", "string", "prompt"]);
-  });
-  const negative = textNodes.find(([, n]) => looksNegativeText(n));
-  const positive = textNodes.find(([id]) => id !== negative?.[0]);
-  if (positive) setIfInput(map, "prompt", positive[0], positive[1], ["text", "string", "prompt"]);
-  if (negative) setIfInput(map, "negative", negative[0], negative[1], ["text", "string", "prompt"]);
-  if (!map.negative.node && textNodes.length > 1) {
-    setIfInput(map, "negative", textNodes[1][0], textNodes[1][1], ["text", "string", "prompt"]);
-  }
+  const { positive, negative } = pickTextRoles(graph);
+  if (positive) setIfInput(map, "prompt", positive[0], positive[1], textInputCandidates(positive[1]));
+  if (negative) setIfInput(map, "negative", negative[0], negative[1], textInputCandidates(negative[1]));
 
   for (const [id, node] of entries) {
     const c = lowerClass(node);
@@ -228,6 +364,37 @@ function autodetectMap(graph: Record<string, ComfyNode>): InjectMap {
     }
   }
   return map;
+}
+
+function repairInjectMap(map: InjectMap, graph: Record<string, ComfyNode>): InjectMap {
+  const detected = autodetectMap(graph);
+  const next: InjectMap = { ...map };
+  for (const key of INJECT_KEYS) {
+    next[key] = { ...map[key] };
+  }
+  for (const key of ["prompt", "negative"] as const) {
+    const node = graph[next[key].node];
+    const positiveScore = node ? downstreamRoleScore(graph, next[key].node, "positive") : 0;
+    const negativeScore = node ? downstreamRoleScore(graph, next[key].node, "negative") : 0;
+    const wrongRole =
+      (key === "prompt" && negativeScore > positiveScore)
+      || (key === "negative" && positiveScore > negativeScore);
+    if (
+      !node
+      || !isTextNode(node)
+      || !hasUsableInput(graph, next[key], textInputCandidates(node))
+      || wrongRole
+      || (key === "negative" && next.prompt.node && next.negative.node === next.prompt.node)
+    ) {
+      next[key] = detected[key];
+    }
+  }
+  for (const key of ["image", "mask", "seed", "width", "height", "steps", "cfg", "denoise", "guidance", "controlnet_image", "controlnet_strength"] as const) {
+    if (!hasUsableInput(graph, next[key]) && detected[key].node) {
+      next[key] = detected[key];
+    }
+  }
+  return next;
 }
 
 function injectMapFromWorkflow(raw: Record<string, unknown>): InjectMap {
@@ -656,6 +823,10 @@ function EditWorkflowDialog({
     }
   }, [graphRaw, t]);
 
+  useEffect(() => {
+    if (graph) setMap((current) => repairInjectMap(current, graph));
+  }, [graph]);
+
   function runAutodetect() {
     if (graph) setMap(autodetectMap(graph));
   }
@@ -681,7 +852,7 @@ function EditWorkflowDialog({
     }
     let injectMap: Record<string, InjectTarget>;
     try {
-      injectMap = compactInjectMap(map, graph);
+      injectMap = compactInjectMap(repairInjectMap(map, graph), graph);
     } catch (e) {
       const key = String((e as Error).message || "").replace("bad-map:", "") || "?";
       setErr(t("import_err_map", { key }));
@@ -898,7 +1069,7 @@ function ImportDialog({
     }
     let injectMap: Record<string, InjectTarget>;
     try {
-      injectMap = compactInjectMap(map, graph);
+      injectMap = compactInjectMap(repairInjectMap(map, graph), graph);
     } catch (e) {
       const key = String((e as Error).message || "").replace("bad-map:", "") || "?";
       setErr(t("import_err_map", { key }));

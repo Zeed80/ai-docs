@@ -94,6 +94,221 @@ def test_build_workflow_replaces_template_prompt_even_when_map_hits_wrong_text_n
     assert graph["2"]["inputs"]["text"] == "template negative blur"
 
 
+def test_build_workflow_normalizes_old_qwen_text_alias_to_prompt():
+    template = {
+        "76": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"text": "old imported positive"},
+        },
+        "77": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"text": "negative blur"},
+        },
+    }
+
+    graph = build_workflow(
+        template,
+        {
+            "prompt": {"node": "76", "input": "text"},
+            "negative": {"node": "77", "input": "text"},
+        },
+        {"prompt": "new user prompt", "negative": "new negative"},
+    )
+
+    assert graph["76"]["inputs"]["prompt"] == "new user prompt"
+    assert "text" not in graph["76"]["inputs"]
+    assert graph["77"]["inputs"]["prompt"] == "new negative"
+    assert "text" not in graph["77"]["inputs"]
+
+
+def test_build_workflow_single_flux_text_node_is_positive_even_if_old_map_marks_negative():
+    template = {
+        "123": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "clip": ["124", 0],
+                "text": (
+                    "Restore a scanned drawing. Remove blur, noise, artifacts, shadows "
+                    "and low quality scan defects while preserving geometry."
+                ),
+            },
+        },
+        "124": {
+            "class_type": "CLIPLoader",
+            "inputs": {"type": "flux2", "clip_name": "mistral_3_small_flux2_bf16.safetensors"},
+        },
+    }
+
+    graph = build_workflow(
+        template,
+        {"negative": {"node": "123", "input": "text"}},
+        {"prompt": "user edit instruction", "negative": None},
+    )
+
+    assert graph["123"]["inputs"]["text"] == "user edit instruction"
+
+
+def test_build_workflow_injects_generic_prompt_like_text_inputs():
+    template = {
+        "10": {
+            "class_type": "Flux2AdvancedTextEncoder",
+            "inputs": {"clip_l": "template prompt", "clip": ["11", 0]},
+        },
+    }
+
+    graph = build_workflow(template, {}, {"prompt": "new user prompt"})
+
+    assert graph["10"]["inputs"]["clip_l"] == "new user prompt"
+
+
+def test_build_workflow_ignores_bad_prompt_map_to_sampler_positive():
+    template = {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"positive": ["111", 0], "negative": ["110", 0], "seed": 1},
+        },
+        "110": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "", "image1": ["93", 0]},
+        },
+        "111": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "template positive", "image1": ["93", 0]},
+        },
+    }
+
+    graph = build_workflow(
+        template,
+        {
+            "prompt": {"node": "3", "input": "positive"},
+            "negative": {"node": "110", "input": "prompt"},
+        },
+        {"prompt": "new user prompt", "negative": None},
+    )
+
+    assert graph["3"]["inputs"]["positive"] == ["111", 0]
+    assert graph["111"]["inputs"]["prompt"] == "new user prompt"
+    assert graph["110"]["inputs"]["prompt"] == ""
+
+
+def test_build_workflow_detects_qwen_positive_negative_from_graph_links_without_map():
+    template = {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"positive": ["111", 0], "negative": ["110", 0], "seed": 1},
+        },
+        "110": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "", "image1": ["93", 0]},
+        },
+        "111": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "template positive", "image1": ["93", 0]},
+        },
+    }
+
+    graph = build_workflow(template, {}, {"prompt": "new user prompt", "negative": None})
+
+    assert graph["111"]["inputs"]["prompt"] == "new user prompt"
+    assert graph["110"]["inputs"]["prompt"] == ""
+
+
+def test_build_workflow_detects_qwen_roles_through_intermediate_conditioning_nodes():
+    template = {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"positive": ["86", 0], "negative": ["87", 0], "seed": 1},
+        },
+        "76": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "", "image1": ["78", 0]},
+        },
+        "77": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "", "image1": ["78", 0]},
+        },
+        "86": {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {"conditioning": ["76", 0]},
+        },
+        "87": {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {"conditioning": ["77", 0]},
+        },
+    }
+
+    graph = build_workflow(template, {}, {"prompt": "new user prompt", "negative": None})
+
+    assert graph["76"]["inputs"]["prompt"] == "new user prompt"
+    assert graph["77"]["inputs"]["prompt"] == ""
+
+
+def test_build_workflow_does_not_treat_sampler_or_kontext_nodes_as_text_nodes():
+    template = {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"positive": ["86", 0], "negative": ["87", 0], "seed": 1},
+        },
+        "76": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "", "image1": ["78", 0]},
+        },
+        "77": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "", "image1": ["78", 0]},
+        },
+        "86": {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {"conditioning": ["76", 0]},
+        },
+        "87": {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {"conditioning": ["77", 0]},
+        },
+    }
+
+    graph = build_workflow(
+        template,
+        {"prompt": {"node": "3", "input": "positive"}},
+        {"prompt": "new user prompt", "negative": None},
+    )
+
+    assert graph["3"]["inputs"]["positive"] == ["86", 0]
+    assert "prompt" not in graph["3"]["inputs"]
+    assert "prompt" not in graph["86"]["inputs"]
+    assert graph["76"]["inputs"]["prompt"] == "new user prompt"
+
+
+def test_build_workflow_ignores_negative_map_when_it_points_to_positive_text_node():
+    template = {
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"positive": ["3", 0], "negative": ["4", 0], "seed": 1},
+        },
+        "3": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "template positive", "image1": ["13", 0]},
+        },
+        "4": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "negative template"},
+        },
+    }
+
+    graph = build_workflow(
+        template,
+        {
+            "prompt": {"node": "2", "input": "positive"},
+            "negative": {"node": "3", "input": "prompt"},
+        },
+        {"prompt": "new user prompt", "negative": None},
+    )
+
+    assert graph["2"]["inputs"]["positive"] == ["3", 0]
+    assert graph["3"]["inputs"]["prompt"] == "new user prompt"
+    assert graph["4"]["inputs"]["prompt"] == "negative template"
+
+
 def test_build_workflow_controlnet_image_optional():
     """A workflow declaring controlnet_image in inject_map must stay valid
     whether or not the caller supplies it — the ControlNet path is opt-in."""
