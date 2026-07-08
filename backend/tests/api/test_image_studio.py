@@ -137,6 +137,90 @@ async def test_generate_creates_queued_record(client):
 
 
 @pytest.mark.asyncio
+async def test_iterate_edit_does_not_inherit_cleanup_workflow(client, db_session, monkeypatch):
+    from app.db.models import ComfyWorkflow, ImageGeneration, ImageGenStatus
+
+    monkeypatch.setattr("app.api.image_generation._enqueue", lambda generation_id: None)
+
+    cleanup_wf = ComfyWorkflow(
+        key="cleanup_test",
+        title="Cleanup test",
+        category="cleanup",
+        operation="cleanup",
+        graph={"1": {"class_type": "Text", "inputs": {"text": "cleanup"}}},
+        inject_map={"prompt": {"node": "1", "input": "text"}},
+        params_schema={},
+        enabled=True,
+        is_builtin=True,
+    )
+    edit_wf = ComfyWorkflow(
+        key="edit_test",
+        title="Edit test",
+        category="edit",
+        operation="edit",
+        graph={"1": {"class_type": "Text", "inputs": {"text": ""}}},
+        inject_map={"prompt": {"node": "1", "input": "text"}},
+        params_schema={},
+        enabled=True,
+        is_builtin=True,
+    )
+    db_session.add_all([cleanup_wf, edit_wf])
+    await db_session.flush()
+    parent = ImageGeneration(
+        owner_sub="dev-user",
+        operation="cleanup",
+        workflow_id=cleanup_wf.id,
+        status=ImageGenStatus.done,
+        prompt="cleanup parent",
+        params={},
+        source_image_paths=[],
+        result_path="image-gen/dev-user/parent.png",
+    )
+    db_session.add(parent)
+    await db_session.commit()
+    await db_session.refresh(parent)
+
+    resp = await client.post(
+        f"/api/image-gen/{parent.id}/iterate",
+        json={"operation": "edit", "prompt": "убери дерево и забор"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["operation"] == "edit"
+    assert body["prompt"] == "убери дерево и забор"
+    assert body["workflow_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_iterate_edit_requires_prompt(client, db_session, monkeypatch):
+    from app.db.models import ImageGeneration, ImageGenStatus
+
+    monkeypatch.setattr("app.api.image_generation._enqueue", lambda generation_id: None)
+
+    parent = ImageGeneration(
+        owner_sub="dev-user",
+        operation="cleanup",
+        status=ImageGenStatus.done,
+        prompt="cleanup parent",
+        params={},
+        source_image_paths=[],
+        result_path="image-gen/dev-user/parent.png",
+    )
+    db_session.add(parent)
+    await db_session.commit()
+    await db_session.refresh(parent)
+
+    resp = await client.post(
+        f"/api/image-gen/{parent.id}/iterate",
+        json={"operation": "edit", "prompt": "   "},
+    )
+
+    assert resp.status_code == 400
+    assert "prompt" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_generate_truncates_queue_title_for_long_prompt(client):
     prompt = "Убери со здания текстуру кирпича и удали дерево и забор. " * 20
 

@@ -51,6 +51,137 @@ class ComfyOutput:
     type: str  # "output" | "temp" | "input"
 
 
+def _node_inputs(node: Any) -> dict[str, Any]:
+    if isinstance(node, dict) and isinstance(node.get("inputs"), dict):
+        return node["inputs"]
+    return {}
+
+
+def _looks_like_text_node(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+    cls = str(node.get("class_type") or "").lower()
+    inputs = _node_inputs(node)
+    return (
+        "text" in cls
+        or "clip" in cls
+        or any(k in inputs for k in ("prompt", "text", "string"))
+    )
+
+
+def _looks_negative_text_node(node: Any) -> bool:
+    inputs = _node_inputs(node)
+    text = str(inputs.get("prompt") or inputs.get("text") or inputs.get("string") or "").lower()
+    cls = str(node.get("class_type") or "").lower() if isinstance(node, dict) else ""
+    return any(
+        token in f"{cls} {text}"
+        for token in (
+            "negative",
+            "worst",
+            "bad",
+            "blur",
+            "artifact",
+            "low quality",
+            "deformed",
+            "лишн",
+            "размыт",
+            "артефакт",
+        )
+    )
+
+
+def _fallback_text_input(node: Any) -> str:
+    inputs = _node_inputs(node)
+    for name in ("prompt", "text", "string"):
+        if name in inputs:
+            return name
+    return ""
+
+
+def _fallback_inject_text(
+    graph: dict[str, Any],
+    key: str,
+    value: Any,
+    negative_node_ids: set[str],
+) -> None:
+    """Inject prompt/negative into likely text nodes when a custom map is incomplete."""
+    if value is None:
+        return
+    text_nodes = [(node_id, node) for node_id, node in graph.items() if _looks_like_text_node(node)]
+    if key == "negative":
+        candidates = [item for item in text_nodes if _looks_negative_text_node(item[1])]
+        if not candidates and len(text_nodes) > 1:
+            candidates = [text_nodes[1]]
+    else:
+        candidates = [
+            item for item in text_nodes
+            if str(item[0]) not in negative_node_ids and not _looks_negative_text_node(item[1])
+        ]
+        if not candidates and text_nodes:
+            candidates = [text_nodes[0]]
+    if not candidates:
+        return
+    node_id, node = candidates[0]
+    input_name = _fallback_text_input(node)
+    if not input_name:
+        return
+    _node_inputs(node)[input_name] = value
+    logger.info("comfyui_prompt_fallback_injected", key=key, node=str(node_id), input=input_name)
+
+
+def _targets_for_key(
+    inject_map: dict[str, Any],
+    key: str,
+) -> list[dict[str, Any]]:
+    target = (inject_map or {}).get(key)
+    if not target:
+        return []
+    targets = target if isinstance(target, list) else [target]
+    return [t for t in targets if isinstance(t, dict)]
+
+
+def _negative_text_node_ids(
+    graph: dict[str, Any],
+    inject_map: dict[str, Any],
+) -> set[str]:
+    out = {str(t.get("node", "")) for t in _targets_for_key(inject_map, "negative") if t.get("node")}
+    text_nodes = [(node_id, node) for node_id, node in graph.items() if _looks_like_text_node(node)]
+    out.update(str(node_id) for node_id, node in text_nodes if _looks_negative_text_node(node))
+    # Common ComfyUI shape: positive text encode followed by negative text encode.
+    # Imported workflows often lose that mapping; keep the second text node from
+    # being overwritten by the user's positive prompt.
+    if not out and len(text_nodes) > 1:
+        out.add(str(text_nodes[1][0]))
+    return out
+
+
+def _replace_text_nodes(
+    graph: dict[str, Any],
+    key: str,
+    value: Any,
+    negative_node_ids: set[str],
+) -> int:
+    if value is None:
+        return 0
+    changed = 0
+    for node_id, node in graph.items():
+        if not _looks_like_text_node(node):
+            continue
+        is_negative = str(node_id) in negative_node_ids or _looks_negative_text_node(node)
+        if key == "prompt" and is_negative:
+            continue
+        if key == "negative" and not is_negative:
+            continue
+        input_name = _fallback_text_input(node)
+        if not input_name:
+            continue
+        _node_inputs(node)[input_name] = value
+        changed += 1
+    if changed:
+        logger.info("comfyui_text_nodes_replaced", key=key, count=changed)
+    return changed
+
+
 def resolve_node(preferred_instance: str | None = None) -> provider_registry.ResolvedProvider:
     """Resolve the ComfyUI node to call, enforcing on-prem-only.
 
@@ -97,6 +228,12 @@ def build_workflow(
                 logger.warning("comfyui_inject_skip", key=key, node=node_id, input=input_name)
                 continue
             node.setdefault("inputs", {})[input_name] = values[key]
+    negative_node_ids = _negative_text_node_ids(graph, inject_map)
+    if _replace_text_nodes(graph, "prompt", values.get("prompt"), negative_node_ids) == 0:
+        _fallback_inject_text(graph, "prompt", values.get("prompt"), negative_node_ids)
+    if values.get("negative") is not None:
+        if _replace_text_nodes(graph, "negative", values.get("negative"), negative_node_ids) == 0:
+            _fallback_inject_text(graph, "negative", values.get("negative"), negative_node_ids)
     return graph
 
 

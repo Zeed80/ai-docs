@@ -582,7 +582,7 @@
       "inject_guidance": "Guidance",
       "inject_controlnet_image": "ControlNet",
       "inject_controlnet_strength": "CN сила",
-      "op_edit": "Правка",
+      "op_edit": "Редактировать",
       "op_generate": "Генерация",
       "op_inpaint": "Инпейнт (маска)",
       "op_cleanup": "Очистка",

@@ -45,6 +45,55 @@ def test_build_workflow_skips_missing_node_gracefully():
     assert graph == {"1": {"class_type": "X", "inputs": {}}}
 
 
+def test_build_workflow_fallback_injects_prompt_when_map_missing():
+    template = {
+        "1": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "template prompt"},
+        },
+        "2": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"prompt": "negative blur"},
+        },
+    }
+
+    graph = build_workflow(template, {}, {"prompt": "user edit instruction"})
+
+    assert graph["1"]["inputs"]["prompt"] == "user edit instruction"
+    assert graph["2"]["inputs"]["prompt"] == "negative blur"
+    assert template["1"]["inputs"]["prompt"] == "template prompt"
+
+
+def test_build_workflow_replaces_template_prompt_even_when_map_hits_wrong_text_node():
+    template = {
+        "1": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "template positive prompt"},
+        },
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "template negative blur"},
+        },
+        "3": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "unused side prompt"},
+        },
+    }
+
+    graph = build_workflow(
+        template,
+        {
+            "prompt": {"node": "3", "input": "text"},
+            "negative": {"node": "2", "input": "text"},
+        },
+        {"prompt": "user prompt", "negative": None},
+    )
+
+    assert graph["1"]["inputs"]["text"] == "user prompt"
+    assert graph["3"]["inputs"]["text"] == "user prompt"
+    assert graph["2"]["inputs"]["text"] == "template negative blur"
+
+
 def test_build_workflow_controlnet_image_optional():
     """A workflow declaring controlnet_image in inject_map must stay valid
     whether or not the caller supplies it — the ControlNet path is opt-in."""

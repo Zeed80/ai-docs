@@ -159,6 +159,49 @@ def _can_mutate_workflow(wf: ComfyWorkflow | None, user: UserInfo) -> bool:
     return wf is not None and (wf.owner_sub == user.sub or _can_manage_workflows(user))
 
 
+def _prompt_text(body: GenerateRequest) -> str:
+    return (body.prompt or "").strip()
+
+
+async def _workflow_for_iteration(
+    db: AsyncSession,
+    parent: ImageGeneration,
+    body: GenerateRequest,
+    user: UserInfo,
+) -> uuid.UUID | None:
+    """Pick an iteration workflow without leaking cleanup pipelines into edit.
+
+    Iteration defaults to ``edit`` even when the parent was produced by
+    cleanup/inpaint/generate. Inheriting the parent's workflow blindly makes an
+    edit iteration run through the parent's cleanup graph, which ignores the
+    user's intent in practice. Only inherit when the parent workflow matches the
+    requested operation; otherwise let the task resolver choose the default
+    enabled workflow for that operation.
+    """
+    operation = body.operation or "edit"
+    if body.workflow_id:
+        wf = await db.get(ComfyWorkflow, body.workflow_id)
+        if not _can_read_workflow(wf, user):
+            raise HTTPException(404, "Воркфлоу не найден")
+        if not wf.enabled:
+            raise HTTPException(400, "Воркфлоу выключен")
+        if wf.operation != operation:
+            raise HTTPException(400, "Воркфлоу не подходит для выбранной операции")
+        return body.workflow_id
+
+    if not parent.workflow_id:
+        return None
+    parent_wf = await db.get(ComfyWorkflow, parent.workflow_id)
+    if (
+        parent_wf
+        and parent_wf.enabled
+        and parent_wf.operation == operation
+        and _can_read_workflow(parent_wf, user)
+    ):
+        return parent.workflow_id
+    return None
+
+
 def _validate_source_path(path: str, user: UserInfo) -> str:
     if not path or path.startswith("/") or ".." in path.split("/"):
         raise HTTPException(400, "Недопустимый путь исходного изображения.")
@@ -326,9 +369,11 @@ async def generate(
 
     if body.operation in ("edit", "inpaint", "cleanup") and not source_paths:
         raise HTTPException(400, "Для этой операции нужно исходное изображение.")
+    if body.operation in ("edit", "inpaint") and not _prompt_text(body):
+        raise HTTPException(400, "Для редактирования нужно текстовое указание (prompt).")
     # "eskd" is a text→image ЕСКД-styled generation (diffusion alternative to the
     # deterministic /techdraw render) — same input contract as "generate".
-    if body.operation in ("generate", "eskd") and not (body.prompt or "").strip():
+    if body.operation in ("generate", "eskd") and not _prompt_text(body):
         raise HTTPException(400, "Для генерации нужно текстовое описание (prompt).")
 
     await studio_queue.ensure_can_enqueue(
@@ -566,14 +611,9 @@ async def iterate_generation(
         raise HTTPException(404, "Не найдено")
     if not parent.result_path:
         raise HTTPException(400, "У исходной генерации нет результата для итерации.")
-    if body.workflow_id:
-        wf = await db.get(ComfyWorkflow, body.workflow_id)
-        if not _can_read_workflow(wf, user):
-            raise HTTPException(404, "Воркфлоу не найден")
-        if not wf.enabled:
-            raise HTTPException(400, "Воркфлоу выключен")
-        if wf.operation != (body.operation or "edit"):
-            raise HTTPException(400, "Воркфлоу не подходит для выбранной операции")
+    if (body.operation or "edit") in ("edit", "inpaint") and not _prompt_text(body):
+        raise HTTPException(400, "Для итерации нужно текстовое указание (prompt).")
+    workflow_id = await _workflow_for_iteration(db, parent, body, user)
 
     gen = ImageGeneration(
         # Inherit the parent's owner, not the caller's — when the agent
@@ -582,7 +622,7 @@ async def iterate_generation(
         # orphaned under the internal service identity.
         owner_sub=parent.owner_sub,
         operation=body.operation or "edit",
-        workflow_id=body.workflow_id or parent.workflow_id,
+        workflow_id=workflow_id,
         status=ImageGenStatus.queued,
         prompt=body.prompt,
         negative_prompt=body.negative_prompt,

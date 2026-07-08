@@ -44,6 +44,29 @@ type InjectMap = Record<InjectKey, InjectTarget>;
 
 const EMPTY_TARGET: InjectTarget = { node: "", input: "" };
 const WORKFLOW_OPERATIONS = ["edit", "generate", "inpaint", "cleanup", "eskd"];
+const CATEGORY_TO_OPERATION: Record<string, string> = {
+  edit: "edit",
+  "правка": "edit",
+  "редактирование": "edit",
+  generate: "generate",
+  inpaint: "inpaint",
+  cleanup: "cleanup",
+  process: "cleanup",
+  "очистка": "cleanup",
+  eskd: "eskd",
+  "ескд": "eskd",
+};
+
+function workflowGroupKey(w: Workflow): string {
+  const operation = String(w.operation || "").trim().toLowerCase();
+  if (WORKFLOW_OPERATIONS.includes(operation)) return operation;
+  const category = String(w.category || "").trim().toLowerCase();
+  return CATEGORY_TO_OPERATION[category] || category || operation || "edit";
+}
+
+function categoryForOperation(operation: string): string {
+  return WORKFLOW_OPERATIONS.includes(operation) ? operation : "edit";
+}
 
 function emptyInjectMap(): InjectMap {
   return Object.fromEntries(
@@ -334,7 +357,7 @@ export default function WorkflowPanel() {
   }, []);
 
   const byCategory = items.reduce<Record<string, Workflow[]>>((acc, w) => {
-    (acc[w.category] ??= []).push(w);
+    (acc[workflowGroupKey(w)] ??= []).push(w);
     return acc;
   }, {});
 
@@ -671,7 +694,7 @@ function EditWorkflowDialog({
         title: title.trim(),
         description: description.trim() || null,
         operation,
-        category: category.trim() || operation,
+        category: categoryForOperation(operation),
         graph,
         inject_map: injectMap,
         params_schema: paramsSchema,
@@ -723,7 +746,7 @@ function EditWorkflowDialog({
               value={operation}
               onChange={(e) => {
                 setOperation(e.target.value);
-                if (!category.trim()) setCategory(e.target.value);
+                setCategory(categoryForOperation(e.target.value));
               }}
               className="w-full bg-zinc-800 rounded px-2 py-2 text-sm text-white"
             >
@@ -827,7 +850,6 @@ function ImportDialog({
   const [raw, setRaw] = useState("");
   const [title, setTitle] = useState("");
   const [operation, setOperation] = useState("edit");
-  const [category, setCategory] = useState("edit");
   const [map, setMap] = useState<
     Record<InjectKey, { node: string; input: string }>
   >(() => emptyInjectMap());
@@ -896,7 +918,7 @@ function ImportDialog({
         key: `${slug}_${Math.random().toString(36).slice(2, 8)}`,
         title: title.trim(),
         operation,
-        category: category.trim() || operation,
+        category: categoryForOperation(operation),
         graph: graph as Record<string, unknown>,
         inject_map: injectMap,
         params_schema: {},
@@ -963,10 +985,7 @@ function ImportDialog({
             </label>
             <select
               value={operation}
-              onChange={(e) => {
-                setOperation(e.target.value);
-                setCategory(e.target.value);
-              }}
+              onChange={(e) => setOperation(e.target.value)}
               className="w-full bg-zinc-800 rounded px-2 py-2 text-sm text-white"
             >
               {WORKFLOW_OPERATIONS.map((o) => (
