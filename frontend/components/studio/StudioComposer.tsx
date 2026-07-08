@@ -42,13 +42,49 @@ interface Props {
   onSubmitted: () => void;
 }
 
+type StudioComposerPrefs = {
+  operation?: Operation;
+  techMode?: boolean;
+  prompt?: string;
+  negative?: string;
+  seed?: string;
+  quality?: "fast" | "quality";
+  techDesc?: string;
+  techView?: TechDrawView;
+  linkDocId?: string;
+  linkCaseId?: string;
+  workflowId?: string;
+  workflowByOperation?: Partial<Record<Operation, string>>;
+  hd?: boolean;
+  upscale?: number;
+  postprocess?: string;
+  sizePreset?: number;
+  customW?: string;
+  customH?: string;
+};
+
+const PREFS_KEY = "ai-docs:studio-composer:v2";
+
+function readPrefs(): StudioComposerPrefs {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(PREFS_KEY);
+    return raw ? (JSON.parse(raw) as StudioComposerPrefs) : {};
+  } catch {
+    return {};
+  }
+}
+
 export default function StudioComposer({ onSubmitted }: Props) {
   const t = useTranslations("studio.composer");
-  const [operation, setOperation] = useState<Operation>("edit");
-  const [prompt, setPrompt] = useState("");
-  const [negative, setNegative] = useState("");
-  const [seed, setSeed] = useState<string>("0");
-  const [quality, setQuality] = useState<"fast" | "quality">("fast");
+  const prefsRef = useRef<StudioComposerPrefs | null>(null);
+  if (prefsRef.current === null) prefsRef.current = readPrefs();
+  const prefs = prefsRef.current;
+  const [operation, setOperation] = useState<Operation>(prefs.operation ?? "edit");
+  const [prompt, setPrompt] = useState(prefs.prompt ?? "");
+  const [negative, setNegative] = useState(prefs.negative ?? "");
+  const [seed, setSeed] = useState<string>(prefs.seed ?? "0");
+  const [quality, setQuality] = useState<"fast" | "quality">(prefs.quality ?? "fast");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -57,13 +93,13 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const maskRef = useRef<MaskCanvasHandle>(null);
 
   // Exact technical drawing (deterministic ЕСКД render, not diffusion).
-  const [techMode, setTechMode] = useState(false);
-  const [techDesc, setTechDesc] = useState("");
-  const [techView, setTechView] = useState<TechDrawView>("front");
+  const [techMode, setTechMode] = useState(Boolean(prefs.techMode));
+  const [techDesc, setTechDesc] = useState(prefs.techDesc ?? "");
+  const [techView, setTechView] = useState<TechDrawView>(prefs.techView ?? "front");
 
   // Traceability: attach the result to a document/case (optional).
-  const [linkDocId, setLinkDocId] = useState("");
-  const [linkCaseId, setLinkCaseId] = useState("");
+  const [linkDocId, setLinkDocId] = useState(prefs.linkDocId ?? "");
+  const [linkCaseId, setLinkCaseId] = useState(prefs.linkCaseId ?? "");
   const link = {
     source_document_id: linkDocId.trim() || undefined,
     case_id: linkCaseId.trim() || undefined,
@@ -75,22 +111,25 @@ export default function StudioComposer({ onSubmitted }: Props) {
   // unreachable. ЕСКД mode maps to operation "eskd" plus a sentinel entry ("")
   // that means the deterministic vector render.
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
-  const [workflowId, setWorkflowId] = useState<string>("");
+  const [workflowId, setWorkflowId] = useState<string>(prefs.workflowId ?? "");
+  const [workflowByOperation, setWorkflowByOperation] = useState<
+    Partial<Record<Operation, string>>
+  >(prefs.workflowByOperation ?? {});
   // Inline rename after a quick "make my own copy".
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   // HD tiled cleanup — maximum quality, minutes per sheet.
-  const [hd, setHd] = useState(false);
+  const [hd, setHd] = useState(Boolean(prefs.hd));
   // High-quality model upscale of the result (any mode): 1 = off, 2/3/4×.
-  const [upscale, setUpscale] = useState(1);
+  const [upscale, setUpscale] = useState(prefs.upscale ?? 1);
   // Post-processing after ComfyUI (cleanup/edit). "auto" = let the workflow
   // decide (LoRA-cleanup keeps its tuned pass); "none" = raw ComfyUI result;
   // "text_only"/"full" opt into enhancements. Default "auto".
-  const [postprocess, setPostprocess] = useState("auto");
+  const [postprocess, setPostprocess] = useState(prefs.postprocess ?? "auto");
   // Output size for text→image modes: index into SIZE_PRESETS, or -1 = custom.
-  const [sizePreset, setSizePreset] = useState(0);
-  const [customW, setCustomW] = useState("1024");
-  const [customH, setCustomH] = useState("1024");
+  const [sizePreset, setSizePreset] = useState(prefs.sizePreset ?? 0);
+  const [customW, setCustomW] = useState(prefs.customW ?? "1024");
+  const [customH, setCustomH] = useState(prefs.customH ?? "1024");
 
   // Active operation the selector filters on: the diffusion op, or "eskd" in
   // the exact-drawing mode.
@@ -124,6 +163,55 @@ export default function StudioComposer({ onSubmitted }: Props) {
     reloadWorkflows().catch(() => undefined);
   }, []);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        PREFS_KEY,
+        JSON.stringify({
+          operation,
+          techMode,
+          prompt,
+          negative,
+          seed,
+          quality,
+          techDesc,
+          techView,
+          linkDocId,
+          linkCaseId,
+          workflowId,
+          workflowByOperation,
+          hd,
+          upscale,
+          postprocess,
+          sizePreset,
+          customW,
+          customH,
+        } satisfies StudioComposerPrefs),
+      );
+    } catch {
+      /* localStorage may be unavailable in private/browser-restricted contexts. */
+    }
+  }, [
+    operation,
+    techMode,
+    prompt,
+    negative,
+    seed,
+    quality,
+    techDesc,
+    techView,
+    linkDocId,
+    linkCaseId,
+    workflowId,
+    workflowByOperation,
+    hd,
+    upscale,
+    postprocess,
+    sizePreset,
+    customW,
+    customH,
+  ]);
+
   // Default selection when the mode (or the loaded list) changes:
   //  • ЕСКД → the deterministic vector render ("") is the recommended default;
   //  • diffusion modes → the newest custom pipeline if any (users expect
@@ -133,12 +221,20 @@ export default function StudioComposer({ onSubmitted }: Props) {
   useEffect(() => {
     setRenaming(null);
     if (techMode) {
-      setWorkflowId("");
+      const saved = workflowByOperation.eskd;
+      setWorkflowId(saved && workflows.some((w) => w.id === saved && w.operation === "eskd") ? saved : "");
       return;
     }
     const opts = workflows.filter((w) => w.operation === operation);
+    const saved = workflowByOperation[operation];
+    if (saved && opts.some((w) => w.id === saved)) {
+      setWorkflowId(saved);
+      return;
+    }
     const custom = opts.find((w) => !w.is_builtin);
-    setWorkflowId(custom ? custom.id : (opts[0]?.id ?? ""));
+    const next = custom ? custom.id : (opts[0]?.id ?? "");
+    setWorkflowId(next);
+    if (next) setWorkflowByOperation((cur) => ({ ...cur, [operation]: next }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [operation, techMode, workflows.length]);
 
@@ -207,7 +303,6 @@ export default function StudioComposer({ onSubmitted }: Props) {
       } else {
         await techDraw(techDesc, techView, link);
       }
-      setTechDesc("");
       onSubmitted();
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -308,8 +403,6 @@ export default function StudioComposer({ onSubmitted }: Props) {
         input.mask_path = await uploadSource(maskFile, "mask");
       }
       await generate(input);
-      setPrompt("");
-      setNegative("");
       onSubmitted();
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -394,7 +487,11 @@ export default function StudioComposer({ onSubmitted }: Props) {
         </div>
         <select
           value={workflowId}
-          onChange={(e) => setWorkflowId(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setWorkflowId(next);
+            setWorkflowByOperation((cur) => ({ ...cur, [activeOp]: next }));
+          }}
           className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm text-white"
         >
           {withSentinel && <option value="">{t("eskd_vector_default")}</option>}

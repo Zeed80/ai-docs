@@ -1,7 +1,14 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 
 import {
   COMFYUI_PROXY_URL,
@@ -15,49 +22,287 @@ import {
 } from "@/lib/studio-api";
 
 // Logical keys the engine's inject_map understands (see comfyui_client.build_workflow).
-const INJECT_KEYS = ["prompt", "negative", "image", "mask", "seed"] as const;
+const INJECT_KEYS = [
+  "prompt",
+  "negative",
+  "image",
+  "mask",
+  "seed",
+  "width",
+  "height",
+  "steps",
+  "cfg",
+  "denoise",
+  "guidance",
+  "controlnet_image",
+  "controlnet_strength",
+] as const;
 type InjectKey = (typeof INJECT_KEYS)[number];
 type ComfyNode = { class_type?: string; inputs?: Record<string, unknown> };
+type InjectTarget = { node: string; input: string };
+type InjectMap = Record<InjectKey, InjectTarget>;
+
+const EMPTY_TARGET: InjectTarget = { node: "", input: "" };
+const WORKFLOW_OPERATIONS = ["edit", "generate", "inpaint", "cleanup", "eskd"];
+
+function emptyInjectMap(): InjectMap {
+  return Object.fromEntries(
+    INJECT_KEYS.map((k) => [k, { ...EMPTY_TARGET }]),
+  ) as InjectMap;
+}
+
+function className(n: ComfyNode): string {
+  return String(n.class_type || "");
+}
+
+function lowerClass(n: ComfyNode): string {
+  return className(n).toLowerCase();
+}
+
+function inputKeys(node: ComfyNode | undefined): string[] {
+  return Object.keys(node?.inputs || {});
+}
+
+function firstInput(node: ComfyNode, candidates: string[]): string {
+  const keys = inputKeys(node);
+  return candidates.find((k) => keys.includes(k)) || "";
+}
+
+function setIfInput(
+  map: InjectMap,
+  key: InjectKey,
+  nodeId: string,
+  node: ComfyNode,
+  candidates: string[],
+) {
+  if (map[key].node) return;
+  const input = firstInput(node, candidates);
+  if (input) map[key] = { node: nodeId, input };
+}
+
+function looksNegativeText(node: ComfyNode): boolean {
+  const text = String(node.inputs?.text || node.inputs?.string || "").toLowerCase();
+  return /negative|worst|bad|blur|artifact|low quality|deformed|лишн|размыт|артефакт/.test(text);
+}
+
+function widgetInputsForNode(
+  node: { type?: string; class_type?: string; widgets_values?: unknown },
+): Record<string, unknown> {
+  const values = node.widgets_values;
+  if (!Array.isArray(values)) {
+    return values && typeof values === "object" ? (values as Record<string, unknown>) : {};
+  }
+  const type = String(node.type || node.class_type || "");
+  const low = type.toLowerCase();
+  const out: Record<string, unknown> = {};
+  if (low.includes("cliptextencode") || low.includes("text")) {
+    if (values[0] !== undefined) out.text = values[0];
+  } else if (low.includes("ksampler")) {
+    const names = ["seed", "control_after_generate", "steps", "cfg", "sampler_name", "scheduler", "denoise"];
+    names.forEach((name, idx) => {
+      if (values[idx] !== undefined) out[name] = values[idx];
+    });
+  } else if (low.includes("randomnoise")) {
+    if (values[0] !== undefined) out.noise_seed = values[0];
+  } else if (low.includes("emptylatent") || low.includes("emptyflux") || low.includes("emptysd3")) {
+    const names = ["width", "height", "batch_size"];
+    names.forEach((name, idx) => {
+      if (values[idx] !== undefined) out[name] = values[idx];
+    });
+  } else if (low.includes("loadimage")) {
+    if (values[0] !== undefined) out.image = values[0];
+  } else if (low.includes("saveimage")) {
+    if (values[0] !== undefined) out.filename_prefix = values[0];
+  }
+  return out;
+}
+
+function normalizeWorkflowJson(obj: unknown): Record<string, ComfyNode> | null {
+  const root = obj as Record<string, unknown> | null;
+  if (!root || typeof root !== "object") return null;
+  const wrapped = (root.prompt ?? root.workflow ?? root) as Record<string, unknown>;
+  if (
+    wrapped &&
+    typeof wrapped === "object" &&
+    !Array.isArray(wrapped) &&
+    Object.values(wrapped).some((n) => n && typeof n === "object" && "class_type" in (n as object))
+  ) {
+    return wrapped as Record<string, ComfyNode>;
+  }
+
+  const visualRoot = Array.isArray(root.nodes)
+    ? root
+    : Array.isArray((root.workflow as Record<string, unknown> | undefined)?.nodes)
+      ? (root.workflow as Record<string, unknown>)
+      : null;
+  if (!visualRoot) return null;
+  const nodes = visualRoot.nodes as Array<Record<string, unknown>>;
+
+  const apiGraph: Record<string, ComfyNode> = {};
+  for (const node of nodes) {
+    const id = String(node.id ?? "");
+    const type = String(node.type ?? node.class_type ?? "");
+    if (!id || !type) continue;
+    const inputs: Record<string, unknown> = widgetInputsForNode(node);
+    const uiInputs = Array.isArray(node.inputs)
+      ? (node.inputs as Array<Record<string, unknown>>)
+      : [];
+    for (const inp of uiInputs) {
+      const name = String(inp.name ?? "");
+      if (!name) continue;
+      const link = inp.link;
+      if (link !== null && link !== undefined) {
+        const linkArr = Array.isArray(visualRoot.links)
+          ? (visualRoot.links as unknown[]).find((l) => Array.isArray(l) && String((l as unknown[])[0]) === String(link))
+          : null;
+        if (Array.isArray(linkArr)) {
+          inputs[name] = [String(linkArr[1]), Number(linkArr[2]) || 0];
+        }
+      }
+    }
+    apiGraph[id] = { class_type: type, inputs };
+  }
+  return Object.keys(apiGraph).length ? apiGraph : null;
+}
 
 /** Best-effort prefill of the node/input for each logical key from a pasted
  * ComfyUI API graph — the user can correct any of it before saving. */
-function autodetectMap(
-  graph: Record<string, ComfyNode>,
-): Record<InjectKey, { node: string; input: string }> {
-  const empty = { node: "", input: "" };
-  const map: Record<InjectKey, { node: string; input: string }> = {
-    prompt: { ...empty },
-    negative: { ...empty },
-    image: { ...empty },
-    mask: { ...empty },
-    seed: { ...empty },
-  };
+function autodetectMap(graph: Record<string, ComfyNode>): InjectMap {
+  const map = emptyInjectMap();
   const entries = Object.entries(graph);
-  const clip = entries.filter(([, n]) =>
-    (n.class_type || "").includes("CLIPTextEncode"),
-  );
-  if (clip[0]) map.prompt = { node: clip[0][0], input: "text" };
-  if (clip[1]) map.negative = { node: clip[1][0], input: "text" };
-  const loadImg = entries.find(([, n]) => n.class_type === "LoadImage");
-  if (loadImg) map.image = { node: loadImg[0], input: "image" };
-  const maskNode = entries.find(([, n]) =>
-    (n.class_type || "").includes("Mask"),
-  );
-  if (maskNode) {
-    const inp = maskNode[1].inputs || {};
-    map.mask = { node: maskNode[0], input: "image" in inp ? "image" : "mask" };
+  const textNodes = entries.filter(([, n]) => {
+    const c = lowerClass(n);
+    return c.includes("cliptextencode") || c.includes("text") || firstInput(n, ["text", "string", "prompt"]);
+  });
+  const negative = textNodes.find(([, n]) => looksNegativeText(n));
+  const positive = textNodes.find(([id]) => id !== negative?.[0]);
+  if (positive) setIfInput(map, "prompt", positive[0], positive[1], ["text", "string", "prompt"]);
+  if (negative) setIfInput(map, "negative", negative[0], negative[1], ["text", "string", "prompt"]);
+  if (!map.negative.node && textNodes.length > 1) {
+    setIfInput(map, "negative", textNodes[1][0], textNodes[1][1], ["text", "string", "prompt"]);
   }
-  const sampler = entries.find(([, n]) =>
-    (n.class_type || "").includes("KSampler"),
-  );
-  if (sampler) {
-    const inp = sampler[1].inputs || {};
-    map.seed = {
-      node: sampler[0],
-      input: "seed" in inp ? "seed" : "noise_seed" in inp ? "noise_seed" : "",
-    };
+
+  for (const [id, node] of entries) {
+    const c = lowerClass(node);
+    if (c.includes("loadimage") || c.includes("imageinput") || c.includes("image load")) {
+      setIfInput(map, "image", id, node, ["image", "path", "filename"]);
+    }
+    if (c.includes("mask") || inputKeys(node).some((k) => k.toLowerCase().includes("mask"))) {
+      setIfInput(map, "mask", id, node, ["mask", "image"]);
+    }
+    if (c.includes("randomnoise") || c.includes("ksampler") || c.includes("sampler")) {
+      setIfInput(map, "seed", id, node, ["seed", "noise_seed"]);
+    }
+    setIfInput(map, "width", id, node, ["width"]);
+    setIfInput(map, "height", id, node, ["height"]);
+    setIfInput(map, "steps", id, node, ["steps"]);
+    setIfInput(map, "cfg", id, node, ["cfg"]);
+    setIfInput(map, "denoise", id, node, ["denoise"]);
+    setIfInput(map, "guidance", id, node, ["guidance"]);
+    if (c.includes("controlnet")) {
+      setIfInput(map, "controlnet_image", id, node, ["image", "control_net_image"]);
+      setIfInput(map, "controlnet_strength", id, node, ["strength"]);
+    }
   }
   return map;
+}
+
+function injectMapFromWorkflow(raw: Record<string, unknown>): InjectMap {
+  const map = emptyInjectMap();
+  for (const key of INJECT_KEYS) {
+    const val = raw[key];
+    const target = Array.isArray(val) ? val[0] : val;
+    if (target && typeof target === "object") {
+      const rec = target as Record<string, unknown>;
+      map[key] = {
+        node: rec.node !== undefined ? String(rec.node) : "",
+        input: rec.input !== undefined ? String(rec.input) : "",
+      };
+    }
+  }
+  return map;
+}
+
+function compactInjectMap(map: InjectMap, graph: Record<string, ComfyNode>): Record<string, InjectTarget> {
+  const injectMap: Record<string, InjectTarget> = {};
+  for (const k of INJECT_KEYS) {
+    const m = map[k];
+    if (!m.node && !m.input) continue;
+    if (!m.node || !m.input || !graph[m.node]) {
+      throw new Error(`bad-map:${k}`);
+    }
+    injectMap[k] = { node: m.node, input: m.input };
+  }
+  return injectMap;
+}
+
+function MappingFields({
+  graph,
+  map,
+  setMap,
+}: {
+  graph: Record<string, ComfyNode> | null;
+  map: InjectMap;
+  setMap: Dispatch<SetStateAction<InjectMap>>;
+}) {
+  const t = useTranslations("studio.workflow");
+  const nodeIds = graph ? Object.keys(graph) : [];
+  return (
+    <div className="space-y-1.5">
+      {INJECT_KEYS.map((k) => {
+        const inputs =
+          graph && map[k].node && graph[map[k].node]?.inputs
+            ? Object.keys(graph[map[k].node].inputs as object)
+            : [];
+        return (
+          <div
+            key={k}
+            className="grid grid-cols-[88px_1fr_1fr] gap-1.5 items-center"
+          >
+            <span className="text-xs text-zinc-400">
+              {t.has(`inject_${k}`) ? t(`inject_${k}`) : k}
+            </span>
+            <select
+              value={map[k].node}
+              disabled={!graph}
+              onChange={(e) =>
+                setMap((m) => ({
+                  ...m,
+                  [k]: { node: e.target.value, input: "" },
+                }))
+              }
+              className="bg-zinc-800 rounded px-1.5 py-1 text-xs text-white disabled:opacity-40"
+            >
+              <option value="">{t("import_node_none")}</option>
+              {nodeIds.map((id) => (
+                <option key={id} value={id}>
+                  {id} - {graph?.[id]?.class_type ?? "?"}
+                </option>
+              ))}
+            </select>
+            <select
+              value={map[k].input}
+              disabled={!map[k].node}
+              onChange={(e) =>
+                setMap((m) => ({
+                  ...m,
+                  [k]: { ...m[k], input: e.target.value },
+                }))
+              }
+              className="bg-zinc-800 rounded px-1.5 py-1 text-xs text-white disabled:opacity-40"
+            >
+              <option value="">{t("import_input_none")}</option>
+              {inputs.map((inp) => (
+                <option key={inp} value={inp}>
+                  {inp}
+                </option>
+              ))}
+            </select>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function WorkflowPanel() {
@@ -69,6 +314,7 @@ export default function WorkflowPanel() {
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [editing, setEditing] = useState<Workflow | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   async function load() {
@@ -242,6 +488,14 @@ export default function WorkflowPanel() {
                 >
                   {t("duplicate")}
                 </button>
+                {!selected.is_builtin && (
+                  <button
+                    onClick={() => setEditing(selected)}
+                    className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-xs"
+                  >
+                    {t("edit")}
+                  </button>
+                )}
                 <button
                   onClick={async () => {
                     const upd = await patchWorkflow(selected.id, {
@@ -327,6 +581,233 @@ export default function WorkflowPanel() {
           }}
         />
       )}
+      {editing && (
+        <EditWorkflowDialog
+          workflow={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async (wf) => {
+            setEditing(null);
+            setSelected(wf);
+            await load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function EditWorkflowDialog({
+  workflow,
+  onClose,
+  onSaved,
+}: {
+  workflow: Workflow;
+  onClose: () => void;
+  onSaved: (wf: Workflow) => void;
+}) {
+  const t = useTranslations("studio.workflow");
+  const [title, setTitle] = useState(workflow.title);
+  const [description, setDescription] = useState(workflow.description ?? "");
+  const [operation, setOperation] = useState(workflow.operation || "edit");
+  const [category, setCategory] = useState(workflow.category || workflow.operation || "edit");
+  const [graphRaw, setGraphRaw] = useState(JSON.stringify(workflow.graph || {}, null, 2));
+  const [paramsRaw, setParamsRaw] = useState(JSON.stringify(workflow.params_schema || {}, null, 2));
+  const [map, setMap] = useState<InjectMap>(() =>
+    injectMapFromWorkflow(workflow.inject_map || {}),
+  );
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const { graph, error: graphErr } = useMemo<{
+    graph: Record<string, ComfyNode> | null;
+    error: string | null;
+  }>(() => {
+    try {
+      const parsed = JSON.parse(graphRaw || "{}");
+      const normalized = normalizeWorkflowJson(parsed);
+      return normalized
+        ? { graph: normalized, error: null }
+        : { graph: null, error: t("import_err_nodes") };
+    } catch {
+      return { graph: null, error: t("import_err_json") };
+    }
+  }, [graphRaw, t]);
+
+  function runAutodetect() {
+    if (graph) setMap(autodetectMap(graph));
+  }
+
+  async function save() {
+    if (!graph) {
+      setErr(graphErr || t("import_err_json"));
+      return;
+    }
+    if (!title.trim()) {
+      setErr(t("import_err_title"));
+      return;
+    }
+    let paramsSchema: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(paramsRaw || "{}");
+      paramsSchema = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      setErr(t("edit_err_params_json"));
+      return;
+    }
+    let injectMap: Record<string, InjectTarget>;
+    try {
+      injectMap = compactInjectMap(map, graph);
+    } catch (e) {
+      const key = String((e as Error).message || "").replace("bad-map:", "") || "?";
+      setErr(t("import_err_map", { key }));
+      return;
+    }
+    setSaving(true);
+    setErr(null);
+    try {
+      const updated = await patchWorkflow(workflow.id, {
+        title: title.trim(),
+        description: description.trim() || null,
+        operation,
+        category: category.trim() || operation,
+        graph,
+        inject_map: injectMap,
+        params_schema: paramsSchema,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4">
+      <div className="w-full max-w-3xl rounded-lg border border-white/10 bg-zinc-900 p-4 space-y-3 my-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-zinc-100">
+            {t("edit_title")}
+          </h3>
+          <button
+            onClick={onClose}
+            className="text-zinc-500 hover:text-zinc-200 text-sm px-1"
+            aria-label={t("close")}
+          >
+            x
+          </button>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div>
+            <label className="text-xs text-zinc-500">{t("import_name_label")}</label>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="w-full rounded bg-zinc-950 border border-white/10 p-2 text-sm text-zinc-200"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-zinc-500">{t("edit_category_label")}</label>
+            <input
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full rounded bg-zinc-950 border border-white/10 p-2 text-sm text-zinc-200"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-zinc-500">{t("import_operation_label")}</label>
+            <select
+              value={operation}
+              onChange={(e) => {
+                setOperation(e.target.value);
+                if (!category.trim()) setCategory(e.target.value);
+              }}
+              className="w-full bg-zinc-800 rounded px-2 py-2 text-sm text-white"
+            >
+              {WORKFLOW_OPERATIONS.map((o) => (
+                <option key={o} value={o}>
+                  {t.has(`op_${o}`) ? t(`op_${o}`) : o}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-zinc-500">{t("edit_description_label")}</label>
+            <input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="w-full rounded bg-zinc-950 border border-white/10 p-2 text-sm text-zinc-200"
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div>
+            <label className="text-xs text-zinc-500">{t("edit_graph_label")}</label>
+            <textarea
+              value={graphRaw}
+              onChange={(e) => setGraphRaw(e.target.value)}
+              rows={14}
+              className="w-full rounded bg-zinc-950 border border-white/10 p-2 text-xs font-mono text-zinc-200"
+            />
+            {graphErr && <p className="text-[11px] text-red-400">{graphErr}</p>}
+            {graph && (
+              <p className="text-[11px] text-emerald-500">
+                {t("import_nodes_ok", { count: Object.keys(graph).length })}
+              </p>
+            )}
+          </div>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-zinc-500">{t("edit_params_label")}</label>
+              <textarea
+                value={paramsRaw}
+                onChange={(e) => setParamsRaw(e.target.value)}
+                rows={5}
+                className="w-full rounded bg-zinc-950 border border-white/10 p-2 text-xs font-mono text-zinc-200"
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs text-zinc-500">{t("import_map_label")}</label>
+                <button
+                  type="button"
+                  onClick={runAutodetect}
+                  disabled={!graph}
+                  className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-40"
+                >
+                  {t("import_autodetect")}
+                </button>
+              </div>
+              <p className="text-[11px] text-zinc-600 mb-1.5">
+                {t("import_map_hint")}
+              </p>
+              <MappingFields graph={graph} map={map} setMap={setMap} />
+            </div>
+          </div>
+        </div>
+
+        {err && <div className="text-xs text-red-400">{err}</div>}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
+          >
+            {t("import_cancel")}
+          </button>
+          <button
+            onClick={save}
+            disabled={saving || !graph || !title.trim()}
+            className="px-3 py-1.5 rounded bg-sky-600 hover:bg-sky-500 text-white text-sm disabled:opacity-50"
+          >
+            {saving ? t("edit_saving") : t("edit_save")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -349,12 +830,7 @@ function ImportDialog({
   const [category, setCategory] = useState("edit");
   const [map, setMap] = useState<
     Record<InjectKey, { node: string; input: string }>
-  >(
-    () =>
-      Object.fromEntries(
-        INJECT_KEYS.map((k) => [k, { node: "", input: "" }]),
-      ) as Record<InjectKey, { node: string; input: string }>,
-  );
+  >(() => emptyInjectMap());
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -368,8 +844,9 @@ function ImportDialog({
     try {
       const obj = JSON.parse(raw);
       // ComfyUI's "Save (API format)" export can be either the bare node map
-      // ({id: {...}}) or wrapped as {"prompt": {...}}. Accept both.
-      const nodes = (obj?.prompt ?? obj) as Record<string, ComfyNode>;
+      // ({id: {...}}), wrapped as {"prompt": {...}}, or the visual editor
+      // format ({nodes, links}). Accept all and normalize to prompt/API graph.
+      const nodes = normalizeWorkflowJson(obj);
       const ok =
         nodes &&
         typeof nodes === "object" &&
@@ -397,17 +874,13 @@ function ImportDialog({
       setErr(t("import_err_title"));
       return;
     }
-    // Keep only fully-specified mappings (both node and input chosen).
-    const injectMap: Record<string, { node: string; input: string }> = {};
-    for (const k of INJECT_KEYS) {
-      const m = map[k];
-      if (m.node && m.input) {
-        if (!graph[m.node]) {
-          setErr(t("import_err_map", { key: k }));
-          return;
-        }
-        injectMap[k] = { node: m.node, input: m.input };
-      }
+    let injectMap: Record<string, InjectTarget>;
+    try {
+      injectMap = compactInjectMap(map, graph);
+    } catch (e) {
+      const key = String((e as Error).message || "").replace("bad-map:", "") || "?";
+      setErr(t("import_err_map", { key }));
+      return;
     }
     const slug =
       title
@@ -435,8 +908,6 @@ function ImportDialog({
       setSaving(false);
     }
   }
-
-  const OPERATIONS = ["edit", "generate", "inpaint", "cleanup", "eskd"];
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4">
@@ -498,7 +969,7 @@ function ImportDialog({
               }}
               className="w-full bg-zinc-800 rounded px-2 py-2 text-sm text-white"
             >
-              {OPERATIONS.map((o) => (
+              {WORKFLOW_OPERATIONS.map((o) => (
                 <option key={o} value={o}>
                   {t.has(`op_${o}`) ? t(`op_${o}`) : o}
                 </option>
@@ -524,60 +995,7 @@ function ImportDialog({
           <p className="text-[11px] text-zinc-600 mb-1.5">
             {t("import_map_hint")}
           </p>
-          <div className="space-y-1.5">
-            {INJECT_KEYS.map((k) => {
-              const inputs =
-                graph && map[k].node && graph[map[k].node]?.inputs
-                  ? Object.keys(graph[map[k].node].inputs as object)
-                  : [];
-              return (
-                <div
-                  key={k}
-                  className="grid grid-cols-[70px_1fr_1fr] gap-1.5 items-center"
-                >
-                  <span className="text-xs text-zinc-400">
-                    {t.has(`inject_${k}`) ? t(`inject_${k}`) : k}
-                  </span>
-                  <select
-                    value={map[k].node}
-                    disabled={!graph}
-                    onChange={(e) =>
-                      setMap((m) => ({
-                        ...m,
-                        [k]: { node: e.target.value, input: "" },
-                      }))
-                    }
-                    className="bg-zinc-800 rounded px-1.5 py-1 text-xs text-white disabled:opacity-40"
-                  >
-                    <option value="">{t("import_node_none")}</option>
-                    {nodeIds.map((id) => (
-                      <option key={id} value={id}>
-                        {id} — {graph?.[id]?.class_type ?? "?"}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={map[k].input}
-                    disabled={!map[k].node}
-                    onChange={(e) =>
-                      setMap((m) => ({
-                        ...m,
-                        [k]: { ...m[k], input: e.target.value },
-                      }))
-                    }
-                    className="bg-zinc-800 rounded px-1.5 py-1 text-xs text-white disabled:opacity-40"
-                  >
-                    <option value="">{t("import_input_none")}</option>
-                    {inputs.map((inp) => (
-                      <option key={inp} value={inp}>
-                        {inp}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              );
-            })}
-          </div>
+          <MappingFields graph={graph} map={map} setMap={setMap} />
         </div>
 
         {err && <div className="text-xs text-red-400">{err}</div>}
