@@ -9,8 +9,25 @@ about what Celery actually does with ``self.retry()``.
 
 from __future__ import annotations
 
+import io
+
 from app.ai.comfyui_client import ComfyUITransientError
 from app.tasks import image_generation as img_gen_task
+
+
+def _png(width: int, height: int) -> bytes:
+    from PIL import Image
+
+    img = Image.new("RGB", (width, height), "white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _png_size(content: bytes) -> tuple[int, int]:
+    from PIL import Image
+
+    return Image.open(io.BytesIO(content)).size
 
 
 def test_transient_error_retries_then_gives_up_and_marks_failed(monkeypatch):
@@ -110,3 +127,25 @@ def test_apply_quality_preset_never_overrides_an_explicit_value():
     assert values["steps"] == 10  # not overwritten to the preset's 4
     assert values["cfg"] == 2.0  # not overwritten to the preset's 1.0
     assert values["lora_strength"] == 1.0  # unset -> filled from preset
+
+
+def test_reconcile_result_size_skips_aspect_mismatch_to_avoid_vertical_compression():
+    source = _png(800, 1200)
+    result = _png(1024, 1024)
+
+    out, changed, reason = img_gen_task._reconcile_result_size(result, source)
+
+    assert changed is False
+    assert reason == "aspect-mismatch"
+    assert _png_size(out) == (1024, 1024)
+
+
+def test_reconcile_result_size_resizes_only_when_aspect_matches():
+    source = _png(800, 1200)
+    result = _png(1210, 1800)
+
+    out, changed, reason = img_gen_task._reconcile_result_size(result, source)
+
+    assert changed is True
+    assert reason == "resized"
+    assert _png_size(out) == (1200, 1800)

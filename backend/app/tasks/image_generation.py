@@ -122,6 +122,44 @@ def _resize_mask_for_comfy(content: bytes, size: tuple[int, int]) -> bytes:
     return buf.getvalue()
 
 
+def _reconcile_result_size(
+    result_bytes: bytes,
+    ref_bytes: bytes,
+    *,
+    aspect_tolerance: float = 0.015,
+) -> tuple[bytes, bool, str]:
+    """Resize image-to-image results only when that cannot distort geometry.
+
+    ComfyUI workflows may intentionally emit a model-native bucket. Forcing
+    every result into the source aspect ratio stretches non-standard sheets;
+    keep such results untouched and only resize when source/result aspects are
+    already effectively the same.
+    """
+    from PIL import Image as _PILImage
+
+    ref_w, ref_h = _PILImage.open(io.BytesIO(ref_bytes)).size
+    out_img = _PILImage.open(io.BytesIO(result_bytes))
+    out_w, out_h = out_img.size
+    if min(ref_w, ref_h, out_w, out_h) <= 0:
+        return result_bytes, False, "invalid-size"
+    ref_aspect = ref_w / ref_h
+    out_aspect = out_w / out_h
+    delta = abs(ref_aspect - out_aspect) / max(ref_aspect, out_aspect)
+    if delta > aspect_tolerance:
+        return result_bytes, False, "aspect-mismatch"
+
+    # Match the source's frame at the diffusion's own resolution, preserving
+    # aspect. This is only safe after the aspect check above.
+    scale = max(max(out_img.size) / max(ref_w, ref_h), 1.0)
+    target = (round(ref_w * scale), round(ref_h * scale))
+    if out_img.size == target:
+        return result_bytes, False, "same-size"
+    resized = out_img.convert("RGB").resize(target, _PILImage.LANCZOS)
+    buf = io.BytesIO()
+    resized.save(buf, format="PNG")
+    return buf.getvalue(), True, "resized"
+
+
 # Applied to every diffusion prompt (generate/edit/cleanup/inpaint — everything
 # that isn't the deterministic `techdraw` path). Two things diffusion won't do
 # on its own: (1) draw in ЕСКД line conventions rather than a generic "blueprint"
@@ -722,32 +760,27 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             await _mark_cancelled(gen_uuid)
             return {"cancelled": True}
 
-        # Size reconciliation (image-to-image ops): FluxKontextImageScale
-        # snaps the input to the model's resolution buckets, so the output
-        # comes back at a DIFFERENT size and aspect (+~4% measured live) —
-        # the user sees a "cropped" result next to their source, and every
-        # proportional mapping downstream (text paste) drifts. Resize the
-        # output back to the (enhanced) source frame; Flux stretches rather
-        # than crops, so the inverse resize restores geometry 1:1.
+        # Size reconciliation (image-to-image ops): some workflows snap the
+        # input to model buckets. Resize only when source/result aspects are
+        # already effectively equal; forcing a different aspect visibly
+        # compresses non-standard sheets compared with the raw ComfyUI output.
         if operation in ("cleanup", "edit", "inpaint") and (enhanced_source or source_paths):
             try:
-                from PIL import Image as _PILImage
-
                 ref_bytes = enhanced_source or download_file(source_paths[0])
-                ref_w, ref_h = _PILImage.open(io.BytesIO(ref_bytes)).size
-                out_img = _PILImage.open(io.BytesIO(result_bytes))
-                # Match the source's ASPECT at the diffusion's own resolution
-                # (never downscale to a small source: that visibly degraded a
-                # dense sheet — the user compared against raw ComfyUI).
-                scale = max(max(out_img.size) / max(ref_w, ref_h), 1.0)
-                target = (round(ref_w * scale), round(ref_h * scale))
-                if out_img.size != target:
-                    resized = out_img.convert("RGB").resize(target, _PILImage.LANCZOS)
-                    buf = io.BytesIO()
-                    resized.save(buf, format="PNG")
-                    result_bytes = buf.getvalue()
+                before_size = None
+                try:
+                    from PIL import Image as _PILImage
+
+                    before_size = _PILImage.open(io.BytesIO(result_bytes)).size
+                except Exception:  # noqa: BLE001
+                    pass
+                result_bytes, changed, reason = _reconcile_result_size(result_bytes, ref_bytes)
+                if changed:
                     logger.info("result_resized_to_source", generation_id=generation_id,
-                                out=list(out_img.size), target=list(target))
+                                out=list(before_size or ()), reason=reason)
+                elif reason == "aspect-mismatch":
+                    logger.info("result_resize_skipped_aspect_mismatch", generation_id=generation_id,
+                                out=list(before_size or ()))
             except Exception as exc:  # noqa: BLE001 — best-effort
                 logger.warning("result_resize_failed", generation_id=generation_id,
                                error=str(exc))
