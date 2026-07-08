@@ -63,6 +63,38 @@ async def test_generate_requires_source_for_edit(client):
 
 
 @pytest.mark.asyncio
+async def test_generate_can_use_previous_generation_result_as_source(client, db_session):
+    from app.db.models import ImageGeneration, ImageGenStatus
+
+    source = ImageGeneration(
+        owner_sub="dev-user",
+        operation="generate",
+        status=ImageGenStatus.done,
+        prompt="исходный эскиз",
+        params={},
+        source_image_paths=[],
+        result_path="image-gen/dev-user/source-result.png",
+    )
+    db_session.add(source)
+    await db_session.commit()
+    await db_session.refresh(source)
+
+    resp = await client.post(
+        "/api/image-gen/generate",
+        json={
+            "operation": "edit",
+            "prompt": "сделай линии чётче",
+            "source_image_paths": [f"generation:{source.id}"],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["operation"] == "edit"
+    assert body["source_image_paths"] == ["image-gen/dev-user/source-result.png"]
+
+
+@pytest.mark.asyncio
 async def test_generate_creates_queued_record(client):
     resp = await client.post(
         "/api/image-gen/generate",

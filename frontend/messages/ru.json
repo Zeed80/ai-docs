@@ -389,6 +389,8 @@
       "pick_file": "Выбрать файл",
       "take_photo": "Снять фото",
       "from_gallery": "Из галереи",
+      "generated_source_label": "Выбрать из сгенерированных",
+      "generated_source_placeholder": "Из сгенерированных",
       "remove_source": "Убрать",
       "source_alt": "источник",
       "prompt_label_generate": "Что сгенерировать",

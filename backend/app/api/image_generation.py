@@ -170,6 +170,22 @@ def _validate_source_path(path: str, user: UserInfo) -> str:
     return path
 
 
+async def _resolve_source_path(path: str, db: AsyncSession, user: UserInfo) -> str:
+    if path.startswith("generation:"):
+        raw_id = path.removeprefix("generation:").strip()
+        try:
+            generation_id = uuid.UUID(raw_id)
+        except ValueError:
+            raise HTTPException(400, "Недопустимая ссылка на сгенерированное изображение.")
+        gen = await db.get(ImageGeneration, generation_id)
+        if not _owns(gen, user):
+            raise HTTPException(404, "Сгенерированное изображение не найдено.")
+        if not gen or not gen.result_path:
+            raise HTTPException(400, "У выбранной генерации нет готового результата.")
+        return gen.result_path
+    return _validate_source_path(path, user)
+
+
 def _gen_out(gen: ImageGeneration) -> dict:
     status = gen.status.value if hasattr(gen.status, "value") else gen.status
     progress = None
@@ -277,7 +293,10 @@ async def generate(
         if wf.operation != body.operation:
             raise HTTPException(400, "Воркфлоу не подходит для выбранной операции")
 
-    source_paths = [_validate_source_path(path, user) for path in body.source_image_paths]
+    source_paths = [
+        await _resolve_source_path(path, db, user)
+        for path in body.source_image_paths
+    ]
     for doc_id in body.source_document_ids:
         doc = await db.get(Document, doc_id)
         if not _can_access_document(doc, user):

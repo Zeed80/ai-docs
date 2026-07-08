@@ -389,6 +389,8 @@
       "pick_file": "Choose file",
       "take_photo": "Take photo",
       "from_gallery": "From gallery",
+      "generated_source_label": "Select from generated images",
+      "generated_source_placeholder": "From generated images",
       "remove_source": "Remove",
       "source_alt": "source",
       "prompt_label_generate": "What to generate",

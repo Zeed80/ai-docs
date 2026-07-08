@@ -10,8 +10,11 @@ import {
   acceptGeneration,
   artifactUrl,
   deleteGeneration,
+  duplicateWorkflow,
   iterateGeneration,
   listWorkflows,
+  patchWorkflow,
+  promptHelp,
   resultUrl,
   sourceUrl,
 } from "@/lib/studio-api";
@@ -25,7 +28,10 @@ interface Props {
 export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   const t = useTranslations("studio");
   const [iterPrompt, setIterPrompt] = useState("");
+  const [iterNegative, setIterNegative] = useState("");
+  const [iterSeed, setIterSeed] = useState("0");
   const [busy, setBusy] = useState(false);
+  const [helping, setHelping] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const hasSource = (gen.source_image_paths?.length ?? 0) > 0;
 
@@ -35,25 +41,44 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   const [quality, setQuality] = useState<"fast" | "quality">("quality");
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [workflowId, setWorkflowId] = useState<string>("");
+  const [workflowParamOverrides, setWorkflowParamOverrides] = useState<
+    Record<string, Record<string, unknown>>
+  >({});
+  const [paramSaveMsg, setParamSaveMsg] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const hasDxf = typeof gen.params?.dxf_path === "string";
+  const selectedWorkflow = workflows.find((w) => w.id === workflowId) ?? null;
+  const selectedParamsSchema = (selectedWorkflow?.params_schema || {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const workflowParamEntries = Object.entries(selectedParamsSchema).filter(
+    ([, spec]) => spec && typeof spec === "object",
+  );
+  const showQuality =
+    !!selectedWorkflow &&
+    selectedWorkflow.is_builtin &&
+    !!(selectedWorkflow.inject_map as Record<string, unknown>)?.lora_strength;
 
   useEffect(() => {
     listWorkflows()
-      .then((ws) =>
-        setWorkflows(
-          ws.filter(
-            (w) => !w.is_builtin && w.enabled && w.operation === "edit",
-          ),
-        ),
-      )
+      .then((ws) => setWorkflows(ws.filter((w) => w.enabled && w.operation === "edit")))
       .catch(() => undefined);
   }, []);
-  // Default to the newest custom edit workflow (as the composer does), so an
-  // iteration uses the trained pipeline rather than the generic builtin.
+  // Default to the newest custom edit workflow (as the composer does), otherwise
+  // use the first builtin edit pipeline.
   useEffect(() => {
-    setWorkflowId(workflows.length ? workflows[0].id : "");
+    const custom = workflows.find((w) => !w.is_builtin);
+    setWorkflowId(custom ? custom.id : (workflows[0]?.id ?? ""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflows.length]);
+
+  async function reloadWorkflows(): Promise<Workflow[]> {
+    const ws = (await listWorkflows()).filter((w) => w.enabled && w.operation === "edit");
+    setWorkflows(ws);
+    return ws;
+  }
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
@@ -72,17 +97,261 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
     const input: GenerateInput = {
       operation: "edit",
       prompt: iterPrompt,
-      params: {},
+      negative_prompt: iterNegative || undefined,
+      params: { seed: Number(iterSeed) || 0 },
     };
     if (workflowId) {
       input.workflow_id = workflowId;
-      // Custom LoRA workflows carry their own tuned steps/cfg — the preset must
-      // not override them (the backend also pops quality for custom workflows).
-    } else {
+    }
+    if (showQuality) {
       (input.params as Record<string, unknown>).quality = quality;
     }
+    Object.assign(input.params as Record<string, unknown>, collectWorkflowParams());
     await iterateGeneration(gen.id, input);
     setIterPrompt("");
+  }
+
+  function workflowTextValue(logicalKey: "prompt" | "negative"): string {
+    const wf = selectedWorkflow;
+    if (!wf) return "";
+    const inject = wf.inject_map as Record<string, unknown>;
+    const rawTarget = inject?.[logicalKey];
+    const target = Array.isArray(rawTarget) ? rawTarget[0] : rawTarget;
+    if (target && typeof target === "object") {
+      const rec = target as Record<string, unknown>;
+      const nodeId = String(rec.node ?? "");
+      const input = String(rec.input ?? "");
+      const node = (wf.graph as Record<string, { inputs?: Record<string, unknown> }>)[nodeId];
+      const value = node?.inputs?.[input];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+    for (const node of Object.values(
+      wf.graph as Record<string, { class_type?: string; inputs?: Record<string, unknown> }>,
+    )) {
+      const cls = String(node?.class_type || "").toLowerCase();
+      if (!cls.includes("text") && !cls.includes("clip")) continue;
+      for (const input of ["prompt", "text", "string"]) {
+        const value = node.inputs?.[input];
+        if (typeof value === "string" && value.trim()) return value;
+      }
+    }
+    return "";
+  }
+
+  function showIterPrompt() {
+    setIterPrompt(iterPrompt.trim() || workflowTextValue("prompt") || gen.prompt || "");
+    const negative = workflowTextValue("negative");
+    if (negative && !iterNegative.trim()) setIterNegative(negative);
+  }
+
+  async function helpWithIterPrompt() {
+    if (!iterPrompt.trim()) return;
+    setHelping(true);
+    setErr(null);
+    try {
+      const res = await promptHelp(iterPrompt, "edit");
+      if (res.prompt) setIterPrompt(res.prompt);
+      if (res.negative_prompt) setIterNegative(res.negative_prompt);
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setHelping(false);
+    }
+  }
+
+  function workflowParamValue(key: string, spec: Record<string, unknown>) {
+    if (!selectedWorkflow) return spec.default ?? "";
+    const saved = workflowParamOverrides[selectedWorkflow.id]?.[key];
+    return saved !== undefined ? saved : (spec.default ?? "");
+  }
+
+  function setWorkflowParamValue(key: string, value: unknown) {
+    if (!selectedWorkflow) return;
+    setParamSaveMsg(null);
+    setWorkflowParamOverrides((cur) => ({
+      ...cur,
+      [selectedWorkflow.id]: {
+        ...(cur[selectedWorkflow.id] || {}),
+        [key]: value,
+      },
+    }));
+  }
+
+  function castWorkflowParam(value: unknown, spec: Record<string, unknown>) {
+    const type = String(spec.type || "");
+    if (type === "bool" || type === "boolean") return Boolean(value);
+    if (type === "int" || type === "integer") {
+      const n = Number(value);
+      return Number.isFinite(n) ? Math.round(n) : undefined;
+    }
+    if (type === "float" || type === "number") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    return value === "" ? undefined : value;
+  }
+
+  function collectWorkflowParams(): Record<string, unknown> {
+    if (!selectedWorkflow) return {};
+    const out: Record<string, unknown> = {};
+    for (const [key, spec] of workflowParamEntries) {
+      const casted = castWorkflowParam(workflowParamValue(key, spec), spec);
+      if (casted !== undefined) out[key] = casted;
+    }
+    return out;
+  }
+
+  async function saveWorkflowParamDefaults() {
+    if (!selectedWorkflow) return;
+    setBusy(true);
+    setErr(null);
+    setParamSaveMsg(null);
+    try {
+      let target = selectedWorkflow;
+      if (selectedWorkflow.is_builtin) {
+        target = await duplicateWorkflow(selectedWorkflow.id);
+      }
+      const nextSchema: Record<string, unknown> = {};
+      for (const [key, spec] of Object.entries(selectedParamsSchema)) {
+        const nextSpec: Record<string, unknown> =
+          spec && typeof spec === "object" ? { ...spec } : { type: "string" };
+        const casted = castWorkflowParam(workflowParamValue(key, nextSpec), nextSpec);
+        if (casted !== undefined) nextSpec.default = casted;
+        nextSchema[key] = nextSpec;
+      }
+      const updated = await patchWorkflow(target.id, { params_schema: nextSchema });
+      await reloadWorkflows();
+      setWorkflowId(updated.id);
+      setWorkflowParamOverrides((cur) => {
+        const next = { ...cur };
+        delete next[selectedWorkflow.id];
+        delete next[updated.id];
+        return next;
+      });
+      setParamSaveMsg(
+        selectedWorkflow.is_builtin
+          ? t("composer.workflow_params_saved_copy")
+          : t("composer.workflow_params_saved"),
+      );
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addOwnWorkflow() {
+    const base = selectedWorkflow || workflows.find((w) => w.is_builtin);
+    if (!base) return;
+    setErr(null);
+    try {
+      const copy = await duplicateWorkflow(base.id);
+      await reloadWorkflows();
+      setWorkflowId(copy.id);
+      setRenaming(copy.id);
+      setRenameValue(copy.title);
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    }
+  }
+
+  async function saveRename() {
+    if (!renaming) return;
+    try {
+      await patchWorkflow(renaming, { title: renameValue.trim() || undefined });
+      await reloadWorkflows();
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setRenaming(null);
+    }
+  }
+
+  function workflowParamsEditor() {
+    if (!selectedWorkflow || workflowParamEntries.length === 0) return null;
+    return (
+      <div className="space-y-2 border-t border-white/10 pt-2">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="text-xs text-zinc-500">
+              {t("composer.workflow_params_label")}
+            </div>
+            <div className="text-[11px] text-zinc-600">
+              {selectedWorkflow.is_builtin
+                ? t("composer.workflow_params_builtin_hint")
+                : t("composer.workflow_params_hint")}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={saveWorkflowParamDefaults}
+            disabled={busy}
+            className="shrink-0 rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20 disabled:opacity-50"
+          >
+            {t("composer.workflow_params_save")}
+          </button>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {workflowParamEntries.map(([key, spec]) => {
+            const type = String(spec.type || "");
+            const label = String(spec.label || key);
+            const value = workflowParamValue(key, spec);
+            const options = Array.isArray(spec.options) ? spec.options : null;
+            if (type === "bool" || type === "boolean") {
+              return (
+                <label
+                  key={key}
+                  className="flex items-center gap-2 rounded bg-zinc-900/80 border border-white/10 p-2 text-xs text-zinc-300"
+                >
+                  <input
+                    type="checkbox"
+                    checked={Boolean(value)}
+                    onChange={(e) => setWorkflowParamValue(key, e.target.checked)}
+                  />
+                  <span>{label}</span>
+                </label>
+              );
+            }
+            if (options) {
+              return (
+                <label key={key} className="block">
+                  <span className="text-xs text-zinc-500">{label}</span>
+                  <select
+                    value={String(value ?? "")}
+                    onChange={(e) => setWorkflowParamValue(key, e.target.value)}
+                    className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                  >
+                    {options.map((opt) => (
+                      <option key={String(opt)} value={String(opt)}>
+                        {String(opt)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            }
+            const numeric = ["int", "integer", "float", "number"].includes(type);
+            return (
+              <label key={key} className="block">
+                <span className="text-xs text-zinc-500">{label}</span>
+                <input
+                  type={numeric ? "number" : "text"}
+                  value={String(value ?? "")}
+                  min={spec.min !== undefined ? Number(spec.min) : undefined}
+                  max={spec.max !== undefined ? Number(spec.max) : undefined}
+                  step={type === "int" || type === "integer" ? 1 : numeric ? 0.1 : undefined}
+                  onChange={(e) => setWorkflowParamValue(key, e.target.value)}
+                  className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                />
+              </label>
+            );
+          })}
+        </div>
+        {paramSaveMsg && (
+          <div className="text-[11px] text-emerald-400">{paramSaveMsg}</div>
+        )}
+      </div>
+    );
   }
 
   const canAct =
@@ -233,36 +502,103 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
 
       {gen.has_result && (
         <div className="border-t border-white/10 pt-3 space-y-2">
-          <label className="text-[11px] text-zinc-500">
-            {t("detail.iterate_label")}
-          </label>
-          <textarea
-            value={iterPrompt}
-            onChange={(e) => setIterPrompt(e.target.value)}
-            placeholder={t("detail.iterate_placeholder")}
-            className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
-            rows={2}
-          />
-
           {workflows.length > 0 && (
-            <select
-              value={workflowId}
-              onChange={(e) => setWorkflowId(e.target.value)}
-              className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm text-white"
-            >
-              <option value="">{t("composer.workflow_builtin")}</option>
-              {workflows.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.title}
-                </option>
-              ))}
-            </select>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs text-zinc-500">
+                  {t("composer.workflow_label")}
+                </label>
+                <button
+                  type="button"
+                  onClick={addOwnWorkflow}
+                  className="text-xs text-sky-400 hover:text-sky-300"
+                >
+                  {t("composer.workflow_add_own")}
+                </button>
+              </div>
+              <select
+                value={workflowId}
+                onChange={(e) => {
+                  setWorkflowId(e.target.value);
+                  setRenaming(null);
+                }}
+                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm text-white"
+              >
+                {workflows.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.is_builtin ? w.title : `★ ${w.title}`}
+                  </option>
+                ))}
+              </select>
+              {renaming && renaming === workflowId && (
+                <div className="mt-1.5 flex gap-1">
+                  <input
+                    value={renameValue}
+                    autoFocus
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void saveRename();
+                      if (e.key === "Escape") setRenaming(null);
+                    }}
+                    placeholder={t("composer.workflow_rename_placeholder")}
+                    className="flex-1 rounded bg-zinc-900 border border-white/10 px-2 py-1 text-sm text-zinc-200"
+                  />
+                  <button
+                    onClick={saveRename}
+                    className="px-2 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white text-xs"
+                  >
+                    {t("composer.workflow_rename_save")}
+                  </button>
+                  <button
+                    onClick={() => setRenaming(null)}
+                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs"
+                  >
+                    {t("composer.workflow_rename_cancel")}
+                  </button>
+                </div>
+              )}
+              {selectedWorkflow?.description && renaming !== workflowId && (
+                <p className="mt-1 text-[11px] text-zinc-600">
+                  {selectedWorkflow.description}
+                </p>
+              )}
+            </div>
           )}
 
-          {/* Speed/quality — hidden for custom workflows (they carry their own
-              tuned config). "quality" is the default: "fast" won't follow the
-              edit instruction. */}
-          {!workflowId && (
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[11px] text-zinc-500">
+                {t("detail.iterate_label")}
+              </label>
+              <button
+                type="button"
+                onClick={showIterPrompt}
+                className="text-xs text-sky-400 hover:text-sky-300"
+              >
+                {t("composer.show_prompt")}
+              </button>
+            </div>
+            <textarea
+              value={iterPrompt}
+              onChange={(e) => setIterPrompt(e.target.value)}
+              placeholder={t("detail.iterate_placeholder")}
+              className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+              rows={3}
+            />
+            <div className="mt-1 flex justify-end">
+              <button
+                onClick={helpWithIterPrompt}
+                disabled={helping || !iterPrompt.trim()}
+                className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-40"
+              >
+                {helping ? t("composer.help_prompt_busy") : t("composer.help_prompt")}
+              </button>
+            </div>
+          </div>
+
+          {/* Speed/quality — shown only for Lightning-LoRA builtins. Custom
+              workflows carry their own tuned config. */}
+          {showQuality && (
             <div className="grid grid-cols-2 gap-1 p-1 rounded bg-white/5">
               <button
                 onClick={() => setQuality("fast")}
@@ -278,6 +614,37 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
               </button>
             </div>
           )}
+
+          <details className="text-sm">
+            <summary className="text-xs text-zinc-500 cursor-pointer">
+              {t("composer.advanced")}
+            </summary>
+            <div className="mt-2 space-y-2">
+              <div>
+                <label className="text-xs text-zinc-500">
+                  {t("composer.negative_prompt_label")}
+                </label>
+                <input
+                  value={iterNegative}
+                  onChange={(e) => setIterNegative(e.target.value)}
+                  className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                  placeholder={t("composer.negative_prompt_placeholder")}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-500">
+                  {t("composer.seed_label")}
+                </label>
+                <input
+                  type="number"
+                  value={iterSeed}
+                  onChange={(e) => setIterSeed(e.target.value)}
+                  className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                />
+              </div>
+              {workflowParamsEditor()}
+            </div>
+          </details>
 
           <button
             disabled={busy || !iterPrompt.trim()}

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { isNative, pickImage } from "@/lib/native-bridge";
 import {
   GenerateInput,
+  Generation,
   Operation,
   TechDrawView,
   Workflow,
@@ -14,6 +15,7 @@ import {
   listWorkflows,
   patchWorkflow,
   promptHelp,
+  resultUrl,
   techDraw,
   uploadSource,
 } from "@/lib/studio-api";
@@ -40,6 +42,7 @@ const SIZE_PRESETS: { labelKey: string; w: number; h: number }[] = [
 
 interface Props {
   onSubmitted: () => void;
+  generatedSources?: Generation[];
 }
 
 type StudioComposerPrefs = {
@@ -84,7 +87,7 @@ function readPrefs(): StudioComposerPrefs {
   }
 }
 
-export default function StudioComposer({ onSubmitted }: Props) {
+export default function StudioComposer({ onSubmitted, generatedSources = [] }: Props) {
   const t = useTranslations("studio.composer");
   const prefsRef = useRef<StudioComposerPrefs | null>(null);
   if (prefsRef.current === null) prefsRef.current = readPrefs();
@@ -100,6 +103,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [quality, setQuality] = useState<"fast" | "quality">(prefs.quality ?? "fast");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
+  const [sourceGenerationId, setSourceGenerationId] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [helping, setHelping] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -487,9 +491,22 @@ export default function StudioComposer({ onSubmitted }: Props) {
   }
 
   function setSource(file: File | null) {
+    setSourceGenerationId("");
     setSourceFile(file);
-    if (sourcePreview) URL.revokeObjectURL(sourcePreview);
+    if (sourcePreview?.startsWith("blob:")) URL.revokeObjectURL(sourcePreview);
     setSourcePreview(file ? URL.createObjectURL(file) : null);
+  }
+
+  function setGeneratedSource(id: string) {
+    setSourceGenerationId(id);
+    setSourceFile(null);
+    if (sourcePreview?.startsWith("blob:")) URL.revokeObjectURL(sourcePreview);
+    setSourcePreview(id ? resultUrl(id) : null);
+  }
+
+  function clearSource() {
+    setSourceGenerationId("");
+    setSource(null);
   }
 
   async function pickFromGallery() {
@@ -518,7 +535,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
 
   async function submit() {
     setErr(null);
-    if (op.needsSource && !sourceFile) {
+    if (op.needsSource && !sourceFile && !sourceGenerationId) {
       setErr(t("error_need_source"));
       return;
     }
@@ -570,6 +587,8 @@ export default function StudioComposer({ onSubmitted }: Props) {
       Object.assign(input.params as Record<string, unknown>, collectWorkflowParams());
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
+      } else if (sourceGenerationId) {
+        input.source_image_paths = [`generation:${sourceGenerationId}`];
       }
       if (operation === "inpaint" && maskRef.current) {
         const blob = await maskRef.current.getMaskBlob();
@@ -1114,9 +1133,24 @@ export default function StudioComposer({ onSubmitted }: Props) {
                     </button>
                   </>
                 )}
-                {sourceFile && (
+                {generatedSources.length > 0 && (
+                  <select
+                    value={sourceGenerationId}
+                    onChange={(e) => setGeneratedSource(e.target.value)}
+                    className="min-w-0 flex-1 rounded bg-zinc-800 px-2 py-1.5 text-sm text-white sm:flex-none"
+                    aria-label={t("generated_source_label")}
+                  >
+                    <option value="">{t("generated_source_placeholder")}</option>
+                    {generatedSources.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.prompt || g.operation} · {g.id.slice(0, 8)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {(sourceFile || sourceGenerationId) && (
                   <button
-                    onClick={() => setSource(null)}
+                    onClick={clearSource}
                     className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-sm text-zinc-400"
                   >
                     {t("remove_source")}

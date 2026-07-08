@@ -290,7 +290,10 @@ export default function StudioPage() {
       ) : (
         <div className="flex-1 overflow-y-auto lg:overflow-hidden grid lg:grid-cols-[360px_1fr]">
           <div className="border-b lg:border-b-0 lg:border-r border-white/10 lg:overflow-y-auto p-4">
-            <StudioComposer onSubmitted={load} />
+            <StudioComposer
+              onSubmitted={load}
+              generatedSources={items.filter((g) => g.status === "done" && g.has_result)}
+            />
           </div>
           <div className="lg:overflow-y-auto p-4 grid xl:grid-cols-[1fr_360px] gap-4">
             <div>
