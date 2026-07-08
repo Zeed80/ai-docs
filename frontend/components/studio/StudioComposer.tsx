@@ -47,6 +47,8 @@ type StudioComposerPrefs = {
   techMode?: boolean;
   prompt?: string;
   negative?: string;
+  cleanupPrompt?: string;
+  cleanupPromptVisible?: boolean;
   seed?: string;
   quality?: "fast" | "quality";
   techDesc?: string;
@@ -64,6 +66,12 @@ type StudioComposerPrefs = {
 };
 
 const PREFS_KEY = "ai-docs:studio-composer:v2";
+const ESKD_STYLE_SUFFIX =
+  ", технический чертёж по ЕСКД: чёрно-белая линейная графика на белом фоне, " +
+  "сплошные основные линии контура, тонкие сплошные линии для размеров, " +
+  "штрихпунктирные осевые и центровые линии, штриховка сечений под 45°, " +
+  "без рамки листа, без углового штампа, без основной надписи, без таблицы";
+const ESKD_STYLE_MARKER = "технический чертёж по ЕСКД";
 
 function readPrefs(): StudioComposerPrefs {
   if (typeof window === "undefined") return {};
@@ -83,6 +91,10 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [operation, setOperation] = useState<Operation>(prefs.operation ?? "edit");
   const [prompt, setPrompt] = useState(prefs.prompt ?? "");
   const [negative, setNegative] = useState(prefs.negative ?? "");
+  const [cleanupPrompt, setCleanupPrompt] = useState(prefs.cleanupPrompt ?? "");
+  const [cleanupPromptVisible, setCleanupPromptVisible] = useState(
+    Boolean(prefs.cleanupPromptVisible),
+  );
   const [seed, setSeed] = useState<string>(prefs.seed ?? "0");
   const [quality, setQuality] = useState<"fast" | "quality">(prefs.quality ?? "fast");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
@@ -172,6 +184,8 @@ export default function StudioComposer({ onSubmitted }: Props) {
           techMode,
           prompt,
           negative,
+          cleanupPrompt,
+          cleanupPromptVisible,
           seed,
           quality,
           techDesc,
@@ -196,6 +210,8 @@ export default function StudioComposer({ onSubmitted }: Props) {
     techMode,
     prompt,
     negative,
+    cleanupPrompt,
+    cleanupPromptVisible,
     seed,
     quality,
     techDesc,
@@ -239,6 +255,68 @@ export default function StudioComposer({ onSubmitted }: Props) {
   }, [operation, techMode, workflows.length]);
 
   const op = OPERATIONS.find((o) => o.key === operation)!;
+
+  function applyEskdPromptPreview(value: string): string {
+    const base = value.trim();
+    if (base.includes(ESKD_STYLE_MARKER)) return base;
+    return base ? `${base}${ESKD_STYLE_SUFFIX}` : ESKD_STYLE_SUFFIX.replace(/^, /, "");
+  }
+
+  function workflowTextValue(logicalKey: "prompt" | "negative"): string {
+    const wf = selectedWorkflow;
+    if (!wf) return "";
+    const inject = wf.inject_map as Record<string, unknown>;
+    const rawTarget = inject?.[logicalKey];
+    const target = Array.isArray(rawTarget) ? rawTarget[0] : rawTarget;
+    if (target && typeof target === "object") {
+      const rec = target as Record<string, unknown>;
+      const nodeId = String(rec.node ?? "");
+      const input = String(rec.input ?? "");
+      const node = (wf.graph as Record<string, { inputs?: Record<string, unknown> }>)[nodeId];
+      const value = node?.inputs?.[input];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+    for (const node of Object.values(
+      wf.graph as Record<string, { class_type?: string; inputs?: Record<string, unknown> }>,
+    )) {
+      const cls = String(node?.class_type || "").toLowerCase();
+      if (!cls.includes("text") && !cls.includes("clip")) continue;
+      for (const input of ["prompt", "text", "string"]) {
+        const value = node.inputs?.[input];
+        if (typeof value === "string" && value.trim()) return value;
+      }
+    }
+    return "";
+  }
+
+  function currentPromptPreview(): string {
+    if (techMode) {
+      return workflowId ? applyEskdPromptPreview(techDesc) : techDesc.trim();
+    }
+    if (operation === "cleanup") {
+      return (
+        cleanupPrompt.trim() ||
+        workflowTextValue("prompt") ||
+        t("cleanup_prompt_default")
+      );
+    }
+    if (operation === "generate") return applyEskdPromptPreview(prompt);
+    return prompt.trim();
+  }
+
+  function showGenerationPrompt() {
+    const next = currentPromptPreview();
+    if (techMode) {
+      setTechDesc(next);
+      return;
+    }
+    if (operation === "cleanup") {
+      setCleanupPrompt(next);
+      setCleanupPromptVisible(true);
+      return;
+    }
+    setPrompt(next);
+  }
 
   /** Quick "make my own copy": duplicate the selected builtin (or the first
    * builtin for this operation) — the copy inherits a correct inject_map, so
@@ -355,7 +433,10 @@ export default function StudioComposer({ onSubmitted }: Props) {
     try {
       const input: GenerateInput = {
         operation,
-        prompt: prompt || undefined,
+        prompt:
+          operation === "cleanup"
+            ? cleanupPrompt.trim() || undefined
+            : prompt || undefined,
         negative_prompt: negative || undefined,
         params: { seed: Number(seed) || 0 },
         source_image_paths: [],
@@ -583,6 +664,18 @@ export default function StudioComposer({ onSubmitted }: Props) {
           <p className="text-xs text-zinc-500">
             {workflowId ? t("eskd_diffusion_hint") : t("tech_hint")}
           </p>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-zinc-500">
+              {t("prompt_to_send_label")}
+            </label>
+            <button
+              type="button"
+              onClick={showGenerationPrompt}
+              className="text-xs text-sky-400 hover:text-sky-300"
+            >
+              {t("show_prompt")}
+            </button>
+          </div>
           <textarea
             value={techDesc}
             onChange={(e) => setTechDesc(e.target.value)}
@@ -838,7 +931,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
             </div>
           )}
 
-          {/* Prompt (not needed for pure cleanup) */}
+          {/* Main prompt for text generation and instruction-based edits. */}
           {operation !== "cleanup" && (
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -848,11 +941,11 @@ export default function StudioComposer({ onSubmitted }: Props) {
                     : t("prompt_label_edit")}
                 </label>
                 <button
-                  onClick={helpWithPrompt}
-                  disabled={helping || !prompt.trim()}
-                  className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-40"
+                  type="button"
+                  onClick={showGenerationPrompt}
+                  className="text-xs text-sky-400 hover:text-sky-300"
                 >
-                  {helping ? t("help_prompt_busy") : t("help_prompt")}
+                  {t("show_prompt")}
                 </button>
               </div>
               <textarea
@@ -866,6 +959,41 @@ export default function StudioComposer({ onSubmitted }: Props) {
                 }
                 className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
               />
+              <div className="mt-1 flex justify-end">
+                <button
+                  onClick={helpWithPrompt}
+                  disabled={helping || !prompt.trim()}
+                  className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-40"
+                >
+                  {helping ? t("help_prompt_busy") : t("help_prompt")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {operation === "cleanup" && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs text-zinc-500">
+                  {t("cleanup_prompt_label")}
+                </label>
+                <button
+                  type="button"
+                  onClick={showGenerationPrompt}
+                  className="text-xs text-sky-400 hover:text-sky-300"
+                >
+                  {t("show_prompt")}
+                </button>
+              </div>
+              {cleanupPromptVisible && (
+                <textarea
+                  value={cleanupPrompt}
+                  onChange={(e) => setCleanupPrompt(e.target.value)}
+                  rows={3}
+                  placeholder={t("cleanup_prompt_placeholder")}
+                  className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                />
+              )}
             </div>
           )}
 

@@ -6,6 +6,7 @@
   "operation": "cleanup",
   "base_family": "flux2",
   "inject_map": {
+    "prompt": {"node": "pos", "input": "text"},
     "image": {"node": "load", "input": "image"},
     "seed": {"node": "noise", "input": "noise_seed"},
     "steps": {"node": "sig", "input": "steps"},

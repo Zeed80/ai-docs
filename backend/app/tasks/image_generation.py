@@ -97,8 +97,16 @@ _ESKD_NEGATIVE_SUFFIX = (
 def _apply_eskd_style(prompt: str | None, negative: str | None) -> tuple[str, str]:
     p = (prompt or "").strip()
     n = (negative or "").strip()
-    p = f"{p}{_ESKD_STYLE_SUFFIX}" if p else _ESKD_STYLE_SUFFIX.lstrip(", ")
-    n = f"{n}, {_ESKD_NEGATIVE_SUFFIX}" if n else _ESKD_NEGATIVE_SUFFIX
+    style_marker = "технический чертёж по ЕСКД"
+    negative_marker = "рамка листа"
+    if p and style_marker not in p:
+        p = f"{p}{_ESKD_STYLE_SUFFIX}"
+    elif not p:
+        p = _ESKD_STYLE_SUFFIX.lstrip(", ")
+    if n and negative_marker not in n:
+        n = f"{n}, {_ESKD_NEGATIVE_SUFFIX}"
+    elif not n:
+        n = _ESKD_NEGATIVE_SUFFIX
     return p, n
 
 

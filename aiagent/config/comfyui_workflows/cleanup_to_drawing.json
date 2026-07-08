@@ -5,6 +5,8 @@
   "category": "process",
   "operation": "cleanup",
   "inject_map": {
+    "prompt": {"node": "76", "input": "prompt"},
+    "negative": {"node": "77", "input": "prompt"},
     "image": {"node": "78", "input": "image"},
     "seed": {"node": "3", "input": "seed"},
     "steps": {"node": "3", "input": "steps"},
