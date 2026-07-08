@@ -182,7 +182,22 @@ async def _resolve_source_path(path: str, db: AsyncSession, user: UserInfo) -> s
             raise HTTPException(404, "Сгенерированное изображение не найдено.")
         if not gen or not gen.result_path:
             raise HTTPException(400, "У выбранной генерации нет готового результата.")
-        return gen.result_path
+        try:
+            content = download_file(gen.result_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "generated_source_missing",
+                generation_id=str(generation_id),
+                path=gen.result_path,
+                error=str(exc),
+            )
+            raise HTTPException(
+                400,
+                "Файл выбранной генерации не найден. Выберите другой результат.",
+            ) from exc
+        copied_path = f"{_SOURCE_PREFIX}/{user.sub}/{uuid.uuid4().hex}.png"
+        upload_file(content, copied_path, "image/png")
+        return copied_path
     return _validate_source_path(path, user)
 
 
@@ -430,7 +445,16 @@ async def get_source(
     paths = gen.source_image_paths or []
     if index >= len(paths):
         raise HTTPException(404, "Источник не найден")
-    data = download_file(paths[index])
+    try:
+        data = download_file(paths[index])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "image_gen_source_missing",
+            generation_id=str(generation_id),
+            source_path=paths[index],
+            error=str(exc),
+        )
+        raise HTTPException(404, "Файл источника не найден") from exc
     return Response(content=data, media_type="image/png")
 
 
@@ -589,8 +613,12 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
     from sqlalchemy import delete as sa_delete
     from sqlalchemy import update as sa_update
 
-    for path in [gen.result_path, gen.thumbnail_path, gen.mask_path,
-                 *(gen.source_image_paths or [])]:
+    source_paths = [
+        path
+        for path in (gen.source_image_paths or [])
+        if isinstance(path, str) and path.startswith(f"{_SOURCE_PREFIX}/")
+    ]
+    for path in [gen.result_path, gen.thumbnail_path, gen.mask_path, *source_paths]:
         if path:
             try:
                 from app.storage import delete_file

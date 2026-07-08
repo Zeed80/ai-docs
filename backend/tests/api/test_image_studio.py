@@ -63,8 +63,21 @@ async def test_generate_requires_source_for_edit(client):
 
 
 @pytest.mark.asyncio
-async def test_generate_can_use_previous_generation_result_as_source(client, db_session):
+async def test_generate_can_use_previous_generation_result_as_source(client, db_session, monkeypatch):
     from app.db.models import ImageGeneration, ImageGenStatus
+
+    copied: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "app.api.image_generation.download_file",
+        lambda path: b"previous-result-png",
+    )
+
+    def _upload(content: bytes, path: str, content_type: str) -> str:
+        copied.update(content=content, path=path, content_type=content_type)
+        return path
+
+    monkeypatch.setattr("app.api.image_generation.upload_file", _upload)
 
     source = ImageGeneration(
         owner_sub="dev-user",
@@ -91,7 +104,11 @@ async def test_generate_can_use_previous_generation_result_as_source(client, db_
     assert resp.status_code == 200
     body = resp.json()
     assert body["operation"] == "edit"
-    assert body["source_image_paths"] == ["image-gen/dev-user/source-result.png"]
+    assert body["source_image_paths"][0].startswith("image-gen-src/dev-user/")
+    assert body["source_image_paths"][0].endswith(".png")
+    assert body["source_image_paths"][0] == copied["path"]
+    assert copied["content"] == b"previous-result-png"
+    assert copied["content_type"] == "image/png"
 
 
 @pytest.mark.asyncio
@@ -398,6 +415,25 @@ def test_owns_lets_agent_service_bypass_ownership_for_any_record():
     assert _owns(gen, _user("real-human-user")) is True
     assert _owns(gen, _user("a-different-human")) is False
     assert _owns(None, _user("agent-service")) is False
+
+
+def test_fit_image_for_comfy_caps_large_sources():
+    import io
+
+    from PIL import Image
+
+    from app.tasks.image_generation import _fit_image_for_comfy
+
+    img = Image.new("RGB", (4096, 2048), "white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+
+    content, size, resized = _fit_image_for_comfy(buf.getvalue())
+
+    assert resized is True
+    assert max(size) <= 1280
+    assert size[0] * size[1] <= 1_250_000
+    assert len(content) < len(buf.getvalue())
 
 
 @pytest.mark.asyncio

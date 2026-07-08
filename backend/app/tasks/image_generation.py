@@ -76,6 +76,52 @@ def read_progress(gen_id: str) -> dict | None:
     except Exception:  # noqa: BLE001
         return None
 
+
+def _fit_image_for_comfy(
+    content: bytes,
+    *,
+    max_side: int = 1280,
+    max_pixels: int = 1_250_000,
+) -> tuple[bytes, tuple[int, int], bool]:
+    """Cap image-to-image inputs before ComfyUI.
+
+    User-selected generated results may be 2x/4x upscaled. Qwen/Flux edit
+    graphs can encode that raw image into a huge latent and OOM a 24GB GPU.
+    Keep the stored source intact, but send a bounded working copy to ComfyUI.
+    """
+    from PIL import Image as _PILImage
+    from PIL import ImageOps as _PILImageOps
+
+    img = _PILImage.open(io.BytesIO(content))
+    img = _PILImageOps.exif_transpose(img).convert("RGB")
+    w, h = img.size
+    scale = min(1.0, max_side / max(w, h), (max_pixels / max(w * h, 1)) ** 0.5)
+    if scale >= 0.999:
+        return content, (w, h), False
+    target = (
+        max(64, round(w * scale / 8) * 8),
+        max(64, round(h * scale / 8) * 8),
+    )
+    resized = img.resize(target, _PILImage.LANCZOS)
+    buf = io.BytesIO()
+    resized.save(buf, format="PNG")
+    return buf.getvalue(), target, True
+
+
+def _resize_mask_for_comfy(content: bytes, size: tuple[int, int]) -> bytes:
+    from PIL import Image as _PILImage
+    from PIL import ImageOps as _PILImageOps
+
+    img = _PILImage.open(io.BytesIO(content))
+    img = _PILImageOps.exif_transpose(img).convert("L")
+    if img.size == size:
+        return content
+    img = img.resize(size, _PILImage.NEAREST)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 # Applied to every diffusion prompt (generate/edit/cleanup/inpaint — everything
 # that isn't the deterministic `techdraw` path). Two things diffusion won't do
 # on its own: (1) draw in ЕСКД line conventions rather than a generic "blueprint"
@@ -514,6 +560,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
         uploaded: list[str] = []
         enhanced_source: bytes | None = None
+        comfy_source_size: tuple[int, int] | None = None
+        comfy_source_content: bytes | None = None
         for idx, path in enumerate(source_paths):
             content = download_file(path)
             if operation == "cleanup":
@@ -533,12 +581,47 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # computed against the original would land in the wrong
                     # place on the diffusion output.
                     enhanced_source = content
-            server_name = await client.upload_image(content, f"src_{generation_id}_{idx}.png")
+            upload_content = content
+            resized_for_comfy = False
+            if operation in ("edit", "inpaint", "cleanup"):
+                try:
+                    upload_content, fit_size, resized_for_comfy = _fit_image_for_comfy(content)
+                    if idx == 0:
+                        comfy_source_size = fit_size
+                        comfy_source_content = upload_content
+                    if resized_for_comfy:
+                        logger.info(
+                            "source_resized_for_comfy",
+                            generation_id=generation_id,
+                            source_index=idx,
+                            size=list(fit_size),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "source_resize_for_comfy_failed",
+                        generation_id=generation_id,
+                        source_index=idx,
+                        error=str(exc),
+                    )
+                    upload_content = content
+            server_name = await client.upload_image(
+                upload_content,
+                f"src_{generation_id}_{idx}.png",
+            )
             uploaded.append(server_name)
 
         mask_name = None
         if mask_path:
             mask_content = download_file(mask_path)
+            if comfy_source_size:
+                try:
+                    mask_content = _resize_mask_for_comfy(mask_content, comfy_source_size)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "mask_resize_for_comfy_failed",
+                        generation_id=generation_id,
+                        error=str(exc),
+                    )
             mask_name = await client.upload_image(mask_content, f"mask_{generation_id}.png")
 
         # ControlNet conditioning image (optional): only for workflows that
@@ -548,7 +631,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if "controlnet_image" in inject_map and uploaded:
             from app.ai.drawing_preprocessor import canny_edge_map
 
-            source_content = download_file(source_paths[0])
+            source_content = comfy_source_content or download_file(source_paths[0])
             edge_png = canny_edge_map(source_content)
             controlnet_name = await client.upload_image(edge_png, f"controlnet_{generation_id}.png")
 
