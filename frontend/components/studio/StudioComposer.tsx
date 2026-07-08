@@ -57,6 +57,7 @@ type StudioComposerPrefs = {
   linkCaseId?: string;
   workflowId?: string;
   workflowByOperation?: Partial<Record<Operation, string>>;
+  workflowParamOverrides?: Record<string, Record<string, unknown>>;
   hd?: boolean;
   upscale?: number;
   postprocess?: string;
@@ -127,6 +128,10 @@ export default function StudioComposer({ onSubmitted }: Props) {
   const [workflowByOperation, setWorkflowByOperation] = useState<
     Partial<Record<Operation, string>>
   >(prefs.workflowByOperation ?? {});
+  const [workflowParamOverrides, setWorkflowParamOverrides] = useState<
+    Record<string, Record<string, unknown>>
+  >(prefs.workflowParamOverrides ?? {});
+  const [paramSaveMsg, setParamSaveMsg] = useState<string | null>(null);
   // Inline rename after a quick "make my own copy".
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -194,6 +199,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
           linkCaseId,
           workflowId,
           workflowByOperation,
+          workflowParamOverrides,
           hd,
           upscale,
           postprocess,
@@ -220,6 +226,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
     linkCaseId,
     workflowId,
     workflowByOperation,
+    workflowParamOverrides,
     hd,
     upscale,
     postprocess,
@@ -255,6 +262,13 @@ export default function StudioComposer({ onSubmitted }: Props) {
   }, [operation, techMode, workflows.length]);
 
   const op = OPERATIONS.find((o) => o.key === operation)!;
+  const selectedParamsSchema = (selectedWorkflow?.params_schema || {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const workflowParamEntries = Object.entries(selectedParamsSchema).filter(
+    ([, spec]) => spec && typeof spec === "object",
+  );
 
   function applyEskdPromptPreview(value: string): string {
     const base = value.trim();
@@ -318,6 +332,88 @@ export default function StudioComposer({ onSubmitted }: Props) {
     setPrompt(next);
   }
 
+  function workflowParamValue(key: string, spec: Record<string, unknown>) {
+    if (!selectedWorkflow) return spec.default ?? "";
+    const saved = workflowParamOverrides[selectedWorkflow.id]?.[key];
+    return saved !== undefined ? saved : (spec.default ?? "");
+  }
+
+  function setWorkflowParamValue(key: string, value: unknown) {
+    if (!selectedWorkflow) return;
+    setParamSaveMsg(null);
+    setWorkflowParamOverrides((cur) => ({
+      ...cur,
+      [selectedWorkflow.id]: {
+        ...(cur[selectedWorkflow.id] || {}),
+        [key]: value,
+      },
+    }));
+  }
+
+  function castWorkflowParam(value: unknown, spec: Record<string, unknown>) {
+    const type = String(spec.type || "");
+    if (type === "bool" || type === "boolean") return Boolean(value);
+    if (type === "int" || type === "integer") {
+      const n = Number(value);
+      return Number.isFinite(n) ? Math.round(n) : undefined;
+    }
+    if (type === "float" || type === "number") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    return value === "" ? undefined : value;
+  }
+
+  function collectWorkflowParams(): Record<string, unknown> {
+    if (!selectedWorkflow) return {};
+    const out: Record<string, unknown> = {};
+    for (const [key, spec] of workflowParamEntries) {
+      const casted = castWorkflowParam(workflowParamValue(key, spec), spec);
+      if (casted !== undefined) out[key] = casted;
+    }
+    return out;
+  }
+
+  async function saveWorkflowParamDefaults() {
+    if (!selectedWorkflow) return;
+    setBusy(true);
+    setErr(null);
+    setParamSaveMsg(null);
+    try {
+      let target = selectedWorkflow;
+      if (selectedWorkflow.is_builtin) {
+        target = await duplicateWorkflow(selectedWorkflow.id);
+      }
+      const nextSchema: Record<string, unknown> = {};
+      for (const [key, spec] of Object.entries(selectedParamsSchema)) {
+        const nextSpec: Record<string, unknown> =
+          spec && typeof spec === "object" ? { ...spec } : { type: "string" };
+        const casted = castWorkflowParam(workflowParamValue(key, nextSpec), nextSpec);
+        if (casted !== undefined) nextSpec.default = casted;
+        nextSchema[key] = nextSpec;
+      }
+      const updated = await patchWorkflow(target.id, { params_schema: nextSchema });
+      await reloadWorkflows();
+      setWorkflowId(updated.id);
+      setWorkflowByOperation((cur) => ({ ...cur, [activeOp]: updated.id }));
+      setWorkflowParamOverrides((cur) => {
+        const next = { ...cur };
+        delete next[selectedWorkflow.id];
+        delete next[updated.id];
+        return next;
+      });
+      setParamSaveMsg(
+        selectedWorkflow.is_builtin
+          ? t("workflow_params_saved_copy")
+          : t("workflow_params_saved"),
+      );
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** Quick "make my own copy": duplicate the selected builtin (or the first
    * builtin for this operation) — the copy inherits a correct inject_map, so
    * it runs immediately. Then offer inline rename. For deeper changes (import
@@ -377,6 +473,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
         if (upscale > 1) {
           (input.params as Record<string, unknown>).upscale = upscale;
         }
+        Object.assign(input.params as Record<string, unknown>, collectWorkflowParams());
         await generate(input);
       } else {
         await techDraw(techDesc, techView, link);
@@ -470,6 +567,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
       ) {
         (input.params as Record<string, unknown>).postprocess = postprocess;
       }
+      Object.assign(input.params as Record<string, unknown>, collectWorkflowParams());
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
       }
@@ -618,6 +716,93 @@ export default function StudioComposer({ onSubmitted }: Props) {
     );
   }
 
+  function workflowParamsEditor() {
+    if (!selectedWorkflow || workflowParamEntries.length === 0) return null;
+    return (
+      <div className="space-y-2 border-t border-white/10 pt-2">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="text-xs text-zinc-500">
+              {t("workflow_params_label")}
+            </div>
+            <div className="text-[11px] text-zinc-600">
+              {selectedWorkflow.is_builtin
+                ? t("workflow_params_builtin_hint")
+                : t("workflow_params_hint")}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={saveWorkflowParamDefaults}
+            disabled={busy}
+            className="shrink-0 rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20 disabled:opacity-50"
+          >
+            {t("workflow_params_save")}
+          </button>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {workflowParamEntries.map(([key, spec]) => {
+            const type = String(spec.type || "");
+            const label = String(spec.label || key);
+            const value = workflowParamValue(key, spec);
+            const options = Array.isArray(spec.options) ? spec.options : null;
+            if (type === "bool" || type === "boolean") {
+              return (
+                <label
+                  key={key}
+                  className="flex items-center gap-2 rounded bg-zinc-900/80 border border-white/10 p-2 text-xs text-zinc-300"
+                >
+                  <input
+                    type="checkbox"
+                    checked={Boolean(value)}
+                    onChange={(e) => setWorkflowParamValue(key, e.target.checked)}
+                  />
+                  <span>{label}</span>
+                </label>
+              );
+            }
+            if (options) {
+              return (
+                <label key={key} className="block">
+                  <span className="text-xs text-zinc-500">{label}</span>
+                  <select
+                    value={String(value ?? "")}
+                    onChange={(e) => setWorkflowParamValue(key, e.target.value)}
+                    className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                  >
+                    {options.map((opt) => (
+                      <option key={String(opt)} value={String(opt)}>
+                        {String(opt)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            }
+            const numeric = ["int", "integer", "float", "number"].includes(type);
+            return (
+              <label key={key} className="block">
+                <span className="text-xs text-zinc-500">{label}</span>
+                <input
+                  type={numeric ? "number" : "text"}
+                  value={String(value ?? "")}
+                  min={spec.min !== undefined ? Number(spec.min) : undefined}
+                  max={spec.max !== undefined ? Number(spec.max) : undefined}
+                  step={type === "int" || type === "integer" ? 1 : numeric ? 0.1 : undefined}
+                  onChange={(e) => setWorkflowParamValue(key, e.target.value)}
+                  className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                />
+              </label>
+            );
+          })}
+        </div>
+        {paramSaveMsg && (
+          <div className="text-[11px] text-emerald-400">{paramSaveMsg}</div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Traceability: optional link to a document/case (shared by both modes) */}
@@ -731,6 +916,27 @@ export default function StudioComposer({ onSubmitted }: Props) {
                 ))}
               </div>
             </div>
+          )}
+          {workflowId && (
+            <details className="text-sm">
+              <summary className="text-xs text-zinc-500 cursor-pointer">
+                {t("advanced")}
+              </summary>
+              <div className="mt-2 space-y-2">
+                <div>
+                  <label className="text-xs text-zinc-500">
+                    {t("seed_label")}
+                  </label>
+                  <input
+                    type="number"
+                    value={seed}
+                    onChange={(e) => setSeed(e.target.value)}
+                    className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                  />
+                </div>
+                {workflowParamsEditor()}
+              </div>
+            </details>
           )}
           {err && <div className="text-xs text-red-400">{err}</div>}
           <button
@@ -1026,6 +1232,7 @@ export default function StudioComposer({ onSubmitted }: Props) {
                   className="w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
                 />
               </div>
+              {workflowParamsEditor()}
             </div>
           </details>
 
