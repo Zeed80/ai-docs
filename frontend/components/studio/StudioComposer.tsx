@@ -77,8 +77,8 @@ const ESKD_STYLE_SUFFIX =
   "без рамки листа, без углового штампа, без основной надписи, без таблицы";
 const ESKD_STYLE_MARKER = "технический чертёж по ЕСКД";
 
-function generationLabel(id: string): string {
-  return `ID ${id.slice(0, 8)}`;
+function generationLabel(g: Generation): string {
+  return g.prompt?.trim() || g.operation;
 }
 
 function readPrefs(): StudioComposerPrefs {
@@ -91,12 +91,17 @@ function readPrefs(): StudioComposerPrefs {
   }
 }
 
-export default function StudioComposer({ onSubmitted, generatedSources = [] }: Props) {
+export default function StudioComposer({
+  onSubmitted,
+  generatedSources = [],
+}: Props) {
   const t = useTranslations("studio.composer");
   const prefsRef = useRef<StudioComposerPrefs | null>(null);
   if (prefsRef.current === null) prefsRef.current = readPrefs();
   const prefs = prefsRef.current;
-  const [operation, setOperation] = useState<Operation>(prefs.operation ?? "edit");
+  const [operation, setOperation] = useState<Operation>(
+    prefs.operation ?? "edit",
+  );
   const [prompt, setPrompt] = useState(prefs.prompt ?? "");
   const [negative, setNegative] = useState(prefs.negative ?? "");
   const [cleanupPrompt, setCleanupPrompt] = useState(prefs.cleanupPrompt ?? "");
@@ -104,7 +109,9 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
     Boolean(prefs.cleanupPromptVisible),
   );
   const [seed, setSeed] = useState<string>(prefs.seed ?? "0");
-  const [quality, setQuality] = useState<"fast" | "quality">(prefs.quality ?? "fast");
+  const [quality, setQuality] = useState<"fast" | "quality">(
+    prefs.quality ?? "fast",
+  );
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
   const [sourceGenerationId, setSourceGenerationId] = useState<string>("");
@@ -118,7 +125,9 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
   // Exact technical drawing (deterministic ЕСКД render, not diffusion).
   const [techMode, setTechMode] = useState(Boolean(prefs.techMode));
   const [techDesc, setTechDesc] = useState(prefs.techDesc ?? "");
-  const [techView, setTechView] = useState<TechDrawView>(prefs.techView ?? "front");
+  const [techView, setTechView] = useState<TechDrawView>(
+    prefs.techView ?? "front",
+  );
 
   // Traceability: attach the result to a document/case (optional).
   const [linkDocId, setLinkDocId] = useState(prefs.linkDocId ?? "");
@@ -262,7 +271,11 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
     setRenaming(null);
     if (techMode) {
       const saved = workflowByOperation.eskd;
-      setWorkflowId(saved && workflows.some((w) => w.id === saved && w.operation === "eskd") ? saved : "");
+      setWorkflowId(
+        saved && workflows.some((w) => w.id === saved && w.operation === "eskd")
+          ? saved
+          : "",
+      );
       return;
     }
     const opts = workflows.filter((w) => w.operation === operation);
@@ -279,10 +292,8 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
   }, [operation, techMode, workflows.length]);
 
   const op = OPERATIONS.find((o) => o.key === operation)!;
-  const selectedParamsSchema = (selectedWorkflow?.params_schema || {}) as Record<
-    string,
-    Record<string, unknown>
-  >;
+  const selectedParamsSchema = (selectedWorkflow?.params_schema ||
+    {}) as Record<string, Record<string, unknown>>;
   const workflowParamEntries = Object.entries(selectedParamsSchema).filter(
     ([, spec]) => spec && typeof spec === "object",
   );
@@ -290,7 +301,9 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
   function applyEskdPromptPreview(value: string): string {
     const base = value.trim();
     if (base.includes(ESKD_STYLE_MARKER)) return base;
-    return base ? `${base}${ESKD_STYLE_SUFFIX}` : ESKD_STYLE_SUFFIX.replace(/^, /, "");
+    return base
+      ? `${base}${ESKD_STYLE_SUFFIX}`
+      : ESKD_STYLE_SUFFIX.replace(/^, /, "");
   }
 
   function workflowTextValue(logicalKey: "prompt" | "negative"): string {
@@ -303,12 +316,17 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
       const rec = target as Record<string, unknown>;
       const nodeId = String(rec.node ?? "");
       const input = String(rec.input ?? "");
-      const node = (wf.graph as Record<string, { inputs?: Record<string, unknown> }>)[nodeId];
+      const node = (
+        wf.graph as Record<string, { inputs?: Record<string, unknown> }>
+      )[nodeId];
       const value = node?.inputs?.[input];
       if (typeof value === "string" && value.trim()) return value;
     }
     for (const node of Object.values(
-      wf.graph as Record<string, { class_type?: string; inputs?: Record<string, unknown> }>,
+      wf.graph as Record<
+        string,
+        { class_type?: string; inputs?: Record<string, unknown> }
+      >,
     )) {
       const cls = String(node?.class_type || "").toLowerCase();
       if (!cls.includes("text") && !cls.includes("clip")) continue;
@@ -405,11 +423,16 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
       for (const [key, spec] of Object.entries(selectedParamsSchema)) {
         const nextSpec: Record<string, unknown> =
           spec && typeof spec === "object" ? { ...spec } : { type: "string" };
-        const casted = castWorkflowParam(workflowParamValue(key, nextSpec), nextSpec);
+        const casted = castWorkflowParam(
+          workflowParamValue(key, nextSpec),
+          nextSpec,
+        );
         if (casted !== undefined) nextSpec.default = casted;
         nextSchema[key] = nextSpec;
       }
-      const updated = await patchWorkflow(target.id, { params_schema: nextSchema });
+      const updated = await patchWorkflow(target.id, {
+        params_schema: nextSchema,
+      });
       await reloadWorkflows();
       setWorkflowId(updated.id);
       setWorkflowByOperation((cur) => ({ ...cur, [activeOp]: updated.id }));
@@ -490,7 +513,10 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
         if (upscale > 1) {
           (input.params as Record<string, unknown>).upscale = upscale;
         }
-        Object.assign(input.params as Record<string, unknown>, collectWorkflowParams());
+        Object.assign(
+          input.params as Record<string, unknown>,
+          collectWorkflowParams(),
+        );
         await generate(input);
       } else {
         await techDraw(techDesc, techView, link);
@@ -563,7 +589,12 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
       setErr(t("error_need_source"));
       return;
     }
-    if (operation === "generate" && !prompt.trim()) {
+    if (
+      (operation === "generate" ||
+        operation === "edit" ||
+        operation === "inpaint") &&
+      !prompt.trim()
+    ) {
       setErr(t("error_need_prompt"));
       return;
     }
@@ -608,7 +639,10 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
       ) {
         (input.params as Record<string, unknown>).postprocess = postprocess;
       }
-      Object.assign(input.params as Record<string, unknown>, collectWorkflowParams());
+      Object.assign(
+        input.params as Record<string, unknown>,
+        collectWorkflowParams(),
+      );
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
       } else if (sourceGenerationId) {
@@ -798,7 +832,9 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                   <input
                     type="checkbox"
                     checked={Boolean(value)}
-                    onChange={(e) => setWorkflowParamValue(key, e.target.checked)}
+                    onChange={(e) =>
+                      setWorkflowParamValue(key, e.target.checked)
+                    }
                   />
                   <span>{label}</span>
                 </label>
@@ -822,7 +858,9 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                 </label>
               );
             }
-            const numeric = ["int", "integer", "float", "number"].includes(type);
+            const numeric = ["int", "integer", "float", "number"].includes(
+              type,
+            );
             return (
               <label key={key} className="block">
                 <span className="text-xs text-zinc-500">{label}</span>
@@ -831,7 +869,13 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                   value={String(value ?? "")}
                   min={spec.min !== undefined ? Number(spec.min) : undefined}
                   max={spec.max !== undefined ? Number(spec.max) : undefined}
-                  step={type === "int" || type === "integer" ? 1 : numeric ? 0.1 : undefined}
+                  step={
+                    type === "int" || type === "integer"
+                      ? 1
+                      : numeric
+                        ? 0.1
+                        : undefined
+                  }
                   onChange={(e) => setWorkflowParamValue(key, e.target.value)}
                   className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
                 />
@@ -853,14 +897,20 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
         <button
           type="button"
           onClick={() => {
-            setPreviewGenerationId(sourceGenerationId || generatedSources[0]?.id || "");
+            setPreviewGenerationId(
+              sourceGenerationId || generatedSources[0]?.id || "",
+            );
             setSourcePickerOpen(true);
           }}
           className="min-w-0 flex-1 rounded bg-white/10 px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-white/20 sm:flex-none"
           aria-label={t("generated_source_label")}
         >
           {sourceGenerationId
-            ? `${t("generated_source_selected")} ${generationLabel(sourceGenerationId)}`
+            ? `${t("generated_source_selected")} ${
+                selectedGeneration
+                  ? generationLabel(selectedGeneration)
+                  : sourceGenerationId.slice(0, 8)
+              }`
             : t("generated_source_placeholder")}
         </button>
 
@@ -883,7 +933,7 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                   </div>
                   {previewGeneration && (
                     <div className="text-[11px] text-zinc-500">
-                      {generationLabel(previewGeneration.id)}
+                      {generationLabel(previewGeneration)}
                     </div>
                   )}
                 </div>
@@ -903,7 +953,7 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={resultUrl(previewGeneration.id)}
-                      alt={`${t("gallery.result_alt")} ${generationLabel(previewGeneration.id)}`}
+                      alt={`${t("gallery.result_alt")} ${generationLabel(previewGeneration)}`}
                       className="max-h-[58vh] w-full object-contain"
                     />
                   ) : (
@@ -934,7 +984,7 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
                               src={resultUrl(g.id, true)}
-                              alt={`${t("gallery.result_alt")} ${generationLabel(g.id)}`}
+                              alt={`${t("gallery.result_alt")} ${generationLabel(g)}`}
                               className="h-full w-full object-cover"
                             />
                           ) : (
@@ -944,7 +994,7 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                           )}
                         </div>
                         <div className="px-1.5 py-1 text-[11px] text-zinc-300">
-                          {generationLabel(g.id)}
+                          {generationLabel(g)}
                         </div>
                       </button>
                     );
@@ -963,11 +1013,14 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                 <button
                   type="button"
                   disabled={!previewGeneration?.has_result}
-                  onClick={() => previewGeneration && setGeneratedSource(previewGeneration.id)}
+                  onClick={() =>
+                    previewGeneration &&
+                    setGeneratedSource(previewGeneration.id)
+                  }
                   className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
                 >
                   {previewGeneration
-                    ? `${t("generated_source_use")} ${generationLabel(previewGeneration.id)}`
+                    ? `${t("generated_source_use")} ${generationLabel(previewGeneration)}`
                     : t("generated_source_use")}
                 </button>
               </div>
@@ -1052,7 +1105,9 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                 {t("tech_view_label")}
               </span>
               <div className="grid grid-cols-2 gap-1 p-1 rounded bg-white/5 sm:grid-cols-4">
-                {(["front", "section", "half_section", "isometric"] as const).map((v) => (
+                {(
+                  ["front", "section", "half_section", "isometric"] as const
+                ).map((v) => (
                   <button
                     key={v}
                     onClick={() => setTechView(v)}
@@ -1303,7 +1358,7 @@ export default function StudioComposer({ onSubmitted, generatedSources = [] }: P
                 <div className="space-y-1">
                   {selectedGeneration && (
                     <div className="text-[11px] text-zinc-500">
-                      {generationLabel(selectedGeneration.id)}
+                      {generationLabel(selectedGeneration)}
                     </div>
                   )}
                   {operation === "inpaint" ? (

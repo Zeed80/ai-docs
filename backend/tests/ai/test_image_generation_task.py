@@ -133,19 +133,21 @@ def test_reconcile_result_size_skips_aspect_mismatch_to_avoid_vertical_compressi
     source = _png(800, 1200)
     result = _png(1024, 1024)
 
-    out, changed, reason = img_gen_task._reconcile_result_size(result, source)
+    out, changed, reason, before_size = img_gen_task._reconcile_result_size(result, source)
 
     assert changed is False
     assert reason == "aspect-mismatch"
     assert _png_size(out) == (1024, 1024)
+    assert before_size == (1024, 1024)
 
 
 def test_reconcile_result_size_resizes_only_when_aspect_matches():
     source = _png(800, 1200)
     result = _png(1210, 1800)
 
-    out, changed, reason = img_gen_task._reconcile_result_size(result, source)
+    out, changed, reason, before_size = img_gen_task._reconcile_result_size(result, source)
 
     assert changed is True
     assert reason == "resized"
     assert _png_size(out) == (1200, 1800)
+    assert before_size == (1210, 1800)

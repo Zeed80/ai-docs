@@ -127,37 +127,41 @@ def _reconcile_result_size(
     ref_bytes: bytes,
     *,
     aspect_tolerance: float = 0.015,
-) -> tuple[bytes, bool, str]:
+) -> tuple[bytes, bool, str, tuple[int, int] | None]:
     """Resize image-to-image results only when that cannot distort geometry.
 
     ComfyUI workflows may intentionally emit a model-native bucket. Forcing
     every result into the source aspect ratio stretches non-standard sheets;
     keep such results untouched and only resize when source/result aspects are
     already effectively the same.
+
+    Returns the original (pre-resize) result size alongside the outcome so
+    callers that just want it for logging don't need to decode the PNG again.
     """
     from PIL import Image as _PILImage
 
     ref_w, ref_h = _PILImage.open(io.BytesIO(ref_bytes)).size
     out_img = _PILImage.open(io.BytesIO(result_bytes))
     out_w, out_h = out_img.size
+    original_size = (out_w, out_h)
     if min(ref_w, ref_h, out_w, out_h) <= 0:
-        return result_bytes, False, "invalid-size"
+        return result_bytes, False, "invalid-size", original_size
     ref_aspect = ref_w / ref_h
     out_aspect = out_w / out_h
     delta = abs(ref_aspect - out_aspect) / max(ref_aspect, out_aspect)
     if delta > aspect_tolerance:
-        return result_bytes, False, "aspect-mismatch"
+        return result_bytes, False, "aspect-mismatch", original_size
 
     # Match the source's frame at the diffusion's own resolution, preserving
     # aspect. This is only safe after the aspect check above.
     scale = max(max(out_img.size) / max(ref_w, ref_h), 1.0)
     target = (round(ref_w * scale), round(ref_h * scale))
     if out_img.size == target:
-        return result_bytes, False, "same-size"
+        return result_bytes, False, "same-size", original_size
     resized = out_img.convert("RGB").resize(target, _PILImage.LANCZOS)
     buf = io.BytesIO()
     resized.save(buf, format="PNG")
-    return buf.getvalue(), True, "resized"
+    return buf.getvalue(), True, "resized", original_size
 
 
 # Applied to every diffusion prompt (generate/edit/cleanup/inpaint — everything
@@ -767,14 +771,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if operation in ("cleanup", "edit", "inpaint") and (enhanced_source or source_paths):
             try:
                 ref_bytes = enhanced_source or download_file(source_paths[0])
-                before_size = None
-                try:
-                    from PIL import Image as _PILImage
-
-                    before_size = _PILImage.open(io.BytesIO(result_bytes)).size
-                except Exception:  # noqa: BLE001
-                    pass
-                result_bytes, changed, reason = _reconcile_result_size(result_bytes, ref_bytes)
+                result_bytes, changed, reason, before_size = _reconcile_result_size(
+                    result_bytes, ref_bytes
+                )
                 if changed:
                     logger.info("result_resized_to_source", generation_id=generation_id,
                                 out=list(before_size or ()), reason=reason)

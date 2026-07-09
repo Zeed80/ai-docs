@@ -4,8 +4,8 @@ import { useTranslations } from "next-intl";
 
 import { Generation, resultUrl } from "@/lib/studio-api";
 
-function generationLabel(id: string): string {
-  return `ID ${id.slice(0, 8)}`;
+function generationLabel(g: Generation): string {
+  return g.prompt?.trim() || g.operation;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -67,7 +67,7 @@ export default function GenerationGallery({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={resultUrl(g.id, true)}
-                alt={`${t("gallery.result_alt")} ${generationLabel(g.id)}`}
+                alt={`${t("gallery.result_alt")} ${generationLabel(g)}`}
                 className="w-full h-full object-cover bg-zinc-900"
               />
             ) : (
@@ -112,7 +112,7 @@ export default function GenerationGallery({
                 {g.accepted ? t("status.accepted_suffix") : ""}
               </div>
               <div className="text-[11px] text-zinc-300 line-clamp-1">
-                {generationLabel(g.id)}
+                {generationLabel(g)}
               </div>
             </div>
           </div>

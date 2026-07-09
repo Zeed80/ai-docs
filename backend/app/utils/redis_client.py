@@ -28,6 +28,8 @@ from redis.asyncio.connection import ConnectionPool as AsyncConnectionPool
 _sync_pool: ConnectionPool | None = None
 _async_pool: AsyncConnectionPool | None = None
 _async_pool_loop: asyncio.AbstractEventLoop | None = None
+_async_pubsub_pool: AsyncConnectionPool | None = None
+_async_pubsub_pool_loop: asyncio.AbstractEventLoop | None = None
 
 
 def get_sync_redis() -> redis.Redis:
@@ -73,13 +75,42 @@ def get_async_redis() -> aioredis.Redis:
     return aioredis.Redis(connection_pool=_async_pool)
 
 
+def get_async_redis_pubsub() -> aioredis.Redis:
+    """Return an async Redis client for long-lived pub/sub subscriptions.
+
+    Backed by its own pool, separate from ``get_async_redis()``'s shared
+    command pool. A pub/sub connection is held for the entire lifetime of a
+    subscription (e.g. one per open Studio queue SSE tab) and only returns to
+    its pool when the subscriber disconnects — sharing that pool with normal
+    short-lived request-path calls (auth revocation checks, rate limiting)
+    let enough open tabs starve unrelated requests of connections.
+    """
+    global _async_pubsub_pool, _async_pubsub_pool_loop
+    current_loop = asyncio.get_running_loop()
+    if _async_pubsub_pool is None or _async_pubsub_pool_loop is not current_loop:
+        if _async_pubsub_pool is not None:
+            _dispose_pool_on_its_loop(_async_pubsub_pool, _async_pubsub_pool_loop)
+        from app.config import settings
+        _async_pubsub_pool = AsyncConnectionPool.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            max_connections=200,
+        )
+        _async_pubsub_pool_loop = current_loop
+    return aioredis.Redis(connection_pool=_async_pubsub_pool)
+
+
 async def close_pools() -> None:
     """Gracefully close both pools. Call from FastAPI lifespan shutdown."""
-    global _sync_pool, _async_pool, _async_pool_loop
+    global _sync_pool, _async_pool, _async_pool_loop, _async_pubsub_pool, _async_pubsub_pool_loop
     if _async_pool is not None:
         await _async_pool.aclose()
         _async_pool = None
         _async_pool_loop = None
+    if _async_pubsub_pool is not None:
+        await _async_pubsub_pool.aclose()
+        _async_pubsub_pool = None
+        _async_pubsub_pool_loop = None
     if _sync_pool is not None:
         _sync_pool.disconnect()
         _sync_pool = None

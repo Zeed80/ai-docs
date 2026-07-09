@@ -171,9 +171,9 @@ async def queue_events(
         import json
 
         from app.services.studio_queue import EVENT_REDIS_CHANNEL
-        from app.utils.redis_client import get_async_redis
+        from app.utils.redis_client import get_async_redis_pubsub
 
-        redis = get_async_redis()
+        redis = get_async_redis_pubsub()
         pubsub = redis.pubsub()
         await pubsub.subscribe(EVENT_REDIS_CHANNEL)
         yield "event: ready\ndata: {}\n\n"

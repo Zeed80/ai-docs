@@ -332,6 +332,62 @@ def test_build_workflow_controlnet_image_optional():
     assert with_cn["96"]["inputs"]["strength"] == 0.8
 
 
+def test_build_workflow_honors_explicit_negative_map_on_single_text_node():
+    """A single-CLIPTextEncode template with an explicit negative map entry
+    must actually receive the negative text — not silently drop it because
+    the graph-wide heuristic only compares roles across >=2 text nodes."""
+    template = {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "template positive"}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "template negative"}},
+    }
+
+    graph = build_workflow(
+        template,
+        {
+            "prompt": {"node": "1", "input": "text"},
+            "negative": {"node": "2", "input": "text"},
+        },
+        {"prompt": "user prompt", "negative": "user negative"},
+    )
+
+    assert graph["1"]["inputs"]["text"] == "user prompt"
+    assert graph["2"]["inputs"]["text"] == "user negative"
+
+
+def test_build_workflow_drops_negative_safely_with_no_target_node():
+    """A single text node with no explicit negative mapping has nowhere to
+    put a negative prompt — it must not clobber the positive prompt node."""
+    template = {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "template prompt"}},
+    }
+
+    graph = build_workflow(
+        template,
+        {"prompt": {"node": "1", "input": "text"}},
+        {"prompt": "user prompt", "negative": "blurry, low quality"},
+    )
+
+    assert graph["1"]["inputs"]["text"] == "user prompt"
+
+
+def test_build_workflow_honors_explicit_prompt_map_over_heuristic_guess():
+    """An admin-configured prompt target that correctly names a text node
+    must be honored, not silently discarded in favor of the heuristic."""
+    template = {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "template a"}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "template b"}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "template c"}},
+    }
+
+    graph = build_workflow(
+        template,
+        {"prompt": {"node": "2", "input": "text"}},
+        {"prompt": "user prompt", "negative": None},
+    )
+
+    assert graph["2"]["inputs"]["text"] == "user prompt"
+
+
 def test_resolve_node_rejects_non_local(monkeypatch):
     monkeypatch.setattr(
         comfyui_client.provider_registry,

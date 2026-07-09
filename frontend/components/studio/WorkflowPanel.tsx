@@ -46,21 +46,25 @@ const EMPTY_TARGET: InjectTarget = { node: "", input: "" };
 const WORKFLOW_OPERATIONS = ["edit", "generate", "inpaint", "cleanup", "eskd"];
 const CATEGORY_TO_OPERATION: Record<string, string> = {
   edit: "edit",
-  "правка": "edit",
-  "редактирование": "edit",
+  правка: "edit",
+  редактирование: "edit",
   generate: "generate",
   inpaint: "inpaint",
   cleanup: "cleanup",
   process: "cleanup",
-  "очистка": "cleanup",
+  очистка: "cleanup",
   eskd: "eskd",
-  "ескд": "eskd",
+  ескд: "eskd",
 };
 
 function workflowGroupKey(w: Workflow): string {
-  const operation = String(w.operation || "").trim().toLowerCase();
+  const operation = String(w.operation || "")
+    .trim()
+    .toLowerCase();
   if (WORKFLOW_OPERATIONS.includes(operation)) return operation;
-  const category = String(w.category || "").trim().toLowerCase();
+  const category = String(w.category || "")
+    .trim()
+    .toLowerCase();
   return CATEGORY_TO_OPERATION[category] || category || operation || "edit";
 }
 
@@ -107,24 +111,29 @@ function firstInput(node: ComfyNode, candidates: string[]): string {
 }
 
 function isLinkValue(value: unknown): value is [string, number] {
-  return Array.isArray(value) && value.length >= 1 && typeof value[0] !== "object";
+  return (
+    Array.isArray(value) && value.length >= 1 && typeof value[0] !== "object"
+  );
 }
 
 function looksLikeTextClass(classType: string): boolean {
   const c = classType.toLowerCase();
   return (
-    c.includes("textencode")
-    || c.includes("text_encode")
-    || c.includes("cliptext")
-    || c.includes("prompt")
-    || c.startsWith("text")
-    || c.endsWith("text")
+    c.includes("textencode") ||
+    c.includes("text_encode") ||
+    c.includes("cliptext") ||
+    c.includes("prompt") ||
+    c.startsWith("text") ||
+    c.endsWith("text")
   );
 }
 
 function isTextNode(node: ComfyNode): boolean {
   const c = lowerClass(node);
-  return looksLikeTextClass(c) || Boolean(firstInput(node, textInputCandidates(node)));
+  return (
+    looksLikeTextClass(c) ||
+    Boolean(firstInput(node, textInputCandidates(node)))
+  );
 }
 
 function textInputCandidates(node: ComfyNode): string[] {
@@ -138,9 +147,16 @@ function textInputCandidates(node: ComfyNode): string[] {
   const inputs = node.inputs || {};
   const existing = GENERIC_TEXT_INPUTS.filter((name) => {
     const value = inputs[name];
-    return value !== undefined && !Array.isArray(value) && (typeof value !== "object" || value === null);
+    return (
+      value !== undefined &&
+      !Array.isArray(value) &&
+      (typeof value !== "object" || value === null)
+    );
   });
-  return [...existing, ...GENERIC_TEXT_INPUTS.filter((name) => !existing.includes(name))];
+  return [
+    ...existing,
+    ...GENERIC_TEXT_INPUTS.filter((name) => !existing.includes(name)),
+  ];
 }
 
 function setIfInput(
@@ -155,7 +171,11 @@ function setIfInput(
   if (input) map[key] = { node: nodeId, input };
 }
 
-function hasUsableInput(graph: Record<string, ComfyNode>, target: InjectTarget, candidates?: string[]): boolean {
+function hasUsableInput(
+  graph: Record<string, ComfyNode>,
+  target: InjectTarget,
+  candidates?: string[],
+): boolean {
   const node = graph[target.node];
   if (!node || !target.input) return false;
   if (candidates && !candidates.includes(target.input)) return false;
@@ -164,16 +184,20 @@ function hasUsableInput(graph: Record<string, ComfyNode>, target: InjectTarget, 
 
 function looksNegativeText(node: ComfyNode): boolean {
   const inputs = node.inputs || {};
-  const text = GENERIC_TEXT_INPUTS
-    .map((name) => (typeof inputs[name] === "string" ? inputs[name] : ""))
+  const text = GENERIC_TEXT_INPUTS.map((name) =>
+    typeof inputs[name] === "string" ? inputs[name] : "",
+  )
     .join(" ")
     .toLowerCase()
     .trim();
   const cls = lowerClass(node);
-  if (/negative|negative_prompt|neg prompt|негатив/.test(`${cls} ${text}`)) return true;
+  if (/negative|negative_prompt|neg prompt|негатив/.test(`${cls} ${text}`))
+    return true;
   if (/negative|negprompt/.test(cls)) return true;
   if (!text || text.length > 260) return false;
-  return /worst|bad|blur|blurry|artifact|artifacts|low quality|deformed|noise|noisy|shadow|shadows|лишн|размыт|артефакт|шум|тень/.test(text);
+  return /worst|bad|blur|blurry|artifact|artifacts|low quality|deformed|noise|noisy|shadow|shadows|лишн|размыт|артефакт|шум|тень/.test(
+    text,
+  );
 }
 
 function textValue(node: ComfyNode): string {
@@ -188,7 +212,9 @@ function downstreamRoleScore(
   sourceId: string,
   role: "positive" | "negative",
 ): number {
-  const queue: Array<{ id: string; depth: number }> = [{ id: sourceId, depth: 0 }];
+  const queue: Array<{ id: string; depth: number }> = [
+    { id: sourceId, depth: 0 },
+  ];
   const visited = new Set<string>();
   let score = 0;
   while (queue.length) {
@@ -202,7 +228,8 @@ function downstreamRoleScore(
         if (inputName === role || inputName.includes(role)) {
           score += Math.max(20, 120 - current.depth * 20);
         }
-        if (!visited.has(targetId)) queue.push({ id: targetId, depth: current.depth + 1 });
+        if (!visited.has(targetId))
+          queue.push({ id: targetId, depth: current.depth + 1 });
       }
     }
   }
@@ -226,11 +253,17 @@ function pickTextRoles(graph: Record<string, ComfyNode>): {
       node,
       index,
       positiveScore: directPositive - directNegative + (text ? 8 : 0),
-      negativeScore: directNegative - directPositive + (looksNegativeText(node) ? 30 : 0) + (text ? 0 : 2),
+      negativeScore:
+        directNegative -
+        directPositive +
+        (looksNegativeText(node) ? 30 : 0) +
+        (text ? 0 : 2),
     };
   });
 
-  const positive = [...ranked].sort((a, b) => b.positiveScore - a.positiveScore || a.index - b.index)[0];
+  const positive = [...ranked].sort(
+    (a, b) => b.positiveScore - a.positiveScore || a.index - b.index,
+  )[0];
   const negative = [...ranked]
     .filter((item) => item.id !== positive.id)
     .sort((a, b) => b.negativeScore - a.negativeScore || a.index - b.index)[0];
@@ -240,28 +273,45 @@ function pickTextRoles(graph: Record<string, ComfyNode>): {
   };
 }
 
-function widgetInputsForNode(
-  node: { type?: string; class_type?: string; widgets_values?: unknown },
-): Record<string, unknown> {
+function widgetInputsForNode(node: {
+  type?: string;
+  class_type?: string;
+  widgets_values?: unknown;
+}): Record<string, unknown> {
   const values = node.widgets_values;
   if (!Array.isArray(values)) {
-    return values && typeof values === "object" ? (values as Record<string, unknown>) : {};
+    return values && typeof values === "object"
+      ? (values as Record<string, unknown>)
+      : {};
   }
   const type = String(node.type || node.class_type || "");
   const low = type.toLowerCase();
   const out: Record<string, unknown> = {};
   if (looksLikeTextClass(low)) {
     if (values[0] !== undefined) {
-      out[low.includes("qwen") && low.includes("text") ? "prompt" : "text"] = values[0];
+      out[low.includes("qwen") && low.includes("text") ? "prompt" : "text"] =
+        values[0];
     }
   } else if (low.includes("ksampler")) {
-    const names = ["seed", "control_after_generate", "steps", "cfg", "sampler_name", "scheduler", "denoise"];
+    const names = [
+      "seed",
+      "control_after_generate",
+      "steps",
+      "cfg",
+      "sampler_name",
+      "scheduler",
+      "denoise",
+    ];
     names.forEach((name, idx) => {
       if (values[idx] !== undefined) out[name] = values[idx];
     });
   } else if (low.includes("randomnoise")) {
     if (values[0] !== undefined) out.noise_seed = values[0];
-  } else if (low.includes("emptylatent") || low.includes("emptyflux") || low.includes("emptysd3")) {
+  } else if (
+    low.includes("emptylatent") ||
+    low.includes("emptyflux") ||
+    low.includes("emptysd3")
+  ) {
     const names = ["width", "height", "batch_size"];
     names.forEach((name, idx) => {
       if (values[idx] !== undefined) out[name] = values[idx];
@@ -277,19 +327,26 @@ function widgetInputsForNode(
 function normalizeWorkflowJson(obj: unknown): Record<string, ComfyNode> | null {
   const root = obj as Record<string, unknown> | null;
   if (!root || typeof root !== "object") return null;
-  const wrapped = (root.prompt ?? root.workflow ?? root) as Record<string, unknown>;
+  const wrapped = (root.prompt ?? root.workflow ?? root) as Record<
+    string,
+    unknown
+  >;
   if (
     wrapped &&
     typeof wrapped === "object" &&
     !Array.isArray(wrapped) &&
-    Object.values(wrapped).some((n) => n && typeof n === "object" && "class_type" in (n as object))
+    Object.values(wrapped).some(
+      (n) => n && typeof n === "object" && "class_type" in (n as object),
+    )
   ) {
     return wrapped as Record<string, ComfyNode>;
   }
 
   const visualRoot = Array.isArray(root.nodes)
     ? root
-    : Array.isArray((root.workflow as Record<string, unknown> | undefined)?.nodes)
+    : Array.isArray(
+          (root.workflow as Record<string, unknown> | undefined)?.nodes,
+        )
       ? (root.workflow as Record<string, unknown>)
       : null;
   if (!visualRoot) return null;
@@ -310,7 +367,11 @@ function normalizeWorkflowJson(obj: unknown): Record<string, ComfyNode> | null {
       const link = inp.link;
       if (link !== null && link !== undefined) {
         const linkArr = Array.isArray(visualRoot.links)
-          ? (visualRoot.links as unknown[]).find((l) => Array.isArray(l) && String((l as unknown[])[0]) === String(link))
+          ? (visualRoot.links as unknown[]).find(
+              (l) =>
+                Array.isArray(l) &&
+                String((l as unknown[])[0]) === String(link),
+            )
           : null;
         if (Array.isArray(linkArr)) {
           inputs[name] = [String(linkArr[1]), Number(linkArr[2]) || 0];
@@ -338,18 +399,43 @@ function autodetectMap(graph: Record<string, ComfyNode>): InjectMap {
   const map = emptyInjectMap();
   const entries = Object.entries(graph);
   const { positive, negative } = pickTextRoles(graph);
-  if (positive) setIfInput(map, "prompt", positive[0], positive[1], textInputCandidates(positive[1]));
-  if (negative) setIfInput(map, "negative", negative[0], negative[1], textInputCandidates(negative[1]));
+  if (positive)
+    setIfInput(
+      map,
+      "prompt",
+      positive[0],
+      positive[1],
+      textInputCandidates(positive[1]),
+    );
+  if (negative)
+    setIfInput(
+      map,
+      "negative",
+      negative[0],
+      negative[1],
+      textInputCandidates(negative[1]),
+    );
 
   for (const [id, node] of entries) {
     const c = lowerClass(node);
-    if (c.includes("loadimage") || c.includes("imageinput") || c.includes("image load")) {
+    if (
+      c.includes("loadimage") ||
+      c.includes("imageinput") ||
+      c.includes("image load")
+    ) {
       setIfInput(map, "image", id, node, ["image", "path", "filename"]);
     }
-    if (c.includes("mask") || inputKeys(node).some((k) => k.toLowerCase().includes("mask"))) {
+    if (
+      c.includes("mask") ||
+      inputKeys(node).some((k) => k.toLowerCase().includes("mask"))
+    ) {
       setIfInput(map, "mask", id, node, ["mask", "image"]);
     }
-    if (c.includes("randomnoise") || c.includes("ksampler") || c.includes("sampler")) {
+    if (
+      c.includes("randomnoise") ||
+      c.includes("ksampler") ||
+      c.includes("sampler")
+    ) {
       setIfInput(map, "seed", id, node, ["seed", "noise_seed"]);
     }
     setIfInput(map, "width", id, node, ["width"]);
@@ -359,14 +445,20 @@ function autodetectMap(graph: Record<string, ComfyNode>): InjectMap {
     setIfInput(map, "denoise", id, node, ["denoise"]);
     setIfInput(map, "guidance", id, node, ["guidance"]);
     if (c.includes("controlnet")) {
-      setIfInput(map, "controlnet_image", id, node, ["image", "control_net_image"]);
+      setIfInput(map, "controlnet_image", id, node, [
+        "image",
+        "control_net_image",
+      ]);
       setIfInput(map, "controlnet_strength", id, node, ["strength"]);
     }
   }
   return map;
 }
 
-function repairInjectMap(map: InjectMap, graph: Record<string, ComfyNode>): InjectMap {
+function repairInjectMap(
+  map: InjectMap,
+  graph: Record<string, ComfyNode>,
+): InjectMap {
   const detected = autodetectMap(graph);
   const next: InjectMap = { ...map };
   for (const key of INJECT_KEYS) {
@@ -374,22 +466,40 @@ function repairInjectMap(map: InjectMap, graph: Record<string, ComfyNode>): Inje
   }
   for (const key of ["prompt", "negative"] as const) {
     const node = graph[next[key].node];
-    const positiveScore = node ? downstreamRoleScore(graph, next[key].node, "positive") : 0;
-    const negativeScore = node ? downstreamRoleScore(graph, next[key].node, "negative") : 0;
+    const positiveScore = node
+      ? downstreamRoleScore(graph, next[key].node, "positive")
+      : 0;
+    const negativeScore = node
+      ? downstreamRoleScore(graph, next[key].node, "negative")
+      : 0;
     const wrongRole =
-      (key === "prompt" && negativeScore > positiveScore)
-      || (key === "negative" && positiveScore > negativeScore);
+      (key === "prompt" && negativeScore > positiveScore) ||
+      (key === "negative" && positiveScore > negativeScore);
     if (
-      !node
-      || !isTextNode(node)
-      || !hasUsableInput(graph, next[key], textInputCandidates(node))
-      || wrongRole
-      || (key === "negative" && next.prompt.node && next.negative.node === next.prompt.node)
+      !node ||
+      !isTextNode(node) ||
+      !hasUsableInput(graph, next[key], textInputCandidates(node)) ||
+      wrongRole ||
+      (key === "negative" &&
+        next.prompt.node &&
+        next.negative.node === next.prompt.node)
     ) {
       next[key] = detected[key];
     }
   }
-  for (const key of ["image", "mask", "seed", "width", "height", "steps", "cfg", "denoise", "guidance", "controlnet_image", "controlnet_strength"] as const) {
+  for (const key of [
+    "image",
+    "mask",
+    "seed",
+    "width",
+    "height",
+    "steps",
+    "cfg",
+    "denoise",
+    "guidance",
+    "controlnet_image",
+    "controlnet_strength",
+  ] as const) {
     if (!hasUsableInput(graph, next[key]) && detected[key].node) {
       next[key] = detected[key];
     }
@@ -413,7 +523,10 @@ function injectMapFromWorkflow(raw: Record<string, unknown>): InjectMap {
   return map;
 }
 
-function compactInjectMap(map: InjectMap, graph: Record<string, ComfyNode>): Record<string, InjectTarget> {
+function compactInjectMap(
+  map: InjectMap,
+  graph: Record<string, ComfyNode>,
+): Record<string, InjectTarget> {
   const injectMap: Record<string, InjectTarget> = {};
   for (const k of INJECT_KEYS) {
     const m = map[k];
@@ -799,9 +912,15 @@ function EditWorkflowDialog({
   const [title, setTitle] = useState(workflow.title);
   const [description, setDescription] = useState(workflow.description ?? "");
   const [operation, setOperation] = useState(workflow.operation || "edit");
-  const [category, setCategory] = useState(workflow.category || workflow.operation || "edit");
-  const [graphRaw, setGraphRaw] = useState(JSON.stringify(workflow.graph || {}, null, 2));
-  const [paramsRaw, setParamsRaw] = useState(JSON.stringify(workflow.params_schema || {}, null, 2));
+  const [category, setCategory] = useState(
+    workflow.category || workflow.operation || "edit",
+  );
+  const [graphRaw, setGraphRaw] = useState(
+    JSON.stringify(workflow.graph || {}, null, 2),
+  );
+  const [paramsRaw, setParamsRaw] = useState(
+    JSON.stringify(workflow.params_schema || {}, null, 2),
+  );
   const [map, setMap] = useState<InjectMap>(() =>
     injectMapFromWorkflow(workflow.inject_map || {}),
   );
@@ -843,9 +962,10 @@ function EditWorkflowDialog({
     let paramsSchema: Record<string, unknown>;
     try {
       const parsed = JSON.parse(paramsRaw || "{}");
-      paramsSchema = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
+      paramsSchema =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : {};
     } catch {
       setErr(t("edit_err_params_json"));
       return;
@@ -854,7 +974,8 @@ function EditWorkflowDialog({
     try {
       injectMap = compactInjectMap(repairInjectMap(map, graph), graph);
     } catch (e) {
-      const key = String((e as Error).message || "").replace("bad-map:", "") || "?";
+      const key =
+        String((e as Error).message || "").replace("bad-map:", "") || "?";
       setErr(t("import_err_map", { key }));
       return;
     }
@@ -865,7 +986,7 @@ function EditWorkflowDialog({
         title: title.trim(),
         description: description.trim() || null,
         operation,
-        category: categoryForOperation(operation),
+        category: category.trim() || categoryForOperation(operation),
         graph,
         inject_map: injectMap,
         params_schema: paramsSchema,
@@ -896,7 +1017,9 @@ function EditWorkflowDialog({
 
         <div className="grid gap-2 sm:grid-cols-2">
           <div>
-            <label className="text-xs text-zinc-500">{t("import_name_label")}</label>
+            <label className="text-xs text-zinc-500">
+              {t("import_name_label")}
+            </label>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -904,7 +1027,9 @@ function EditWorkflowDialog({
             />
           </div>
           <div>
-            <label className="text-xs text-zinc-500">{t("edit_category_label")}</label>
+            <label className="text-xs text-zinc-500">
+              {t("edit_category_label")}
+            </label>
             <input
               value={category}
               onChange={(e) => setCategory(e.target.value)}
@@ -912,7 +1037,9 @@ function EditWorkflowDialog({
             />
           </div>
           <div>
-            <label className="text-xs text-zinc-500">{t("import_operation_label")}</label>
+            <label className="text-xs text-zinc-500">
+              {t("import_operation_label")}
+            </label>
             <select
               value={operation}
               onChange={(e) => {
@@ -929,7 +1056,9 @@ function EditWorkflowDialog({
             </select>
           </div>
           <div>
-            <label className="text-xs text-zinc-500">{t("edit_description_label")}</label>
+            <label className="text-xs text-zinc-500">
+              {t("edit_description_label")}
+            </label>
             <input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -940,7 +1069,9 @@ function EditWorkflowDialog({
 
         <div className="grid gap-3 lg:grid-cols-2">
           <div>
-            <label className="text-xs text-zinc-500">{t("edit_graph_label")}</label>
+            <label className="text-xs text-zinc-500">
+              {t("edit_graph_label")}
+            </label>
             <textarea
               value={graphRaw}
               onChange={(e) => setGraphRaw(e.target.value)}
@@ -956,7 +1087,9 @@ function EditWorkflowDialog({
           </div>
           <div className="space-y-3">
             <div>
-              <label className="text-xs text-zinc-500">{t("edit_params_label")}</label>
+              <label className="text-xs text-zinc-500">
+                {t("edit_params_label")}
+              </label>
               <textarea
                 value={paramsRaw}
                 onChange={(e) => setParamsRaw(e.target.value)}
@@ -966,7 +1099,9 @@ function EditWorkflowDialog({
             </div>
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-xs text-zinc-500">{t("import_map_label")}</label>
+                <label className="text-xs text-zinc-500">
+                  {t("import_map_label")}
+                </label>
                 <button
                   type="button"
                   onClick={runAutodetect}
@@ -1071,7 +1206,8 @@ function ImportDialog({
     try {
       injectMap = compactInjectMap(repairInjectMap(map, graph), graph);
     } catch (e) {
-      const key = String((e as Error).message || "").replace("bad-map:", "") || "?";
+      const key =
+        String((e as Error).message || "").replace("bad-map:", "") || "?";
       setErr(t("import_err_map", { key }));
       return;
     }

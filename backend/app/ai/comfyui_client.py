@@ -195,11 +195,16 @@ def _fallback_inject_text(
     key: str,
     value: Any,
     negative_node_ids: set[str],
+    skip_ids: set[str] | None = None,
 ) -> None:
     """Inject prompt/negative into likely text nodes when a custom map is incomplete."""
     if value is None:
         return
-    text_nodes = [(node_id, node) for node_id, node in graph.items() if _looks_like_text_node(node)]
+    skip_ids = skip_ids or set()
+    text_nodes = [
+        (node_id, node) for node_id, node in graph.items()
+        if _looks_like_text_node(node) and str(node_id) not in skip_ids
+    ]
     if key == "negative":
         candidates = [item for item in text_nodes if _looks_negative_text_node(item[1])]
         if not candidates and len(text_nodes) > 1:
@@ -260,19 +265,24 @@ def _negative_text_node_ids(
 ) -> set[str]:
     out: set[str] = set()
     text_nodes = [(node_id, node) for node_id, node in graph.items() if _looks_like_text_node(node)]
-    if len(text_nodes) <= 1:
-        return set()
     text_node_ids = {str(node_id) for node_id, _node in text_nodes}
+    # An explicit map entry must be honored even for a single-text-node graph
+    # (e.g. one CLIPTextEncode with a distinct negative-conditioning sibling
+    # node that isn't itself detected as a "text" node) — only the graph-wide
+    # scoring heuristic below requires >=2 text nodes to compare against.
     for target in _targets_for_key(inject_map, "negative"):
         node_id = str(target.get("node", ""))
         if not node_id or node_id not in text_node_ids:
             continue
-        positive_score = _downstream_role_score(graph, node_id, "positive")
-        negative_score = _downstream_role_score(graph, node_id, "negative")
-        if positive_score > negative_score:
-            logger.warning("comfyui_negative_map_ignored_positive_node", node=node_id)
-            continue
+        if len(text_nodes) > 1:
+            positive_score = _downstream_role_score(graph, node_id, "positive")
+            negative_score = _downstream_role_score(graph, node_id, "negative")
+            if positive_score > negative_score:
+                logger.warning("comfyui_negative_map_ignored_positive_node", node=node_id)
+                continue
         out.add(node_id)
+    if len(text_nodes) <= 1:
+        return out
     for node_id, node in text_nodes:
         node_id_str = str(node_id)
         positive_score = _downstream_role_score(graph, node_id_str, "positive")
@@ -294,11 +304,15 @@ def _replace_text_nodes(
     key: str,
     value: Any,
     negative_node_ids: set[str],
+    skip_ids: set[str] | None = None,
 ) -> int:
     if value is None:
         return 0
+    skip_ids = skip_ids or set()
     changed = 0
     for node_id, node in graph.items():
+        if str(node_id) in skip_ids:
+            continue
         if not _looks_like_text_node(node):
             continue
         is_negative = str(node_id) in negative_node_ids
@@ -347,6 +361,8 @@ def build_workflow(
     so a template keeps its defaults for everything the caller doesn't override.
     """
     graph = copy.deepcopy(graph_template)
+    explicit_prompt_nodes: set[str] = set()
+    explicit_negative_nodes: set[str] = set()
     for key, target in (inject_map or {}).items():
         if key not in values or values[key] is None:
             continue
@@ -360,6 +376,10 @@ def build_workflow(
                 continue
             if key in {"prompt", "negative"}:
                 if not _looks_like_text_node(node):
+                    # Old imported workflows sometimes point prompt/negative at
+                    # sampler conditioning inputs or at the wrong node; that
+                    # mapping can't be honored directly, so fall through to the
+                    # graph-aware pass below instead.
                     logger.warning(
                         "comfyui_text_inject_skip_non_text_node",
                         key=key,
@@ -367,18 +387,49 @@ def build_workflow(
                         input=input_name,
                         class_type=node.get("class_type"),
                     )
-                # Text prompts are injected below by a graph-aware pass. Direct
-                # map injection is intentionally skipped here because old
-                # imported workflows may point prompt/negative at sampler
-                # conditioning inputs or at the wrong text node.
+                    continue
+                # A map entry that correctly names a real text node is an
+                # explicit, human-configured choice — honor it by writing to
+                # this node (via _set_text_value, which still normalizes
+                # known node families and drops stale aliases) instead of
+                # silently discarding it for the graph-wide heuristic below.
+                _set_text_value(node, values[key])
+                if key == "prompt":
+                    explicit_prompt_nodes.add(node_id)
+                else:
+                    explicit_negative_nodes.add(node_id)
                 continue
             node.setdefault("inputs", {})[input_name] = values[key]
-    negative_node_ids = _negative_text_node_ids(graph, inject_map)
-    if _replace_text_nodes(graph, "prompt", values.get("prompt"), negative_node_ids) == 0:
-        _fallback_inject_text(graph, "prompt", values.get("prompt"), negative_node_ids)
+    # An explicitly mapped prompt node always wins over the heuristic's
+    # ambiguous tie-break (e.g. "assume the 2nd text node is negative") —
+    # otherwise a correctly-configured prompt target could be reclassified
+    # as the negative node and get skipped by the replace pass below.
+    negative_node_ids = (_negative_text_node_ids(graph, inject_map) | explicit_negative_nodes) - explicit_prompt_nodes
+    prompt_changed = _replace_text_nodes(
+        graph, "prompt", values.get("prompt"), negative_node_ids,
+        skip_ids=explicit_prompt_nodes | explicit_negative_nodes,
+    )
+    if prompt_changed == 0 and not explicit_prompt_nodes:
+        _fallback_inject_text(
+            graph, "prompt", values.get("prompt"), negative_node_ids,
+            skip_ids=explicit_negative_nodes,
+        )
     if values.get("negative") is not None:
-        if _replace_text_nodes(graph, "negative", values.get("negative"), negative_node_ids) == 0:
-            _fallback_inject_text(graph, "negative", values.get("negative"), negative_node_ids)
+        negative_changed = _replace_text_nodes(
+            graph, "negative", values.get("negative"), negative_node_ids,
+            skip_ids=explicit_negative_nodes,
+        )
+        if negative_changed == 0 and not explicit_negative_nodes:
+            _fallback_inject_text(
+                graph, "negative", values.get("negative"), negative_node_ids,
+                skip_ids=explicit_prompt_nodes,
+            )
+            if not negative_node_ids:
+                text_node_count = sum(1 for n in graph.values() if _looks_like_text_node(n))
+                logger.warning(
+                    "comfyui_negative_prompt_no_target",
+                    reason="single_text_node" if text_node_count <= 1 else "no_negative_node_detected",
+                )
     return graph
 
 
