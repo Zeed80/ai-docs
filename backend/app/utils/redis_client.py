@@ -22,6 +22,7 @@ import asyncio
 import redis
 import redis.asyncio as aioredis
 from redis.connection import ConnectionPool
+from redis.asyncio.connection import BlockingConnectionPool as AsyncBlockingConnectionPool
 from redis.asyncio.connection import ConnectionPool as AsyncConnectionPool
 
 _sync_pool: ConnectionPool | None = None
@@ -62,10 +63,11 @@ def get_async_redis() -> aioredis.Redis:
         if _async_pool is not None:
             _dispose_pool_on_its_loop(_async_pool, _async_pool_loop)
         from app.config import settings
-        _async_pool = AsyncConnectionPool.from_url(
+        _async_pool = AsyncBlockingConnectionPool.from_url(
             settings.redis_url,
             decode_responses=True,
-            max_connections=20,
+            max_connections=100,
+            timeout=5,
         )
         _async_pool_loop = current_loop
     return aioredis.Redis(connection_pool=_async_pool)
