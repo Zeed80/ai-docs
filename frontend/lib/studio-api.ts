@@ -8,7 +8,9 @@ const BASE = `${API}/api/image-gen`;
 
 // "eskd" = text→image ЕСКД-styled diffusion (alternative to the deterministic
 // techDraw() vector render, which is not a ComfyUI operation).
-export type Operation = "generate" | "edit" | "inpaint" | "cleanup" | "eskd";
+// "vectorize" = deterministic scan→CAD-IR→DXF digitization (no diffusion).
+export type Operation =
+  "generate" | "edit" | "inpaint" | "cleanup" | "eskd" | "vectorize";
 export type TechDrawView = "front" | "isometric" | "section" | "half_section";
 export type GenStatus = "queued" | "running" | "cancelled" | "done" | "failed";
 export type StudioJobStatus =
@@ -268,7 +270,10 @@ export async function retryStudioJob(id: string): Promise<StudioJob> {
   return jsonOrThrow<StudioJob>(res);
 }
 
-export async function setStudioJobPriority(id: string, priority: number): Promise<StudioJob> {
+export async function setStudioJobPriority(
+  id: string,
+  priority: number,
+): Promise<StudioJob> {
   const res = await mutFetch(`${API}/api/studio/queue/${id}/priority`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -277,10 +282,12 @@ export async function setStudioJobPriority(id: string, priority: number): Promis
   return jsonOrThrow<StudioJob>(res);
 }
 
-export async function bulkCancelStudioQueue(input: {
-  resource?: string;
-  owner_sub?: string;
-} = {}): Promise<{ cancelled: number }> {
+export async function bulkCancelStudioQueue(
+  input: {
+    resource?: string;
+    owner_sub?: string;
+  } = {},
+): Promise<{ cancelled: number }> {
   const res = await mutFetch(`${API}/api/studio/queue/bulk-cancel`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -379,6 +386,198 @@ export function sourceUrl(id: string, index = 0): string {
   return `${BASE}/${id}/source?index=${index}`;
 }
 
-export function artifactUrl(id: string, kind: "dxf"): string {
+export type ArtifactKind = "dxf" | "dwg" | "svg" | "ir";
+
+export function artifactUrl(id: string, kind: ArtifactKind): string {
   return `${BASE}/${id}/artifact?kind=${encodeURIComponent(kind)}`;
+}
+
+// ── CAD IR (vectorize / manual drafting) ─────────────────────────────────────
+
+export type IrLineClass =
+  "contour" | "axis" | "dim" | "hatch" | "hidden" | "thin";
+export type IrWidthClass = "main" | "thin";
+
+export interface IrPoint {
+  x: number;
+  y: number;
+}
+
+export type IrAssurance =
+  | "observed"
+  | "inferred"
+  | "constraint_validated"
+  | "calculation_validated"
+  | "human_approved";
+
+export interface IrSourceRegion {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface IrAlternative {
+  value?: string | null;
+  entity?: Record<string, unknown> | null;
+  p: number;
+}
+
+export interface IrEntity {
+  id: string;
+  type:
+    "segment" | "arc" | "circle" | "polyline" | "text" | "dimension" | "hatch";
+  line_class: IrLineClass;
+  width_class: IrWidthClass;
+  confidence: number;
+  origin: "neural" | "vlm" | "cv" | "human" | "spec";
+  assurance: IrAssurance;
+  source_region?: IrSourceRegion | null;
+  alternatives?: IrAlternative[];
+  evidence?: string[];
+  p1?: IrPoint;
+  p2?: IrPoint;
+  center?: IrPoint;
+  radius?: number;
+  start_angle?: number;
+  end_angle?: number;
+  points?: IrPoint[];
+  boundary?: IrPoint[];
+  closed?: boolean;
+  position?: IrPoint;
+  text?: string;
+  height?: number;
+  rotation?: number;
+  kind?: string;
+  value_mm?: number | null;
+  tolerance?: string | null;
+  pattern?: string;
+}
+
+export interface IrValidationIssue {
+  code: string;
+  severity: "error" | "warn" | "info";
+  entity_ids: string[];
+  message_ru: string;
+  level: number;
+}
+
+export interface IrReviewItem {
+  entity_id: string;
+  reason: string;
+  resolved: boolean;
+}
+
+export interface CadIr {
+  schema_version: number;
+  units: string;
+  scale: number | null;
+  source: {
+    generation_id: string | null;
+    image_width: number;
+    image_height: number;
+    kind: string;
+  };
+  sheet: {
+    format: string | null;
+    width_mm: number | null;
+    height_mm: number | null;
+    frame: boolean;
+    title_block: Record<string, unknown>;
+  };
+  entities: IrEntity[];
+  validation: {
+    issues: IrValidationIssue[];
+    coverage_recall: number | null;
+    coverage_precision: number | null;
+  };
+  review: IrReviewItem[];
+  recognizer_used: string | null;
+}
+
+export interface IrEnvelope {
+  revision: number;
+  origin: string;
+  summary: Record<string, unknown>;
+  ir: CadIr;
+}
+
+export type IrPatchOp =
+  | { op: "confirm"; entity_id: string }
+  | { op: "delete"; entity_id: string }
+  | { op: "update"; entity_id: string; entity: Partial<IrEntity> }
+  | { op: "add"; entity: Partial<IrEntity> }
+  | { op: "set_scale"; scale: number }
+  | { op: "move"; entity_id: string; dx: number; dy: number }
+  | { op: "copy"; entity_id: string; dx?: number; dy?: number }
+  | {
+      op: "mirror";
+      entity_id: string;
+      mirror_p1: { x: number; y: number };
+      mirror_p2: { x: number; y: number };
+    }
+  | {
+      op: "fillet" | "chamfer";
+      entity_id: string;
+      entity_id_2: string;
+      value: number;
+    }
+  | { op: "hatch_click"; click_x: number; click_y: number };
+
+export async function getIr(id: string): Promise<IrEnvelope> {
+  const res = await apiFetch(`${BASE}/${id}/ir`);
+  return jsonOrThrow<IrEnvelope>(res);
+}
+
+export async function patchIr(
+  id: string,
+  ops: IrPatchOp[],
+): Promise<IrEnvelope> {
+  const res = await mutFetch(`${BASE}/${id}/ir`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ops }),
+  });
+  return jsonOrThrow<IrEnvelope>(res);
+}
+
+export async function revertIr(
+  id: string,
+  revision: number,
+): Promise<IrEnvelope> {
+  const res = await mutFetch(`${BASE}/${id}/ir/revert`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ revision }),
+  });
+  return jsonOrThrow<IrEnvelope>(res);
+}
+
+export async function runFullCheck(id: string): Promise<IrEnvelope> {
+  const res = await mutFetch(`${BASE}/${id}/ir/full-check`, { method: "POST" });
+  return jsonOrThrow<IrEnvelope>(res);
+}
+
+export async function acceptVectorize(id: string): Promise<Generation> {
+  const res = await mutFetch(`${BASE}/${id}/accept-vectorize`, {
+    method: "POST",
+  });
+  return jsonOrThrow<Generation>(res);
+}
+
+export async function createBlankSheet(input: {
+  format?: "A4" | "A3" | "A2" | "A1";
+  landscape?: boolean;
+  title?: string;
+  case_id?: string;
+  with_frame?: boolean;
+  designation?: string;
+  company?: string;
+}): Promise<Generation> {
+  const res = await mutFetch(`${BASE}/blank-sheet`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow<Generation>(res);
 }

@@ -19,6 +19,26 @@ def test_live_capability_manifest_is_typed_and_has_gates():
     assert manifest.is_gated("invoices", "list") is False
 
 
+def test_tech_capability_declares_material_domain():
+    """Ф8.2: the tech capability's declared domain must match what
+    tp_generator.material_group_with_confidence actually recognizes —
+    documentation drift here would defeat the point of declaring it."""
+    manifest = load_capability_manifest()
+    domain = manifest.by_name["tech"].domain
+    assert domain is not None
+    assert set(domain["materials"]) == {
+        "steel_carbon", "steel_alloy", "stainless", "aluminum", "cast_iron",
+    }
+
+
+def test_capability_without_domain_defaults_to_none(tmp_path: Path):
+    path = tmp_path / "capabilities.yml"
+    path.write_text("version: 2\ncapabilities:\n  - name: plain\n", encoding="utf-8")
+    clear_capability_manifest_cache()
+    manifest = load_capability_manifest(path)
+    assert manifest.by_name["plain"].domain is None
+
+
 def test_capability_manifest_rejects_duplicate_names(tmp_path: Path):
     path = tmp_path / "capabilities.yml"
     path.write_text(

@@ -353,6 +353,10 @@ prompts:
     memory_researcher:
       prompt: ./prompts/role-memory-researcher.md
       capabilities: [documents, analytics]
+    normcontroller:
+      prompt: ./prompts/role-normcontroller.md
+      capabilities: [cad_review, documents, analytics]
+      default_canvases: ["agent:image-studio"]
 channels:
   websocket:
     enabled: true

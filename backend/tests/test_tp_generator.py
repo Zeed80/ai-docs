@@ -3,10 +3,12 @@
 import pytest
 
 from app.ai.tp_generator import (
+    CompetenceCode,
     _material_group,
     _surface_to_method,
     calculate_cutting_parameters,
     calculate_time_norms,
+    material_group_with_confidence,
     recommend_blank,
 )
 
@@ -35,6 +37,61 @@ def test_material_group_cast_iron():
 
 def test_material_group_default():
     assert _material_group("неизвестный материал") == "steel_carbon"
+
+
+# ── material_group_with_confidence (Ф8.2 competence boundary) ──────────────────
+
+
+def test_confidence_recognizes_known_steel_designations():
+    group, recognized = material_group_with_confidence("Сталь 45")
+    assert group == "steel_carbon"
+    assert recognized is True
+
+
+def test_confidence_recognizes_stainless():
+    group, recognized = material_group_with_confidence("12Х18Н10Т")
+    assert group == "stainless"
+    assert recognized is True
+
+
+def test_confidence_honestly_flags_unrecognized_material():
+    """A material like titanium alloy (ВТ6) is NOT in any known group — the
+    function must say so, not silently pretend it's carbon steel."""
+    group, recognized = material_group_with_confidence("Титан ВТ6")
+    assert group == "steel_carbon"  # still a fallback estimate...
+    assert recognized is False       # ...but honestly flagged as unconfirmed
+
+
+def test_confidence_flags_empty_or_nonsense_material():
+    group, recognized = material_group_with_confidence("xyz-unknown-9000")
+    assert recognized is False
+
+
+def test_cutting_parameters_carry_competence_flag_when_recognized():
+    cp = calculate_cutting_parameters("turning", "Сталь 45", 30.0, 3.2)
+    assert cp["competence"]["recognized"] is True
+    assert cp["competence"]["code"] is None
+
+
+def test_cutting_parameters_carry_competence_flag_when_unrecognized():
+    cp = calculate_cutting_parameters("turning", "Титан ВТ6", 30.0, 3.2)
+    assert cp["competence"]["recognized"] is False
+    assert cp["competence"]["code"] == CompetenceCode.MATERIAL_UNRECOGNIZED
+    assert "Титан ВТ6" in cp["competence"]["note"]
+    # The estimate is still returned (draft-first) — just honestly flagged.
+    assert cp["vc_m_min"] > 0
+
+
+def test_cutting_parameters_logs_typed_warning_for_unrecognized_material(monkeypatch):
+    from app.ai import tp_generator
+
+    calls = []
+    monkeypatch.setattr(tp_generator.logger, "warning", lambda event, **kw: calls.append((event, kw)))
+    calculate_cutting_parameters("turning", "Титан ВТ6", 30.0, 3.2)
+    assert calls
+    event, kw = calls[0]
+    assert event == "tp_cutting_params_material_unrecognized"
+    assert kw["code"] == CompetenceCode.MATERIAL_UNRECOGNIZED
 
 
 # ── _surface_to_method ─────────────────────────────────────────────────────────

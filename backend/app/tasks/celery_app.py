@@ -52,6 +52,9 @@ celery_app.conf.update(
         # alongside gpu/gpu_priority so heavy image work never lands on the
         # general-purpose Celery worker.
         "image_generation.*": {"queue": "studio"},
+        # Vectorize (scan → CAD IR → DXF) is CPU-only — no GPU/ComfyUI, so it
+        # must not sit behind diffusion jobs in the studio queue.
+        "cad_trace.*": {"queue": "celery"},
         # ── LoRA lane (worker-lora, -c 1) ────────────────────────────────────
         # Training supervises a container for up to 48h and preparation
         # captions for hours — neither may occupy a general-purpose slot, and
@@ -187,3 +190,4 @@ from app.tasks import graph_memory as _graph_memory  # noqa: F401
 from app.tasks import graph_analytics as _graph_analytics  # noqa: F401
 from app.tasks import image_generation as _image_generation  # noqa: F401
 from app.tasks import lora_training as _lora_training  # noqa: F401
+from app.tasks import cad_trace as _cad_trace  # noqa: F401

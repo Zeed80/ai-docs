@@ -148,6 +148,10 @@ class Settings(BaseSettings):
     # ComfyUI (image generation / editing — drawings studio). On-prem only.
     # Default targets the optional compose service; override: COMFYUI_URL=http://host:8188
     comfyui_url: str = "http://comfyui:8188"
+    # Neural CAD vectorizer (Ф3, infra/cad-vectorizer) — on-prem only, same
+    # confidentiality posture as ComfyUI. Optional: cad_recognize/neural.py
+    # degrades to CV-only when unreachable (NEURAL_UNAVAILABLE).
+    cad_vectorizer_url: str = "http://cad-vectorizer:8090"
     llamacpp_n_gpu_layers: int = -1   # -1 = all layers on GPU
     llamacpp_parallel: int = 2        # 2 slots × 8 192 tokens; was 4 (too many, caused OOM)
     llamacpp_flash_attn: bool = True

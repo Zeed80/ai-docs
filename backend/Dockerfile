@@ -36,8 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu tesseract-ocr tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy libredwg runtime: binary + shared library
+# Copy libredwg runtime: binaries + shared library
 COPY --from=libredwg-builder /opt/libredwg/bin/dwg2dxf /usr/local/bin/dwg2dxf
+COPY --from=libredwg-builder /opt/libredwg/bin/dxf2dwg /usr/local/bin/dxf2dwg
 COPY --from=libredwg-builder /opt/libredwg/lib/libredwg.so* /usr/local/lib/
 RUN ldconfig
 

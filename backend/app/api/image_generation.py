@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -43,7 +44,9 @@ router = APIRouter()
 logger = structlog.get_logger()
 
 _SOURCE_PREFIX = "image-gen-src"
-_ALLOWED_OPERATIONS = {"edit", "generate", "inpaint", "cleanup", "eskd"}
+_ALLOWED_OPERATIONS = {"edit", "generate", "inpaint", "cleanup", "eskd", "vectorize"}
+# Engineering results whose acceptance is approval-gated for the agent.
+_GATED_OPERATIONS = {"techdraw", "vectorize"}
 _ALLOWED_UPLOAD_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp", "application/octet-stream"}
 _ALLOWED_UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp"}
 _MAX_SOURCE_BYTES = 50 * 1024 * 1024
@@ -53,7 +56,7 @@ _MAX_SOURCE_BYTES = 50 * 1024 * 1024
 
 
 class GenerateRequest(BaseModel):
-    operation: Literal["edit", "generate", "inpaint", "cleanup", "eskd"] = "edit"
+    operation: Literal["edit", "generate", "inpaint", "cleanup", "eskd", "vectorize"] = "edit"
     prompt: str | None = None
     negative_prompt: str | None = None
     workflow_id: uuid.UUID | None = None
@@ -367,7 +370,7 @@ async def generate(
         if not _can_access_document(doc, user):
             raise HTTPException(404, "Документ для связи не найден")
 
-    if body.operation in ("edit", "inpaint", "cleanup") and not source_paths:
+    if body.operation in ("edit", "inpaint", "cleanup", "vectorize") and not source_paths:
         raise HTTPException(400, "Для этой операции нужно исходное изображение.")
     if body.operation in ("edit", "inpaint") and not _prompt_text(body):
         raise HTTPException(400, "Для редактирования нужно текстовое указание (prompt).")
@@ -383,6 +386,15 @@ async def generate(
         roles=user.roles,
     )
 
+    params = dict(body.params or {})
+    # Provenance link: vectorizing a previous (possibly diffusion) result must
+    # know its ancestry — the pipeline compares against that generation's own
+    # source to build the pixel-change mask (diffusion is not a truth source).
+    for raw in body.source_image_paths:
+        if raw.startswith("generation:"):
+            params.setdefault("source_generation_id", raw.removeprefix("generation:").strip())
+            break
+
     gen = ImageGeneration(
         owner_sub=user.sub,
         operation=body.operation,
@@ -390,7 +402,7 @@ async def generate(
         status=ImageGenStatus.queued,
         prompt=body.prompt,
         negative_prompt=body.negative_prompt,
-        params=body.params or {},
+        params=params,
         source_image_paths=source_paths,
         mask_path=body.mask_path,
         source_document_id=body.source_document_id,
@@ -403,7 +415,7 @@ async def generate(
     await db.refresh(gen)
     await db.refresh(job)
 
-    task_id = _enqueue(str(gen.id))
+    task_id = _enqueue(str(gen.id), body.operation)
     if task_id:
         job.celery_task_id = task_id
         gen.celery_task_id = task_id
@@ -413,15 +425,22 @@ async def generate(
     return out
 
 
-def _enqueue(generation_id: str) -> str | None:
+def _enqueue(generation_id: str, operation: str = "edit") -> str | None:
     try:
         from app.config import settings
         from app.tasks.celery_app import celery_app
-        from app.tasks.image_generation import run_image_generation
 
         if settings.app_env == "test" and celery_app.conf.task_always_eager:
             return None
-        task = run_image_generation.apply_async(args=[generation_id], queue="studio")
+        if operation == "vectorize":
+            # CPU-only deterministic trace — general queue, not the GPU studio lane.
+            from app.tasks.cad_trace import run_cad_trace
+
+            task = run_cad_trace.apply_async(args=[generation_id], queue="celery")
+        else:
+            from app.tasks.image_generation import run_image_generation
+
+            task = run_image_generation.apply_async(args=[generation_id], queue="studio")
         return task.id
     except Exception as exc:  # noqa: BLE001
         logger.warning("image_gen_enqueue_failed", generation_id=generation_id, error=str(exc))
@@ -503,22 +522,53 @@ async def get_source(
     return Response(content=data, media_type="image/png")
 
 
+_ARTIFACT_MEDIA_TYPES = {
+    "dxf": "application/dxf",
+    "dwg": "application/acad",
+    "svg": "image/svg+xml",
+    "ir": "application/json",
+}
+
+
 @router.get("/{generation_id}/artifact")
 async def get_artifact(
     generation_id: uuid.UUID,
-    kind: Literal["dxf"] = "dxf",
+    kind: Literal["dxf", "dwg", "svg", "ir"] = "dxf",
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
     gen = await db.get(ImageGeneration, generation_id)
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
-    path = (gen.params or {}).get(f"{kind}_path")
+    params = gen.params or {}
+    path = params.get(f"{kind}_path")
+    if not path and kind == "dwg":
+        # DWG is derived lazily from the master DXF artifact and cached.
+        dxf_path = params.get("dxf_path")
+        if not dxf_path:
+            raise HTTPException(404, "Артефакт не найден")
+        from anyio import to_thread
+
+        from app.services.dwg_convert import DwgConversionError, convert_dxf_to_dwg
+
+        dxf_data = await to_thread.run_sync(download_file, dxf_path)
+        try:
+            dwg_data = await to_thread.run_sync(convert_dxf_to_dwg, dxf_data)
+        except DwgConversionError as exc:
+            raise HTTPException(
+                422,
+                f"{exc} — DWG-запись в LibreDWG экспериментальна; используйте DXF, "
+                "любой CAD откроет и сохранит его как DWG",
+            ) from exc
+        path = dxf_path.rsplit(".", 1)[0] + ".dwg"
+        await to_thread.run_sync(lambda: upload_file(dwg_data, path, _ARTIFACT_MEDIA_TYPES["dwg"]))
+        gen.params = {**params, "dwg_path": path}
+        await db.commit()
+        return Response(content=dwg_data, media_type=_ARTIFACT_MEDIA_TYPES["dwg"])
     if not path:
         raise HTTPException(404, "Артефакт не найден")
     data = download_file(path)
-    media_type = "application/dxf" if kind == "dxf" else "application/octet-stream"
-    return Response(content=data, media_type=media_type)
+    return Response(content=data, media_type=_ARTIFACT_MEDIA_TYPES.get(kind, "application/octet-stream"))
 
 
 # ── Accept / iterate / delete ────────────────────────────────────────────────
@@ -549,19 +599,20 @@ async def accept_generation(
         raise HTTPException(404, "Не найдено")
     if gen.status != ImageGenStatus.done:
         raise HTTPException(400, "Можно принять только готовый результат.")
-    if gen.operation == "techdraw" and _is_agent_service_call(request):
-        # capabilities.yml gates "accept_techdraw" (routed to a DIFFERENT REST
-        # path below), not "accept" — an agent could otherwise dodge the gate
-        # by simply calling the ungated action name for the same id. A human
-        # clicking "Принять" in the Studio UI (no service-key header) is
-        # unaffected — their click IS the required approval.
+    if gen.operation in _GATED_OPERATIONS and _is_agent_service_call(request):
+        # capabilities.yml gates "accept_techdraw"/"accept_vectorize" (routed
+        # to DIFFERENT REST paths below), not "accept" — an agent could
+        # otherwise dodge the gate by simply calling the ungated action name
+        # for the same id. A human clicking "Принять" in the Studio UI (no
+        # service-key header) is unaffected — their click IS the approval.
+        action = "accept_techdraw" if gen.operation == "techdraw" else "accept_vectorize"
         raise HTTPException(
             423,
             {
                 "error_code": "approval_required",
                 "message": (
                     "Приёмка точного чертежа требует подтверждения человека "
-                    "(используйте action=accept_techdraw)."
+                    f"(используйте action={action})."
                 ),
             },
         )
@@ -596,6 +647,547 @@ async def accept_techdraw_generation(
     gen.accepted_by = user.sub
     gen.accepted_at = datetime.now(timezone.utc)
     await db.commit()
+    return _gen_out(gen)
+
+
+@router.post("/{generation_id}/accept-vectorize")
+async def accept_vectorize_generation(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Approval-gated acceptance of a vectorized (scan→DXF) drawing — same
+    contract as accept-techdraw: the agent reaches this only through the
+    gated ``image_studio.accept_vectorize`` action; a human's direct call is
+    itself the approval. Blocking validation issues must be resolved first."""
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    if gen.status != ImageGenStatus.done:
+        raise HTTPException(400, "Можно принять только готовый результат.")
+    if gen.operation != "vectorize":
+        raise HTTPException(400, "Это не оцифрованный чертёж — используйте /accept.")
+    errors = int(((gen.params or {}).get("validation") or {}).get("errors") or 0)
+    if errors:
+        raise HTTPException(
+            409,
+            f"В отчёте валидации {errors} блокирующих ошибок — исправьте их в редакторе перед приёмкой.",
+        )
+    # Critical annotations (dimension/text) still on the bottom of the
+    # assurance ladder with open review items must be resolved by a human
+    # before the drawing can be accepted — a plausible but unchecked digit is
+    # exactly the error class this gate exists for.
+    try:
+        _revision, ir = await _load_current_ir(db, gen)
+        open_review = {r.entity_id for r in ir.review if not r.resolved}
+        critical = [
+            e.id
+            for e in ir.entities
+            if e.type in ("dimension", "text")
+            and e.assurance == "inferred"
+            and e.id in open_review
+        ]
+        if critical:
+            raise HTTPException(
+                409,
+                f"Неподтверждённых критических надписей/размеров: {len(critical)} — "
+                "подтвердите или исправьте их в очереди проверки перед приёмкой.",
+            )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            pass  # техдолг старых записей без IR — принимаем как раньше
+        else:
+            raise
+    gen.accepted = True
+    gen.accepted_by = user.sub
+    gen.accepted_at = datetime.now(timezone.utc)
+    await db.commit()
+    return _gen_out(gen)
+
+
+@router.post("/{generation_id}/ir/full-check")
+async def run_full_check(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Ф7.2: run levels 6-7 (LLM normcontrol + VLM visual critique) on top
+    of the already-current deterministic levels 1-5 report, and save the
+    merged result as a new revision. Explicitly opt-in (a separate call, not
+    automatic on every PATCH) — the human decides when a model opinion is
+    worth the latency/cost, per the module's "LLM strictly at the end"
+    design. Any previous levels 6-7 issues are replaced, not accumulated:
+    they're a judgement about a specific render, stale the moment the
+    drawing changes again."""
+    from app.ai.cad_validate import run_llm_review_levels
+    from app.ai.norm_citation import resolve_norm_citations
+    from app.services import cad_ir_store
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    revision, ir = await _load_current_ir(db, gen)
+    if not gen.result_path:
+        raise HTTPException(409, "Нет рендера для проверки — сначала сохраните ревизию.")
+    png_bytes = download_file(gen.result_path)
+
+    llm_issues = await run_llm_review_levels(png_bytes, confidential=True)
+    kept = [i for i in ir.validation.issues if i.code not in ("NORMCONTROL_LLM", "VLM_CRITIC")]
+    ir.validation.issues = await resolve_norm_citations(kept + llm_issues, db)
+
+    row = await cad_ir_store.save_revision(db, gen, ir, origin="llm_review", created_by=user.sub)
+    await db.commit()
+    return {"revision": row.revision, "origin": row.origin, "summary": row.summary, "ir": ir.model_dump()}
+
+
+@router.get("/{generation_id}/ir/feature-tree-candidates")
+async def get_feature_tree_candidates(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Ф10: ranked 3D feature-tree HYPOTHESES derived from the current 2D
+    IR — never a single "the" 3D model (a single orthographic view can't
+    determine depth). Read-only, like get_ir; the human picks a candidate
+    and separately asks for it to be compiled (POST .../step)."""
+    from app.ai.cad_ir.feature_tree import generate_feature_tree_candidates
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    _revision, ir = await _load_current_ir(db, gen)
+    candidates = generate_feature_tree_candidates(ir)
+    return {"candidates": [c.model_dump() for c in candidates]}
+
+
+@router.post("/{generation_id}/ir/feature-tree-candidates/{index}/step")
+async def compile_feature_tree_candidate_to_step(
+    generation_id: uuid.UUID,
+    index: int,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> Response:
+    """Ф10: compile a HUMAN-PICKED candidate to a STEP file. Requires
+    acceptance first (same gate philosophy as promote-to-drawing — compiling
+    a specific depth guess into a downloadable 3D artifact is a real
+    decision, not implied by 2D acceptance). Honestly reports 503 when the
+    cad-kernel (CadQuery/OCP) isn't available in this deployment — never
+    fabricates a STEP file."""
+    from app.ai.cad_ir.feature_tree import compile_to_step, generate_feature_tree_candidates
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    if not gen.accepted:
+        raise HTTPException(409, "Сначала примите чертёж (accept-vectorize).")
+    _revision, ir = await _load_current_ir(db, gen)
+    candidates = generate_feature_tree_candidates(ir)
+    if not (0 <= index < len(candidates)):
+        raise HTTPException(404, f"Кандидат {index} не найден (всего {len(candidates)})")
+    step_bytes = compile_to_step(candidates[index])
+    if step_bytes is None:
+        raise HTTPException(503, "cad-kernel (CadQuery) недоступен в этом окружении")
+    return Response(content=step_bytes, media_type="model/step")
+
+
+@router.post("/{generation_id}/promote-to-drawing")
+async def promote_vectorize_to_drawing(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Ф6.2: send an ACCEPTED vectorize result into the technology module —
+    creates a Drawing + DrawingFeature rows (holes/threads) from the current
+    CAD IR, the same models tp_generator.generate_process_plan_from_drawing
+    already consumes for scanned drawings. Requires acceptance first (the
+    same approval gate as accept-vectorize) — this is a second, separate
+    step, not implied by acceptance, since not every accepted sketch is
+    meant to become a manufacturing input."""
+    from app.ai.cad_ir.adapters.to_drawing import promote_ir_to_drawing
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    if not gen.accepted:
+        raise HTTPException(409, "Сначала примите чертёж (accept-vectorize).")
+    revision, ir = await _load_current_ir(db, gen)
+    drawing = await promote_ir_to_drawing(db, gen, ir, revision.revision)
+    await db.commit()
+    return {
+        "drawing_id": str(drawing.id),
+        "features": len([e for e in ir.entities if e.type == "circle"]),
+    }
+
+
+# ── CAD IR (vectorize/editor) ────────────────────────────────────────────────
+
+
+class IrPatchErrorCode(str, Enum):
+    """Typed precondition-failure codes for PATCH /ir ops (Ф5.9) — a caller
+    (frontend, or the agent's capability dispatcher) can branch on ``code``
+    instead of parsing a Russian sentence. The HTTP status still carries the
+    coarse category (400 malformed request, 404 unknown reference, 422
+    well-formed but geometrically/semantically invalid)."""
+
+    ENTITY_NOT_FOUND = "entity_not_found"
+    MISSING_FIELD = "missing_field"
+    INVALID_ENTITY = "invalid_entity"
+    NOT_A_SEGMENT = "not_a_segment"
+    FILLET_CHAMFER_GEOMETRY_INVALID = "fillet_chamfer_geometry_invalid"
+    NO_ENCLOSED_REGION = "no_enclosed_region"
+
+
+def _patch_error(status: int, code: IrPatchErrorCode, message: str) -> HTTPException:
+    return HTTPException(status_code=status, detail={"code": code.value, "message": message})
+
+
+class IrPatchOp(BaseModel):
+    op: Literal[
+        "confirm", "delete", "update", "add", "set_scale",
+        "move", "copy", "mirror", "fillet", "chamfer", "hatch_click",
+    ]
+    entity_id: str | None = None
+    entity_id_2: str | None = None  # second segment, for fillet/chamfer
+    entity: dict[str, Any] | None = None
+    scale: float | None = Field(default=None, gt=0)
+    dx: float | None = None  # move/copy
+    dy: float | None = None
+    value: float | None = None  # fillet radius / chamfer distance
+    mirror_p1: dict[str, float] | None = None  # mirror line, two points
+    mirror_p2: dict[str, float] | None = None
+    click_x: float | None = None  # hatch_click
+    click_y: float | None = None
+
+
+class IrPatchRequest(BaseModel):
+    ops: list[IrPatchOp] = Field(min_length=1, max_length=500)
+
+
+async def _load_current_ir(db: AsyncSession, gen: ImageGeneration):
+    from app.services import cad_ir_store
+
+    revision = await cad_ir_store.latest_revision(db, gen.id)
+    if revision is None:
+        raise HTTPException(404, "У этой генерации нет CAD IR")
+    return revision, cad_ir_store.load_ir(revision)
+
+
+@router.get("/{generation_id}/ir")
+async def get_ir(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    revision, ir = await _load_current_ir(db, gen)
+    return {
+        "revision": revision.revision,
+        "origin": revision.origin,
+        "summary": revision.summary,
+        "ir": ir.model_dump(),
+    }
+
+
+@router.patch("/{generation_id}/ir")
+async def patch_ir(
+    generation_id: uuid.UUID,
+    body: IrPatchRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Deterministic IR edit: apply batch ops, re-validate, save a new
+    revision and regenerate PNG/SVG/DXF. Zero LLM — the spec-table pattern
+    applied to drawings."""
+    from pydantic import TypeAdapter, ValidationError
+
+    from app.ai.cad_ir.assurance import sanitize_incoming, set_assurance
+    from app.ai.cad_ir.schema import Entity, ReviewItem
+    from app.ai.cad_validate import validate_ir
+    from app.services import cad_ir_store
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    _revision, ir = await _load_current_ir(db, gen)
+
+    entity_adapter = TypeAdapter(Entity)
+    by_id = {e.id: i for i, e in enumerate(ir.entities)}
+
+    def _index_of(entity_id: str | None) -> int:
+        if not entity_id or entity_id not in by_id:
+            raise _patch_error(
+                404, IrPatchErrorCode.ENTITY_NOT_FOUND, f"Элемент {entity_id!r} не найден в IR"
+            )
+        return by_id[entity_id]
+
+    def _require(value: object, field: str) -> None:
+        if value is None:
+            raise _patch_error(
+                400, IrPatchErrorCode.MISSING_FIELD, f"Для {op.op} нужно поле {field!r}"
+            )
+
+    # Every op below only ever mutates the LOCAL `ir` object in memory — none
+    # of this reaches storage until `save_revision`/`commit` at the very end.
+    # An exception anywhere in this loop propagates out of the request
+    # handler before that point, so FastAPI returns the error and nothing
+    # commits: a batch either lands as ONE new revision or leaves none at
+    # all (verified by test_patch_ir_batch_failure_saves_no_partial_revision).
+    for op in body.ops:
+        if op.op == "confirm":
+            idx = _index_of(op.entity_id)
+            entity = ir.entities[idx]
+            entity.confidence = 1.0
+            entity.origin = "human"
+            set_assurance(entity, "human_approved", "human")
+            for item in ir.review:
+                if item.entity_id == entity.id:
+                    item.resolved = True
+        elif op.op == "delete":
+            idx = _index_of(op.entity_id)
+            removed = ir.entities.pop(idx)
+            ir.review = [r for r in ir.review if r.entity_id != removed.id]
+            by_id = {e.id: i for i, e in enumerate(ir.entities)}
+        elif op.op == "update":
+            idx = _index_of(op.entity_id)
+            _require(op.entity, "entity")
+            payload = sanitize_incoming(
+                {**op.entity, "id": op.entity_id, "origin": "human", "confidence": 1.0},
+                actor="human",
+            )
+            try:
+                ir.entities[idx] = entity_adapter.validate_python(payload)
+            except ValidationError as exc:
+                raise _patch_error(
+                    422, IrPatchErrorCode.INVALID_ENTITY, f"Некорректный элемент: {exc.errors()[:3]}"
+                ) from exc
+            for item in ir.review:
+                if item.entity_id == op.entity_id:
+                    item.resolved = True
+        elif op.op == "add":
+            _require(op.entity, "entity")
+            payload = sanitize_incoming(
+                {**op.entity, "origin": "human", "confidence": 1.0}, actor="human"
+            )
+            payload.pop("id", None)
+            try:
+                entity = entity_adapter.validate_python(payload)
+            except ValidationError as exc:
+                raise _patch_error(
+                    422, IrPatchErrorCode.INVALID_ENTITY, f"Некорректный элемент: {exc.errors()[:3]}"
+                ) from exc
+            ir.entities.append(entity)
+            by_id[entity.id] = len(ir.entities) - 1
+        elif op.op == "set_scale":
+            if not op.scale:
+                raise _patch_error(
+                    400, IrPatchErrorCode.MISSING_FIELD, "Для set_scale нужен scale (мм/px)"
+                )
+            ir.scale = op.scale
+        elif op.op == "move":
+            from app.ai.cad_ir.transform import translate_entity
+
+            idx = _index_of(op.entity_id)
+            _require(op.dx, "dx")
+            _require(op.dy, "dy")
+            ir.entities[idx] = translate_entity(ir.entities[idx], op.dx, op.dy)
+        elif op.op == "copy":
+            from app.ai.cad_ir.transform import duplicate_entity
+
+            idx = _index_of(op.entity_id)
+            new_entity = duplicate_entity(ir.entities[idx], op.dx or 0.0, op.dy or 0.0)
+            ir.entities.append(new_entity)
+            by_id[new_entity.id] = len(ir.entities) - 1
+        elif op.op == "mirror":
+            from app.ai.cad_ir.schema import Point
+            from app.ai.cad_ir.transform import mirror_entity
+
+            idx = _index_of(op.entity_id)
+            _require(op.mirror_p1, "mirror_p1")
+            _require(op.mirror_p2, "mirror_p2")
+            p1 = Point(**op.mirror_p1)
+            p2 = Point(**op.mirror_p2)
+            ir.entities[idx] = mirror_entity(ir.entities[idx], p1, p2)
+        elif op.op in ("fillet", "chamfer"):
+            from app.ai.cad_ir.schema import Segment
+            from app.ai.cad_ir.transform import FilletChamferError, chamfer, fillet
+
+            idx1 = _index_of(op.entity_id)
+            idx2 = _index_of(op.entity_id_2)
+            seg1, seg2 = ir.entities[idx1], ir.entities[idx2]
+            if not isinstance(seg1, Segment) or not isinstance(seg2, Segment):
+                raise _patch_error(
+                    400, IrPatchErrorCode.NOT_A_SEGMENT, f"{op.op} работает только с двумя отрезками"
+                )
+            if not op.value or op.value <= 0:
+                param = "радиус" if op.op == "fillet" else "дистанция"
+                raise _patch_error(
+                    400, IrPatchErrorCode.MISSING_FIELD, f"Для {op.op} нужен положительный {param} (value)"
+                )
+            try:
+                new1, new2, extra = (fillet if op.op == "fillet" else chamfer)(seg1, seg2, op.value)
+            except FilletChamferError as exc:
+                raise _patch_error(422, IrPatchErrorCode.FILLET_CHAMFER_GEOMETRY_INVALID, str(exc)) from exc
+            ir.entities[idx1] = new1
+            ir.entities[idx2] = new2
+            ir.entities.append(extra)
+            by_id[extra.id] = len(ir.entities) - 1
+        elif op.op == "hatch_click":
+            from app.ai.cad_ir.hatch_click import hatch_region_at_point
+
+            _require(op.click_x, "click_x")
+            _require(op.click_y, "click_y")
+            region = hatch_region_at_point(ir, op.click_x, op.click_y)
+            if region is None:
+                raise _patch_error(
+                    422, IrPatchErrorCode.NO_ENCLOSED_REGION, "В точке клика нет замкнутой области"
+                )
+            ir.entities.append(region)
+            by_id[region.id] = len(ir.entities) - 1
+
+    validate_ir(ir)
+    origin = "review" if all(o.op in ("confirm", "delete", "set_scale") for o in body.ops) else "editor"
+    row = await cad_ir_store.save_revision(db, gen, ir, origin=origin, created_by=user.sub)
+    await db.commit()
+    return {"revision": row.revision, "origin": row.origin, "summary": row.summary, "ir": ir.model_dump()}
+
+
+class IrRevertRequest(BaseModel):
+    revision: int = Field(ge=0)
+
+
+@router.post("/{generation_id}/ir/revert")
+async def revert_ir(
+    generation_id: uuid.UUID,
+    body: IrRevertRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Undo/redo (Ф5.2): re-save an earlier revision's IR as the new current
+    one — same deterministic rebuild as PATCH, zero LLM. History stays
+    append-only (nothing is deleted, matching the project's audit
+    philosophy); this just makes an old state current again, like a git
+    revert. The frontend tracks which revision numbers to jump between for
+    undo/redo — this endpoint only knows how to jump to one."""
+    from app.ai.cad_validate import validate_ir
+    from app.db.models import CadIrRevision
+    from app.services import cad_ir_store
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    row = (
+        await db.execute(
+            select(CadIrRevision).where(
+                CadIrRevision.generation_id == generation_id,
+                CadIrRevision.revision == body.revision,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, f"Ревизия {body.revision} не найдена")
+    ir = cad_ir_store.load_ir(row)
+    validate_ir(ir)
+    new_row = await cad_ir_store.save_revision(db, gen, ir, origin="revert", created_by=user.sub)
+    await db.commit()
+    return {
+        "revision": new_row.revision,
+        "origin": new_row.origin,
+        "summary": new_row.summary,
+        "ir": ir.model_dump(),
+    }
+
+
+class BlankSheetRequest(BaseModel):
+    # ГОСТ 2.301 format name; the sheet is created at ~4 px/mm working resolution.
+    format: Literal["A4", "A3", "A2", "A1"] = "A4"
+    landscape: bool = False
+    title: str | None = None
+    case_id: uuid.UUID | None = None
+    # Off by default (matches techdraw.py's TitleBlock.show_frame=False —
+    # most manual sketches don't want a border eating into a small A4/A3
+    # canvas); explicit opt-in draws the ГОСТ 2.301 frame + 2.104 form-1
+    # corner stamp as real, editable IR entities.
+    with_frame: bool = False
+    designation: str | None = None
+    company: str | None = None
+
+
+_BLANK_PX_PER_MM = 4.0
+_BLANK_SIZES_MM = {"A4": (210, 297), "A3": (297, 420), "A2": (420, 594), "A1": (594, 841)}
+
+
+@router.post("/blank-sheet")
+async def create_blank_sheet(
+    body: BlankSheetRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Manual drafting entry point: an empty CAD IR sheet (known format and
+    scale) the user draws on in the editor. No pipeline, no queue — the
+    generation is born done at revision 0 and every stroke arrives via
+    PATCH /ir."""
+    from app.ai.cad_ir import CadIR, SourceInfo
+    from app.ai.cad_ir.schema import SheetInfo
+    from app.ai.cad_validate import validate_ir
+    from app.services import cad_ir_store
+
+    if not _can_use_studio(user):
+        raise HTTPException(403, "Недостаточно прав для графической студии")
+
+    short_mm, long_mm = _BLANK_SIZES_MM[body.format]
+    w_mm, h_mm = (long_mm, short_mm) if body.landscape else (short_mm, long_mm)
+    entities = []
+    title_block: dict = {}
+    if body.with_frame:
+        from app.ai.cad_ir.blank_sheet import TB_H_MM, TB_W_MM, frame_and_title_block_entities
+
+        entities = frame_and_title_block_entities(
+            w_mm, h_mm, _BLANK_PX_PER_MM,
+            name=body.title or "",
+            designation=body.designation or "",
+            company=body.company or "",
+        )
+        title_block = {
+            "detected": True,
+            "region": {
+                "x0": (w_mm - 25.0 - TB_W_MM) * _BLANK_PX_PER_MM,
+                "y0": (h_mm - 10.0 - TB_H_MM) * _BLANK_PX_PER_MM,
+                "x1": (w_mm - 25.0) * _BLANK_PX_PER_MM,
+                "y1": (h_mm - 10.0) * _BLANK_PX_PER_MM,
+            },
+        }
+    ir = CadIR(
+        source=SourceInfo(
+            image_width=int(w_mm * _BLANK_PX_PER_MM),
+            image_height=int(h_mm * _BLANK_PX_PER_MM),
+            kind="blank",
+        ),
+        scale=1.0 / _BLANK_PX_PER_MM,
+        sheet=SheetInfo(
+            format=body.format, width_mm=w_mm, height_mm=h_mm,
+            frame=body.with_frame, title_block=title_block,
+        ),
+        entities=entities,
+        recognizer_used="manual",
+    )
+    validate_ir(ir)
+
+    gen = ImageGeneration(
+        owner_sub=user.sub,
+        operation="vectorize",
+        status=ImageGenStatus.done,
+        prompt=body.title,
+        params={"blank": True, "sheet_format": body.format},
+        source_image_paths=[],
+        case_id=body.case_id,
+    )
+    db.add(gen)
+    await db.flush()
+    await cad_ir_store.save_revision(db, gen, ir, origin="editor", created_by=user.sub)
+    await db.commit()
+    await db.refresh(gen)
     return _gen_out(gen)
 
 

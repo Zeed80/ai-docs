@@ -1685,7 +1685,12 @@ class AgentOrchestrator:
         # deterministic techdraw renderer over the default diffusion generate,
         # otherwise the heuristic-route fast path (no real LLM planning call)
         # would never surface techdraw as a candidate skill.
-        if matched_route and matched_route.get("intent") == "image_studio" and _is_techdraw_request(text):
+        # Digitize request ("оцифруй чертёж", "переведи в DXF") wins over the
+        # techdraw check: such a phrase often also contains precision markers
+        # (ГОСТ/размеры) but means scan→CAD, not rendering a new part.
+        if matched_route and matched_route.get("intent") == "image_studio" and _is_vectorize_request(text):
+            skills = ["image_studio.generate", "image_studio.get_ir"]
+        elif matched_route and matched_route.get("intent") == "image_studio" and _is_techdraw_request(text):
             skills = ["image_studio.techdraw", "image_studio.prompt_help"]
         if not skills:
             # Bulk/listing turns ("выведи все...", "список...") need the real
@@ -2681,6 +2686,7 @@ _resolve_canvas_from_route = route_table.resolve_canvas_from_route
 _extract_supplier_name = route_table.extract_supplier_name
 _is_supplier_grouping_request = route_table.is_supplier_grouping_request
 _is_techdraw_request = route_table.is_techdraw_request
+_is_vectorize_request = route_table.is_vectorize_request
 
 
 def _build_orchestrator_prompt(

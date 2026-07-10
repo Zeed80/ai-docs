@@ -10,6 +10,7 @@ import {
   Operation,
   TechDrawView,
   Workflow,
+  createBlankSheet,
   duplicateWorkflow,
   generate,
   listWorkflows,
@@ -48,6 +49,10 @@ interface Props {
 type StudioComposerPrefs = {
   operation?: Operation;
   techMode?: boolean;
+  mode?: "image" | "tech" | "vector";
+  vectorScale?: string;
+  blankFormat?: "A4" | "A3" | "A2" | "A1";
+  blankLandscape?: boolean;
   prompt?: string;
   negative?: string;
   cleanupPrompt?: string;
@@ -122,12 +127,26 @@ export default function StudioComposer({
   const [err, setErr] = useState<string | null>(null);
   const maskRef = useRef<MaskCanvasHandle>(null);
 
-  // Exact technical drawing (deterministic ЕСКД render, not diffusion).
-  const [techMode, setTechMode] = useState(Boolean(prefs.techMode));
+  // Composer mode: diffusion image, exact ЕСКД render, or scan→DXF digitizing.
+  // (prefs.techMode is the legacy boolean — migrate it into `mode` once.)
+  const [mode, setMode] = useState<"image" | "tech" | "vector">(
+    prefs.mode ?? (prefs.techMode ? "tech" : "image"),
+  );
+  const techMode = mode === "tech";
   const [techDesc, setTechDesc] = useState(prefs.techDesc ?? "");
   const [techView, setTechView] = useState<TechDrawView>(
     prefs.techView ?? "front",
   );
+  // Vector (digitize) mode: optional manual scale + blank-sheet drafting.
+  const [vectorScale, setVectorScale] = useState(prefs.vectorScale ?? "");
+  const [blankFormat, setBlankFormat] = useState<"A4" | "A3" | "A2" | "A1">(
+    prefs.blankFormat ?? "A4",
+  );
+  const [blankLandscape, setBlankLandscape] = useState(
+    Boolean(prefs.blankLandscape),
+  );
+  const [blankWithFrame, setBlankWithFrame] = useState(false);
+  const [blankDesignation, setBlankDesignation] = useState("");
 
   // Traceability: attach the result to a document/case (optional).
   const [linkDocId, setLinkDocId] = useState(prefs.linkDocId ?? "");
@@ -213,6 +232,10 @@ export default function StudioComposer({
         JSON.stringify({
           operation,
           techMode,
+          mode,
+          vectorScale,
+          blankFormat,
+          blankLandscape,
           prompt,
           negative,
           cleanupPrompt,
@@ -240,6 +263,10 @@ export default function StudioComposer({
   }, [
     operation,
     techMode,
+    mode,
+    vectorScale,
+    blankFormat,
+    blankLandscape,
     prompt,
     negative,
     cleanupPrompt,
@@ -521,6 +548,59 @@ export default function StudioComposer({
       } else {
         await techDraw(techDesc, techView, link);
       }
+      onSubmitted();
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitVector() {
+    if (!sourceFile && !sourceGenerationId) {
+      setErr(t("error_need_source"));
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const input: GenerateInput = {
+        operation: "vectorize",
+        params: {},
+        source_image_paths: [],
+        ...link,
+      };
+      const s = Number(vectorScale.replace(",", "."));
+      if (Number.isFinite(s) && s > 0) {
+        (input.params as Record<string, unknown>).scale_mm_per_px = s;
+      }
+      if (sourceFile) {
+        input.source_image_paths = [await uploadSource(sourceFile, "source")];
+      } else {
+        input.source_image_paths = [`generation:${sourceGenerationId}`];
+      }
+      await generate(input);
+      onSubmitted();
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitBlankSheet() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await createBlankSheet({
+        format: blankFormat,
+        landscape: blankLandscape,
+        case_id: link.case_id,
+        with_frame: blankWithFrame,
+        designation: blankWithFrame
+          ? blankDesignation.trim() || undefined
+          : undefined,
+      });
       onSubmitted();
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -1054,21 +1134,169 @@ export default function StudioComposer({
         </div>
       </details>
 
-      {/* Mode: diffusion (image) vs exact technical drawing (ЕСКД) */}
-      <div className="grid grid-cols-2 gap-1 p-1 rounded bg-white/5">
+      {/* Mode: diffusion (image) vs exact ЕСКД render vs scan→DXF digitizing */}
+      <div className="grid grid-cols-3 gap-1 p-1 rounded bg-white/5">
         <button
-          onClick={() => setTechMode(false)}
-          className={`px-3 py-1.5 rounded text-sm ${!techMode ? "bg-sky-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+          onClick={() => setMode("image")}
+          className={`px-3 py-1.5 rounded text-sm ${mode === "image" ? "bg-sky-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
         >
           {t("mode_image")}
         </button>
         <button
-          onClick={() => setTechMode(true)}
-          className={`px-3 py-1.5 rounded text-sm ${techMode ? "bg-emerald-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+          onClick={() => setMode("tech")}
+          className={`px-3 py-1.5 rounded text-sm ${mode === "tech" ? "bg-emerald-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
         >
           {t("mode_techdraw")}
         </button>
+        <button
+          onClick={() => setMode("vector")}
+          className={`px-3 py-1.5 rounded text-sm ${mode === "vector" ? "bg-amber-600 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+        >
+          {t("mode_vector")}
+        </button>
       </div>
+
+      {mode === "vector" && (
+        <div className="space-y-3">
+          <p className="text-xs text-zinc-500">{t("vector_hint")}</p>
+
+          {/* Source: file / camera / previous generation result */}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm cursor-pointer">
+              {t("pick_file")}
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => setSource(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            {isNative() && (
+              <>
+                <button
+                  onClick={pickFromCamera}
+                  className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
+                >
+                  {t("take_photo")}
+                </button>
+                <button
+                  onClick={pickFromGallery}
+                  className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
+                >
+                  {t("from_gallery")}
+                </button>
+              </>
+            )}
+            {generatedSources.length > 0 && (
+              <select
+                value={sourceGenerationId}
+                onChange={(e) => setGeneratedSource(e.target.value)}
+                className="rounded bg-zinc-900 border border-white/10 px-2 py-1.5 text-sm text-zinc-200"
+              >
+                <option value="">{t("generated_source_placeholder")}</option>
+                {generatedSources
+                  .filter((g) => g.has_result)
+                  .map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {generationLabel(g).slice(0, 60)}
+                    </option>
+                  ))}
+              </select>
+            )}
+            {(sourceFile || sourceGenerationId) && (
+              <button
+                onClick={clearSource}
+                className="text-xs text-zinc-400 hover:text-white"
+              >
+                {t("remove_source")}
+              </button>
+            )}
+          </div>
+          {sourcePreview && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={sourcePreview}
+              alt={t("source_alt")}
+              className="max-h-56 rounded border border-white/10 bg-zinc-900"
+            />
+          )}
+          <p className="text-[11px] text-zinc-600">{t("vector_cleanup_tip")}</p>
+
+          <label className="block">
+            <span className="text-xs text-zinc-500">
+              {t("vector_scale_label")}
+            </span>
+            <input
+              value={vectorScale}
+              onChange={(e) => setVectorScale(e.target.value)}
+              placeholder={t("vector_scale_placeholder")}
+              className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+            />
+          </label>
+
+          {err && <div className="text-xs text-red-400">{err}</div>}
+          <button
+            onClick={submitVector}
+            disabled={busy || (!sourceFile && !sourceGenerationId)}
+            className="w-full px-4 py-2.5 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium disabled:opacity-50"
+          >
+            {busy ? t("vector_submit_busy") : t("vector_submit")}
+          </button>
+
+          {/* Manual drafting: an empty ГОСТ sheet to draw on in the editor */}
+          <div className="border-t border-white/10 pt-3 space-y-2">
+            <div className="text-xs text-zinc-500">
+              {t("vector_blank_label")}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={blankFormat}
+                onChange={(e) =>
+                  setBlankFormat(e.target.value as "A4" | "A3" | "A2" | "A1")
+                }
+                className="rounded bg-zinc-900 border border-white/10 px-2 py-1.5 text-sm text-zinc-200"
+              >
+                {(["A4", "A3", "A2", "A1"] as const).map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-1 text-xs text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={blankLandscape}
+                  onChange={(e) => setBlankLandscape(e.target.checked)}
+                />
+                {t("vector_landscape")}
+              </label>
+              <label className="flex items-center gap-1 text-xs text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={blankWithFrame}
+                  onChange={(e) => setBlankWithFrame(e.target.checked)}
+                />
+                {t("vector_blank_with_frame")}
+              </label>
+              {blankWithFrame && (
+                <input
+                  value={blankDesignation}
+                  onChange={(e) => setBlankDesignation(e.target.value)}
+                  placeholder={t("vector_blank_designation_placeholder")}
+                  className="rounded bg-zinc-900 border border-white/10 px-2 py-1.5 text-sm text-zinc-200"
+                />
+              )}
+              <button
+                onClick={submitBlankSheet}
+                disabled={busy}
+                className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+              >
+                {t("vector_blank_create")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {techMode && (
         <div className="space-y-3">
@@ -1179,7 +1407,7 @@ export default function StudioComposer({
         </div>
       )}
 
-      {!techMode && (
+      {mode === "image" && (
         <>
           {/* Operation tabs */}
           <div className="flex flex-wrap gap-1">

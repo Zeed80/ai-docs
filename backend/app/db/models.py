@@ -3154,6 +3154,32 @@ class ImageGeneration(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+class CadIrRevision(UUIDPrimaryKey, TimestampMixin, Base):
+    """One revision of a generation's CAD IR (engineering intermediate format).
+
+    The IR JSON itself lives in MinIO (``ir_path``) — on large sheets it is
+    megabytes. Every human/agent edit produces a new revision; renders
+    (PNG/SVG/DXF) are regenerated deterministically from the referenced IR.
+    """
+
+    __tablename__ = "cad_ir_revisions"
+    __table_args__ = (
+        Index("ix_cad_ir_revisions_gen_rev", "generation_id", "revision", unique=True),
+    )
+
+    generation_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("image_generations.id"), nullable=False, index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ir_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(255))
+    # auto — recognition pipeline; review — confirm/fix of recognized entities;
+    # editor — manual drafting operations
+    origin: Mapped[str] = mapped_column(String(30), nullable=False, default="auto")
+    # counters + validation summary (entity counts, codes, coverage)
+    summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
 class StudioJob(UUIDPrimaryKey, TimestampMixin, Base):
     """Unified queue ledger for long-running studio work.
 

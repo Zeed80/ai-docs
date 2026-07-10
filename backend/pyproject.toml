@@ -38,6 +38,7 @@ dependencies = [
     "networkx>=3.4,<4",
     "opencv-contrib-python-headless>=4.10,<5",
     "pytesseract>=0.3.13,<1",
+    "shapely>=2.0,<3",
     # ezdxf's matplotlib drawing backend (LoRA dataset DXF/DWG target renders)
     "matplotlib>=3.8,<4",
 ]

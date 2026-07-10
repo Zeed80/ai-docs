@@ -305,6 +305,16 @@ def is_techdraw_request(text: str) -> bool:
     return has_precision and (has_part or has_chertezh)
 
 
+def is_vectorize_request(text: str) -> bool:
+    """Оцифровка скана/фото в редактируемый CAD (vectorize) vs рендер новой
+    детали (techdraw) vs диффузия. OR-семантика по маркерам («оцифруй»,
+    «в DXF», «векторизуй»). Проверяется ДО is_techdraw_request — «оцифруй
+    чертёж по ГОСТ» содержит и precision-маркер, но остаётся оцифровкой."""
+    cfg = _table().get("image_studio_vectorize") or {}
+    t = normalize(text)
+    return any(kw in t for kw in cfg.get("markers") or [])
+
+
 # ── Canvas/skill mappings (audit + direct repair) ──────────────────────────────
 
 

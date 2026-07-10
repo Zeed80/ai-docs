@@ -1,0 +1,11 @@
+torch>=2.5
+torchvision>=0.20
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34
+pillow>=11.0
+numpy>=1.26,<3
+pydantic>=2.10,<3
+structlog>=24.4
+opencv-contrib-python-headless>=4.10,<5
+shapely>=2.0,<3
+python-multipart>=0.0.18

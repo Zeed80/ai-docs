@@ -642,6 +642,15 @@ capabilities:
     path: /api/agent/cap/tech
     method: POST
     gate_actions: [process_plan_approve, norm_estimate_approve, learning_rule_activate, bom_approve]
+    # Ф8.2: режимы резания реально посчитаны только для этих групп материалов
+    # (app.ai.tp_generator._CUTTING_PARAMS) — за пределами этого списка
+    # material_group_with_confidence() честно отказывается угадывать, а не
+    # молча подставляет параметры стали.
+    domain:
+      materials: [steel_carbon, steel_alloy, stainless, aluminum, cast_iron]
+      note: >
+        Материал вне этого списка (титан, латунь, пластики и т.д.) — режимы
+        резания не считаются автоматически, нужна ручная проверка технолога.
     parameters:
       type: object
       properties:
@@ -770,23 +779,37 @@ capabilities:
       action=accept_techdraw: принять готовый ТОЧНЫЙ чертёж (generation_id) —
       approval-gated (нужно подтверждение человека), используй ТОЛЬКО для
       результатов operation=techdraw, не путай с обычным accept.
+      action=vectorize (operation=vectorize через generate): оцифровать
+      скан/фото чертежа в РЕДАКТИРУЕМЫЙ CAD-формат (DXF/DWG + структура
+      примитивов CAD IR) — детерминированное распознавание линий/окружностей/
+      дуг/текста, БЕЗ диффузии. Используй для запросов «оцифруй чертёж»,
+      «переведи в DXF/DWG», «сделай редактируемый чертёж из фото»: передай
+      operation="vectorize" и source_document_ids/source_image_paths.
+      Асинхронно — проверяй get. Спорные места попадают в очередь review,
+      человек правит их в студии; результат содержит отчёт валидации.
+      action=get_ir: получить распознанную структуру (CAD IR) по generation_id
+      — счётчики элементов, отчёт валидации, спорные места.
+      action=accept_vectorize: принять оцифрованный чертёж (generation_id) —
+      approval-gated (нужно подтверждение человека), ТОЛЬКО для
+      operation=vectorize; при блокирующих ошибках валидации приёмка
+      отклоняется (409) — сначала человек исправляет в редакторе студии.
       Генерация (generate/edit) асинхронная — после неё проверяй get по generation_id.
       Опционально для generate/techdraw: source_document_id/case_id — привяжи
       результат к документу/делу для трассируемости (это НЕ то же самое, что
       source_document_ids — те задают источник изображения для edit/inpaint).
     path: /api/agent/cap/image_studio
     method: POST
-    gate_actions: [accept_techdraw]
-    non_recipeable_actions: [generate, iterate, accept, accept_techdraw]
+    gate_actions: [accept_techdraw, accept_vectorize]
+    non_recipeable_actions: [generate, iterate, accept, accept_techdraw, accept_vectorize]
     parameters:
       type: object
       properties:
         action:
           type: string
-          description: "generate | techdraw | list | get | accept | accept_techdraw | iterate | prompt_help | list_workflows"
+          description: "generate | techdraw | list | get | get_ir | accept | accept_techdraw | accept_vectorize | iterate | prompt_help | list_workflows"
         operation:
           type: string
-          description: "Для generate: generate | edit | inpaint | cleanup"
+          description: "Для generate: generate | edit | inpaint | cleanup | vectorize"
         prompt:
           type: string
           description: "Текстовое описание/инструкция для генерации или правки"
@@ -816,6 +839,35 @@ capabilities:
         case_id:
           type: string
           description: "Опционально: ID дела (WorkCase), к которому относится результат"
+      required: [action]
+
+  - name: cad_review
+    description: >
+      Нормоконтроль CAD-чертежей (оцифрованных/ЕСКД) — ТОЛЬКО просмотр и
+      критика, без прав принятия результата (нет accept/accept_vectorize) и
+      без прав редактирования геометрии (нет generate/PATCH). Роль критика:
+      предложение → независимая проверка → человек утвердил.
+      action=list: история генераций; action=get: статус по generation_id;
+      action=get_ir: CAD IR + отчёт валидации по уровням (1-5 детерминированные
+      уже посчитаны, 6-7 — если запускался full_check);
+      action=full_check: запустить уровни 6-7 (LLM-нормоконтроль ЕСКД +
+      визуальная VLM-критика) поверх уже пройденных уровней 1-5 —
+      результат сохраняется как новая ревизия отчёта, но НЕ меняет геометрию
+      и не может быть использован для приёмки — только человек с capability
+      image_studio принимает через accept_vectorize.
+    path: /api/agent/cap/cad_review
+    method: POST
+    gate_actions: []
+    non_recipeable_actions: [full_check]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "list | get | get_ir | full_check"
+        generation_id:
+          type: string
+          description: "ID генерации (для get, get_ir, full_check)"
       required: [action]
 
   - name: vault

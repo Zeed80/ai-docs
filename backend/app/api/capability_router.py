@@ -297,6 +297,22 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         # techdraw record when the caller is the internal agent service —
         # otherwise an agent could dodge the gate by just calling "accept".
         "accept_techdraw": ("POST", "/api/image-gen/{generation_id}/accept-techdraw", ["generation_id"]),
+        # Same gate pattern for vectorized (scan→DXF) drawings; plain /accept
+        # likewise refuses agent-service calls for operation=vectorize.
+        "accept_vectorize": ("POST", "/api/image-gen/{generation_id}/accept-vectorize", ["generation_id"]),
+        "get_ir":          ("GET",   "/api/image-gen/{generation_id}/ir",       ["generation_id"]),
+    },
+    # Ф8.1: normcontrol — read-only over the SAME CAD IR data as image_studio,
+    # deliberately a NARROWER action set (no generate/accept/PATCH-editing) so
+    # a critic role structurally cannot approve or change geometry, only read
+    # it and run the levels 6-7 LLM/VLM review. Separate capability, not a
+    # restricted view of image_studio, because roles grant whole capabilities
+    # (see gateway_config.role_capabilities) — there is no per-action carve-out.
+    "cad_review": {
+        "list":       ("GET",  "/api/image-gen",                            []),
+        "get":        ("GET",  "/api/image-gen/{generation_id}",            ["generation_id"]),
+        "get_ir":     ("GET",  "/api/image-gen/{generation_id}/ir",         ["generation_id"]),
+        "full_check": ("POST", "/api/image-gen/{generation_id}/ir/full-check", ["generation_id"]),
     },
 }
 

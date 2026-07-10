@@ -136,17 +136,39 @@ _TPZ_TABLE: dict[str, float] = {
 
 # ── Material group detector ───────────────────────────────────────────────────
 
-def material_group(material: str) -> str:
+class CompetenceCode:
+    """Typed reasons a competence check refused to guess (Ф8.2) — a stable
+    code the caller/UI can branch on, not a string to grep for."""
+
+    MATERIAL_UNRECOGNIZED = "material_unrecognized"
+
+
+def material_group_with_confidence(material: str) -> tuple[str, bool]:
+    """(group, recognized). ``recognized=False`` means no keyword matched —
+    the returned group is a bare fallback guess (steel_carbon), not a
+    confirmed classification. Callers that silently used the fallback as if
+    it were confident are exactly the failure mode this exists to stop:
+    cutting parameters for the WRONG material (e.g. titanium mis-treated as
+    carbon steel) are actively dangerous, not just imprecise."""
     m = material.lower()
     if any(k in m for k in ["12х18", "нержав", "stainless", "321", "316", "304", "aisi"]):
-        return "stainless"
+        return "stainless", True
     if any(k in m for k in ["алюм", "ад3", "ад0", "ад1", "амг", "амц", "дур", "ав", "al ", "al-", "aluminum", "aluminium", "д16", "а5", "а6", "а7"]):
-        return "aluminum"
+        return "aluminum", True
     if any(k in m for k in ["чугун", "сч", "кч", "вч", "cast iron", "grey iron"]):
-        return "cast_iron"
+        return "cast_iron", True
     if any(k in m for k in ["легир", "хвг", "хвф", "40х", "30хгса", "18хгт", "alloy", "chrome"]):
-        return "steel_alloy"
-    return "steel_carbon"
+        return "steel_alloy", True
+    if any(k in m for k in ["сталь", "steel", "ст3", "ст20", "ст45", "45", "20", "10", "sae"]):
+        return "steel_carbon", True
+    return "steel_carbon", False
+
+
+def material_group(material: str) -> str:
+    """Backward-compatible: group only, no confidence signal. New call sites
+    that make a decision based on the material should prefer
+    ``material_group_with_confidence`` instead."""
+    return material_group_with_confidence(material)[0]
 
 
 # Backward-compatible private alias — kept so existing call sites in this file
@@ -451,8 +473,21 @@ def calculate_cutting_parameters(
     roughness_ra: float | None,
     tool_material: str = "carbide",
 ) -> dict[str, Any]:
-    """Calculate Vc, n, feed, ap/ae and To estimate."""
-    mat_group = _material_group(material)
+    """Calculate Vc, n, feed, ap/ae and To estimate.
+
+    Ф8.2: when the material doesn't match any known group, the calculation
+    still runs (a draft-first estimate beats no estimate) but the result
+    carries an honest ``competence`` flag instead of silently presenting a
+    steel_carbon guess as a confirmed value — a normcontrol/human reviewer
+    must catch this before it reaches a real machining program."""
+    mat_group, recognized = material_group_with_confidence(material)
+    if not recognized:
+        logger.warning(
+            "tp_cutting_params_material_unrecognized",
+            code=CompetenceCode.MATERIAL_UNRECOGNIZED,
+            material=material,
+            fallback_group=mat_group,
+        )
     op_key = operation_type if operation_type in ("turning", "milling", "drilling", "grinding",
                                                    "boring", "reaming", "honing", "broaching") else "default"
 
@@ -489,6 +524,15 @@ def calculate_cutting_parameters(
         "to_min": to_min,
         "material_group": mat_group,
         "tool_material": tool_key,
+        "competence": {
+            "recognized": recognized,
+            "code": None if recognized else CompetenceCode.MATERIAL_UNRECOGNIZED,
+            "note": None if recognized else (
+                f"Материал «{material}» не распознан ни в одной известной группе — "
+                f"параметры резания оценены ПО УМОЛЧАНИЮ как {mat_group}, требуется "
+                "проверка технолога перед использованием"
+            ),
+        },
     }
 
 

@@ -33,6 +33,7 @@ each redrawn into a fatter bar, unrelated segments bridged, text read as
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 
 import structlog
 
@@ -70,15 +71,57 @@ def _coverage_dilate_px(h: int, w: int) -> int:
     return max(3, min(_COVERAGE_DILATE_MAX_PX, round(math.hypot(w, h) * 0.004)))
 
 
-def redraw_ink(ink, exclusion_boxes: list[tuple[int, int, int, int]] | None = None):
-    """Rebuild the drawing from ``ink`` (uint8 mask, 255 = ink) as clean
-    vector-quality strokes. Returns a grayscale uint8 canvas (255 background,
-    anti-aliased dark strokes) or ``None`` when the redraw would be unsafe —
-    callers must treat ``None`` as "keep the binarized image as-is".
+@dataclass
+class RawPrimitive:
+    """One fitted stroke primitive in source-pixel coordinates.
 
-    ``exclusion_boxes`` (x0, y0, x1, y1) mark regions whose original raster
-    ink is copied through untouched (text handled by text_preserve, title
-    block) instead of being re-stroked.
+    ``confidence`` derives from the fit residual (1.0 = points sit exactly on
+    the primitive; the acceptance cap maps to ~0.5). Polyline fallbacks carry
+    the lowest confidence — they mean "no clean primitive matched".
+    """
+
+    kind: str  # "segment" | "circle" | "arc" | "polyline" | "dot"
+    thickness_px: int
+    is_thick: bool
+    confidence: float
+    # segment endpoints / dot center
+    p1: tuple[float, float] | None = None
+    p2: tuple[float, float] | None = None
+    # circle/arc
+    center: tuple[float, float] | None = None
+    radius: float | None = None
+    start_angle: float | None = None
+    end_angle: float | None = None
+    # polyline (simplified vertices)
+    points: list[tuple[float, float]] = field(default_factory=list)
+    closed: bool = False
+
+
+@dataclass
+class ExtractResult:
+    """Primitives plus everything needed to re-render/verify the sheet."""
+
+    primitives: list[RawPrimitive]
+    keep_raster: "object"  # bool HxW mask: solid fills + exclusion regions
+    # Solid-fill component of keep_raster ALONE (arrowheads, section fills,
+    # weld symbols — density-detected, not caller-supplied exclusion boxes).
+    # Exposed separately so callers can turn genuine hatching/fills into
+    # structured HatchRegion entities (Ф4.4) without also contour-tracing
+    # excluded TEXT regions, which are unrelated raster passthrough.
+    solid_mask: "object"
+    thin_px: int
+    thick_px: int
+    width: int
+    height: int
+
+
+def extract_primitives(
+    ink, exclusion_boxes: list[tuple[int, int, int, int]] | None = None
+) -> ExtractResult | None:
+    """Fit vector primitives to ``ink`` (uint8 mask, 255 = ink).
+
+    Returns ``None`` when the sheet is not a line drawing (density gate) or
+    yields no traceable strokes — callers must treat that as "decline".
     """
     import cv2
     import numpy as np
@@ -117,15 +160,51 @@ def redraw_ink(ink, exclusion_boxes: list[tuple[int, int, int, int]] | None = No
     ]
     thin_px, thick_px, split = _width_classes(widths, [len(p) for p in paths])
 
-    canvas = np.full((h, w), 255, dtype=np.uint8)
-    canvas[keep_raster] = 0
-
+    primitives = []
     for pts, width in zip(paths, widths):
-        thickness = thick_px if (split is not None and width >= split) else thin_px
-        _draw_path(canvas, pts, thickness, junction_points)
+        is_thick = split is not None and width >= split
+        thickness = thick_px if is_thick else thin_px
+        primitives.extend(_fit_path(pts, thickness, is_thick, junction_points))
 
+    return ExtractResult(
+        primitives=primitives,
+        keep_raster=keep_raster,
+        solid_mask=solid,
+        thin_px=thin_px,
+        thick_px=thick_px,
+        width=w,
+        height=h,
+    )
+
+
+def render_primitives(result: ExtractResult):
+    """Deterministic raster of an ``ExtractResult``: white canvas, kept raster
+    regions copied through, every primitive drawn exactly once."""
+    import numpy as np
+
+    canvas = np.full((result.height, result.width), 255, dtype=np.uint8)
+    canvas[result.keep_raster] = 0
+    for prim in result.primitives:
+        _draw_primitive(canvas, prim)
+    return canvas
+
+
+def redraw_ink(ink, exclusion_boxes: list[tuple[int, int, int, int]] | None = None):
+    """Rebuild the drawing from ``ink`` (uint8 mask, 255 = ink) as clean
+    vector-quality strokes. Returns a grayscale uint8 canvas (255 background,
+    anti-aliased dark strokes) or ``None`` when the redraw would be unsafe —
+    callers must treat ``None`` as "keep the binarized image as-is".
+
+    ``exclusion_boxes`` (x0, y0, x1, y1) mark regions whose original raster
+    ink is copied through untouched (text handled by text_preserve, title
+    block) instead of being re-stroked.
+    """
+    result = extract_primitives(ink, exclusion_boxes)
+    if result is None:
+        return None
+    canvas = render_primitives(result)
     redrawn = canvas < 128
-    if not _verify_coverage(ink_bool, redrawn):
+    if not _verify_coverage(ink > 0, redrawn):
         return None
     return canvas
 
@@ -221,11 +300,24 @@ def _trace_paths(skel):
     import numpy as np
 
     skel_u8 = skel.astype(np.uint8)
-    neighbor_count = (
-        cv2.filter2D(skel_u8, -1, np.ones((3, 3), np.uint8), borderType=cv2.BORDER_CONSTANT)
-        - skel_u8
-    )
-    junctions = skel & (neighbor_count >= 3)
+    # Crossing number: junctions are pixels with ≥3 distinct 0→1 transitions
+    # around their 8-neighborhood. A raw neighbor count (≥3) falsely marks
+    # staircase corners of discretized circles/diagonals as junctions and
+    # shreds one drawn circle into dozens of chord fragments.
+    padded = np.pad(skel.astype(bool), 1)
+    nb = [
+        padded[0:-2, 1:-1],  # N
+        padded[0:-2, 2:],    # NE
+        padded[1:-1, 2:],    # E
+        padded[2:, 2:],      # SE
+        padded[2:, 1:-1],    # S
+        padded[2:, 0:-2],    # SW
+        padded[1:-1, 0:-2],  # W
+        padded[0:-2, 0:-2],  # NW
+    ]
+    seq = nb + [nb[0]]
+    transitions = sum(((~seq[i]) & seq[i + 1]).astype(np.uint8) for i in range(8))
+    junctions = skel & (transitions >= 3)
 
     # Junction clusters → centroids, and per-pixel lookup of its centroid.
     junction_points = np.empty((0, 2), dtype=np.float32)
@@ -332,43 +424,131 @@ def _width_classes(widths: list[float], lengths: list[int]):
 # ── Primitive fitting + drawing ──────────────────────────────────────────────
 
 
-def _draw_path(canvas, pts, thickness: int, junction_points) -> None:
+def _fit_confidence(dev: float, cap: float) -> float:
+    """Residual → confidence: exact fit = 1.0, at the acceptance cap = 0.5."""
+    if cap <= 0:
+        return 0.5
+    return max(0.5, 1.0 - 0.5 * (dev / cap))
+
+
+_CORNER_SPLIT_MIN_EDGE_PX = 15.0
+
+
+def _fit_path(pts, thickness: int, is_thick: bool, junction_points) -> list[RawPrimitive]:
+    """Fit one ordered skeleton path to primitives (straight segment →
+    circle/arc → corner-split segment chain → simplified polyline fallback),
+    preserving the exact same acceptance rules the renderer used when it drew
+    directly. A path may yield several primitives: an L-shaped stroke whose
+    corner is not a topological junction splits into its straight edges."""
     import cv2
     import numpy as np
 
     n = len(pts)
     if n == 1:
-        cv2.circle(canvas, tuple(pts[0]), max(1, thickness // 2), 0, -1, cv2.LINE_AA)
-        return
+        return [RawPrimitive(
+            kind="dot",
+            thickness_px=thickness,
+            is_thick=is_thick,
+            confidence=0.6,
+            p1=(float(pts[0][0]), float(pts[0][1])),
+        )]
     ptsf = pts.astype(np.float32)
 
     line = _fit_straight(ptsf)
     if line is not None:
-        p1, p2 = line
+        p1, p2, dev, cap = line
         p1 = _snap_to_junction(p1, junction_points)
         p2 = _snap_to_junction(p2, junction_points)
-        cv2.line(
-            canvas,
-            (int(round(p1[0])), int(round(p1[1]))),
-            (int(round(p2[0])), int(round(p2[1]))),
-            0, thickness, cv2.LINE_AA,
-        )
-        return
+        return [RawPrimitive(
+            kind="segment",
+            thickness_px=thickness,
+            is_thick=is_thick,
+            confidence=_fit_confidence(dev, cap),
+            p1=(float(p1[0]), float(p1[1])),
+            p2=(float(p2[0]), float(p2[1])),
+        )]
 
     closed = bool(n > 8 and abs(int(pts[0][0]) - int(pts[-1][0])) <= 1
                   and abs(int(pts[0][1]) - int(pts[-1][1])) <= 1)
-    if n >= 20 and _draw_circle_or_arc(canvas, ptsf, closed, thickness):
-        return
+    if n >= 20:
+        circ = _fit_circle_or_arc(ptsf, closed)
+        if circ is not None:
+            circ.thickness_px = thickness
+            circ.is_thick = is_thick
+            return [circ]
 
     approx = cv2.approxPolyDP(pts.reshape(-1, 1, 2), _POLYLINE_SIMPLIFY_EPS, closed)
-    cv2.polylines(canvas, [approx], closed, 0, thickness, cv2.LINE_AA)
+    vertices = [(float(p[0][0]), float(p[0][1])) for p in approx]
+    if len(vertices) < 2:
+        vertices = [(float(ptsf[0][0]), float(ptsf[0][1])), (float(ptsf[-1][0]), float(ptsf[-1][1]))]
+
+    # Corner chain vs genuine curve: straight edges between simplified
+    # vertices are long; a smooth curve simplifies into many short edges.
+    edges = list(zip(vertices[:-1], vertices[1:]))
+    if closed and len(vertices) >= 3:
+        edges.append((vertices[-1], vertices[0]))
+    edge_lens = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in edges]
+    if edges and min(edge_lens) >= _CORNER_SPLIT_MIN_EDGE_PX:
+        return [
+            RawPrimitive(
+                kind="segment",
+                thickness_px=thickness,
+                is_thick=is_thick,
+                confidence=0.7,
+                p1=a,
+                p2=b,
+            )
+            for a, b in edges
+        ]
+
+    return [RawPrimitive(
+        kind="polyline",
+        thickness_px=thickness,
+        is_thick=is_thick,
+        confidence=0.5,
+        points=vertices,
+        closed=closed,
+    )]
+
+
+def _draw_primitive(canvas, prim: RawPrimitive) -> None:
+    import cv2
+    import numpy as np
+
+    t = prim.thickness_px
+    if prim.kind == "dot":
+        cv2.circle(
+            canvas,
+            (int(round(prim.p1[0])), int(round(prim.p1[1]))),
+            max(1, t // 2), 0, -1, cv2.LINE_AA,
+        )
+    elif prim.kind == "segment":
+        cv2.line(
+            canvas,
+            (int(round(prim.p1[0])), int(round(prim.p1[1]))),
+            (int(round(prim.p2[0])), int(round(prim.p2[1]))),
+            0, t, cv2.LINE_AA,
+        )
+    elif prim.kind == "circle":
+        center = (int(round(prim.center[0])), int(round(prim.center[1])))
+        cv2.circle(canvas, center, int(round(prim.radius)), 0, t, cv2.LINE_AA)
+    elif prim.kind == "arc":
+        center = (int(round(prim.center[0])), int(round(prim.center[1])))
+        radius = int(round(prim.radius))
+        cv2.ellipse(
+            canvas, center, (radius, radius), 0.0,
+            prim.start_angle, prim.end_angle, 0, t, cv2.LINE_AA,
+        )
+    elif prim.kind == "polyline":
+        arr = np.array([[int(round(x)), int(round(y))] for x, y in prim.points], dtype=np.int32)
+        cv2.polylines(canvas, [arr], prim.closed, 0, t, cv2.LINE_AA)
 
 
 def _fit_straight(ptsf):
-    """Least-squares line fit; returns (p1, p2) endpoints of the straightened
-    stroke, or None when the path isn't straight. Direction snaps to the
-    nearest canonical ЕСКД angle when already close; other angles stay as
-    fitted (still perfectly straight, at their own angle)."""
+    """Least-squares line fit; returns (p1, p2, max_dev, cap) of the
+    straightened stroke, or None when the path isn't straight. Direction snaps
+    to the nearest canonical ЕСКД angle when already close; other angles stay
+    as fitted (still perfectly straight, at their own angle)."""
     import numpy as np
 
     mean = ptsf.mean(axis=0)
@@ -380,7 +560,8 @@ def _fit_straight(ptsf):
     # reaches several px) up to the cap; an "arc" flat enough to pass the cap
     # has a multi-thousand-px radius — indistinguishable from straight at
     # sheet scale anyway.
-    if max_dev > min(_STRAIGHT_DEV_CAP_PX, max(2.5, 0.015 * len(ptsf))):
+    cap = min(_STRAIGHT_DEV_CAP_PX, max(2.5, 0.015 * len(ptsf)))
+    if max_dev > cap:
         return None
 
     angle = math.degrees(math.atan2(float(direction[1]), float(direction[0]))) % 180.0
@@ -390,7 +571,7 @@ def _fit_straight(ptsf):
         direction = np.array([math.cos(rad), math.sin(rad)], dtype=np.float32)
 
     t = centered @ direction
-    return mean + direction * float(t.min()), mean + direction * float(t.max())
+    return mean + direction * float(t.min()), mean + direction * float(t.max()), max_dev, cap
 
 
 def _nearest_canonical_angle(angle_deg: float) -> float | None:
@@ -419,41 +600,57 @@ def _snap_to_junction(p, junction_points):
     return p
 
 
-def _draw_circle_or_arc(canvas, ptsf, closed: bool, thickness: int) -> bool:
-    """Kåsa algebraic circle fit; draws a perfect circle (closed path) or arc
-    (open path) when the points genuinely lie on one. Returns False when they
-    don't — caller falls back to a polyline."""
-    import cv2
+def _fit_circle_or_arc(ptsf, closed: bool) -> RawPrimitive | None:
+    """Kåsa algebraic circle fit; returns a circle (closed path) or arc (open
+    path) primitive when the points genuinely lie on one, else None — caller
+    falls back to a polyline. Thickness fields are filled in by the caller."""
     import numpy as np
 
     x, y = ptsf[:, 0], ptsf[:, 1]
+    span = float(max(x.max() - x.min(), y.max() - y.min()))
     a_mat = np.column_stack([2 * x, 2 * y, np.ones(len(ptsf))])
     b_vec = x * x + y * y
     try:
         (cx, cy, c), *_ = np.linalg.lstsq(a_mat, b_vec, rcond=None)
     except np.linalg.LinAlgError:
-        return False
+        return None
     r_sq = c + cx * cx + cy * cy
     if r_sq <= _MIN_CIRCLE_RADIUS_PX**2:
-        return False
+        return None
     r = math.sqrt(r_sq)
-    if r > 2 * max(canvas.shape):
-        return False
+    # A radius far beyond the path's own extent means "almost straight" — the
+    # fit is numerically valid but meaningless as a drawable circle.
+    if r > 4 * max(span, 1.0):
+        return None
     dev = np.abs(np.hypot(x - cx, y - cy) - r)
-    if float(dev.max()) > max(_CIRCLE_DEV_CAP_PX, 0.01 * r):
-        return False
+    dev_cap = max(_CIRCLE_DEV_CAP_PX, 0.01 * r)
+    if float(dev.max()) > dev_cap:
+        return None
 
-    center = (int(round(cx)), int(round(cy)))
-    radius = int(round(r))
+    confidence = _fit_confidence(float(dev.max()), dev_cap)
     if closed:
-        cv2.circle(canvas, center, radius, 0, thickness, cv2.LINE_AA)
-        return True
+        return RawPrimitive(
+            kind="circle",
+            thickness_px=1,
+            is_thick=False,
+            confidence=confidence,
+            center=(float(cx), float(cy)),
+            radius=float(r),
+        )
     angles = np.degrees(np.unwrap(np.arctan2(y - cy, x - cx)))
     a0, a1 = float(angles[0]), float(angles[-1])
     if abs(a1 - a0) > 370.0:
-        return False
-    cv2.ellipse(canvas, center, (radius, radius), 0.0, a0, a1, 0, thickness, cv2.LINE_AA)
-    return True
+        return None
+    return RawPrimitive(
+        kind="arc",
+        thickness_px=1,
+        is_thick=False,
+        confidence=confidence,
+        center=(float(cx), float(cy)),
+        radius=float(r),
+        start_angle=a0,
+        end_angle=a1,
+    )
 
 
 # ── Self-verification ────────────────────────────────────────────────────────

@@ -252,3 +252,23 @@ def test_not_techdraw_request_photo_edit():
 def test_not_techdraw_request_part_noun_without_precision():
     """Mentioning a part alone (no precision marker) is still a sketch request."""
     assert not route_table.is_techdraw_request("нарисуй вал для иллюстрации в письме")
+
+
+def test_vectorize_request_markers():
+    assert route_table.is_vectorize_request("оцифруй этот чертёж")
+    assert route_table.is_vectorize_request("переведи скан в dxf")
+    assert route_table.is_vectorize_request("векторизуй фото чертежа")
+    assert route_table.is_vectorize_request("сделай редактируемый чертеж из фото")
+
+
+def test_vectorize_wins_over_techdraw_semantics():
+    """«оцифруй чертёж по ГОСТ» has a techdraw precision marker too — the
+    orchestrator checks vectorize first, so both being true is fine, but the
+    vectorize detector itself must fire."""
+    text = "оцифруй чертеж по гост в dxf"
+    assert route_table.is_vectorize_request(text)
+
+
+def test_not_vectorize_request_plain_draw():
+    assert not route_table.is_vectorize_request("начерти вал 50h6 с размерами")
+    assert not route_table.is_vectorize_request("нарисуй эскиз приспособления")

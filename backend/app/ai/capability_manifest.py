@@ -23,6 +23,15 @@ class CapabilityDefinition(BaseModel):
     # learned recipe as if it were the same result every time.
     non_recipeable_actions: list[str] = Field(default_factory=list)
     parameters: dict[str, Any] = Field(default_factory=dict)
+    # Ф8.2: declared domain of applicability (materials/ranges/exclusions a
+    # skill actually has data/rules for) — descriptive metadata surfaced to
+    # the model in its tool description, not a mechanically enforced filter
+    # (same status as the rest of `description`). Real enforcement of a
+    # competence boundary happens in the skill's own code (see
+    # tp_generator.material_group_with_confidence for a worked example) and
+    # is what actually produces an honest refusal — this field documents
+    # that boundary so it's visible without reading the implementation.
+    domain: dict[str, Any] | None = None
 
     @field_validator("method")
     @classmethod

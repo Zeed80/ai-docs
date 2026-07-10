@@ -1,0 +1,176 @@
+"""Classical-CV recognizer: skeleton tracing + primitive fitting.
+
+Thin adapter over ``drawing_vectorize.extract_primitives`` that converts its
+``RawPrimitive`` structures into CAD IR entities. This backend is the
+always-available fallback and the scaffolding the vertical was built on; the
+neural seq2seq backend replaces it as the primary path without changing this
+contract.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import structlog
+
+from app.ai.cad_ir.schema import Arc, Circle, Entity, HatchRegion, Point, Polyline, Segment
+from app.ai.cad_recognize.base import RecognizeOutput
+from app.ai.drawing_vectorize import RawPrimitive, extract_primitives
+
+logger = structlog.get_logger()
+
+
+def _to_entity(prim: RawPrimitive) -> Entity | None:
+    # Line-class heuristic for revision 0: thick strokes are contours, thin
+    # ones auxiliary. Axis/dim/hidden refinement is the VLM/review stage's job.
+    common = {
+        "line_class": "contour" if prim.is_thick else "thin",
+        "width_class": "main" if prim.is_thick else "thin",
+        "confidence": prim.confidence,
+        "origin": "cv",
+    }
+    if prim.kind == "segment":
+        return Segment(
+            p1=Point(x=prim.p1[0], y=prim.p1[1]),
+            p2=Point(x=prim.p2[0], y=prim.p2[1]),
+            **common,
+        )
+    if prim.kind == "circle":
+        return Circle(center=Point(x=prim.center[0], y=prim.center[1]), radius=prim.radius, **common)
+    if prim.kind == "arc":
+        return Arc(
+            center=Point(x=prim.center[0], y=prim.center[1]),
+            radius=prim.radius,
+            start_angle=prim.start_angle,
+            end_angle=prim.end_angle,
+            **common,
+        )
+    if prim.kind == "polyline":
+        return Polyline(
+            points=[Point(x=x, y=y) for x, y in prim.points],
+            closed=prim.closed,
+            **common,
+        )
+    # "dot": single-pixel speck — noise at IR level, stays raster-only
+    return None
+
+
+_ARC_MERGE_CENTER_TOL_PX = 4.0
+_ARC_MERGE_RADIUS_TOL = 0.05  # relative
+_FULL_CIRCLE_MIN_SPAN_DEG = 330.0
+
+
+def _merge_cocircular_arcs(entities: list[Entity]) -> list[Entity]:
+    """Skeletonization often splits one drawn circle into several arcs (spur
+    junctions break the loop). Arcs sharing a center/radius whose combined
+    angular span is nearly full are one circle — merge them so the DXF gets a
+    single CIRCLE entity instead of four arc fragments."""
+    arcs = [e for e in entities if isinstance(e, Arc)]
+    if len(arcs) < 2:
+        return entities
+    used: set[str] = set()
+    merged: list[Entity] = []
+    for i, a in enumerate(arcs):
+        if a.id in used:
+            continue
+        group = [a]
+        for b in arcs[i + 1:]:
+            if b.id in used:
+                continue
+            dc = ((a.center.x - b.center.x) ** 2 + (a.center.y - b.center.y) ** 2) ** 0.5
+            if dc <= _ARC_MERGE_CENTER_TOL_PX and abs(a.radius - b.radius) <= _ARC_MERGE_RADIUS_TOL * a.radius:
+                group.append(b)
+        span = sum(abs(g.end_angle - g.start_angle) for g in group)
+        if len(group) >= 2 and span >= _FULL_CIRCLE_MIN_SPAN_DEG:
+            for g in group:
+                used.add(g.id)
+            merged.append(
+                Circle(
+                    center=Point(
+                        x=sum(g.center.x for g in group) / len(group),
+                        y=sum(g.center.y for g in group) / len(group),
+                    ),
+                    radius=sum(g.radius for g in group) / len(group),
+                    line_class=group[0].line_class,
+                    width_class=group[0].width_class,
+                    confidence=min(g.confidence for g in group),
+                    origin="cv",
+                )
+            )
+    if not used:
+        return entities
+    out = [e for e in entities if e.id not in used]
+    out.extend(merged)
+    return out
+
+
+# Below this pixel area a "solid" blob is an arrowhead/junction dot, not
+# hatching worth a structured HatchRegion — same order of magnitude as
+# drawing_vectorize's own dot-vs-primitive distinction.
+_MIN_HATCH_AREA_PX = 150
+_HATCH_SIMPLIFY_EPS = 2.0
+
+
+def _hatch_regions_from_solid(solid_mask) -> list[HatchRegion]:
+    """Contour-trace the CV solid-fill mask (Ф4.4): section fills and
+    hatching currently ship as opaque raster and are invisible in the DXF
+    export (only entities render there) — turning them into HatchRegion
+    polygons is what actually gets them into the CAD file."""
+    import cv2
+    import numpy as np
+
+    if not np.asarray(solid_mask).any():
+        return []
+    contours, _ = cv2.findContours(
+        np.asarray(solid_mask).astype("uint8"), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    out: list[HatchRegion] = []
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < _MIN_HATCH_AREA_PX:
+            continue
+        approx = cv2.approxPolyDP(contour, _HATCH_SIMPLIFY_EPS, True)
+        points = [Point(x=float(p[0][0]), y=float(p[0][1])) for p in approx]
+        if len(points) < 3:
+            continue
+        out.append(HatchRegion(boundary=points, pattern="ansi31", confidence=0.6, origin="cv"))
+    return out
+
+
+class CvRecognizer:
+    name = "cv"
+
+    def recognize(
+        self,
+        ink: Any,
+        exclusion_boxes: list[tuple[int, int, int, int]] | None = None,
+    ) -> RecognizeOutput | None:
+        result = extract_primitives(ink, exclusion_boxes)
+        if result is None:
+            return None
+        entities: list[Entity] = []
+        dots = 0
+        for prim in result.primitives:
+            entity = _to_entity(prim)
+            if entity is None:
+                dots += 1
+                continue
+            entities.append(entity)
+        entities = _merge_cocircular_arcs(entities)
+        hatches = _hatch_regions_from_solid(result.solid_mask)
+        entities.extend(hatches)
+        logger.info(
+            "cv_recognize",
+            entities=len(entities),
+            dots_skipped=dots,
+            hatches=len(hatches),
+            thin_px=result.thin_px,
+            thick_px=result.thick_px,
+        )
+        return RecognizeOutput(
+            entities=entities,
+            keep_raster=result.keep_raster,
+            thin_px=result.thin_px,
+            thick_px=result.thick_px,
+            notes={"dots_skipped": dots},
+        )

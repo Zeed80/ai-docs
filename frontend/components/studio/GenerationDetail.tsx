@@ -19,6 +19,8 @@ import {
   sourceUrl,
 } from "@/lib/studio-api";
 
+import VectorWorkspace from "@/components/studio/VectorWorkspace";
+
 interface Props {
   gen: Generation;
   onChanged: () => void;
@@ -49,10 +51,8 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   const [renameValue, setRenameValue] = useState("");
   const hasDxf = typeof gen.params?.dxf_path === "string";
   const selectedWorkflow = workflows.find((w) => w.id === workflowId) ?? null;
-  const selectedParamsSchema = (selectedWorkflow?.params_schema || {}) as Record<
-    string,
-    Record<string, unknown>
-  >;
+  const selectedParamsSchema = (selectedWorkflow?.params_schema ||
+    {}) as Record<string, Record<string, unknown>>;
   const workflowParamEntries = Object.entries(selectedParamsSchema).filter(
     ([, spec]) => spec && typeof spec === "object",
   );
@@ -63,7 +63,9 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
 
   useEffect(() => {
     listWorkflows()
-      .then((ws) => setWorkflows(ws.filter((w) => w.enabled && w.operation === "edit")))
+      .then((ws) =>
+        setWorkflows(ws.filter((w) => w.enabled && w.operation === "edit")),
+      )
       .catch(() => undefined);
   }, []);
   // Default to the newest custom edit workflow (as the composer does), otherwise
@@ -75,7 +77,9 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   }, [workflows.length]);
 
   async function reloadWorkflows(): Promise<Workflow[]> {
-    const ws = (await listWorkflows()).filter((w) => w.enabled && w.operation === "edit");
+    const ws = (await listWorkflows()).filter(
+      (w) => w.enabled && w.operation === "edit",
+    );
     setWorkflows(ws);
     return ws;
   }
@@ -106,7 +110,10 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
     if (showQuality) {
       (input.params as Record<string, unknown>).quality = quality;
     }
-    Object.assign(input.params as Record<string, unknown>, collectWorkflowParams());
+    Object.assign(
+      input.params as Record<string, unknown>,
+      collectWorkflowParams(),
+    );
     await iterateGeneration(gen.id, input);
     setIterPrompt("");
   }
@@ -121,12 +128,17 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
       const rec = target as Record<string, unknown>;
       const nodeId = String(rec.node ?? "");
       const input = String(rec.input ?? "");
-      const node = (wf.graph as Record<string, { inputs?: Record<string, unknown> }>)[nodeId];
+      const node = (
+        wf.graph as Record<string, { inputs?: Record<string, unknown> }>
+      )[nodeId];
       const value = node?.inputs?.[input];
       if (typeof value === "string" && value.trim()) return value;
     }
     for (const node of Object.values(
-      wf.graph as Record<string, { class_type?: string; inputs?: Record<string, unknown> }>,
+      wf.graph as Record<
+        string,
+        { class_type?: string; inputs?: Record<string, unknown> }
+      >,
     )) {
       const cls = String(node?.class_type || "").toLowerCase();
       if (!cls.includes("text") && !cls.includes("clip")) continue;
@@ -139,7 +151,9 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   }
 
   function showIterPrompt() {
-    setIterPrompt(iterPrompt.trim() || workflowTextValue("prompt") || gen.prompt || "");
+    setIterPrompt(
+      iterPrompt.trim() || workflowTextValue("prompt") || gen.prompt || "",
+    );
     const negative = workflowTextValue("negative");
     if (negative && !iterNegative.trim()) setIterNegative(negative);
   }
@@ -215,11 +229,16 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
       for (const [key, spec] of Object.entries(selectedParamsSchema)) {
         const nextSpec: Record<string, unknown> =
           spec && typeof spec === "object" ? { ...spec } : { type: "string" };
-        const casted = castWorkflowParam(workflowParamValue(key, nextSpec), nextSpec);
+        const casted = castWorkflowParam(
+          workflowParamValue(key, nextSpec),
+          nextSpec,
+        );
         if (casted !== undefined) nextSpec.default = casted;
         nextSchema[key] = nextSpec;
       }
-      const updated = await patchWorkflow(target.id, { params_schema: nextSchema });
+      const updated = await patchWorkflow(target.id, {
+        params_schema: nextSchema,
+      });
       await reloadWorkflows();
       setWorkflowId(updated.id);
       setWorkflowParamOverrides((cur) => {
@@ -306,7 +325,9 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
                   <input
                     type="checkbox"
                     checked={Boolean(value)}
-                    onChange={(e) => setWorkflowParamValue(key, e.target.checked)}
+                    onChange={(e) =>
+                      setWorkflowParamValue(key, e.target.checked)
+                    }
                   />
                   <span>{label}</span>
                 </label>
@@ -330,7 +351,9 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
                 </label>
               );
             }
-            const numeric = ["int", "integer", "float", "number"].includes(type);
+            const numeric = ["int", "integer", "float", "number"].includes(
+              type,
+            );
             return (
               <label key={key} className="block">
                 <span className="text-xs text-zinc-500">{label}</span>
@@ -339,7 +362,13 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
                   value={String(value ?? "")}
                   min={spec.min !== undefined ? Number(spec.min) : undefined}
                   max={spec.max !== undefined ? Number(spec.max) : undefined}
-                  step={type === "int" || type === "integer" ? 1 : numeric ? 0.1 : undefined}
+                  step={
+                    type === "int" || type === "integer"
+                      ? 1
+                      : numeric
+                        ? 0.1
+                        : undefined
+                  }
                   onChange={(e) => setWorkflowParamValue(key, e.target.value)}
                   className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
                 />
@@ -355,7 +384,47 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   }
 
   const canAct =
-    gen.status === "failed" || gen.status === "done" || gen.status === "cancelled";
+    gen.status === "failed" ||
+    gen.status === "done" ||
+    gen.status === "cancelled";
+
+  // Vectorized (scan→DXF) drawings get the dedicated CAD workspace: overlay,
+  // review queue, editor tools and validation — diffusion iterate/workflow
+  // controls below make no sense for a deterministic CAD result.
+  if (gen.operation === "vectorize" && gen.status === "done") {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-zinc-200">
+            {t("vector.title")} · {t(`status.${gen.status}`)}
+            {gen.accepted ? t("status.accepted_suffix") : ""}
+          </h3>
+          <button
+            onClick={onClose}
+            className="text-zinc-400 hover:text-white text-sm px-2 -mr-2"
+          >
+            ✕
+          </button>
+        </div>
+        <VectorWorkspace gen={gen} onChanged={onChanged} />
+        {canAct && (
+          <button
+            disabled={busy}
+            onClick={() => {
+              if (confirm(t("detail.delete_confirm"))) {
+                run(() =>
+                  deleteGeneration(gen.id).then(onChanged).then(onClose),
+                );
+              }
+            }}
+            className="self-end text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
+          >
+            {t("detail.delete")}
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -409,7 +478,9 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
               disabled={busy}
               onClick={() => {
                 if (confirm(t("detail.delete_confirm"))) {
-                  run(() => deleteGeneration(gen.id).then(onChanged).then(onClose));
+                  run(() =>
+                    deleteGeneration(gen.id).then(onChanged).then(onClose),
+                  );
                 }
               }}
               className="ml-auto text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
@@ -591,7 +662,9 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
                 disabled={helping || !iterPrompt.trim()}
                 className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-40"
               >
-                {helping ? t("composer.help_prompt_busy") : t("composer.help_prompt")}
+                {helping
+                  ? t("composer.help_prompt_busy")
+                  : t("composer.help_prompt")}
               </button>
             </div>
           </div>

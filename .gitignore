@@ -11,6 +11,9 @@ cleanup_test_files/
 # Generated LoRA training data (tools/lora-dataset — regenerate, don't commit)
 datasets/lora-cleanup*/
 
+# Generated CAD neural-vectorizer training data (tools/cad-dataset — regenerate, don't commit)
+cad-dataset-out/
+
 # Python
 __pycache__/
 *.py[cod]

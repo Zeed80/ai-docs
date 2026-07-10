@@ -70,6 +70,33 @@ def test_role_scoping_filters_tools(session):
     assert "documents" in scoped
 
 
+def test_normcontroller_role_scoped_to_cad_review_only(session):
+    """Ф8.1: the critic role must NOT see image_studio (generate/accept*) —
+    only the narrower read-only cad_review capability."""
+    if gateway_config.skills_mode != "capabilities":
+        pytest.skip("role scoping applies in capabilities mode only")
+    caps = gateway_config.role_capabilities("normcontroller")
+    assert "cad_review" in caps
+    assert "image_studio" not in caps
+
+    session.set_active_role("normcontroller")
+    scoped = _tool_names(session._tools_for_turn())
+    assert "cad_review" in scoped
+    assert "image_studio" not in scoped
+
+
+def test_cad_review_capability_has_no_write_actions():
+    """The critic's only capability must expose exactly its read/critique
+    actions — no generate/accept/PATCH, structurally, not just by prompt."""
+    from app.api.capability_router import capability_action_map
+
+    actions = set(capability_action_map()["cad_review"])
+    assert actions == {"list", "get", "get_ir", "full_check"}
+    assert "accept" not in actions
+    assert "accept_vectorize" not in actions
+    assert "generate" not in actions
+
+
 def test_role_without_allowlist_sees_full_set(session):
     session.set_active_role("nonexistent_role")
     assert _tool_names(session._tools_for_turn()) == _tool_names(session._tools)
