@@ -108,9 +108,10 @@ def _render_dxf_png(doc, long_side: int) -> bytes | None:
 
 
 def _recognize(image_bytes: bytes, enhance: bool, recognizer: str = "cv") -> dict | None:
-    """``recognizer``: "cv" (baseline), "neural" (Ф3 model only, no CV
-    fallback — a clean read of what the network alone achieves), or
-    "arbitrate" (production path: neural vs CV, independently scored)."""
+    """``recognizer``: "cv" (baseline), "neural" (technical-vectorizer model
+    only, no CV fallback — a clean read of what the network alone
+    achieves), or "arbitrate" (production path: neural vs CV, independently
+    scored)."""
     from app.ai.cad_recognize import CvRecognizer
     from app.ai.cad_recognize.verify import score_coverage
     from app.tasks.cad_trace import _binarize, _ocr_text_entities
@@ -137,18 +138,18 @@ def _recognize(image_bytes: bytes, enhance: bool, recognizer: str = "cv") -> dic
             if out is not None else None
         )
     elif recognizer == "neural":
-        from app.ai.cad_recognize.neural import NeuralRecognizer
+        from app.ai.cad_recognize.technical_vectorizer import TechnicalVectorizerRecognizer
 
-        out = NeuralRecognizer().recognize(ink, exclusion_boxes=text_boxes)
+        out = TechnicalVectorizerRecognizer().recognize(ink, exclusion_boxes=text_boxes)
         score = (
             score_coverage(out.entities, ink, out.keep_raster, thin_px=out.thin_px, thick_px=out.thick_px)
             if out is not None else None
         )
     else:  # arbitrate — the actual production decision path
-        from app.ai.cad_recognize.neural import NeuralRecognizer
+        from app.ai.cad_recognize.technical_vectorizer import TechnicalVectorizerRecognizer
         from app.ai.cad_recognize.verify import arbitrate_recognition
 
-        result = arbitrate_recognition(ink, text_boxes, NeuralRecognizer(), CvRecognizer())
+        result = arbitrate_recognition(ink, text_boxes, TechnicalVectorizerRecognizer(), CvRecognizer())
         out = result if result.entities else None
         score = result.score if result.entities else None
         used = result.recognizer_used

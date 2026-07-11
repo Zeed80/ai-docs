@@ -333,7 +333,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     from app.ai.cad_ir import CadIR, SourceInfo
     from app.ai.cad_ir.schema import SheetInfo
     from app.ai.cad_recognize import CvRecognizer
-    from app.ai.cad_recognize.neural import NeuralRecognizer
+    from app.ai.cad_recognize.technical_vectorizer import TechnicalVectorizerRecognizer
     from app.ai.cad_recognize.verify import apply_to_ir, arbitrate_recognition, score_coverage
     from app.ai.cad_validate import validate_ir
     from app.db.models import ImageGeneration, ImageGenStatus
@@ -432,7 +432,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # Stage 5: recognize geometry — neural (if available) arbitrated
         # against CV by independent coverage scoring, never by the model's
         # own say-so (see cad_recognize/verify.arbitrate_recognition).
-        arbitration = arbitrate_recognition(ink, text_boxes, NeuralRecognizer(), CvRecognizer())
+        arbitration = arbitrate_recognition(ink, text_boxes, TechnicalVectorizerRecognizer(), CvRecognizer())
         if not arbitration.entities:
             return await _fail(
                 "Не удалось распознать линейную графику: лист слишком плотный или пустой. "

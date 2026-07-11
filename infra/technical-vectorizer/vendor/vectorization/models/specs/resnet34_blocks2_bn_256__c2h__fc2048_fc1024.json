@@ -1,0 +1,35 @@
+{
+  "kind": "GenericVectorizationNet",
+  "conv": {
+    "kind": "resnet",
+    "in_channels": 3,
+    "convmap_channels": 256,
+    "conf": "34",
+    "blocks": 2,
+    "bn": true
+  },
+  "use_fc_from_conv": false,
+  "hidden": {
+    "kind": "linear_block_seq",
+    "layers": [
+      {
+        "in_features": 16384,
+        "out_features": 2048,
+        "normalization": "none",
+        "dropout": 0.1
+      },
+      {
+        "in_features": 2048,
+        "out_features": 1280,
+        "normalization": "none",
+        "dropout": 0.1
+      }
+    ]
+  },
+  "use_fc_from_hidden": false,
+  "output": {
+    "kind": "output",
+    "in_features": 128,
+    "out_features": 6
+  }
+}

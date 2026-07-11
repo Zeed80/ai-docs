@@ -1,0 +1,18 @@
+{
+  "generator": {
+    "input_channels": 3,
+    "hidden_dim": 128,
+    "ffn_dim": 512,
+    "n_head": 4,
+    "resnet_count": 6,
+    "num_layers": 2
+  },
+  "discriminator": {
+    "input_channels": 3,
+    "hidden_dim": 128,
+    "ffn_dim": 512,
+    "n_head": 4,
+    "resnet_count": 6,
+    "num_layers": 2
+  }
+}

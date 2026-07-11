@@ -15,9 +15,14 @@ x-backend-env: &backend-env
   # ComfyUI (image studio). Defaults to a host-deployed ComfyUI reachable via the
   # host-gateway alias; override with COMFYUI_URL for an external node.
   COMFYUI_URL: ${COMFYUI_URL:-http://host-gateway:8188}
-  # Neural CAD vectorizer (Ф3, cad-vectorizer profile). Optional — the
-  # pipeline falls back to CV when unreachable (NEURAL_UNAVAILABLE).
+  # Neural CAD vectorizer (Ф3, cad-vectorizer profile) — superseded by
+  # technical-vectorizer below, kept configurable but no longer used in
+  # arbitrate_recognition (see cad_recognize/technical_vectorizer.py).
   CAD_VECTORIZER_URL: ${CAD_VECTORIZER_URL:-http://cad-vectorizer:8090}
+  # Technical-drawing line vectorizer (technical-vectorizer profile) — the
+  # primary neural recognizer now. Optional — the pipeline falls back to CV
+  # when unreachable (NEURAL_UNAVAILABLE).
+  TECHNICAL_VECTORIZER_URL: ${TECHNICAL_VECTORIZER_URL:-http://technical-vectorizer:8091}
   OLLAMA_MODEL_REASONING: ${OLLAMA_MODEL_REASONING:-qwen3.5:9b}
   OLLAMA_MODEL_OCR: ${OLLAMA_MODEL_OCR:-gemma4:e4b}
   APP_ENV: ${APP_ENV:-development}
@@ -275,6 +280,44 @@ services:
               capabilities: [gpu]
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/health', timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - app
+
+  # === Technical-drawing line vectorizer (2026-07-11, studio «Точный чертёж») ===
+  # Wraps a vendored, openly-licensed (MPL-2.0) PRETRAINED model — Deep
+  # Vectorization of Technical Drawings — replacing cad-vectorizer above as
+  # the primary neural recognizer (that one, trained from scratch on
+  # synthetic data only, never beat CV on real photos; this one does,
+  # validated live). Opt-in for the same reason (own GPU footprint):
+  # start explicitly: docker compose --profile technical-vectorizer up
+  # Checkpoint is the official published "line" model (see
+  # infra/technical-vectorizer/README-checkpoint.md for the download link),
+  # mounted read-only; swap TECHNICAL_VECTORIZER_CHECKPOINT to point at a
+  # different file without rebuilding the image.
+  technical-vectorizer:
+    build:
+      context: ./technical-vectorizer
+      dockerfile: Dockerfile
+    profiles:
+      - technical-vectorizer
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      TECHNICAL_VECTORIZER_CHECKPOINT: /models/model_lines.weights
+    volumes:
+      - technical_vectorizer_models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8091/health', timeout=3).status==200 else 1)\""]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -838,6 +881,7 @@ volumes:
   comfyui_models:
   comfyui_output:
   cad_vectorizer_models:
+  technical_vectorizer_models:
   traefik_acme:
   authentik_db_data:
   authentik_media:

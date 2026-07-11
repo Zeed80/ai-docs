@@ -151,7 +151,17 @@ class Settings(BaseSettings):
     # Neural CAD vectorizer (Ф3, infra/cad-vectorizer) — on-prem only, same
     # confidentiality posture as ComfyUI. Optional: cad_recognize/neural.py
     # degrades to CV-only when unreachable (NEURAL_UNAVAILABLE).
+    # NOTE: superseded in arbitration by technical_vectorizer_url below (see
+    # cad_recognize/technical_vectorizer.py) — the from-scratch model here
+    # never beat CV on real photos (recall ~0, trained on synthetic data
+    # only). Kept running/configurable for now, not removed from the code.
     cad_vectorizer_url: str = "http://cad-vectorizer:8090"
+    # Technical-drawing line vectorizer (infra/technical-vectorizer) —
+    # vendored, openly-licensed (MPL-2.0), pretrained Deep Vectorization of
+    # Technical Drawings model. Validated live (2026-07-11): zero-shot
+    # recall +3.8..+23.5 points over CV baseline on real test photos. This
+    # is the primary neural recognizer in arbitrate_recognition now.
+    technical_vectorizer_url: str = "http://technical-vectorizer:8091"
     llamacpp_n_gpu_layers: int = -1   # -1 = all layers on GPU
     llamacpp_parallel: int = 2        # 2 slots × 8 192 tokens; was 4 (too many, caused OOM)
     llamacpp_flash_attn: bool = True

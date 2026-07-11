@@ -33,9 +33,18 @@ export default function StudioPage() {
   const [jobs, setJobs] = useState<StudioJob[]>([]);
   const [queueStats, setQueueStats] = useState<StudioQueueStats | null>(null);
   const [queueStatusFilter, setQueueStatusFilter] = useState("");
-  const [queueKindFilter, setQueueKindFilter] = useState<StudioJobKind | "">("");
+  const [queueKindFilter, setQueueKindFilter] = useState<StudioJobKind | "">(
+    "",
+  );
   const [queueMineOnly, setQueueMineOnly] = useState(false);
   const [selected, setSelected] = useState<Generation | null>(null);
+  // The vectorize CAD editor (VectorWorkspace, inside GenerationDetail) is a
+  // full editing surface — canvas, toolbar, properties, review queue,
+  // validation report — not a small image-preview-plus-buttons panel. The
+  // 420px/360px sidebar widths below exist for that latter, simpler case;
+  // confining the CAD editor to them left it unusable ("matchbox-sized").
+  const isVectorEditor =
+    selected?.operation === "vectorize" && selected?.status === "done";
   const [tab, setTab] = useState<Tab>("studio");
   const [error, setError] = useState<string | null>(null);
   const [gpuBusy, setGpuBusy] = useState(false);
@@ -89,7 +98,9 @@ export default function StudioPage() {
 
   const failedCount = items.filter((g) => g.status === "failed").length;
   const activeJobs = jobs.some((j) =>
-    ["queued", "waiting_resource", "running", "cancel_requested"].includes(j.status),
+    ["queued", "waiting_resource", "running", "cancel_requested"].includes(
+      j.status,
+    ),
   );
 
   useEffect(() => {
@@ -266,11 +277,17 @@ export default function StudioPage() {
                 getGeneration(id)
                   .then((g) => setSelected(g))
                   .catch(() => undefined);
-                }}
+              }}
             />
           </div>
           {selected && (
-            <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:left-auto xl:w-[420px] xl:border-l xl:border-white/10">
+            <div
+              className={
+                isVectorEditor
+                  ? "fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4"
+                  : "fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:left-auto xl:w-[420px] xl:border-l xl:border-white/10"
+              }
+            >
               <GenerationDetail
                 gen={selected}
                 onChanged={load}
@@ -292,7 +309,9 @@ export default function StudioPage() {
           <div className="border-b lg:border-b-0 lg:border-r border-white/10 lg:overflow-y-auto p-4">
             <StudioComposer
               onSubmitted={load}
-              generatedSources={items.filter((g) => g.status === "done" && g.has_result)}
+              generatedSources={items.filter(
+                (g) => g.status === "done" && g.has_result,
+              )}
             />
           </div>
           <div className="lg:overflow-y-auto p-4 grid xl:grid-cols-[1fr_360px] gap-4">
@@ -338,8 +357,17 @@ export default function StudioPage() {
             {selected && (
               // Mobile: a full-screen overlay so the actions (download/accept/
               // iterate) are reachable without scrolling past the whole gallery.
-              // Desktop (xl): the inline side panel as before.
-              <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:static xl:z-auto xl:overflow-visible xl:rounded-lg xl:border xl:border-white/10 xl:bg-zinc-900/40 xl:h-fit">
+              // Desktop (xl): the inline side panel as before — except the CAD
+              // editor (isVectorEditor), which stays a full-screen overlay on
+              // every breakpoint instead of squeezing into the 360px gallery
+              // column it would otherwise become "static" inside of.
+              <div
+                className={
+                  isVectorEditor
+                    ? "fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4"
+                    : "fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:static xl:z-auto xl:overflow-visible xl:rounded-lg xl:border xl:border-white/10 xl:bg-zinc-900/40 xl:h-fit"
+                }
+              >
                 <GenerationDetail
                   gen={selected}
                   onChanged={load}

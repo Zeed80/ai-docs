@@ -56,6 +56,17 @@ async def test_cad_trace_run_end_to_end(db_session, fake_storage, monkeypatch):
         )
 
     monkeypatch.setattr("app.db.session._get_session_factory", lambda: _factory)
+    # This test's intent is the CV/pipeline plumbing (DXF/SVG/IR outputs,
+    # circle+frame recognized) on a tiny synthetic image — not which
+    # recognizer wins arbitration, which genuinely depends on whether a
+    # real technical-vectorizer service happens to be reachable from
+    # wherever this test runs. Force CV-only so the test is deterministic
+    # regardless of environment (mirrors test_arbitration_falls_back_to_cv_
+    # when_neural_unavailable in test_cad_neural_arbitration.py).
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.technical_vectorizer.TechnicalVectorizerRecognizer.recognize",
+        lambda self, ink, exclusion_boxes=None: None,
+    )
 
     fake_storage["image-gen-src/test/scan.png"] = _scan_png()
     gen = ImageGeneration(
