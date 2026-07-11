@@ -48,7 +48,19 @@ class CadSequenceDataset(Dataset):
 def collate(batch):
     """Pad variable-length sequences; prepend a BOS row (all-zero = EOS
     embedding, matches ``model.generate``'s BOS convention) to the DECODER
-    INPUT side so teacher forcing predicts row t from rows[0..t-1]."""
+    INPUT side so teacher forcing predicts row t from rows[0..t-1].
+
+    Non-obvious invariant, easy to miscount: ``cmd`` (from ``__getitem__``)
+    already carries a trailing EOS row appended by
+    ``cad_ir.sequence.encode()`` before it was saved to the ``.npy`` file —
+    so ``t = cmd.size(0)`` is (real entity count + 1), and that EOS row
+    lands at target index ``t - 1``, NOT at index ``t``. ``pad_mask[i, t:] =
+    False`` only masks genuine padding (indices >= t); the EOS position
+    itself stays valid (mask=True) and DOES receive a training gradient —
+    verified by tracing a concrete 2-entity example end to end. Do not
+    "fix" this into ``pad_mask[i, t-1:] = False`` — that would be the actual
+    bug, silently teaching the model to never predict EOS.
+    """
     images = torch.stack([b[0] for b in batch])
     max_len = max(b[1].size(0) for b in batch) + 1  # +1 for BOS
     B = len(batch)

@@ -8,6 +8,9 @@ test-drawings/*.svg
 # Real photos/DWG of company drawings for cleanup-mode testing (private data)
 cleanup_test_files/
 
+# Real photos of drawings for vectorize-mode testing (private data)
+test_vector_files/
+
 # Generated LoRA training data (tools/lora-dataset — regenerate, don't commit)
 datasets/lora-cleanup*/
 

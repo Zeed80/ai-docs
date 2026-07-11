@@ -70,6 +70,11 @@ def rasterize_entities(
                 [[int(round(p.x)), int(round(p.y))] for p in entity.boundary], dtype=np.int32
             )
             cv2.polylines(canvas, [arr], True, 0, t, cv2.LINE_AA)
+            for hole in entity.holes:
+                harr = np.array(
+                    [[int(round(p.x)), int(round(p.y))] for p in hole], dtype=np.int32
+                )
+                cv2.polylines(canvas, [harr], True, 0, t, cv2.LINE_AA)
         elif isinstance(entity, DimensionEntity):
             cv2.line(
                 canvas,

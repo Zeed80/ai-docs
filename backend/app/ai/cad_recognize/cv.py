@@ -111,29 +111,60 @@ _MIN_HATCH_AREA_PX = 150
 _HATCH_SIMPLIFY_EPS = 2.0
 
 
+def _contour_to_points(contour) -> list[Point] | None:
+    import cv2
+
+    approx = cv2.approxPolyDP(contour, _HATCH_SIMPLIFY_EPS, True)
+    points = [Point(x=float(p[0][0]), y=float(p[0][1])) for p in approx]
+    return points if len(points) >= 3 else None
+
+
 def _hatch_regions_from_solid(solid_mask) -> list[HatchRegion]:
     """Contour-trace the CV solid-fill mask (Ф4.4): section fills and
     hatching currently ship as opaque raster and are invisible in the DXF
     export (only entities render there) — turning them into HatchRegion
-    polygons is what actually gets them into the CAD file."""
+    polygons is what actually gets them into the CAD file.
+
+    Uses ``RETR_CCOMP`` (a 2-level hierarchy: outer boundaries + their
+    immediate holes) rather than ``RETR_EXTERNAL`` — a section fill with a
+    bolt hole through it (a completely ordinary detail, not an edge case)
+    has ink everywhere EXCEPT the hole; ``RETR_EXTERNAL`` used to report the
+    hole's own perimeter as ink-covered too, since it only sees the outer
+    silhouette and has no notion of nested contours at all."""
     import cv2
     import numpy as np
 
     if not np.asarray(solid_mask).any():
         return []
-    contours, _ = cv2.findContours(
-        np.asarray(solid_mask).astype("uint8"), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    contours, hierarchy = cv2.findContours(
+        np.asarray(solid_mask).astype("uint8"), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
     )
     out: list[HatchRegion] = []
-    for contour in contours:
+    if hierarchy is None:
+        return out
+    # hierarchy[0][i] = [next, prev, first_child, parent] per OpenCV's
+    # RETR_CCOMP convention: parent == -1 is an outer (even-depth) contour.
+    hier = hierarchy[0]
+    for i, contour in enumerate(contours):
+        parent = hier[i][3]
+        if parent != -1:
+            continue  # a hole contour — collected as a child below, not its own region
         area = cv2.contourArea(contour)
         if area < _MIN_HATCH_AREA_PX:
             continue
-        approx = cv2.approxPolyDP(contour, _HATCH_SIMPLIFY_EPS, True)
-        points = [Point(x=float(p[0][0]), y=float(p[0][1])) for p in approx]
-        if len(points) < 3:
+        boundary = _contour_to_points(contour)
+        if boundary is None:
             continue
-        out.append(HatchRegion(boundary=points, pattern="ansi31", confidence=0.6, origin="cv"))
+        holes: list[list[Point]] = []
+        child = hier[i][2]
+        while child != -1:
+            hole_area = cv2.contourArea(contours[child])
+            if hole_area >= _MIN_HATCH_AREA_PX:
+                hole_points = _contour_to_points(contours[child])
+                if hole_points is not None:
+                    holes.append(hole_points)
+            child = hier[child][0]  # next sibling at the same (hole) depth
+        out.append(HatchRegion(boundary=boundary, holes=holes, pattern="ansi31", confidence=0.6, origin="cv"))
     return out
 
 

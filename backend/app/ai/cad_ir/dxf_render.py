@@ -114,14 +114,25 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
                     dxfattribs={"layer": "DIM", "height": max(3.5, 0.1)},
                 ).set_placement((mx, my + 0.8))
         elif isinstance(entity, HatchRegion):
+            from ezdxf import const
+
             hatch = msp.add_hatch(dxfattribs={"layer": "HATCH"})
             if entity.pattern == "solid":
                 hatch.set_solid_fill(color=7)
             else:
                 hatch.set_pattern_fill("ANSI31", scale=max(scale, 0.05) * 10)
             hatch.paths.add_polyline_path(
-                [pt(p.x, p.y) for p in entity.boundary], is_closed=True
+                [pt(p.x, p.y) for p in entity.boundary], is_closed=True,
+                flags=const.BOUNDARY_PATH_EXTERNAL,
             )
+            # Nested loops (a section fill with a bolt hole through it) —
+            # DEFAULT (not EXTERNAL) flags mark them as inner boundaries the
+            # hatch's own fill algorithm subtracts from the outer region.
+            for hole in entity.holes:
+                hatch.paths.add_polyline_path(
+                    [pt(p.x, p.y) for p in hole], is_closed=True,
+                    flags=const.BOUNDARY_PATH_DEFAULT,
+                )
 
     buf = io.StringIO()
     doc.write(buf)

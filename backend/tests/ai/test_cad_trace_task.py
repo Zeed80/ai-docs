@@ -222,6 +222,70 @@ async def test_cad_trace_declines_dense_sheet(db_session, fake_storage, monkeypa
     assert "Очистка" in (gen.error or "")
 
 
+def test_binarize_retries_with_adaptive_threshold_on_stained_paper():
+    """Regression (2026-07-11, live test_vector_files photo): a global Otsu
+    threshold reads mottled/foxed paper staining as "ink" — on an aged
+    diazo-print photo this alone pushed density past extract_primitives'
+    0.30 decline gate, producing the exact "лист слишком плотный" failure
+    for a photo whose actual line content was perfectly recognizable. Local
+    adaptive thresholding correctly ignores the low-frequency staining;
+    _binarize must retry with it when Otsu's own result reads implausibly
+    dense, and pick the cleaner result."""
+    import cv2
+    import numpy as np
+
+    from app.tasks import cad_trace
+
+    rng = np.random.default_rng(7)
+    h, w = 300, 400
+    img = np.full((h, w), 235, dtype=np.uint8)
+    for _ in range(40):
+        cx, cy = rng.integers(0, w), rng.integers(0, h)
+        r = rng.integers(15, 45)
+        color = int(rng.integers(120, 170))
+        cv2.circle(img, (int(cx), int(cy)), int(r), color, -1)
+    img = cv2.GaussianBlur(img, (9, 9), 0)
+    # Real line content well below the staining shade.
+    cv2.rectangle(img, (30, 30), (370, 270), 10, 3)
+    cv2.circle(img, (200, 150), 60, 10, 2)
+    ok, buf = cv2.imencode(".png", img)
+    assert ok
+
+    ink, out_w, out_h = cad_trace._binarize(buf.tobytes())
+    assert (out_w, out_h) == (w, h)
+    ink_fraction = float((ink > 0).mean())
+    assert ink_fraction < 0.20, f"adaptive retry should have cleaned the staining, got {ink_fraction}"
+
+
+def test_detect_sheet_frame_quad_and_segments():
+    """Regression (2026-07-11): a detected ГОСТ 2.301 sheet frame must be
+    usable both for scale (existing behavior) and as real Segment entities
+    (new) — skeleton tracing alone routinely fragments a frame with edge
+    tick marks into dozens of short polylines and under-recognizes it; see
+    _frame_segments_from_quad's docstring for the live measurement."""
+    import cv2
+    import numpy as np
+
+    from app.tasks import cad_trace
+
+    img = np.full((400, 500), 255, dtype=np.uint8)
+    cv2.rectangle(img, (20, 20), (480, 380), 0, 3)
+    ink = cv2.bitwise_not(img)
+
+    quad = cad_trace._detect_sheet_frame_quad(ink, 500, 400)
+    assert quad is not None
+
+    segments = cad_trace._frame_segments_from_quad(quad)
+    assert len(segments) == 4
+    xs = [round(p.x) for s in segments for p in (s.p1, s.p2)]
+    ys = [round(p.y) for s in segments for p in (s.p1, s.p2)]
+    assert min(xs) < 30 and max(xs) > 470
+    assert min(ys) < 30 and max(ys) > 370
+    for s in segments:
+        assert s.line_class == "contour"
+        assert s.confidence >= 0.85
+
+
 @pytest.mark.asyncio
 async def test_cad_trace_vlm_enrichment_promotes_thread_reading(db_session, fake_storage, monkeypatch):
     """params.vlm_dimensions=true end-to-end: a mocked VLM call reads a

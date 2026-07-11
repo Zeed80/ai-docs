@@ -26,7 +26,12 @@ from pydantic import BaseModel, Field
 
 from app.ai.cad_ir.schema import CadIR, Circle, DimensionEntity, TextEntity
 
-_DEPTH_PATTERN = re.compile(r"(?:глубина|толщина|depth|h)\s*[=:]?\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
+# Deliberately no bare "h" alternative: a lone "h" immediately followed by a
+# number is the single most common ГОСТ tolerance-class notation on real
+# drawings ("40h7", "Ø30h6") — matching it as a stated DEPTH would turn the
+# most common shaft/hole fit callout on the sheet into a false high-
+# confidence 3D hypothesis. Only explicit depth/thickness words count.
+_DEPTH_PATTERN = re.compile(r"(?:глубина|толщина|depth)\s*[=:]?\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
 _THROUGH_PATTERN = re.compile(r"сквозн|through", re.IGNORECASE)
 
 

@@ -70,9 +70,16 @@ def render_ir_to_svg(ir: CadIR) -> bytes:
             tag = "polygon" if e.closed else "polyline"
             parts.append(f'<{tag} points="{pts}" {_attrs(e)}/>')
         elif isinstance(e, HatchRegion):
-            pts = " ".join(f"{_fmt(p.x)},{_fmt(p.y)}" for p in e.boundary)
-            fill = ' fill-opacity="0.15" fill="currentColor"'
-            parts.append(f'<polygon points="{pts}" {_attrs(e, fill)}/>')
+            # <polygon> can't represent holes; a <path> with fill-rule
+            #="evenodd" and one "M...Z" subpath per loop (outer + holes)
+            # renders holes as actual gaps, not painted-over.
+            fill = ' fill-opacity="0.15" fill="currentColor" fill-rule="evenodd"'
+            loops = [e.boundary, *e.holes]
+            d = " ".join(
+                "M " + " L ".join(f"{_fmt(p.x)} {_fmt(p.y)}" for p in loop) + " Z"
+                for loop in loops
+            )
+            parts.append(f'<path d="{d}" {_attrs(e, fill)}/>')
         elif isinstance(e, TextEntity):
             transform = (
                 f' transform="rotate({_fmt(e.rotation)} {_fmt(e.position.x)} {_fmt(e.position.y)})"'

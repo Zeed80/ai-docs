@@ -2,8 +2,8 @@
 rendering onto the same IR the vectorize pipeline already renders through
 (``svg_render``/``dxf_render``/``png_render``), instead of techdraw's own
 duplicated bespoke SVG-drawing (``_render_shaft``) and DXF-drawing
-(``_dxf_draw_shaft``) code paths, which had already drifted apart (the DXF
-path is missing chamfers/section-hatch/roughness that the SVG path draws).
+(``_dxf_draw_shaft``) code paths, which had already drifted apart before
+this module existed (the two disagreed about which annotations to draw).
 
 Deliberately scoped to ``ShaftSpec`` front-view geometry only — PlateSpec,
 AssemblySpec, and isometric views stay on the legacy renderer for now. This
@@ -22,6 +22,7 @@ from app.ai.cad_ir.schema import (
     Segment,
     SheetInfo,
     SourceInfo,
+    TextEntity,
 )
 
 _MARGIN_MM = 20.0
@@ -31,6 +32,28 @@ _TOTAL_DIM_GAP_MM = 10.0
 
 def _spec_dia_label(diameter: float, tolerance: str) -> str:
     return f"{diameter:g}{tolerance}"
+
+
+def _roughness_mark_entities(
+    mx: float, my: float, ra: float, P, common: dict, px_per_mm: float
+) -> list[Entity]:
+    """The ГОСТ 2.309 roughness checkmark (two short strokes + a horizontal
+    bar) + "Ra N" text — geometry ported 1:1 from ``techdraw._dxf_roughness``
+    (same relative offsets from the anchor point), previously drawn by the
+    SVG path but silently dropped by this adapter."""
+    p0 = P(mx, my)
+    p1 = P(mx - 3.0, my + 6.0)
+    p2 = P(mx + 7.0, my + 12.0)
+    p3 = P(mx + 17.0, my + 12.0)
+    return [
+        Segment(p1=p0, p2=p1, **common),
+        Segment(p1=p0, p2=p2, **common),
+        Segment(p1=p2, p2=p3, **common),
+        TextEntity(
+            position=P(mx + 7.5, my + 14.0), text=f"Ra {ra:g}", height=2.8 * px_per_mm,
+            origin="spec", assurance="constraint_validated",
+        ),
+    ]
 
 
 def shaft_spec_to_ir(spec, px_per_mm: float = 4.0) -> CadIR:
@@ -65,6 +88,10 @@ def shaft_spec_to_ir(spec, px_per_mm: float = 4.0) -> CadIR:
     common = {"line_class": "contour", "width_class": "main", "origin": "spec", "assurance": "constraint_validated"}
     axis = {"line_class": "axis", "width_class": "thin", "origin": "spec", "assurance": "constraint_validated"}
     dim_common = {"origin": "spec", "assurance": "constraint_validated"}
+    # Roughness marks are annotation, not object geometry — "dim" is the
+    # closest existing line_class (thin, DIM layer), same choice
+    # DimensionEntity itself defaults to.
+    roughness_common = {"line_class": "dim", "width_class": "thin", "origin": "spec", "assurance": "constraint_validated"}
 
     entities: list[Entity] = []
     x = 0.0
@@ -101,6 +128,10 @@ def shaft_spec_to_ir(spec, px_per_mm: float = 4.0) -> CadIR:
                 tolerance=seg.tolerance or None, **dim_common,
             )
         )
+        if seg.roughness is not None:
+            entities.extend(_roughness_mark_entities(
+                x + w / 2 + 8, top + 8, seg.roughness, P, roughness_common, px_per_mm,
+            ))
         prev_h = h
         x += w
 

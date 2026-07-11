@@ -327,7 +327,15 @@ def _check_title_block_complete(ir: CadIR) -> list[ValidationIssueIR]:
     """Level 4: when the sheet is framed (a ГОСТ 2.104 stamp area exists),
     that area should actually contain identifying text — an empty detected
     stamp region means the основная надпись was never filled in, not just
-    that the frame is missing."""
+    that the frame is missing.
+
+    Severity is deliberately "info", not "warn": "draw first, fill the
+    stamp in later" is a completely normal, common editing order (frame
+    added at blank-sheet creation, name/designation typed in only once the
+    drawing itself is done) — this would otherwise be a PERSISTENT warning
+    on every single revision for as long as that's true, well before the
+    user did anything wrong. It still shows up (info doesn't disappear),
+    it just doesn't compete for attention with a real ЕСКД violation."""
     if not ir.sheet.frame:
         return []
     region = (ir.sheet.title_block or {}).get("region")
@@ -343,7 +351,7 @@ def _check_title_block_complete(ir: CadIR) -> list[ValidationIssueIR]:
     if has_text:
         return []
     return [_issue(
-        CadCheckCode.ESKD_TITLE_BLOCK_INCOMPLETE, "warn",
+        CadCheckCode.ESKD_TITLE_BLOCK_INCOMPLETE, "info",
         "Основная надпись (штамп) пуста — не заполнены наименование/обозначение",
     )]
 

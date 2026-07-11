@@ -97,6 +97,29 @@ class ArbitrationResult:
 # disagreement a human should see, not have arbitrated away quietly.
 _DISCREPANCY_RELATIVE_GAP = 0.30
 
+# The lone-survivor gate exists to reject a genuinely fabricated result
+# (recall AND precision both near zero — nothing recognizable overlaps real
+# ink, e.g. runaway neural generation) before it ships as if it were a real
+# recognition. It must NOT reject an honest partial recognition (e.g. CV
+# finding 82% of the geometry with zero hallucination, precision=1.0) —
+# that is exactly what CadCheckCode.COVERAGE_LOW + the review queue exist
+# for downstream in cad_validate._check_coverage, using the SAME full
+# production bar (_MIN_COVERAGE_RECALL/_MIN_COVERAGE_PRECISION, 0.85) this
+# module imports. Confirmed live (2026-07-11): a real photo scored CV
+# recall=0.82/precision=1.0 and got discarded to zero entities here before
+# cad_validate ever ran — turning "flag for review" into "found nothing at
+# all". This floor is deliberately far below the production bar; only true
+# noise gets rejected at this stage. Two-recognizer arbitration below
+# already never force-empties on a failing score (it always ships
+# `chosen.entities` and lets cad_validate flag COVERAGE_LOW) — this floor
+# brings the lone-survivor path in line with that existing behavior.
+_LONE_SURVIVOR_MIN_RECALL = 0.3
+_LONE_SURVIVOR_MIN_PRECISION = 0.3
+
+
+def _passes_lone_survivor_floor(score: CoverageScore) -> bool:
+    return score.recall >= _LONE_SURVIVOR_MIN_RECALL and score.precision >= _LONE_SURVIVOR_MIN_PRECISION
+
 
 def arbitrate_recognition(
     ink: Any,
@@ -145,7 +168,7 @@ def arbitrate_recognition(
         survivor = cv_out if cv_out is not None else neural_out
         survivor_score = cv_score if cv_out is not None else neural_score
         used = "cv" if cv_out is not None else "neural"
-        if survivor is None or not survivor_score.ok:
+        if survivor is None or not _passes_lone_survivor_floor(survivor_score):
             return ArbitrationResult(
                 entities=[], keep_raster=None, thin_px=2, thick_px=3,
                 recognizer_used=used, score=survivor_score or CoverageScore(0.0, 0.0),

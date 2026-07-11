@@ -111,6 +111,72 @@ async def test_promote_ir_hole_gets_contour_and_diameter_dimension(db_session):
 
 
 @pytest.mark.asyncio
+async def test_promote_ir_does_not_cross_attribute_thread_to_the_wrong_hole(db_session):
+    """Regression: two holes close together, one thread callout sitting
+    within BOTH holes' independent search radius (a dense hole pattern —
+    an ordinary layout, not a contrived edge case). Only the geometrically
+    CLOSER circle may claim it; the other must fall back to a plain hole,
+    not also claim the same thread text."""
+    gen = ImageGeneration(
+        owner_sub="u1", operation="vectorize", status=ImageGenStatus.done,
+        params={}, source_image_paths=[], accepted=True,
+    )
+    db_session.add(gen)
+    await db_session.flush()
+
+    ir = CadIR(
+        source=SourceInfo(image_width=400, image_height=300),
+        scale=0.5,
+        entities=[
+            Circle(center=Point(x=100, y=100), radius=10, confidence=0.9),  # close to the text
+            Circle(center=Point(x=140, y=100), radius=10, confidence=0.9),  # farther, but still in ITS OWN threshold
+            TextEntity(position=Point(x=105, y=95), text="M6", height=8),
+        ],
+    )
+    drawing = await promote_ir_to_drawing(db_session, gen, ir, revision=0)
+    await db_session.commit()
+
+    features = (
+        await db_session.execute(sa.select(DrawingFeature).where(DrawingFeature.drawing_id == drawing.id))
+    ).scalars().all()
+    threads = [f for f in features if f.feature_type == DrawingFeatureType.thread]
+    holes = [f for f in features if f.feature_type == DrawingFeatureType.hole]
+    assert len(threads) == 1  # not 2 — the far circle must not also claim it
+    assert len(holes) == 1
+
+
+@pytest.mark.asyncio
+async def test_promote_ir_two_separate_holes_can_each_get_their_own_thread(db_session):
+    """Two DIFFERENT thread texts, each genuinely closest to its own circle
+    — both should be recognized as threads, not just the first one found."""
+    gen = ImageGeneration(
+        owner_sub="u1", operation="vectorize", status=ImageGenStatus.done,
+        params={}, source_image_paths=[], accepted=True,
+    )
+    db_session.add(gen)
+    await db_session.flush()
+
+    ir = CadIR(
+        source=SourceInfo(image_width=400, image_height=300),
+        scale=0.5,
+        entities=[
+            Circle(center=Point(x=100, y=100), radius=10, confidence=0.9),
+            Circle(center=Point(x=300, y=100), radius=10, confidence=0.9),
+            TextEntity(position=Point(x=105, y=95), text="M6", height=8),
+            TextEntity(position=Point(x=305, y=95), text="M8", height=8),
+        ],
+    )
+    drawing = await promote_ir_to_drawing(db_session, gen, ir, revision=0)
+    await db_session.commit()
+
+    features = (
+        await db_session.execute(sa.select(DrawingFeature).where(DrawingFeature.drawing_id == drawing.id))
+    ).scalars().all()
+    thread_names = {f.name for f in features if f.feature_type == DrawingFeatureType.thread}
+    assert thread_names == {"M6", "M8"}
+
+
+@pytest.mark.asyncio
 async def test_promote_ir_no_circles_yields_no_features(db_session):
     gen = ImageGeneration(
         owner_sub="u1", operation="vectorize", status=ImageGenStatus.done,

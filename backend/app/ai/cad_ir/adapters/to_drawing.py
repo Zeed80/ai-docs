@@ -54,13 +54,21 @@ def _entity_anchor(entity: Entity) -> Point | None:
     return None
 
 
-def _thread_text_near(ir: CadIR, circle: Circle) -> str | None:
-    """A thread callout (``M20x1.5``-like text) close enough to this circle
-    to plausibly annotate it — same proximity-matching spirit as
-    ``cad_hypothesis._axis_bonus_for_class``, just for a different question."""
-    threshold = max(circle.radius * _THREAD_SEARCH_RADIUS_FACTOR, _THREAD_SEARCH_RADIUS_MIN_PX)
-    best: str | None = None
-    best_d = threshold
+def _match_thread_texts_to_circles(ir: CadIR, circles: list[Circle]) -> dict[str, str]:
+    """circle.id -> thread callout text, via GLOBAL greedy nearest-neighbor
+    matching — not "is this text within MY threshold" evaluated per circle
+    independently. The independent version let a single thread label get
+    attributed to TWO circles when they sat close together (a common
+    pattern: a row of threaded holes with one shared "4×M6" callout, or
+    just two holes 20-40px apart with one label near the pair) — each
+    circle would separately find that same text as "close enough" and both
+    would claim it. Greedy nearest-pair-first matching (classic stable
+    matching approximation) guarantees a given text claims at most one
+    circle, and a given circle gets at most one text."""
+    # (distance, circle_id, text_entity_id, text) — matched/claimed by the
+    # text-bearing ENTITY's own IR id, not its string value (two separate
+    # holes can legitimately carry the identical text "M6").
+    candidates: list[tuple[float, str, str, str]] = []
     for e in ir.entities:
         text = getattr(e, "text", None)
         if not text or not _THREAD_PATTERN.search(text):
@@ -68,11 +76,21 @@ def _thread_text_near(ir: CadIR, circle: Circle) -> str | None:
         anchor = _entity_anchor(e)
         if anchor is None:
             continue
-        d = math.hypot(anchor.x - circle.center.x, anchor.y - circle.center.y)
-        if d < best_d:
-            best_d = d
-            best = text
-    return best
+        for circle in circles:
+            threshold = max(circle.radius * _THREAD_SEARCH_RADIUS_FACTOR, _THREAD_SEARCH_RADIUS_MIN_PX)
+            d = math.hypot(anchor.x - circle.center.x, anchor.y - circle.center.y)
+            if d <= threshold:
+                candidates.append((d, circle.id, e.id, text))
+
+    candidates.sort(key=lambda c: c[0])
+    matched: dict[str, str] = {}
+    claimed_text_entities: set[str] = set()
+    for _d, circle_id, text_entity_id, text in candidates:
+        if circle_id in matched or text_entity_id in claimed_text_entities:
+            continue
+        matched[circle_id] = text
+        claimed_text_entities.add(text_entity_id)
+    return matched
 
 
 async def promote_ir_to_drawing(
@@ -108,12 +126,13 @@ async def promote_ir_to_drawing(
     db.add(drawing)
     await db.flush()
 
+    circles = [e for e in ir.entities if isinstance(e, Circle)]
+    thread_by_circle_id = _match_thread_texts_to_circles(ir, circles)
+
     order = 0
-    for entity in ir.entities:
-        if not isinstance(entity, Circle):
-            continue
+    for entity in circles:
         diameter_mm = 2 * entity.radius * scale
-        thread_text = _thread_text_near(ir, entity)
+        thread_text = thread_by_circle_id.get(entity.id)
         if thread_text:
             feature = DrawingFeature(
                 drawing_id=drawing.id,

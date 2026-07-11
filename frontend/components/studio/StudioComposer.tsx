@@ -147,6 +147,11 @@ export default function StudioComposer({
   );
   const [blankWithFrame, setBlankWithFrame] = useState(false);
   const [blankDesignation, setBlankDesignation] = useState("");
+  // Ф4.1/Ф4.3 VLM enrichment (dimension/line hypotheses) — opt-in per run,
+  // not persisted: it's an extra LLM call per uncertain crop, the user
+  // should decide each time whether the latency/cost is worth it for this
+  // particular scan, not have it silently on by default.
+  const [vlmEnrich, setVlmEnrich] = useState(false);
 
   // Traceability: attach the result to a document/case (optional).
   const [linkDocId, setLinkDocId] = useState(prefs.linkDocId ?? "");
@@ -573,6 +578,10 @@ export default function StudioComposer({
       const s = Number(vectorScale.replace(",", "."));
       if (Number.isFinite(s) && s > 0) {
         (input.params as Record<string, unknown>).scale_mm_per_px = s;
+      }
+      if (vlmEnrich) {
+        (input.params as Record<string, unknown>).vlm_dimensions = true;
+        (input.params as Record<string, unknown>).vlm_lines = true;
       }
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
@@ -1232,6 +1241,15 @@ export default function StudioComposer({
               placeholder={t("vector_scale_placeholder")}
               className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
             />
+          </label>
+
+          <label className="flex items-center gap-2 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              checked={vlmEnrich}
+              onChange={(e) => setVlmEnrich(e.target.checked)}
+            />
+            {t("vector_vlm_enrich_label")}
           </label>
 
           {err && <div className="text-xs text-red-400">{err}</div>}

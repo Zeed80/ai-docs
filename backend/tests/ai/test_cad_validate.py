@@ -232,6 +232,10 @@ def test_title_block_incomplete_when_region_empty_of_text() -> None:
     report = validate_ir(ir)
     issues = [i for i in report.issues if i.code == "ESKD_TITLE_BLOCK_INCOMPLETE"]
     assert len(issues) == 1
+    # info, not warn: "draw first, fill the stamp in later" is a normal
+    # editing order (blank sheet with frame → draw → fill stamp last), not
+    # a mistake worth nagging about on every single revision until then.
+    assert issues[0].severity == "info"
     assert issues[0].level == 4
 
 

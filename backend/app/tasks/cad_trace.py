@@ -23,6 +23,7 @@ Celery queue and works when the GPU is busy training LoRA.
 
 from __future__ import annotations
 
+import re
 import uuid
 
 import structlog
@@ -62,9 +63,27 @@ def run_cad_trace(self, generation_id: str) -> dict:
     return run_async(_run(generation_id, self.request.id))
 
 
+# A global Otsu threshold assumes a roughly bimodal histogram (clean dark
+# ink on clean light paper) — it fails on foxed/stained/uneven-lit paper by
+# reading the mottled staining itself as "ink", inflating density well past
+# what real line-drawing content would ever produce. Confirmed live
+# (2026-07-11, an aged diazo-print photo in test_vector_files): Otsu read
+# ink_fraction=0.34 (above extract_primitives' 0.30 density-decline gate —
+# the exact "лист слишком плотный" failure the user hit), while a local
+# adaptive threshold on the SAME image read 0.14 and, after the same speck/
+# gap hygiene, produced 1301 usable entities passing the full production
+# coverage bar (recall 0.85, precision 1.0). Otsu is tried first and used
+# whenever it's not egregiously dense — it is the simpler, more literal
+# read of the ink and the 4 other test files all pass comfortably below the
+# retry trigger, so this never touches an already-working image.
+_OTSU_RETRY_INK_FRACTION = 0.22
+
+
 def _binarize(image_bytes: bytes):
     """Otsu binarization + speck/gap hygiene (same recipe the cleanup
-    postprocess uses). Returns (ink uint8 mask 255=ink, w, h)."""
+    postprocess uses), retried with local adaptive thresholding when Otsu
+    alone reads implausibly dense (uneven lighting/staining, not real ink).
+    Returns (ink uint8 mask 255=ink, w, h)."""
     import cv2
     import numpy as np
 
@@ -74,21 +93,41 @@ def _binarize(image_bytes: bytes):
     arr = np.asarray(img)
     h, w = arr.shape[:2]
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     ink = cv2.bitwise_not(binary)
     ink = _remove_small_specks(ink, w * h)
     ink = _close_small_gaps(ink)
+
+    if float((ink > 0).mean()) > _OTSU_RETRY_INK_FRACTION:
+        block = (max(15, min(h, w) // 25)) | 1  # odd, scales with resolution
+        adaptive = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block, 20
+        )
+        adaptive_ink = cv2.bitwise_not(adaptive)
+        adaptive_ink = _remove_small_specks(adaptive_ink, w * h)
+        adaptive_ink = _close_small_gaps(adaptive_ink)
+        if float((adaptive_ink > 0).mean()) < float((ink > 0).mean()):
+            logger.info(
+                "cad_trace_binarize_adaptive_retry",
+                otsu_ink_fraction=round(float((ink > 0).mean()), 4),
+                adaptive_ink_fraction=round(float((adaptive_ink > 0).mean()), 4),
+            )
+            ink = adaptive_ink
+
     return ink, w, h
 
 
-def _detect_sheet_scale(ink, w: int, h: int) -> tuple[float | None, str | None]:
-    """Detect a ГОСТ 2.301 sheet frame (the dominant near-full-page rectangle)
-    and derive mm-per-px from its known size. Conservative: no plausible
-    frame → (None, None) and the validator flags SCALE_UNKNOWN."""
+def _detect_sheet_frame_quad(ink, w: int, h: int):
+    """Find the dominant near-full-page rectangle contour (the ГОСТ 2.301
+    sheet frame) and return its 4 approximated corner points (cv2
+    approxPolyDP's Nx1x2 int array, N==4), or None when no plausible frame
+    is present."""
     import cv2
 
     contours, _ = cv2.findContours(ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    best: tuple[float, float, float] | None = None  # area, fw, fh
+    best = None
+    best_area = -1.0
     for contour in contours:
         area = cv2.contourArea(contour)
         if area < _FRAME_MIN_AREA_FRACTION * w * h:
@@ -97,13 +136,20 @@ def _detect_sheet_scale(ink, w: int, h: int) -> tuple[float | None, str | None]:
         approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
         if len(approx) != 4:
             continue
-        _x, _y, fw, fh = cv2.boundingRect(approx)
-        if best is None or area > best[0]:
-            best = (area, float(fw), float(fh))
-    if best is None:
-        return None, None
+        if area > best_area:
+            best_area = area
+            best = approx
+    return best
 
-    _area, fw, fh = best
+
+def _scale_from_quad(quad, w: int, h: int) -> tuple[float | None, str | None]:
+    """Derive mm-per-px from a detected frame quad's known ГОСТ 2.301 size.
+    Conservative: aspect doesn't match a standard sheet → (None, None) and
+    the validator flags SCALE_UNKNOWN — the quad itself (frame geometry) is
+    still used regardless, see _frame_segments_from_quad."""
+    import cv2
+
+    _x, _y, fw, fh = cv2.boundingRect(quad)
     frame_aspect = max(fw, fh) / max(min(fw, fh), 1.0)
     for name, (short_mm, long_mm) in _GOST_SHEETS.items():
         if abs(frame_aspect - long_mm / short_mm) / (long_mm / short_mm) <= _FRAME_ASPECT_TOL:
@@ -111,6 +157,42 @@ def _detect_sheet_scale(ink, w: int, h: int) -> tuple[float | None, str | None]:
             logger.info("sheet_frame_detected", format=name, scale=round(scale, 5))
             return scale, name
     return None, None
+
+
+def _frame_segments_from_quad(quad):
+    """Synthesize the 4 sides of a detected sheet frame as Segment entities.
+
+    The skeleton-tracing recognizer (drawing_vectorize) reliably finds the
+    frame's ink but routinely FRAGMENTS it into dozens of short polylines —
+    ГОСТ frames carry small perpendicular tick marks (zone/fold references)
+    along their length, and each one is a junction that splits the
+    continuous border into a new piece. Confirmed live (2026-07-11): on a
+    clean, perfectly digital source drawing (detal_126.png — the easiest
+    possible case) this fragmentation alone accounted for most of a 37%
+    coverage-recall shortfall, because a rectangle's 4 long straight sides
+    are exactly the geometry precision won't tolerate re-deriving via noisy
+    fragment-stitching. The quad is already known deterministically from
+    contour detection (same one _scale_from_quad uses) — emitting it
+    directly is strictly more reliable than reassembling it from skeleton
+    fragments, at the cost of some duplicate short polylines already found
+    by CV along the same border (harmless for recall/precision scoring and
+    editable away later; not worth an exclusion-zone plumbing change to
+    avoid for revision 0).
+    """
+    from app.ai.cad_ir.schema import Point, Segment
+
+    pts = [(float(p[0][0]), float(p[0][1])) for p in quad]
+    return [
+        Segment(
+            p1=Point(x=pts[i][0], y=pts[i][1]),
+            p2=Point(x=pts[(i + 1) % 4][0], y=pts[(i + 1) % 4][1]),
+            line_class="contour",
+            width_class="main",
+            confidence=0.9,
+            origin="cv",
+        )
+        for i in range(4)
+    ]
 
 
 def _detect_title_block(ink, w: int, h: int) -> dict | None:
@@ -131,6 +213,37 @@ def _detect_title_block(ink, w: int, h: int) -> dict | None:
         "region": {"x0": x0, "y0": y0, "x1": w, "y1": h},
         "ink_fraction": round(ink_fraction, 4),
     }
+
+
+# ГОСТ 2.109 stamp scale callout, e.g. "М 1:2". The "М"/"M" prefix is
+# REQUIRED (not just decorative) — the stamp region also carries "Лист X
+# Листов Y" and drawing-number fields that could otherwise coincidentally
+# look like a bare "N:M" ratio; a wrongly-inferred scale would produce a
+# false ESKD_SCALE_NONSTANDARD warning, exactly the noise this is meant to
+# avoid, not add.
+_STAMP_SCALE_PATTERN = re.compile(r"[MМ]\s*(\d+(?:[.,]\d+)?)\s*:\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
+
+
+def _extract_stamp_scale(text_entities: list, region: dict) -> str | None:
+    """The one real producer of ``ir.sheet.title_block["scale"]`` —
+    cad_validate.ESKD_SCALE_NONSTANDARD reads that field but nothing wrote
+    it before this: scan OCR text that landed inside the detected stamp
+    region for a "N:M" ratio callout, normalized to bare "N:M" (stripping
+    the "М" prefix) to match cad_validate's expected format exactly."""
+    x0, y0, x1, y1 = region["x0"], region["y0"], region["x1"], region["y1"]
+    for e in text_entities:
+        pos = getattr(e, "position", None)
+        text = getattr(e, "text", None)
+        if pos is None or not text:
+            continue
+        if not (x0 <= pos.x <= x1 and y0 <= pos.y <= y1):
+            continue
+        m = _STAMP_SCALE_PATTERN.search(text)
+        if m:
+            num = m.group(1).replace(",", ".")
+            den = m.group(2).replace(",", ".")
+            return f"{num}:{den}"
+    return None
 
 
 def _ocr_text_entities(image_bytes: bytes):
@@ -221,7 +334,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     from app.ai.cad_ir.schema import SheetInfo
     from app.ai.cad_recognize import CvRecognizer
     from app.ai.cad_recognize.neural import NeuralRecognizer
-    from app.ai.cad_recognize.verify import apply_to_ir, arbitrate_recognition
+    from app.ai.cad_recognize.verify import apply_to_ir, arbitrate_recognition, score_coverage
     from app.ai.cad_validate import validate_ir
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
@@ -297,15 +410,24 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # Stage 4: scale (manual override wins; else frame detection).
         manual_scale = params.get("scale_mm_per_px")
         sheet_format = None
+        frame_quad = None
         if manual_scale:
             scale = float(manual_scale)
         else:
-            scale, sheet_format = _detect_sheet_scale(ink, w, h)
+            frame_quad = _detect_sheet_frame_quad(ink, w, h)
+            scale, sheet_format = _scale_from_quad(frame_quad, w, h) if frame_quad is not None else (None, None)
 
         # Stage 4.5 (Ф4.4): title block (основная надпись) presence, purely
         # geometric — no OCR/VLM read of its FIELDS yet, just "is there one
-        # and where" so the UI/normcontrol can point at it.
+        # and where" so the UI/normcontrol can point at it. The one field we
+        # DO read here: a stated scale ("М 1:2") from OCR text that already
+        # landed inside the region — the real producer for
+        # ESKD_SCALE_NONSTANDARD's title_block["scale"] check.
         title_block = _detect_title_block(ink, w, h) or {}
+        if title_block:
+            stamp_scale = _extract_stamp_scale(text_entities, title_block["region"])
+            if stamp_scale:
+                title_block["scale"] = stamp_scale
 
         # Stage 5: recognize geometry — neural (if available) arbitrated
         # against CV by independent coverage scoring, never by the model's
@@ -317,13 +439,19 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 "Попробуйте сначала пропустить фото через режим «Очистка»."
             )
 
+        # The frame quad (Stage 4) is emitted as real Segment entities here,
+        # not just used for scale — see _frame_segments_from_quad for why
+        # skeleton-traced fragments alone systematically under-recognize a
+        # sheet border. Coverage is rescored below to reflect it.
+        frame_segments = _frame_segments_from_quad(frame_quad) if frame_quad is not None else []
+
         ir = CadIR(
             source=SourceInfo(
                 generation_id=generation_id, image_width=w, image_height=h, kind="scan"
             ),
             scale=scale,
-            sheet=SheetInfo(format=sheet_format, frame=sheet_format is not None, title_block=title_block),
-            entities=[*arbitration.entities, *text_entities],
+            sheet=SheetInfo(format=sheet_format, frame=frame_quad is not None, title_block=title_block),
+            entities=[*arbitration.entities, *frame_segments, *text_entities],
             recognizer_used=arbitration.recognizer_used,
         )
 
@@ -335,8 +463,18 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if params.get("vlm_lines"):
             await _enrich_lines_with_vlm(ir, content)
 
-        # Stage 6: verification score already computed by arbitration + validation.
-        apply_to_ir(ir, arbitration.score)
+        # Stage 6: verification score. Rescored when frame segments were
+        # added (Stage 5) — arbitration.score predates them and would under-
+        # report recall for a sheet whose frame just got recognized.
+        score = (
+            score_coverage(
+                [*arbitration.entities, *frame_segments], ink,
+                arbitration.keep_raster, arbitration.thin_px, arbitration.thick_px,
+            )
+            if frame_segments
+            else arbitration.score
+        )
+        apply_to_ir(ir, score)
         if not arbitration.neural_available:
             from app.ai.cad_ir.schema import ValidationIssueIR
 

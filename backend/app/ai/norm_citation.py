@@ -30,9 +30,21 @@ from app.db.models import NormativeDocument
 
 
 def _doc_code_base(norm_ref: str) -> str:
-    """"ГОСТ 2.303-68" -> "ГОСТ 2.303" — strip the year suffix so a citation
-    matches whichever edition/version happens to be ingested."""
-    return norm_ref.split("-")[0].strip()
+    """"ГОСТ 2.303-68" -> "ГОСТ 2.303" — strip a trailing YEAR/edition
+    suffix (the last "-NN" or "-NNNN" segment) so a citation matches
+    whichever edition happens to be ingested.
+
+    Splits from the RIGHT and only when that last segment actually looks
+    like a year (2 or 4 bare digits) — a naive ``split("-")[0]`` would
+    mangle a multi-part standard number like "ГОСТ Р 50-123-2018" into
+    "ГОСТ Р 50", silently matching ANY "ГОСТ Р 50-*" document instead of
+    specifically 50-123."""
+    if "-" not in norm_ref:
+        return norm_ref.strip()
+    head, _, tail = norm_ref.rpartition("-")
+    if tail.strip().isdigit() and len(tail.strip()) in (2, 4):
+        return head.strip()
+    return norm_ref.strip()
 
 
 async def resolve_norm_citations(

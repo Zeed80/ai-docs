@@ -6,12 +6,34 @@ from __future__ import annotations
 
 import torch
 
+from dataset import collate
 from model import IMG_SIZE, CadVectorizerModel
 
 
 def _model():
     torch.manual_seed(0)
     return CadVectorizerModel(d_model=32, n_layers=2, n_heads=2, dim_ff=64)
+
+
+def test_collate_pad_mask_includes_the_eos_target_position():
+    """A code-review pass flagged (then, on closer inspection, retracted) a
+    suspected off-by-one where the EOS row's loss would be masked out —
+    ``cad_ir.sequence.encode()`` already appends a trailing EOS row before
+    the sequence is saved to .npy, so ``t = cmd.size(0)`` already counts it
+    and ``pad_mask[i, t:] = False`` never touches the EOS position itself
+    (index t-1). This test pins that down so the real bug (silently
+    training the model to never predict EOS) can't be reintroduced by a
+    future "fix"."""
+    cmd = torch.tensor([1, 1, 0])  # SEG, SEG, EOS — matches encode()'s own convention
+    params = torch.zeros(3, 5)
+    lc = torch.zeros(3, dtype=torch.long)
+    wc = torch.zeros(3, dtype=torch.long)
+    image = torch.zeros(1, 8, 8)
+    batch = [(image, cmd, params, lc, wc)]
+
+    _images, _dec_in, (cmd_tgt, *_), pad_mask = collate(batch)
+    eos_idx = (cmd_tgt[0] == 0).nonzero()[0].item()
+    assert pad_mask[0, eos_idx].item() is True
 
 
 def test_forward_shapes():

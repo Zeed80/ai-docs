@@ -57,6 +57,17 @@ def test_stated_depth_wins_and_has_no_missing_side_view_note() -> None:
     assert extrude.confidence == pytest.approx(0.9)
 
 
+def test_gost_tolerance_class_is_not_mistaken_for_a_stated_depth() -> None:
+    """Regression: "40h7"/"Ø30h6"/"15H7" are the single most common shaft/
+    hole fit callout on a real drawing (ГОСТ 25347), not a depth. A bare "h"
+    pattern previously matched the tolerance letter and fabricated a
+    high-confidence but bogus depth candidate."""
+    for text in ("40h7", "Ø30h6", "15H7", "d=20h6"):
+        ir = _rect_ir([TextEntity(position=Point(x=50, y=30), text=text, height=5)])
+        candidates = generate_feature_tree_candidates(ir)
+        assert all(c.score <= 0.5 for c in candidates), f"{text!r} produced a false high-confidence candidate"
+
+
 def test_hole_feature_from_circle_with_correct_diameter_mm() -> None:
     ir = _rect_ir([Circle(center=Point(x=50, y=30), radius=10, line_class="contour", width_class="main")], scale=0.5)
     candidates = generate_feature_tree_candidates(ir)

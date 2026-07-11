@@ -258,12 +258,14 @@ function EntityShape({
   flagged,
   onClick,
   arrowLen,
+  tool,
 }: {
   e: IrEntity;
   selected: boolean;
   flagged: boolean;
   onClick: (id: string) => void;
   arrowLen: number;
+  tool: Tool;
 }) {
   const stroke = selected
     ? "#38bdf8"
@@ -284,7 +286,16 @@ function EntityShape({
     fill: "none" as const,
     style: { cursor: "pointer" },
     onClick: (ev: React.MouseEvent) => {
-      ev.stopPropagation();
+      // select/fillet/chamfer need EXCLUSIVE entity-click handling (pick
+      // this entity, nothing else). Every other tool (line/circle/dim/
+      // mirror/polyline/hatch) is drawing something NEW — a click that
+      // visually lands on existing geometry should still register as a
+      // normal canvas point (snapPoint already prefers snapping to nearby
+      // entity endpoints/intersections), not be silently swallowed just
+      // because the cursor happened to be over a stroke.
+      if (tool === "select" || tool === "fillet" || tool === "chamfer") {
+        ev.stopPropagation();
+      }
       onClick(e.id);
     },
   };
@@ -313,19 +324,20 @@ function EntityShape({
       />
     );
   }
-  if (
-    (e.type === "polyline" || e.type === "hatch") &&
-    (e.points ?? e.boundary)
-  ) {
-    const pts = (e.points ?? e.boundary ?? [])
-      .map((p) => `${p.x},${p.y}`)
+  if (e.type === "hatch" && e.boundary) {
+    // <polygon> can't represent holes; a <path> with fill-rule="evenodd"
+    // and one "M...Z" subpath per loop (outer + holes) renders holes as
+    // actual gaps instead of painting over them.
+    const loops = [e.boundary, ...(e.holes ?? [])];
+    const d = loops
+      .map((loop) => "M " + loop.map((p) => `${p.x} ${p.y}`).join(" L ") + " Z")
       .join(" ");
-    return e.closed || e.type === "hatch" ? (
-      <polygon
-        points={pts}
-        {...common}
-        fillOpacity={e.type === "hatch" ? 0.1 : 0}
-      />
+    return <path d={d} {...common} fillOpacity={0.1} fillRule="evenodd" />;
+  }
+  if (e.type === "polyline" && e.points) {
+    const pts = e.points.map((p) => `${p.x},${p.y}`).join(" ");
+    return e.closed ? (
+      <polygon points={pts} {...common} fillOpacity={0} />
     ) : (
       <polyline points={pts} {...common} />
     );
@@ -381,6 +393,12 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
   const [ir, setIr] = useState<CadIr | null>(null);
   const [revision, setRevision] = useState<number>(0);
   const [busy, setBusy] = useState(false);
+  // Separate from `busy`: full-check (LLM/VLM review levels) can run up to
+  // ~180s server-side, unlike every other apply() here which is a fast
+  // deterministic PATCH — the button needs its own elapsed-time readout so
+  // a long wait doesn't look identical to a hang.
+  const [fullCheckRunning, setFullCheckRunning] = useState(false);
+  const [fullCheckElapsed, setFullCheckElapsed] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("select");
@@ -606,6 +624,10 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
   });
 
   function finishPolyline() {
+    // Same in-flight guard as canvasClick — dblclick is a distinct handler
+    // from the click chain that builds polylinePoints, so it isn't covered
+    // by the guard added there.
+    if (busy) return;
     let pts = polylinePoints;
     if (pts.length >= 2) {
       const last = pts[pts.length - 1];
@@ -644,6 +666,12 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
 
   function canvasClick(ev: React.MouseEvent) {
     if (!ir) return;
+    // A previous apply() (PATCH /ir) is still in flight — a rapid double-
+    // click (or clicking again before the network round-trip finishes)
+    // would otherwise fire a second concurrent PATCH for the same
+    // generation. Toolbar buttons already have this via disabled={busy};
+    // the canvas itself didn't.
+    if (busy) return;
     const raw = svgPoint(ev);
     if (!raw) return;
     const tol = ir.source.image_width / 80;
@@ -944,14 +972,29 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
               selected={e.id === selectedId || e.id === pickedSegmentId}
               flagged={flaggedIds.has(e.id)}
               arrowLen={arrowLen}
+              tool={tool}
               onClick={(id) => {
+                // Same in-flight guard as canvasClick — this is a separate
+                // handler (EntityShape's onClick, not the SVG's onClick) so
+                // it needs its own check before the fillet/chamfer second
+                // pick can fire apply().
+                if (busy) return;
                 if (tool === "select") {
                   setSelectedId(id === selectedId ? null : id);
                   return;
                 }
                 if (tool === "fillet" || tool === "chamfer") {
                   const clicked = ir.entities.find((x) => x.id === id);
-                  if (!clicked || clicked.type !== "segment") return;
+                  if (!clicked || clicked.type !== "segment") {
+                    // Previously silent no-op — a click that visibly does
+                    // nothing reads as a broken tool, not "wrong pick, try
+                    // again". Surface it in the same error banner apply()
+                    // failures use, without cancelling an already-picked
+                    // first segment.
+                    setErr(t("vector.fillet_chamfer_not_a_segment"));
+                    return;
+                  }
+                  setErr(null);
                   if (!pickedSegmentId) {
                     setPickedSegmentId(id);
                     return;
@@ -1291,6 +1334,12 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
               onClick={async () => {
                 setBusy(true);
                 setErr(null);
+                setFullCheckRunning(true);
+                setFullCheckElapsed(0);
+                const timer = window.setInterval(
+                  () => setFullCheckElapsed((s) => s + 1),
+                  1000,
+                );
                 try {
                   const env = await runFullCheck(gen.id);
                   setIr(env.ir);
@@ -1299,12 +1348,18 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
                 } catch (e) {
                   setErr(String((e as Error).message || e));
                 } finally {
+                  window.clearInterval(timer);
+                  setFullCheckRunning(false);
                   setBusy(false);
                 }
               }}
-              className="text-[11px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-zinc-200 disabled:opacity-50"
+              className={`text-[11px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-zinc-200 disabled:opacity-50 ${
+                fullCheckRunning ? "animate-pulse" : ""
+              }`}
             >
-              {t("vector.run_full_check")}
+              {fullCheckRunning
+                ? t("vector.full_check_running", { s: fullCheckElapsed })
+                : t("vector.run_full_check")}
             </button>
           </div>
           {levelGroups.map(([level, levelIssues]) => (

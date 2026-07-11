@@ -93,3 +93,29 @@ def test_shaft_ir_single_segment_shaft() -> None:
     segments = [e for e in ir.entities if e.type == "segment" and e.line_class == "contour"]
     # top, bottom, start cap, end cap
     assert len(segments) == 4
+
+
+def test_shaft_ir_carries_roughness_marks_legacy_dxf_also_draws() -> None:
+    """Regression: the adapter used to silently drop seg.roughness even
+    though the legacy DXF path draws a real ГОСТ 2.309 roughness mark for
+    it (on a "ROUGHNESS" layer) — verify both paths actually have SOME
+    roughness-related output for a spec that sets it, not just that the IR
+    path doesn't crash."""
+    spec = ShaftSpec(segments=[ShaftSegment(diameter=30, length=40, roughness=3.2)])
+
+    legacy_doc = ezdxf.read(io.StringIO(render_spec_to_dxf(spec.model_dump()).decode("utf-8")))
+    legacy_roughness_text = [
+        e.dxf.text for e in legacy_doc.modelspace()
+        if e.dxftype() == "TEXT" and e.dxf.layer == "ROUGHNESS"
+    ]
+    assert any("3.2" in t for t in legacy_roughness_text), "legacy path should draw the Ra callout"
+
+    ir = shaft_spec_to_ir(spec)
+    ir_roughness_texts = [e.text for e in ir.entities if e.type == "text" and "Ra" in (e.text or "")]
+    assert any("3.2" in t for t in ir_roughness_texts), "adapter must not silently drop seg.roughness"
+
+
+def test_shaft_ir_no_roughness_marks_when_not_specified() -> None:
+    spec = ShaftSpec(segments=[ShaftSegment(diameter=30, length=40)])
+    ir = shaft_spec_to_ir(spec)
+    assert not [e for e in ir.entities if e.type == "text" and "Ra" in (e.text or "")]

@@ -131,12 +131,26 @@ export interface GenerateInput {
   case_id?: string;
 }
 
+/** Backend errors carry either a plain string `detail` (legacy) or a typed
+ * `{code, message}` object (e.g. IrPatchErrorCode — see cad_validate.py /
+ * image_generation.py PATCH /ir). Extract a displayable string either way —
+ * `body?.detail as string` alone is a compile-time-only cast that silently
+ * stringifies an object to "[object Object]" at runtime. */
+function _errorMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail) return detail;
+  if (detail && typeof detail === "object") {
+    const obj = detail as Record<string, unknown>;
+    if (typeof obj.message === "string" && obj.message) return obj.message;
+  }
+  return fallback;
+}
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {
       const body = await res.json();
-      detail = (body?.detail as string) || detail;
+      detail = _errorMessage(body?.detail, detail);
     } catch {
       /* ignore */
     }
@@ -443,6 +457,7 @@ export interface IrEntity {
   end_angle?: number;
   points?: IrPoint[];
   boundary?: IrPoint[];
+  holes?: IrPoint[][];
   closed?: boolean;
   position?: IrPoint;
   text?: string;

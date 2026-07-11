@@ -150,6 +150,10 @@ class DimensionEntity(_EntityBase):
 class HatchRegion(_EntityBase):
     type: Literal["hatch"] = "hatch"
     boundary: list[Point] = Field(min_length=3)
+    # Nested loops cut OUT of ``boundary`` (a section fill with a bolt hole
+    # through it, etc.) — each inner list is itself a closed loop, same
+    # convention as ``boundary``. Empty when the region has no holes.
+    holes: list[list[Point]] = Field(default_factory=list)
     pattern: Literal["ansi31", "solid"] = "ansi31"
     line_class: LineClass = "hatch"
     width_class: WidthClass = "thin"

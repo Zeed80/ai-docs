@@ -170,3 +170,28 @@ def test_lone_survivor_must_pass_coverage_too():
     )
     assert result.entities == []
     assert not result.score.ok
+
+
+def test_lone_survivor_with_honest_partial_coverage_still_ships():
+    """Regression (2026-07-11, live test_vector_files photos): CV found the
+    two straight lines but missed the circle — recall ~0.7, precision 1.0
+    (nothing hallucinated, just incomplete). The old code discarded this to
+    zero entities because it re-used the FULL production bar (0.85/0.85) as
+    the lone-survivor gate, silently turning "ship with COVERAGE_LOW for
+    review" (cad_validate._check_coverage's actual job) into "found nothing
+    at all" — the user saw a blank decline for a photo that was 70% readable.
+    An honest partial result must ship non-empty so cad_validate can flag
+    it, exactly like the two-recognizer path already does for a failing
+    score (see test_arbitration_falls_back_to_cv_when_neural_fails_coverage
+    — that path never force-empties either)."""
+    ink = _sheet()
+    partial = _good_entities()[:2]  # both lines, circle missing
+    cv_out = RecognizeOutput(entities=partial, thin_px=2, thick_px=4)
+    result = arbitrate_recognition(
+        ink, None, _FakeRecognizer("neural", None), _FakeRecognizer("cv", cv_out)
+    )
+    assert result.entities == partial
+    assert result.recognizer_used == "cv"
+    assert not result.score.ok  # below the production bar...
+    assert result.score.precision == 1.0  # ...but zero hallucination
+    assert result.score.recall >= 0.3  # ...and clearly not garbage either

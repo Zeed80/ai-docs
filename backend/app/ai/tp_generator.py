@@ -23,6 +23,7 @@ from app.db.models import (
     ManufacturingOperation,
     ManufacturingProcessPlan,
     ManufacturingResource,
+    NormControlCheck,
     SurfaceMachiningSpec,
 )
 
@@ -136,6 +137,18 @@ _TPZ_TABLE: dict[str, float] = {
 
 # ── Material group detector ───────────────────────────────────────────────────
 
+# "Ст3", "ст.45", "ст 20", "Ст3сп" (deoxidation-grade suffix attached with
+# no separator — a real, common ГОСТ 1050/380 notation) — the carbon-steel
+# shorthand. Requires the "ст" prefix directly against the number with a
+# word boundary BEFORE "ст" (so it doesn't fire on "ст" appearing mid-word
+# in an unrelated term — Russian has plenty: "быстрый", "инструмент" — none
+# of those have a word boundary immediately before "ст"). No boundary is
+# required AFTER the digits so a suffix like "сп"/"пс"/"кп" doesn't break
+# the match.
+_STEEL_DESIGNATION_PATTERN = re.compile(r"\bст\.?\s*\d{1,3}", re.IGNORECASE)
+_ALUMINUM_SHORT_GRADE_PATTERN = re.compile(r"\b(?:ав|а5|а6|а7)\b", re.IGNORECASE)
+
+
 class CompetenceCode:
     """Typed reasons a competence check refused to guess (Ф8.2) — a stable
     code the caller/UI can branch on, not a string to grep for."""
@@ -153,13 +166,28 @@ def material_group_with_confidence(material: str) -> tuple[str, bool]:
     m = material.lower()
     if any(k in m for k in ["12х18", "нержав", "stainless", "321", "316", "304", "aisi"]):
         return "stainless", True
-    if any(k in m for k in ["алюм", "ад3", "ад0", "ад1", "амг", "амц", "дур", "ав", "al ", "al-", "aluminum", "aluminium", "д16", "а5", "а6", "а7"]):
+    # "ав"/"а5"/"а6"/"а7" are real aluminum-alloy grade shorthands (АВ, А5,
+    # А6, А7) but as bare 2-char substrings they also collide with common
+    # unrelated words — "сплав" (any alloy, incl. non-aluminum ones like
+    # tool carbide ВК8) contains "ав" mid-word. Word-bounded so they only
+    # match when standing as their own token, not buried inside a word.
+    if (
+        any(k in m for k in ["алюм", "ад3", "ад0", "ад1", "амг", "амц", "дур", "al ", "al-", "aluminum", "aluminium", "д16"])
+        or _ALUMINUM_SHORT_GRADE_PATTERN.search(m)
+    ):
         return "aluminum", True
     if any(k in m for k in ["чугун", "сч", "кч", "вч", "cast iron", "grey iron"]):
         return "cast_iron", True
     if any(k in m for k in ["легир", "хвг", "хвф", "40х", "30хгса", "18хгт", "alloy", "chrome"]):
         return "steel_alloy", True
-    if any(k in m for k in ["сталь", "steel", "ст3", "ст20", "ст45", "45", "20", "10", "sae"]):
+    # Deliberately no bare "45"/"20"/"10" digit keywords: those are
+    # substrings of countless UNRELATED material designations (titanium
+    # ВТ20/ВТ10, any grade number) — matching them made the function
+    # confidently WRONG instead of honestly uncertain, exactly the failure
+    # mode this function exists to prevent. "Ст45"/"ст. 20"/"Ст 3" (the
+    # actual carbon-steel notation) require the "ст" prefix right before
+    # the number.
+    if "сталь" in m or "steel" in m or "sae" in m or _STEEL_DESIGNATION_PATTERN.search(m):
         return "steel_carbon", True
     return "steel_carbon", False
 
@@ -588,6 +616,11 @@ def draft_operations_from_surfaces(
 
     operations = []
     sequence = 5
+    # Ф8.2 competence flag (recognized=False on cutting_parameters["competence"])
+    # otherwise only reached a structlog warning nobody watches by default —
+    # (op, cp) pairs needing a real NormControlCheck row, created once op.id
+    # exists (after the flush below).
+    unrecognized_material_ops: list[tuple[ManufacturingOperation, dict]] = []
 
     # Always start with blank preparation
     blank_op = ManufacturingOperation(
@@ -678,6 +711,8 @@ def draft_operations_from_surfaces(
         )
         db.add(op)
         operations.append(op)
+        if not cp["competence"]["recognized"]:
+            unrecognized_material_ops.append((op, cp))
         sequence += 5
 
     # Quality control at the end
@@ -705,7 +740,26 @@ def draft_operations_from_surfaces(
     db.add(qc_op)
     operations.append(qc_op)
 
-    db.flush()
+    db.flush()  # populates op.id for the NormControlCheck rows below
+
+    for op, cp in unrecognized_material_ops:
+        db.add(NormControlCheck(
+            process_plan_id=plan_id,
+            operation_id=op.id,
+            gost_code="Технологичность",
+            check_code=CompetenceCode.MATERIAL_UNRECOGNIZED,
+            severity="warning",
+            status="open",
+            message=cp["competence"]["note"],
+            recommendation=(
+                "Проверьте группу материала и режимы резания вручную — "
+                "автоматическое распознавание не смогло сопоставить материал "
+                "ни одной известной группе (сталь/нержавейка/алюминий/чугун)."
+            ),
+            evidence={"material_group_assumed": cp["material_group"], "operation_type": op.operation_type},
+            created_by="tp_generator",
+        ))
+
     return operations
 
 

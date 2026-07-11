@@ -1,6 +1,11 @@
 """Tests for tp_generator.py — cutting params, time norms, blank selection, surface grouping."""
 
+import uuid
+
 import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
 from app.ai.tp_generator import (
     CompetenceCode,
@@ -8,9 +13,12 @@ from app.ai.tp_generator import (
     _surface_to_method,
     calculate_cutting_parameters,
     calculate_time_norms,
+    draft_operations_from_surfaces,
     material_group_with_confidence,
     recommend_blank,
 )
+from app.db.base import Base
+from app.db.models import NormControlCheck
 
 
 # ── _material_group ────────────────────────────────────────────────────────────
@@ -65,6 +73,39 @@ def test_confidence_honestly_flags_unrecognized_material():
 def test_confidence_flags_empty_or_nonsense_material():
     group, recognized = material_group_with_confidence("xyz-unknown-9000")
     assert recognized is False
+
+
+def test_confidence_does_not_false_positive_on_titanium_grade_numbers():
+    """Regression: bare "20"/"10"/"45" digit substrings previously matched
+    ANY grade number, including titanium designations that happen to end in
+    those digits (ВТ20, ВТ10) — the exact "titanium mistaken for steel"
+    failure mode this function exists to prevent, except now with a FALSE
+    recognized=True instead of an honest refusal."""
+    for material in ("Титан ВТ20", "ВТ10", "Титан ВТ1-0"):
+        group, recognized = material_group_with_confidence(material)
+        assert recognized is False, f"{material!r} was falsely marked as a recognized steel grade"
+
+
+def test_confidence_still_recognizes_real_steel_shorthand():
+    for material in ("Ст3", "ст.45", "Ст 20", "СТ3сп"):
+        group, recognized = material_group_with_confidence(material)
+        assert group == "steel_carbon"
+        assert recognized is True, f"{material!r} should still be recognized"
+
+
+def test_confidence_does_not_false_positive_aluminum_on_splav_word():
+    """Regression: the bare "ав" keyword (meant for the АВ aluminum grade)
+    matched mid-word inside "сплав" (any alloy — Russian for "alloy"),
+    falsely tagging non-aluminum materials like tool carbide as aluminum."""
+    group, recognized = material_group_with_confidence("Твёрдый сплав ВК8")
+    assert group != "aluminum"
+
+
+def test_confidence_still_recognizes_aluminum_short_grades_as_own_token():
+    for material in ("Сплав АВ", "Лист А5", "профиль А6", "лист-А7"):
+        group, recognized = material_group_with_confidence(material)
+        assert group == "aluminum"
+        assert recognized is True, f"{material!r} should still be recognized as aluminum"
 
 
 def test_cutting_parameters_carry_competence_flag_when_recognized():
@@ -246,3 +287,81 @@ def test_blank_selection_has_required_keys():
     rec = recommend_blank("Ст.20", {"d_mm": 60, "l_mm": 150}, 1.0, 200)
     for key in ("blank_type", "utilization_factor", "confidence", "reasoning"):
         assert key in rec
+
+
+# ── draft_operations_from_surfaces + NormControlCheck (Ф8.2 fix: competence
+# must reach a real reviewer channel, not just a log line) ────────────────
+
+
+def _make_engine():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    return engine
+
+
+def _surface_spec(**overrides) -> dict:
+    spec = {
+        "machining_method": "turning",
+        "surface_type": "external_cylindrical",
+        "nominal_mm": 30.0,
+        "roughness_ra": 3.2,
+        "machining_stage": "finish",
+        "is_internal": False,
+    }
+    spec.update(overrides)
+    return spec
+
+
+def test_unrecognized_material_creates_a_normcontrol_check():
+    engine = _make_engine()
+    plan_id = uuid.uuid4()
+    with Session(engine) as db:
+        draft_operations_from_surfaces(
+            [_surface_spec()], "Титан ВТ20", batch_size=10, plan_id=plan_id, db=db,
+        )
+        db.commit()
+
+        checks = db.execute(
+            select(NormControlCheck).where(NormControlCheck.check_code == CompetenceCode.MATERIAL_UNRECOGNIZED)
+        ).scalars().all()
+        assert len(checks) == 1
+        check = checks[0]
+        assert check.process_plan_id == plan_id
+        assert check.operation_id is not None
+        assert check.severity == "warning"
+        assert check.status == "open"
+        assert "Титан ВТ20" in check.message
+        assert check.evidence["material_group_assumed"] == "steel_carbon"
+
+
+def test_recognized_material_creates_no_normcontrol_check():
+    engine = _make_engine()
+    plan_id = uuid.uuid4()
+    with Session(engine) as db:
+        draft_operations_from_surfaces(
+            [_surface_spec()], "Сталь 45", batch_size=10, plan_id=plan_id, db=db,
+        )
+        db.commit()
+
+        checks = db.execute(
+            select(NormControlCheck).where(NormControlCheck.check_code == CompetenceCode.MATERIAL_UNRECOGNIZED)
+        ).scalars().all()
+        assert checks == []
+
+
+def test_normcontrol_check_operation_id_points_at_the_actual_operation():
+    engine = _make_engine()
+    plan_id = uuid.uuid4()
+    with Session(engine) as db:
+        ops = draft_operations_from_surfaces(
+            [_surface_spec()], "Титан ВТ6", batch_size=10, plan_id=plan_id, db=db,
+        )
+        db.commit()
+
+        turning_op = next(o for o in ops if o.operation_type == "turning")
+        check = db.execute(
+            select(NormControlCheck).where(NormControlCheck.check_code == CompetenceCode.MATERIAL_UNRECOGNIZED)
+        ).scalar_one()
+        assert check.operation_id == turning_op.id

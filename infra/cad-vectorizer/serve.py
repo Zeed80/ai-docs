@@ -17,6 +17,7 @@ other provider node — see ``cad_recognize/neural.py`` for the client side.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import pathlib
 import sys
@@ -30,6 +31,7 @@ from pydantic import BaseModel
 from model import IMG_SIZE, CadVectorizerModel
 
 app = FastAPI(title="cad-vectorizer")
+logger = logging.getLogger("cad_vectorizer")
 
 _MODEL: CadVectorizerModel | None = None
 _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -169,8 +171,15 @@ async def vectorize(file: UploadFile = File(...)) -> VectorizeResponse:
     tensor = torch.from_numpy(arr).unsqueeze(0).unsqueeze(0).to(_DEVICE)
 
     model = _load_model()
-    rows = model.generate(tensor, device=_DEVICE)
-    entities = _rows_to_entities(rows, w0 / IMG_SIZE, h0 / IMG_SIZE)
+    try:
+        rows = model.generate(tensor, device=_DEVICE)
+        entities = _rows_to_entities(rows, w0 / IMG_SIZE, h0 / IMG_SIZE)
+    except torch.cuda.OutOfMemoryError as exc:
+        logger.exception("cad_vectorizer_cuda_oom")
+        raise HTTPException(503, "GPU out of memory during inference — retry, or the caller falls back to CV") from exc
+    except Exception as exc:  # noqa: BLE001 — any model failure must be a clear, loggable 500, not an opaque traceback
+        logger.exception("cad_vectorizer_inference_failed")
+        raise HTTPException(500, f"model inference failed: {exc}") from exc
     return VectorizeResponse(entities=entities, model_step=getattr(app.state, "model_step", None))
 
 

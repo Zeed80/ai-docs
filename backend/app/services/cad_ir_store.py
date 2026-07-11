@@ -21,7 +21,7 @@ from app.ai.cad_ir.dxf_render import render_ir_to_dxf
 from app.ai.cad_ir.png_render import render_ir_to_png
 from app.ai.cad_ir.svg_render import render_ir_to_svg
 from app.db.models import CadIrRevision, ImageGeneration
-from app.storage import download_file, upload_file
+from app.storage import delete_file, download_file, upload_file
 
 logger = structlog.get_logger()
 
@@ -114,6 +114,19 @@ async def save_revision(
     revisions (review/editor patches) the raster mask and stroke widths are
     restored from what the pipeline stored with revision 0.
     """
+    # Serialize concurrent revision-number allocation for the SAME
+    # generation: without this row lock, two concurrent PATCH/revert/
+    # full-check calls could both read the same latest_revision and race to
+    # insert the same next revision number, one of them hitting the
+    # (generation_id, revision) unique constraint as a raw IntegrityError
+    # instead of a clean "someone else is editing this" — a real gap the
+    # single-user common case never exercises, but agent+human editing the
+    # same drawing at once genuinely can. Requires gen's row to already
+    # exist (true at every call site: callers always flush/commit the
+    # ImageGeneration row before calling save_revision).
+    await db.execute(
+        select(ImageGeneration.id).where(ImageGeneration.id == gen.id).with_for_update()
+    )
     base = _base_path(gen)
     prev = await latest_revision(db, gen.id)
     revision = 0 if prev is None else prev.revision + 1
@@ -127,15 +140,37 @@ async def save_revision(
     thin_px = thin_px if thin_px is not None else int(params_in.get("render_thin_px") or 1)
     thick_px = thick_px if thick_px is not None else int(params_in.get("render_thick_px") or 2)
 
-    ir_path = f"{base}_ir_r{revision}.json"
-    upload_file(ir.model_dump_json().encode("utf-8"), ir_path, "application/json")
+    # Track what we've actually put in MinIO so a failure partway through
+    # this function (a rendering bug, a malformed IR that slipped past
+    # validation) can be cleaned up instead of leaving orphaned blobs with
+    # no DB row pointing at them. Doesn't cover the caller's OWN commit
+    # failing after this function returns successfully — that would need a
+    # real two-phase commit, which storage + Postgres don't share — but it
+    # closes the much larger window of "anything in here raised".
+    uploaded_paths: list[str] = []
 
-    png = render_ir_to_png(ir, keep_raster=keep_raster, thin_px=thin_px, thick_px=thick_px)
-    svg = render_ir_to_svg(ir)
-    dxf = render_ir_to_dxf(ir)
-    upload_file(png, f"{base}.png", "image/png")
-    upload_file(svg, f"{base}.svg", "image/svg+xml")
-    upload_file(dxf, f"{base}.dxf", "application/dxf")
+    def _tracked_upload(content: bytes, path: str, content_type: str) -> str:
+        result = upload_file(content, path, content_type)
+        uploaded_paths.append(path)
+        return result
+
+    try:
+        ir_path = f"{base}_ir_r{revision}.json"
+        _tracked_upload(ir.model_dump_json().encode("utf-8"), ir_path, "application/json")
+
+        png = render_ir_to_png(ir, keep_raster=keep_raster, thin_px=thin_px, thick_px=thick_px)
+        svg = render_ir_to_svg(ir)
+        dxf = render_ir_to_dxf(ir)
+        _tracked_upload(png, f"{base}.png", "image/png")
+        _tracked_upload(svg, f"{base}.svg", "image/svg+xml")
+        _tracked_upload(dxf, f"{base}.dxf", "application/dxf")
+    except Exception:
+        for path in uploaded_paths:
+            try:
+                delete_file(path)
+            except Exception as cleanup_exc:  # noqa: BLE001 — best-effort, don't mask the original error
+                logger.warning("cad_ir_orphan_cleanup_failed", path=path, error=str(cleanup_exc))
+        raise
 
     row = CadIrRevision(
         generation_id=gen.id,
