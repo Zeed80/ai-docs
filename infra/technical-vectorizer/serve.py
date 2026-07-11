@@ -117,11 +117,14 @@ def _startup() -> None:
 
 @app.get("/health")
 def health() -> dict:
+    loaded = getattr(app.state, "checkpoint_loaded", False)
+    if not loaded:
+        raise HTTPException(503, f"model checkpoint not loaded: {_CHECKPOINT}")
     return {
         "ok": True,
         "device": str(_DEVICE),
         "checkpoint": str(_CHECKPOINT),
-        "checkpoint_loaded": getattr(app.state, "checkpoint_loaded", False),
+        "checkpoint_loaded": loaded,
     }
 
 

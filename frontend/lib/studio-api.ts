@@ -48,6 +48,7 @@ export interface Generation {
   accepted: boolean;
   accepted_by?: string | null;
   accepted_at?: string | null;
+  accepted_revision?: number | null;
   quality_rating?: number | null;
   issue_tags?: string[];
   review_notes?: string | null;
@@ -396,11 +397,15 @@ export function resultUrl(id: string, thumb = false): string {
   return `${BASE}/${id}/result${thumb ? "?thumb=true" : ""}`;
 }
 
-export function sourceUrl(id: string, index = 0): string {
-  return `${BASE}/${id}/source?index=${index}`;
+export function sourceUrl(
+  id: string,
+  index = 0,
+  variant: "original" | "normalized" = "original",
+): string {
+  return `${BASE}/${id}/source?index=${index}&variant=${variant}`;
 }
 
-export type ArtifactKind = "dxf" | "dwg" | "svg" | "ir";
+export type ArtifactKind = "dxf" | "dwg" | "svg" | "ir" | "step" | "fcstd" | "stl";
 
 export function artifactUrl(id: string, kind: ArtifactKind): string {
   return `${BASE}/${id}/artifact?kind=${encodeURIComponent(kind)}`;
@@ -487,6 +492,7 @@ export interface CadIr {
   schema_version: number;
   units: string;
   scale: number | null;
+  scale_source: "manual" | "calibration" | "dpi" | "sheet_format" | null;
   source: {
     generation_id: string | null;
     image_width: number;
@@ -515,6 +521,43 @@ export interface IrEnvelope {
   origin: string;
   summary: Record<string, unknown>;
   ir: CadIr;
+}
+
+export interface Feature3D {
+  kind: "extrude" | "hole" | "boss" | "pocket" | "fillet" | "chamfer";
+  source_entity_ids: string[];
+  params: Record<string, unknown>;
+  confidence: number;
+}
+
+export interface FeatureTreeCandidate {
+  features: Feature3D[];
+  score: number;
+  label: string;
+  missing_data: string[];
+}
+
+export interface FeatureParameterOverride {
+  feature_index: number;
+  depth_mm?: number;
+  through?: boolean | null;
+}
+
+export interface AddedCadFeature {
+  kind: "boss" | "pocket";
+  profile: "circle" | "rectangle";
+  center_x_mm: number;
+  center_y_mm: number;
+  depth_mm: number;
+  diameter_mm?: number;
+  width_mm?: number;
+  height_mm?: number;
+}
+
+export interface AddedCadEdgeFeature {
+  kind: "fillet" | "chamfer";
+  edge_key: string;
+  size_mm: number;
 }
 
 export type IrPatchOp =
@@ -578,6 +621,47 @@ export async function acceptVectorize(id: string): Promise<Generation> {
     method: "POST",
   });
   return jsonOrThrow<Generation>(res);
+}
+
+export async function getFeatureTreeCandidates(
+  id: string,
+): Promise<FeatureTreeCandidate[]> {
+  const res = await apiFetch(`${BASE}/${id}/ir/feature-tree-candidates`);
+  const body = await jsonOrThrow<{ candidates: FeatureTreeCandidate[] }>(res);
+  return body.candidates;
+}
+
+export async function compileFeatureTreeCandidate(
+  id: string,
+  index: number,
+  confirmAssumptions: boolean,
+  featureOverrides: FeatureParameterOverride[],
+  addedFeatures: (AddedCadFeature | AddedCadEdgeFeature)[],
+): Promise<void> {
+  const res = await mutFetch(
+    `${BASE}/${id}/ir/feature-tree-candidates/${index}/step`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirm_assumptions: confirmAssumptions,
+        feature_overrides: featureOverrides,
+        added_features: addedFeatures,
+      }),
+    },
+  );
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      detail = typeof body.detail === "string"
+        ? body.detail
+        : JSON.stringify(body.detail ?? body);
+    } catch {
+      // Keep the status when the proxy returned a non-JSON error.
+    }
+    throw new Error(detail);
+  }
 }
 
 export async function createBlankSheet(input: {

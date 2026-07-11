@@ -56,12 +56,24 @@ class TechnicalVectorizerRecognizer:
     ) -> RecognizeOutput | None:
         import cv2
         import httpx
+        import numpy as np
 
         # Same convention mismatch as neural.py: `ink` is a binarized mask
         # (255=ink, 0=background); the model was trained on/serves normal
         # photos (dark ink on a light sheet). Invert before it leaves this
         # process.
-        photo_like = cv2.bitwise_not(ink)
+        masked_ink = np.asarray(ink).copy()
+        h, w = masked_ink.shape[:2]
+        # OCR regions are annotations, not linework. If they reach the line
+        # model, every glyph is returned as contour fragments and then added a
+        # second time as TextEntity. Keep the mask contract identical to CV.
+        for x0, y0, x1, y1 in exclusion_boxes or []:
+            pad = 2
+            xa, ya = max(0, int(x0) - pad), max(0, int(y0) - pad)
+            xb, yb = min(w, int(x1) + pad), min(h, int(y1) + pad)
+            if xa < xb and ya < yb:
+                masked_ink[ya:yb, xa:xb] = 0
+        photo_like = cv2.bitwise_not(masked_ink)
         ok, buf = cv2.imencode(".png", photo_like)
         if not ok:
             logger.warning("technical_vectorizer_encode_failed")

@@ -162,6 +162,9 @@ class Settings(BaseSettings):
     # recall +3.8..+23.5 points over CV baseline on real test photos. This
     # is the primary neural recognizer in arbitrate_recognition now.
     technical_vectorizer_url: str = "http://technical-vectorizer:8091"
+    # Headless FreeCAD/OpenCascade service. The backend sends only a
+    # human-confirmed feature tree; the kernel has no DB or object-storage access.
+    cad_kernel_url: str = "http://cad-kernel:8092"
     llamacpp_n_gpu_layers: int = -1   # -1 = all layers on GPU
     llamacpp_parallel: int = 2        # 2 slots × 8 192 tokens; was 4 (too many, caused OOM)
     llamacpp_flash_attn: bool = True

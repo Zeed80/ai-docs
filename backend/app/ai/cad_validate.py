@@ -61,6 +61,7 @@ class CadCheckCode(str, Enum):
     ESKD_LINE_WEIGHT = "ESKD_LINE_WEIGHT"
     ESKD_SCALE_NONSTANDARD = "ESKD_SCALE_NONSTANDARD"
     SCALE_UNKNOWN = "SCALE_UNKNOWN"
+    SCALE_UNVERIFIED = "SCALE_UNVERIFIED"
     COVERAGE_LOW = "COVERAGE_LOW"
     NEURAL_UNAVAILABLE = "NEURAL_UNAVAILABLE"
     RECOGNIZER_DISCREPANCY = "RECOGNIZER_DISCREPANCY"
@@ -87,6 +88,7 @@ class CadCheckCode(str, Enum):
 # quality, not an engineering-correctness level).
 _CHECK_LEVEL: dict[str, int] = {
     "SCALE_UNKNOWN": 1,
+    "SCALE_UNVERIFIED": 1,
     "GEOM_SELF_INTERSECTION": 2,
     "GEOM_DUPLICATE": 2,
     "GEOM_DEGENERATE": 2,
@@ -135,9 +137,15 @@ def _issue(code: CadCheckCode, severity: str, message: str, entity_ids: list[str
 def _check_scale(ir: CadIR) -> list[ValidationIssueIR]:
     if ir.scale is None:
         return [_issue(
-            CadCheckCode.SCALE_UNKNOWN, "warn",
+            CadCheckCode.SCALE_UNKNOWN, "error",
             "Масштаб не определён — размеры в DXF будут в условных единицах (пикселях). "
             "Укажите масштаб вручную или добавьте рамку формата.",
+        )]
+    if ir.scale_source is None:
+        return [_issue(
+            CadCheckCode.SCALE_UNVERIFIED, "error",
+            "Метрический масштаб не имеет подтверждённого источника. "
+            "Укажите мм/px вручную или подтвердите формат листа.",
         )]
     return []
 
@@ -149,7 +157,7 @@ def _check_degenerate(ir: CadIR) -> list[ValidationIssueIR]:
             length = ((e.p1.x - e.p2.x) ** 2 + (e.p1.y - e.p2.y) ** 2) ** 0.5
             if length < _MIN_SEGMENT_LEN_PX:
                 issues.append(_issue(
-                    CadCheckCode.GEOM_DEGENERATE, "warn",
+                    CadCheckCode.GEOM_DEGENERATE, "error",
                     f"Вырожденный отрезок длиной {length:.1f}px", [e.id],
                 ))
     return issues
@@ -169,7 +177,7 @@ def _check_duplicates(ir: CadIR) -> list[ValidationIssueIR]:
             )
             if same:
                 issues.append(_issue(
-                    CadCheckCode.GEOM_DUPLICATE, "warn",
+                    CadCheckCode.GEOM_DUPLICATE, "error",
                     "Дублирующиеся отрезки — в CAD останутся наложенные линии",
                     [a.id, b.id],
                 ))

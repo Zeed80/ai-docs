@@ -244,10 +244,14 @@ class CadIR(BaseModel):
                 else:
                     entity.assurance = "inferred"
             self.schema_version = SCHEMA_VERSION
+        if self.scale is not None and self.scale_source is None and self.source.kind in ("blank", "spec"):
+            self.scale_source = "sheet_format"
         return self
     units: Literal["mm"] = "mm"
     # mm per source pixel; None until frame detection / manual input
     scale: float | None = Field(default=None, gt=0)
+    # A metric scale is engineering evidence, not an aspect-ratio guess.
+    scale_source: Literal["manual", "calibration", "dpi", "sheet_format"] | None = None
     source: SourceInfo
     sheet: SheetInfo = Field(default_factory=SheetInfo)
     entities: list[Entity] = Field(default_factory=list)

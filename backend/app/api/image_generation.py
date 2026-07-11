@@ -22,7 +22,7 @@ import httpx
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -273,6 +273,7 @@ def _gen_out(gen: ImageGeneration) -> dict:
         "accepted": gen.accepted,
         "accepted_by": gen.accepted_by,
         "accepted_at": gen.accepted_at.isoformat() if gen.accepted_at else None,
+        "accepted_revision": gen.accepted_revision,
         "quality_rating": gen.quality_rating,
         "issue_tags": gen.issue_tags or [],
         "review_notes": gen.review_notes,
@@ -500,6 +501,7 @@ async def get_result(
 async def get_source(
     generation_id: uuid.UUID,
     index: int = 0,
+    variant: Literal["original", "normalized"] = "original",
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
@@ -507,6 +509,10 @@ async def get_source(
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     paths = gen.source_image_paths or []
+    if variant == "normalized":
+        normalized_path = (gen.params or {}).get("normalized_source_path")
+        if normalized_path:
+            paths = [normalized_path]
     if index >= len(paths):
         raise HTTPException(404, "Источник не найден")
     try:
@@ -527,13 +533,16 @@ _ARTIFACT_MEDIA_TYPES = {
     "dwg": "application/acad",
     "svg": "image/svg+xml",
     "ir": "application/json",
+    "step": "model/step",
+    "fcstd": "application/vnd.freecad",
+    "stl": "model/stl",
 }
 
 
 @router.get("/{generation_id}/artifact")
 async def get_artifact(
     generation_id: uuid.UUID,
-    kind: Literal["dxf", "dwg", "svg", "ir"] = "dxf",
+    kind: Literal["dxf", "dwg", "svg", "ir", "step", "fcstd", "stl"] = "dxf",
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
@@ -541,6 +550,21 @@ async def get_artifact(
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     params = gen.params or {}
+    if kind in ("step", "fcstd", "stl"):
+        revision, _ir = await _load_current_ir(db, gen)
+        if (
+            not gen.accepted
+            or gen.accepted_revision != revision.revision
+            or params.get("cad_artifact_revision") != revision.revision
+        ):
+            raise HTTPException(409, "3D-артефакт не относится к текущей утверждённой ревизии.")
+    if kind in ("dxf", "dwg") and gen.operation == "vectorize":
+        _revision, current_ir = await _load_current_ir(db, gen)
+        if current_ir.scale is None or current_ir.scale_source is None:
+            raise HTTPException(
+                409,
+                "Метрический масштаб не подтверждён — укажите мм/px или формат листа перед CAD-экспортом.",
+            )
     path = params.get(f"{kind}_path")
     if not path and kind == "dwg":
         # DWG is derived lazily from the master DXF artifact and cached.
@@ -667,42 +691,58 @@ async def accept_vectorize_generation(
         raise HTTPException(400, "Можно принять только готовый результат.")
     if gen.operation != "vectorize":
         raise HTTPException(400, "Это не оцифрованный чертёж — используйте /accept.")
-    errors = int(((gen.params or {}).get("validation") or {}).get("errors") or 0)
+    from app.ai.cad_validate import validate_ir
+
+    stored_errors = int(((gen.params or {}).get("validation") or {}).get("errors") or 0)
+    if stored_errors:
+        raise HTTPException(
+            409,
+            f"В отчёте валидации {stored_errors} блокирующих ошибок — исправьте их в редакторе перед приёмкой.",
+        )
+    revision, ir = await _load_current_ir(db, gen)
+    checked_revision = (gen.params or {}).get("full_check_revision")
+    if checked_revision != revision.revision:
+        raise HTTPException(
+            409,
+            "Текущая ревизия не прошла полную проверку — запустите её после последнего изменения.",
+        )
+    errors = len(validate_ir(ir).blocking)
     if errors:
         raise HTTPException(
             409,
             f"В отчёте валидации {errors} блокирующих ошибок — исправьте их в редакторе перед приёмкой.",
         )
-    # Critical annotations (dimension/text) still on the bottom of the
-    # assurance ladder with open review items must be resolved by a human
-    # before the drawing can be accepted — a plausible but unchecked digit is
-    # exactly the error class this gate exists for.
-    try:
-        _revision, ir = await _load_current_ir(db, gen)
-        open_review = {r.entity_id for r in ir.review if not r.resolved}
-        critical = [
-            e.id
-            for e in ir.entities
-            if e.type in ("dimension", "text")
-            and e.assurance == "inferred"
-            and e.id in open_review
-        ]
-        if critical:
-            raise HTTPException(
-                409,
-                f"Неподтверждённых критических надписей/размеров: {len(critical)} — "
-                "подтвердите или исправьте их в очереди проверки перед приёмкой.",
-            )
-    except HTTPException as exc:
-        if exc.status_code == 404:
-            pass  # техдолг старых записей без IR — принимаем как раньше
-        else:
-            raise
+    # No unresolved recognition hypothesis may cross the release boundary.
+    open_review = {r.entity_id for r in ir.review if not r.resolved}
+    if open_review:
+        raise HTTPException(
+            409,
+            f"Неразрешённых элементов в очереди проверки: {len(open_review)} — "
+            "подтвердите, исправьте или удалите их перед приёмкой.",
+        )
+    accepted_at = datetime.now(timezone.utc)
     gen.accepted = True
     gen.accepted_by = user.sub
-    gen.accepted_at = datetime.now(timezone.utc)
+    gen.accepted_at = accepted_at
+    gen.accepted_revision = revision.revision
+    revision.approved_by = user.sub
+    revision.approved_at = accepted_at
     await db.commit()
     return _gen_out(gen)
+
+
+def _invalidate_vector_approval(gen: ImageGeneration) -> None:
+    """A new current revision is unchecked and never inherits approval."""
+    if gen.operation != "vectorize":
+        return
+    params = dict(gen.params or {})
+    params.pop("full_check_revision", None)
+    gen.params = params
+    if gen.accepted:
+        gen.accepted = False
+        gen.accepted_by = None
+        gen.accepted_at = None
+        gen.accepted_revision = None
 
 
 @router.post("/{generation_id}/ir/full-check")
@@ -735,9 +775,138 @@ async def run_full_check(
     kept = [i for i in ir.validation.issues if i.code not in ("NORMCONTROL_LLM", "VLM_CRITIC")]
     ir.validation.issues = await resolve_norm_citations(kept + llm_issues, db)
 
+    _invalidate_vector_approval(gen)
     row = await cad_ir_store.save_revision(db, gen, ir, origin="llm_review", created_by=user.sub)
+    gen.params = {**(gen.params or {}), "full_check_revision": row.revision}
     await db.commit()
     return {"revision": row.revision, "origin": row.origin, "summary": row.summary, "ir": ir.model_dump()}
+
+
+class FeatureParameterOverride(BaseModel):
+    feature_index: int = Field(ge=0, lt=500)
+    depth_mm: float | None = Field(default=None, gt=0, le=100_000)
+    through: bool | None = None
+
+
+class AddedFeatureRequest(BaseModel):
+    kind: Literal["boss", "pocket", "fillet", "chamfer"]
+    profile: Literal["circle", "rectangle"] | None = None
+    center_x_mm: float | None = Field(default=None, ge=0, le=100_000)
+    center_y_mm: float | None = Field(default=None, ge=0, le=100_000)
+    depth_mm: float | None = Field(default=None, gt=0, le=100_000)
+    diameter_mm: float | None = Field(default=None, gt=0, le=100_000)
+    width_mm: float | None = Field(default=None, gt=0, le=100_000)
+    height_mm: float | None = Field(default=None, gt=0, le=100_000)
+    edge_key: str | None = Field(default=None, min_length=16, max_length=128)
+    size_mm: float | None = Field(default=None, gt=0, le=100_000)
+
+    @model_validator(mode="after")
+    def validate_profile_dimensions(self) -> "AddedFeatureRequest":
+        if self.kind in ("fillet", "chamfer"):
+            if self.edge_key is None or self.size_mm is None:
+                raise ValueError("Операция ребра требует edge_key и size_mm")
+            if any(value is not None for value in (
+                self.profile, self.center_x_mm, self.center_y_mm, self.depth_mm,
+                self.diameter_mm, self.width_mm, self.height_mm,
+            )):
+                raise ValueError("Операция ребра не принимает параметры профиля")
+            return self
+        if self.profile is None or self.center_x_mm is None or self.center_y_mm is None or self.depth_mm is None:
+            raise ValueError("Операция тела требует профиль, центр и глубину")
+        if self.edge_key is not None or self.size_mm is not None:
+            raise ValueError("Операция тела не принимает параметры ребра")
+        if self.profile == "circle":
+            if self.diameter_mm is None or self.width_mm is not None or self.height_mm is not None:
+                raise ValueError("Круглый профиль требует только diameter_mm")
+        elif self.width_mm is None or self.height_mm is None or self.diameter_mm is not None:
+            raise ValueError("Прямоугольный профиль требует width_mm и height_mm")
+        return self
+
+
+class CompileFeatureTreeRequest(BaseModel):
+    confirm_assumptions: bool = False
+    feature_overrides: list[FeatureParameterOverride] = Field(default_factory=list, max_length=500)
+    added_features: list[AddedFeatureRequest] = Field(default_factory=list, max_length=100)
+
+
+def _apply_feature_overrides(candidate, overrides: list[FeatureParameterOverride]):
+    """Apply only 3D-specific human decisions to a server-derived tree.
+
+    The 2D footprint, hole diameter and hole position remain immutable here:
+    changing those belongs in CAD IR, where revisioning and validation can see it.
+    """
+    if not overrides:
+        return candidate
+    updated = candidate.model_copy(deep=True)
+    seen: set[int] = set()
+    missing = list(updated.missing_data)
+    for override in overrides:
+        index = override.feature_index
+        if index in seen:
+            raise HTTPException(422, f"Параметры операции {index} переданы дважды")
+        seen.add(index)
+        if index >= len(updated.features):
+            raise HTTPException(422, f"Операция {index} отсутствует в выбранной гипотезе")
+        feature = updated.features[index]
+        fields = override.model_fields_set
+        if feature.kind == "extrude":
+            if "through" in fields or "depth_mm" not in fields or override.depth_mm is None:
+                raise HTTPException(422, "Для выдавливания разрешено менять только depth_mm")
+            feature.params["depth_mm"] = override.depth_mm
+            missing = [item for item in missing if "бокового вида" not in item and "глубина выдавливания" not in item]
+        elif feature.kind == "hole":
+            if "through" not in fields:
+                raise HTTPException(422, "Для отверстия нужно явно выбрать сквозное или глухое")
+            feature.params["through"] = override.through
+            diameter = float(feature.params.get("diameter_mm") or 0)
+            marker = f"глубина отверстия {diameter:g}мм"
+            if override.through is True:
+                if "depth_mm" in fields and override.depth_mm is not None:
+                    raise HTTPException(422, "У сквозного отверстия нельзя задавать depth_mm")
+                feature.params.pop("depth_mm", None)
+                missing = [item for item in missing if marker not in item]
+            elif override.through is False:
+                if "depth_mm" not in fields or override.depth_mm is None:
+                    raise HTTPException(422, "Для глухого отверстия нужна положительная depth_mm")
+                feature.params["depth_mm"] = override.depth_mm
+                missing = [item for item in missing if marker not in item]
+            else:
+                feature.params.pop("depth_mm", None)
+        else:
+            raise HTTPException(422, f"Редактирование операции {feature.kind} пока не поддерживается")
+    updated.missing_data = missing
+    updated.label = f"{updated.label}; параметры 3D уточнены человеком"
+    return updated
+
+
+def _append_human_features(candidate, additions: list[AddedFeatureRequest]):
+    if not additions:
+        return candidate
+    from app.ai.cad_ir.feature_tree import Feature3D
+
+    updated = candidate.model_copy(deep=True)
+    insert_at = next(
+        (index for index, feature in enumerate(updated.features) if feature.kind == "hole"),
+        len(updated.features),
+    )
+    edge_seen = False
+    for item in additions:
+        if item.kind in ("fillet", "chamfer"):
+            edge_seen = True
+        elif edge_seen:
+            raise HTTPException(422, "Операции тела должны предшествовать фаскам и скруглениям")
+    human_features = [
+        Feature3D(
+            kind=item.kind,
+            source_entity_ids=[],
+            params=item.model_dump(exclude={"kind"}, exclude_none=True),
+            confidence=1.0,
+        )
+        for item in additions
+    ]
+    updated.features[insert_at:insert_at] = human_features
+    updated.label = f"{updated.label}; добавлено операций: {len(human_features)}"
+    return updated
 
 
 @router.get("/{generation_id}/ir/feature-tree-candidates")
@@ -764,30 +933,116 @@ async def get_feature_tree_candidates(
 async def compile_feature_tree_candidate_to_step(
     generation_id: uuid.UUID,
     index: int,
+    body: CompileFeatureTreeRequest | None = None,
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
-    """Ф10: compile a HUMAN-PICKED candidate to a STEP file. Requires
+    """Compile a human-picked hypothesis in the isolated FreeCAD kernel.
+
+    STEP, FCStd and STL are generated from the same B-Rep and persisted against
+    the accepted IR revision. Unknown depth/side-view assumptions require an
+    explicit flag; merely accepting the 2D drawing is not consent to invent 3D.
+
+    Requires
     acceptance first (same gate philosophy as promote-to-drawing — compiling
     a specific depth guess into a downloadable 3D artifact is a real
-    decision, not implied by 2D acceptance). Honestly reports 503 when the
-    cad-kernel (CadQuery/OCP) isn't available in this deployment — never
-    fabricates a STEP file."""
-    from app.ai.cad_ir.feature_tree import compile_to_step, generate_feature_tree_candidates
+    decision, not implied by 2D acceptance)."""
+    import hashlib
+    import json
+
+    from app.ai.cad_ir.feature_tree import generate_feature_tree_candidates
+    from app.services.cad_kernel import (
+        CadKernelError,
+        CadKernelRejected,
+        CadKernelUnavailable,
+        compile_candidate,
+    )
 
     gen = await db.get(ImageGeneration, generation_id)
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     if not gen.accepted:
         raise HTTPException(409, "Сначала примите чертёж (accept-vectorize).")
-    _revision, ir = await _load_current_ir(db, gen)
+    revision, ir = await _load_current_ir(db, gen)
+    if gen.accepted_revision != revision.revision:
+        raise HTTPException(409, "Текущая ревизия не утверждена.")
     candidates = generate_feature_tree_candidates(ir)
     if not (0 <= index < len(candidates)):
         raise HTTPException(404, f"Кандидат {index} не найден (всего {len(candidates)})")
-    step_bytes = compile_to_step(candidates[index])
-    if step_bytes is None:
-        raise HTTPException(503, "cad-kernel (CadQuery) недоступен в этом окружении")
-    return Response(content=step_bytes, media_type="model/step")
+    candidate = _apply_feature_overrides(
+        candidates[index],
+        body.feature_overrides if body else [],
+    )
+    candidate = _append_human_features(candidate, body.added_features if body else [])
+    try:
+        artifacts = await compile_candidate(
+            candidate,
+            confirm_assumptions=bool(body and body.confirm_assumptions),
+            metadata={
+                "generation_id": str(gen.id),
+                "ir_revision": revision.revision,
+                "candidate_index": index,
+                "approved_by": gen.accepted_by,
+            },
+        )
+    except CadKernelRejected as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except CadKernelUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except CadKernelError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    base = f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_3d_r{revision.revision}"
+    paths = {
+        "step_path": f"{base}.step",
+        "fcstd_path": f"{base}.FCStd",
+        "stl_path": f"{base}.stl",
+        "cad_report_path": f"{base}_report.json",
+    }
+    report_bytes = json.dumps(artifacts.report, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    uploads = (
+        (artifacts.step, paths["step_path"], "model/step"),
+        (artifacts.fcstd, paths["fcstd_path"], "application/vnd.freecad"),
+        (artifacts.stl, paths["stl_path"], "model/stl"),
+        (report_bytes, paths["cad_report_path"], "application/json"),
+    )
+    uploaded: list[str] = []
+    try:
+        for content, path, content_type in uploads:
+            upload_file(content, path, content_type)
+            uploaded.append(path)
+    except Exception:
+        from app.storage import delete_file
+
+        for path in uploaded:
+            try:
+                delete_file(path)
+            except Exception:  # noqa: BLE001
+                pass
+        raise
+
+    revision.artifact_hashes = {
+        **(revision.artifact_hashes or {}),
+        "step": hashlib.sha256(artifacts.step).hexdigest(),
+        "fcstd": hashlib.sha256(artifacts.fcstd).hexdigest(),
+        "stl": hashlib.sha256(artifacts.stl).hexdigest(),
+    }
+    gen.params = {
+        **(gen.params or {}),
+        **paths,
+        "cad_artifact_revision": revision.revision,
+        "cad_candidate_index": index,
+        "cad_feature_overrides": [item.model_dump(exclude_unset=True) for item in (body.feature_overrides if body else [])],
+        "cad_added_features": [item.model_dump(mode="json", exclude_none=True) for item in (body.added_features if body else [])],
+        "cad_feature_tree": candidate.model_dump(mode="json"),
+        "cad_report": artifacts.report,
+    }
+    await db.commit()
+    return Response(
+        content=artifacts.step,
+        media_type="model/step",
+        headers={"X-CAD-Revision": str(revision.revision)},
+    )
 
 
 @router.post("/{generation_id}/promote-to-drawing")
@@ -811,6 +1066,8 @@ async def promote_vectorize_to_drawing(
     if not gen.accepted:
         raise HTTPException(409, "Сначала примите чертёж (accept-vectorize).")
     revision, ir = await _load_current_ir(db, gen)
+    if gen.accepted_revision != revision.revision:
+        raise HTTPException(409, "Текущая ревизия не утверждена.")
     drawing = await promote_ir_to_drawing(db, gen, ir, revision.revision)
     await db.commit()
     return {
@@ -985,6 +1242,7 @@ async def patch_ir(
                     400, IrPatchErrorCode.MISSING_FIELD, "Для set_scale нужен scale (мм/px)"
                 )
             ir.scale = op.scale
+            ir.scale_source = "manual"
         elif op.op == "move":
             from app.ai.cad_ir.transform import translate_entity
 
@@ -1048,6 +1306,7 @@ async def patch_ir(
 
     validate_ir(ir)
     origin = "review" if all(o.op in ("confirm", "delete", "set_scale") for o in body.ops) else "editor"
+    _invalidate_vector_approval(gen)
     row = await cad_ir_store.save_revision(db, gen, ir, origin=origin, created_by=user.sub)
     await db.commit()
     return {"revision": row.revision, "origin": row.origin, "summary": row.summary, "ir": ir.model_dump()}
@@ -1089,6 +1348,7 @@ async def revert_ir(
         raise HTTPException(404, f"Ревизия {body.revision} не найдена")
     ir = cad_ir_store.load_ir(row)
     validate_ir(ir)
+    _invalidate_vector_approval(gen)
     new_row = await cad_ir_store.save_revision(db, gen, ir, origin="revert", created_by=user.sub)
     await db.commit()
     return {
@@ -1165,6 +1425,7 @@ async def create_blank_sheet(
             kind="blank",
         ),
         scale=1.0 / _BLANK_PX_PER_MM,
+        scale_source="sheet_format",
         sheet=SheetInfo(
             format=body.format, width_mm=w_mm, height_mm=h_mm,
             frame=body.with_frame, title_block=title_block,
@@ -1244,13 +1505,34 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
     gen must always be removable)."""
     from sqlalchemy import delete as sa_delete
     from sqlalchemy import update as sa_update
+    from app.db.models import CadIrRevision
 
     source_paths = [
         path
         for path in (gen.source_image_paths or [])
         if isinstance(path, str) and path.startswith(f"{_SOURCE_PREFIX}/")
     ]
-    for path in [gen.result_path, gen.thumbnail_path, gen.mask_path, *source_paths]:
+    revisions = (
+        await db.execute(select(CadIrRevision).where(CadIrRevision.generation_id == gen.id))
+    ).scalars().all()
+    params = gen.params or {}
+    derived_paths = [
+        params.get(key)
+        for key in (
+            "normalized_source_path", "keep_raster_path", "svg_path", "dxf_path", "dwg_path",
+            "step_path", "fcstd_path", "stl_path", "cad_report_path",
+        )
+    ]
+    revision_paths = [revision.ir_path for revision in revisions]
+    paths = {
+        path
+        for path in [
+            gen.result_path, gen.thumbnail_path, gen.mask_path,
+            *source_paths, *derived_paths, *revision_paths,
+        ]
+        if path
+    }
+    for path in paths:
         if path:
             try:
                 from app.storage import delete_file
@@ -1264,6 +1546,7 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
         .values(parent_id=None)
     )
     await db.execute(sa_delete(StudioJob).where(StudioJob.generation_id == gen.id))
+    await db.execute(sa_delete(CadIrRevision).where(CadIrRevision.generation_id == gen.id))
     from app.tasks.image_generation import _clear_progress
 
     _clear_progress(str(gen.id))

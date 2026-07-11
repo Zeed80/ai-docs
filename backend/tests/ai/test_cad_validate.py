@@ -13,6 +13,7 @@ def _ir(entities, scale=0.5) -> CadIR:
     return CadIR(
         source=SourceInfo(image_width=400, image_height=300),
         scale=scale,
+        scale_source="manual" if scale is not None else None,
         entities=entities,
     )
 
@@ -28,6 +29,14 @@ def test_clean_ir_passes() -> None:
     ]))
     assert report.issues == []
     assert report.blocking == []
+
+
+def test_metric_scale_without_evidence_is_blocking() -> None:
+    ir = _ir([Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0))])
+    ir.scale_source = None
+    report = validate_ir(ir)
+    assert "SCALE_UNVERIFIED" in _codes(report)
+    assert len(report.blocking) == 1
 
 
 def test_scale_unknown_flagged() -> None:

@@ -47,9 +47,10 @@ def test_dxf_readback_layers_and_geometry() -> None:
     doc = ezdxf.read(io.StringIO(data.decode("utf-8")))
     msp = doc.modelspace()
     types = sorted(e.dxftype() for e in msp)
-    assert types.count("LINE") == 3  # 2 segments + dimension leader
+    assert types.count("LINE") == 2
+    assert types.count("DIMENSION") == 1
     assert "CIRCLE" in types and "ARC" in types and "LWPOLYLINE" in types
-    assert types.count("TEXT") == 2  # annotation + dimension label
+    assert types.count("TEXT") == 1  # annotation; dimension text is native DIMENSION data
 
     circle = next(e for e in msp if e.dxftype() == "CIRCLE")
     # px→mm: x*0.5, y flipped: (300-150)*0.5 = 75
@@ -103,18 +104,18 @@ def test_svg_diameter_and_radial_labels_get_gost_prefix() -> None:
     assert "R30" in svg
 
 
-def test_dxf_dimension_has_solid_arrowheads() -> None:
+def test_dxf_dimension_is_native_editable_entity() -> None:
     import io
 
     import ezdxf
 
     data = render_ir_to_dxf(_ir())
     doc = ezdxf.read(io.StringIO(data.decode("utf-8")))
-    solids = [e for e in doc.modelspace() if e.dxftype() == "SOLID" and e.dxf.layer == "DIM"]
-    assert len(solids) == 2  # linear dimension: one arrowhead per end
+    dimensions = [e for e in doc.modelspace() if e.dxftype() == "DIMENSION" and e.dxf.layer == "DIM"]
+    assert len(dimensions) == 1
 
 
-def test_dxf_radial_dimension_has_single_arrowhead() -> None:
+def test_dxf_radial_dimension_is_native_editable_entity() -> None:
     import io
 
     import ezdxf
@@ -127,10 +128,9 @@ def test_dxf_radial_dimension_has_single_arrowhead() -> None:
         ],
     )
     doc = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode("utf-8")))
-    solids = [e for e in doc.modelspace() if e.dxftype() == "SOLID"]
-    assert len(solids) == 1
-    texts = [e.dxf.text for e in doc.modelspace() if e.dxftype() == "TEXT"]
-    assert "R30" in texts
+    dimensions = [e for e in doc.modelspace() if e.dxftype() == "DIMENSION"]
+    assert len(dimensions) == 1
+    assert dimensions[0].dxf.text == "R30"
 
 
 def test_png_self_consistency_roundtrip() -> None:

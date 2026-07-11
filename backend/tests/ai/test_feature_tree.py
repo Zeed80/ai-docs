@@ -74,6 +74,24 @@ def test_hole_feature_from_circle_with_correct_diameter_mm() -> None:
     holes = [f for f in candidates[0].features if f.kind == "hole"]
     assert len(holes) == 1
     assert holes[0].params["diameter_mm"] == pytest.approx(10)  # 2*10px*0.5mm/px
+    assert holes[0].params["center_x_mm"] == pytest.approx(25)
+    assert holes[0].params["center_y_mm"] == pytest.approx(15)
+
+
+def test_outer_round_footprint_is_not_mistaken_for_hole() -> None:
+    ir = CadIR(
+        source=SourceInfo(image_width=200, image_height=200),
+        scale=1.0,
+        entities=[
+            Circle(
+                center=Point(x=50, y=50), radius=50,
+                line_class="contour", width_class="main",
+            )
+        ],
+    )
+    candidates = generate_feature_tree_candidates(ir)
+    assert candidates
+    assert all(feature.kind != "hole" for feature in candidates[0].features)
 
 
 def test_hole_through_flag_from_nearby_text() -> None:

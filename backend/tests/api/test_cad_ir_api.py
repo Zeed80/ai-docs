@@ -25,6 +25,29 @@ def fake_storage(monkeypatch):
     return blobs
 
 
+async def _mark_full_check_current(db_session, generation_id: str) -> int:
+    """Mark the current revision as checked without invoking external models."""
+    import uuid
+
+    import sqlalchemy as sa
+
+    from app.db.models import CadIrRevision, ImageGeneration
+
+    gen_id = uuid.UUID(generation_id)
+    revision = (
+        await db_session.execute(
+            sa.select(sa.func.max(CadIrRevision.revision)).where(
+                CadIrRevision.generation_id == gen_id,
+            )
+        )
+    ).scalar_one()
+    gen = await db_session.get(ImageGeneration, gen_id)
+    assert gen is not None
+    gen.params = {**(gen.params or {}), "full_check_revision": revision}
+    await db_session.commit()
+    return int(revision)
+
+
 @pytest.mark.asyncio
 async def test_generate_vectorize_requires_source(client):
     resp = await client.post("/api/image-gen/generate", json={"operation": "vectorize"})
@@ -303,7 +326,7 @@ async def test_patch_ir_hatch_click_outside_enclosure_returns_422(client, fake_s
 
 
 @pytest.mark.asyncio
-async def test_patch_ir_add_dimension_renders_gost_arrows_in_dxf(client, fake_storage):
+async def test_patch_ir_add_dimension_renders_native_dxf_dimension(client, fake_storage):
     """Ф5.1: the manual dimension tool's PATCH payload must round-trip
     through validate_ir and reach the DXF export as a real arrowed leader,
     not just a bare line."""
@@ -330,7 +353,7 @@ async def test_patch_ir_add_dimension_renders_gost_arrows_in_dxf(client, fake_st
 
     gen_full = (await client.get(f"/api/image-gen/{gen_id}")).json()
     dxf = fake_storage[gen_full["params"]["dxf_path"]]
-    assert b"SOLID" in dxf  # filled arrowhead triangles
+    assert b"DIMENSION" in dxf
     assert b"40" in dxf
 
 
@@ -483,9 +506,27 @@ async def test_accept_vectorize_gate_and_validation(client, fake_storage, db_ses
     gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     gen_id = gen["id"]
 
+    unchecked = await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")
+    assert unchecked.status_code == 409
+    assert "полную проверку" in unchecked.text
+
+    await _mark_full_check_current(db_session, gen_id)
     ok = await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")
     assert ok.status_code == 200
     assert ok.json()["accepted"] is True
+    assert ok.json()["accepted_revision"] == 0
+
+    edited = await client.patch(
+        f"/api/image-gen/{gen_id}/ir",
+        json={"ops": [{"op": "add", "entity": {
+            "type": "segment", "p1": {"x": 10, "y": 10}, "p2": {"x": 50, "y": 10},
+        }}]},
+    )
+    assert edited.status_code == 200
+    refreshed = await client.get(f"/api/image-gen/{gen_id}")
+    assert refreshed.json()["accepted"] is False
+    assert refreshed.json()["accepted_revision"] is None
+    assert "full_check_revision" not in refreshed.json()["params"]
 
 
 @pytest.mark.asyncio
@@ -515,13 +556,19 @@ async def test_feature_tree_step_requires_acceptance(client, fake_storage):
 
 
 @pytest.mark.asyncio
-async def test_feature_tree_step_honestly_reports_missing_cad_kernel(client, fake_storage):
-    """cadquery isn't installed in this backend image (heavy native dep,
-    reserved for a dedicated cad-kernel container) — the endpoint must say
-    so with a real error, never fabricate a STEP file."""
+async def test_feature_tree_step_honestly_reports_missing_cad_kernel(
+    client, fake_storage, db_session, monkeypatch
+):
+    from app.services.cad_kernel import CadKernelUnavailable
+
+    async def _unavailable(*args, **kwargs):
+        raise CadKernelUnavailable("cad-kernel unavailable")
+
+    monkeypatch.setattr("app.services.cad_kernel.compile_candidate", _unavailable)
     gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     gen_id = gen["id"]
     await _add_segment(client, gen_id, {"x": 50, "y": 50}, {"x": 250, "y": 50})
+    await _mark_full_check_current(db_session, gen_id)
     await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")
 
     resp = await client.post(f"/api/image-gen/{gen_id}/ir/feature-tree-candidates/0/step")
@@ -529,9 +576,103 @@ async def test_feature_tree_step_honestly_reports_missing_cad_kernel(client, fak
 
 
 @pytest.mark.asyncio
-async def test_feature_tree_step_unknown_candidate_index_404s(client, fake_storage):
+async def test_feature_tree_compile_persists_revision_bound_step_fcstd_stl(
+    client, fake_storage, db_session, monkeypatch
+):
+    from app.services.cad_kernel import CadKernelArtifacts
+
+    async def _compile(candidate, **kwargs):
+        assert kwargs["confirm_assumptions"] is False
+        assert kwargs["metadata"]["ir_revision"] == 5
+        extrude = next(feature for feature in candidate.features if feature.kind == "extrude")
+        assert extrude.params["depth_mm"] == pytest.approx(22.0)
+        hole = next(feature for feature in candidate.features if feature.kind == "hole")
+        assert hole.params["center_x_mm"] == pytest.approx(12.5)
+        assert hole.params["center_y_mm"] == pytest.approx(12.5)
+        assert hole.params["through"] is False
+        assert hole.params["depth_mm"] == pytest.approx(8.0)
+        assert [feature.kind for feature in candidate.features] == ["extrude", "boss", "pocket", "fillet", "hole"]
+        boss = candidate.features[1]
+        assert boss.params["profile"] == "circle"
+        assert boss.params["depth_mm"] == pytest.approx(5.0)
+        pocket = candidate.features[2]
+        assert pocket.params["profile"] == "rectangle"
+        assert pocket.params["width_mm"] == pytest.approx(5.0)
+        fillet = candidate.features[3]
+        assert fillet.params["size_mm"] == pytest.approx(1.0)
+        assert candidate.missing_data == []
+        return CadKernelArtifacts(
+            step=b"ISO-10303-21;\nEND-ISO-10303-21;",
+            fcstd=b"PK\x03\x04fcstd",
+            stl=b"solid model\nendsolid model\n",
+            report={"valid": True, "solid_count": 1, "volume_mm3": 1200.0, "warnings": []},
+        )
+
+    monkeypatch.setattr("app.services.cad_kernel.compile_candidate", _compile)
     gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
     gen_id = gen["id"]
+    for p1, p2 in (
+        ((0, 0), (100, 0)), ((100, 0), (100, 100)),
+        ((100, 100), (0, 100)), ((0, 100), (0, 0)),
+    ):
+        await _add_segment(client, gen_id, {"x": p1[0], "y": p1[1]}, {"x": p2[0], "y": p2[1]})
+    await client.patch(
+        f"/api/image-gen/{gen_id}/ir",
+        json={"ops": [{"op": "add", "entity": {
+            "type": "circle", "center": {"x": 50, "y": 50}, "radius": 10,
+            "line_class": "contour", "width_class": "main",
+        }}]},
+    )
+    await _mark_full_check_current(db_session, gen_id)
+    assert (await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")).status_code == 200
+
+    invalid = await client.post(
+        f"/api/image-gen/{gen_id}/ir/feature-tree-candidates/0/step",
+        json={"feature_overrides": [{"feature_index": 0, "through": True}]},
+    )
+    assert invalid.status_code == 422
+
+    compiled = await client.post(
+        f"/api/image-gen/{gen_id}/ir/feature-tree-candidates/0/step",
+        json={"confirm_assumptions": False, "feature_overrides": [
+            {"feature_index": 0, "depth_mm": 22.0},
+            {"feature_index": 1, "through": False, "depth_mm": 8.0},
+        ], "added_features": [
+            {"kind": "boss", "profile": "circle", "center_x_mm": 18.0, "center_y_mm": 18.0, "depth_mm": 5.0, "diameter_mm": 4.0},
+            {"kind": "pocket", "profile": "rectangle", "center_x_mm": 8.0, "center_y_mm": 8.0, "depth_mm": 3.0, "width_mm": 5.0, "height_mm": 6.0},
+            {"kind": "fillet", "edge_key": "edge-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size_mm": 1.0},
+        ]},
+    )
+    assert compiled.status_code == 200
+    assert compiled.content.startswith(b"ISO-10303-21")
+    assert compiled.headers["x-cad-revision"] == "5"
+    assert (await client.get(f"/api/image-gen/{gen_id}/artifact?kind=fcstd")).content.startswith(b"PK")
+    assert (await client.get(f"/api/image-gen/{gen_id}/artifact?kind=stl")).content.startswith(b"solid")
+    detail = (await client.get(f"/api/image-gen/{gen_id}")).json()
+    assert detail["params"]["cad_artifact_revision"] == 5
+    assert detail["params"]["cad_report"]["solid_count"] == 1
+    assert detail["params"]["cad_feature_tree"]["features"][4]["params"]["through"] is False
+    assert detail["params"]["cad_feature_overrides"][1]["depth_mm"] == 8.0
+    assert detail["params"]["cad_added_features"][0]["kind"] == "boss"
+
+    ir = (await client.get(f"/api/image-gen/{gen_id}/ir")).json()["ir"]
+    await client.patch(
+        f"/api/image-gen/{gen_id}/ir",
+        json={"ops": [{
+            "op": "move", "entity_id": ir["entities"][0]["id"], "dx": 1, "dy": 0,
+        }]},
+    )
+    assert (await client.get(f"/api/image-gen/{gen_id}/artifact?kind=step")).status_code == 409
+    detail = (await client.get(f"/api/image-gen/{gen_id}")).json()
+    assert "cad_artifact_revision" not in detail["params"]
+    assert "cad_report" not in detail["params"]
+
+
+@pytest.mark.asyncio
+async def test_feature_tree_step_unknown_candidate_index_404s(client, fake_storage, db_session):
+    gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
+    gen_id = gen["id"]
+    await _mark_full_check_current(db_session, gen_id)
     await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")
     resp = await client.post(f"/api/image-gen/{gen_id}/ir/feature-tree-candidates/99/step")
     assert resp.status_code == 404
@@ -563,6 +704,7 @@ async def test_promote_to_drawing_creates_drawing_with_hole_features(client, fak
             "line_class": "contour", "width_class": "main",
         }}]},
     )
+    await _mark_full_check_current(db_session, gen_id)
     await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")
 
     resp = await client.post(f"/api/image-gen/{gen_id}/promote-to-drawing")
@@ -629,6 +771,8 @@ async def test_full_check_merges_llm_issues_into_a_new_revision(client, fake_sto
     codes = {i["code"] for i in body["ir"]["validation"]["issues"]}
     assert "NORMCONTROL_LLM" in codes
     assert "GEOM_DEGENERATE" in codes  # level 1-5 result preserved, not wiped
+    detail = await client.get(f"/api/image-gen/{gen_id}")
+    assert detail.json()["params"]["full_check_revision"] == body["revision"]
 
 
 @pytest.mark.asyncio

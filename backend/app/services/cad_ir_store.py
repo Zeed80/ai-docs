@@ -9,6 +9,7 @@ DXF and is re-converted lazily on next download.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any
 
@@ -56,6 +57,7 @@ def _summary(ir: CadIR) -> dict[str, Any]:
         "coverage_recall": ir.validation.coverage_recall,
         "coverage_precision": ir.validation.coverage_precision,
         "scale": ir.scale,
+        "scale_source": ir.scale_source,
         "recognizer_used": ir.recognizer_used,
     }
 
@@ -156,7 +158,8 @@ async def save_revision(
 
     try:
         ir_path = f"{base}_ir_r{revision}.json"
-        _tracked_upload(ir.model_dump_json().encode("utf-8"), ir_path, "application/json")
+        ir_bytes = ir.model_dump_json().encode("utf-8")
+        _tracked_upload(ir_bytes, ir_path, "application/json")
 
         png = render_ir_to_png(ir, keep_raster=keep_raster, thin_px=thin_px, thick_px=thick_px)
         svg = render_ir_to_svg(ir)
@@ -179,6 +182,12 @@ async def save_revision(
         created_by=created_by,
         origin=origin,
         summary=_summary(ir),
+        ir_sha256=hashlib.sha256(ir_bytes).hexdigest(),
+        artifact_hashes={
+            "png": hashlib.sha256(png).hexdigest(),
+            "svg": hashlib.sha256(svg).hexdigest(),
+            "dxf": hashlib.sha256(dxf).hexdigest(),
+        },
     )
     db.add(row)
 
@@ -218,8 +227,24 @@ async def save_revision(
             "review_pending": sum(1 for r in ir.review if not r.resolved),
         }
     )
-    # DWG derives from the DXF — the cache is stale the moment we re-render.
-    params.pop("dwg_path", None)
+    # All compiled CAD files derive from this exact IR revision. They must not
+    # survive an edit under the same generation id.
+    stale_keys = (
+        "dwg_path", "step_path", "fcstd_path", "stl_path", "cad_report_path",
+    )
+    for key in stale_keys:
+        stale_path = params.pop(key, None)
+        if stale_path:
+            try:
+                delete_file(stale_path)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("cad_derived_artifact_cleanup_failed", path=stale_path, error=str(exc))
+    params.pop("cad_artifact_revision", None)
+    params.pop("cad_candidate_index", None)
+    params.pop("cad_feature_overrides", None)
+    params.pop("cad_added_features", None)
+    params.pop("cad_feature_tree", None)
+    params.pop("cad_report", None)
     gen.params = params
 
     logger.info(

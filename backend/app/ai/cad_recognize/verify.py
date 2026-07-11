@@ -17,6 +17,7 @@ import structlog
 
 from app.ai.cad_ir.png_render import rasterize_entities
 from app.ai.cad_ir.schema import CadIR, Entity
+from app.ai.cad_recognize.base import RecognizeOutput
 from app.ai.drawing_vectorize import (
     _MIN_COVERAGE_PRECISION,
     _MIN_COVERAGE_RECALL,
@@ -96,6 +97,11 @@ class ArbitrationResult:
 # silently resolved — a whole-sheet miscount is exactly the kind of
 # disagreement a human should see, not have arbitrated away quietly.
 _DISCREPANCY_RELATIVE_GAP = 0.30
+# A line model can cover every source pixel with thousands of tiny patch
+# fragments and still be unusable as CAD. Prefer the established CV topology
+# when neural expands the entity count this aggressively and CV itself remains
+# an honest, high-precision partial read.
+_NEURAL_FRAGMENTATION_RATIO = 3.0
 
 # The lone-survivor gate exists to reject a genuinely fabricated result
 # (recall AND precision both near zero — nothing recognizable overlaps real
@@ -119,6 +125,36 @@ _LONE_SURVIVOR_MIN_PRECISION = 0.3
 
 def _passes_lone_survivor_floor(score: CoverageScore) -> bool:
     return score.recall >= _LONE_SURVIVOR_MIN_RECALL and score.precision >= _LONE_SURVIVOR_MIN_PRECISION
+
+
+def _supplement_neural_with_cv(
+    neural_out: RecognizeOutput,
+    cv_out: RecognizeOutput,
+) -> tuple[RecognizeOutput, set[str]]:
+    """Preserve primitive families the active neural backend cannot emit.
+
+    The production technical-vectorizer is intentionally line-only. Whole-
+    sheet winner-takes-all arbitration therefore used to erase every CV
+    circle, arc, polyline and hatch whenever neural won on line coverage.
+    Supplement only entity families absent from neural so a future multi-type
+    model remains authoritative for the families it actually predicts.
+    """
+    neural_types = {entity.type for entity in neural_out.entities}
+    missing_types = {entity.type for entity in cv_out.entities} - neural_types
+    supplements = [entity for entity in cv_out.entities if entity.type in missing_types]
+    if not supplements:
+        return neural_out, set()
+    return RecognizeOutput(
+        entities=[*neural_out.entities, *supplements],
+        keep_raster=cv_out.keep_raster,
+        thin_px=cv_out.thin_px,
+        thick_px=max(neural_out.thick_px, cv_out.thick_px),
+        notes={
+            **neural_out.notes,
+            "cv_supplement_types": sorted(missing_types),
+            "cv_supplement_entities": len(supplements),
+        },
+    ), missing_types
 
 
 def arbitrate_recognition(
@@ -153,6 +189,9 @@ def arbitrate_recognition(
         neural_out = None
     if neural_out is None:
         neural_available = False
+    supplemented_types: set[str] = set()
+    if neural_out is not None and cv_out is not None:
+        neural_out, supplemented_types = _supplement_neural_with_cv(neural_out, cv_out)
     neural_score = (
         score_coverage(neural_out.entities, ink, neural_out.keep_raster, neural_out.thin_px, neural_out.thick_px)
         if neural_out is not None
@@ -192,13 +231,26 @@ def arbitrate_recognition(
     both_pass = neural_score.ok and cv_score.ok
     rel_gap = abs(n_neural - n_cv) / max(n_neural, n_cv, 1)
     discrepancy = both_pass and rel_gap >= _DISCREPANCY_RELATIVE_GAP
+    neural_fragmented = (
+        n_cv > 0
+        and n_neural / n_cv >= _NEURAL_FRAGMENTATION_RATIO
+        and cv_score.recall >= _LONE_SURVIVOR_MIN_RECALL
+        and cv_score.precision >= _MIN_COVERAGE_PRECISION
+    )
 
-    if discrepancy:
+    if neural_fragmented:
+        chosen, used, chosen_score = cv_out, "cv", cv_score
+        discrepancy = True
+    elif discrepancy:
         # Keep neural's geometry (target primary path) but flag loudly;
         # cad_trace surfaces the counts so a human can compare, not guess.
         chosen, used, chosen_score = neural_out, "neural+cv", neural_score
     elif neural_score.ok and neural_avg >= cv_avg:
-        chosen, used, chosen_score = neural_out, "neural", neural_score
+        chosen, used, chosen_score = (
+            neural_out,
+            "neural+cv" if supplemented_types else "neural",
+            neural_score,
+        )
     else:
         chosen, used, chosen_score = cv_out, "cv", cv_score
 
@@ -212,6 +264,8 @@ def arbitrate_recognition(
         neural_available=neural_available,
         discrepancy=discrepancy,
         notes={"neural_entities": n_neural, "cv_entities": n_cv,
+               "cv_supplement_types": sorted(supplemented_types),
+               "neural_fragmented": neural_fragmented,
                "neural_score": (neural_score.recall, neural_score.precision),
                "cv_score": (cv_score.recall, cv_score.precision)},
     )

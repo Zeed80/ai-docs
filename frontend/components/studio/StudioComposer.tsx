@@ -51,6 +51,7 @@ type StudioComposerPrefs = {
   techMode?: boolean;
   mode?: "image" | "tech" | "vector";
   vectorScale?: string;
+  vectorSheetFormat?: "" | "A4" | "A3" | "A2" | "A1" | "A0";
   blankFormat?: "A4" | "A3" | "A2" | "A1";
   blankLandscape?: boolean;
   prompt?: string;
@@ -139,6 +140,9 @@ export default function StudioComposer({
   );
   // Vector (digitize) mode: optional manual scale + blank-sheet drafting.
   const [vectorScale, setVectorScale] = useState(prefs.vectorScale ?? "");
+  const [vectorSheetFormat, setVectorSheetFormat] = useState<
+    "" | "A4" | "A3" | "A2" | "A1" | "A0"
+  >(prefs.vectorSheetFormat ?? "");
   const [blankFormat, setBlankFormat] = useState<"A4" | "A3" | "A2" | "A1">(
     prefs.blankFormat ?? "A4",
   );
@@ -239,6 +243,7 @@ export default function StudioComposer({
           techMode,
           mode,
           vectorScale,
+          vectorSheetFormat,
           blankFormat,
           blankLandscape,
           prompt,
@@ -270,6 +275,7 @@ export default function StudioComposer({
     techMode,
     mode,
     vectorScale,
+    vectorSheetFormat,
     blankFormat,
     blankLandscape,
     prompt,
@@ -578,6 +584,8 @@ export default function StudioComposer({
       const s = Number(vectorScale.replace(",", "."));
       if (Number.isFinite(s) && s > 0) {
         (input.params as Record<string, unknown>).scale_mm_per_px = s;
+      } else if (vectorSheetFormat) {
+        (input.params as Record<string, unknown>).sheet_format = vectorSheetFormat;
       }
       if (vlmEnrich) {
         (input.params as Record<string, unknown>).vlm_dimensions = true;
@@ -1231,17 +1239,39 @@ export default function StudioComposer({
           )}
           <p className="text-[11px] text-zinc-600">{t("vector_cleanup_tip")}</p>
 
-          <label className="block">
-            <span className="text-xs text-zinc-500">
-              {t("vector_scale_label")}
-            </span>
-            <input
-              value={vectorScale}
-              onChange={(e) => setVectorScale(e.target.value)}
-              placeholder={t("vector_scale_placeholder")}
-              className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
-            />
-          </label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="block">
+              <span className="text-xs text-zinc-500">
+                {t("vector_scale_label")}
+              </span>
+              <input
+                value={vectorScale}
+                onChange={(e) => setVectorScale(e.target.value)}
+                placeholder={t("vector_scale_placeholder")}
+                className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-zinc-500">
+                {t("vector_sheet_format_label")}
+              </span>
+              <select
+                value={vectorSheetFormat}
+                disabled={Boolean(vectorScale.trim())}
+                onChange={(e) =>
+                  setVectorSheetFormat(
+                    e.target.value as "" | "A4" | "A3" | "A2" | "A1" | "A0",
+                  )
+                }
+                className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200 disabled:opacity-50"
+              >
+                <option value="">{t("vector_sheet_format_unknown")}</option>
+                {(["A4", "A3", "A2", "A1", "A0"] as const).map((format) => (
+                  <option key={format} value={format}>{format}</option>
+                ))}
+              </select>
+            </label>
+          </div>
 
           <label className="flex items-center gap-2 text-xs text-zinc-400">
             <input

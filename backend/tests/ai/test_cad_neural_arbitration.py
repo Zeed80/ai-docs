@@ -115,6 +115,19 @@ def test_arbitration_prefers_neural_when_both_pass_and_similar():
     assert not result.discrepancy
 
 
+def test_line_only_neural_keeps_cv_curve_families():
+    ink = _sheet()
+    good = _good_entities()
+    cv_out = RecognizeOutput(entities=good, thin_px=2, thick_px=4)
+    neural_out = RecognizeOutput(entities=good[:2], thin_px=2, thick_px=4)
+    result = arbitrate_recognition(
+        ink, None, _FakeRecognizer("neural", neural_out), _FakeRecognizer("cv", cv_out)
+    )
+    assert result.recognizer_used == "neural+cv"
+    assert {entity.type for entity in result.entities} == {"segment", "circle"}
+    assert result.notes["cv_supplement_types"] == ["circle"]
+
+
 def test_arbitration_falls_back_to_cv_when_neural_fails_coverage():
     ink = _sheet()
     cv_out = RecognizeOutput(entities=_good_entities(), thin_px=2, thick_px=4)
@@ -143,6 +156,24 @@ def test_arbitration_flags_discrepancy_when_both_pass_but_disagree_on_count():
     assert result.recognizer_used == "neural+cv"
     assert result.notes["cv_entities"] == len(good)
     assert result.notes["neural_entities"] == len(inflated)
+
+
+def test_arbitration_rejects_runaway_neural_fragmentation():
+    ink = _sheet()
+    good = _good_entities()
+    cv_out = RecognizeOutput(entities=good, thin_px=2, thick_px=4)
+    fragmented = good + [
+        Segment(p1=Point(x=40 + i, y=40), p2=Point(x=45 + i, y=40))
+        for i in range(20)
+    ]
+    neural_out = RecognizeOutput(entities=fragmented, thin_px=2, thick_px=4)
+    result = arbitrate_recognition(
+        ink, None, _FakeRecognizer("neural", neural_out), _FakeRecognizer("cv", cv_out)
+    )
+    assert result.recognizer_used == "cv"
+    assert result.entities == good
+    assert result.discrepancy
+    assert result.notes["neural_fragmented"] is True
 
 
 def test_arbitration_declines_both_returns_empty():

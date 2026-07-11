@@ -29,6 +29,12 @@ services:
   backend:
     restart: unless-stopped
 
+  technical-vectorizer:
+    restart: unless-stopped
+
+  cad-kernel:
+    restart: unless-stopped
+
   gpu-temp-helper:
     restart: unless-stopped
 

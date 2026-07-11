@@ -142,21 +142,31 @@ def _detect_sheet_frame_quad(ink, w: int, h: int):
     return best
 
 
-def _scale_from_quad(quad, w: int, h: int) -> tuple[float | None, str | None]:
-    """Derive mm-per-px from a detected frame quad's known ГОСТ 2.301 size.
-    Conservative: aspect doesn't match a standard sheet → (None, None) and
-    the validator flags SCALE_UNKNOWN — the quad itself (frame geometry) is
-    still used regardless, see _frame_segments_from_quad."""
+def _scale_from_quad(
+    quad,
+    w: int,
+    h: int,
+    confirmed_format: str | None = None,
+) -> tuple[float | None, str | None]:
+    """Derive mm-per-px only from a user-confirmed ГОСТ sheet format.
+
+    Every A-series sheet has the same aspect ratio. Image pixels therefore
+    cannot distinguish A4 from A0; the former implementation always matched
+    the first dict entry (A4) and silently scaled A3/A2/A1/A0 incorrectly.
+    """
     import cv2
 
+    if confirmed_format not in _GOST_SHEETS:
+        return None, None
     _x, _y, fw, fh = cv2.boundingRect(quad)
     frame_aspect = max(fw, fh) / max(min(fw, fh), 1.0)
-    for name, (short_mm, long_mm) in _GOST_SHEETS.items():
-        if abs(frame_aspect - long_mm / short_mm) / (long_mm / short_mm) <= _FRAME_ASPECT_TOL:
-            scale = long_mm / max(fw, fh)
-            logger.info("sheet_frame_detected", format=name, scale=round(scale, 5))
-            return scale, name
-    return None, None
+    short_mm, long_mm = _GOST_SHEETS[confirmed_format]
+    expected_aspect = long_mm / short_mm
+    if abs(frame_aspect - expected_aspect) / expected_aspect > _FRAME_ASPECT_TOL:
+        return None, None
+    scale = long_mm / max(fw, fh)
+    logger.info("sheet_frame_scale_confirmed", format=confirmed_format, scale=round(scale, 5))
+    return scale, confirmed_format
 
 
 def _frame_segments_from_quad(quad):
@@ -339,7 +349,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.db.session import _get_session_factory
     from app.services import cad_ir_store, studio_queue
-    from app.storage import download_file
+    from app.storage import download_file, upload_file
 
     factory = _get_session_factory()
     gen_uuid = uuid.UUID(generation_id)
@@ -409,13 +419,22 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
         # Stage 4: scale (manual override wins; else frame detection).
         manual_scale = params.get("scale_mm_per_px")
+        confirmed_format = str(params.get("sheet_format") or "").upper() or None
         sheet_format = None
         frame_quad = None
+        scale_source = None
         if manual_scale:
             scale = float(manual_scale)
+            scale_source = "manual"
         else:
             frame_quad = _detect_sheet_frame_quad(ink, w, h)
-            scale, sheet_format = _scale_from_quad(frame_quad, w, h) if frame_quad is not None else (None, None)
+            scale, sheet_format = (
+                _scale_from_quad(frame_quad, w, h, confirmed_format)
+                if frame_quad is not None
+                else (None, None)
+            )
+            if scale is not None:
+                scale_source = "sheet_format"
 
         # Stage 4.5 (Ф4.4): title block (основная надпись) presence, purely
         # geometric — no OCR/VLM read of its FIELDS yet, just "is there one
@@ -450,6 +469,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 generation_id=generation_id, image_width=w, image_height=h, kind="scan"
             ),
             scale=scale,
+            scale_source=scale_source,
             sheet=SheetInfo(format=sheet_format, frame=frame_quad is not None, title_block=title_block),
             entities=[*arbitration.entities, *frame_segments, *text_entities],
             recognizer_used=arbitration.recognizer_used,
@@ -490,8 +510,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 code="RECOGNIZER_DISCREPANCY", severity="warn",
                 message_ru=(
                     f"Нейросеть и классический CV дали расходящиеся результаты "
-                    f"({n.get('neural_entities')} vs {n.get('cv_entities')} элементов, оба прошли порог покрытия) "
-                    "— использован нейросетевой результат, сверьте с оригиналом."
+                    f"({n.get('neural_entities')} vs {n.get('cv_entities')} элементов) "
+                    f"— использован результат {arbitration.recognizer_used}, сверьте с оригиналом."
                 ),
             ))
 
@@ -585,6 +605,12 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             gen = await db.get(ImageGeneration, gen_uuid)
             if not gen or gen.status == ImageGenStatus.cancelled:
                 return {"cancelled": True}
+            normalized_path = f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
+            upload_file(content, normalized_path, "image/png")
+            gen.params = {
+                **(gen.params or {}),
+                "normalized_source_path": normalized_path,
+            }
             await cad_ir_store.save_revision(
                 db, gen, ir,
                 origin="auto",

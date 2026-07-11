@@ -95,3 +95,18 @@ def test_technical_vectorizer_declines_on_empty_segments():
     with patch("httpx.post", return_value=resp):
         out = rec.recognize(_sheet())
     assert out is None
+
+
+def test_technical_vectorizer_masks_ocr_regions_before_inference():
+    rec = TechnicalVectorizerRecognizer(base_url="http://fake")
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {
+        "segments": [{"x1": 1, "y1": 1, "x2": 5, "y2": 1, "confidence": 0.8}]
+    }
+    with patch("httpx.post", return_value=resp) as post:
+        rec.recognize(_sheet(), exclusion_boxes=[(0, 0, 8, 8)])
+
+    encoded = post.call_args.kwargs["files"]["file"][1]
+    decoded = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+    assert decoded[:10, :10].min() == 255

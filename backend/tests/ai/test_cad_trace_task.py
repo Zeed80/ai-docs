@@ -297,6 +297,18 @@ def test_detect_sheet_frame_quad_and_segments():
         assert s.confidence >= 0.85
 
 
+def test_sheet_scale_requires_confirmed_format_and_never_guesses_a4():
+    import numpy as np
+
+    from app.tasks import cad_trace
+
+    a3 = np.array([[[0, 0]], [[296, 0]], [[296, 419]], [[0, 419]]], dtype=np.int32)
+    assert cad_trace._scale_from_quad(a3, 297, 420) == (None, None)
+    scale, detected = cad_trace._scale_from_quad(a3, 297, 420, "A3")
+    assert detected == "A3"
+    assert scale == pytest.approx(1.0)
+
+
 @pytest.mark.asyncio
 async def test_cad_trace_vlm_enrichment_promotes_thread_reading(db_session, fake_storage, monkeypatch):
     """params.vlm_dimensions=true end-to-end: a mocked VLM call reads a

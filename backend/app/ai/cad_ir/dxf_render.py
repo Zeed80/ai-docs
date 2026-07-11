@@ -12,7 +12,7 @@ becomes a DXF arc [-max, -min].
 
 from __future__ import annotations
 
-from app.ai.cad_ir.dim_render import arrow_len_mm, dimension_arrows_for_points, dimension_label
+from app.ai.cad_ir.dim_render import arrow_len_mm, dimension_label
 from app.ai.cad_ir.schema import (
     LINE_CLASS_LAYERS,
     TEXT_LAYER,
@@ -93,26 +93,28 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
                 },
             ).set_placement(pt(entity.position.x, entity.position.y))
         elif isinstance(entity, DimensionEntity):
-            # ГОСТ 2.307-style leader: dimension line + filled arrowheads
-            # (both ends for linear/diameter, one at the arc/circle point for
-            # radial) + Ø/R-prefixed label. Not a native ezdxf DIMENSION
-            # object (those bind to and auto-measure real geometry — a later
-            # editor increment, see the Ф5 snapping/binding item); this is a
-            # faithful static rendering of what the IR already stores.
-            dim_attribs = {"layer": "DIM", "lineweight": _LINEWEIGHT["thin"]}
+            # Export real DIMENSION entities so downstream CAD can edit style,
+            # measurement points and labels instead of receiving exploded
+            # LINE/SOLID/TEXT graphics.
+            dim_attribs = {"layer": "DIM"}
             p1_mm = pt(entity.p1.x, entity.p1.y)
             p2_mm = pt(entity.p2.x, entity.p2.y)
-            msp.add_line(p1_mm, p2_mm, dxfattribs=dim_attribs)
-            for tri in dimension_arrows_for_points(p1_mm, p2_mm, entity.kind, arrow_len_mm()):
-                msp.add_solid([tri[0], tri[1], tri[2], tri[2]], dxfattribs={"layer": "DIM", "color": 7})
             label_text = dimension_label(entity)
-            if label_text:
-                mx = (p1_mm[0] + p2_mm[0]) / 2
-                my = (p1_mm[1] + p2_mm[1]) / 2
-                msp.add_text(
-                    label_text,
-                    dxfattribs={"layer": "DIM", "height": max(3.5, 0.1)},
-                ).set_placement((mx, my + 0.8))
+            text = label_text or "<>"
+            override = {"dimtxt": 3.5, "dimasz": arrow_len_mm()}
+            if entity.kind == "diameter":
+                dim = msp.add_diameter_dim_2p(
+                    p1_mm, p2_mm, text=text, override=override, dxfattribs=dim_attribs,
+                )
+            elif entity.kind == "radial":
+                dim = msp.add_radius_dim_2p(
+                    p1_mm, p2_mm, text=text, override=override, dxfattribs=dim_attribs,
+                )
+            else:
+                dim = msp.add_aligned_dim(
+                    p1_mm, p2_mm, distance=0, text=text, override=override, dxfattribs=dim_attribs,
+                )
+            dim.render()
         elif isinstance(entity, HatchRegion):
             from ezdxf import const
 

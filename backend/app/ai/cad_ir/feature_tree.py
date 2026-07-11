@@ -36,7 +36,7 @@ _THROUGH_PATTERN = re.compile(r"сквозн|through", re.IGNORECASE)
 
 
 class Feature3D(BaseModel):
-    kind: Literal["extrude", "hole", "boss"]
+    kind: Literal["extrude", "hole", "boss", "pocket", "fillet", "chamfer"]
     source_entity_ids: list[str] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
     confidence: float = 0.5
@@ -49,7 +49,7 @@ class FeatureTreeCandidate(BaseModel):
     missing_data: list[str] = Field(default_factory=list)
 
 
-def _footprint_mm(ir: CadIR) -> tuple[float, float] | None:
+def _footprint_mm(ir: CadIR) -> tuple[float, float, float, float] | None:
     """Bounding box of the main-weight contour geometry, in mm — the part's
     footprint as seen from this view. A simplification: the true outer
     silhouette would need real contour tracing (shapely union of the
@@ -78,7 +78,9 @@ def _footprint_mm(ir: CadIR) -> tuple[float, float] | None:
                 ys += [p.y for p in pts]
     if not xs or not ys:
         return None
-    return (max(xs) - min(xs)) * scale, (max(ys) - min(ys)) * scale
+    x0 = min(xs) * scale
+    y0 = min(ys) * scale
+    return x0, y0, (max(xs) - min(xs)) * scale, (max(ys) - min(ys)) * scale
 
 
 def _stated_depth_mm(ir: CadIR) -> float | None:
@@ -97,13 +99,29 @@ def _stated_depth_mm(ir: CadIR) -> float | None:
     return None
 
 
-def _hole_features(ir: CadIR) -> list[Feature3D]:
+def _hole_features(
+    ir: CadIR,
+    footprint: tuple[float, float, float, float],
+) -> list[Feature3D]:
     scale = ir.scale or 1.0
+    x0_mm, y0_mm, width_mm, height_mm = footprint
     features: list[Feature3D] = []
     for e in ir.entities:
         if not isinstance(e, Circle):
             continue
         diameter_mm = 2 * e.radius * scale
+        center_x_mm = e.center.x * scale - x0_mm
+        center_y_mm = e.center.y * scale - y0_mm
+        # A circle that defines the complete footprint is an outer cylindrical
+        # silhouette, not a hole. Without this guard a round flange becomes a
+        # rectangular block with a full-size cut through it.
+        if (
+            abs(diameter_mm - width_mm) <= max(0.1, width_mm * 0.01)
+            and abs(diameter_mm - height_mm) <= max(0.1, height_mm * 0.01)
+            and abs(center_x_mm - width_mm / 2) <= max(0.1, width_mm * 0.01)
+            and abs(center_y_mm - height_mm / 2) <= max(0.1, height_mm * 0.01)
+        ):
+            continue
         through = any(
             isinstance(other, (TextEntity, DimensionEntity))
             and getattr(other, "text", None)
@@ -113,7 +131,12 @@ def _hole_features(ir: CadIR) -> list[Feature3D]:
         features.append(Feature3D(
             kind="hole",
             source_entity_ids=[e.id],
-            params={"diameter_mm": diameter_mm, "through": through if through else None},
+            params={
+                "diameter_mm": diameter_mm,
+                "center_x_mm": center_x_mm,
+                "center_y_mm": center_y_mm,
+                "through": through if through else None,
+            },
             confidence=0.8 if through else 0.5,
         ))
     return features
@@ -132,8 +155,8 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
     footprint = _footprint_mm(ir)
     if footprint is None:
         return []
-    width_mm, height_mm = footprint
-    holes = _hole_features(ir)
+    x0_mm, y0_mm, width_mm, height_mm = footprint
+    holes = _hole_features(ir, footprint)
     hole_missing = [] if not holes else [
         f"глубина отверстия {h.params['diameter_mm']:g}мм не указана на чертеже (сквозное/глухое)"
         for h in holes if h.params.get("through") is None
@@ -145,7 +168,13 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
     if stated_depth is not None:
         base = Feature3D(
             kind="extrude", source_entity_ids=[], confidence=0.9,
-            params={"depth_mm": stated_depth, "width_mm": width_mm, "height_mm": height_mm},
+            params={
+                "depth_mm": stated_depth,
+                "width_mm": width_mm,
+                "height_mm": height_mm,
+                "source_origin_x_mm": x0_mm,
+                "source_origin_y_mm": y0_mm,
+            },
         )
         candidates.append(FeatureTreeCandidate(
             features=[base, *holes], score=0.9,
@@ -157,7 +186,13 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
         depth = min(width_mm, height_mm) * ratio if name == "square" else width_mm * ratio
         base = Feature3D(
             kind="extrude", source_entity_ids=[], confidence=0.2,
-            params={"depth_mm": depth, "width_mm": width_mm, "height_mm": height_mm},
+            params={
+                "depth_mm": depth,
+                "width_mm": width_mm,
+                "height_mm": height_mm,
+                "source_origin_x_mm": x0_mm,
+                "source_origin_y_mm": y0_mm,
+            },
         )
         candidates.append(FeatureTreeCandidate(
             features=[base, *holes], score=0.2, label=label,

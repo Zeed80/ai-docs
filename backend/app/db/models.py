@@ -3142,6 +3142,7 @@ class ImageGeneration(UUIDPrimaryKey, TimestampMixin, Base):
     accepted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     accepted_by: Mapped[str | None] = mapped_column(String(255))
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    accepted_revision: Mapped[int | None] = mapped_column(Integer)
     quality_rating: Mapped[int | None] = mapped_column(SmallInteger)
     issue_tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     review_notes: Mapped[str | None] = mapped_column(Text)
@@ -3178,6 +3179,10 @@ class CadIrRevision(UUIDPrimaryKey, TimestampMixin, Base):
     origin: Mapped[str] = mapped_column(String(30), nullable=False, default="auto")
     # counters + validation summary (entity counts, codes, coverage)
     summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    ir_sha256: Mapped[str | None] = mapped_column(String(64))
+    artifact_hashes: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    approved_by: Mapped[str | None] = mapped_column(String(255))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class StudioJob(UUIDPrimaryKey, TimestampMixin, Base):
