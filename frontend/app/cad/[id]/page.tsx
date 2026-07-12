@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 
-import VectorWorkspace from "@/components/studio/VectorWorkspace";
+import CadWorkspace from "@/components/cad/CadWorkspace";
 import { Generation, getGeneration } from "@/lib/studio-api";
 
 export default function CadEditorPage() {
@@ -90,7 +90,7 @@ export default function CadEditorPage() {
       )}
       {gen && gen.status === "done" && gen.operation === "vectorize" && (
         <div className="min-h-0 flex-1">
-          <VectorWorkspace gen={gen} onChanged={load} />
+          <CadWorkspace gen={gen} onChanged={load} />
         </div>
       )}
     </main>

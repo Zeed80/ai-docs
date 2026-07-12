@@ -677,7 +677,20 @@
       "review_reason_validation_error": "validation error",
       "review_reason_unresolved_hypothesis": "ambiguous hypothesis",
       "review_reason_diffusion_modified": "diffusion-modified",
-      "open_in_cad": "Open in CAD editor"
+      "open_in_cad": "Open in CAD editor",
+      "status_selected": "Selected: {n}",
+      "cmd_hint": "command or coordinates: 100,50 · @50,0 · @50<45 · line · circle · undo · fit",
+      "cmd_unknown": "Unknown command: {cmd}",
+      "parameters_title": "Sketch parameters",
+      "parameter_name": "Name",
+      "parameter_mm": "mm",
+      "parameter_save": "Save",
+      "parameter_value_invalid": "Enter a numeric parameter value",
+      "constraints_count": "Constraints: {constraints}; parameters: {parameters}",
+      "rebuild": "Rebuild",
+      "constraint_horizontal": "Horizontal",
+      "constraint_vertical": "Vertical",
+      "constraint_segment": "Constrain segment"
     },
     "workflow": {
       "loading": "Loading workflows…",

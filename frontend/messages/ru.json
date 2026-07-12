@@ -677,7 +677,20 @@
       "review_reason_validation_error": "ошибка валидации",
       "review_reason_unresolved_hypothesis": "неоднозначная гипотеза",
       "review_reason_diffusion_modified": "дорисовано диффузией",
-      "open_in_cad": "Открыть в CAD-редакторе"
+      "open_in_cad": "Открыть в CAD-редакторе",
+      "status_selected": "Выбрано: {n}",
+      "cmd_hint": "команда или координаты: 100,50 · @50,0 · @50<45 · line · circle · undo · fit",
+      "cmd_unknown": "Неизвестная команда: {cmd}",
+      "parameters_title": "Параметры эскиза",
+      "parameter_name": "Имя",
+      "parameter_mm": "мм",
+      "parameter_save": "Сохранить",
+      "parameter_value_invalid": "Введите числовое значение параметра",
+      "constraints_count": "Ограничения: {constraints}; параметры: {parameters}",
+      "rebuild": "Перестроить",
+      "constraint_horizontal": "Горизонтальность",
+      "constraint_vertical": "Вертикальность",
+      "constraint_segment": "Ограничить отрезок"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",
