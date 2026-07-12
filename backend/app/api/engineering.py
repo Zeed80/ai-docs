@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import add_timeline_event, log_action
-from app.db.models import BOM, Drawing, EngineeringAnalysisCase, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
+from app.db.models import BOM, CadIrRevision, Drawing, EngineeringAnalysisCase, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
 from app.db.session import get_db
 from app.domain.engineering import (
     EngineeringApprovalRequest,
@@ -42,6 +42,7 @@ _PROJECTABLE_MODELS = {
     "drawing": Drawing,
     "bom": BOM,
     "manufacturing_process_plan": ManufacturingProcessPlan,
+    "cad_ir_revision": CadIrRevision,
 }
 
 
@@ -157,7 +158,7 @@ async def create_projection(
         raise HTTPException(400, "Нельзя изменять проекции утвержденной ревизии")
     target_model = _PROJECTABLE_MODELS.get(body.entity_type)
     if target_model is None:
-        raise HTTPException(400, "Поддерживаются только проекции drawing, bom и manufacturing_process_plan")
+        raise HTTPException(400, "Поддерживаются проекции drawing, cad_ir_revision, bom и manufacturing_process_plan")
     target = await db.get(target_model, body.entity_id)
     if target is None:
         raise HTTPException(404, "Объект проекции не найден")
@@ -169,7 +170,10 @@ async def create_projection(
         metadata_=body.metadata_,
     )
     db.add(projection)
-    target.engineering_revision_id = revision.id
+    # Operational records expose a direct convenience FK. A CAD IR snapshot
+    # intentionally stays immutable and is linked only through this projection.
+    if hasattr(target, "engineering_revision_id"):
+        target.engineering_revision_id = revision.id
     await db.flush()
     await db.commit()
     await db.refresh(projection)

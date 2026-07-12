@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
-from app.db.models import Drawing, DrawingStatus
+from app.db.models import CadIrRevision, Drawing, DrawingStatus, ImageGeneration
 
 
 @pytest.mark.asyncio
@@ -42,6 +42,25 @@ async def test_revision_lifecycle_and_projection(client: AsyncClient, db_session
         "projection_type": "drawing", "entity_type": "drawing", "entity_id": str(drawing.id)
     })
     assert frozen.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_revision_can_reference_immutable_cad_ir_snapshot(client: AsyncClient, db_session):
+    project = (await client.post("/api/engineering/projects", json={"name": "CAD связь"})).json()
+    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    generation = ImageGeneration(operation="vectorize")
+    db_session.add(generation)
+    await db_session.flush()
+    cad_revision = CadIrRevision(generation_id=generation.id, revision=0, ir_path="cad/snapshot.json")
+    db_session.add(cad_revision)
+    await db_session.commit()
+    projection = await client.post(f"/api/engineering/revisions/{revision['id']}/projections", json={
+        "projection_type": "cad_source",
+        "entity_type": "cad_ir_revision",
+        "entity_id": str(cad_revision.id),
+    })
+    assert projection.status_code == 201
+    assert projection.json()["entity_type"] == "cad_ir_revision"
 
 
 @pytest.mark.asyncio
