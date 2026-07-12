@@ -42,6 +42,28 @@ _GT_TYPE_MAP = {
 }
 
 
+def _strip_sortentstable(dxf_path: pathlib.Path) -> None:
+    """dwg2dxf emits SORTENTSTABLE objects with group code 331 that ezdxf
+    1.4+ rejects outright (DXFStructureError, even in recover mode). The
+    object only affects draw order — irrelevant for counting/rendering —
+    so drop it from the tag stream."""
+    lines = dxf_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i + 1 < len(lines):
+        code, value = lines[i], lines[i + 1]
+        if code.strip() == "0" and value.strip() == "SORTENTSTABLE":
+            i += 2
+            while i + 1 < len(lines) and lines[i].strip() != "0":
+                i += 2
+            continue
+        out.append(code)
+        out.append(value)
+        i += 2
+    out.extend(lines[i:])
+    dxf_path.write_text("".join(out), encoding="utf-8")
+
+
 def _convert_dwg(dwg_path: pathlib.Path, tmp_dir: pathlib.Path) -> pathlib.Path | None:
     if shutil.which("dwg2dxf") is None:
         print("ERROR: dwg2dxf not found", file=sys.stderr)
@@ -51,7 +73,13 @@ def _convert_dwg(dwg_path: pathlib.Path, tmp_dir: pathlib.Path) -> pathlib.Path 
         ["dwg2dxf", "-y", "-o", str(out), str(dwg_path)],
         capture_output=True, text=True, timeout=300,
     )
-    return out if out.exists() else None
+    if not out.exists():
+        return None
+    try:
+        _strip_sortentstable(out)
+    except Exception as exc:  # noqa: BLE001 — best-effort cleanup, reader decides
+        print(f"  sortentstable strip failed: {str(exc)[:120]}", file=sys.stderr)
+    return out
 
 
 def _gt_counts(doc) -> dict[str, int]:
@@ -82,6 +110,15 @@ def _render_dxf_png(doc, long_side: int) -> bytes | None:
     for ins in list(msp.query("INSERT")):
         if ins.dxf.name not in doc.blocks:
             msp.delete_entity(ins)
+    # dwg2dxf writes layer "0" with a negative color (= layer off); the
+    # Frontend then silently draws nothing and the "clean raster" is a blank
+    # white sheet. Ground truth must always render fully: thaw + switch on.
+    for layer in doc.layers:
+        try:
+            layer.dxf.color = abs(int(layer.dxf.color)) or 7
+            layer.thaw()
+        except Exception:  # noqa: BLE001
+            continue
     try:
         extents = bbox.extents(msp, fast=True)
         ratio = (extents.size.y / extents.size.x) if extents.has_data and extents.size.x else 0.7
@@ -97,7 +134,15 @@ def _render_dxf_png(doc, long_side: int) -> bytes | None:
     try:
         fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi)
         ax = fig.add_axes([0, 0, 1, 1])
-        Frontend(RenderContext(doc), MatplotlibBackend(ax), config=cfg).draw_layout(msp, finalize=True)
+        backend = MatplotlibBackend(ax)
+        # draw_entities, not draw_layout: dwg2dxf's SORTENTSTABLE leftovers
+        # crash ezdxf's redraw-order resolution, and draw order is irrelevant
+        # for a black-on-white ground-truth raster anyway.
+        Frontend(RenderContext(doc), backend, config=cfg).draw_entities(msp)
+        backend.finalize()
+        ax.set_aspect("equal")
+        ax.margins(0)
+        ax.autoscale_view()
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=dpi, facecolor="white", bbox_inches="tight", pad_inches=0.1)
         plt.close(fig)
@@ -107,7 +152,143 @@ def _render_dxf_png(doc, long_side: int) -> bytes | None:
         return None
 
 
-def _recognize(image_bytes: bytes, enhance: bool, recognizer: str = "cv") -> dict | None:
+def _safe_stem(name: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
+
+
+def _write_report(
+    report_dir: pathlib.Path,
+    stem: str,
+    ink,
+    entities,
+    keep_raster,
+    thin_px: int,
+    thick_px: int,
+) -> dict:
+    """Side-by-side visual evidence for one file: binarized source, colored
+    vector render (by entity type), and a coverage diff — missed ink red,
+    hallucinated geometry orange. Returns fragmentation stats for the JSON."""
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_ir.png_render import rasterize_entities
+    from app.ai.drawing_vectorize import _coverage_dilate_px
+
+    report_dir.mkdir(parents=True, exist_ok=True)
+    ink_bool = np.asarray(ink) > 0
+    h, w = ink_bool.shape[:2]
+    src = np.full((h, w), 255, np.uint8)
+    src[ink_bool] = 0
+    cv2.imwrite(str(report_dir / f"{stem}__src.png"), src)
+    if not entities:
+        return {}
+
+    palette = {  # BGR
+        "segment": (0, 0, 0),
+        "polyline": (180, 0, 180),
+        "circle": (255, 0, 0),
+        "arc": (0, 160, 0),
+        "hatch": (160, 160, 160),
+        "text": (0, 0, 255),
+        "dimension": (0, 128, 255),
+    }
+    vec = np.full((h, w, 3), 255, np.uint8)
+    for e in entities:
+        color = palette.get(e.type, (0, 0, 0))
+        width = max(1, thin_px)
+        if e.type == "segment":
+            cv2.line(vec, (int(e.p1.x), int(e.p1.y)), (int(e.p2.x), int(e.p2.y)), color, width)
+        elif e.type == "circle":
+            cv2.circle(vec, (int(e.center.x), int(e.center.y)), max(1, int(e.radius)), color, width)
+        elif e.type == "arc":
+            cv2.ellipse(
+                vec, (int(e.center.x), int(e.center.y)),
+                (max(1, int(e.radius)), max(1, int(e.radius))),
+                0, e.start_angle, e.end_angle, color, width,
+            )
+        elif e.type == "polyline":
+            pts = np.array([[int(p.x), int(p.y)] for p in e.points], np.int32)
+            cv2.polylines(vec, [pts], e.closed, color, width)
+        elif e.type == "hatch":
+            pts = np.array([[int(p.x), int(p.y)] for p in e.boundary], np.int32)
+            cv2.polylines(vec, [pts], True, color, 1)
+        elif e.type in ("text", "dimension") and e.source_region is not None:
+            r = e.source_region
+            cv2.rectangle(vec, (int(r.x0), int(r.y0)), (int(r.x1), int(r.y1)), color, 1)
+    cv2.imwrite(str(report_dir / f"{stem}__vec.png"), vec)
+
+    drawn = rasterize_entities(entities, w, h, thin_px, thick_px) < 128
+    covered = drawn if keep_raster is None else (drawn | np.asarray(keep_raster).astype(bool))
+    k = 2 * _coverage_dilate_px(h, w) + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    covered_grown = cv2.dilate(covered.astype(np.uint8), kernel) > 0
+    ink_grown = cv2.dilate(ink_bool.astype(np.uint8), kernel) > 0
+    missed = ink_bool & ~covered_grown
+    hallucinated = drawn & ~ink_grown
+    diff = np.full((h, w, 3), 255, np.uint8)
+    diff[ink_bool] = (200, 200, 200)
+    diff[missed] = (0, 0, 255)
+    diff[hallucinated] = (0, 128, 255)
+    cv2.imwrite(str(report_dir / f"{stem}__diff.png"), diff)
+
+    seg_lens = [
+        float(np.hypot(e.p2.x - e.p1.x, e.p2.y - e.p1.y))
+        for e in entities if e.type == "segment"
+    ]
+    short_cap = max(8.0, 0.01 * max(w, h))
+    return {
+        "missed_ink_fraction": round(float(missed.sum()) / max(int(ink_bool.sum()), 1), 4),
+        "hallucinated_fraction": round(float(hallucinated.sum()) / max(int(drawn.sum()), 1), 4),
+        "segments": len(seg_lens),
+        "short_segments": sum(1 for length in seg_lens if length < short_cap),
+        "median_segment_px": round(float(np.median(seg_lens)), 1) if seg_lens else None,
+    }
+
+
+def _write_html_index(report_dir: pathlib.Path, results: dict) -> None:
+    import html
+    from urllib.parse import quote
+
+    rows: list[str] = []
+    for section in ("dwg", "photos"):
+        for name, rec in sorted(results.get(section, {}).items()):
+            if not rec or rec.get("error"):
+                continue
+            stem = _safe_stem(name)
+            imgs = "".join(
+                f'<td><a href="{quote(stem)}__{kind}.png">'
+                f'<img src="{quote(stem)}__{kind}.png" loading="lazy"></a></td>'
+                for kind in ("src", "vec", "diff")
+            )
+            metric = (
+                "<b>DECLINED</b>" if rec.get("declined")
+                else f"entities={rec.get('entities')} recall={rec.get('coverage_recall')} "
+                     f"precision={rec.get('coverage_precision')} "
+                     f"short_seg={rec.get('short_segments')}/{rec.get('segments')} "
+                     f"missed={rec.get('missed_ink_fraction')}"
+            )
+            rows.append(
+                f"<tr><td>{html.escape(name)}<br><small>{rec.get('recognizer_used', '')}"
+                f" · {metric}</small></td>{imgs}</tr>"
+            )
+    (report_dir / "index.html").write_text(
+        "<!doctype html><meta charset='utf-8'><title>vectorize report</title>"
+        "<style>img{max-width:420px;display:block}td{vertical-align:top;"
+        "border-bottom:1px solid #ccc;padding:6px;font-family:sans-serif}</style>"
+        "<table><tr><th>file</th><th>source ink</th><th>vector (by type)</th>"
+        "<th>diff (red=missed, orange=hallucinated)</th></tr>"
+        + "".join(rows) + "</table>",
+        encoding="utf-8",
+    )
+
+
+def _recognize(
+    image_bytes: bytes,
+    enhance: bool,
+    recognizer: str = "cv",
+    report_dir: pathlib.Path | None = None,
+    stem: str = "",
+) -> dict | None:
     """``recognizer``: "cv" (baseline), "neural" (technical-vectorizer model
     only, no CV fallback — a clean read of what the network alone
     achieves), or "arbitrate" (production path: neural vs CV, independently
@@ -156,11 +337,13 @@ def _recognize(image_bytes: bytes, enhance: bool, recognizer: str = "cv") -> dic
     elapsed = time.monotonic() - started
 
     if out is None or not out.entities:
+        if report_dir is not None:
+            _write_report(report_dir, stem, ink, [], None, 1, 2)
         return {"declined": True, "seconds": round(elapsed, 2), "size": [w, h], "recognizer_used": used}
     counts: dict[str, int] = {}
     for e in out.entities:
         counts[e.type] = counts.get(e.type, 0) + 1
-    return {
+    rec = {
         "declined": False,
         "seconds": round(elapsed, 2),
         "size": [w, h],
@@ -171,6 +354,11 @@ def _recognize(image_bytes: bytes, enhance: bool, recognizer: str = "cv") -> dic
         "coverage_ok": score.ok,
         "recognizer_used": used,
     }
+    if report_dir is not None:
+        rec.update(_write_report(
+            report_dir, stem, ink, out.entities, out.keep_raster, out.thin_px, out.thick_px,
+        ))
+    return rec
 
 
 def main() -> int:
@@ -185,7 +373,12 @@ def main() -> int:
         help="cv=CV-baseline (default); neural=Ф3 model alone (no CV fallback); "
              "arbitrate=production decision path (neural vs CV, independently scored)",
     )
+    parser.add_argument(
+        "--report-dir", default="",
+        help="write per-file visual evidence (src/vec/diff PNG + index.html) here",
+    )
     args = parser.parse_args()
+    report_dir = pathlib.Path(args.report_dir) if args.report_dir else None
 
     import ezdxf
 
@@ -218,7 +411,10 @@ def main() -> int:
             if png is None:
                 results["dwg"][dwg.name] = {"error": "render_failed", "gt_counts": gt}
                 continue
-            rec = _recognize(png, enhance=False, recognizer=args.recognizer)
+            rec = _recognize(
+                png, enhance=False, recognizer=args.recognizer,
+                report_dir=report_dir, stem=_safe_stem(dwg.name),
+            )
             rec["gt_counts"] = gt
             results["dwg"][dwg.name] = rec
             print(f"  -> {rec.get('entities', 'declined')} entities, "
@@ -232,7 +428,10 @@ def main() -> int:
         photos = photos[: args.limit_photos]
     for photo in photos:
         print(f"[photo] {photo.name}")
-        rec = _recognize(photo.read_bytes(), enhance=True, recognizer=args.recognizer)
+        rec = _recognize(
+            photo.read_bytes(), enhance=True, recognizer=args.recognizer,
+            report_dir=report_dir, stem=_safe_stem(photo.name),
+        )
         results["photos"][photo.name] = rec
         print(f"  -> {rec.get('entities', 'declined')} entities, "
               f"recall={rec.get('coverage_recall')}, precision={rec.get('coverage_precision')}")
@@ -259,6 +458,9 @@ def main() -> int:
     out_path = pathlib.Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2))
+    if report_dir is not None:
+        _write_html_index(report_dir, results)
+        print(f"report: {report_dir / 'index.html'}")
     print(json.dumps(results["summary"], ensure_ascii=False, indent=2))
     return 0
 

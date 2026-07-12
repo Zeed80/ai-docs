@@ -144,26 +144,38 @@ def test_arbitration_flags_discrepancy_when_both_pass_but_disagree_on_count():
     ink = _sheet()
     good = _good_entities()
     cv_out = RecognizeOutput(entities=good, thin_px=2, thick_px=4)
-    # Neural "passes" coverage (superset covers the same ink) but reports a
-    # very different entity count — duplicated segments inflate the count
-    # without hurting recall/precision, simulating a miscount disagreement.
-    inflated = good + [Segment(p1=Point(x=40, y=40), p2=Point(x=360, y=40)) for _ in range(4)]
-    neural_out = RecognizeOutput(entities=inflated, thin_px=2, thick_px=4)
+    # Neural "passes" coverage but reports a very different structure: the
+    # top edge as dash pieces (gaps far above the consolidation weld
+    # tolerance, so they legitimately survive as separate strokes). Exact
+    # duplicates would no longer work here — topology consolidation collapses
+    # those before arbitration ever counts entities.
+    dashed = [
+        Segment(p1=Point(x=40, y=40), p2=Point(x=110, y=40)),
+        Segment(p1=Point(x=130, y=40), p2=Point(x=200, y=40)),
+        Segment(p1=Point(x=220, y=40), p2=Point(x=290, y=40)),
+        Segment(p1=Point(x=310, y=40), p2=Point(x=360, y=40)),
+        *good[1:],
+    ]
+    neural_out = RecognizeOutput(entities=dashed, thin_px=2, thick_px=4)
     result = arbitrate_recognition(
         ink, None, _FakeRecognizer("neural", neural_out), _FakeRecognizer("cv", cv_out)
     )
     assert result.discrepancy
     assert result.recognizer_used == "neural+cv"
     assert result.notes["cv_entities"] == len(good)
-    assert result.notes["neural_entities"] == len(inflated)
+    assert result.notes["neural_entities"] == len(dashed)
 
 
 def test_arbitration_rejects_runaway_neural_fragmentation():
     ink = _sheet()
     good = _good_entities()
     cv_out = RecognizeOutput(entities=good, thin_px=2, thick_px=4)
+    # Fragmentation that consolidation cannot repair: parallel ticks 8px
+    # apart crossing the top edge — not collinear, not chained, so the
+    # inflated entity count is real leftover fragmentation. CV itself is a
+    # complete read (passes the full coverage bar), so the guard applies.
     fragmented = good + [
-        Segment(p1=Point(x=40 + i, y=40), p2=Point(x=45 + i, y=40))
+        Segment(p1=Point(x=48 + 8 * i, y=36), p2=Point(x=48 + 8 * i, y=44))
         for i in range(20)
     ]
     neural_out = RecognizeOutput(entities=fragmented, thin_px=2, thick_px=4)
@@ -171,7 +183,8 @@ def test_arbitration_rejects_runaway_neural_fragmentation():
         ink, None, _FakeRecognizer("neural", neural_out), _FakeRecognizer("cv", cv_out)
     )
     assert result.recognizer_used == "cv"
-    assert result.entities == good
+    assert {e.type for e in result.entities} == {"segment", "circle"}
+    assert len(result.entities) == len(good)
     assert result.discrepancy
     assert result.notes["neural_fragmented"] is True
 

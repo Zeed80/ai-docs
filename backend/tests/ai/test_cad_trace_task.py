@@ -233,6 +233,65 @@ async def test_cad_trace_declines_dense_sheet(db_session, fake_storage, monkeypa
     assert "Очистка" in (gen.error or "")
 
 
+@pytest.mark.asyncio
+async def test_cad_trace_degrades_to_raster_draft_when_recognition_empty(
+    db_session, fake_storage, monkeypatch
+):
+    """B1: when BOTH recognizers come back empty on a sheet with real ink,
+    the run must NOT fail — it ships a raster-passthrough draft (frame/text
+    still vectorized when found) flagged RECOGNITION_EMPTY, so the user can
+    review and trace manually instead of hitting a dead error."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.ai.cad_recognize.verify import ArbitrationResult, CoverageScore
+    from app.db.models import CadIrRevision, ImageGeneration, ImageGenStatus
+    from app.tasks import cad_trace
+
+    conn = db_session.bind
+
+    def _factory():
+        return AsyncSession(
+            bind=conn, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        )
+
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: _factory)
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.verify.arbitrate_recognition",
+        lambda *a, **kw: ArbitrationResult(
+            entities=[], keep_raster=None, thin_px=2, thick_px=3,
+            recognizer_used="cv", score=CoverageScore(0.0, 0.0),
+            neural_available=False, discrepancy=False, notes={},
+        ),
+    )
+
+    fake_storage["image-gen-src/test/scan.png"] = _scan_png()
+    gen = ImageGeneration(
+        owner_sub=None,
+        operation="vectorize",
+        status=ImageGenStatus.queued,
+        params={},
+        source_image_paths=["image-gen-src/test/scan.png"],
+    )
+    db_session.add(gen)
+    await db_session.commit()
+
+    result = await cad_trace._run(str(gen.id), task_id=None)
+    assert result.get("ok"), result
+
+    await db_session.refresh(gen)
+    assert gen.status == ImageGenStatus.done
+    assert "RECOGNITION_EMPTY" in gen.params["validation"]["codes"]
+    # The revision persisted with the full ink as raster passthrough.
+    rev = (
+        await db_session.execute(
+            select(CadIrRevision).where(CadIrRevision.generation_id == gen.id)
+        )
+    ).scalar_one()
+    assert rev.revision == 0
+    assert gen.params.get("keep_raster_path") in fake_storage
+
+
 def test_binarize_retries_with_adaptive_threshold_on_stained_paper():
     """Regression (2026-07-11, live test_vector_files photo): a global Otsu
     threshold reads mottled/foxed paper staining as "ink" — on an aged

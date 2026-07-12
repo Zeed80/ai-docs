@@ -65,6 +65,9 @@ class CadCheckCode(str, Enum):
     COVERAGE_LOW = "COVERAGE_LOW"
     NEURAL_UNAVAILABLE = "NEURAL_UNAVAILABLE"
     RECOGNIZER_DISCREPANCY = "RECOGNIZER_DISCREPANCY"
+    # B1: recognition returned no vector geometry; the sheet shipped as a
+    # raster-passthrough draft for manual review/tracing instead of failing.
+    RECOGNITION_EMPTY = "RECOGNITION_EMPTY"
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
     # pixel provenance of diffusion-prepared sources (sticky across revalidation)
     DIFFUSION_ADDED_INK = "DIFFUSION_ADDED_INK"

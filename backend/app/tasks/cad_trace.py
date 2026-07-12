@@ -77,6 +77,13 @@ def run_cad_trace(self, generation_id: str) -> dict:
 # read of the ink and the 4 other test files all pass comfortably below the
 # retry trigger, so this never touches an already-working image.
 _OTSU_RETRY_INK_FRACTION = 0.22
+# Sauvola is the last binarization resort: local mean/stddev thresholding
+# survives severe uneven lighting where even the Gaussian adaptive retry
+# stays implausibly dense (the CV density-decline gate is 0.30).
+_SAUVOLA_RETRY_INK_FRACTION = 0.30
+# B1 degrade-vs-fail split: an empty recognition on a sheet denser than this
+# is garbage input (a near-solid photo), not a drawing to review.
+_DEGRADED_MAX_INK_FRACTION = 0.85
 
 
 def _binarize(image_bytes: bytes):
@@ -114,6 +121,32 @@ def _binarize(image_bytes: bytes):
                 adaptive_ink_fraction=round(float((adaptive_ink > 0).mean()), 4),
             )
             ink = adaptive_ink
+
+    # Last resort of the cascade (B1): Sauvola local thresholding, for sheets
+    # still implausibly dense after the Gaussian adaptive retry (severe
+    # uneven lighting / aged paper). Picked only when it is both cleaner and
+    # non-empty — the cascade must never turn a readable sheet into a blank.
+    frac = float((ink > 0).mean())
+    if frac > _SAUVOLA_RETRY_INK_FRACTION and hasattr(cv2, "ximgproc"):
+        try:
+            block = (max(15, min(h, w) // 25)) | 1
+            sauvola = cv2.ximgproc.niBlackThreshold(
+                gray, 255, cv2.THRESH_BINARY, block, 0.2,
+                binarizationMethod=cv2.ximgproc.BINARIZATION_SAUVOLA,
+            )
+            sauvola_ink = cv2.bitwise_not(sauvola)
+            sauvola_ink = _remove_small_specks(sauvola_ink, w * h)
+            sauvola_ink = _close_small_gaps(sauvola_ink)
+            s_frac = float((sauvola_ink > 0).mean())
+            if 0.0 < s_frac < frac:
+                logger.info(
+                    "cad_trace_binarize_sauvola_retry",
+                    prev_ink_fraction=round(frac, 4),
+                    sauvola_ink_fraction=round(s_frac, 4),
+                )
+                ink = sauvola_ink
+        except Exception as exc:  # noqa: BLE001 — cascade stage is best-effort
+            logger.warning("cad_trace_binarize_sauvola_failed", error=str(exc)[:120])
 
     return ink, w, h
 
@@ -452,11 +485,24 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # against CV by independent coverage scoring, never by the model's
         # own say-so (see cad_recognize/verify.arbitrate_recognition).
         arbitration = arbitrate_recognition(ink, text_boxes, TechnicalVectorizerRecognizer(), CvRecognizer())
-        if not arbitration.entities:
+        # B1: an empty recognition is a hard failure only when the sheet
+        # itself is pathological (no ink at all / near-solid black). Anything
+        # in between degrades to a reviewable draft: the ink ships as raster
+        # passthrough with whatever frame/text WAS recognized, flagged
+        # RECOGNITION_EMPTY — the user reviews and traces in the editor
+        # instead of hitting a dead "лист слишком плотный или пустой" error.
+        degraded_recognition = not arbitration.entities
+        ink_fraction = float((ink > 0).mean())
+        if degraded_recognition and not 0.0 < ink_fraction <= _DEGRADED_MAX_INK_FRACTION:
             return await _fail(
-                "Не удалось распознать линейную графику: лист слишком плотный или пустой. "
-                "Попробуйте сначала пропустить фото через режим «Очистка»."
+                "Не удалось распознать линейную графику: лист "
+                + ("пустой. " if ink_fraction <= 0.0 else "почти полностью залит — не похож на линейный чертёж. ")
+                + "Попробуйте сначала пропустить фото через режим «Очистка»."
             )
+        keep_raster = arbitration.keep_raster
+        thin_px, thick_px = arbitration.thin_px, arbitration.thick_px
+        if degraded_recognition:
+            keep_raster = ink > 0
 
         # The frame quad (Stage 4) is emitted as real Segment entities here,
         # not just used for scale — see _frame_segments_from_quad for why
@@ -489,31 +535,12 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         score = (
             score_coverage(
                 [*arbitration.entities, *frame_segments], ink,
-                arbitration.keep_raster, arbitration.thin_px, arbitration.thick_px,
+                keep_raster, thin_px, thick_px,
             )
             if frame_segments
             else arbitration.score
         )
         apply_to_ir(ir, score)
-        if not arbitration.neural_available:
-            from app.ai.cad_ir.schema import ValidationIssueIR
-
-            ir.validation.issues.append(ValidationIssueIR(
-                code="NEURAL_UNAVAILABLE", severity="info",
-                message_ru="Нейросетевой распознаватель недоступен — использован классический CV-путь.",
-            ))
-        if arbitration.discrepancy:
-            from app.ai.cad_ir.schema import ValidationIssueIR
-
-            n = arbitration.notes
-            ir.validation.issues.append(ValidationIssueIR(
-                code="RECOGNIZER_DISCREPANCY", severity="warn",
-                message_ru=(
-                    f"Нейросеть и классический CV дали расходящиеся результаты "
-                    f"({n.get('neural_entities')} vs {n.get('cv_entities')} элементов) "
-                    f"— использован результат {arbitration.recognizer_used}, сверьте с оригиналом."
-                ),
-            ))
 
         # Stage 6.7 (Ф4.2/4.3): cross-check any VLM reading/line-class
         # hypotheses attached in Stage 3.5/5.5 — promotes a decisive winner,
@@ -525,6 +552,40 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         resolve_line_hypotheses(ir)
 
         validate_ir(ir)
+
+        # Recognition-provenance signals are appended AFTER validate_ir:
+        # validate_ir rebuilds the issue list from IR-derivable checks (plus
+        # sticky DIFFUSION_*) and cannot re-derive these pipeline facts —
+        # appended before it, they were silently wiped (pre-existing bug for
+        # NEURAL_UNAVAILABLE/RECOGNIZER_DISCREPANCY). Their lifecycle is
+        # intentionally revision-0-only: the next revalidation after a human
+        # edit drops them, while quality gating stays with COVERAGE_LOW.
+        from app.ai.cad_ir.schema import ValidationIssueIR
+
+        if degraded_recognition:
+            ir.validation.issues.append(ValidationIssueIR(
+                code="RECOGNITION_EMPTY", severity="error",
+                message_ru=(
+                    "Векторная геометрия не распознана — лист сохранён растровой подложкой "
+                    "с рамкой и текстом. Проверьте исходник, попробуйте режим «Очистка» "
+                    "или обведите геометрию вручную в редакторе."
+                ),
+            ))
+        if not arbitration.neural_available:
+            ir.validation.issues.append(ValidationIssueIR(
+                code="NEURAL_UNAVAILABLE", severity="info",
+                message_ru="Нейросетевой распознаватель недоступен — использован классический CV-путь.",
+            ))
+        if arbitration.discrepancy:
+            n = arbitration.notes
+            ir.validation.issues.append(ValidationIssueIR(
+                code="RECOGNIZER_DISCREPANCY", severity="warn",
+                message_ru=(
+                    f"Нейросеть и классический CV дали расходящиеся результаты "
+                    f"({n.get('neural_entities')} vs {n.get('cv_entities')} элементов) "
+                    f"— использован результат {arbitration.recognizer_used}, сверьте с оригиналом."
+                ),
+            ))
 
         # Stage 6.5: pixel provenance for diffusion-derived sources — diffusion
         # output is not a truth source. Findings are sticky (survive later
@@ -615,9 +676,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 db, gen, ir,
                 origin="auto",
                 created_by=owner_sub,
-                keep_raster=arbitration.keep_raster,
-                thin_px=arbitration.thin_px,
-                thick_px=arbitration.thick_px,
+                keep_raster=keep_raster,
+                thin_px=thin_px,
+                thick_px=thick_px,
             )
             gen.status = ImageGenStatus.done
             job = await studio_queue.job_for_generation(db, gen_uuid)

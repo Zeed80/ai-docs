@@ -18,6 +18,7 @@ import structlog
 from app.ai.cad_ir.png_render import rasterize_entities
 from app.ai.cad_ir.schema import CadIR, Entity
 from app.ai.cad_recognize.base import RecognizeOutput
+from app.ai.cad_recognize.topology import consolidate_entities
 from app.ai.drawing_vectorize import (
     _MIN_COVERAGE_PRECISION,
     _MIN_COVERAGE_RECALL,
@@ -99,8 +100,14 @@ class ArbitrationResult:
 _DISCREPANCY_RELATIVE_GAP = 0.30
 # A line model can cover every source pixel with thousands of tiny patch
 # fragments and still be unusable as CAD. Prefer the established CV topology
-# when neural expands the entity count this aggressively and CV itself remains
-# an honest, high-precision partial read.
+# when neural expands the entity count this aggressively — but ONLY when CV
+# is itself a COMPLETE read (full coverage bar). Comparing entity counts when
+# CV misses geometry confounds "fragmentation" with "more coverage": found
+# live (B0, 2026-07-12) — CV at recall 0.62 was being preferred over a
+# passing neural read at recall 0.98 purely because the fuller result had
+# proportionally more entities. Counts are compared on the neural proposal's
+# OWN entities (pre-CV-supplement) and after topology consolidation, so the
+# ratio reflects genuine leftover fragmentation, not supplemented families.
 _NEURAL_FRAGMENTATION_RATIO = 3.0
 
 # The lone-survivor gate exists to reject a genuinely fabricated result
@@ -125,6 +132,22 @@ _LONE_SURVIVOR_MIN_PRECISION = 0.3
 
 def _passes_lone_survivor_floor(score: CoverageScore) -> bool:
     return score.recall >= _LONE_SURVIVOR_MIN_RECALL and score.precision >= _LONE_SURVIVOR_MIN_PRECISION
+
+
+def _consolidated(out: RecognizeOutput | None) -> RecognizeOutput | None:
+    """Topology repair on a raw proposal BEFORE scoring/arbitration: both
+    backends over-fragment (patch borders, junction splits), and entity-count
+    heuristics below must compare real strokes, not fragments."""
+    if out is None or len(out.entities) < 2:
+        return out
+    entities, stats = consolidate_entities(out.entities)
+    return RecognizeOutput(
+        entities=entities,
+        keep_raster=out.keep_raster,
+        thin_px=out.thin_px,
+        thick_px=out.thick_px,
+        notes={**out.notes, "topology": stats},
+    )
 
 
 def _supplement_neural_with_cv(
@@ -173,7 +196,7 @@ def arbitrate_recognition(
     thing is flagged as a discrepancy for the review queue — the plan is
     explicit that disagreement must surface, not be resolved silently.
     """
-    cv_out = cv_recognizer.recognize(ink, exclusion_boxes)
+    cv_out = _consolidated(cv_recognizer.recognize(ink, exclusion_boxes))
     cv_score = (
         score_coverage(cv_out.entities, ink, cv_out.keep_raster, cv_out.thin_px, cv_out.thick_px)
         if cv_out is not None
@@ -183,12 +206,13 @@ def arbitrate_recognition(
     neural_out = None
     neural_available = True
     try:
-        neural_out = neural_recognizer.recognize(ink, exclusion_boxes)
+        neural_out = _consolidated(neural_recognizer.recognize(ink, exclusion_boxes))
     except Exception as exc:  # noqa: BLE001 — arbitration must survive a broken client
         logger.warning("neural_recognize_error", error=str(exc)[:200])
         neural_out = None
     if neural_out is None:
         neural_available = False
+    neural_own_count = len(neural_out.entities) if neural_out is not None else 0
     supplemented_types: set[str] = set()
     if neural_out is not None and cv_out is not None:
         neural_out, supplemented_types = _supplement_neural_with_cv(neural_out, cv_out)
@@ -233,9 +257,8 @@ def arbitrate_recognition(
     discrepancy = both_pass and rel_gap >= _DISCREPANCY_RELATIVE_GAP
     neural_fragmented = (
         n_cv > 0
-        and n_neural / n_cv >= _NEURAL_FRAGMENTATION_RATIO
-        and cv_score.recall >= _LONE_SURVIVOR_MIN_RECALL
-        and cv_score.precision >= _MIN_COVERAGE_PRECISION
+        and neural_own_count / n_cv >= _NEURAL_FRAGMENTATION_RATIO
+        and cv_score.ok
     )
 
     if neural_fragmented:
@@ -264,6 +287,7 @@ def arbitrate_recognition(
         neural_available=neural_available,
         discrepancy=discrepancy,
         notes={"neural_entities": n_neural, "cv_entities": n_cv,
+               "neural_own_entities": neural_own_count,
                "cv_supplement_types": sorted(supplemented_types),
                "neural_fragmented": neural_fragmented,
                "neural_score": (neural_score.recall, neural_score.precision),

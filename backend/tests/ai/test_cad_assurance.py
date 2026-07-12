@@ -11,7 +11,7 @@ from app.ai.cad_ir.assurance import (
     sanitize_incoming,
     set_assurance,
 )
-from app.ai.cad_ir.schema import Alternative, Point, Segment, TextEntity
+from app.ai.cad_ir.schema import SCHEMA_VERSION, Alternative, Point, Segment, TextEntity
 from app.ai.cad_validate import validate_ir
 
 
@@ -33,7 +33,9 @@ def test_v1_payload_migrates_assurance_from_origin() -> None:
         ],
     }
     ir = CadIR.model_validate(v1)
-    assert ir.schema_version == 2
+    # migration always lands on the CURRENT schema version (was pinned to 2
+    # and silently went stale when CAD IR v3 bumped SCHEMA_VERSION)
+    assert ir.schema_version == SCHEMA_VERSION
     assert ir.entities[0].assurance == "inferred"
     assert ir.entities[1].assurance == "human_approved"
     assert ir.entities[2].assurance == "constraint_validated"
