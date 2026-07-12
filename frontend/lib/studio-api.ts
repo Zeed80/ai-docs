@@ -513,6 +513,8 @@ export interface CadIr {
     coverage_precision: number | null;
   };
   review: IrReviewItem[];
+  parameters: { name: string; value: number; unit: "mm" | "deg" | "unitless"; expression?: string | null }[];
+  constraints: { id: string; kind: string; enabled: boolean }[];
   recognizer_used: string | null;
 }
 
@@ -607,6 +609,15 @@ export async function revertIr(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ revision }),
+  });
+  return jsonOrThrow<IrEnvelope>(res);
+}
+
+export async function solveIr(id: string): Promise<IrEnvelope> {
+  const res = await mutFetch(`${BASE}/${id}/ir/solve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
   });
   return jsonOrThrow<IrEnvelope>(res);
 }

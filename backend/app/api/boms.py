@@ -69,6 +69,7 @@ class BOMUpdate(BaseModel):
 
 class BOMOut(BaseModel):
     id: uuid.UUID
+    engineering_revision_id: uuid.UUID | None
     product_name: str
     product_code: str | None
     version: str

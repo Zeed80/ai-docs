@@ -21,6 +21,7 @@ import {
   patchIr,
   revertIr,
   runFullCheck,
+  solveIr,
   sourceUrl,
 } from "@/lib/studio-api";
 import CadModelViewer from "@/components/studio/CadModelViewer";
@@ -1868,6 +1869,35 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
                 : t("vector.run_full_check")}
             </button>
           </div>
+          {ir.constraints.length > 0 && (
+            <div className="flex items-center justify-between border-t border-white/10 pt-2">
+              <div className="text-[11px] text-zinc-400">
+                Ограничения: {ir.constraints.length}; параметры: {ir.parameters.length}
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setErr(null);
+                  try {
+                    const env = await solveIr(gen.id);
+                    setIr(env.ir);
+                    setRevision(env.revision);
+                    setFullCheckedRevision(null);
+                    onChanged();
+                  } catch (e) {
+                    setErr(String((e as Error).message || e));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="rounded bg-sky-600 px-2 py-1 text-[11px] text-white hover:bg-sky-500 disabled:opacity-50"
+              >
+                Перестроить
+              </button>
+            </div>
+          )}
           {levelGroups.map(([level, levelIssues]) => (
             <div key={level} className="space-y-1">
               <div className="text-[10px] uppercase tracking-wide text-zinc-500">

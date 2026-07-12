@@ -178,6 +178,24 @@ async def get_drawing(
     return DrawingWithFeaturesOut.model_validate(drawing)
 
 
+@router.get("/{drawing_id}/reconstruction-candidates")
+async def reconstruction_candidates(drawing_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> dict:
+    """Return transparent 3D hypotheses from all segmented views of a drawing."""
+    from app.ai.multiview_reconstruct import reconstruct_from_views
+    from app.db.models import DrawingViewSection
+
+    result = await db.execute(
+        select(Drawing).where(Drawing.id == drawing_id).options(
+            selectinload(Drawing.features).selectinload(DrawingFeature.dimensions)
+        )
+    )
+    drawing = result.scalar_one_or_none()
+    if not drawing:
+        raise HTTPException(404, "Чертёж не найден")
+    views = list((await db.execute(select(DrawingViewSection).where(DrawingViewSection.drawing_id == drawing_id))).scalars())
+    return {"candidates": [candidate.model_dump() for candidate in reconstruct_from_views(drawing.features, views)]}
+
+
 @router.patch(
     "/{drawing_id}",
     response_model=DrawingOut,

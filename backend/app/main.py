@@ -55,6 +55,7 @@ from app.api import (
     drawings,
     email,
     email_templates,
+    engineering,
     export,
     graph,
     health,
@@ -369,6 +370,7 @@ def create_app() -> FastAPI:
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"], dependencies=_auth)
     app.include_router(memory.router, prefix="/api/memory", tags=["memory"], dependencies=_auth)
     app.include_router(technology.router, prefix="/api/technology", tags=["technology"], dependencies=_auth)
+    app.include_router(engineering.router, prefix="/api/engineering", tags=["engineering"], dependencies=_auth)
     app.include_router(ntd.router, prefix="/api", tags=["ntd"], dependencies=_auth)
     app.include_router(telegram.router, prefix="/api/telegram", tags=["telegram"], dependencies=_auth)
     app.include_router(canvas.router, prefix="/api/canvas", tags=["canvas"], dependencies=_auth)

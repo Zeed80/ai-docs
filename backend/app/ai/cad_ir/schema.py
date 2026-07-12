@@ -15,7 +15,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 LineClass = Literal["contour", "axis", "dim", "hatch", "hidden", "thin"]
 WidthClass = Literal["main", "thin"]
@@ -227,6 +227,45 @@ class ReviewItem(BaseModel):
     resolved: bool = False
 
 
+ConstraintKind = Literal[
+    "coincident", "horizontal", "vertical", "parallel", "perpendicular",
+    "tangent", "concentric", "equal", "distance", "angle", "radius", "diameter",
+]
+
+
+class SketchPointRef(BaseModel):
+    """Stable sub-entity reference used by a geometric constraint."""
+
+    entity_id: str
+    point: Literal["p1", "p2", "center"]
+
+
+class CadParameter(BaseModel):
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    value: float
+    unit: Literal["mm", "deg", "unitless"] = "mm"
+    expression: str | None = None
+
+
+class GeometricConstraint(BaseModel):
+    id: str = Field(default_factory=_entity_id)
+    kind: ConstraintKind
+    refs: list[SketchPointRef] = Field(default_factory=list, max_length=2)
+    entity_ids: list[str] = Field(default_factory=list, max_length=2)
+    value: float | None = None
+    parameter: str | None = None
+    tolerance: float = Field(default=1e-3, gt=0)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _has_targets(self) -> "GeometricConstraint":
+        if not self.refs and not self.entity_ids:
+            raise ValueError("constraint requires refs or entity_ids")
+        if self.parameter and self.value is not None:
+            raise ValueError("constraint may use either value or parameter, not both")
+        return self
+
+
 class CadIR(BaseModel):
     schema_version: int = SCHEMA_VERSION
 
@@ -246,6 +285,8 @@ class CadIR(BaseModel):
             self.schema_version = SCHEMA_VERSION
         if self.scale is not None and self.scale_source is None and self.source.kind in ("blank", "spec"):
             self.scale_source = "sheet_format"
+        if self.schema_version < 3:
+            self.schema_version = SCHEMA_VERSION
         return self
     units: Literal["mm"] = "mm"
     # mm per source pixel; None until frame detection / manual input
@@ -257,6 +298,8 @@ class CadIR(BaseModel):
     entities: list[Entity] = Field(default_factory=list)
     validation: ValidationReportIR = Field(default_factory=ValidationReportIR)
     review: list[ReviewItem] = Field(default_factory=list)
+    parameters: list[CadParameter] = Field(default_factory=list)
+    constraints: list[GeometricConstraint] = Field(default_factory=list)
     # which recognizer produced revision 0: neural | cv | mixed | manual
     recognizer_used: str | None = None
 

@@ -295,6 +295,7 @@ class DrawingUpdate(BaseModel):
 class DrawingOut(BaseModel):
     id: uuid.UUID
     document_id: uuid.UUID | None = None
+    engineering_revision_id: uuid.UUID | None = None
     drawing_number: str | None = None
     revision: str | None = None
     filename: str

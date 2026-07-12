@@ -1092,6 +1092,7 @@ class IrPatchErrorCode(str, Enum):
     NOT_A_SEGMENT = "not_a_segment"
     FILLET_CHAMFER_GEOMETRY_INVALID = "fillet_chamfer_geometry_invalid"
     NO_ENCLOSED_REGION = "no_enclosed_region"
+    INVALID_CONSTRAINT = "invalid_constraint"
 
 
 def _patch_error(status: int, code: IrPatchErrorCode, message: str) -> HTTPException:
@@ -1102,6 +1103,7 @@ class IrPatchOp(BaseModel):
     op: Literal[
         "confirm", "delete", "update", "add", "set_scale",
         "move", "copy", "mirror", "fillet", "chamfer", "hatch_click",
+        "set_constraints", "set_parameters",
     ]
     entity_id: str | None = None
     entity_id_2: str | None = None  # second segment, for fillet/chamfer
@@ -1114,6 +1116,8 @@ class IrPatchOp(BaseModel):
     mirror_p2: dict[str, float] | None = None
     click_x: float | None = None  # hatch_click
     click_y: float | None = None
+    constraints: list[dict[str, Any]] | None = None
+    parameters: list[dict[str, Any]] | None = None
 
 
 class IrPatchRequest(BaseModel):
@@ -1160,7 +1164,7 @@ async def patch_ir(
     from pydantic import TypeAdapter, ValidationError
 
     from app.ai.cad_ir.assurance import sanitize_incoming, set_assurance
-    from app.ai.cad_ir.schema import Entity, ReviewItem
+    from app.ai.cad_ir.schema import CadParameter, Entity, GeometricConstraint, ReviewItem
     from app.ai.cad_validate import validate_ir
     from app.services import cad_ir_store
 
@@ -1303,6 +1307,21 @@ async def patch_ir(
                 )
             ir.entities.append(region)
             by_id[region.id] = len(ir.entities) - 1
+        elif op.op == "set_constraints":
+            _require(op.constraints, "constraints")
+            try:
+                ir.constraints = TypeAdapter(list[GeometricConstraint]).validate_python(op.constraints)
+            except ValidationError as exc:
+                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, f"Некорректные ограничения: {exc.errors()[:3]}") from exc
+        elif op.op == "set_parameters":
+            _require(op.parameters, "parameters")
+            try:
+                parameters = TypeAdapter(list[CadParameter]).validate_python(op.parameters)
+            except ValidationError as exc:
+                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, f"Некорректные параметры: {exc.errors()[:3]}") from exc
+            if len({parameter.name for parameter in parameters}) != len(parameters):
+                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, "Имена параметров должны быть уникальны")
+            ir.parameters = parameters
 
     validate_ir(ir)
     origin = "review" if all(o.op in ("confirm", "delete", "set_scale") for o in body.ops) else "editor"
@@ -1314,6 +1333,36 @@ async def patch_ir(
 
 class IrRevertRequest(BaseModel):
     revision: int = Field(ge=0)
+
+
+class IrSolveRequest(BaseModel):
+    max_nfev: int = Field(default=200, ge=1, le=2000)
+
+
+@router.post("/{generation_id}/ir/solve")
+async def solve_ir_constraints(
+    generation_id: uuid.UUID,
+    body: IrSolveRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Explicitly rebuild a constrained sketch and persist one new CAD revision."""
+    from app.ai.cad_ir.constraints import solve_constraints
+    from app.ai.cad_validate import validate_ir
+    from app.services import cad_ir_store
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    _revision, ir = await _load_current_ir(db, gen)
+    result = solve_constraints(ir, max_nfev=body.max_nfev)
+    if not result.converged:
+        raise HTTPException(422, {"message": "Ограничения не удалось согласовать", "solver": result.__dict__})
+    validate_ir(ir)
+    _invalidate_vector_approval(gen)
+    row = await cad_ir_store.save_revision(db, gen, ir, origin="solver", created_by=user.sub)
+    await db.commit()
+    return {"revision": row.revision, "summary": row.summary, "solver": result.__dict__, "ir": ir.model_dump()}
 
 
 @router.post("/{generation_id}/ir/revert")

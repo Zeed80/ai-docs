@@ -1,0 +1,116 @@
+"""Engineering-project API: immutable revisions and traceable projections."""
+
+import uuid
+
+import pytest
+from httpx import AsyncClient
+from app.db.models import Drawing, DrawingStatus
+
+
+@pytest.mark.asyncio
+async def test_revision_lifecycle_and_projection(client: AsyncClient, db_session):
+    project_response = await client.post("/api/engineering/projects", json={"name": "Корпус редуктора", "code": "ENG-001"})
+    assert project_response.status_code == 201
+    project_id = project_response.json()["id"]
+
+    first = await client.post(f"/api/engineering/projects/{project_id}/revisions", json={
+        "base_revision": None,
+        "payload": {"schema_version": 1, "parts": []},
+        "validation": {"issues": []},
+        "created_by": "engineer",
+    })
+    assert first.status_code == 201
+    revision = first.json()
+    assert revision["revision"] == 0
+    assert revision["status"] == "validated"
+
+    drawing = Drawing(filename="engineering-detail.dxf", format="dxf", status=DrawingStatus.analyzed)
+    db_session.add(drawing)
+    await db_session.commit()
+    projection = await client.post(f"/api/engineering/revisions/{revision['id']}/projections", json={
+        "projection_type": "drawing",
+        "entity_type": "drawing",
+        "entity_id": str(drawing.id),
+    })
+    assert projection.status_code == 201
+
+    approved = await client.post(f"/api/engineering/revisions/{revision['id']}/approve", json={"approved_by": "chief-engineer"})
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+
+    frozen = await client.post(f"/api/engineering/revisions/{revision['id']}/projections", json={
+        "projection_type": "drawing", "entity_type": "drawing", "entity_id": str(drawing.id)
+    })
+    assert frozen.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_revision_conflict_and_validation_gate(client: AsyncClient):
+    project = (await client.post("/api/engineering/projects", json={"name": "Фланец"})).json()
+    project_id = project["id"]
+    rejected = await client.post(f"/api/engineering/projects/{project_id}/revisions", json={"base_revision": 0})
+    assert rejected.status_code == 409
+
+    revision = (await client.post(f"/api/engineering/projects/{project_id}/revisions", json={
+        "base_revision": None,
+        "validation": {"issues": [{"severity": "error", "code": "SCALE_UNKNOWN"}]},
+    })).json()
+    assert revision["status"] == "needs_review"
+    approval = await client.post(f"/api/engineering/revisions/{revision['id']}/approve", json={"approved_by": "chief-engineer"})
+    assert approval.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_material_assignment_is_revisioned(client: AsyncClient):
+    material = (await client.post("/api/engineering/materials", json={
+        "designation": "40Х", "standard": "ГОСТ 4543-2016", "density_kg_m3": 7850,
+    })).json()
+    project = (await client.post("/api/engineering/projects", json={"name": "Шестерня"})).json()
+    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    assigned = await client.post(f"/api/engineering/revisions/{revision['id']}/materials", json={
+        "material_id": material["id"], "object_key": "part:gear",
+    })
+    assert assigned.status_code == 201
+    assert assigned.json()["material"]["designation"] == "40Х"
+
+
+@pytest.mark.asyncio
+async def test_assembly_reports_aabb_collision(client: AsyncClient):
+    project = (await client.post("/api/engineering/projects", json={"name": "Редуктор"})).json()
+    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    assembly = (await client.post(f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Главная"})).json()
+    for key, bounds in (("housing", {"x_min": 0, "x_max": 10, "y_min": 0, "y_max": 10, "z_min": 0, "z_max": 10}), ("shaft", {"x_min": 9, "x_max": 12, "y_min": 0, "y_max": 2, "z_min": 0, "z_max": 2})):
+        response = await client.post(f"/api/engineering/assemblies/{assembly['id']}/components", json={"instance_key": key, "designation": key, "bounds": bounds})
+        assert response.status_code == 201
+    report = await client.post(f"/api/engineering/assemblies/{assembly['id']}/validate")
+    assert report.status_code == 200
+    assert report.json()["collisions"] == [["housing", "shaft"]]
+
+
+@pytest.mark.asyncio
+async def test_release_validation_promotes_clean_revision(client: AsyncClient):
+    project = (await client.post("/api/engineering/projects", json={"name": "Втулка"})).json()
+    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    response = await client.post(f"/api/engineering/revisions/{revision['id']}/validate")
+    assert response.status_code == 200
+    assert response.json()["status"] == "passed"
+
+
+@pytest.mark.asyncio
+async def test_failed_analysis_case_blocks_release(client: AsyncClient):
+    material = (await client.post("/api/engineering/materials", json={
+        "designation": "Сталь", "yield_strength_mpa": 100,
+    })).json()
+    project = (await client.post("/api/engineering/projects", json={"name": "Тяга"})).json()
+    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    case = (await client.post(f"/api/engineering/revisions/{revision['id']}/analysis-cases", json={
+        "name": "Осевое растяжение", "material_id": material["id"],
+        "inputs": {"force_n": 2_000, "area_mm2": 10},
+    })).json()
+    run = await client.post(f"/api/engineering/analysis-cases/{case['id']}/run")
+    assert run.status_code == 200
+    assert run.json()["status"] == "failed"
+    assert run.json()["results"]["safety_factor"] == 0.5
+    validation = await client.post(f"/api/engineering/revisions/{revision['id']}/validate")
+    assert validation.status_code == 200
+    assert validation.json()["status"] == "failed"

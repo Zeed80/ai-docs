@@ -194,6 +194,221 @@ class SiteObject(UUIDPrimaryKey, TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
 
 
+# ── Engineering projects and immutable source revisions ─────────────────────
+
+
+class EngineeringProject(UUIDPrimaryKey, TimestampMixin, Base):
+    """Versioned engineering workspace bound to the existing business project.
+
+    ``Project`` remains the broad operational container used by documents and
+    procurement.  This model is intentionally narrower: it owns the canonical
+    engineering revision that projections (drawing, BOM, process plan, CAE)
+    are derived from.
+    """
+
+    __tablename__ = "engineering_projects"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_engineering_projects_code"),
+    )
+
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("projects.id"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
+    code: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="draft", index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+
+    revisions: Mapped[list["EngineeringRevision"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", order_by="EngineeringRevision.revision"
+    )
+
+
+class EngineeringRevision(UUIDPrimaryKey, TimestampMixin, Base):
+    """Immutable Engineering IR snapshot and its validation/approval state."""
+
+    __tablename__ = "engineering_revisions"
+    __table_args__ = (
+        Index("ix_engineering_revisions_project_revision", "engineering_project_id", "revision", unique=True),
+    )
+
+    engineering_project_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_projects.id"), nullable=False, index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_revision: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="draft", index=True)
+    origin: Mapped[str] = mapped_column(String(30), nullable=False, default="manual")
+    change_summary: Mapped[str | None] = mapped_column(Text)
+    # Canonical, versioned Engineering IR. Large binary artifacts remain in
+    # MinIO and are referenced from this document instead of copied into DB.
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    validation: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(255))
+    approved_by: Mapped[str | None] = mapped_column(String(255))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    project: Mapped["EngineeringProject"] = relationship(back_populates="revisions")
+    projections: Mapped[list["EngineeringProjection"]] = relationship(
+        back_populates="revision", cascade="all, delete-orphan"
+    )
+
+
+class EngineeringProjection(UUIDPrimaryKey, TimestampMixin, Base):
+    """Traceable link from an IR revision to an existing domain projection."""
+
+    __tablename__ = "engineering_projections"
+    __table_args__ = (
+        Index("ix_engineering_projection_target", "entity_type", "entity_id"),
+        UniqueConstraint("engineering_revision_id", "projection_type", "entity_type", "entity_id", name="uq_engineering_projection_target"),
+    )
+
+    engineering_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=False, index=True
+    )
+    projection_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    entity_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(30), nullable=False, default="current", index=True)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+
+    revision: Mapped["EngineeringRevision"] = relationship(back_populates="projections")
+
+
+class EngineeringMaterial(UUIDPrimaryKey, TimestampMixin, Base):
+    """Normalized material properties used by design, technology and CAE."""
+
+    __tablename__ = "engineering_materials"
+    __table_args__ = (UniqueConstraint("designation", "standard", name="uq_engineering_material_designation"),)
+
+    designation: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    standard: Mapped[str | None] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(Text)
+    density_kg_m3: Mapped[float | None] = mapped_column(Float)
+    elastic_modulus_mpa: Mapped[float | None] = mapped_column(Float)
+    yield_strength_mpa: Mapped[float | None] = mapped_column(Float)
+    tensile_strength_mpa: Mapped[float | None] = mapped_column(Float)
+    thermal_expansion_1_k: Mapped[float | None] = mapped_column(Float)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+
+
+class EngineeringMaterialAssignment(UUIDPrimaryKey, TimestampMixin, Base):
+    """Material assignment to an IR part/body in one immutable revision."""
+
+    __tablename__ = "engineering_material_assignments"
+    __table_args__ = (UniqueConstraint("engineering_revision_id", "object_key", name="uq_engineering_material_assignment"),)
+
+    engineering_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=False, index=True
+    )
+    material_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_materials.id"), nullable=False, index=True
+    )
+    object_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="manual")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+
+    revision: Mapped["EngineeringRevision"] = relationship()
+    material: Mapped["EngineeringMaterial"] = relationship()
+
+
+class EngineeringAssembly(UUIDPrimaryKey, TimestampMixin, Base):
+    """Assembly definition owned by one Engineering IR revision."""
+
+    __tablename__ = "engineering_assemblies"
+    __table_args__ = (UniqueConstraint("engineering_revision_id", "name", name="uq_engineering_assembly_name"),)
+
+    engineering_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    designation: Mapped[str | None] = mapped_column(String(160))
+    metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+
+    components: Mapped[list["EngineeringAssemblyComponent"]] = relationship(
+        back_populates="assembly", cascade="all, delete-orphan", order_by="EngineeringAssemblyComponent.sort_order"
+    )
+    mates: Mapped[list["EngineeringAssemblyMate"]] = relationship(
+        back_populates="assembly", cascade="all, delete-orphan"
+    )
+
+
+class EngineeringAssemblyComponent(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "engineering_assembly_components"
+    __table_args__ = (UniqueConstraint("engineering_assembly_id", "instance_key", name="uq_engineering_component_instance"),)
+
+    engineering_assembly_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_assemblies.id"), nullable=False, index=True
+    )
+    component_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=True, index=True
+    )
+    instance_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    designation: Mapped[str] = mapped_column(String(300), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    transform: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Axis-aligned component bounds in assembly coordinates. Populated from
+    # the CAD kernel for solids, or manually for imported/lightweight parts.
+    bounds: Mapped[dict | None] = mapped_column(JSON)
+    suppressed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+
+    assembly: Mapped["EngineeringAssembly"] = relationship(back_populates="components")
+
+
+class EngineeringAssemblyMate(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "engineering_assembly_mates"
+
+    engineering_assembly_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_assemblies.id"), nullable=False, index=True
+    )
+    mate_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    first_instance_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    second_instance_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="valid")
+
+    assembly: Mapped["EngineeringAssembly"] = relationship(back_populates="mates")
+
+
+class EngineeringValidationRun(UUIDPrimaryKey, TimestampMixin, Base):
+    """Immutable release-check report for one Engineering IR revision."""
+
+    __tablename__ = "engineering_validation_runs"
+
+    engineering_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="passed", index=True)
+    summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    findings: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    initiated_by: Mapped[str | None] = mapped_column(String(255))
+
+
+class EngineeringAnalysisCase(UUIDPrimaryKey, TimestampMixin, Base):
+    """Reproducible calculation case tied to geometry revision and material."""
+
+    __tablename__ = "engineering_analysis_cases"
+
+    engineering_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=False, index=True
+    )
+    material_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_materials.id"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    analysis_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="draft", index=True)
+    inputs: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    results: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    assumptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    solver: Mapped[str] = mapped_column(String(80), nullable=False, default="analytical")
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class DocumentVersion(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "document_versions"
 
@@ -1570,6 +1785,9 @@ class BOM(UUIDPrimaryKey, TimestampMixin, Base):
     document_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("documents.id")
     )
+    engineering_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=True, index=True
+    )
     approved_by: Mapped[str | None] = mapped_column(String(100))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
@@ -1643,6 +1861,9 @@ class ManufacturingProcessPlan(UUIDPrimaryKey, TimestampMixin, Base):
     tp_type: Mapped[str] = mapped_column(String(50), default="единичный", nullable=False, index=True)
     drawing_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("drawings.id"), nullable=True, index=True
+    )
+    engineering_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=True, index=True
     )
     blank_spec_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     normcontrol_status: Mapped[str] = mapped_column(
@@ -2235,6 +2456,9 @@ class Drawing(UUIDPrimaryKey, TimestampMixin, Base):
 
     document_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("documents.id"), nullable=True, index=True
+    )
+    engineering_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=True, index=True
     )
     drawing_number: Mapped[str | None] = mapped_column(String(200), index=True)
     revision: Mapped[str | None] = mapped_column(String(50))

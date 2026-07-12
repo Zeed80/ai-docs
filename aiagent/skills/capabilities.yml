@@ -678,6 +678,29 @@ capabilities:
           description: "Данные для create/update/approve/correction"
       required: [action]
 
+  - name: engineering
+    description: >
+      Инженерные проекты и их неизменяемые ревизии: единый Engineering IR
+      связывает чертёж, BOM и технологический процесс. Агент может создавать
+      только черновики ревизий и проекции; утверждение ревизии [GATE] всегда
+      требует человека и невозможно при блокирующих замечаниях проверки.
+    path: /api/agent/cap/engineering
+    method: POST
+    gate_actions: [revision_approve]
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "material_list | material_create | project_list | project_get | project_create | revision_create | projection_list | projection_create | material_assignment_list | material_assign | assembly_list | assembly_create | assembly_component_add | assembly_mate_add | assembly_validate | revision_validate | validation_run_list | analysis_case_list | analysis_case_create | analysis_case_run | revision_approve"
+        entity_id:
+          type: string
+          description: "ID инженерного проекта или ревизии, в зависимости от action"
+        body:
+          type: object
+          description: "Данные проекта, ревизии, проекции или утверждения"
+      required: [action]
+
   - name: analytics
     description: >
       Аналитика и отчётность: дашборд сегодняшнего дня (dashboard_today),

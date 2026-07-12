@@ -74,6 +74,8 @@ class CadCheckCode(str, Enum):
     DIM_CHAIN_MISMATCH = "DIM_CHAIN_MISMATCH"
     RA_INVALID = "RA_INVALID"
     TECH_RULE = "TECH_RULE"
+    CONSTRAINT_UNSATISFIED = "CONSTRAINT_UNSATISFIED"
+    CONSTRAINT_REFERENCE_INVALID = "CONSTRAINT_REFERENCE_INVALID"
     # level 6/7 additions (Ф7)
     NORMCONTROL_LLM = "NORMCONTROL_LLM"
     VLM_CRITIC = "VLM_CRITIC"
@@ -101,6 +103,8 @@ _CHECK_LEVEL: dict[str, int] = {
     "ESKD_TITLE_BLOCK_INCOMPLETE": 4,
     "ESKD_NO_CONTOUR_GEOMETRY": 4,
     "TECH_RULE": 5,
+    "CONSTRAINT_UNSATISFIED": 3,
+    "CONSTRAINT_REFERENCE_INVALID": 3,
     "NORMCONTROL_LLM": 6,
     "VLM_CRITIC": 7,
 }
@@ -255,6 +259,22 @@ def _check_dimension_chains(ir: CadIR) -> list[ValidationIssueIR]:
     return [_issue(CadCheckCode.DIM_CHAIN_MISMATCH, "warn", msg) for msg in check_dimension_chains(ir)]
 
 
+def _check_constraints(ir: CadIR) -> list[ValidationIssueIR]:
+    from app.ai.cad_ir.constraints import evaluate_constraints
+
+    issues: list[ValidationIssueIR] = []
+    for result in evaluate_constraints(ir):
+        if result.ok:
+            continue
+        code = (
+            CadCheckCode.CONSTRAINT_REFERENCE_INVALID
+            if "ссыл" in result.message or "не найден" in result.message or "применим" in result.message
+            else CadCheckCode.CONSTRAINT_UNSATISFIED
+        )
+        issues.append(_issue(code, "error", f"Ограничение {result.constraint_id}: {result.message}", list(result.entity_ids)))
+    return issues
+
+
 _RA_PATTERN = re.compile(r"\bRa\s*([\d.,]+)", re.IGNORECASE)
 
 
@@ -397,6 +417,7 @@ _CHECKS = (
     _check_roughness_values,
     _check_coverage,
     _check_dimension_chains,
+    _check_constraints,
 )
 
 

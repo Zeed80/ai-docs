@@ -57,6 +57,7 @@ class ProcessPlanApproveRequest(BaseModel):
 
 class ProcessPlanOut(ProcessPlanCreate):
     id: uuid.UUID
+    engineering_revision_id: uuid.UUID | None = None
     approved_by: str | None = None
     approved_at: datetime | None = None
     created_at: datetime
