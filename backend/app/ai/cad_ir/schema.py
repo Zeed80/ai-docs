@@ -169,7 +169,7 @@ class SourceInfo(BaseModel):
     generation_id: str | None = None
     image_width: int = Field(gt=0)
     image_height: int = Field(gt=0)
-    kind: Literal["scan", "photo", "blank", "spec"] = "scan"
+    kind: Literal["scan", "photo", "blank", "spec", "import"] = "scan"
 
 
 class SheetInfo(BaseModel):

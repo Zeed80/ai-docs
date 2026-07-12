@@ -56,7 +56,7 @@ export default function EngineeringPage() {
         <div>
           <h1 className="text-2xl font-semibold text-zinc-100">Инженерные проекты</h1>
         </div>
-        <Link href="/studio" className="rounded bg-sky-600 px-3 py-2 text-sm text-white hover:bg-sky-500">Открыть CAD</Link>
+        <Link href="/cad" className="rounded bg-sky-600 px-3 py-2 text-sm text-white hover:bg-sky-500">Открыть CAD</Link>
       </header>
 
       <form onSubmit={create} className="grid gap-3 border-b border-white/10 pb-5 sm:grid-cols-[minmax(0,1fr)_180px_auto]">

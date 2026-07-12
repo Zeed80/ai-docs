@@ -175,6 +175,20 @@ export async function uploadSource(
   return body.path;
 }
 
+export async function importDxf(
+  file: File,
+  title?: string,
+): Promise<Generation> {
+  const form = new FormData();
+  form.append("file", file);
+  if (title) form.append("title", title);
+  const res = await mutFetch(`${BASE}/import-dxf`, {
+    method: "POST",
+    body: form,
+  });
+  return jsonOrThrow<Generation>(res);
+}
+
 export async function generate(input: GenerateInput): Promise<Generation> {
   const res = await mutFetch(`${BASE}/generate`, {
     method: "POST",
@@ -405,7 +419,8 @@ export function sourceUrl(
   return `${BASE}/${id}/source?index=${index}&variant=${variant}`;
 }
 
-export type ArtifactKind = "dxf" | "dwg" | "svg" | "ir" | "step" | "fcstd" | "stl";
+export type ArtifactKind =
+  "dxf" | "dwg" | "svg" | "ir" | "step" | "fcstd" | "stl";
 
 export function artifactUrl(id: string, kind: ArtifactKind): string {
   return `${BASE}/${id}/artifact?kind=${encodeURIComponent(kind)}`;
@@ -513,7 +528,12 @@ export interface CadIr {
     coverage_precision: number | null;
   };
   review: IrReviewItem[];
-  parameters: { name: string; value: number; unit: "mm" | "deg" | "unitless"; expression?: string | null }[];
+  parameters: {
+    name: string;
+    value: number;
+    unit: "mm" | "deg" | "unitless";
+    expression?: string | null;
+  }[];
   constraints: {
     id: string;
     kind: string;
@@ -676,9 +696,10 @@ export async function compileFeatureTreeCandidate(
     let detail = `${res.status}`;
     try {
       const body = (await res.json()) as { detail?: unknown };
-      detail = typeof body.detail === "string"
-        ? body.detail
-        : JSON.stringify(body.detail ?? body);
+      detail =
+        typeof body.detail === "string"
+          ? body.detail
+          : JSON.stringify(body.detail ?? body);
     } catch {
       // Keep the status when the proxy returned a non-JSON error.
     }

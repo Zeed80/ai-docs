@@ -1501,6 +1501,51 @@ async def create_blank_sheet(
     return _gen_out(gen)
 
 
+@router.post("/import-dxf")
+async def import_dxf(
+    file: UploadFile = File(...),
+    title: str | None = Form(None),
+    case_id: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """CAD-file entry point of the /cad section: an uploaded DXF becomes a
+    CAD IR document at revision 0 — same lifecycle as a digitized scan or a
+    blank sheet, no pipeline/queue involved."""
+    from app.ai.cad_ir.adapters.from_dxf import DxfImportError, dxf_to_ir
+    from app.ai.cad_validate import validate_ir
+    from app.services import cad_ir_store
+
+    if not _can_use_studio(user):
+        raise HTTPException(403, "Недостаточно прав для графической студии")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Пустой файл")
+    if len(data) > 50 * 1024 * 1024:
+        raise HTTPException(413, "Файл больше 50 МБ")
+    try:
+        ir = dxf_to_ir(data)
+    except DxfImportError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    validate_ir(ir)
+
+    gen = ImageGeneration(
+        owner_sub=user.sub,
+        operation="vectorize",
+        status=ImageGenStatus.done,
+        prompt=title or (file.filename or "").rsplit(".", 1)[0] or None,
+        params={"imported": True, "source_filename": file.filename},
+        source_image_paths=[],
+        case_id=uuid.UUID(case_id) if case_id else None,
+    )
+    db.add(gen)
+    await db.flush()
+    await cad_ir_store.save_revision(db, gen, ir, origin="import", created_by=user.sub)
+    await db.commit()
+    await db.refresh(gen)
+    return _gen_out(gen)
+
+
 @router.post("/{generation_id}/iterate")
 async def iterate_generation(
     generation_id: uuid.UUID,

@@ -693,8 +693,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         db=db,
                         user_sub=owner_sub,
                         title="Оцифровка готова",
-                        body="Чертёж распознан — DXF и проверка доступны в студии.",
-                        action_url=f"/studio?id={generation_id}",
+                        body="Чертёж распознан — открыт в CAD-редакторе, DXF и проверка доступны.",
+                        action_url=f"/cad/{generation_id}",
                         notification_type="image_ready",
                     )
                 except Exception:  # noqa: BLE001

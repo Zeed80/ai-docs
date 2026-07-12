@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
@@ -18,8 +19,6 @@ import {
   resultUrl,
   sourceUrl,
 } from "@/lib/studio-api";
-
-import VectorWorkspace from "@/components/studio/VectorWorkspace";
 
 interface Props {
   gen: Generation;
@@ -388,9 +387,10 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
     gen.status === "done" ||
     gen.status === "cancelled";
 
-  // Vectorized (scan→DXF) drawings get the dedicated CAD workspace: overlay,
-  // review queue, editor tools and validation — diffusion iterate/workflow
-  // controls below make no sense for a deterministic CAD result.
+  // Vectorized (scan→DXF) drawings live in the standalone CAD editor at
+  // /cad/[id] — this panel only offers the jump there (plus delete), since
+  // diffusion iterate/workflow controls make no sense for a CAD result and
+  // the full editor no longer embeds into the studio overlay.
   if (gen.operation === "vectorize" && gen.status === "done") {
     return (
       <div className="flex flex-col gap-3">
@@ -406,7 +406,12 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
             ✕
           </button>
         </div>
-        <VectorWorkspace gen={gen} onChanged={onChanged} />
+        <Link
+          href={`/cad/${gen.id}`}
+          className="rounded bg-sky-600 px-3 py-2 text-center text-sm text-white hover:bg-sky-500"
+        >
+          {t("vector.open_in_cad")}
+        </Link>
         {canAct && (
           <button
             disabled={busy}

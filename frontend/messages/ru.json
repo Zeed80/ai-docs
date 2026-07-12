@@ -676,7 +676,8 @@
       "review_reason_low_confidence": "низкая уверенность",
       "review_reason_validation_error": "ошибка валидации",
       "review_reason_unresolved_hypothesis": "неоднозначная гипотеза",
-      "review_reason_diffusion_modified": "дорисовано диффузией"
+      "review_reason_diffusion_modified": "дорисовано диффузией",
+      "open_in_cad": "Открыть в CAD-редакторе"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",
@@ -791,5 +792,31 @@
     "lora_make_workflow": "Воркфлоу с LoRA",
     "lora_delete": "Удалить",
     "lora_resolution": "Разрешение"
+  },
+  "cad": {
+    "title": "CAD-редактор",
+    "subtitle": "Чертежи: оцифровки, пустые листы и импортированные DXF",
+    "open_studio": "Студия",
+    "new_sheet": "Новый лист",
+    "import_dxf": "Импорт DXF",
+    "search": "Поиск по названию…",
+    "empty": "Пока нет чертежей — создайте лист, импортируйте DXF или оцифруйте скан в студии.",
+    "open_in_studio": "Открыть в студии",
+    "open_in_cad": "Открыть в CAD-редакторе",
+    "back_to_list": "К списку",
+    "status_draft": "Черновик",
+    "status_accepted": "Принят",
+    "status_failed": "Ошибка",
+    "status_processing": "Оцифровка…",
+    "badge_imported": "Импорт DXF",
+    "badge_blank": "Ручной лист",
+    "badge_scan": "Оцифровка",
+    "sheet_format": "Формат",
+    "landscape": "Альбомная",
+    "with_frame": "Рамка и штамп",
+    "sheet_title": "Название",
+    "sheet_title_placeholder": "Например: Вал ведущий",
+    "create": "Создать",
+    "loading": "Загрузка…"
   }
 }

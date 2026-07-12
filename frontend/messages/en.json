@@ -676,7 +676,8 @@
       "review_reason_low_confidence": "low confidence",
       "review_reason_validation_error": "validation error",
       "review_reason_unresolved_hypothesis": "ambiguous hypothesis",
-      "review_reason_diffusion_modified": "diffusion-modified"
+      "review_reason_diffusion_modified": "diffusion-modified",
+      "open_in_cad": "Open in CAD editor"
     },
     "workflow": {
       "loading": "Loading workflows…",
@@ -791,5 +792,31 @@
     "lora_make_workflow": "Workflow with LoRA",
     "lora_delete": "Delete",
     "lora_resolution": "Resolution"
+  },
+  "cad": {
+    "title": "CAD editor",
+    "subtitle": "Drawings: digitized scans, blank sheets and imported DXF",
+    "open_studio": "Studio",
+    "new_sheet": "New sheet",
+    "import_dxf": "Import DXF",
+    "search": "Search by name…",
+    "empty": "No drawings yet — create a sheet, import a DXF or digitize a scan in the studio.",
+    "open_in_studio": "Open in studio",
+    "open_in_cad": "Open in CAD editor",
+    "back_to_list": "Back to list",
+    "status_draft": "Draft",
+    "status_accepted": "Accepted",
+    "status_failed": "Failed",
+    "status_processing": "Digitizing…",
+    "badge_imported": "DXF import",
+    "badge_blank": "Blank sheet",
+    "badge_scan": "Digitized",
+    "sheet_format": "Format",
+    "landscape": "Landscape",
+    "with_frame": "Frame and title block",
+    "sheet_title": "Title",
+    "sheet_title_placeholder": "e.g. Drive shaft",
+    "create": "Create",
+    "loading": "Loading…"
   }
 }

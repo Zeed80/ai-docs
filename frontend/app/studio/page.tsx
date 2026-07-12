@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import GenerationDetail from "@/components/studio/GenerationDetail";
@@ -37,15 +38,22 @@ export default function StudioPage() {
     "",
   );
   const [queueMineOnly, setQueueMineOnly] = useState(false);
+  const router = useRouter();
   const [selected, setSelected] = useState<Generation | null>(null);
-  // The vectorize CAD editor (VectorWorkspace, inside GenerationDetail) is a
-  // full editing surface — canvas, toolbar, properties, review queue,
-  // validation report — not a small image-preview-plus-buttons panel. The
-  // 420px/360px sidebar widths below exist for that latter, simpler case;
-  // confining the CAD editor to them left it unusable ("matchbox-sized").
-  const isVectorEditor =
-    selected?.operation === "vectorize" && selected?.status === "done";
   const [tab, setTab] = useState<Tab>("studio");
+  // The vectorize CAD editor is a full editing surface and lives at its own
+  // route now (/cad/[id]) — a finished digitization OPENS there instead of
+  // squeezing into the studio's detail overlay/sidebar.
+  const openGeneration = useCallback(
+    (g: Generation) => {
+      if (g.operation === "vectorize" && g.status === "done") {
+        router.push(`/cad/${g.id}`);
+        return;
+      }
+      setSelected(g);
+    },
+    [router],
+  );
   const [error, setError] = useState<string | null>(null);
   const [gpuBusy, setGpuBusy] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -275,19 +283,13 @@ export default function StudioPage() {
               onChanged={load}
               onOpenGeneration={(id) => {
                 getGeneration(id)
-                  .then((g) => setSelected(g))
+                  .then(openGeneration)
                   .catch(() => undefined);
               }}
             />
           </div>
           {selected && (
-            <div
-              className={
-                isVectorEditor
-                  ? "fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4"
-                  : "fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:left-auto xl:w-[420px] xl:border-l xl:border-white/10"
-              }
-            >
+            <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:left-auto xl:w-[420px] xl:border-l xl:border-white/10">
               <GenerationDetail
                 gen={selected}
                 onChanged={load}
@@ -350,24 +352,15 @@ export default function StudioPage() {
               <GenerationGallery
                 items={items}
                 selectedId={selected?.id ?? null}
-                onSelect={setSelected}
+                onSelect={openGeneration}
                 onDelete={onDelete}
               />
             </div>
             {selected && (
               // Mobile: a full-screen overlay so the actions (download/accept/
               // iterate) are reachable without scrolling past the whole gallery.
-              // Desktop (xl): the inline side panel as before — except the CAD
-              // editor (isVectorEditor), which stays a full-screen overlay on
-              // every breakpoint instead of squeezing into the 360px gallery
-              // column it would otherwise become "static" inside of.
-              <div
-                className={
-                  isVectorEditor
-                    ? "fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4"
-                    : "fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:static xl:z-auto xl:overflow-visible xl:rounded-lg xl:border xl:border-white/10 xl:bg-zinc-900/40 xl:h-fit"
-                }
-              >
+              // Desktop (xl): the inline side panel.
+              <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950/95 p-4 xl:static xl:z-auto xl:overflow-visible xl:rounded-lg xl:border xl:border-white/10 xl:bg-zinc-900/40 xl:h-fit">
                 <GenerationDetail
                   gen={selected}
                   onChanged={load}
