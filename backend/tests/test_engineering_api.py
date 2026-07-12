@@ -61,6 +61,10 @@ async def test_revision_can_reference_immutable_cad_ir_snapshot(client: AsyncCli
     })
     assert projection.status_code == 201
     assert projection.json()["entity_type"] == "cad_ir_revision"
+    validation = await client.post(f"/api/engineering/revisions/{revision['id']}/validate")
+    assert validation.status_code == 200
+    assert validation.json()["status"] == "failed"
+    assert validation.json()["findings"][0]["code"] == "CAD_IR_NOT_APPROVED"
 
 
 @pytest.mark.asyncio

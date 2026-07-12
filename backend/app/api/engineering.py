@@ -323,6 +323,21 @@ async def validate_revision(revision_id: uuid.UUID, db: AsyncSession = Depends(g
                 if not first.suppressed and not second.suppressed and first.bounds and second.bounds and _overlap(first.bounds, second.bounds):
                     findings.append({"code": "ASSEMBLY_INTERFERENCE", "severity": "error", "entity_ids": [str(first.id), str(second.id)], "message_ru": f"Коллизия {first.instance_key} / {second.instance_key}", "level": 2})
     projections = list((await db.execute(select(EngineeringProjection).where(EngineeringProjection.engineering_revision_id == revision_id))).scalars())
+    cad_revision_ids = [item.entity_id for item in projections if item.entity_type == "cad_ir_revision"]
+    if cad_revision_ids:
+        cad_revisions = list((await db.execute(
+            select(CadIrRevision).where(CadIrRevision.id.in_(cad_revision_ids))
+        )).scalars())
+        approved_cad_ids = {item.id for item in cad_revisions if item.approved_by and item.approved_at}
+        for cad_revision_id in cad_revision_ids:
+            if cad_revision_id not in approved_cad_ids:
+                findings.append({
+                    "code": "CAD_IR_NOT_APPROVED",
+                    "severity": "error",
+                    "entity_ids": [str(cad_revision_id)],
+                    "message_ru": "Связанная CAD IR ревизия не принята человеком",
+                    "level": 2,
+                })
     plan_ids = [item.entity_id for item in projections if item.entity_type == "manufacturing_process_plan"]
     if plan_ids:
         checks = list((await db.execute(select(ManufacturingCheckResult).where(ManufacturingCheckResult.process_plan_id.in_(plan_ids), ManufacturingCheckResult.status == "open"))).scalars())
