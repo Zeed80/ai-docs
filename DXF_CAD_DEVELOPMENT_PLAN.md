@@ -1,6 +1,6 @@
 # План развития «Оцифровка в DXF» и CAD-контура
 
-**Статус:** действующий подробный план. **Сверка:** 2026-07-12.
+**Статус:** действующий подробный план. **Сверка:** 2026-07-12 (все статусы верифицированы по коду и git-истории).
 **Источники:** `deep-research-report.md`, `dorabotka_eskd.txt`, текущая реализация.
 `[x]` выполнено и проверено; `[-]` частично; `[ ]` не выполнено.
 
@@ -40,15 +40,45 @@
 
 **Приемка A:** параметризованный эскиз редактируется без JSON; solver объясняет конфликт; DXF открывается независимым CAD без потери основной геометрии и слоев.
 
+### I. Самодостаточный CAD-редактор (/cad)
+
+Сейчас редактор -- монолит `frontend/components/studio/VectorWorkspace.tsx` (~2450 строк, ~40 useState), открывается только полноэкранным оверлеем внутри `/studio` по клику на vectorize-генерацию; ввод значений через `window.prompt`; отдельного маршрута, командной строки, multi-select и открытия произвольного DXF нет. Цель: отдельный AutoCAD-подобный раздел приложения, для которого оцифровка -- лишь один из источников документов. Backend IR API (`/api/image-gen/{id}/ir` + patch/revert/solve/full-check) уже покрывает все нужные операции.
+
+- [ ] **I1. Раздел `/cad` и документная модель.** Страница-список чертежей (vectorize-генерации, пустые листы `blank_sheet`, импортированные DXF/DWG -- ingress уже есть в бэкенде): поиск, статусы draft/review/accepted, создание нового листа, импорт файла. Страница `/cad/[id]` -- standalone-редактор, монтируется по id без студии; deep-links из студии, push-уведомлений («Оцифровка готова») и `/engineering`.
+- [ ] **I2. Декомпозиция монолита.** `VectorWorkspace.tsx` -> `frontend/components/cad/`: CadCanvas, Toolbar, CommandLine, LayersPanel, PropertiesPanel, ReviewPanel, ParametersPanel, FeatureTreePanel, StatusBar; общее состояние через store (zustand или useReducer-контекст); единственный путь мутаций `apply(IrPatchOp[])` и серверные append-only ревизии сохраняются. Студия рендерит ссылку «Открыть в CAD» вместо полноэкранного оверлея.
+- [ ] **I3. AutoCAD-подобный UX.** Командная строка вместо `window.prompt`: команды-алиасы (line/l, circle/c, copy, fillet...), ввод координат (абсолютные `100,50`, относительные `@50,0`, полярные `@50<45`), history и автодополнение. Статус-бар: переключатели OSNAP/ORTHO/GRID, текущие координаты, масштаб. Multi-select: window/crossing рамки, Shift+клик, property grid для группы (закрывает A3). Контекстное меню правой кнопки.
+- [ ] **I4. Слои и печать.** Панель слоев с lock/freeze, цвет/lineweight/linetype, именование по ЕСКД и DXF layer mapping (закрывает A4); печать/экспорт PDF из редактора.
+- [ ] **I5. Жизненный цикл документа.** Создать с нуля -> редактировать -> сохранить (ревизии) -> экспорт DXF/SVG/PDF без прохождения через оцифровку; переименование и метаданные документа.
+
+**Приемка I:** редактор открывается по прямому URL без студии; чертеж создается с нуля и выпускается в DXF; результат оцифровки открывается по ссылке из уведомления; command line выполняет полный цикл построения без мыши; Playwright smoke на desktop/mobile.
+
+Примечание: A1--A4 выполняются уже внутри нового `/cad`, а не в studio-оверлее.
+
 ### B. Надежная оцифровка raster/PDF
 
-- [-] **B1. Ingest и предобработка.** Есть входные форматы и базовый pipeline; завершить deskew, denoise, DPI/scale evidence и нормализацию страниц.
-- [-] **B2. Семантическая сегментация.** Довести frame/title block, views, text, dimensions, hatch и symbols до измеряемого качества.
-- [-] **B3. Геометрия.** Усилить primitive fitting, centerline tracing и topology repair вместо outline tracing.
-- [ ] **B4. Corpus и метрики.** Эталонные реальные сканы/синтетические дефекты, IR/DXF ground truth, entity precision/recall, topology correctness, OCR/dimension accuracy, DXF opening rate, review effort и false-accept rate.
-- [ ] **B5. Active learning.** Изолировать принятые правки как обучающие примеры; никаких автоматических production-изменений без review.
+Текущее состояние: пиксельное покрытие на golden-файлах приемлемое (technical-vectorizer + CV-арбитраж, 5/5 test_vector_files проходят порог coverage), но практический результат неудовлетворителен: рваная/фрагментированная геометрия («мусор» вместо чертежа), отсутствие семантики (типы линий, размеры), полные отказы на части файлов (5/19 фото baseline) и неудобная проверка. Пункты конкретизированы под эти дефекты.
 
-**Приемка B:** каждый recognized entity имеет provenance/confidence; критичные размеры не принимаются автоматически; качество публикуется на golden set.
+- [ ] **B0. Диагностика на golden-наборе прежде улучшений.** Прогон `backend/scripts/eval_vectorize.py` по всем корпусам (`test_vector_files/` -- 5 файлов, `cleanup_test_files/` -- 19 фото + 10 DWG ground truth); визуальные side-by-side HTML-отчеты (исходник vs вектор, heatmap непокрытых чернил); per-file фиксация причин «мусора»: фрагментация, ложные сущности, потерянные дуги, шум.
+- [-] **B1. Ingest, предобработка и устранение полных отказов.** Есть входные форматы, deskew/denoise и adaptive-retry бинаризации; довести:
+  - [ ] Каскад бинаризации Otsu -> adaptive -> Sauvola/tiling вместо одиночного ретрая.
+  - [ ] Смягчить density gate `_MAX_INK_FRACTION`: деградация в частичный результат с review вместо отказа «лист слишком плотный или пустой».
+  - [ ] Dewarp/автоповорот фото, DPI/scale evidence и нормализация страниц.
+  - Цель: 0 полных отказов на корпусе; любой файл дает хотя бы частичный review-результат.
+- [-] **B2. Семантическая сегментация и семантика чертежа.** Frame/title block и OCR-текст есть; довести:
+  - [ ] Детерминированная классификация типов линий по профилю пробелов вдоль цепочки (сплошная/штриховая/штрихпунктирная) -- не opt-in VLM.
+  - [ ] Реконструкция размеров: детекция стрелок и выносных линий, ассоциация OCR-текста с размерной линией -> настоящая размерная сущность со значением и сверкой с геометрией.
+  - [ ] Штриховка как паттерн (угол/шаг/тип) вместо raster passthrough; symbols (шероховатость, сварка) до измеряемого качества.
+- [-] **B3. Чистая геометрия вместо мусора.** Centerline tracing и primitive fitting есть; довести:
+  - [ ] Topology repair pass после распознавания: слияние коллинеарных цепочек, снап конечных точек к узлам/пересечениям, удаление дублей и шумовых коротких сегментов, сборка polyline из цепочек, замыкание контуров.
+  - [ ] Пере-фиттинг цепочек сегментов в дуги/окружности поверх neural-выхода (least-squares/RANSAC): нейромодель выдает только отрезки, дуги сейчас целиком на CV.
+  - [ ] Повторная оценка curve-модели или Deep Sketch Vectorization как второго кандидата в арбитраже.
+  - Метрика успеха -- entity-level (число и тип сущностей против ground truth), не только пиксельный recall.
+- [-] **B4. Corpus и метрики.** Есть `eval_vectorize.py` (cv|neural|arbitrate, DWG ground truth через dwg2dxf) и baseline `test-results/eval_vectorize_baseline.json`; довести: IR/DXF ground truth для test_vector_files, entity precision/recall, topology correctness, OCR/dimension accuracy, DXF opening rate, review effort, false-accept rate и автоматический regression-прогон.
+- [ ] **B5. Active learning.** Изолировать принятые правки как обучающие примеры; никаких автоматических production-изменений без review.
+- [ ] **B6. Review UX в редакторе.** Наложение вектора на исходный растр (слайдер прозрачности), прием/отклонение сущностей по области, подтверждение масштаба одним шагом (выбор формата листа), очередь review с подсветкой на канвасе; живет внутри `/cad` (связка с I2 ReviewPanel).
+- [ ] **B7. Дообучение technical-vectorizer.** Fine-tune предобученной line-модели на собственном корпусе реальных фото (источник примеров -- B5); только после измеримой базы B0/B4.
+
+**Приемка B:** каждый recognized entity имеет provenance/confidence; критичные размеры не принимаются автоматически; на golden-корпусе 0 полных отказов; entity-level precision/recall публикуются; результат на чистом цифровом чертеже (`detal_126.png`) визуально неотличим от исходника; типы линий и размеры присутствуют как сущности, а не как текст поверх отрезков.
 
 ### C. ЕСКД, нормоконтроль и выпуск
 
@@ -72,7 +102,7 @@
 ### E. PDM/PLM и сборки
 
 - [-] **E1. Revision foundation** и CAD snapshot gate готовы.
-- [ ] **E2. UI проекций.** В проекте выбрать и показать CAD IR/Drawing/BOM/technology, current/stale, manifest и acceptance evidence.
+- [-] **E2. UI проекций.** Backend готов (`/api/engineering` projection_list/create + capability router); построить UI: в проекте выбрать и показать CAD IR/Drawing/BOM/technology, current/stale, manifest и acceptance evidence.
 - [ ] **E3. Change management.** Change request/order, причина, impact analysis, affected revisions, reviewers, signatures, supersession.
 - [ ] **E4. EBOM/MBOM.** Positions, quantity, units, variants, substitutes, reference designators, where-used и mapping к технологии/закупке.
 - [-] **E5. Assemblies.** Есть instances/mates и AABB collision; добавить exact B-Rep interference, mate solve, DOF, exploded view и спецификацию.
@@ -102,12 +132,17 @@
 
 ## Очередность следующих работ
 
-1. E2: UI связей инженерной ревизии с конкретными CAD/Drawing/BOM/technology артефактами.
-2. A1: полный constraint editor и диагностика solver.
-3. C2-C4: формализованный ЕСКД-профиль, штамп и структурные аннотации.
-4. B4-B5/H1: golden corpus и измеримые метрики до расширения AI pipeline.
-5. D1-D4: многовидовая увязка, B-Rep и STEP после стабилизации 2D-регрессии.
-6. E3-E5, затем F1-F4, G1-G4 и H2-H4.
+Приоритет пересмотрен 2026-07-12 по фактической боли: оцифровка дает «мусор» вместо чертежа, редактор не самодостаточен.
+
+1. B0 + B1 + B3: диагностика на golden-наборе, устранение полных отказов и чистая геометрия.
+2. I1-I3: самодостаточный `/cad` -- маршруты, декомпозиция монолита, командная строка и multi-select.
+3. B2 + B6: семантика чертежа (типы линий, размеры, штриховка) и review UX в редакторе.
+4. I4-I5 + A1: слои/печать, жизненный цикл документа, полный constraint editor и диагностика solver.
+5. E2: UI связей инженерной ревизии с конкретными CAD/Drawing/BOM/technology артефактами.
+6. C2-C4: формализованный ЕСКД-профиль, штамп и структурные аннотации.
+7. B4/B7/H1: entity-level метрики, дообучение technical-vectorizer и golden regression.
+8. D1-D4: многовидовая увязка, B-Rep и STEP после стабилизации 2D-регрессии.
+9. E3-E5, затем F1-F4, G1-G4 и H2-H4.
 
 ## Доказательства текущего состояния
 
