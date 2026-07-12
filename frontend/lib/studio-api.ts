@@ -514,7 +514,16 @@ export interface CadIr {
   };
   review: IrReviewItem[];
   parameters: { name: string; value: number; unit: "mm" | "deg" | "unitless"; expression?: string | null }[];
-  constraints: { id: string; kind: string; enabled: boolean }[];
+  constraints: {
+    id: string;
+    kind: string;
+    refs: { entity_id: string; point: "p1" | "p2" | "center" }[];
+    entity_ids: string[];
+    value: number | null;
+    parameter: string | null;
+    tolerance: number;
+    enabled: boolean;
+  }[];
   recognizer_used: string | null;
 }
 
@@ -582,7 +591,9 @@ export type IrPatchOp =
       entity_id_2: string;
       value: number;
     }
-  | { op: "hatch_click"; click_x: number; click_y: number };
+  | { op: "hatch_click"; click_x: number; click_y: number }
+  | { op: "set_parameters"; parameters: CadIr["parameters"] }
+  | { op: "set_constraints"; constraints: CadIr["constraints"] };
 
 export async function getIr(id: string): Promise<IrEnvelope> {
   const res = await apiFetch(`${BASE}/${id}/ir`);

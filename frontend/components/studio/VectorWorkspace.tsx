@@ -472,6 +472,9 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [scaleInput, setScaleInput] = useState("");
   const [textInput, setTextInput] = useState("");
+  const [parameterName, setParameterName] = useState("");
+  const [parameterValue, setParameterValue] = useState("");
+  const [constraintKind, setConstraintKind] = useState<"horizontal" | "vertical">("horizontal");
   const [reviewFilter, setReviewFilter] = useState<string>("all");
   const [reviewPage, setReviewPage] = useState(0);
   const [visibleLayers, setVisibleLayers] = useState<Set<IrLineClass>>(
@@ -744,6 +747,40 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function addParameter() {
+    if (!ir || !parameterName.trim()) return;
+    const value = Number(parameterValue);
+    if (!Number.isFinite(value)) {
+      setErr("Введите числовое значение параметра");
+      return;
+    }
+    const name = parameterName.trim();
+    const next = [
+      ...ir.parameters.filter((item) => item.name !== name),
+      { name, value, unit: "mm" as const, expression: null },
+    ];
+    void apply([{ op: "set_parameters", parameters: next }]);
+    setParameterName("");
+    setParameterValue("");
+  }
+
+  function addSelectedConstraint() {
+    if (!ir || !selected || selected.type !== "segment") return;
+    void apply([{
+      op: "set_constraints",
+      constraints: [...ir.constraints, {
+        id: `constraint_${crypto.randomUUID()}`,
+        kind: constraintKind,
+        refs: [],
+        entity_ids: [selected.id],
+        value: null,
+        parameter: null,
+        tolerance: 0.001,
+        enabled: true,
+      }],
+    }]);
   }
 
   async function buildCadModel() {
@@ -1896,6 +1933,39 @@ export default function VectorWorkspace({ gen, onChanged }: Props) {
               >
                 Перестроить
               </button>
+            </div>
+          )}
+          <div className="space-y-2 border-t border-white/10 pt-2">
+            <div className="text-[11px] text-zinc-400">Параметры эскиза</div>
+            <div className="flex flex-wrap gap-1">
+              {ir.parameters.map((parameter) => (
+                <button
+                  key={parameter.name}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setParameterName(parameter.name);
+                    setParameterValue(String(parameter.value));
+                  }}
+                  className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-zinc-300 hover:bg-white/10"
+                >
+                  {parameter.name}={parameter.value} {parameter.unit}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-[minmax(0,1fr)_86px_auto] gap-1">
+              <input value={parameterName} onChange={(event) => setParameterName(event.target.value)} placeholder="Имя" className="min-w-0 rounded border border-white/10 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-100" />
+              <input value={parameterValue} onChange={(event) => setParameterValue(event.target.value)} inputMode="decimal" placeholder="мм" className="min-w-0 rounded border border-white/10 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-100" />
+              <button type="button" disabled={busy} onClick={addParameter} className="rounded bg-white/10 px-2 py-1 text-[11px] text-zinc-200 hover:bg-white/20 disabled:opacity-50">Сохранить</button>
+            </div>
+          </div>
+          {selected?.type === "segment" && (
+            <div className="flex items-center justify-between gap-2 border-t border-white/10 pt-2">
+              <select value={constraintKind} onChange={(event) => setConstraintKind(event.target.value as "horizontal" | "vertical")} disabled={busy} className="rounded border border-white/10 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-200">
+                <option value="horizontal">Горизонтальность</option>
+                <option value="vertical">Вертикальность</option>
+              </select>
+              <button type="button" disabled={busy} onClick={addSelectedConstraint} className="rounded bg-white/10 px-2 py-1 text-[11px] text-zinc-200 hover:bg-white/20 disabled:opacity-50">Ограничить отрезок</button>
             </div>
           )}
           {levelGroups.map(([level, levelIssues]) => (
