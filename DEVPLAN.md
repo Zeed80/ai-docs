@@ -1,5 +1,7 @@
 # План разработки и To Do — AI Manufacturing Workspace
 
+> Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
+
 ## Контекст
 
 **Источник требований**: `plan_claude.md` (v2.0, 20 разделов, §1–§20).
