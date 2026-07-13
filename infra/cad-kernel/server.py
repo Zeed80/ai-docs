@@ -20,11 +20,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Feature(BaseModel):
+    # Strict boundary is deliberate (sandboxed kernel); the traceability
+    # fields the backend attaches (param_provenance — D2) are accepted but
+    # unused here: the kernel builds geometry from ``params`` only.
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["extrude", "hole", "boss", "pocket", "fillet", "chamfer"]
     source_entity_ids: list[str] = Field(default_factory=list, max_length=500)
     params: dict[str, Any] = Field(default_factory=dict)
+    param_provenance: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(ge=0, le=1)
 
 
@@ -35,6 +39,7 @@ class Candidate(BaseModel):
     score: float = Field(ge=0, le=1)
     label: str = Field(min_length=1, max_length=500)
     missing_data: list[str] = Field(default_factory=list, max_length=500)
+    correspondences: list[str] = Field(default_factory=list, max_length=500)
 
 
 class CompileRequest(BaseModel):
