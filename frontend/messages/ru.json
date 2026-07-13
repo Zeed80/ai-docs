@@ -699,7 +699,12 @@
       "annotations": "Аннотации ЕСКД",
       "annotation_add": "Добавить аннотацию",
       "annotation_datums": "Базы (напр. A B)",
-      "type_annotation": "Аннотация"
+      "type_annotation": "Аннотация",
+      "release_download": "Выпуск (zip)",
+      "release_hint": "Скачать выпускной пакет: DXF/SVG/CAD IR + манифест с хешами",
+      "release_reproducible": "✓ Воспроизводимый выпуск",
+      "release_not_reproducible": "⚠ Артефакты не совпали с исходной ревизией",
+      "release_approved_by": "Принял: {who}"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

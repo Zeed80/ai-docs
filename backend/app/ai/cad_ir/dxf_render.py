@@ -12,6 +12,8 @@ becomes a DXF arc [-max, -min].
 
 from __future__ import annotations
 
+import re
+
 from app.ai.cad_ir.dim_render import arrow_len_mm, dimension_label
 from app.ai.cad_ir.annotations import annotation_text
 from app.ai.cad_ir.schema import (
@@ -52,6 +54,11 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
     doc.units = units.MM
     doc.header["$INSUNITS"] = units.MM
     doc.header["$MEASUREMENT"] = 1
+    # C5: pin the two document GUIDs so the DXF is byte-reproducible from the
+    # same IR (ezdxf randomizes them per write otherwise). The version marker
+    # timestamp is normalized after write in _normalize_dxf.
+    doc.header["$FINGERPRINTGUID"] = "{00000000-0000-0000-0000-000000000000}"
+    doc.header["$VERSIONGUID"] = "{00000000-0000-0000-0000-000000000001}"
     for name, color, linetype in _LAYER_DEFS:
         if name not in doc.layers:
             doc.layers.add(name, color=color, linetype=linetype)
@@ -163,4 +170,19 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
 
     buf = io.StringIO()
     doc.write(buf)
-    return buf.getvalue().encode("utf-8")
+    return _normalize_dxf(buf.getvalue()).encode("utf-8")
+
+
+# ezdxf stamps a per-write timestamp and regenerates $VERSIONGUID on every
+# write; neutralize both (plus $FINGERPRINTGUID for good measure) so the same
+# IR yields byte-identical DXF (C5 reproducibility).
+_EZDXF_MARKER = re.compile(r"(\d+\.\d+\.\d+) @ \d{4}-\d{2}-\d{2}T[\d:.+-]+")
+_GUID_HEADER = re.compile(
+    r"(\$(?:VERSION|FINGERPRINT)GUID\r?\n\s*2\r?\n)\{[0-9A-Fa-f-]+\}"
+)
+
+
+def _normalize_dxf(text: str) -> str:
+    text = _EZDXF_MARKER.sub(r"\1 @ 1970-01-01T00:00:00+00:00", text)
+    text = _GUID_HEADER.sub(r"\g<1>{00000000-0000-0000-0000-000000000000}", text)
+    return text

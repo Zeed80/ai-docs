@@ -9,10 +9,13 @@ import {
   IrEntity,
   IrLineClass,
   IrPatchOp,
+  ReleaseManifest,
   acceptVectorize,
   artifactUrl,
   getIr,
+  getReleaseManifest,
   patchIr,
+  releasePackageUrl,
   revertIr,
   runFullCheck,
   solveIr,
@@ -118,6 +121,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
       : null,
   );
   const [err, setErr] = useState<string | null>(null);
+  const [release, setRelease] = useState<ReleaseManifest | null>(null);
   // Multi-select (A3): the whole selection set; `selected` below is the
   // single-entity view used by the property grid when exactly one is picked.
   const [selection, setSelection] = useState<Set<string>>(new Set());
@@ -230,6 +234,22 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // C5: fetch the release manifest once the drawing is accepted, so the
+  // reproducibility + approval trail shows next to the download button.
+  useEffect(() => {
+    if (!gen.accepted) {
+      setRelease(null);
+      return;
+    }
+    let cancelled = false;
+    getReleaseManifest(gen.id)
+      .then((m) => !cancelled && setRelease(m))
+      .catch(() => !cancelled && setRelease(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [gen.accepted, gen.id, revision]);
 
   function clearDrafts() {
     setDraftStart(null);
@@ -1738,7 +1758,46 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             {t("vector.accept")}
           </button>
         )}
+        {gen.accepted && (
+          <a
+            href={releasePackageUrl(gen.id)}
+            download={`release-${gen.id}.zip`}
+            className="ml-auto rounded bg-emerald-600/90 px-3 py-1.5 text-sm text-white hover:bg-emerald-500"
+            title={t("vector.release_hint")}
+          >
+            {t("vector.release_download")}
+          </a>
+        )}
       </div>
+
+      {gen.accepted && release && (
+        <div className="rounded border border-emerald-500/20 bg-emerald-500/5 p-2 text-[11px] text-zinc-300 space-y-0.5">
+          <div className="flex items-center gap-2">
+            <span
+              className={
+                release.fully_reproducible
+                  ? "text-emerald-300"
+                  : "text-amber-300"
+              }
+            >
+              {release.fully_reproducible
+                ? t("vector.release_reproducible")
+                : t("vector.release_not_reproducible")}
+            </span>
+            <span className="text-zinc-500">· DXF {release.dxf_version}</span>
+          </div>
+          <div className="font-mono text-zinc-500">
+            manifest {release.manifest_sha256.slice(0, 16)}…
+          </div>
+          {release.approval.accepted_by && (
+            <div className="text-zinc-500">
+              {t("vector.release_approved_by", {
+                who: release.approval.accepted_by,
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

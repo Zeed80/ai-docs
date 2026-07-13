@@ -267,6 +267,48 @@ async def test_patch_ir_add_invalid_annotation_flags_validation(client, fake_sto
     assert "ESKD_ANNOTATION_INVALID" in codes
 
 
+async def test_release_manifest_blocks_until_accepted(client, fake_storage, monkeypatch):
+    # C5: manifest is 409 before acceptance, then reproducible after.
+    async def _no_llm(png_bytes, **kwargs):
+        return []
+
+    monkeypatch.setattr("app.ai.cad_validate.run_llm_review_levels", _no_llm)
+
+    gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
+    gen_id = gen["id"]
+    await client.patch(
+        f"/api/image-gen/{gen_id}/ir",
+        json={"ops": [{"op": "add", "entity": {
+            "type": "segment", "p1": {"x": 100, "y": 100}, "p2": {"x": 500, "y": 100},
+            "line_class": "contour", "width_class": "main",
+        }}]},
+    )
+    blocked = await client.get(f"/api/image-gen/{gen_id}/release-manifest")
+    assert blocked.status_code == 409
+
+    # Full-check + accept, then the manifest releases.
+    await client.post(f"/api/image-gen/{gen_id}/ir/full-check")
+    accepted = await client.post(f"/api/image-gen/{gen_id}/accept-vectorize")
+    assert accepted.status_code == 200, accepted.text
+
+    resp = await client.get(f"/api/image-gen/{gen_id}/release-manifest")
+    assert resp.status_code == 200
+    m = resp.json()
+    assert m["fully_reproducible"] is True
+    assert m["dxf_version"] == "R2010"
+    assert m["approval"]["accepted_by"]
+    assert m["manifest_sha256"]
+
+    pkg = await client.get(f"/api/image-gen/{gen_id}/release-package")
+    assert pkg.status_code == 200
+    assert pkg.headers["content-type"] == "application/zip"
+    import io
+    import zipfile
+    zf = zipfile.ZipFile(io.BytesIO(pkg.content))
+    assert "manifest.json" in zf.namelist()
+    assert "drawing.dxf" in zf.namelist()
+
+
 async def _add_segment(client, gen_id, p1, p2):
     resp = await client.patch(
         f"/api/image-gen/{gen_id}/ir",

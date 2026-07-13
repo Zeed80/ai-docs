@@ -731,6 +731,86 @@ async def accept_vectorize_generation(
     return _gen_out(gen)
 
 
+async def _build_manifest(db: AsyncSession, gen: ImageGeneration) -> dict:
+    from app.ai.cad_validate import validate_ir
+    from app.services.cad_release import ReleaseBlocked, build_release_manifest
+
+    revision, ir = await _load_current_ir(db, gen)
+    validate_ir(ir)  # freshest report; blocking issues are re-derived here
+    try:
+        return build_release_manifest(
+            generation_id=str(gen.id),
+            revision=revision.revision,
+            ir=ir,
+            stored_ir_sha256=revision.ir_sha256,
+            stored_artifact_hashes=revision.artifact_hashes or {},
+            accepted=bool(gen.accepted),
+            accepted_by=gen.accepted_by,
+            accepted_at=gen.accepted_at.isoformat() if gen.accepted_at else None,
+            accepted_revision=gen.accepted_revision,
+            approved_by=revision.approved_by,
+            approved_at=revision.approved_at.isoformat() if revision.approved_at else None,
+        )
+    except ReleaseBlocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/{generation_id}/release-manifest")
+async def get_release_manifest(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """C5: reproducible release manifest for an accepted CAD drawing —
+    CAD IR + artifact hashes (with a deterministic re-render check),
+    validation report and approval trail, all under one manifest hash.
+    409 until the drawing is accepted and free of blocking ЕСКД issues."""
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    if gen.operation != "vectorize":
+        raise HTTPException(400, "Выпуск определён только для оцифрованных чертежей.")
+    return await _build_manifest(db, gen)
+
+
+@router.get("/{generation_id}/release-package")
+async def get_release_package(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> Response:
+    """C5: the release bundle as a zip — DXF (R2010), SVG, the CAD IR JSON and
+    manifest.json. Same release gate as the manifest."""
+    import io
+    import json
+    import zipfile
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    if gen.operation != "vectorize":
+        raise HTTPException(400, "Выпуск определён только для оцифрованных чертежей.")
+    manifest = await _build_manifest(db, gen)
+    params = gen.params or {}
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        for kind, name in (("dxf", "drawing.dxf"), ("svg", "drawing.svg"), ("ir", "cad_ir.json")):
+            path = params.get(f"{kind}_path")
+            if path:
+                try:
+                    zf.writestr(name, download_file(path))
+                except Exception:  # noqa: BLE001 — a missing derived file must not sink the bundle
+                    pass
+    data = buf.getvalue()
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="release-{gen.id}.zip"'},
+    )
+
+
 def _invalidate_vector_approval(gen: ImageGeneration) -> None:
     """A new current revision is unchecked and never inherits approval."""
     if gen.operation != "vectorize":

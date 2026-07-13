@@ -699,7 +699,12 @@
       "annotations": "ЕСКД annotations",
       "annotation_add": "Add annotation",
       "annotation_datums": "Datums (e.g. A B)",
-      "type_annotation": "Annotation"
+      "type_annotation": "Annotation",
+      "release_download": "Release (zip)",
+      "release_hint": "Download release package: DXF/SVG/CAD IR + hash manifest",
+      "release_reproducible": "✓ Reproducible release",
+      "release_not_reproducible": "⚠ Artifacts do not match the source revision",
+      "release_approved_by": "Accepted by: {who}"
     },
     "workflow": {
       "loading": "Loading workflows…",

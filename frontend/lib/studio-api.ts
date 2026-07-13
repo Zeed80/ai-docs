@@ -671,6 +671,28 @@ export async function solveIr(id: string): Promise<IrEnvelope> {
   return jsonOrThrow<IrEnvelope>(res);
 }
 
+export interface ReleaseManifest {
+  manifest_version: string;
+  generation_id: string;
+  revision: number;
+  dxf_version: string;
+  fully_reproducible: boolean;
+  manifest_sha256: string;
+  cad_ir: { sha256: string | null; reproducible: boolean };
+  artifacts: Record<string, { reproducible: boolean }>;
+  validation: { eskd_profile_version: string | null; issue_count: number };
+  approval: { accepted_by: string | null; accepted_at: string | null };
+}
+
+export async function getReleaseManifest(id: string): Promise<ReleaseManifest> {
+  const res = await apiFetch(`${BASE}/${id}/release-manifest`);
+  return jsonOrThrow<ReleaseManifest>(res);
+}
+
+export function releasePackageUrl(id: string): string {
+  return `${BASE}/${id}/release-package`;
+}
+
 export async function runFullCheck(id: string): Promise<IrEnvelope> {
   const res = await mutFetch(`${BASE}/${id}/ir/full-check`, { method: "POST" });
   return jsonOrThrow<IrEnvelope>(res);
