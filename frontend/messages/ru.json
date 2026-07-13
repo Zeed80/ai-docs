@@ -563,6 +563,8 @@
       "tool_trim": "Обрезать",
       "tool_extend": "Продлить",
       "tool_offset": "Смещение",
+      "tool_split": "Разделить",
+      "tool_join": "Соединить",
       "tool_pattern_linear": "Линейный массив",
       "tool_pattern_polar": "Полярный массив",
       "sketch_not_a_segment": "Эта операция работает только с отрезками — выберите прямую линию",

@@ -14,10 +14,12 @@ from app.ai.cad_ir.transform import (
     duplicate_entity,
     extend_segment,
     fillet,
+    join_segments,
     mirror_entity,
     offset_entity,
     pattern_linear,
     pattern_polar,
+    split_segment,
     translate_entity,
     trim_segment,
 )
@@ -76,6 +78,34 @@ def test_pattern_polar_full_circle_divides_by_count() -> None:
     # 90° step: first copy's p1 (10,0) → (0,10)
     assert copies[0].p1.x == pytest.approx(0, abs=1e-6)
     assert copies[0].p1.y == pytest.approx(10, abs=1e-6)
+
+
+def test_split_segment_at_interior_point() -> None:
+    a, b = split_segment(_seg(0, 0, 100, 0), Point(x=60, y=5))
+    assert (a.p1.x, a.p2.x) == pytest.approx((0, 60))
+    assert (b.p1.x, b.p2.x) == pytest.approx((60, 100))
+
+
+def test_split_rejects_endpoint() -> None:
+    with pytest.raises(SketchOpError):
+        split_segment(_seg(0, 0, 100, 0), Point(x=0, y=0))
+
+
+def test_join_collinear_becomes_one_segment() -> None:
+    j = join_segments(_seg(0, 0, 50, 0), _seg(50, 0, 100, 0))
+    assert j.type == "segment"
+    assert sorted([j.p1.x, j.p2.x]) == pytest.approx([0, 100])
+
+
+def test_join_corner_becomes_polyline() -> None:
+    j = join_segments(_seg(0, 0, 50, 0), _seg(50, 0, 50, 40))
+    assert j.type == "polyline"
+    assert [(p.x, p.y) for p in j.points] == pytest.approx([(0, 0), (50, 0), (50, 40)])
+
+
+def test_join_rejects_disconnected_segments() -> None:
+    with pytest.raises(SketchOpError):
+        join_segments(_seg(0, 0, 50, 0), _seg(200, 0, 300, 0))
 
 
 def test_translate_segment() -> None:

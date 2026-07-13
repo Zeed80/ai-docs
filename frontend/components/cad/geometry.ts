@@ -19,6 +19,8 @@ export type Tool =
   | "trim"
   | "extend"
   | "offset"
+  | "split"
+  | "join"
   | "pattern_linear"
   | "pattern_polar"
   | "polyline"

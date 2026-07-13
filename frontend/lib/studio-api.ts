@@ -679,6 +679,8 @@ export type IrPatchOp =
       click_y: number;
       value: number;
     }
+  | { op: "split"; entity_id: string; click_x: number; click_y: number }
+  | { op: "join"; entity_id: string; entity_id_2: string }
   | { op: "set_construction"; entity_id: string }
   | { op: "hatch_click"; click_x: number; click_y: number }
   | { op: "set_parameters"; parameters: CadIr["parameters"] }

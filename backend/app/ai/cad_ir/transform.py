@@ -13,7 +13,15 @@ from __future__ import annotations
 
 import math
 
-from app.ai.cad_ir.schema import Arc, Circle, Entity, Point, Segment, new_entity_id
+from app.ai.cad_ir.schema import (
+    Arc,
+    Circle,
+    Entity,
+    Point,
+    Polyline,
+    Segment,
+    new_entity_id,
+)
 
 
 def _translate_point(p: Point, dx: float, dy: float) -> Point:
@@ -320,3 +328,59 @@ def pattern_polar(
     full = abs(abs(total_angle_deg) - 360.0) < 1e-6
     step = total_angle_deg / count if full else total_angle_deg / (count - 1)
     return [rotate_entity(entity, center, step * i) for i in range(1, count)]
+
+
+def split_segment(seg: Segment, point: Point) -> tuple[Segment, Segment]:
+    """Split ``seg`` at the projection of ``point`` onto it into two segments.
+    The split must land strictly inside — you can't split at an endpoint."""
+    t = _param_on(seg, point)
+    if not (0.001 < t < 0.999):
+        raise SketchOpError("точка деления должна лежать на отрезке, не на конце")
+    mid = Point(
+        x=seg.p1.x + t * (seg.p2.x - seg.p1.x),
+        y=seg.p1.y + t * (seg.p2.y - seg.p1.y),
+    )
+    common = {
+        "line_class": seg.line_class,
+        "width_class": seg.width_class,
+        "origin": "human",
+    }
+    return (
+        Segment(p1=seg.p1.model_copy(), p2=mid, **common),
+        Segment(p1=mid.model_copy(), p2=seg.p2.model_copy(), **common),
+    )
+
+
+_JOIN_SNAP_PX = 4.0
+_JOIN_COLLINEAR_CROSS = 0.02  # sin of the angle between the two segments
+
+
+def join_segments(a: Segment, b: Segment) -> Entity:
+    """Join two segments that share an endpoint. Collinear ones merge into a
+    single Segment (endpoints being the two far ends); a real corner becomes a
+    3-point Polyline. Refuses segments that don't touch."""
+    ends = [
+        (a.p1, a.p2, b.p1, b.p2),
+        (a.p1, a.p2, b.p2, b.p1),
+        (a.p2, a.p1, b.p1, b.p2),
+        (a.p2, a.p1, b.p2, b.p1),
+    ]
+    shared_a, far_a, shared_b, far_b = min(
+        ends, key=lambda c: math.hypot(c[0].x - c[2].x, c[0].y - c[2].y)
+    )
+    if math.hypot(shared_a.x - shared_b.x, shared_a.y - shared_b.y) > _JOIN_SNAP_PX:
+        raise SketchOpError("отрезки не имеют общей вершины — соединять нечего")
+    ux1, uy1 = _unit(shared_a.x - far_a.x, shared_a.y - far_a.y)
+    ux2, uy2 = _unit(far_b.x - shared_b.x, far_b.y - shared_b.y)
+    common = {
+        "line_class": a.line_class,
+        "width_class": a.width_class,
+        "origin": "human",
+    }
+    if abs(ux1 * uy2 - uy1 * ux2) <= _JOIN_COLLINEAR_CROSS:
+        # collinear → one straight segment spanning both
+        return Segment(p1=far_a.model_copy(), p2=far_b.model_copy(), **common)
+    corner = Point(x=(shared_a.x + shared_b.x) / 2, y=(shared_a.y + shared_b.y) / 2)
+    return Polyline(
+        points=[far_a.model_copy(), corner, far_b.model_copy()], closed=False, **common
+    )

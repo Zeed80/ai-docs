@@ -1219,7 +1219,7 @@ class IrPatchOp(BaseModel):
         "confirm", "delete", "update", "add", "set_scale", "set_sheet_format",
         "move", "copy", "mirror", "fillet", "chamfer", "hatch_click",
         "trim", "extend", "offset", "pattern_linear", "pattern_polar",
-        "set_construction",
+        "split", "join", "set_construction",
         "set_constraints", "set_parameters", "set_title_block",
     ]
     sheet_format: str | None = None  # A4..A0, for set_sheet_format
@@ -1522,6 +1522,45 @@ async def patch_ir(
             for copy_entity in copies:
                 ir.entities.append(copy_entity)
                 by_id[copy_entity.id] = len(ir.entities) - 1
+        elif op.op == "split":
+            from app.ai.cad_ir.schema import Point, Segment
+            from app.ai.cad_ir.transform import SketchOpError, split_segment
+
+            idx = _index_of(op.entity_id)
+            _require(op.click_x, "click_x")
+            _require(op.click_y, "click_y")
+            target = ir.entities[idx]
+            if not isinstance(target, Segment):
+                raise _patch_error(
+                    400, IrPatchErrorCode.NOT_A_SEGMENT, "split работает только с отрезком"
+                )
+            try:
+                part_a, part_b = split_segment(target, Point(x=op.click_x, y=op.click_y))
+            except SketchOpError as exc:
+                raise _patch_error(422, IrPatchErrorCode.SKETCH_OP_INVALID, str(exc)) from exc
+            ir.entities[idx] = part_a
+            ir.entities.append(part_b)
+            by_id = {e.id: i for i, e in enumerate(ir.entities)}
+        elif op.op == "join":
+            from app.ai.cad_ir.schema import Segment
+            from app.ai.cad_ir.transform import SketchOpError, join_segments
+
+            idx1 = _index_of(op.entity_id)
+            idx2 = _index_of(op.entity_id_2)
+            seg1, seg2 = ir.entities[idx1], ir.entities[idx2]
+            if not isinstance(seg1, Segment) or not isinstance(seg2, Segment):
+                raise _patch_error(
+                    400, IrPatchErrorCode.NOT_A_SEGMENT, "join работает только с двумя отрезками"
+                )
+            try:
+                joined = join_segments(seg1, seg2)
+            except SketchOpError as exc:
+                raise _patch_error(422, IrPatchErrorCode.SKETCH_OP_INVALID, str(exc)) from exc
+            # replace the first, drop the second
+            ir.entities[idx1] = joined
+            ir.entities.pop(idx2)
+            ir.review = [r for r in ir.review if r.entity_id != seg2.id]
+            by_id = {e.id: i for i, e in enumerate(ir.entities)}
         elif op.op == "set_construction":
             idx = _index_of(op.entity_id)
             entity = ir.entities[idx]

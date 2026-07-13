@@ -111,6 +111,11 @@ const COMMAND_TOOLS: Record<string, Tool> = {
   offset: "offset",
   смещение: "offset",
   подобие: "offset",
+  split: "split",
+  разделить: "split",
+  разбить: "split",
+  join: "join",
+  соединить: "join",
   array: "pattern_linear",
   массив: "pattern_linear",
   parray: "pattern_polar",
@@ -791,7 +796,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
       tool === "fillet" ||
       tool === "chamfer" ||
       tool === "trim" ||
-      tool === "extend"
+      tool === "extend" ||
+      tool === "join"
     ) {
       // Clicking blank canvas cancels an in-progress pick — the actual
       // picks happen on EntityShape's onClick (segments only).
@@ -932,6 +938,36 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
       setErr(t("vector.pattern_polar_pick_center"));
       return;
     }
+    if (tool === "split") {
+      const clicked = ir.entities.find((x) => x.id === id);
+      if (!clicked || clicked.type !== "segment") {
+        setErr(t("vector.sketch_not_a_segment"));
+        return;
+      }
+      const pt = svgPoint(ev);
+      if (pt)
+        void apply([
+          { op: "split", entity_id: id, click_x: pt.x, click_y: pt.y },
+        ]);
+      return;
+    }
+    if (tool === "join") {
+      const clicked = ir.entities.find((x) => x.id === id);
+      if (!clicked || clicked.type !== "segment") {
+        setErr(t("vector.sketch_not_a_segment"));
+        return;
+      }
+      setErr(null);
+      if (!pickedSegmentId) {
+        setPickedSegmentId(id);
+        return;
+      }
+      if (pickedSegmentId === id) return;
+      const firstId = pickedSegmentId;
+      setPickedSegmentId(null);
+      void apply([{ op: "join", entity_id: firstId, entity_id_2: id }]);
+      return;
+    }
   }
 
   /** Free-form command line input: tool aliases, actions or a coordinate. */
@@ -1041,6 +1077,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     { key: "trim", label: t("vector.tool_trim") },
     { key: "extend", label: t("vector.tool_extend") },
     { key: "offset", label: t("vector.tool_offset") },
+    { key: "split", label: t("vector.tool_split") },
+    { key: "join", label: t("vector.tool_join") },
     { key: "pattern_linear", label: t("vector.tool_pattern_linear") },
     { key: "pattern_polar", label: t("vector.tool_pattern_polar") },
     { key: "polyline", label: t("vector.tool_polyline") },

@@ -563,6 +563,8 @@
       "tool_trim": "Trim",
       "tool_extend": "Extend",
       "tool_offset": "Offset",
+      "tool_split": "Split",
+      "tool_join": "Join",
       "tool_pattern_linear": "Linear array",
       "tool_pattern_polar": "Polar array",
       "sketch_not_a_segment": "This operation only works on segments — pick a straight line",
