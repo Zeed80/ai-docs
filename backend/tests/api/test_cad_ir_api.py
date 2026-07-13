@@ -198,6 +198,41 @@ async def test_patch_ir_set_sheet_format_rejects_unknown(client, fake_storage):
     assert resp.status_code == 400
 
 
+async def test_patch_ir_set_title_block_fills_stamp(client, fake_storage):
+    # C3: filling the основная надпись stores structured fields, renders the
+    # stamp labels, and clears the "title block incomplete" ЕСКД finding.
+    gen = (await client.post(
+        "/api/image-gen/blank-sheet", json={"format": "A4", "with_frame": True}
+    )).json()
+    gen_id = gen["id"]
+
+    resp = await client.patch(
+        f"/api/image-gen/{gen_id}/ir",
+        json={"ops": [{"op": "set_title_block", "title_block": {
+            "designation": "АБВГ.301256.001",
+            "name": "Вал ведущий",
+            "material": "Сталь 45 ГОСТ 1050",
+            "scale": "1:2",
+            "mass_kg": 3.4,
+        }}]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    ir = body["ir"]
+    assert ir["sheet"]["title_block"]["fields"]["designation"] == "АБВГ.301256.001"
+    labels = [
+        e for e in ir["entities"]
+        if e["type"] == "text" and "title_block_text" in (e.get("evidence") or [])
+    ]
+    assert any(e["text"] == "Вал ведущий" for e in labels)
+    codes = {i["code"] for i in ir["validation"]["issues"]}
+    assert "ESKD_TITLE_BLOCK_INCOMPLETE" not in codes
+
+    # DXF export carries the stamp text.
+    dxf = fake_storage[(await client.get(f"/api/image-gen/{gen_id}")).json()["params"]["dxf_path"]]
+    assert "Вал ведущий".encode() in dxf
+
+
 async def _add_segment(client, gen_id, p1, p2):
     resp = await client.patch(
         f"/api/image-gen/{gen_id}/ir",

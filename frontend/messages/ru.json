@@ -692,7 +692,10 @@
       "constraint_vertical": "Вертикальность",
       "constraint_segment": "Ограничить отрезок",
       "set_sheet_format": "Подтвердить формат листа {fmt} и вычислить масштаб",
-      "source_opacity": "Прозрачность исходника"
+      "source_opacity": "Прозрачность исходника",
+      "title_block": "Основная надпись (штамп)",
+      "title_mass": "Масса, кг",
+      "title_apply": "Заполнить штамп"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

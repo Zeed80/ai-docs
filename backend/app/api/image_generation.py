@@ -1103,9 +1103,10 @@ class IrPatchOp(BaseModel):
     op: Literal[
         "confirm", "delete", "update", "add", "set_scale", "set_sheet_format",
         "move", "copy", "mirror", "fillet", "chamfer", "hatch_click",
-        "set_constraints", "set_parameters",
+        "set_constraints", "set_parameters", "set_title_block",
     ]
     sheet_format: str | None = None  # A4..A0, for set_sheet_format
+    title_block: dict[str, Any] | None = None  # form-1 fields, for set_title_block
     entity_id: str | None = None
     entity_id_2: str | None = None  # second segment, for fillet/chamfer
     entity: dict[str, Any] | None = None
@@ -1352,6 +1353,13 @@ async def patch_ir(
             if len({parameter.name for parameter in parameters}) != len(parameters):
                 raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, "Имена параметров должны быть уникальны")
             ir.parameters = parameters
+        elif op.op == "set_title_block":
+            from app.ai.cad_ir.title_block import apply_title_block
+
+            _require(op.title_block, "title_block")
+            apply_title_block(ir, op.title_block)
+            # entity list changed underneath the by_id cache; rebuild it.
+            by_id = {e.id: i for i, e in enumerate(ir.entities)}
 
     validate_ir(ir)
     origin = "review" if all(o.op in ("confirm", "delete", "set_scale", "set_sheet_format") for o in body.ops) else "editor"

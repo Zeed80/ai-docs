@@ -602,6 +602,7 @@ export type IrPatchOp =
   | { op: "add"; entity: Partial<IrEntity> }
   | { op: "set_scale"; scale: number }
   | { op: "set_sheet_format"; sheet_format: string }
+  | { op: "set_title_block"; title_block: Record<string, string | number> }
   | { op: "move"; entity_id: string; dx: number; dy: number }
   | { op: "copy"; entity_id: string; dx?: number; dy?: number }
   | {

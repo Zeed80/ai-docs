@@ -405,7 +405,19 @@ def _check_title_block_complete(ir: CadIR) -> list[ValidationIssueIR]:
     it just doesn't compete for attention with a real ЕСКД violation."""
     if not ir.sheet.frame:
         return []
-    region = (ir.sheet.title_block or {}).get("region")
+    tb = ir.sheet.title_block or {}
+    # C3: when structured fields exist, judge completeness by the two
+    # mandatory ГОСТ 2.104 identifiers (designation + name) rather than by
+    # "any text somewhere in the region".
+    fields = tb.get("fields")
+    if isinstance(fields, dict):
+        if str(fields.get("designation") or "").strip() and str(fields.get("name") or "").strip():
+            return []
+        return [eskd_issue(
+            CadCheckCode.ESKD_TITLE_BLOCK_INCOMPLETE,
+            "Основная надпись: не заполнены обозначение и/или наименование",
+        )]
+    region = tb.get("region")
     if not isinstance(region, dict):
         return []
     x0, y0, x1, y1 = region.get("x0"), region.get("y0"), region.get("x1"), region.get("y1")

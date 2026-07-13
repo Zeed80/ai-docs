@@ -24,6 +24,7 @@ import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
 import EntityShape from "@/components/cad/EntityShape";
 import ReviewPanel from "@/components/cad/ReviewPanel";
 import StatusBar from "@/components/cad/StatusBar";
+import TitleBlockPanel from "@/components/cad/TitleBlockPanel";
 import ValidationPanel from "@/components/cad/ValidationPanel";
 import {
   DIM_TOOL_KIND,
@@ -1596,6 +1597,13 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         busy={busy}
         onApply={(ops) => void apply(ops)}
         onFocus={focusEntity}
+        t={t}
+      />
+
+      <TitleBlockPanel
+        ir={ir}
+        busy={busy}
+        onApply={(ops) => void apply(ops)}
         t={t}
       />
 

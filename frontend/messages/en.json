@@ -692,7 +692,10 @@
       "constraint_vertical": "Vertical",
       "constraint_segment": "Constrain segment",
       "set_sheet_format": "Confirm sheet format {fmt} and derive scale",
-      "source_opacity": "Source opacity"
+      "source_opacity": "Source opacity",
+      "title_block": "Title block (stamp)",
+      "title_mass": "Mass, kg",
+      "title_apply": "Fill title block"
     },
     "workflow": {
       "loading": "Loading workflows…",
