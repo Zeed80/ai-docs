@@ -95,23 +95,52 @@ def _prune_noise_segments(segments: list[Segment]) -> tuple[list[Segment], int, 
             dropped_degen += 1
             continue
         kept.append(seg)
-    # Endpoint-bucketed dedup: two segments are duplicates when both endpoints
-    # coincide within tolerance (either orientation). Bucket by rounded
-    # endpoints so this stays near-linear instead of O(n^2) on 1300 segments.
-    seen: dict[tuple, Segment] = {}
-    deduped: list[Segment] = []
-    dropped_dup = 0
-    tol = max(1, int(round(_DUPLICATE_TOL_PX)))
-    for seg in kept:
-        a = (int(round(seg.p1.x / tol)), int(round(seg.p1.y / tol)))
-        b = (int(round(seg.p2.x / tol)), int(round(seg.p2.y / tol)))
-        key = (a, b) if a <= b else (b, a)
-        if key in seen:
-            dropped_dup += 1
-            continue
-        seen[key] = seg
-        deduped.append(seg)
+    deduped, dropped_dup = _dedup_segments(kept)
     return deduped, dropped_degen, dropped_dup
+
+
+def _dedup_segments(segments: list[Segment]) -> tuple[list[Segment], int]:
+    """Drop segments whose both endpoints coincide (either orientation) with an
+    already-kept segment within _DUPLICATE_TOL_PX — the validator's exact
+    GEOM_DUPLICATE predicate. Endpoints are bucketed on a grid the tolerance
+    wide and each candidate is checked against its own bucket AND the eight
+    neighbours, so a duplicate straddling a bucket boundary is still caught
+    (plain rounding missed those). Near-linear: few candidates per bucket."""
+    tol = _DUPLICATE_TOL_PX
+    cell = max(1.0, tol)
+    buckets: dict[tuple[int, int], list[Segment]] = {}
+    kept: list[Segment] = []
+    dropped = 0
+
+    def _cell(p: Point) -> tuple[int, int]:
+        return (int(p.x // cell), int(p.y // cell))
+
+    def _same(a: Segment, b: Segment) -> bool:
+        fwd = (
+            abs(a.p1.x - b.p1.x) <= tol and abs(a.p1.y - b.p1.y) <= tol
+            and abs(a.p2.x - b.p2.x) <= tol and abs(a.p2.y - b.p2.y) <= tol
+        )
+        rev = (
+            abs(a.p1.x - b.p2.x) <= tol and abs(a.p1.y - b.p2.y) <= tol
+            and abs(a.p2.x - b.p1.x) <= tol and abs(a.p2.y - b.p1.y) <= tol
+        )
+        return fwd or rev
+
+    for seg in segments:
+        c1 = _cell(seg.p1)
+        candidates: list[Segment] = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                candidates.extend(buckets.get((c1[0] + dx, c1[1] + dy), ()))
+        if any(_same(seg, other) for other in candidates):
+            dropped += 1
+            continue
+        kept.append(seg)
+        buckets.setdefault(c1, []).append(seg)
+        c2 = _cell(seg.p2)
+        if c2 != c1:
+            buckets.setdefault(c2, []).append(seg)
+    return kept, dropped
 
 
 def _angle_deg(seg: Segment) -> float:
@@ -577,6 +606,11 @@ def consolidate_entities(entities: list[Entity]) -> tuple[list[Entity], dict[str
     #    become collinear, then merge them into one clean long stroke.
     straight = _snap_canonical(straight)
     merged = _merge_collinear_segments(straight)
+    # Snapping/merging can drive two near-parallel fragments onto the same line
+    # and leave overlapping copies — dedup once more so pipeline-induced
+    # duplicates don't reach the validator either.
+    merged, dropped_dup_post = _dedup_segments(merged)
+    dropped_dup += dropped_dup_post
     kept, dash_lines = _recognize_dash_patterns(merged)
     all_arcs = arcs + [e for e in fitted if isinstance(e, Arc)]
     fitted_non_arc = [e for e in fitted if not isinstance(e, Arc)]
