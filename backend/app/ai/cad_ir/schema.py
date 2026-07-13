@@ -303,6 +303,10 @@ class GeometricConstraint(BaseModel):
     parameter: str | None = None
     tolerance: float = Field(default=1e-3, gt=0)
     enabled: bool = True
+    # A1: a driven (reference) dimension measures the geometry instead of
+    # driving it — excluded from the solver and always "satisfied", it just
+    # reports the current value. Default is a driving dimension.
+    driven: bool = False
 
     @model_validator(mode="after")
     def _has_targets(self) -> "GeometricConstraint":
@@ -311,6 +315,15 @@ class GeometricConstraint(BaseModel):
         if self.parameter and self.value is not None:
             raise ValueError("constraint may use either value or parameter, not both")
         return self
+
+
+class SketchConfiguration(BaseModel):
+    """A1: a named set of parameter values (like a SolidWorks configuration).
+    Activating it writes ``values`` onto the matching parameters and re-solves,
+    so one sketch can carry a family of sizes."""
+
+    name: str = Field(min_length=1, max_length=80)
+    values: dict[str, float] = Field(default_factory=dict)
 
 
 class CadIR(BaseModel):
@@ -347,6 +360,7 @@ class CadIR(BaseModel):
     review: list[ReviewItem] = Field(default_factory=list)
     parameters: list[CadParameter] = Field(default_factory=list)
     constraints: list[GeometricConstraint] = Field(default_factory=list)
+    configurations: list[SketchConfiguration] = Field(default_factory=list)
     # which recognizer produced revision 0: neural | cv | mixed | manual
     recognizer_used: str | None = None
 

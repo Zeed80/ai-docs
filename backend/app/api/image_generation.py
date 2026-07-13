@@ -1221,6 +1221,7 @@ class IrPatchOp(BaseModel):
         "trim", "extend", "offset", "pattern_linear", "pattern_polar",
         "split", "join", "set_construction",
         "set_constraints", "set_parameters", "set_title_block",
+        "set_configurations", "apply_configuration",
     ]
     sheet_format: str | None = None  # A4..A0, for set_sheet_format
     title_block: dict[str, Any] | None = None  # form-1 fields, for set_title_block
@@ -1238,6 +1239,8 @@ class IrPatchOp(BaseModel):
     count: int | None = Field(default=None, ge=2, le=500)  # pattern instance count
     constraints: list[dict[str, Any]] | None = None
     parameters: list[dict[str, Any]] | None = None
+    configurations: list[dict[str, Any]] | None = None  # set_configurations
+    config_name: str | None = None  # apply_configuration
 
 
 class IrPatchRequest(BaseModel):
@@ -1580,7 +1583,42 @@ async def patch_ir(
                 raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, f"Некорректные параметры: {exc.errors()[:3]}") from exc
             if len({parameter.name for parameter in parameters}) != len(parameters):
                 raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, "Имена параметров должны быть уникальны")
+            # A1: resolve expression-driven parameters (width = 2*height…) in
+            # dependency order so the stored value is the computed number.
+            from app.ai.cad_ir.param_expr import ParamExprError, apply_parameter_expressions
+
+            try:
+                parameters = apply_parameter_expressions(parameters)
+            except ParamExprError as exc:
+                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, str(exc)) from exc
             ir.parameters = parameters
+        elif op.op == "set_configurations":
+            from app.ai.cad_ir.schema import SketchConfiguration
+
+            _require(op.configurations, "configurations")
+            try:
+                configs = TypeAdapter(list[SketchConfiguration]).validate_python(op.configurations)
+            except ValidationError as exc:
+                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, f"Некорректные конфигурации: {exc.errors()[:3]}") from exc
+            if len({c.name for c in configs}) != len(configs):
+                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, "Имена конфигураций должны быть уникальны")
+            ir.configurations = configs
+        elif op.op == "apply_configuration":
+            from app.ai.cad_ir.param_expr import ParamExprError, apply_parameter_expressions
+
+            _require(op.config_name, "config_name")
+            config = next((c for c in ir.configurations if c.name == op.config_name), None)
+            if config is None:
+                raise _patch_error(404, IrPatchErrorCode.ENTITY_NOT_FOUND, f"Конфигурация {op.config_name!r} не найдена")
+            # write the config's values onto matching parameters, then re-resolve
+            # any expression-driven parameters that depend on them.
+            for parameter in ir.parameters:
+                if parameter.name in config.values and not parameter.expression:
+                    parameter.value = config.values[parameter.name]
+            try:
+                ir.parameters = apply_parameter_expressions(ir.parameters)
+            except ParamExprError as exc:
+                raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, str(exc)) from exc
         elif op.op == "set_title_block":
             from app.ai.cad_ir.title_block import apply_title_block
 
@@ -1640,13 +1678,14 @@ async def evaluate_ir_constraints(
     """A1: per-constraint satisfaction status of the current sketch WITHOUT
     solving — the constraints panel shows a green/red badge and the offending
     geometry per row, so a conflict is visible before the user hits Rebuild."""
-    from app.ai.cad_ir.constraints import evaluate_constraints
+    from app.ai.cad_ir.constraints import analyze_constraints, evaluate_constraints
 
     gen = await db.get(ImageGeneration, generation_id)
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     _revision, ir = await _load_current_ir(db, gen)
     checks = evaluate_constraints(ir)
+    dof = analyze_constraints(ir)
     return {
         "checks": [
             {
@@ -1658,6 +1697,15 @@ async def evaluate_ir_constraints(
             for c in checks
         ],
         "violated": sum(1 for c in checks if not c.ok),
+        "dof": {
+            "dof": dof.dof,
+            "unknowns": dof.unknowns,
+            "equations": dof.equations,
+            "rank": dof.rank,
+            "state": dof.state,
+            "redundant": dof.redundant,
+            "conflict": dof.conflict,
+        },
     }
 
 

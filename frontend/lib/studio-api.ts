@@ -572,7 +572,9 @@ export interface CadIr {
     parameter: string | null;
     tolerance: number;
     enabled: boolean;
+    driven?: boolean;
   }[];
+  configurations?: { name: string; values: Record<string, number> }[];
   recognizer_used: string | null;
 }
 
@@ -682,6 +684,8 @@ export type IrPatchOp =
   | { op: "split"; entity_id: string; click_x: number; click_y: number }
   | { op: "join"; entity_id: string; entity_id_2: string }
   | { op: "set_construction"; entity_id: string }
+  | { op: "set_configurations"; configurations: CadIr["configurations"] }
+  | { op: "apply_configuration"; config_name: string }
   | { op: "hatch_click"; click_x: number; click_y: number }
   | { op: "set_parameters"; parameters: CadIr["parameters"] }
   | { op: "set_constraints"; constraints: CadIr["constraints"] };
@@ -731,11 +735,29 @@ export interface ConstraintCheck {
   entity_ids: string[];
 }
 
+export interface DofReport {
+  dof: number;
+  unknowns: number;
+  equations: number;
+  rank: number;
+  state:
+    | "unconstrained"
+    | "under_constrained"
+    | "well_constrained"
+    | "over_constrained";
+  redundant: boolean;
+  conflict: boolean;
+}
+
 export async function evaluateConstraints(
   id: string,
-): Promise<{ checks: ConstraintCheck[]; violated: number }> {
+): Promise<{ checks: ConstraintCheck[]; violated: number; dof?: DofReport }> {
   const res = await apiFetch(`${BASE}/${id}/ir/constraints/evaluate`);
-  return jsonOrThrow<{ checks: ConstraintCheck[]; violated: number }>(res);
+  return jsonOrThrow<{
+    checks: ConstraintCheck[];
+    violated: number;
+    dof?: DofReport;
+  }>(res);
 }
 
 export interface ReleaseManifest {

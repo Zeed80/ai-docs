@@ -62,6 +62,11 @@ def evaluate_constraints(ir: CadIR) -> list[ConstraintResult]:
         if not c.enabled:
             continue
         ids = tuple([ref.entity_id for ref in c.refs] or c.entity_ids)
+        if c.driven:
+            # A driven (reference) dimension measures geometry, it doesn't
+            # constrain it — always satisfied by definition.
+            results.append(ConstraintResult(c.id, True, "справочный размер", ids))
+            continue
         target = _target(c, parameters)
         if c.parameter and target is None:
             results.append(ConstraintResult(c.id, False, f"Параметр {c.parameter} не найден", ids))
@@ -124,26 +129,29 @@ def evaluate_constraints(ir: CadIR) -> list[ConstraintResult]:
     return results
 
 
-def solve_constraints(ir: CadIR, *, max_nfev: int = 200) -> SolveResult:
-    """Numerically satisfy the supported 2D constraints in-place.
+# Scalar-equation count each supported constraint contributes to the system —
+# used for DOF/over-constrained analysis (a point-on-point ties both axes).
+_EQUATIONS_PER_KIND = {"coincident": 2, "concentric": 2}
 
-    The solver is invoked only through an explicit editor action.  It never
-    invents topology, deletes entities, or applies ambiguous 3D hypotheses;
-    it only moves sketch coordinates/radii to the nearest configuration that
-    satisfies declared constraints and named driving parameters.
-    """
-    active = [constraint for constraint in ir.constraints if constraint.enabled]
-    if not active:
-        return SolveResult(True, 0.0, 0, "Ограничения отсутствуют", ())
-    try:
-        from scipy.optimize import least_squares
-    except ImportError as exc:  # pragma: no cover - dependency is production-required
-        raise RuntimeError("Для решения ограничений требуется scipy") from exc
 
+def _equation_count(constraint: GeometricConstraint) -> int:
+    return _EQUATIONS_PER_KIND.get(constraint.kind, 1)
+
+
+def _build_system(ir: CadIR, active: list[GeometricConstraint], *, only: set[str] | None = None):
+    """Shared residual system for the solver and the DOF analyzer.
+
+    Returns ``(variables, values, residuals_fn)`` where variables are the
+    editable (entity_id, coord) pairs, values their current numbers, and
+    residuals_fn maps a value-vector to the constraint residual list. ``only``
+    restricts the variable set to the given entity ids (the constrained
+    subsystem) — the analyzer wants that, the solver passes None for all."""
     parameter_values = {item.name: item.value for item in ir.parameters}
     variables: list[tuple[str, str]] = []
     values: list[float] = []
     for entity in ir.entities:
+        if only is not None and entity.id not in only:
+            continue
         if isinstance(entity, Segment):
             for name in ("p1.x", "p1.y", "p2.x", "p2.y"):
                 point_name, axis = name.split(".")
@@ -153,8 +161,6 @@ def solve_constraints(ir: CadIR, *, max_nfev: int = 200) -> SolveResult:
             for name in ("center.x", "center.y", "radius"):
                 variables.append((entity.id, name))
                 values.append(entity.radius if name == "radius" else getattr(entity.center, name[-1]))
-    if not variables:
-        return SolveResult(False, math.inf, 0, "Нет редактируемой геометрии для ограничений", tuple(evaluate_constraints(ir)))
 
     index = {key: position for position, key in enumerate(variables)}
 
@@ -228,6 +234,29 @@ def solve_constraints(ir: CadIR, *, max_nfev: int = 200) -> SolveResult:
                 out.append(1e6)
         return out or [0.0]
 
+    return variables, values, residuals
+
+
+def solve_constraints(ir: CadIR, *, max_nfev: int = 200) -> SolveResult:
+    """Numerically satisfy the supported 2D constraints in-place.
+
+    The solver is invoked only through an explicit editor action.  It never
+    invents topology, deletes entities, or applies ambiguous 3D hypotheses;
+    it only moves sketch coordinates/radii to the nearest configuration that
+    satisfies declared constraints and named driving parameters.
+    """
+    active = [c for c in ir.constraints if c.enabled and not c.driven]
+    if not active:
+        return SolveResult(True, 0.0, 0, "Ограничения отсутствуют", ())
+    try:
+        from scipy.optimize import least_squares
+    except ImportError as exc:  # pragma: no cover - dependency is production-required
+        raise RuntimeError("Для решения ограничений требуется scipy") from exc
+
+    variables, values, residuals = _build_system(ir, active)
+    if not variables:
+        return SolveResult(False, math.inf, 0, "Нет редактируемой геометрии для ограничений", tuple(evaluate_constraints(ir)))
+
     solved = least_squares(residuals, values, max_nfev=max_nfev, xtol=1e-10, ftol=1e-10, gtol=1e-10)
     for (entity_id, name), value in zip(variables, solved.x, strict=True):
         entity = ir.entity_by_id(entity_id)
@@ -242,3 +271,61 @@ def solve_constraints(ir: CadIR, *, max_nfev: int = 200) -> SolveResult:
     residual = max((abs(item) for item in residuals(solved.x)), default=0.0)
     converged = bool(solved.success and all(check.ok for check in checks))
     return SolveResult(converged, residual, int(solved.nfev), str(solved.message), checks)
+
+
+@dataclass(frozen=True)
+class DofReport:
+    """Degrees-of-freedom analysis of the constrained subsystem (A1). ``dof``
+    is how many free motions remain (0 = fully constrained); ``redundant`` is
+    true when constraints duplicate information (rank < equations); ``conflict``
+    is true when an enabled constraint can't be satisfied at the current
+    geometry."""
+
+    unknowns: int
+    equations: int
+    rank: int
+    dof: int
+    state: str  # "unconstrained" | "under_constrained" | "well_constrained" | "over_constrained"
+    redundant: bool
+    conflict: bool
+
+
+def analyze_constraints(ir: CadIR) -> DofReport:
+    """Numerically estimate the sketch's degrees of freedom from the Jacobian
+    rank of the enabled constraints over the entities they touch."""
+    active = [c for c in ir.constraints if c.enabled and not c.driven]
+    involved: set[str] = set()
+    for c in active:
+        involved.update(c.entity_ids)
+        involved.update(r.entity_id for r in c.refs)
+    if not active or not involved:
+        return DofReport(0, 0, 0, 0, "unconstrained", False, False)
+
+    variables, values, residuals = _build_system(ir, active, only=involved)
+    unknowns = len(variables)
+    equations = sum(_equation_count(c) for c in active)
+    conflict = any(not chk.ok for chk in evaluate_constraints(ir))
+
+    rank = 0
+    if unknowns:
+        import numpy as np
+
+        x0 = np.asarray(values, dtype=float)
+        r0 = np.asarray(residuals(x0), dtype=float)
+        eps = 1e-6
+        jac = np.zeros((len(r0), unknowns))
+        for j in range(unknowns):
+            xp = x0.copy()
+            xp[j] += eps
+            jac[:, j] = (np.asarray(residuals(xp), dtype=float) - r0) / eps
+        rank = int(np.linalg.matrix_rank(jac, tol=1e-6))
+
+    dof = max(unknowns - rank, 0)
+    redundant = rank < equations
+    if dof > 0:
+        state = "under_constrained"
+    elif redundant:
+        state = "over_constrained"
+    else:
+        state = "well_constrained"
+    return DofReport(unknowns, equations, rank, dof, state, redundant, conflict)

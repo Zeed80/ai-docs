@@ -6,6 +6,7 @@ import {
   evaluateConstraints,
   type CadIr,
   type ConstraintCheck,
+  type DofReport,
   type IrEntity,
   type IrPatchOp,
 } from "@/lib/studio-api";
@@ -121,10 +122,12 @@ export default function ConstraintsPanel({
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
   const [checks, setChecks] = useState<Record<string, ConstraintCheck>>({});
+  const [dof, setDof] = useState<DofReport | null>(null);
 
   const refreshChecks = useCallback(async () => {
     if (!ir.constraints.length) {
       setChecks({});
+      setDof(null);
       return;
     }
     try {
@@ -132,6 +135,7 @@ export default function ConstraintsPanel({
       const map: Record<string, ConstraintCheck> = {};
       for (const c of res.checks) map[c.constraint_id] = c;
       setChecks(map);
+      setDof(res.dof ?? null);
     } catch {
       // status is a nicety — a failed probe must not break the panel
     }
@@ -202,6 +206,17 @@ export default function ConstraintsPanel({
     ]);
   }
 
+  function toggleDriven(id: string) {
+    onApply([
+      {
+        op: "set_constraints",
+        constraints: ir.constraints.map((c) =>
+          c.id === id ? { ...c, driven: !c.driven } : c,
+        ),
+      },
+    ]);
+  }
+
   const violated = Object.values(checks).filter((c) => !c.ok).length;
 
   return (
@@ -262,6 +277,37 @@ export default function ConstraintsPanel({
             </div>
           )}
 
+          {/* DOF / conflict report */}
+          {dof && ir.constraints.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 border-t border-white/10 pt-2 text-[11px]">
+              <span
+                className={`rounded px-1.5 py-0.5 ${
+                  dof.state === "well_constrained"
+                    ? "bg-emerald-500/15 text-emerald-300"
+                    : dof.state === "over_constrained"
+                      ? "bg-amber-500/15 text-amber-300"
+                      : "bg-sky-500/15 text-sky-300"
+                }`}
+                title={`${dof.unknowns} ${t("vector.dof_unknowns")} − ${dof.rank} ${t("vector.dof_rank")}`}
+              >
+                {t(`vector.dof_${dof.state}`)}
+                {dof.dof > 0
+                  ? ` · ${t("vector.dof_count", { n: dof.dof })}`
+                  : ""}
+              </span>
+              {dof.redundant && (
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-300">
+                  {t("vector.dof_redundant")}
+                </span>
+              )}
+              {dof.conflict && (
+                <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-300">
+                  {t("vector.dof_conflict")}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* constraint list */}
           {ir.constraints.length > 0 && (
             <ul className="space-y-1 border-t border-white/10 pt-2">
@@ -292,11 +338,32 @@ export default function ConstraintsPanel({
                     <button
                       type="button"
                       onClick={() => ids[0] && onFocus(ids[0])}
-                      className="flex-1 truncate text-left text-zinc-300 hover:text-sky-300"
+                      className={`flex-1 truncate text-left hover:text-sky-300 ${
+                        c.driven ? "text-zinc-500 italic" : "text-zinc-300"
+                      }`}
                     >
                       {t(`vector.constraint_${c.kind}`)}
-                      {c.value !== null ? ` = ${c.value}` : ""}
+                      {c.value !== null
+                        ? ` ${c.driven ? "≈" : "="} ${c.value}`
+                        : ""}
                     </button>
+                    {c.value !== null && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => toggleDriven(c.id)}
+                        title={t("vector.constraint_driven_hint")}
+                        className={`rounded px-1 text-[10px] disabled:opacity-40 ${
+                          c.driven
+                            ? "bg-zinc-500/20 text-zinc-300"
+                            : "bg-sky-500/15 text-sky-300"
+                        }`}
+                      >
+                        {c.driven
+                          ? t("vector.constraint_driven")
+                          : t("vector.constraint_driving")}
+                      </button>
+                    )}
                     <label
                       className="flex items-center"
                       title={t("vector.constraint_enabled")}

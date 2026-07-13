@@ -47,17 +47,21 @@ export default function ValidationPanel({
   }, [issues]);
 
   function addParameter() {
-    if (!parameterName.trim()) return;
-    const value = Number(parameterValue);
-    if (!Number.isFinite(value)) {
+    const name = parameterName.trim();
+    if (!name) return;
+    const raw = parameterValue.trim();
+    const num = Number(raw.replace(",", "."));
+    // A1: a numeric entry is a plain value; anything else (e.g. "2*height+5")
+    // is stored as an expression and resolved on the backend.
+    const isExpr = raw !== "" && !Number.isFinite(num);
+    if (!isExpr && !Number.isFinite(num)) {
       onError(t("vector.parameter_value_invalid"));
       return;
     }
-    const name = parameterName.trim();
-    const next = [
-      ...ir.parameters.filter((item) => item.name !== name),
-      { name, value, unit: "mm" as const, expression: null },
-    ];
+    const param = isExpr
+      ? { name, value: 0, unit: "mm" as const, expression: raw }
+      : { name, value: num, unit: "mm" as const, expression: null };
+    const next = [...ir.parameters.filter((item) => item.name !== name), param];
     onApply([{ op: "set_parameters", parameters: next }]);
     setParameterName("");
     setParameterValue("");
@@ -102,11 +106,19 @@ export default function ValidationPanel({
               disabled={busy}
               onClick={() => {
                 setParameterName(parameter.name);
-                setParameterValue(String(parameter.value));
+                setParameterValue(
+                  parameter.expression ?? String(parameter.value),
+                );
               }}
+              title={
+                parameter.expression
+                  ? `${parameter.expression} = ${parameter.value}`
+                  : undefined
+              }
               className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-zinc-300 hover:bg-white/10"
             >
-              {parameter.name}={parameter.value} {parameter.unit}
+              {parameter.name}={parameter.value}
+              {parameter.expression ? " ƒ" : ""} {parameter.unit}
             </button>
           ))}
         </div>
@@ -120,8 +132,8 @@ export default function ValidationPanel({
           <input
             value={parameterValue}
             onChange={(event) => setParameterValue(event.target.value)}
-            inputMode="decimal"
-            placeholder={t("vector.parameter_mm")}
+            placeholder={t("vector.parameter_value_or_expr")}
+            title={t("vector.parameter_expr_hint")}
             className="min-w-0 rounded border border-white/10 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-100"
           />
           <button
@@ -133,6 +145,81 @@ export default function ValidationPanel({
             {t("vector.parameter_save")}
           </button>
         </div>
+        {/* A1: named configurations — a family of parameter sets. */}
+        {ir.parameters.length > 0 && (
+          <div className="space-y-1 pt-1">
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-[10px] text-zinc-500">
+                {t("vector.configurations")}
+              </span>
+              {(ir.configurations ?? []).map((cfg) => (
+                <span
+                  key={cfg.name}
+                  className="flex items-center gap-0.5 rounded border border-white/10 bg-white/5 text-[10px]"
+                >
+                  <button
+                    type="button"
+                    disabled={busy}
+                    title={t("vector.configuration_apply")}
+                    onClick={() =>
+                      onApply([
+                        { op: "apply_configuration", config_name: cfg.name },
+                      ])
+                    }
+                    className="px-1.5 py-0.5 text-zinc-200 hover:text-sky-300"
+                  >
+                    {cfg.name}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    title={t("vector.configuration_delete")}
+                    onClick={() =>
+                      onApply([
+                        {
+                          op: "set_configurations",
+                          configurations: (ir.configurations ?? []).filter(
+                            (c) => c.name !== cfg.name,
+                          ),
+                        },
+                      ])
+                    }
+                    className="pr-1 text-zinc-500 hover:text-red-300"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const name = window.prompt(t("vector.configuration_name"));
+                  if (!name?.trim()) return;
+                  const values: Record<string, number> = {};
+                  for (const p of ir.parameters) {
+                    if (!p.expression) values[p.name] = p.value;
+                  }
+                  const others = (ir.configurations ?? []).filter(
+                    (c) => c.name !== name.trim(),
+                  );
+                  onApply([
+                    {
+                      op: "set_configurations",
+                      configurations: [
+                        ...others,
+                        { name: name.trim(), values },
+                      ],
+                    },
+                  ]);
+                }}
+                className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-zinc-300 hover:bg-white/10"
+              >
+                {t("vector.configuration_save")}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       {levelGroups.map(([level, levelIssues]) => (
         <div key={level} className="space-y-1">
