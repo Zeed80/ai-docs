@@ -46,6 +46,13 @@ _GAP_TOL_PX = 6.0
 _GRID_CELL_PX = 48
 # Post-merge specks: a merged run shorter than this is recognition noise.
 _MIN_SEGMENT_LEN_PX = 2.0
+# A raw fragment shorter than this is a degenerate speck the validator would
+# flag GEOM_DEGENERATE — dropped up front so it never becomes an IR entity or
+# an un-actionable review item (kept in step with cad_validate._MIN_SEGMENT_LEN_PX).
+_DEGENERATE_LEN_PX = 3.0
+# Two segments whose endpoints coincide within this are the same drawn line
+# traced twice; the redundant copy is dropped (validator's GEOM_DUPLICATE tol).
+_DUPLICATE_TOL_PX = 2.0
 
 # Arc re-fit: chains of short segments whose direction turns consistently.
 _CHAIN_ENDPOINT_SNAP_PX = 3.0
@@ -70,6 +77,41 @@ _ORTHO_SNAP_DEG = 3.0
 
 def _seg_len(seg: Segment) -> float:
     return math.hypot(seg.p2.x - seg.p1.x, seg.p2.y - seg.p1.y)
+
+
+def _prune_noise_segments(segments: list[Segment]) -> tuple[list[Segment], int, int]:
+    """Drop degenerate specks and duplicate overlays before consolidation.
+
+    These are exactly the fragments the validator flags GEOM_DEGENERATE /
+    GEOM_DUPLICATE — auto-fixable recognition noise, not geometry a human can
+    meaningfully review. Removing them here keeps them out of the IR (and out
+    of the review queue) so the drawing accepts cleanly. A lone degenerate
+    fragment never enters a collinear-merge group, so the merge pass alone
+    could not catch it."""
+    kept: list[Segment] = []
+    dropped_degen = 0
+    for seg in segments:
+        if _seg_len(seg) < _DEGENERATE_LEN_PX:
+            dropped_degen += 1
+            continue
+        kept.append(seg)
+    # Endpoint-bucketed dedup: two segments are duplicates when both endpoints
+    # coincide within tolerance (either orientation). Bucket by rounded
+    # endpoints so this stays near-linear instead of O(n^2) on 1300 segments.
+    seen: dict[tuple, Segment] = {}
+    deduped: list[Segment] = []
+    dropped_dup = 0
+    tol = max(1, int(round(_DUPLICATE_TOL_PX)))
+    for seg in kept:
+        a = (int(round(seg.p1.x / tol)), int(round(seg.p1.y / tol)))
+        b = (int(round(seg.p2.x / tol)), int(round(seg.p2.y / tol)))
+        key = (a, b) if a <= b else (b, a)
+        if key in seen:
+            dropped_dup += 1
+            continue
+        seen[key] = seg
+        deduped.append(seg)
+    return deduped, dropped_degen, dropped_dup
 
 
 def _angle_deg(seg: Segment) -> float:
@@ -524,6 +566,10 @@ def consolidate_entities(entities: list[Entity]) -> tuple[list[Entity], dict[str
     if len(segments) < 2 and len(arcs) < 2:
         return entities, {"consolidated": False}
 
+    # 0. Strip degenerate specks and duplicate overlays — auto-fixable noise
+    #    the validator would otherwise flag (and queue) as un-actionable
+    #    GEOM_DEGENERATE / GEOM_DUPLICATE review items.
+    segments, dropped_degen, dropped_dup = _prune_noise_segments(segments)
     # 1. Pull circle/arc chains out of the RAW short fragments first — before
     #    canonical snapping would flatten their curvature.
     straight, fitted = _refit_chains_to_arcs(segments)
@@ -543,6 +589,8 @@ def consolidate_entities(entities: list[Entity]) -> tuple[list[Entity], dict[str
         "arcs_in": len(arcs),
         "arcs_merged": len(merged_arcs),
         "dash_lines": dash_lines,
+        "dropped_degenerate": dropped_degen,
+        "dropped_duplicate": dropped_dup,
     }
     if len(kept) + len(fitted) < len(segments) or merged_arcs:
         logger.info("cad_topology_consolidated", **stats)
