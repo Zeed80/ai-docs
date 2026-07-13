@@ -146,8 +146,10 @@ def _render_labels(region: tuple[float, float, float, float], fields: dict[str, 
         return "" if v is None else str(v)
 
     # Central column: name (наименование) + designation (обозначение).
-    put(sval("name"), 100, 14, 4.2)
-    put(sval("designation"), 100, 30, 4.0)
+    # Heights are nominal ГОСТ 2.304 sizes so the generated stamp does not
+    # trip the very ESKD_TEXT_HEIGHT check this pipeline enforces.
+    put(sval("name"), 100, 14, 5.0)
+    put(sval("designation"), 100, 30, 5.0)
     # Right column: material / litera / mass / sheet / scale.
     put("Материал", 160, 6, 2.4)
     put(sval("material")[:32], 160, 12, 2.3)
