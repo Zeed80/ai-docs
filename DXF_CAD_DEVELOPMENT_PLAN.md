@@ -105,7 +105,7 @@
 ### E. PDM/PLM и сборки
 
 - [-] **E1. Revision foundation** и CAD snapshot gate готовы.
-- [-] **E2. UI проекций.** Backend готов (`/api/engineering` projection_list/create + capability router); построить UI: в проекте выбрать и показать CAD IR/Drawing/BOM/technology, current/stale, manifest и acceptance evidence.
+- [x] **E2. UI проекций.** Выполнено 2026-07-13 (playwright-verified): `frontend/components/engineering/ProjectionsPanel.tsx` на странице проекта -- список проекций ревизии (CAD IR/чертёж/BOM/техпроцесс) с бейджем актуальна/устарела, коротким id, датой; deep-link «Открыть» для CAD IR (через `metadata.generation_id`) и чертежей; форма связывания артефакта с непринятой ревизией. Backend был готов.
 - [ ] **E3. Change management.** Change request/order, причина, impact analysis, affected revisions, reviewers, signatures, supersession.
 - [ ] **E4. EBOM/MBOM.** Positions, quantity, units, variants, substitutes, reference designators, where-used и mapping к технологии/закупке.
 - [-] **E5. Assemblies.** Есть instances/mates и AABB collision; добавить exact B-Rep interference, mate solve, DOF, exploded view и спецификацию.
