@@ -2,21 +2,20 @@
 
 import { useMemo, useState } from "react";
 
-import { CadIr, IrEntity, IrPatchOp } from "@/lib/studio-api";
+import { CadIr, IrPatchOp } from "@/lib/studio-api";
 
-/** Validation report grouped by assurance level + the sketch parameter/
- * constraint editors and the long-running full check. Parameter input state
- * lives here; every mutation still flows through the parent's apply()/API
- * callbacks so revision history stays in one place. */
+/** Validation report grouped by assurance level + the sketch parameter editor
+ * and the long-running full check. Geometric constraints live in
+ * ConstraintsPanel; parameter input state lives here; every mutation still
+ * flows through the parent's apply()/API callbacks so revision history stays
+ * in one place. */
 export default function ValidationPanel({
   ir,
   busy,
-  selected,
   fullCheckCurrent,
   fullCheckRunning,
   fullCheckElapsed,
   onRunFullCheck,
-  onSolve,
   onApply,
   onFocus,
   onError,
@@ -24,12 +23,10 @@ export default function ValidationPanel({
 }: {
   ir: CadIr;
   busy: boolean;
-  selected: IrEntity | null;
   fullCheckCurrent: boolean;
   fullCheckRunning: boolean;
   fullCheckElapsed: number;
   onRunFullCheck: () => void;
-  onSolve: () => void;
   onApply: (ops: IrPatchOp[]) => void;
   onFocus: (entityId: string) => void;
   onError: (message: string) => void;
@@ -37,9 +34,6 @@ export default function ValidationPanel({
 }) {
   const [parameterName, setParameterName] = useState("");
   const [parameterValue, setParameterValue] = useState("");
-  const [constraintKind, setConstraintKind] = useState<
-    "horizontal" | "vertical"
-  >("horizontal");
 
   const issues = useMemo(() => ir.validation.issues ?? [], [ir]);
   const levelGroups = useMemo(() => {
@@ -69,28 +63,6 @@ export default function ValidationPanel({
     setParameterValue("");
   }
 
-  function addSelectedConstraint() {
-    if (!selected || selected.type !== "segment") return;
-    onApply([
-      {
-        op: "set_constraints",
-        constraints: [
-          ...ir.constraints,
-          {
-            id: `constraint_${crypto.randomUUID()}`,
-            kind: constraintKind,
-            refs: [],
-            entity_ids: [selected.id],
-            value: null,
-            parameter: null,
-            tolerance: 0.001,
-            enabled: true,
-          },
-        ],
-      },
-    ]);
-  }
-
   return (
     <div className="rounded border border-white/10 bg-zinc-900/60 p-2 space-y-2">
       <div className="flex items-center justify-between">
@@ -118,24 +90,6 @@ export default function ValidationPanel({
             : t("vector.run_full_check")}
         </button>
       </div>
-      {ir.constraints.length > 0 && (
-        <div className="flex items-center justify-between border-t border-white/10 pt-2">
-          <div className="text-[11px] text-zinc-400">
-            {t("vector.constraints_count", {
-              constraints: ir.constraints.length,
-              parameters: ir.parameters.length,
-            })}
-          </div>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onSolve}
-            className="rounded bg-sky-600 px-2 py-1 text-[11px] text-white hover:bg-sky-500 disabled:opacity-50"
-          >
-            {t("vector.rebuild")}
-          </button>
-        </div>
-      )}
       <div className="space-y-2 border-t border-white/10 pt-2">
         <div className="text-[11px] text-zinc-400">
           {t("vector.parameters_title")}
@@ -180,31 +134,6 @@ export default function ValidationPanel({
           </button>
         </div>
       </div>
-      {selected?.type === "segment" && (
-        <div className="flex items-center justify-between gap-2 border-t border-white/10 pt-2">
-          <select
-            value={constraintKind}
-            onChange={(event) =>
-              setConstraintKind(event.target.value as "horizontal" | "vertical")
-            }
-            disabled={busy}
-            className="rounded border border-white/10 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-200"
-          >
-            <option value="horizontal">
-              {t("vector.constraint_horizontal")}
-            </option>
-            <option value="vertical">{t("vector.constraint_vertical")}</option>
-          </select>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={addSelectedConstraint}
-            className="rounded bg-white/10 px-2 py-1 text-[11px] text-zinc-200 hover:bg-white/20 disabled:opacity-50"
-          >
-            {t("vector.constraint_segment")}
-          </button>
-        </div>
-      )}
       {levelGroups.map(([level, levelIssues]) => (
         <div key={level} className="space-y-1">
           <div className="text-[10px] uppercase tracking-wide text-zinc-500">

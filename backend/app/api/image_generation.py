@@ -1517,6 +1517,36 @@ async def solve_ir_constraints(
     return {"revision": row.revision, "summary": row.summary, "solver": result.__dict__, "ir": ir.model_dump()}
 
 
+@router.get("/{generation_id}/ir/constraints/evaluate")
+async def evaluate_ir_constraints(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """A1: per-constraint satisfaction status of the current sketch WITHOUT
+    solving — the constraints panel shows a green/red badge and the offending
+    geometry per row, so a conflict is visible before the user hits Rebuild."""
+    from app.ai.cad_ir.constraints import evaluate_constraints
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    _revision, ir = await _load_current_ir(db, gen)
+    checks = evaluate_constraints(ir)
+    return {
+        "checks": [
+            {
+                "constraint_id": c.constraint_id,
+                "ok": c.ok,
+                "message": c.message,
+                "entity_ids": list(c.entity_ids),
+            }
+            for c in checks
+        ],
+        "violated": sum(1 for c in checks if not c.ok),
+    }
+
+
 @router.post("/{generation_id}/ir/revert")
 async def revert_ir(
     generation_id: uuid.UUID,

@@ -691,6 +691,20 @@ export async function solveIr(id: string): Promise<IrEnvelope> {
   return jsonOrThrow<IrEnvelope>(res);
 }
 
+export interface ConstraintCheck {
+  constraint_id: string;
+  ok: boolean;
+  message: string;
+  entity_ids: string[];
+}
+
+export async function evaluateConstraints(
+  id: string,
+): Promise<{ checks: ConstraintCheck[]; violated: number }> {
+  const res = await apiFetch(`${BASE}/${id}/ir/constraints/evaluate`);
+  return jsonOrThrow<{ checks: ConstraintCheck[]; violated: number }>(res);
+}
+
 export interface ReleaseManifest {
   manifest_version: string;
   generation_id: string;

@@ -27,6 +27,7 @@ import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
 import EntityShape from "@/components/cad/EntityShape";
 import ReviewPanel from "@/components/cad/ReviewPanel";
 import LayersPanel from "@/components/cad/LayersPanel";
+import ConstraintsPanel from "@/components/cad/ConstraintsPanel";
 import StatusBar from "@/components/cad/StatusBar";
 import AnnotationsPanel from "@/components/cad/AnnotationsPanel";
 import TitleBlockPanel from "@/components/cad/TitleBlockPanel";
@@ -1702,15 +1703,25 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         t={t}
       />
 
+      <ConstraintsPanel
+        ir={ir}
+        genId={gen.id}
+        selected={selectedList}
+        busy={busy}
+        onApply={(ops) => void apply(ops)}
+        onSolve={() => void onSolve()}
+        onFocus={focusEntity}
+        onError={setErr}
+        t={t}
+      />
+
       <ValidationPanel
         ir={ir}
         busy={busy}
-        selected={selected}
         fullCheckCurrent={fullCheckCurrent}
         fullCheckRunning={fullCheckRunning}
         fullCheckElapsed={fullCheckElapsed}
         onRunFullCheck={() => void onRunFullCheck()}
-        onSolve={() => void onSolve()}
         onApply={(ops) => void apply(ops)}
         onFocus={focusEntity}
         onError={setErr}
