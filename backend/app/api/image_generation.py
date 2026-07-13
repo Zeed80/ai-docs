@@ -1207,6 +1207,7 @@ class IrPatchErrorCode(str, Enum):
     FILLET_CHAMFER_GEOMETRY_INVALID = "fillet_chamfer_geometry_invalid"
     NO_ENCLOSED_REGION = "no_enclosed_region"
     INVALID_CONSTRAINT = "invalid_constraint"
+    SKETCH_OP_INVALID = "sketch_op_invalid"
 
 
 def _patch_error(status: int, code: IrPatchErrorCode, message: str) -> HTTPException:
@@ -1217,6 +1218,7 @@ class IrPatchOp(BaseModel):
     op: Literal[
         "confirm", "delete", "update", "add", "set_scale", "set_sheet_format",
         "move", "copy", "mirror", "fillet", "chamfer", "hatch_click",
+        "trim", "extend", "offset", "pattern_linear", "pattern_polar",
         "set_constraints", "set_parameters", "set_title_block",
     ]
     sheet_format: str | None = None  # A4..A0, for set_sheet_format
@@ -1230,8 +1232,9 @@ class IrPatchOp(BaseModel):
     value: float | None = None  # fillet radius / chamfer distance
     mirror_p1: dict[str, float] | None = None  # mirror line, two points
     mirror_p2: dict[str, float] | None = None
-    click_x: float | None = None  # hatch_click
+    click_x: float | None = None  # hatch_click; trim/extend/offset reference point
     click_y: float | None = None
+    count: int | None = Field(default=None, ge=2, le=500)  # pattern instance count
     constraints: list[dict[str, Any]] | None = None
     parameters: list[dict[str, Any]] | None = None
 
@@ -1452,6 +1455,72 @@ async def patch_ir(
                 )
             ir.entities.append(region)
             by_id[region.id] = len(ir.entities) - 1
+        elif op.op in ("trim", "extend"):
+            from app.ai.cad_ir.schema import Point, Segment
+            from app.ai.cad_ir.transform import (
+                SketchOpError,
+                extend_segment,
+                trim_segment,
+            )
+
+            idx1 = _index_of(op.entity_id)
+            idx2 = _index_of(op.entity_id_2)
+            _require(op.click_x, "click_x")
+            _require(op.click_y, "click_y")
+            target, other = ir.entities[idx1], ir.entities[idx2]
+            if not isinstance(target, Segment) or not isinstance(other, Segment):
+                raise _patch_error(
+                    400, IrPatchErrorCode.NOT_A_SEGMENT, f"{op.op} работает только с отрезками"
+                )
+            ref = Point(x=op.click_x, y=op.click_y)
+            try:
+                fn = trim_segment if op.op == "trim" else extend_segment
+                ir.entities[idx1] = fn(target, other, ref)
+            except SketchOpError as exc:
+                raise _patch_error(422, IrPatchErrorCode.SKETCH_OP_INVALID, str(exc)) from exc
+        elif op.op == "offset":
+            from app.ai.cad_ir.schema import Point
+            from app.ai.cad_ir.transform import SketchOpError, offset_entity
+
+            idx = _index_of(op.entity_id)
+            _require(op.value, "value")
+            _require(op.click_x, "click_x")
+            _require(op.click_y, "click_y")
+            try:
+                new_entity = offset_entity(
+                    ir.entities[idx], op.value, Point(x=op.click_x, y=op.click_y)
+                )
+            except SketchOpError as exc:
+                raise _patch_error(422, IrPatchErrorCode.SKETCH_OP_INVALID, str(exc)) from exc
+            ir.entities.append(new_entity)
+            by_id[new_entity.id] = len(ir.entities) - 1
+        elif op.op in ("pattern_linear", "pattern_polar"):
+            from app.ai.cad_ir.schema import Point
+            from app.ai.cad_ir.transform import (
+                SketchOpError,
+                pattern_linear,
+                pattern_polar,
+            )
+
+            idx = _index_of(op.entity_id)
+            _require(op.count, "count")
+            try:
+                if op.op == "pattern_linear":
+                    _require(op.dx, "dx")
+                    _require(op.dy, "dy")
+                    copies = pattern_linear(ir.entities[idx], op.count, op.dx, op.dy)
+                else:
+                    _require(op.click_x, "click_x")
+                    _require(op.click_y, "click_y")
+                    _require(op.value, "value")
+                    copies = pattern_polar(
+                        ir.entities[idx], op.count, Point(x=op.click_x, y=op.click_y), op.value
+                    )
+            except SketchOpError as exc:
+                raise _patch_error(422, IrPatchErrorCode.SKETCH_OP_INVALID, str(exc)) from exc
+            for copy_entity in copies:
+                ir.entities.append(copy_entity)
+                by_id[copy_entity.id] = len(ir.entities) - 1
         elif op.op == "set_constraints":
             _require(op.constraints, "constraints")
             try:

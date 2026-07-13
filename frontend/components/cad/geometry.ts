@@ -16,6 +16,11 @@ export type Tool =
   | "mirror"
   | "fillet"
   | "chamfer"
+  | "trim"
+  | "extend"
+  | "offset"
+  | "pattern_linear"
+  | "pattern_polar"
   | "polyline"
   | "hatch";
 

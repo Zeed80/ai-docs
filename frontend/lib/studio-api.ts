@@ -649,6 +649,35 @@ export type IrPatchOp =
       entity_id_2: string;
       value: number;
     }
+  | {
+      op: "trim" | "extend";
+      entity_id: string;
+      entity_id_2: string;
+      click_x: number;
+      click_y: number;
+    }
+  | {
+      op: "offset";
+      entity_id: string;
+      value: number;
+      click_x: number;
+      click_y: number;
+    }
+  | {
+      op: "pattern_linear";
+      entity_id: string;
+      count: number;
+      dx: number;
+      dy: number;
+    }
+  | {
+      op: "pattern_polar";
+      entity_id: string;
+      count: number;
+      click_x: number;
+      click_y: number;
+      value: number;
+    }
   | { op: "hatch_click"; click_x: number; click_y: number }
   | { op: "set_parameters"; parameters: CadIr["parameters"] }
   | { op: "set_constraints"; constraints: CadIr["constraints"] };

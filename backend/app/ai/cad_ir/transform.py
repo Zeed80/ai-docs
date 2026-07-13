@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 
-from app.ai.cad_ir.schema import Arc, Entity, Point, Segment, new_entity_id
+from app.ai.cad_ir.schema import Arc, Circle, Entity, Point, Segment, new_entity_id
 
 
 def _translate_point(p: Point, dx: float, dy: float) -> Point:
@@ -175,3 +175,148 @@ def fillet(seg1: Segment, seg2: Segment, radius: float) -> tuple[Segment, Segmen
         origin="human", assurance="human_approved",
     )
     return new_seg1, new_seg2, arc
+
+
+# ── A2: sketch editing operations ────────────────────────────────────────────
+
+
+class SketchOpError(ValueError):
+    """A2 sketch operation can't be applied to this geometry — surfaced to the
+    caller as a typed 422, never a silent no-op or a wrong geometric guess."""
+
+
+def _line_intersection(a1: Point, a2: Point, b1: Point, b2: Point) -> Point | None:
+    """Intersection of the two INFINITE lines through a1-a2 and b1-b2 (None if
+    parallel)."""
+    x1, y1, x2, y2 = a1.x, a1.y, a2.x, a2.y
+    x3, y3, x4, y4 = b1.x, b1.y, b2.x, b2.y
+    den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(den) < 1e-9:
+        return None
+    px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / den
+    py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / den
+    return Point(x=px, y=py)
+
+
+def _param_on(seg: Segment, p: Point) -> float:
+    """Projection parameter of ``p`` onto the segment's line (0 at p1, 1 at p2)."""
+    dx, dy = seg.p2.x - seg.p1.x, seg.p2.y - seg.p1.y
+    n2 = dx * dx + dy * dy
+    if n2 < 1e-9:
+        return 0.0
+    return ((p.x - seg.p1.x) * dx + (p.y - seg.p1.y) * dy) / n2
+
+
+def trim_segment(target: Segment, cutter: Segment, remove_point: Point) -> Segment:
+    """Trim ``target`` back to where ``cutter`` crosses it, discarding the side
+    that contains ``remove_point``. The cut must land within the target's own
+    span — you can't trim to an edge that doesn't cross it."""
+    ix = _line_intersection(target.p1, target.p2, cutter.p1, cutter.p2)
+    if ix is None:
+        raise SketchOpError("режущий отрезок параллелен — резать не к чему")
+    t = _param_on(target, ix)
+    if not (0.001 <= t <= 0.999):
+        raise SketchOpError("отрезки не пересекаются — точки реза нет на этом отрезке")
+    out = target.model_copy(deep=True)
+    if _param_on(target, remove_point) >= t:
+        out.p2 = ix  # remove_point sits past the cut toward p2 → keep p1..cut
+    else:
+        out.p1 = ix
+    out.origin = "human"
+    return out
+
+
+def extend_segment(target: Segment, boundary: Segment, move_point: Point) -> Segment:
+    """Extend ``target`` along its own line until it meets ``boundary``'s line;
+    the endpoint nearest ``move_point`` is the one that moves. Must lengthen —
+    if the intersection would shorten the segment, that's a trim, not an
+    extend, and is refused."""
+    ix = _line_intersection(target.p1, target.p2, boundary.p1, boundary.p2)
+    if ix is None:
+        raise SketchOpError("граница параллельна — продлевать некуда")
+    out = target.model_copy(deep=True)
+    d1 = math.hypot(move_point.x - target.p1.x, move_point.y - target.p1.y)
+    d2 = math.hypot(move_point.x - target.p2.x, move_point.y - target.p2.y)
+    old_len = math.hypot(target.p2.x - target.p1.x, target.p2.y - target.p1.y)
+    if d1 <= d2:
+        new_len = math.hypot(target.p2.x - ix.x, target.p2.y - ix.y)
+        moved = out.model_copy(update={"p1": ix})
+    else:
+        new_len = math.hypot(ix.x - target.p1.x, ix.y - target.p1.y)
+        moved = out.model_copy(update={"p2": ix})
+    if new_len <= old_len + 1e-6:
+        raise SketchOpError("пересечение укорачивает отрезок — это обрезка, не продление")
+    moved.origin = "human"
+    return moved
+
+
+def offset_entity(entity: Entity, distance: float, side_point: Point) -> Entity:
+    """Parallel copy of a segment/circle/arc at ``distance``, on the side of
+    ``side_point``. A fresh id — the source stays."""
+    if distance <= 0:
+        raise SketchOpError("смещение должно быть положительным")
+    if isinstance(entity, Segment):
+        ux, uy = _unit(entity.p2.x - entity.p1.x, entity.p2.y - entity.p1.y)
+        nx, ny = -uy, ux  # left normal
+        mx, my = (entity.p1.x + entity.p2.x) / 2, (entity.p1.y + entity.p2.y) / 2
+        sign = 1.0 if (side_point.x - mx) * nx + (side_point.y - my) * ny >= 0 else -1.0
+        ox, oy = nx * distance * sign, ny * distance * sign
+        out = entity.model_copy(
+            update={
+                "id": new_entity_id(),
+                "p1": Point(x=entity.p1.x + ox, y=entity.p1.y + oy),
+                "p2": Point(x=entity.p2.x + ox, y=entity.p2.y + oy),
+                "origin": "human",
+            }
+        )
+        return out
+    if isinstance(entity, (Circle, Arc)):
+        d = math.hypot(side_point.x - entity.center.x, side_point.y - entity.center.y)
+        sign = 1.0 if d > entity.radius else -1.0
+        new_r = entity.radius + sign * distance
+        if new_r <= 1e-6:
+            raise SketchOpError("смещение внутрь больше радиуса")
+        return entity.model_copy(
+            update={"id": new_entity_id(), "radius": new_r, "origin": "human"}
+        )
+    raise SketchOpError("смещение поддерживается для отрезка, окружности и дуги")
+
+
+def _rotate_point(p: Point, center: Point, ang_rad: float) -> Point:
+    dx, dy = p.x - center.x, p.y - center.y
+    c, s = math.cos(ang_rad), math.sin(ang_rad)
+    return Point(x=center.x + dx * c - dy * s, y=center.y + dx * s + dy * c)
+
+
+def rotate_entity(entity: Entity, center: Point, ang_deg: float) -> Entity:
+    """Copy of ``entity`` rotated by ``ang_deg`` about ``center`` (fresh id)."""
+    a = math.radians(ang_deg)
+    out = _map_points(entity, lambda p: _rotate_point(p, center, a))
+    if isinstance(out, Arc):
+        out.start_angle = (entity.start_angle + ang_deg) % 360
+        out.end_angle = (entity.end_angle + ang_deg) % 360
+    out.id = new_entity_id()
+    out.origin = "human"
+    return out
+
+
+def pattern_linear(entity: Entity, count: int, dx: float, dy: float) -> list[Entity]:
+    """``count`` total instances (including the original) spaced by (dx, dy);
+    returns the NEW copies only (indices 1..count-1)."""
+    if count < 2:
+        raise SketchOpError("нужно минимум 2 экземпляра")
+    return [duplicate_entity(entity, dx * i, dy * i) for i in range(1, count)]
+
+
+def pattern_polar(
+    entity: Entity, count: int, center: Point, total_angle_deg: float
+) -> list[Entity]:
+    """``count`` total instances around ``center`` spread over
+    ``total_angle_deg`` (360 = full circle); returns the NEW copies only. Full
+    turns divide by count so copies don't double up at 0°/360°; a partial fan
+    divides by count-1 so the ends sit exactly on the span."""
+    if count < 2:
+        raise SketchOpError("нужно минимум 2 экземпляра")
+    full = abs(abs(total_angle_deg) - 360.0) < 1e-6
+    step = total_angle_deg / count if full else total_angle_deg / (count - 1)
+    return [rotate_entity(entity, center, step * i) for i in range(1, count)]

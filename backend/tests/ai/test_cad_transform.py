@@ -9,12 +9,73 @@ import pytest
 from app.ai.cad_ir.schema import Arc, Circle, Point, Segment, TextEntity
 from app.ai.cad_ir.transform import (
     FilletChamferError,
+    SketchOpError,
     chamfer,
     duplicate_entity,
+    extend_segment,
     fillet,
     mirror_entity,
+    offset_entity,
+    pattern_linear,
+    pattern_polar,
     translate_entity,
+    trim_segment,
 )
+
+
+def _seg(x1, y1, x2, y2):
+    return Segment(p1=Point(x=x1, y=y1), p2=Point(x=x2, y=y2))
+
+
+def test_trim_keeps_side_away_from_click() -> None:
+    # horizontal 0..100, cut by a vertical at x=60, click the right half → keep 0..60
+    out = trim_segment(_seg(0, 0, 100, 0), _seg(60, -10, 60, 10), Point(x=90, y=0))
+    xs = sorted([out.p1.x, out.p2.x])
+    assert xs == pytest.approx([0, 60])
+
+
+def test_trim_rejects_non_crossing_cutter() -> None:
+    with pytest.raises(SketchOpError):
+        trim_segment(_seg(0, 0, 100, 0), _seg(200, -10, 200, 10), Point(x=50, y=0))
+
+
+def test_extend_lengthens_to_boundary() -> None:
+    out = extend_segment(_seg(0, 0, 50, 0), _seg(80, -10, 80, 10), Point(x=45, y=0))
+    assert max(out.p1.x, out.p2.x) == pytest.approx(80)
+
+
+def test_extend_refuses_to_shorten() -> None:
+    # boundary crosses inside the segment → that would be a trim, not an extend
+    with pytest.raises(SketchOpError):
+        extend_segment(_seg(0, 0, 100, 0), _seg(40, -10, 40, 10), Point(x=90, y=0))
+
+
+def test_offset_segment_moves_toward_side_point() -> None:
+    out = offset_entity(_seg(0, 0, 100, 0), 10, Point(x=50, y=20))
+    assert out.p1.y == pytest.approx(10) and out.p2.y == pytest.approx(10)
+    assert out.id  # fresh copy
+
+
+def test_offset_circle_outward_and_inward() -> None:
+    c = Circle(center=Point(x=0, y=0), radius=20)
+    assert offset_entity(c, 5, Point(x=100, y=0)).radius == pytest.approx(25)
+    assert offset_entity(c, 5, Point(x=1, y=0)).radius == pytest.approx(15)
+    with pytest.raises(SketchOpError):
+        offset_entity(c, 25, Point(x=1, y=0))  # inward past the centre
+
+
+def test_pattern_linear_returns_new_copies_only() -> None:
+    copies = pattern_linear(_seg(0, 0, 10, 0), 4, 30, 0)
+    assert len(copies) == 3
+    assert [round(c.p1.x) for c in copies] == [30, 60, 90]
+
+
+def test_pattern_polar_full_circle_divides_by_count() -> None:
+    copies = pattern_polar(_seg(10, 0, 20, 0), 4, Point(x=0, y=0), 360)
+    assert len(copies) == 3
+    # 90° step: first copy's p1 (10,0) → (0,10)
+    assert copies[0].p1.x == pytest.approx(0, abs=1e-6)
+    assert copies[0].p1.y == pytest.approx(10, abs=1e-6)
 
 
 def test_translate_segment() -> None:

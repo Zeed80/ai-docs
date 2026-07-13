@@ -104,6 +104,17 @@ const COMMAND_TOOLS: Record<string, Tool> = {
   скругление: "fillet",
   chamfer: "chamfer",
   фаска: "chamfer",
+  trim: "trim",
+  обрезать: "trim",
+  extend: "extend",
+  продлить: "extend",
+  offset: "offset",
+  смещение: "offset",
+  подобие: "offset",
+  array: "pattern_linear",
+  массив: "pattern_linear",
+  parray: "pattern_polar",
+  полярный: "pattern_polar",
 };
 
 export default function CadWorkspace({ gen, onChanged }: Props) {
@@ -164,6 +175,13 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   );
   const [mirrorTargetId, setMirrorTargetId] = useState<string | null>(null);
   const [pickedSegmentId, setPickedSegmentId] = useState<string | null>(null);
+  // A2: an in-progress sketch op waiting on a second canvas click (offset side,
+  // polar-pattern centre).
+  const [sketchPending, setSketchPending] = useState<
+    | { op: "offset"; entityId: string; value: number }
+    | { op: "pattern_polar"; entityId: string }
+    | null
+  >(null);
   const [polylinePoints, setPolylinePoints] = useState<
     { x: number; y: number }[]
   >([]);
@@ -718,11 +736,63 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     const raw = svgPoint(ev);
     if (!raw) return;
     if (tool === "pan") return;
+    // A2: second click of an offset / polar-pattern — the point IS the side or
+    // the rotation centre.
+    if (sketchPending) {
+      if (sketchPending.op === "offset") {
+        void apply([
+          {
+            op: "offset",
+            entity_id: sketchPending.entityId,
+            value: sketchPending.value,
+            click_x: raw.x,
+            click_y: raw.y,
+          },
+        ]);
+        setSketchPending(null);
+        setErr(null);
+        return;
+      }
+      const entityId = sketchPending.entityId;
+      const center = raw;
+      setSketchPending(null);
+      void (async () => {
+        const typed = await requestValue(
+          t("vector.pattern_polar_prompt"),
+          "6, 360",
+        );
+        if (typed === null) return;
+        const [cStr, aStr] = typed.split(/[ ,;]+/);
+        const count = parseInt(cStr, 10);
+        const angle = Number((aStr ?? "360").replace(",", "."));
+        if (count >= 2 && Number.isFinite(angle) && angle !== 0) {
+          void apply([
+            {
+              op: "pattern_polar",
+              entity_id: entityId,
+              count,
+              click_x: center.x,
+              click_y: center.y,
+              value: angle,
+            },
+          ]);
+          setErr(null);
+        } else {
+          setErr(t("vector.pattern_bad_input"));
+        }
+      })();
+      return;
+    }
     if (tool === "select") {
       if (!ev.shiftKey) selectOnly(null);
       return;
     }
-    if (tool === "fillet" || tool === "chamfer") {
+    if (
+      tool === "fillet" ||
+      tool === "chamfer" ||
+      tool === "trim" ||
+      tool === "extend"
+    ) {
       // Clicking blank canvas cancels an in-progress pick — the actual
       // picks happen on EntityShape's onClick (segments only).
       setPickedSegmentId(null);
@@ -795,6 +865,72 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           },
         ]);
       }
+      return;
+    }
+    if (tool === "trim" || tool === "extend") {
+      const clicked = ir.entities.find((x) => x.id === id);
+      if (!clicked || clicked.type !== "segment") {
+        setErr(t("vector.sketch_not_a_segment"));
+        return;
+      }
+      setErr(null);
+      // First pick = the cutting edge / boundary; second pick = the segment to
+      // trim/extend, and where you clicked chooses the side.
+      if (!pickedSegmentId) {
+        setPickedSegmentId(id);
+        return;
+      }
+      if (pickedSegmentId === id) return;
+      const pt = svgPoint(ev);
+      const cutterId = pickedSegmentId;
+      setPickedSegmentId(null);
+      if (pt) {
+        void apply([
+          {
+            op: tool,
+            entity_id: id,
+            entity_id_2: cutterId,
+            click_x: pt.x,
+            click_y: pt.y,
+          },
+        ]);
+      }
+      return;
+    }
+    if (tool === "offset") {
+      const clicked = ir.entities.find((x) => x.id === id);
+      if (!clicked || !["segment", "circle", "arc"].includes(clicked.type)) {
+        setErr(t("vector.offset_bad_target"));
+        return;
+      }
+      const typed = await requestValue(t("vector.offset_prompt"), "10");
+      const value = typed ? Number(typed.replace(",", ".")) : NaN;
+      if (typed === null || !(value > 0)) return;
+      setSketchPending({ op: "offset", entityId: id, value });
+      setErr(t("vector.offset_pick_side"));
+      return;
+    }
+    if (tool === "pattern_linear") {
+      const typed = await requestValue(
+        t("vector.pattern_linear_prompt"),
+        "3, 30, 0",
+      );
+      if (typed === null) return;
+      const [cStr, dxStr, dyStr] = typed.split(/[ ,;]+/);
+      const count = parseInt(cStr, 10);
+      const dx = Number((dxStr ?? "").replace(",", "."));
+      const dy = Number((dyStr ?? "").replace(",", "."));
+      if (!(count >= 2) || !Number.isFinite(dx) || !Number.isFinite(dy)) {
+        setErr(t("vector.pattern_bad_input"));
+        return;
+      }
+      void apply([{ op: "pattern_linear", entity_id: id, count, dx, dy }]);
+      return;
+    }
+    if (tool === "pattern_polar") {
+      setSketchPending({ op: "pattern_polar", entityId: id });
+      setErr(t("vector.pattern_polar_pick_center"));
+      return;
     }
   }
 
@@ -889,6 +1025,11 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     { key: "dim_radial", label: t("vector.tool_dim_radial") },
     { key: "fillet", label: t("vector.tool_fillet") },
     { key: "chamfer", label: t("vector.tool_chamfer") },
+    { key: "trim", label: t("vector.tool_trim") },
+    { key: "extend", label: t("vector.tool_extend") },
+    { key: "offset", label: t("vector.tool_offset") },
+    { key: "pattern_linear", label: t("vector.tool_pattern_linear") },
+    { key: "pattern_polar", label: t("vector.tool_pattern_polar") },
     { key: "polyline", label: t("vector.tool_polyline") },
     { key: "hatch", label: t("vector.tool_hatch") },
   ];
