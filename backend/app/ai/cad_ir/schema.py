@@ -205,6 +205,13 @@ class ValidationIssueIR(BaseModel):
     # "cite always, resolve to stored data when available."
     norm_ref: str | None = None
     norm_clause_text: str | None = None
+    # C2 machine-readable ЕСКД profile: a stable rule key (e.g.
+    # "ESKD.2.303.line_weight") independent of the plain citation, and a
+    # concrete fix path ("сделайте линию тонкой в свойствах"). Both come from
+    # the versioned rule registry in app.ai.eskd_profile; None for checks not
+    # in the profile (geometry/recognition-quality signals).
+    rule_id: str | None = None
+    fix_hint: str | None = None
 
 
 class ValidationReportIR(BaseModel):
@@ -212,6 +219,9 @@ class ValidationReportIR(BaseModel):
     # raster coverage of the recognized geometry vs the source ink
     coverage_recall: float | None = None
     coverage_precision: float | None = None
+    # C2: which versioned ЕСКД ruleset produced these findings — a stored
+    # report stays interpretable after the profile tightens.
+    eskd_profile_version: str | None = None
 
     @property
     def blocking(self) -> list[ValidationIssueIR]:

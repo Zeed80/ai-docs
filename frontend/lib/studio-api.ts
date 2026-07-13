@@ -495,6 +495,9 @@ export interface IrValidationIssue {
   entity_ids: string[];
   message_ru: string;
   level: number;
+  norm_ref?: string | null;
+  rule_id?: string | null;
+  fix_hint?: string | null;
 }
 
 export interface IrReviewItem {

@@ -231,6 +231,20 @@ export default function ValidationPanel({
                   {t("vector.show_entity")}
                 </button>
               )}
+              {/* C2: ЕСКД citation + concrete fix path from the versioned
+                  rule profile, when the issue is standard-backed. */}
+              {(issue.norm_ref || issue.fix_hint) && (
+                <div className="mt-0.5 pl-1 text-[10px] text-zinc-500">
+                  {issue.norm_ref && (
+                    <span className="text-zinc-400">{issue.norm_ref}</span>
+                  )}
+                  {issue.fix_hint && (
+                    <span className="block text-zinc-500">
+                      → {issue.fix_hint}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

@@ -86,6 +86,9 @@ class CadCheckCode(str, Enum):
     ESKD_SHEET_FORMAT_UNKNOWN = "ESKD_SHEET_FORMAT_UNKNOWN"
     ESKD_TITLE_BLOCK_INCOMPLETE = "ESKD_TITLE_BLOCK_INCOMPLETE"
     ESKD_NO_CONTOUR_GEOMETRY = "ESKD_NO_CONTOUR_GEOMETRY"
+    # C2: extended ЕСКД profile coverage
+    ESKD_TEXT_HEIGHT = "ESKD_TEXT_HEIGHT"  # ГОСТ 2.304 font height series
+    ESKD_DIMENSION_INCOMPLETE = "ESKD_DIMENSION_INCOMPLETE"  # ГОСТ 2.307 value present
 
 
 # Assurance-pipeline level per code (Ф7.1) — see module docstring for the
@@ -105,6 +108,8 @@ _CHECK_LEVEL: dict[str, int] = {
     "ESKD_SHEET_FORMAT_UNKNOWN": 4,
     "ESKD_TITLE_BLOCK_INCOMPLETE": 4,
     "ESKD_NO_CONTOUR_GEOMETRY": 4,
+    "ESKD_TEXT_HEIGHT": 4,
+    "ESKD_DIMENSION_INCOMPLETE": 3,
     "TECH_RULE": 5,
     "CONSTRAINT_UNSATISFIED": 3,
     "CONSTRAINT_REFERENCE_INVALID": 3,
@@ -120,24 +125,55 @@ _GOST_SCALES = (
 )
 
 
-# Ф9: which ГОСТ each check actually enforces — a plain citation always
-# attached to the issue; app.ai.norm_citation resolves it against ingested
-# NormativeDocument/NormativeClause rows when the corpus has that standard,
-# purely additive (this string alone is already a real, checkable citation).
+# Ф9/C2: which ГОСТ each check enforces — resolved from the versioned ЕСКД
+# rule profile (app.ai.eskd_profile). The plain citation is always attached;
+# app.ai.norm_citation additionally resolves it against ingested
+# NormativeDocument/NormativeClause rows when the corpus has that standard.
+# Codes not in the profile (geometry/scale-completeness) fall back to these
+# bare citations.
 _NORM_REF: dict[str, str] = {
-    "ESKD_LINE_WEIGHT": "ГОСТ 2.303-68",
-    "ESKD_SCALE_NONSTANDARD": "ГОСТ 2.302-68",
-    "ESKD_SHEET_FORMAT_UNKNOWN": "ГОСТ 2.301-68",
-    "ESKD_TITLE_BLOCK_INCOMPLETE": "ГОСТ 2.104-2006",
     "RA_INVALID": "ГОСТ 2789-73",
 }
 
 
 def _issue(code: CadCheckCode, severity: str, message: str, entity_ids: list[str] | None = None) -> ValidationIssueIR:
+    """A non-profile issue (geometry, scale completeness, recognition
+    signals). ЕСКД-profile checks use ``eskd_issue`` so their rule_id/
+    fix_hint/citation travel from the single registry."""
     return ValidationIssueIR(
         code=code.value, severity=severity, message_ru=message, entity_ids=entity_ids or [],
         level=_CHECK_LEVEL.get(code.value, 0),
         norm_ref=_NORM_REF.get(code.value),
+    )
+
+
+def eskd_issue(
+    code: CadCheckCode,
+    message: str,
+    entity_ids: list[str] | None = None,
+    severity: str | None = None,
+) -> ValidationIssueIR:
+    """An issue backed by the versioned ЕСКД rule profile: rule_id, fix path,
+    citation, clause and level all come from the registry entry for ``code``.
+    ``severity`` overrides the rule default only when a check needs to."""
+    from app.ai.eskd_profile import rule_for
+
+    rule = rule_for(code.value)
+    if rule is None:  # defensive: a profile code with no registry entry
+        return _issue(code, severity or "warn", message, entity_ids)
+    return ValidationIssueIR(
+        code=code.value,
+        severity=severity or rule.default_severity,
+        message_ru=message,
+        entity_ids=entity_ids or [],
+        level=rule.level,
+        # Bare GOST citation so norm_citation.resolve_norm_citations (which
+        # strips a trailing year and prefix-matches the ingested corpus) still
+        # finds the document. The specific clause lives in the rule registry
+        # and travels via rule_id; the fix_hint gives the actionable path.
+        norm_ref=rule.gost,
+        rule_id=rule.rule_id,
+        fix_hint=rule.fix_hint,
     )
 
 
@@ -234,8 +270,8 @@ def _check_line_weights(ir: CadIR) -> list[ValidationIssueIR]:
         if e.line_class in ("axis", "dim", "hatch") and e.width_class == "main"
     ]
     if wrong:
-        issues.append(_issue(
-            CadCheckCode.ESKD_LINE_WEIGHT, "warn",
+        issues.append(eskd_issue(
+            CadCheckCode.ESKD_LINE_WEIGHT,
             "Осевые/размерные/штриховые линии должны быть тонкими (ГОСТ 2.303)",
             wrong,
         ))
@@ -301,8 +337,8 @@ def _check_roughness_values(ir: CadIR) -> list[ValidationIssueIR]:
             continue
         nearest = tdref.nearest_ra(value)
         if abs(nearest - value) > 1e-6:
-            issues.append(_issue(
-                CadCheckCode.RA_INVALID, "warn",
+            issues.append(eskd_issue(
+                CadCheckCode.RA_INVALID,
                 f"Ra {value:g} не входит в стандартный ряд ГОСТ 2789 (ближайшее — Ra {nearest:g})",
                 [e.id],
             ))
@@ -330,8 +366,8 @@ def _check_scale_standard(ir: CadIR) -> list[ValidationIssueIR]:
     ratio = num / den
     if any(abs(ratio - g) <= _SCALE_TOLERANCE * max(g, 1e-9) for g in _GOST_SCALES):
         return []
-    return [_issue(
-        CadCheckCode.ESKD_SCALE_NONSTANDARD, "warn",
+    return [eskd_issue(
+        CadCheckCode.ESKD_SCALE_NONSTANDARD,
         f"Масштаб {stated} не входит в стандартный ряд ГОСТ 2.302",
     )]
 
@@ -348,8 +384,8 @@ def _check_sheet_format(ir: CadIR) -> list[ValidationIssueIR]:
         return []
     if ir.sheet.format in _GOST_SHEET_FORMATS:
         return []
-    return [_issue(
-        CadCheckCode.ESKD_SHEET_FORMAT_UNKNOWN, "info",
+    return [eskd_issue(
+        CadCheckCode.ESKD_SHEET_FORMAT_UNKNOWN,
         f"Формат листа {ir.sheet.format or 'не указан'} не входит в стандартный ряд ГОСТ 2.301 (A0-A4)",
     )]
 
@@ -381,8 +417,8 @@ def _check_title_block_complete(ir: CadIR) -> list[ValidationIssueIR]:
     )
     if has_text:
         return []
-    return [_issue(
-        CadCheckCode.ESKD_TITLE_BLOCK_INCOMPLETE, "info",
+    return [eskd_issue(
+        CadCheckCode.ESKD_TITLE_BLOCK_INCOMPLETE,
         "Основная надпись (штамп) пуста — не заполнены наименование/обозначение",
     )]
 
@@ -400,10 +436,60 @@ def _check_contour_geometry(ir: CadIR) -> list[ValidationIssueIR]:
     )
     if has_contour:
         return []
-    return [_issue(
-        CadCheckCode.ESKD_NO_CONTOUR_GEOMETRY, "warn",
+    return [eskd_issue(
+        CadCheckCode.ESKD_NO_CONTOUR_GEOMETRY,
         "На листе нет основной контурной геометрии — только вспомогательные элементы",
     )]
+
+
+_TEXT_HEIGHT_TOL_MM = 0.35  # OCR/rounding slack around the nominal series
+
+
+def _check_text_heights(ir: CadIR) -> list[ValidationIssueIR]:
+    """C2 / ГОСТ 2.304: text/dimension label height should be a nominal font
+    size from the standard series. Only meaningful with a known scale (px→mm),
+    so it's silent on an unscaled draft. Info severity — a slightly-off height
+    is a formatting nit, not a geometry error."""
+    from app.ai.eskd_profile import GOST_2304_TEXT_HEIGHTS_MM
+
+    if ir.scale is None:
+        return []
+    issues = []
+    for e in ir.entities:
+        height_px = getattr(e, "height", None)
+        if not height_px or e.type not in ("text", "dimension"):
+            continue
+        height_mm = height_px * ir.scale
+        if height_mm < 1.0:  # too small to have been read reliably
+            continue
+        nearest = min(GOST_2304_TEXT_HEIGHTS_MM, key=lambda h: abs(h - height_mm))
+        if abs(nearest - height_mm) > _TEXT_HEIGHT_TOL_MM:
+            issues.append(eskd_issue(
+                CadCheckCode.ESKD_TEXT_HEIGHT,
+                f"Высота шрифта {height_mm:.1f} мм не из ряда ГОСТ 2.304 "
+                f"(ближайшая — {nearest:g} мм)",
+                [e.id],
+            ))
+    return issues
+
+
+def _check_dimension_complete(ir: CadIR) -> list[ValidationIssueIR]:
+    """C2 / ГОСТ 2.307: a dimension entity must carry a numeric value — a
+    dimension line with neither a parsed value nor any label text is an
+    incomplete размер that cannot cross the release boundary."""
+    issues = []
+    for e in ir.entities:
+        if e.type != "dimension":
+            continue
+        has_value = getattr(e, "value_mm", None) is not None
+        has_text = bool((getattr(e, "text", "") or "").strip())
+        if not has_value and not has_text:
+            issues.append(eskd_issue(
+                CadCheckCode.ESKD_DIMENSION_INCOMPLETE,
+                "Размер без числового значения (ГОСТ 2.307)",
+                [e.id],
+            ))
+    return issues
 
 
 _CHECKS = (
@@ -417,6 +503,8 @@ _CHECKS = (
     _check_sheet_format,
     _check_title_block_complete,
     _check_contour_geometry,
+    _check_text_heights,
+    _check_dimension_complete,
     _check_roughness_values,
     _check_coverage,
     _check_dimension_chains,
@@ -441,10 +529,13 @@ def validate_ir(ir: CadIR) -> ValidationReportIR:
     for check in _CHECKS:
         issues.extend(check(ir))
 
+    from app.ai.eskd_profile import ESKD_PROFILE_VERSION
+
     report = ValidationReportIR(
         issues=issues,
         coverage_recall=ir.validation.coverage_recall,
         coverage_precision=ir.validation.coverage_precision,
+        eskd_profile_version=ESKD_PROFILE_VERSION,
     )
     ir.validation = report
 

@@ -81,8 +81,78 @@ def test_eskd_checks_carry_a_plain_norm_citation() -> None:
     )
     report = validate_ir(_ir([axis_thick]))
     line_weight = next(i for i in report.issues if i.code == "ESKD_LINE_WEIGHT")
-    assert line_weight.norm_ref == "ГОСТ 2.303-68"
+    assert line_weight.norm_ref.startswith("ГОСТ 2.303-68")
     assert line_weight.norm_clause_text is None  # not resolved against the corpus here
+
+
+def test_eskd_profile_stamps_rule_id_and_fix_hint() -> None:
+    """C2: a profile-backed issue carries a stable machine rule_id and a
+    concrete fix path from the versioned registry."""
+    from app.ai.eskd_profile import ESKD_PROFILE_VERSION
+
+    axis_thick = Segment(
+        p1=Point(x=0, y=0), p2=Point(x=100, y=0), line_class="axis", width_class="main"
+    )
+    report = validate_ir(_ir([axis_thick]))
+    assert report.eskd_profile_version == ESKD_PROFILE_VERSION
+    lw = next(i for i in report.issues if i.code == "ESKD_LINE_WEIGHT")
+    assert lw.rule_id == "ESKD.2.303.line_weight"
+    assert lw.fix_hint and "тонк" in lw.fix_hint
+    # norm_ref stays a bare, resolver-compatible citation
+    assert lw.norm_ref == "ГОСТ 2.303-68"
+
+
+def test_geometry_issue_has_no_profile_rule() -> None:
+    """Non-ЕСКД geometry checks stay out of the profile — no rule_id."""
+    tiny = Segment(p1=Point(x=0, y=0), p2=Point(x=1, y=1))
+    report = validate_ir(_ir([tiny]))
+    degenerate = next(i for i in report.issues if i.code == "GEOM_DEGENERATE")
+    assert degenerate.rule_id is None
+    assert degenerate.fix_hint is None
+
+
+def test_nonstandard_text_height_flagged() -> None:
+    # scale 0.5 → a 9px label is 4.5mm, not in the 2.304 series (nearest 5).
+    txt = TextEntity(position=Point(x=10, y=10), text="42", height=9.0)
+    report = validate_ir(_ir([
+        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)), txt,
+    ]))
+    hits = [i for i in report.issues if i.code == "ESKD_TEXT_HEIGHT"]
+    assert len(hits) == 1
+    assert hits[0].rule_id == "ESKD.2.304.text_height"
+
+
+def test_standard_text_height_not_flagged() -> None:
+    # 7px * 0.5 = 3.5mm — exactly a nominal height.
+    txt = TextEntity(position=Point(x=10, y=10), text="42", height=7.0)
+    report = validate_ir(_ir([
+        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)), txt,
+    ]))
+    assert "ESKD_TEXT_HEIGHT" not in _codes(report)
+
+
+def test_text_height_silent_without_scale() -> None:
+    txt = TextEntity(position=Point(x=10, y=10), text="42", height=9.0)
+    report = validate_ir(_ir([txt], scale=None))
+    assert "ESKD_TEXT_HEIGHT" not in _codes(report)
+
+
+def test_dimension_without_value_flagged() -> None:
+    dim = DimensionEntity(
+        p1=Point(x=0, y=0), p2=Point(x=100, y=0), text="", value_mm=None,
+    )
+    report = validate_ir(_ir([dim]))
+    hits = [i for i in report.issues if i.code == "ESKD_DIMENSION_INCOMPLETE"]
+    assert len(hits) == 1
+    assert hits[0].rule_id == "ESKD.2.307.dimension_value"
+
+
+def test_dimension_with_value_not_flagged() -> None:
+    dim = DimensionEntity(
+        p1=Point(x=0, y=0), p2=Point(x=100, y=0), text="50", value_mm=50.0,
+    )
+    report = validate_ir(_ir([dim]))
+    assert "ESKD_DIMENSION_INCOMPLETE" not in _codes(report)
 
 
 def test_geometry_checks_have_no_norm_citation() -> None:
