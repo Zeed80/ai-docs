@@ -282,6 +282,97 @@ def _write_html_index(report_dir: pathlib.Path, results: dict) -> None:
     )
 
 
+def _geometry_quality(entities) -> dict:
+    """B4: self-referential geometry-quality metrics — no GT alignment needed,
+    so they work on photos too. They measure exactly the "рваная геометрия /
+    мусор" pain: how fragmented the lines are, how much is degenerate/duplicate
+    noise, and how many endpoints float free instead of meeting other geometry.
+    Lower is better for every rate; fragmentation 1.0 = already consolidated."""
+    import math
+    from collections import defaultdict
+
+    segs = [e for e in entities if e.type == "segment"]
+    n = len(segs)
+    if n == 0:
+        return {"n_segments": 0}
+
+    def _len(s) -> float:
+        return math.hypot(s.p2.x - s.p1.x, s.p2.y - s.p1.y)
+
+    degen = sum(1 for s in segs if _len(s) < 3.0)
+
+    tol = 2.0
+    seen: set = set()
+    dup = 0
+    for s in segs:
+        a = (round(s.p1.x / tol), round(s.p1.y / tol))
+        b = (round(s.p2.x / tol), round(s.p2.y / tol))
+        key = (a, b) if a <= b else (b, a)
+        if key in seen:
+            dup += 1
+        else:
+            seen.add(key)
+
+    snap = 4.0
+    pts = [p for s in segs for p in (s.p1, s.p2)]
+    buckets: dict = defaultdict(int)
+    for p in pts:
+        buckets[(round(p.x / snap), round(p.y / snap))] += 1
+    open_ends = 0
+    for p in pts:
+        cx, cy = round(p.x / snap), round(p.y / snap)
+        neigh = sum(
+            buckets.get((cx + dx, cy + dy), 0)
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+        )
+        if neigh <= 1:  # only this endpoint itself → nothing meets it
+            open_ends += 1
+
+    frag = 1.0
+    try:
+        from app.ai.cad_recognize.topology import consolidate_entities
+
+        merged, _stats = consolidate_entities(list(segs))
+        merged_segs = sum(1 for e in merged if e.type == "segment")
+        frag = round(n / max(merged_segs, 1), 2)
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "n_segments": n,
+        "fragmentation": frag,
+        "degenerate_rate": round(degen / n, 3),
+        "duplicate_rate": round(dup / n, 3),
+        "open_endpoint_rate": round(open_ends / (2 * n), 3),
+    }
+
+
+def _dxf_roundtrip(entities, w: int, h: int) -> dict:
+    """B4: does the recognized geometry survive a DXF round-trip? Render IR →
+    DXF → re-parse with ezdxf. A drawing that can't be re-opened is useless
+    regardless of its coverage score."""
+    import io
+
+    import ezdxf
+
+    from app.ai.cad_ir import CadIR, SourceInfo
+    from app.ai.cad_ir.dxf_render import render_ir_to_dxf
+
+    try:
+        ir = CadIR(
+            source=SourceInfo(image_width=w, image_height=h),
+            scale=1.0,
+            scale_source="manual",
+            entities=list(entities),
+        )
+        data = render_ir_to_dxf(ir)
+        doc = ezdxf.read(io.StringIO(data.decode("utf-8")))
+        return {"dxf_reopens": True, "dxf_entities": sum(1 for _ in doc.modelspace())}
+    except Exception as exc:  # noqa: BLE001
+        return {"dxf_reopens": False, "dxf_error": str(exc)[:100]}
+
+
 def _recognize(
     image_bytes: bytes,
     enhance: bool,
@@ -353,6 +444,8 @@ def _recognize(
         "coverage_precision": score.precision,
         "coverage_ok": score.ok,
         "recognizer_used": used,
+        "quality": _geometry_quality(out.entities),
+        **_dxf_roundtrip(out.entities, w, h),
     }
     if report_dir is not None:
         rec.update(_write_report(
@@ -376,6 +469,12 @@ def main() -> int:
     parser.add_argument(
         "--report-dir", default="",
         help="write per-file visual evidence (src/vec/diff PNG + index.html) here",
+    )
+    parser.add_argument(
+        "--check-baseline", default="",
+        help="compare the run summary against this baseline JSON and exit 1 on "
+             "a regression (recall/coverage-ok/dxf-reopen down, or fragmentation/"
+             "noise up beyond tolerance)",
     )
     args = parser.parse_args()
     report_dir = pathlib.Path(args.report_dir) if args.report_dir else None
@@ -443,6 +542,10 @@ def main() -> int:
         errors = sum(1 for r in section.values() if r.get("error"))
         if not oks:
             return {"files": len(section), "ok": 0, "declined": declined, "errors": errors}
+        def _qmean(key: str) -> float:
+            vals = [r["quality"][key] for r in oks if r.get("quality", {}).get(key) is not None]
+            return round(sum(vals) / len(vals), 3) if vals else 0.0
+
         return {
             "files": len(section),
             "ok": len(oks),
@@ -451,6 +554,13 @@ def main() -> int:
             "mean_recall": round(sum(r["coverage_recall"] for r in oks) / len(oks), 4),
             "mean_precision": round(sum(r["coverage_precision"] for r in oks) / len(oks), 4),
             "coverage_ok_rate": round(sum(1 for r in oks if r["coverage_ok"]) / len(oks), 3),
+            # B4: geometry-quality + round-trip aggregates (lower rates better;
+            # fragmentation → 1.0 is best; dxf_reopen_rate → 1.0 is best).
+            "mean_fragmentation": _qmean("fragmentation"),
+            "mean_degenerate_rate": _qmean("degenerate_rate"),
+            "mean_duplicate_rate": _qmean("duplicate_rate"),
+            "mean_open_endpoint_rate": _qmean("open_endpoint_rate"),
+            "dxf_reopen_rate": round(sum(1 for r in oks if r.get("dxf_reopens")) / len(oks), 3),
         }
 
     results["summary"] = {"dwg": _agg(results["dwg"]), "photos": _agg(results["photos"])}
@@ -462,6 +572,45 @@ def main() -> int:
         _write_html_index(report_dir, results)
         print(f"report: {report_dir / 'index.html'}")
     print(json.dumps(results["summary"], ensure_ascii=False, indent=2))
+
+    if args.check_baseline:
+        return _check_regression(results["summary"], pathlib.Path(args.check_baseline))
+    return 0
+
+
+# Metrics where higher is better vs. lower is better, and how much drift is
+# tolerated before it counts as a regression.
+_HIGHER_BETTER = {"mean_recall": 0.03, "coverage_ok_rate": 0.05, "dxf_reopen_rate": 0.01}
+_LOWER_BETTER = {
+    "mean_fragmentation": 0.3,
+    "mean_degenerate_rate": 0.02,
+    "mean_duplicate_rate": 0.02,
+    "mean_open_endpoint_rate": 0.05,
+}
+
+
+def _check_regression(summary: dict, baseline_path: pathlib.Path) -> int:
+    """Fail (exit 1) if any section regressed beyond tolerance vs the baseline.
+    This is what turns eval_vectorize into an automated quality gate (B4/H1)."""
+    if not baseline_path.exists():
+        print(f"baseline {baseline_path} not found — nothing to check against", file=sys.stderr)
+        return 0
+    base = json.loads(baseline_path.read_text()).get("summary", {})
+    regressions: list[str] = []
+    for section in ("dwg", "photos"):
+        now, was = summary.get(section, {}), base.get(section, {})
+        for metric, tol in _HIGHER_BETTER.items():
+            if metric in now and metric in was and now[metric] < was[metric] - tol:
+                regressions.append(f"{section}.{metric}: {was[metric]} → {now[metric]} (↓)")
+        for metric, tol in _LOWER_BETTER.items():
+            if metric in now and metric in was and now[metric] > was[metric] + tol:
+                regressions.append(f"{section}.{metric}: {was[metric]} → {now[metric]} (↑)")
+    if regressions:
+        print("\nREGRESSION vs baseline:", file=sys.stderr)
+        for r in regressions:
+            print(f"  ✗ {r}", file=sys.stderr)
+        return 1
+    print("\n✓ no regression vs baseline")
     return 0
 
 
