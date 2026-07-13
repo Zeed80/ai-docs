@@ -460,7 +460,14 @@ export interface IrAlternative {
 export interface IrEntity {
   id: string;
   type:
-    "segment" | "arc" | "circle" | "polyline" | "text" | "dimension" | "hatch";
+    | "segment"
+    | "arc"
+    | "circle"
+    | "polyline"
+    | "text"
+    | "dimension"
+    | "hatch"
+    | "annotation";
   line_class: IrLineClass;
   width_class: IrWidthClass;
   confidence: number;
@@ -487,6 +494,11 @@ export interface IrEntity {
   value_mm?: number | null;
   tolerance?: string | null;
   pattern?: string;
+  // annotation (C4)
+  value?: string | null;
+  symbol?: string | null;
+  datum_refs?: string[];
+  leader?: IrPoint | null;
 }
 
 export interface IrValidationIssue {

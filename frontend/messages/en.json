@@ -695,7 +695,11 @@
       "source_opacity": "Source opacity",
       "title_block": "Title block (stamp)",
       "title_mass": "Mass, kg",
-      "title_apply": "Fill title block"
+      "title_apply": "Fill title block",
+      "annotations": "ЕСКД annotations",
+      "annotation_add": "Add annotation",
+      "annotation_datums": "Datums (e.g. A B)",
+      "type_annotation": "Annotation"
     },
     "workflow": {
       "loading": "Loading workflows…",

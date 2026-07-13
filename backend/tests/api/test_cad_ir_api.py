@@ -233,6 +233,40 @@ async def test_patch_ir_set_title_block_fills_stamp(client, fake_storage):
     assert "Вал ведущий".encode() in dxf
 
 
+async def test_patch_ir_add_annotation_and_export(client, fake_storage):
+    # C4: a structured annotation adds via the same add op, validates, and
+    # lands in the DXF export as text.
+    gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
+    gen_id = gen["id"]
+    resp = await client.patch(
+        f"/api/image-gen/{gen_id}/ir",
+        json={"ops": [{"op": "add", "entity": {
+            "type": "annotation", "kind": "roughness", "value": "3.2",
+            "position": {"x": 100, "y": 100}, "line_class": "dim", "width_class": "thin",
+        }}]},
+    )
+    assert resp.status_code == 200
+    ir = resp.json()["ir"]
+    ann = [e for e in ir["entities"] if e["type"] == "annotation"]
+    assert len(ann) == 1 and ann[0]["kind"] == "roughness"
+    dxf = fake_storage[(await client.get(f"/api/image-gen/{gen_id}")).json()["params"]["dxf_path"]]
+    assert "Ra 3.2".encode() in dxf
+
+
+async def test_patch_ir_add_invalid_annotation_flags_validation(client, fake_storage):
+    gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
+    resp = await client.patch(
+        f"/api/image-gen/{gen['id']}/ir",
+        json={"ops": [{"op": "add", "entity": {
+            "type": "annotation", "kind": "roughness", "value": "3.0",  # off-series
+            "position": {"x": 100, "y": 100}, "line_class": "dim", "width_class": "thin",
+        }}]},
+    )
+    assert resp.status_code == 200
+    codes = {i["code"] for i in resp.json()["ir"]["validation"]["issues"]}
+    assert "ESKD_ANNOTATION_INVALID" in codes
+
+
 async def _add_segment(client, gen_id, p1, p2):
     resp = await client.patch(
         f"/api/image-gen/{gen_id}/ir",

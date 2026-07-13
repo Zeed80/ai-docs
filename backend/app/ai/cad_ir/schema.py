@@ -159,8 +159,35 @@ class HatchRegion(_EntityBase):
     width_class: WidthClass = "thin"
 
 
+class AnnotationEntity(_EntityBase):
+    """A structured ЕСКД annotation (C4): roughness, thread, geometric
+    tolerance, datum or weld — first-class data, not free text over a stroke.
+
+    ``kind`` selects the standard; ``value``/``symbol``/``datum_refs`` hold the
+    parsed payload; ``text`` is the canonical display string
+    (``annotation_text`` builds it). ``leader`` optionally anchors the symbol
+    to the feature it annotates."""
+
+    type: Literal["annotation"] = "annotation"
+    kind: Literal["roughness", "thread", "tolerance", "datum", "weld"]
+    position: Point
+    text: str = ""
+    # roughness Ra/Rz value; thread designation "M20×1.5"; tolerance value mm
+    value: str | None = None
+    # tolerance geometric symbol ("flatness"/"parallelism"/…); datum letter;
+    # weld type per ГОСТ 2.312
+    symbol: str | None = None
+    # datum letters a geometric tolerance references, e.g. ["A", "B"]
+    datum_refs: list[str] = Field(default_factory=list)
+    # optional leader line end at the annotated feature
+    leader: Point | None = None
+    height: float = Field(default=3.5, gt=0)
+    line_class: LineClass = "dim"
+    width_class: WidthClass = "thin"
+
+
 Entity = Annotated[
-    Union[Segment, Arc, Circle, Polyline, TextEntity, DimensionEntity, HatchRegion],
+    Union[Segment, Arc, Circle, Polyline, TextEntity, DimensionEntity, HatchRegion, AnnotationEntity],
     Field(discriminator="type"),
 ]
 

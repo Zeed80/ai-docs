@@ -3,6 +3,7 @@
 import { IrEntity } from "@/lib/studio-api";
 
 import {
+  annotationText,
   ASSURANCE_STROKE,
   dimensionArrowPolygons,
   dimensionLabel,
@@ -97,6 +98,51 @@ export default function EntityShape({
       <polygon points={pts} {...common} fillOpacity={0} />
     ) : (
       <polyline points={pts} {...common} />
+    );
+  }
+  if (e.type === "annotation" && e.position) {
+    const label = annotationText(e);
+    const h = e.height ?? 12;
+    const boxed = e.kind === "tolerance" || e.kind === "datum";
+    return (
+      <g
+        style={{ cursor: "pointer" }}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          onClick(e.id, ev);
+        }}
+      >
+        {e.leader && (
+          <line
+            x1={e.position.x}
+            y1={e.position.y}
+            x2={e.leader.x}
+            y2={e.leader.y}
+            stroke={stroke}
+            strokeWidth={1}
+          />
+        )}
+        {boxed && (
+          <rect
+            x={e.position.x - h * 0.3}
+            y={e.position.y - h}
+            width={Math.max(label.length * h * 0.62, h * 1.6)}
+            height={h * 1.4}
+            fill="none"
+            stroke={stroke}
+            strokeWidth={1}
+          />
+        )}
+        <text
+          x={e.position.x}
+          y={e.position.y}
+          fontSize={h}
+          fill={stroke}
+          stroke="none"
+        >
+          {label}
+        </text>
+      </g>
     );
   }
   if (e.type === "text" && e.position) {

@@ -24,6 +24,7 @@ import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
 import EntityShape from "@/components/cad/EntityShape";
 import ReviewPanel from "@/components/cad/ReviewPanel";
 import StatusBar from "@/components/cad/StatusBar";
+import AnnotationsPanel from "@/components/cad/AnnotationsPanel";
 import TitleBlockPanel from "@/components/cad/TitleBlockPanel";
 import ValidationPanel from "@/components/cad/ValidationPanel";
 import {
@@ -1604,6 +1605,31 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         ir={ir}
         busy={busy}
         onApply={(ops) => void apply(ops)}
+        t={t}
+      />
+
+      <AnnotationsPanel
+        busy={busy}
+        onAdd={(payload) => {
+          // Drop the annotation at the current view centre; the user then
+          // drags it into place (arrow keys / select-move).
+          const cx = activeViewBox.x + activeViewBox.width / 2;
+          const cy = activeViewBox.y + activeViewBox.height / 2;
+          const h = ir.scale ? 3.5 / ir.scale : 14;
+          void apply([
+            {
+              op: "add",
+              entity: {
+                type: "annotation",
+                position: { x: cx, y: cy },
+                height: h,
+                line_class: "dim",
+                width_class: "thin",
+                ...payload,
+              },
+            },
+          ]);
+        }}
         t={t}
       />
 

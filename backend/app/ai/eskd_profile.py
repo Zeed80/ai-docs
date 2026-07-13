@@ -117,6 +117,17 @@ _RULES: tuple[EskdRule, ...] = (
         fix_hint="Проставьте числовое значение размера — размерная линия "
                  "без величины не допускается.",
     ),
+    EskdRule(
+        rule_id="ESKD.2.308.annotation",
+        code="ESKD_ANNOTATION_INVALID",
+        gost="ГОСТ 2.308-2011",
+        clause="п. 1",
+        level=3,
+        default_severity="warn",
+        fix_hint="Исправьте аннотацию: шероховатость — из ряда Ra ГОСТ 2789, "
+                 "резьба — по ГОСТ 8724, база — одна буква, символ допуска — "
+                 "из ГОСТ 2.308.",
+    ),
 )
 
 RULES: dict[str, EskdRule] = {rule.code: rule for rule in _RULES}

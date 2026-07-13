@@ -89,6 +89,8 @@ class CadCheckCode(str, Enum):
     # C2: extended ЕСКД profile coverage
     ESKD_TEXT_HEIGHT = "ESKD_TEXT_HEIGHT"  # ГОСТ 2.304 font height series
     ESKD_DIMENSION_INCOMPLETE = "ESKD_DIMENSION_INCOMPLETE"  # ГОСТ 2.307 value present
+    # C4: structured annotation validity (roughness/thread/tolerance/datum)
+    ESKD_ANNOTATION_INVALID = "ESKD_ANNOTATION_INVALID"
 
 
 # Assurance-pipeline level per code (Ф7.1) — see module docstring for the
@@ -110,6 +112,7 @@ _CHECK_LEVEL: dict[str, int] = {
     "ESKD_NO_CONTOUR_GEOMETRY": 4,
     "ESKD_TEXT_HEIGHT": 4,
     "ESKD_DIMENSION_INCOMPLETE": 3,
+    "ESKD_ANNOTATION_INVALID": 3,
     "TECH_RULE": 5,
     "CONSTRAINT_UNSATISFIED": 3,
     "CONSTRAINT_REFERENCE_INVALID": 3,
@@ -485,6 +488,23 @@ def _check_text_heights(ir: CadIR) -> list[ValidationIssueIR]:
     return issues
 
 
+def _check_annotations(ir: CadIR) -> list[ValidationIssueIR]:
+    """C4 / ГОСТ 2.308: each structured annotation (roughness/thread/geometric
+    tolerance/datum) must be valid per its standard."""
+    from app.ai.cad_ir.annotations import validate_annotation
+
+    issues = []
+    for e in ir.entities:
+        if e.type != "annotation":
+            continue
+        ok, message = validate_annotation(e)
+        if not ok:
+            issues.append(eskd_issue(
+                CadCheckCode.ESKD_ANNOTATION_INVALID, message or "Некорректная аннотация", [e.id],
+            ))
+    return issues
+
+
 def _check_dimension_complete(ir: CadIR) -> list[ValidationIssueIR]:
     """C2 / ГОСТ 2.307: a dimension entity must carry a numeric value — a
     dimension line with neither a parsed value nor any label text is an
@@ -517,6 +537,7 @@ _CHECKS = (
     _check_contour_geometry,
     _check_text_heights,
     _check_dimension_complete,
+    _check_annotations,
     _check_roughness_values,
     _check_coverage,
     _check_dimension_chains,

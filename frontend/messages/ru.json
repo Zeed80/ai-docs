@@ -695,7 +695,11 @@
       "source_opacity": "Прозрачность исходника",
       "title_block": "Основная надпись (штамп)",
       "title_mass": "Масса, кг",
-      "title_apply": "Заполнить штамп"
+      "title_apply": "Заполнить штамп",
+      "annotations": "Аннотации ЕСКД",
+      "annotation_add": "Добавить аннотацию",
+      "annotation_datums": "Базы (напр. A B)",
+      "type_annotation": "Аннотация"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

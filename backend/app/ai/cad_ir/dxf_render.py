@@ -13,9 +13,11 @@ becomes a DXF arc [-max, -min].
 from __future__ import annotations
 
 from app.ai.cad_ir.dim_render import arrow_len_mm, dimension_label
+from app.ai.cad_ir.annotations import annotation_text
 from app.ai.cad_ir.schema import (
     LINE_CLASS_LAYERS,
     TEXT_LAYER,
+    AnnotationEntity,
     Arc,
     CadIR,
     Circle,
@@ -134,6 +136,29 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
                 hatch.paths.add_polyline_path(
                     [pt(p.x, p.y) for p in hole], is_closed=True,
                     flags=const.BOUNDARY_PATH_DEFAULT,
+                )
+        elif isinstance(entity, AnnotationEntity):
+            # Structured ЕСКД annotations export as text on the DIM layer,
+            # with a leader and (for tolerance/datum) a boxed frame — editable
+            # CAD geometry, not a flattened glyph.
+            text = annotation_text(entity.kind, entity.value, entity.symbol, entity.datum_refs)
+            h = max(entity.height * scale, 0.1)
+            msp.add_text(
+                text, dxfattribs={"layer": "DIM", "height": h},
+            ).set_placement(pt(entity.position.x, entity.position.y))
+            if entity.leader is not None:
+                msp.add_line(
+                    pt(entity.position.x, entity.position.y),
+                    pt(entity.leader.x, entity.leader.y),
+                    dxfattribs={"layer": "DIM"},
+                )
+            if entity.kind in ("tolerance", "datum"):
+                x_mm, y_mm = pt(entity.position.x, entity.position.y)
+                w = max(h * len(text) * 0.62, h * 1.6)
+                msp.add_lwpolyline(
+                    [(x_mm - h * 0.3, y_mm - h * 0.2), (x_mm + w, y_mm - h * 0.2),
+                     (x_mm + w, y_mm + h * 1.2), (x_mm - h * 0.3, y_mm + h * 1.2)],
+                    close=True, dxfattribs={"layer": "DIM"},
                 )
 
     buf = io.StringIO()

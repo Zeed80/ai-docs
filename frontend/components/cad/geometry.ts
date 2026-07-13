@@ -201,6 +201,48 @@ export function snapPoint(
   return { x, y };
 }
 
+// ГОСТ 2.308 geometric-tolerance symbol glyphs — mirrors the backend
+// cad_ir.annotations.TOLERANCE_SYMBOLS.
+export const TOLERANCE_GLYPHS: Record<string, string> = {
+  straightness: "—",
+  flatness: "▱",
+  roundness: "○",
+  cylindricity: "⌭",
+  profile_line: "⌒",
+  parallelism: "∥",
+  perpendicularity: "⊥",
+  angularity: "∠",
+  position: "⊕",
+  concentricity: "◎",
+  symmetry: "⌯",
+  runout: "↗",
+};
+
+/** Canonical display string of a structured annotation — mirrors the backend
+ * cad_ir.annotations.annotation_text so the canvas reads like the export. */
+export function annotationText(e: IrEntity): string {
+  const value = (e.value ?? "").trim();
+  const symbol = (e.symbol ?? "").trim();
+  const datums = e.datum_refs ?? [];
+  switch (e.kind) {
+    case "roughness":
+      if (!value) return "Ra";
+      return /^r[az]/i.test(value) ? value : `Ra ${value}`;
+    case "thread":
+      return value;
+    case "tolerance": {
+      const glyph = TOLERANCE_GLYPHS[symbol] ?? symbol ?? "?";
+      return [glyph, value, ...datums].filter(Boolean).join(" ");
+    }
+    case "datum":
+      return symbol || value || "A";
+    case "weld":
+      return value || symbol;
+    default:
+      return value;
+  }
+}
+
 export function entityLabel(e: IrEntity, t: (k: string) => string): string {
   const name = t(`vector.type_${e.type}`);
   if (e.type === "text") return `${name}: ${e.text ?? ""}`;

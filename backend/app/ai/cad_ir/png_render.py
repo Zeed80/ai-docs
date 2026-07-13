@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.ai.cad_ir.schema import (
+    AnnotationEntity,
     Arc,
     CadIR,
     Circle,
@@ -82,8 +83,8 @@ def rasterize_entities(
                 (int(round(entity.p2.x)), int(round(entity.p2.y))),
                 0, thin_px, cv2.LINE_AA,
             )
-        elif isinstance(entity, TextEntity):
-            continue
+        elif isinstance(entity, (TextEntity, AnnotationEntity)):
+            continue  # annotations/text are not stroke geometry
     return canvas
 
 

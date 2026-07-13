@@ -12,8 +12,10 @@ from __future__ import annotations
 import html
 import math
 
+from app.ai.cad_ir.annotations import annotation_text
 from app.ai.cad_ir.dim_render import dimension_arrows, dimension_label
 from app.ai.cad_ir.schema import (
+    AnnotationEntity,
     Arc,
     CadIR,
     Circle,
@@ -107,6 +109,27 @@ def render_ir_to_svg(ir: CadIR) -> bytes:
             parts.append(
                 f'<g {_attrs(e)}><line x1="{_fmt(e.p1.x)}" y1="{_fmt(e.p1.y)}" '
                 f'x2="{_fmt(e.p2.x)}" y2="{_fmt(e.p2.y)}"/>{arrows}{label}</g>'
+            )
+        elif isinstance(e, AnnotationEntity):
+            text = annotation_text(e.kind, e.value, e.symbol, e.datum_refs)
+            x, y, h = e.position.x, e.position.y, e.height
+            leader = (
+                f'<line x1="{_fmt(x)}" y1="{_fmt(y)}" '
+                f'x2="{_fmt(e.leader.x)}" y2="{_fmt(e.leader.y)}"/>'
+                if e.leader else ""
+            )
+            # ГОСТ boxes the geometric-tolerance frame and the datum letter.
+            box = ""
+            if e.kind in ("tolerance", "datum"):
+                w = max(h * len(text) * 0.62, h * 1.6)
+                box = (
+                    f'<rect x="{_fmt(x - h * 0.3)}" y="{_fmt(y - h)}" '
+                    f'width="{_fmt(w)}" height="{_fmt(h * 1.4)}" fill="none"/>'
+                )
+            parts.append(
+                f'<g {_attrs(e)}>{leader}{box}'
+                f'<text x="{_fmt(x)}" y="{_fmt(y)}" font-size="{_fmt(h)}" '
+                f'fill="currentColor" stroke="none">{html.escape(text)}</text></g>'
             )
     parts.append("</svg>")
     return "".join(parts).encode("utf-8")
