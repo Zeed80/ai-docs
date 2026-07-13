@@ -95,12 +95,12 @@
 
 ### D. Многовидовая реконструкция и 3D
 
-- [-] **D1. Candidates/3D preview** готовы; расширить correspondence graph: оси, скрытые линии, диаметры, сечения и масштабы между видами.
-- [ ] **D2. Связность 2D <-> 3D.** Propagation параметров и явное происхождение каждого 3D-размера.
-- [ ] **D3. Операции.** Revolve, sweep, loft, shell, draft, pattern, threads; не разрушать последнюю валидную ревизию при ошибке.
-- [ ] **D4. Exact geometry.** B-Rep validation, manifold/self-intersection, mass properties, STEP/IGES export и ассоциативные проекции/сечения.
+- [x] **D1. Candidates/3D preview + correspondence graph.** Выполнено 2026-07-13: `backend/app/ai/cad_ir/correspondence.py` строит граф соответствий между ортогональными видами по 4 признакам — выравнивание осей (спереди↔сверху вертикаль, спереди↔сбоку горизонталь), Ø-метка↔окружность в ортогональном виде, скрытый контур↔видимое отверстие, согласованность масштаба (расхождение — в issues). Подтверждённые соответствия поднимают score кандидата, рассогласования осей/масштаба → missing_data. Ноты в `MultiViewCandidate.correspondences` (endpoint reconstruction-candidates); адаптер читает выравнивание из bbox+section_type, что уже хранят строки видов. Тесты 12.
+- [x] **D2. Связность 2D <-> 3D.** Выполнено 2026-07-13: каждый параметр `Feature3D` несёт `ParamProvenance` (origin: measured/stated/guessed/propagated + source_entity_id/source_parameter). Глубина «с чертежа» трассируется к своей размерной сущности; диаметр совпадающий с именованным параметром эскиза → propagated (2D-параметр правит 3D); эвристика → guessed. 3D-панель показывает цветной бейдж происхождения у глубины выдавливания. Тесты 14.
+- [ ] **D3. Операции.** Revolve, sweep, loft, shell, draft, pattern, threads; не разрушать последнюю валидную ревизию при ошибке. (Пока: extrude/hole/boss/pocket/fillet/chamfer в cad-kernel; revolve/sweep/loft/shell/threads — не начаты, требуют новых kind в схеме + FreeCAD-операции.)
+- [-] **D4. Exact geometry.** Выполнено 2026-07-13 (ядро): cad-kernel вместо hardcoded `valid=True` даёт честную проверку OpenCascade — `brep_valid` (Shape.isValid), `manifold` (isClosed/watertight) + массовые характеристики (площадь, центр масс, масса по плотности материала из справочника); экспорт IGES рядом со STEP (декодер принимает опционально, скачивается как artifact kind). 3D-панель показывает массу и бейдж валидности B-Rep. Осталось: явная self-intersection-проверка отдельно от isValid, ассоциативные проекции/сечения.
 
-**Приемка D:** нехватка данных дает несколько кандидатов с предположениями; утвержденная модель воспроизводимо экспортируется в STEP.
+**Приемка D:** нехватка данных дает несколько кандидатов с предположениями (✅ D1/D2); утвержденная модель воспроизводимо экспортируется в STEP (✅), теперь с честной B-Rep-валидацией и IGES (✅ D4).
 
 ### E. PDM/PLM и сборки
 
