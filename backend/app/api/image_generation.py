@@ -537,13 +537,14 @@ _ARTIFACT_MEDIA_TYPES = {
     "iges": "model/iges",
     "fcstd": "application/vnd.freecad",
     "stl": "model/stl",
+    "pdf": "application/pdf",
 }
 
 
 @router.get("/{generation_id}/artifact")
 async def get_artifact(
     generation_id: uuid.UUID,
-    kind: Literal["dxf", "dwg", "svg", "ir", "step", "iges", "fcstd", "stl"] = "dxf",
+    kind: Literal["dxf", "dwg", "svg", "ir", "step", "iges", "fcstd", "stl", "pdf"] = "dxf",
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
@@ -559,7 +560,7 @@ async def get_artifact(
             or params.get("cad_artifact_revision") != revision.revision
         ):
             raise HTTPException(409, "3D-артефакт не относится к текущей утверждённой ревизии.")
-    if kind in ("dxf", "dwg") and gen.operation == "vectorize":
+    if kind in ("dxf", "dwg", "pdf") and gen.operation == "vectorize":
         _revision, current_ir = await _load_current_ir(db, gen)
         if current_ir.scale is None or current_ir.scale_source is None:
             raise HTTPException(
@@ -567,6 +568,23 @@ async def get_artifact(
                 "Метрический масштаб не подтверждён — укажите мм/px или формат листа перед CAD-экспортом.",
             )
     path = params.get(f"{kind}_path")
+    if not path and kind == "pdf":
+        # Print PDF is derived lazily from the master DXF artifact (I4) and
+        # cached: same layers/linetypes/lineweights, rendered vector-to-vector.
+        dxf_path = params.get("dxf_path")
+        if not dxf_path:
+            raise HTTPException(404, "Артефакт не найден")
+        from anyio import to_thread
+
+        from app.ai.cad_ir.dxf_render import render_dxf_to_pdf
+
+        dxf_data = await to_thread.run_sync(download_file, dxf_path)
+        pdf_data = await to_thread.run_sync(render_dxf_to_pdf, dxf_data)
+        path = dxf_path.rsplit(".", 1)[0] + ".pdf"
+        await to_thread.run_sync(lambda: upload_file(pdf_data, path, _ARTIFACT_MEDIA_TYPES["pdf"]))
+        gen.params = {**params, "pdf_path": path}
+        await db.commit()
+        return Response(content=pdf_data, media_type=_ARTIFACT_MEDIA_TYPES["pdf"])
     if not path and kind == "dwg":
         # DWG is derived lazily from the master DXF artifact and cached.
         dxf_path = params.get("dxf_path")
@@ -1748,7 +1766,7 @@ async def _delete_one(db: AsyncSession, gen: ImageGeneration) -> None:
         params.get(key)
         for key in (
             "normalized_source_path", "keep_raster_path", "svg_path", "dxf_path", "dwg_path",
-            "step_path", "fcstd_path", "stl_path", "cad_report_path",
+            "pdf_path", "step_path", "fcstd_path", "stl_path", "cad_report_path",
         )
     ]
     revision_paths = [revision.ir_path for revision in revisions]

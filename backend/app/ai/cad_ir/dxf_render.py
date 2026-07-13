@@ -186,3 +186,34 @@ def _normalize_dxf(text: str) -> str:
     text = _EZDXF_MARKER.sub(r"\1 @ 1970-01-01T00:00:00+00:00", text)
     text = _GUID_HEADER.sub(r"\g<1>{00000000-0000-0000-0000-000000000000}", text)
     return text
+
+
+def render_dxf_to_pdf(dxf_bytes: bytes) -> bytes:
+    """Print-ready PDF of the master DXF (I4): the same layers, linetypes and
+    lineweights CAD sees, rendered vector-to-vector via ezdxf's matplotlib
+    backend. Used for the editor's «Печать / PDF» — a drawing you can hand to
+    a shop, not a screenshot."""
+    import io
+
+    import ezdxf
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from ezdxf.addons.drawing import Frontend, RenderContext
+    from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+
+    doc = ezdxf.read(io.StringIO(dxf_bytes.decode("utf-8")))
+    msp = doc.modelspace()
+    fig = plt.figure()
+    ax = fig.add_axes((0, 0, 1, 1))
+    ax.set_axis_off()
+    try:
+        backend = MatplotlibBackend(ax)
+        ctx = RenderContext(doc)
+        Frontend(ctx, backend).draw_layout(msp, finalize=True)
+        out = io.BytesIO()
+        fig.savefig(out, format="pdf", dpi=300)
+        return out.getvalue()
+    finally:
+        plt.close(fig)

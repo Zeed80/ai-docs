@@ -17,6 +17,7 @@ export default function EntityShape({
   onClick,
   arrowLen,
   tool,
+  locked = false,
 }: {
   e: IrEntity;
   selected: boolean;
@@ -24,6 +25,7 @@ export default function EntityShape({
   onClick: (id: string, ev: React.MouseEvent) => void;
   arrowLen: number;
   tool: Tool;
+  locked?: boolean;
 }) {
   const stroke = selected
     ? "#38bdf8"
@@ -42,7 +44,11 @@ export default function EntityShape({
     strokeWidth: selected ? strokeWidth + 1 : strokeWidth,
     strokeDasharray: dash,
     fill: "none" as const,
-    style: { cursor: "pointer" },
+    // I4: a locked layer is visible reference geometry — click-through so the
+    // user can still snap to it while drawing, but it can't be picked/edited.
+    style: locked
+      ? ({ cursor: "default", pointerEvents: "none" } as const)
+      : ({ cursor: "pointer" } as const),
     onClick: (ev: React.MouseEvent) => {
       // select/fillet/chamfer need EXCLUSIVE entity-click handling (pick
       // this entity, nothing else). Every other tool (line/circle/dim/
@@ -106,7 +112,11 @@ export default function EntityShape({
     const boxed = e.kind === "tolerance" || e.kind === "datum";
     return (
       <g
-        style={{ cursor: "pointer" }}
+        style={
+          locked
+            ? { cursor: "default", pointerEvents: "none" }
+            : { cursor: "pointer" }
+        }
         onClick={(ev) => {
           ev.stopPropagation();
           onClick(e.id, ev);

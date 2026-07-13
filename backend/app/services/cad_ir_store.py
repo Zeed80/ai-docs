@@ -230,7 +230,7 @@ async def save_revision(
     # All compiled CAD files derive from this exact IR revision. They must not
     # survive an edit under the same generation id.
     stale_keys = (
-        "dwg_path", "step_path", "fcstd_path", "stl_path", "cad_report_path",
+        "dwg_path", "pdf_path", "step_path", "fcstd_path", "stl_path", "cad_report_path",
     )
     for key in stale_keys:
         stale_path = params.pop(key, None)

@@ -420,7 +420,7 @@ export function sourceUrl(
 }
 
 export type ArtifactKind =
-  "dxf" | "dwg" | "svg" | "ir" | "step" | "fcstd" | "stl";
+  "dxf" | "dwg" | "svg" | "ir" | "step" | "iges" | "fcstd" | "stl" | "pdf";
 
 export function artifactUrl(id: string, kind: ArtifactKind): string {
   return `${BASE}/${id}/artifact?kind=${encodeURIComponent(kind)}`;

@@ -2,7 +2,7 @@
  * the former VectorWorkspace monolith so the canvas, command line and
  * panels can share them without dragging React state around. */
 
-import { CadIr, IrEntity } from "@/lib/studio-api";
+import { CadIr, IrEntity, IrLineClass } from "@/lib/studio-api";
 
 export type Tool =
   | "select"
@@ -271,6 +271,62 @@ export const ASSURANCE_STROKE: Record<string, string> = {
   calculation_validated: "#0284c7",
   human_approved: "#059669", // emerald-600
 };
+
+/** I4: the ЕСКД layer catalog — one row per line_class. `dxfLayer` mirrors
+ * backend LINE_CLASS_LAYERS (schema.py); `linetype`/`lineweight` mirror the
+ * DXF layer defs (dxf_render._LAYER_DEFS / ГОСТ 2.303). This is the single
+ * source the Layers panel renders, so the editor shows exactly what the DXF
+ * export will contain. */
+export const LAYER_CATALOG: {
+  lineClass: IrLineClass;
+  dxfLayer: string;
+  color: string;
+  linetype: string;
+  lineweightMm: number;
+}[] = [
+  {
+    lineClass: "contour",
+    dxfLayer: "OBJECT",
+    color: "#f4f4f5",
+    linetype: "CONTINUOUS",
+    lineweightMm: 0.5,
+  },
+  {
+    lineClass: "thin",
+    dxfLayer: "OBJECT_THIN",
+    color: "#a1a1aa",
+    linetype: "CONTINUOUS",
+    lineweightMm: 0.25,
+  },
+  {
+    lineClass: "axis",
+    dxfLayer: "CENTER",
+    color: "#22d3ee",
+    linetype: "CENTER",
+    lineweightMm: 0.25,
+  },
+  {
+    lineClass: "hidden",
+    dxfLayer: "HIDDEN",
+    color: "#a78bfa",
+    linetype: "DASHED",
+    lineweightMm: 0.25,
+  },
+  {
+    lineClass: "dim",
+    dxfLayer: "DIM",
+    color: "#facc15",
+    linetype: "CONTINUOUS",
+    lineweightMm: 0.25,
+  },
+  {
+    lineClass: "hatch",
+    dxfLayer: "HATCH",
+    color: "#34d399",
+    linetype: "CONTINUOUS",
+    lineweightMm: 0.25,
+  },
+];
 
 /** Critical annotation still unresolved at the bottom of the ladder — the
  * same predicate the backend accept-vectorize gate enforces (409). Mirrored

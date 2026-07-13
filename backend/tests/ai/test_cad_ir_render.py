@@ -63,6 +63,15 @@ def test_dxf_readback_layers_and_geometry() -> None:
     assert {e.dxf.layer for e in msp} <= {"OBJECT", "OBJECT_THIN", "CENTER", "HIDDEN", "DIM", "HATCH", "ANNOTATION"}
 
 
+def test_dxf_renders_to_pdf() -> None:
+    # I4: the editor's «Печать / PDF» derives a print PDF from the master DXF.
+    from app.ai.cad_ir.dxf_render import render_dxf_to_pdf
+
+    pdf = render_dxf_to_pdf(render_ir_to_dxf(_ir()))
+    assert pdf[:5] == b"%PDF-"
+    assert len(pdf) > 500
+
+
 def test_dxf_without_scale_uses_pixel_units() -> None:
     import io
 

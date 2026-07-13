@@ -26,6 +26,7 @@ import Cad3dPanel from "@/components/cad/Cad3dPanel";
 import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
 import EntityShape from "@/components/cad/EntityShape";
 import ReviewPanel from "@/components/cad/ReviewPanel";
+import LayersPanel from "@/components/cad/LayersPanel";
 import StatusBar from "@/components/cad/StatusBar";
 import AnnotationsPanel from "@/components/cad/AnnotationsPanel";
 import TitleBlockPanel from "@/components/cad/TitleBlockPanel";
@@ -151,6 +152,14 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const [textInput, setTextInput] = useState("");
   const [visibleLayers, setVisibleLayers] = useState<Set<IrLineClass>>(
     () => new Set(["contour", "thin", "axis", "hidden", "dim", "hatch"]),
+  );
+  // I4: AutoCAD-style layer state. Frozen = neither drawn nor selectable
+  // (stronger than hidden); locked = drawn but not selectable/editable.
+  const [frozenLayers, setFrozenLayers] = useState<Set<IrLineClass>>(
+    () => new Set(),
+  );
+  const [lockedLayers, setLockedLayers] = useState<Set<IrLineClass>>(
+    () => new Set(),
   );
   const [mirrorTargetId, setMirrorTargetId] = useState<string | null>(null);
   const [pickedSegmentId, setPickedSegmentId] = useState<string | null>(null);
@@ -723,6 +732,13 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
 
   async function entityClick(id: string, ev: React.MouseEvent) {
     if (!ir) return;
+    // I4: entities on a locked or frozen layer are inert — no select, no edit.
+    const clickedLine = ir.entities.find((x) => x.id === id)?.line_class;
+    if (
+      clickedLine &&
+      (lockedLayers.has(clickedLine) || frozenLayers.has(clickedLine))
+    )
+      return;
     // Same in-flight guard as canvasClick — this is a separate handler
     // (EntityShape's onClick, not the SVG's onClick) so it needs its own
     // check before the fillet/chamfer second pick can fire apply().
@@ -891,6 +907,18 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     dim: "#facc15",
     hatch: "#34d399",
   };
+  const layerCounts = ir.entities.reduce<Record<string, number>>((acc, e) => {
+    acc[e.line_class] = (acc[e.line_class] ?? 0) + 1;
+    return acc;
+  }, {});
+  const toggleInSet =
+    (setter: typeof setVisibleLayers) => (layer: IrLineClass) =>
+      setter((current) => {
+        const next = new Set(current);
+        if (next.has(layer)) next.delete(layer);
+        else next.add(layer);
+        return next;
+      });
   const arrowLen = dimArrowLenPx(ir.scale);
   const imageWidth = ir.source.image_width;
   const imageHeight = ir.source.image_height;
@@ -1170,7 +1198,12 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
               if (moved > threshold) {
                 const crossing = marquee.end.x < marquee.start.x;
                 const ids = selectByRect(
-                  ir.entities.filter((e) => visibleLayers.has(e.line_class)),
+                  ir.entities.filter(
+                    (e) =>
+                      visibleLayers.has(e.line_class) &&
+                      !frozenLayers.has(e.line_class) &&
+                      !lockedLayers.has(e.line_class),
+                  ),
                   {
                     x0: marquee.start.x,
                     y0: marquee.start.y,
@@ -1254,7 +1287,11 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             />
           )}
           {ir.entities
-            .filter((e) => visibleLayers.has(e.line_class))
+            .filter(
+              (e) =>
+                visibleLayers.has(e.line_class) &&
+                !frozenLayers.has(e.line_class),
+            )
             .map((e) => (
               <EntityShape
                 key={e.id}
@@ -1263,6 +1300,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                 flagged={flaggedIds.has(e.id)}
                 arrowLen={arrowLen}
                 tool={tool}
+                locked={lockedLayers.has(e.line_class)}
                 onClick={(id, ev) => void entityClick(id, ev)}
               />
             ))}
@@ -1613,6 +1651,17 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         </div>
       )}
 
+      <LayersPanel
+        counts={layerCounts}
+        visible={visibleLayers}
+        locked={lockedLayers}
+        frozen={frozenLayers}
+        onToggleVisible={toggleInSet(setVisibleLayers)}
+        onToggleLocked={toggleInSet(setLockedLayers)}
+        onToggleFrozen={toggleInSet(setFrozenLayers)}
+        t={t}
+      />
+
       <ReviewPanel
         ir={ir}
         busy={busy}
@@ -1721,6 +1770,15 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
         >
           SVG
+        </a>
+        <a
+          href={artifactUrl(gen.id, "pdf")}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={t("vector.print_pdf_hint")}
+          className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
+        >
+          {t("vector.print_pdf")}
         </a>
         {!gen.accepted && (
           <button
