@@ -570,10 +570,18 @@ export interface IrEnvelope {
   ir: CadIr;
 }
 
+export interface ParamProvenance {
+  origin: "measured" | "stated" | "guessed" | "propagated";
+  detail: string;
+  source_entity_id?: string | null;
+  source_parameter?: string | null;
+}
+
 export interface Feature3D {
   kind: "extrude" | "hole" | "boss" | "pocket" | "fillet" | "chamfer";
   source_entity_ids: string[];
   params: Record<string, unknown>;
+  param_provenance?: Record<string, ParamProvenance>;
   confidence: number;
 }
 

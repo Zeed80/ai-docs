@@ -35,10 +35,24 @@ _DEPTH_PATTERN = re.compile(r"(?:глубина|толщина|depth)\s*[=:]?\s*
 _THROUGH_PATTERN = re.compile(r"сквозн|through", re.IGNORECASE)
 
 
+class ParamProvenance(BaseModel):
+    """D2: where a 3D parameter's value came from — the explicit origin of
+    every 3D dimension, so nothing reads as fact without a traceable source."""
+
+    origin: Literal["measured", "stated", "guessed", "propagated"]
+    detail: str
+    # 2D IR entity the value was read/measured from
+    source_entity_id: str | None = None
+    # named sketch parameter the value propagated from (ir.parameters)
+    source_parameter: str | None = None
+
+
 class Feature3D(BaseModel):
     kind: Literal["extrude", "hole", "boss", "pocket", "fillet", "chamfer"]
     source_entity_ids: list[str] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
+    # D2: per-parameter provenance, keyed by the param name in ``params``
+    param_provenance: dict[str, ParamProvenance] = Field(default_factory=dict)
     confidence: float = 0.5
 
 
@@ -83,9 +97,10 @@ def _footprint_mm(ir: CadIR) -> tuple[float, float, float, float] | None:
     return x0, y0, (max(xs) - min(xs)) * scale, (max(ys) - min(ys)) * scale
 
 
-def _stated_depth_mm(ir: CadIR) -> float | None:
+def _stated_depth_mm(ir: CadIR) -> tuple[float, str] | None:
     """A depth actually written on the sheet (dimension/text) beats any
-    geometric guess — real data, not a heuristic."""
+    geometric guess — real data, not a heuristic. Returns (value, entity_id)
+    so the parameter carries its provenance (D2)."""
     for e in ir.entities:
         text = getattr(e, "text", None)
         if not text:
@@ -93,9 +108,18 @@ def _stated_depth_mm(ir: CadIR) -> float | None:
         m = _DEPTH_PATTERN.search(text)
         if m:
             try:
-                return float(m.group(1).replace(",", "."))
+                return float(m.group(1).replace(",", ".")), e.id
             except ValueError:
                 continue
+    return None
+
+
+def _propagated_parameter(ir: CadIR, value_mm: float) -> str | None:
+    """A named sketch parameter (ir.parameters) whose value matches this 3D
+    dimension — the 2D parameter propagates to 3D, not an independent guess."""
+    for p in ir.parameters:
+        if p.unit == "mm" and abs(p.value - value_mm) <= max(0.01, abs(value_mm) * 0.005):
+            return p.name
     return None
 
 
@@ -128,6 +152,15 @@ def _hole_features(
             and _THROUGH_PATTERN.search(other.text)
             for other in ir.entities
         )
+        # D2: every hole parameter is measured from this circle; a diameter
+        # that matches a named sketch parameter propagated from it.
+        propagated = _propagated_parameter(ir, diameter_mm)
+        dia_prov = (
+            ParamProvenance(origin="propagated", detail=f"параметр эскиза «{propagated}»",
+                            source_entity_id=e.id, source_parameter=propagated)
+            if propagated else
+            ParamProvenance(origin="measured", detail="измерено по окружности", source_entity_id=e.id)
+        )
         features.append(Feature3D(
             kind="hole",
             source_entity_ids=[e.id],
@@ -137,9 +170,19 @@ def _hole_features(
                 "center_y_mm": center_y_mm,
                 "through": through if through else None,
             },
+            param_provenance={
+                "diameter_mm": dia_prov,
+                "center_x_mm": ParamProvenance(origin="measured", detail="центр окружности", source_entity_id=e.id),
+                "center_y_mm": ParamProvenance(origin="measured", detail="центр окружности", source_entity_id=e.id),
+            },
             confidence=0.8 if through else 0.5,
         ))
     return features
+
+
+def _footprint_provenance() -> dict[str, ParamProvenance]:
+    measured = lambda: ParamProvenance(origin="measured", detail="габарит контура вида")  # noqa: E731
+    return {"width_mm": measured(), "height_mm": measured()}
 
 
 # Depth-guess heuristics, each a distinct, labeled hypothesis — deliberately
@@ -162,10 +205,18 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
         for h in holes if h.params.get("through") is None
     ]
 
-    stated_depth = _stated_depth_mm(ir)
+    stated = _stated_depth_mm(ir)
     candidates: list[FeatureTreeCandidate] = []
 
-    if stated_depth is not None:
+    if stated is not None:
+        stated_depth, depth_src = stated
+        propagated = _propagated_parameter(ir, stated_depth)
+        depth_prov = (
+            ParamProvenance(origin="propagated", detail=f"параметр эскиза «{propagated}»",
+                            source_parameter=propagated)
+            if propagated else
+            ParamProvenance(origin="stated", detail="указана на чертеже", source_entity_id=depth_src)
+        )
         base = Feature3D(
             kind="extrude", source_entity_ids=[], confidence=0.9,
             params={
@@ -175,6 +226,7 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
                 "source_origin_x_mm": x0_mm,
                 "source_origin_y_mm": y0_mm,
             },
+            param_provenance={"depth_mm": depth_prov, **_footprint_provenance()},
         )
         candidates.append(FeatureTreeCandidate(
             features=[base, *holes], score=0.9,
@@ -192,6 +244,10 @@ def generate_feature_tree_candidates(ir: CadIR) -> list[FeatureTreeCandidate]:
                 "height_mm": height_mm,
                 "source_origin_x_mm": x0_mm,
                 "source_origin_y_mm": y0_mm,
+            },
+            param_provenance={
+                "depth_mm": ParamProvenance(origin="guessed", detail=label),
+                **_footprint_provenance(),
             },
         )
         candidates.append(FeatureTreeCandidate(

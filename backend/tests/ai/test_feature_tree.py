@@ -114,6 +114,48 @@ def test_hole_without_through_marker_is_flagged_as_missing_data() -> None:
     assert any("сквозное" in m or "глух" in m for m in best.missing_data)
 
 
+# ── D2: 2D↔3D parameter provenance ────────────────────────────────────────
+
+
+def test_stated_depth_param_traces_to_its_dimension_entity() -> None:
+    txt = TextEntity(position=Point(x=50, y=30), text="глубина 25", height=5)
+    ir = _rect_ir([txt])
+    extrude = next(
+        f for f in generate_feature_tree_candidates(ir)[0].features if f.kind == "extrude"
+    )
+    prov = extrude.param_provenance["depth_mm"]
+    assert prov.origin == "stated"
+    assert prov.source_entity_id == txt.id
+
+
+def test_guessed_depth_param_is_marked_guessed() -> None:
+    candidates = generate_feature_tree_candidates(_rect_ir())
+    guess = next(c for c in candidates if c.score < 0.5)
+    extrude = next(f for f in guess.features if f.kind == "extrude")
+    assert extrude.param_provenance["depth_mm"].origin == "guessed"
+
+
+def test_hole_diameter_provenance_points_at_its_circle() -> None:
+    circle = Circle(center=Point(x=50, y=30), radius=10, line_class="contour", width_class="main")
+    ir = _rect_ir([circle], scale=0.5)
+    hole = next(f for f in generate_feature_tree_candidates(ir)[0].features if f.kind == "hole")
+    prov = hole.param_provenance["diameter_mm"]
+    assert prov.origin == "measured"
+    assert prov.source_entity_id == circle.id
+
+
+def test_diameter_matching_named_parameter_propagates() -> None:
+    from app.ai.cad_ir.schema import CadParameter
+
+    circle = Circle(center=Point(x=50, y=30), radius=10, line_class="contour", width_class="main")
+    ir = _rect_ir([circle], scale=0.5)  # Ø = 10mm
+    ir.parameters = [CadParameter(name="d_hole", value=10.0, unit="mm")]
+    hole = next(f for f in generate_feature_tree_candidates(ir)[0].features if f.kind == "hole")
+    prov = hole.param_provenance["diameter_mm"]
+    assert prov.origin == "propagated"
+    assert prov.source_parameter == "d_hole"
+
+
 def test_compile_to_step_degrades_gracefully_without_cadquery() -> None:
     """cadquery/OCP isn't installed in this environment (deliberately —
     heavy native dep reserved for a dedicated cad-kernel container, per the

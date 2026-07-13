@@ -704,7 +704,11 @@
       "release_hint": "Скачать выпускной пакет: DXF/SVG/CAD IR + манифест с хешами",
       "release_reproducible": "✓ Воспроизводимый выпуск",
       "release_not_reproducible": "⚠ Артефакты не совпали с исходной ревизией",
-      "release_approved_by": "Принял: {who}"
+      "release_approved_by": "Принял: {who}",
+      "prov_stated": "с чертежа",
+      "prov_measured": "измерено",
+      "prov_propagated": "параметр",
+      "prov_guessed": "догадка"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

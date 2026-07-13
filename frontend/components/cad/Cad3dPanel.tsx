@@ -9,10 +9,38 @@ import {
   FeatureParameterOverride,
   FeatureTreeCandidate,
   Generation,
+  ParamProvenance,
   artifactUrl,
   compileFeatureTreeCandidate,
   getFeatureTreeCandidates,
 } from "@/lib/studio-api";
+
+// D2: colour-coded origin of a 3D dimension — stated/measured/propagated are
+// trustworthy, guessed is a labelled hypothesis needing a side view.
+const PROV_STYLE: Record<string, string> = {
+  stated: "bg-emerald-500/15 text-emerald-300",
+  measured: "bg-emerald-500/15 text-emerald-300",
+  propagated: "bg-sky-500/15 text-sky-300",
+  guessed: "bg-amber-500/15 text-amber-300",
+};
+
+function ProvenanceBadge({
+  prov,
+  t,
+}: {
+  prov?: ParamProvenance;
+  t: (k: string) => string;
+}) {
+  if (!prov) return null;
+  return (
+    <span
+      title={prov.detail}
+      className={`rounded px-1 py-0.5 text-[9px] ${PROV_STYLE[prov.origin] ?? "bg-white/10 text-zinc-400"}`}
+    >
+      {t(`vector.prov_${prov.origin}`)}
+    </span>
+  );
+}
 
 /** The accepted-drawing 3D section: feature-tree candidates, parameter
  * overrides, boss/pocket/fillet/chamfer additions, explicit build and the
@@ -406,8 +434,12 @@ export default function Cad3dPanel({
                     className="grid grid-cols-[minmax(110px,1fr)_120px] items-center gap-3 text-xs"
                   >
                     <div className="min-w-0">
-                      <div className="text-zinc-200">
+                      <div className="flex items-center gap-1 text-zinc-200">
                         {index + 1}. {t("vector.cad_extrude")}
+                        <ProvenanceBadge
+                          prov={feature.param_provenance?.depth_mm}
+                          t={t}
+                        />
                       </div>
                       <div className="truncate text-[11px] text-zinc-500">
                         {Number(feature.params.width_mm ?? 0).toFixed(2)} ×{" "}
