@@ -534,6 +534,7 @@ _ARTIFACT_MEDIA_TYPES = {
     "svg": "image/svg+xml",
     "ir": "application/json",
     "step": "model/step",
+    "iges": "model/iges",
     "fcstd": "application/vnd.freecad",
     "stl": "model/stl",
 }
@@ -542,7 +543,7 @@ _ARTIFACT_MEDIA_TYPES = {
 @router.get("/{generation_id}/artifact")
 async def get_artifact(
     generation_id: uuid.UUID,
-    kind: Literal["dxf", "dwg", "svg", "ir", "step", "fcstd", "stl"] = "dxf",
+    kind: Literal["dxf", "dwg", "svg", "ir", "step", "iges", "fcstd", "stl"] = "dxf",
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> Response:
@@ -550,7 +551,7 @@ async def get_artifact(
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     params = gen.params or {}
-    if kind in ("step", "fcstd", "stl"):
+    if kind in ("step", "iges", "fcstd", "stl"):
         revision, _ir = await _load_current_ir(db, gen)
         if (
             not gen.accepted
@@ -1055,6 +1056,16 @@ async def compile_feature_tree_candidate_to_step(
     )
     candidate = _append_human_features(candidate, body.added_features if body else [])
     try:
+        # D4: resolve the sheet material to a density so the kernel can report
+        # mass. A material we can't classify simply yields no density (no mass).
+        density_kg_m3: float | None = None
+        material = (((ir.sheet.title_block or {}).get("fields") or {}).get("material"))
+        if isinstance(material, str) and material.strip():
+            from app.ai import techdraw_reference as tdref
+
+            spec = tdref.classify_material(material)
+            if spec is not None:
+                density_kg_m3 = spec.density_kg_m3
         artifacts = await compile_candidate(
             candidate,
             confirm_assumptions=bool(body and body.confirm_assumptions),
@@ -1063,6 +1074,7 @@ async def compile_feature_tree_candidate_to_step(
                 "ir_revision": revision.revision,
                 "candidate_index": index,
                 "approved_by": gen.accepted_by,
+                "density_kg_m3": density_kg_m3,
             },
         )
     except CadKernelRejected as exc:
@@ -1080,12 +1092,15 @@ async def compile_feature_tree_candidate_to_step(
         "cad_report_path": f"{base}_report.json",
     }
     report_bytes = json.dumps(artifacts.report, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    uploads = (
+    uploads = [
         (artifacts.step, paths["step_path"], "model/step"),
         (artifacts.fcstd, paths["fcstd_path"], "application/vnd.freecad"),
         (artifacts.stl, paths["stl_path"], "model/stl"),
         (report_bytes, paths["cad_report_path"], "application/json"),
-    )
+    ]
+    if artifacts.iges:
+        paths["iges_path"] = f"{base}.iges"
+        uploads.append((artifacts.iges, paths["iges_path"], "model/iges"))
     uploaded: list[str] = []
     try:
         for content, path, content_type in uploads:
@@ -1106,6 +1121,7 @@ async def compile_feature_tree_candidate_to_step(
         "step": hashlib.sha256(artifacts.step).hexdigest(),
         "fcstd": hashlib.sha256(artifacts.fcstd).hexdigest(),
         "stl": hashlib.sha256(artifacts.stl).hexdigest(),
+        **({"iges": hashlib.sha256(artifacts.iges).hexdigest()} if artifacts.iges else {}),
     }
     gen.params = {
         **(gen.params or {}),

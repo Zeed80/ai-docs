@@ -233,6 +233,52 @@ def health() -> dict[str, Any]:
     }
 
 
+def _brep_report(shape: "Part.Shape", metadata: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+    """D4: honest B-Rep validity + mass properties, not a hardcoded 'valid'.
+
+    - ``valid``: OCC topology/geometry check (BRepCheck via Shape.isValid()).
+    - ``manifold``: the solid is closed/watertight (a non-manifold or open
+      shell cannot be a real part).
+    - mass properties: surface area, centre of mass, and mass when the
+      material density is known (metadata.density_kg_m3).
+    """
+    problems = list(warnings)
+    try:
+        valid = bool(shape.isValid())
+    except Exception as exc:  # noqa: BLE001
+        valid, problems = False, [*problems, f"проверка B-Rep не выполнена: {exc}"]
+    try:
+        manifold = bool(shape.isClosed())
+    except Exception:  # noqa: BLE001
+        manifold = False
+    if not valid:
+        problems.append("B-Rep невалиден (OpenCascade BRepCheck)")
+    if not manifold:
+        problems.append("модель не замкнута (не manifold/не watertight)")
+
+    volume_mm3 = float(shape.Volume)
+    report: dict[str, Any] = {
+        "valid": valid and manifold,
+        "brep_valid": valid,
+        "manifold": manifold,
+        "solid_count": len(shape.Solids),
+        "volume_mm3": volume_mm3,
+        "surface_area_mm2": float(shape.Area),
+        "warnings": problems,
+    }
+    try:
+        com = shape.CenterOfMass
+        report["center_of_mass_mm"] = {"x": com.x, "y": com.y, "z": com.z}
+    except Exception:  # noqa: BLE001
+        pass
+    density = metadata.get("density_kg_m3") if isinstance(metadata, dict) else None
+    if isinstance(density, (int, float)) and density > 0:
+        # volume mm³ → m³ (1e-9), × kg/m³
+        report["mass_kg"] = round(volume_mm3 * 1e-9 * float(density), 6)
+        report["density_kg_m3"] = float(density)
+    return report
+
+
 @app.post("/compile")
 def compile_candidate(request: CompileRequest) -> Response:
     shape, warnings = _build_shape(request)
@@ -250,26 +296,29 @@ def compile_candidate(request: CompileRequest) -> Response:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             step_path = root / "model.step"
+            iges_path = root / "model.iges"
             fcstd_path = root / "model.FCStd"
             stl_path = root / "model.stl"
             report_path = root / "report.json"
 
             shape.exportStep(str(step_path))
+            # D4: exact-geometry IGES export alongside STEP.
+            try:
+                shape.exportIges(str(iges_path))
+            except Exception:  # noqa: BLE001 — IGES is a bonus format, never fatal
+                iges_path = None
             document.saveAs(str(fcstd_path))
             Mesh.export([model], str(stl_path))
             bounds = shape.BoundBox
             report_path.write_text(
                 json.dumps(
                     {
-                        "valid": True,
-                        "solid_count": len(shape.Solids),
-                        "volume_mm3": shape.Volume,
+                        **_brep_report(shape, request.metadata, warnings),
                         "bounds_mm": {
                             "x": bounds.XLength,
                             "y": bounds.YLength,
                             "z": bounds.ZLength,
                         },
-                        "warnings": warnings,
                         "edges": _edge_descriptors(shape),
                         "kernel": "FreeCAD/OpenCascade",
                     },
@@ -280,8 +329,11 @@ def compile_candidate(request: CompileRequest) -> Response:
             )
 
             payload = io.BytesIO()
+            exports = [step_path, fcstd_path, stl_path, report_path]
+            if iges_path is not None:
+                exports.append(iges_path)
             with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-                for path in (step_path, fcstd_path, stl_path, report_path):
+                for path in exports:
                     if not path.exists() or path.stat().st_size == 0:
                         raise HTTPException(500, f"CAD export {path.name} is empty")
                     archive.write(path, path.name)

@@ -708,7 +708,10 @@
       "prov_stated": "stated",
       "prov_measured": "measured",
       "prov_propagated": "parameter",
-      "prov_guessed": "guess"
+      "prov_guessed": "guess",
+      "cad_mass": "Mass: {value} kg",
+      "cad_brep_ok": "✓ B-Rep valid (closed)",
+      "cad_brep_bad": "⚠ B-Rep invalid/open"
     },
     "workflow": {
       "loading": "Loading workflows…",

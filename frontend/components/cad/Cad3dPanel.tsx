@@ -148,6 +148,14 @@ export default function Cad3dPanel({
     solid_count?: number;
     bounds_mm?: { x?: number; y?: number; z?: number };
     warnings?: string[];
+    // D4: B-Rep validity + mass properties
+    valid?: boolean;
+    brep_valid?: boolean;
+    manifold?: boolean;
+    surface_area_mm2?: number;
+    mass_kg?: number;
+    density_kg_m3?: number;
+    center_of_mass_mm?: { x: number; y: number; z: number };
     edges?: Array<{
       key: string;
       index: number;
@@ -822,6 +830,22 @@ export default function Cad3dPanel({
                 {t("vector.cad_volume", {
                   value: cadReport.volume_mm3.toFixed(2),
                 })}
+              </span>
+            )}
+            {typeof cadReport?.mass_kg === "number" && (
+              <span>
+                {t("vector.cad_mass", { value: cadReport.mass_kg.toFixed(3) })}
+              </span>
+            )}
+            {typeof cadReport?.valid === "boolean" && (
+              <span
+                className={
+                  cadReport.valid ? "text-emerald-300" : "text-amber-300"
+                }
+              >
+                {cadReport.valid
+                  ? t("vector.cad_brep_ok")
+                  : t("vector.cad_brep_bad")}
               </span>
             )}
             <a

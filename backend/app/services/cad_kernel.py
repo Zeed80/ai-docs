@@ -32,9 +32,11 @@ class CadKernelArtifacts:
     fcstd: bytes
     stl: bytes
     report: dict[str, Any]
+    iges: bytes | None = None  # D4: optional exact-geometry IGES export
 
 
 _EXPECTED_FILES = {"model.step", "model.FCStd", "model.stl", "report.json"}
+_OPTIONAL_FILES = {"model.iges"}
 _MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 _MAX_MEMBER_BYTES = 80 * 1024 * 1024
 
@@ -46,7 +48,7 @@ def _decode_artifacts(content: bytes) -> CadKernelArtifacts:
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             members = archive.infolist()
             names = {info.filename for info in members}
-            if names != _EXPECTED_FILES or len(members) != len(_EXPECTED_FILES):
+            if not _EXPECTED_FILES <= names or not names <= (_EXPECTED_FILES | _OPTIONAL_FILES):
                 raise CadKernelError("cad-kernel вернул неполный пакет артефактов")
             for info in members:
                 if info.file_size <= 0 or info.file_size > _MAX_MEMBER_BYTES:
@@ -55,6 +57,7 @@ def _decode_artifacts(content: bytes) -> CadKernelArtifacts:
             fcstd = archive.read("model.FCStd")
             stl = archive.read("model.stl")
             report = json.loads(archive.read("report.json"))
+            iges = archive.read("model.iges") if "model.iges" in names else None
     except (zipfile.BadZipFile, KeyError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise CadKernelError("cad-kernel вернул повреждённый пакет") from exc
 
@@ -68,7 +71,7 @@ def _decode_artifacts(content: bytes) -> CadKernelArtifacts:
         raise CadKernelError("cad-kernel вернул некорректный отчёт валидации") from exc
     if not valid_solid:
         raise CadKernelError("OpenCascade не подтвердил валидный solid")
-    return CadKernelArtifacts(step=step, fcstd=fcstd, stl=stl, report=report)
+    return CadKernelArtifacts(step=step, fcstd=fcstd, stl=stl, report=report, iges=iges)
 
 
 async def compile_candidate(
