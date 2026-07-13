@@ -45,11 +45,46 @@ def test_overlapping_duplicates_collapse():
     assert seg.p2.x == pytest.approx(200, abs=2)
 
 
-def test_dashed_line_gaps_survive():
-    # ЕСКД dash gaps (>= 10px here) must NOT be welded into one solid stroke.
-    dashes = [_seg(i * 30, 20, i * 30 + 15, 20) for i in range(5)]
-    out, _ = consolidate_entities(dashes)
-    assert len(out) == 5
+def test_uniform_dashes_recognized_as_hidden_line():
+    # B2: a regular run of equal dashes (штриховая) is recognized as ONE
+    # hidden-class segment — the dash pattern lives in line_class, the
+    # renderer/DXF draws it. It must NOT be welded into a solid contour.
+    dashes = [_seg(i * 30, 20, i * 30 + 15, 20) for i in range(6)]
+    out, stats = consolidate_entities(dashes)
+    assert stats["dash_lines"] == 1
+    assert len(out) == 1
+    assert out[0].type == "segment"
+    assert out[0].line_class == "hidden"
+    # span covers the whole run, not one dash
+    assert out[0].p2.x - out[0].p1.x == pytest.approx(165, abs=3)
+
+
+def test_dash_dot_run_recognized_as_axis():
+    # Штрихпунктирная: long strokes alternating with short dashes/dots.
+    parts = []
+    x = 0
+    for _ in range(3):
+        parts.append(_seg(x, 50, x + 40, 50))  # long
+        x += 40 + 10
+        parts.append(_seg(x, 50, x + 6, 50))  # short/dot
+        x += 6 + 10
+    parts.append(_seg(x, 50, x + 40, 50))  # ends on a long
+    out, stats = consolidate_entities(parts)
+    assert stats["dash_lines"] == 1
+    axis = [e for e in out if e.type == "segment" and e.line_class == "axis"]
+    assert len(axis) == 1
+
+
+def test_irregular_broken_line_not_a_dash_pattern():
+    # A wall broken by a single wide doorway gap is TWO real segments, not a
+    # dash pattern — one huge gap breaks the regularity test.
+    out, stats = consolidate_entities([
+        _seg(0, 0, 100, 0),
+        _seg(400, 0, 500, 0),
+    ])
+    assert stats["dash_lines"] == 0
+    assert all(e.line_class == "contour" for e in out)
+    assert len(out) == 2
 
 
 def test_perpendicular_segments_do_not_merge():

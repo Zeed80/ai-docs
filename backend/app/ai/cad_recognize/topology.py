@@ -84,7 +84,7 @@ class _UnionFind:
             self.parent[rj] = ri
 
 
-def _collinear_mergeable(a: Segment, b: Segment) -> bool:
+def _collinear_mergeable(a: Segment, b: Segment, gap_tol: float = _GAP_TOL_PX) -> bool:
     if _angle_diff(_angle_deg(a), _angle_deg(b)) > _ANGLE_TOL_DEG:
         return False
     # Shared line = the longer segment's line; both ends of the shorter one
@@ -104,13 +104,14 @@ def _collinear_mergeable(a: Segment, b: Segment) -> bool:
     ta = sorted(((a.p1.x * ux + a.p1.y * uy), (a.p2.x * ux + a.p2.y * uy)))
     tb = sorted(((b.p1.x * ux + b.p1.y * uy), (b.p2.x * ux + b.p2.y * uy)))
     gap = max(ta[0], tb[0]) - min(ta[1], tb[1])
-    return gap <= _GAP_TOL_PX
+    return gap <= gap_tol
 
 
-def _merge_group(group: list[Segment]) -> Segment:
+def _merge_group(group: list[Segment], line_class: str | None = None) -> Segment:
     """One consolidated segment from a run of collinear fragments: principal
     direction from the length-weighted covariance, extent from the extreme
-    endpoint projections."""
+    endpoint projections. ``line_class`` overrides the anchor's class when
+    the run was recognized as a dash pattern (hidden/axis)."""
     total = sum(_seg_len(s) for s in group) or 1.0
     # Length-weighted mean direction (angles are mod 180: use doubled-angle
     # averaging so 179deg and 1deg average to 0deg, not 90deg).
@@ -131,27 +132,29 @@ def _merge_group(group: list[Segment]) -> Segment:
     return Segment(
         p1=Point(x=cx + ux * t0, y=cy + uy * t0),
         p2=Point(x=cx + ux * t1, y=cy + uy * t1),
-        line_class=anchor.line_class,
-        width_class=anchor.width_class,
+        line_class=line_class or anchor.line_class,
+        width_class="thin" if line_class else anchor.width_class,
         confidence=round(min(1.0, confidence), 4),
         origin=anchor.origin,
     )
 
 
-def _merge_collinear_segments(segments: list[Segment]) -> list[Segment]:
+def _collinear_groups(
+    segments: list[Segment], gap_tol: float
+) -> list[list[Segment]]:
     """Union-find over locally close, collinear segments. Candidate pairs
     come from a coarse spatial hash of padded segment AABBs, so the pass
     stays near-linear on the thousands of fragments the neural backend
     emits."""
     n = len(segments)
     if n < 2:
-        return segments
+        return [[s] for s in segments]
     grid: dict[tuple[int, int], list[int]] = {}
     for i, s in enumerate(segments):
-        x0 = min(s.p1.x, s.p2.x) - _GAP_TOL_PX
-        x1 = max(s.p1.x, s.p2.x) + _GAP_TOL_PX
-        y0 = min(s.p1.y, s.p2.y) - _GAP_TOL_PX
-        y1 = max(s.p1.y, s.p2.y) + _GAP_TOL_PX
+        x0 = min(s.p1.x, s.p2.x) - gap_tol
+        x1 = max(s.p1.x, s.p2.x) + gap_tol
+        y0 = min(s.p1.y, s.p2.y) - gap_tol
+        y1 = max(s.p1.y, s.p2.y) + gap_tol
         for gx in range(int(x0 // _GRID_CELL_PX), int(x1 // _GRID_CELL_PX) + 1):
             for gy in range(int(y0 // _GRID_CELL_PX), int(y1 // _GRID_CELL_PX) + 1):
                 grid.setdefault((gx, gy), []).append(i)
@@ -167,18 +170,114 @@ def _merge_collinear_segments(segments: list[Segment]) -> list[Segment]:
                 checked.add(pair)
                 if uf.find(pair[0]) == uf.find(pair[1]):
                     continue
-                if _collinear_mergeable(segments[pair[0]], segments[pair[1]]):
+                if _collinear_mergeable(segments[pair[0]], segments[pair[1]], gap_tol):
                     uf.union(pair[0], pair[1])
 
     groups: dict[int, list[Segment]] = {}
     for i, s in enumerate(segments):
         groups.setdefault(uf.find(i), []).append(s)
+    return list(groups.values())
+
+
+def _merge_collinear_segments(segments: list[Segment]) -> list[Segment]:
     out: list[Segment] = []
-    for group in groups.values():
+    for group in _collinear_groups(segments, _GAP_TOL_PX):
         merged = group[0] if len(group) == 1 else _merge_group(group)
         if _seg_len(merged) >= _MIN_SEGMENT_LEN_PX:
             out.append(merged)
     return out
+
+
+# ── Dash-pattern recognition (B2: line-type semantics) ──────────────────────
+#
+# ЕСКД line types are drawn as dash patterns: штриховая (hidden contour,
+# dashes 2-8mm with 1-2mm gaps) and штрихпунктирная (axis/center, long
+# 5-30mm dashes alternating with dots/short dashes, 3-5mm gaps). After
+# fragment consolidation those survive as runs of separate collinear
+# segments — deliberately, the 6px weld tolerance must not fuse them. This
+# second pass RECOGNIZES the runs by their regularity and merges each into
+# ONE segment with the correct line_class, which is the canonical CAD
+# representation (renderers/DXF layers draw the pattern themselves).
+_DASH_GAP_MAX_PX = 22.0  # 3-5mm gaps at the typical 4px/mm working scale
+_DASH_ELEMENT_MAX_PX = 140.0  # a 30mm+ stroke is real contour, not a dash
+_DASH_MIN_ELEMENTS = 4
+_AXIS_MIN_ELEMENTS = 3
+# A dash-dot short element is decisively shorter than the long strokes.
+_AXIS_SHORT_RATIO = 0.4
+
+
+def _classify_dash_group(group: list[Segment]) -> str | None:
+    """hidden / axis / None for a collinear run, judged purely on the
+    regularity of element lengths and gaps — no thresholds on ink."""
+    if len(group) < _AXIS_MIN_ELEMENTS:
+        return None
+    # Order along the shared direction.
+    anchor = max(group, key=_seg_len)
+    dx, dy = anchor.p2.x - anchor.p1.x, anchor.p2.y - anchor.p1.y
+    norm = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / norm, dy / norm
+    spans = sorted(
+        (
+            sorted((s.p1.x * ux + s.p1.y * uy, s.p2.x * ux + s.p2.y * uy)),
+            _seg_len(s),
+        )
+        for s in group
+    )
+    lens = [length for _span, length in spans]
+    gaps = [
+        max(0.0, spans[i + 1][0][0] - spans[i][0][1])
+        for i in range(len(spans) - 1)
+    ]
+    if not gaps or max(lens) > _DASH_ELEMENT_MAX_PX:
+        return None
+    # Gaps must be regular — one huge gap means two unrelated strokes that
+    # happen to share a line (a wall broken by a doorway), not a pattern.
+    med_gap = sorted(gaps)[len(gaps) // 2]
+    if med_gap <= 0 or max(gaps) > max(3.0 * med_gap, 12.0):
+        return None
+
+    long_thr = _AXIS_SHORT_RATIO * max(lens)
+    shorts = [length for length in lens if length <= long_thr]
+    longs = [length for length in lens if length > long_thr]
+    if shorts and longs:
+        # Axis (штрихпунктирная): long strokes alternating with short
+        # dashes/dots — no two shorts in a row, at least two longs.
+        kinds = ["s" if length <= long_thr else "l" for _span, length in spans]
+        if (
+            len(longs) >= 2
+            and "ss" not in "".join(kinds)
+            and kinds[0] == "l"
+            and kinds[-1] == "l"
+        ):
+            return "axis"
+        return None
+    if len(group) >= _DASH_MIN_ELEMENTS:
+        # Hidden (штриховая): uniform dashes.
+        if max(lens) <= 2.5 * min(lens):
+            return "hidden"
+    return None
+
+
+def _recognize_dash_patterns(
+    segments: list[Segment],
+) -> tuple[list[Segment], int]:
+    """Merge recognized dash runs into single hidden/axis segments; leave
+    everything else untouched. Only short elements participate — long
+    contour strokes can never be swallowed by this pass."""
+    candidates = [s for s in segments if _seg_len(s) <= _DASH_ELEMENT_MAX_PX]
+    rest = [s for s in segments if _seg_len(s) > _DASH_ELEMENT_MAX_PX]
+    if len(candidates) < _AXIS_MIN_ELEMENTS:
+        return segments, 0
+    out: list[Segment] = list(rest)
+    recognized = 0
+    for group in _collinear_groups(candidates, _DASH_GAP_MAX_PX):
+        line_class = _classify_dash_group(group) if len(group) > 1 else None
+        if line_class is None:
+            out.extend(group)
+            continue
+        out.append(_merge_group(group, line_class=line_class))
+        recognized += 1
+    return out, recognized
 
 
 def _snap_key(p: Point) -> tuple[int, int]:
@@ -391,6 +490,7 @@ def consolidate_entities(entities: list[Entity]) -> tuple[list[Entity], dict[str
 
     merged = _merge_collinear_segments(segments)
     kept, fitted = _refit_chains_to_arcs(merged)
+    kept, dash_lines = _recognize_dash_patterns(kept)
     all_arcs = arcs + [e for e in fitted if isinstance(e, Arc)]
     fitted_non_arc = [e for e in fitted if not isinstance(e, Arc)]
     kept_arcs, merged_arcs = _merge_cocircular_arcs(all_arcs)
@@ -401,6 +501,7 @@ def consolidate_entities(entities: list[Entity]) -> tuple[list[Entity], dict[str
         "arcs_fitted": len(fitted),
         "arcs_in": len(arcs),
         "arcs_merged": len(merged_arcs),
+        "dash_lines": dash_lines,
     }
     if len(kept) + len(fitted) < len(segments) or merged_arcs:
         logger.info("cad_topology_consolidated", **stats)

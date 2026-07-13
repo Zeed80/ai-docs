@@ -690,7 +690,9 @@
       "rebuild": "Rebuild",
       "constraint_horizontal": "Horizontal",
       "constraint_vertical": "Vertical",
-      "constraint_segment": "Constrain segment"
+      "constraint_segment": "Constrain segment",
+      "set_sheet_format": "Confirm sheet format {fmt} and derive scale",
+      "source_opacity": "Source opacity"
     },
     "workflow": {
       "loading": "Loading workflows…",

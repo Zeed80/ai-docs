@@ -166,6 +166,38 @@ async def test_patch_ir_add_update_delete_cycle(client, fake_storage):
     assert dele.json()["revision"] == 3
 
 
+async def test_patch_ir_set_sheet_format_derives_scale(client, fake_storage):
+    # A blank A4 sheet knows its own format already, but set_sheet_format
+    # must recompute mm/px from the format and mark the source authoritative
+    # (B6 one-step scale confirmation). Switching A4→A3 doubles the long
+    # side (297→420) so mm/px must grow accordingly.
+    gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
+    gen_id = gen["id"]
+
+    resp = await client.patch(
+        f"/api/image-gen/{gen_id}/ir",
+        json={"ops": [{"op": "set_sheet_format", "sheet_format": "A3"}]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["origin"] == "review"
+    ir = body["ir"]
+    assert ir["scale_source"] == "sheet_format"
+    assert ir["sheet"]["format"] == "A3"
+    # image is portrait A4 pixels; long side maps to 420mm
+    long_px = max(ir["source"]["image_width"], ir["source"]["image_height"])
+    assert ir["scale"] == pytest.approx(420.0 / long_px, rel=1e-6)
+
+
+async def test_patch_ir_set_sheet_format_rejects_unknown(client, fake_storage):
+    gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
+    resp = await client.patch(
+        f"/api/image-gen/{gen['id']}/ir",
+        json={"ops": [{"op": "set_sheet_format", "sheet_format": "B7"}]},
+    )
+    assert resp.status_code == 400
+
+
 async def _add_segment(client, gen_id, p1, p2):
     resp = await client.patch(
         f"/api/image-gen/{gen_id}/ir",

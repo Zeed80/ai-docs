@@ -179,6 +179,11 @@ class SheetInfo(BaseModel):
     height_mm: float | None = None
     frame: bool = False
     title_block: dict = Field(default_factory=dict)
+    # Detected sheet-frame bounding box in source pixels [x, y, w, h] — kept
+    # so the editor can recompute mm/px when the user confirms the format
+    # (B6), since A-series aspect ratios are identical and pixels alone can't
+    # tell A4 from A0. None when no frame was detected.
+    frame_px: list[float] | None = None
 
 
 class ValidationIssueIR(BaseModel):

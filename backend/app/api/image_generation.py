@@ -1101,10 +1101,11 @@ def _patch_error(status: int, code: IrPatchErrorCode, message: str) -> HTTPExcep
 
 class IrPatchOp(BaseModel):
     op: Literal[
-        "confirm", "delete", "update", "add", "set_scale",
+        "confirm", "delete", "update", "add", "set_scale", "set_sheet_format",
         "move", "copy", "mirror", "fillet", "chamfer", "hatch_click",
         "set_constraints", "set_parameters",
     ]
+    sheet_format: str | None = None  # A4..A0, for set_sheet_format
     entity_id: str | None = None
     entity_id_2: str | None = None  # second segment, for fillet/chamfer
     entity: dict[str, Any] | None = None
@@ -1247,6 +1248,35 @@ async def patch_ir(
                 )
             ir.scale = op.scale
             ir.scale_source = "manual"
+        elif op.op == "set_sheet_format":
+            # B6 one-step scale confirmation: the user picks the ГОСТ format;
+            # scale is derived from the detected frame's pixel span (or the
+            # full sheet when no frame box was stored). A-series aspect ratios
+            # are identical, so this is the only reliable metric anchor.
+            from app.tasks.cad_trace import _GOST_SHEETS
+
+            fmt = op.sheet_format
+            if fmt not in _GOST_SHEETS:
+                raise _patch_error(
+                    400, IrPatchErrorCode.MISSING_FIELD,
+                    f"Неизвестный формат листа: {fmt}. Допустимо: {', '.join(_GOST_SHEETS)}",
+                )
+            _short_mm, long_mm = _GOST_SHEETS[fmt]
+            frame_px = ir.sheet.frame_px
+            long_px = (
+                max(frame_px[2], frame_px[3])
+                if frame_px
+                else max(ir.source.image_width, ir.source.image_height)
+            )
+            ir.scale = long_mm / max(long_px, 1.0)
+            ir.scale_source = "sheet_format"
+            ir.sheet.format = fmt
+            short_mm = _short_mm
+            ir.sheet.width_mm, ir.sheet.height_mm = (
+                (long_mm, short_mm)
+                if ir.source.image_width >= ir.source.image_height
+                else (short_mm, long_mm)
+            )
         elif op.op == "move":
             from app.ai.cad_ir.transform import translate_entity
 
@@ -1324,7 +1354,7 @@ async def patch_ir(
             ir.parameters = parameters
 
     validate_ir(ir)
-    origin = "review" if all(o.op in ("confirm", "delete", "set_scale") for o in body.ops) else "editor"
+    origin = "review" if all(o.op in ("confirm", "delete", "set_scale", "set_sheet_format") for o in body.ops) else "editor"
     _invalidate_vector_approval(gen)
     row = await cad_ir_store.save_revision(db, gen, ir, origin=origin, created_by=user.sub)
     await db.commit()

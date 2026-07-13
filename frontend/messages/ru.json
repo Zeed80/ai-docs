@@ -690,7 +690,9 @@
       "rebuild": "Перестроить",
       "constraint_horizontal": "Горизонтальность",
       "constraint_vertical": "Вертикальность",
-      "constraint_segment": "Ограничить отрезок"
+      "constraint_segment": "Ограничить отрезок",
+      "set_sheet_format": "Подтвердить формат листа {fmt} и вычислить масштаб",
+      "source_opacity": "Прозрачность исходника"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

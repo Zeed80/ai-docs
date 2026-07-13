@@ -144,26 +144,25 @@ def test_arbitration_flags_discrepancy_when_both_pass_but_disagree_on_count():
     ink = _sheet()
     good = _good_entities()
     cv_out = RecognizeOutput(entities=good, thin_px=2, thick_px=4)
-    # Neural "passes" coverage but reports a very different structure: the
-    # top edge as dash pieces (gaps far above the consolidation weld
-    # tolerance, so they legitimately survive as separate strokes). Exact
-    # duplicates would no longer work here — topology consolidation collapses
-    # those before arbitration ever counts entities.
-    dashed = [
-        Segment(p1=Point(x=40, y=40), p2=Point(x=110, y=40)),
-        Segment(p1=Point(x=130, y=40), p2=Point(x=200, y=40)),
-        Segment(p1=Point(x=220, y=40), p2=Point(x=290, y=40)),
-        Segment(p1=Point(x=310, y=40), p2=Point(x=360, y=40)),
-        *good[1:],
+    # Neural "passes" coverage but reports a very different count: extra
+    # circles stacked on the existing one. Circles aren't collinear-merged
+    # or dash-recognized (only segments are), and each overlaps the real
+    # circle ink, so they survive consolidation AND keep precision high —
+    # a genuine whole-sheet miscount for the review queue to surface.
+    inflated = [
+        *good,
+        Circle(center=Point(x=200, y=150), radius=60, width_class="thin"),
+        Circle(center=Point(x=200, y=150), radius=60, width_class="thin"),
+        Circle(center=Point(x=200, y=150), radius=60, width_class="thin"),
     ]
-    neural_out = RecognizeOutput(entities=dashed, thin_px=2, thick_px=4)
+    neural_out = RecognizeOutput(entities=inflated, thin_px=2, thick_px=4)
     result = arbitrate_recognition(
         ink, None, _FakeRecognizer("neural", neural_out), _FakeRecognizer("cv", cv_out)
     )
     assert result.discrepancy
     assert result.recognizer_used == "neural+cv"
     assert result.notes["cv_entities"] == len(good)
-    assert result.notes["neural_entities"] == len(dashed)
+    assert result.notes["neural_entities"] == len(inflated)
 
 
 def test_arbitration_rejects_runaway_neural_fragmentation():

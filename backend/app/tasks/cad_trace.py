@@ -376,6 +376,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     from app.ai.cad_ir import CadIR, SourceInfo
     from app.ai.cad_ir.schema import SheetInfo
     from app.ai.cad_recognize import CvRecognizer
+    from app.ai.cad_recognize.dimensions import reconstruct_dimensions
     from app.ai.cad_recognize.technical_vectorizer import TechnicalVectorizerRecognizer
     from app.ai.cad_recognize.verify import apply_to_ir, arbitrate_recognition, score_coverage
     from app.ai.cad_validate import validate_ir
@@ -510,14 +511,35 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # sheet border. Coverage is rescored below to reflect it.
         frame_segments = _frame_segments_from_quad(frame_quad) if frame_quad is not None else []
 
+        # Stage 5.4 (B2): reconstruct dimensions from OCR value labels paired
+        # with the thin lines they annotate — a размер is a dimension line +
+        # value, not floating text over a stroke. Deterministic; anything
+        # ambiguous stays as separate text + line. Frame segments are contour,
+        # not thin, so they can never be consumed here.
+        geometry, text_entities, dim_count = reconstruct_dimensions(
+            list(arbitration.entities), text_entities, scale, w, h,
+        )
+
+        frame_px = None
+        if frame_quad is not None:
+            import cv2
+
+            fx, fy, fw, fh = cv2.boundingRect(frame_quad)
+            frame_px = [float(fx), float(fy), float(fw), float(fh)]
+
         ir = CadIR(
             source=SourceInfo(
                 generation_id=generation_id, image_width=w, image_height=h, kind="scan"
             ),
             scale=scale,
             scale_source=scale_source,
-            sheet=SheetInfo(format=sheet_format, frame=frame_quad is not None, title_block=title_block),
-            entities=[*arbitration.entities, *frame_segments, *text_entities],
+            sheet=SheetInfo(
+                format=sheet_format,
+                frame=frame_quad is not None,
+                title_block=title_block,
+                frame_px=frame_px,
+            ),
+            entities=[*geometry, *frame_segments, *text_entities],
             recognizer_used=arbitration.recognizer_used,
         )
 
@@ -530,14 +552,15 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             await _enrich_lines_with_vlm(ir, content)
 
         # Stage 6: verification score. Rescored when frame segments were
-        # added (Stage 5) — arbitration.score predates them and would under-
-        # report recall for a sheet whose frame just got recognized.
+        # added (Stage 5) or dimensions reconstructed (Stage 5.4) —
+        # arbitration.score predates both and would misreport recall.
+        # Dimension leader lines still rasterize, so coverage is preserved.
         score = (
             score_coverage(
-                [*arbitration.entities, *frame_segments], ink,
+                [*geometry, *frame_segments], ink,
                 keep_raster, thin_px, thick_px,
             )
-            if frame_segments
+            if (frame_segments or dim_count)
             else arbitration.score
         )
         apply_to_ir(ir, score)

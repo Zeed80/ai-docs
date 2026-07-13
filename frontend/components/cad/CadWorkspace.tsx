@@ -121,6 +121,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [tool, setTool] = useState<Tool>("select");
   const [showSource, setShowSource] = useState(true);
+  const [sourceOpacity, setSourceOpacity] = useState(0.45);
   const hasNormalizedSource = Boolean(gen.params?.normalized_source_path);
   const [sourceVariant, setSourceVariant] = useState<"original" | "normalized">(
     hasNormalizedSource ? "normalized" : "original",
@@ -921,8 +922,25 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             {t("vector.scale_known", { scale: ir.scale.toFixed(4) })}
           </span>
         ) : (
-          <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/10 text-amber-300">
+          <span className="flex flex-wrap items-center gap-1 px-2 py-0.5 rounded bg-amber-500/10 text-amber-300">
             {t("vector.scale_unknown")}
+            {/* B6: one-click sheet-format confirmation — the fast path when
+                the drawing has a ГОСТ frame (A-series aspect is ambiguous in
+                pixels, so the user just names the format). */}
+            {(["A4", "A3", "A2", "A1", "A0"] as const).map((fmt) => (
+              <button
+                key={fmt}
+                disabled={busy}
+                onClick={() =>
+                  apply([{ op: "set_sheet_format", sheet_format: fmt }])
+                }
+                title={t("vector.set_sheet_format", { fmt })}
+                className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-zinc-200 hover:bg-white/15 disabled:opacity-40"
+              >
+                {fmt}
+              </button>
+            ))}
+            <span className="text-zinc-500">·</span>
             <input
               value={scaleInput}
               onChange={(e) => setScaleInput(e.target.value)}
@@ -1070,6 +1088,19 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
               />
               {t("vector.show_source")}
             </label>
+            {showSource && (
+              // B6: transparency slider to compare the vector overlay against
+              // the source raster while reviewing recognition quality.
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(sourceOpacity * 100)}
+                onChange={(e) => setSourceOpacity(Number(e.target.value) / 100)}
+                title={t("vector.source_opacity")}
+                className="w-20 accent-sky-500"
+              />
+            )}
           </div>
         )}
       </div>
@@ -1196,7 +1227,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
               y={0}
               width={ir.source.image_width}
               height={ir.source.image_height}
-              opacity={0.45}
+              opacity={sourceOpacity}
               preserveAspectRatio="none"
             />
           )}

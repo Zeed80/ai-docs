@@ -520,6 +520,7 @@ export interface CadIr {
     height_mm: number | null;
     frame: boolean;
     title_block: Record<string, unknown>;
+    frame_px?: number[] | null;
   };
   entities: IrEntity[];
   validation: {
@@ -597,6 +598,7 @@ export type IrPatchOp =
   | { op: "update"; entity_id: string; entity: Partial<IrEntity> }
   | { op: "add"; entity: Partial<IrEntity> }
   | { op: "set_scale"; scale: number }
+  | { op: "set_sheet_format"; sheet_format: string }
   | { op: "move"; entity_id: string; dx: number; dy: number }
   | { op: "copy"; entity_id: string; dx?: number; dy?: number }
   | {
