@@ -33,6 +33,32 @@ def test_collinear_run_merges_to_one_segment():
     assert abs(seg.p1.y - 100) < 1.5 and abs(seg.p2.y - 100) < 1.5
 
 
+def test_degenerate_specks_are_dropped():
+    # A near-zero-length fragment is recognition noise the validator would flag
+    # GEOM_DEGENERATE; consolidation drops it so it never becomes an IR entity
+    # or an un-actionable review item. A real segment survives alongside it.
+    out, stats = consolidate_entities([
+        _seg(0, 0, 0.5, 0.5),   # ~0.7px — degenerate
+        _seg(10, 10, 10, 11),   # 1px — degenerate
+        _seg(0, 100, 200, 100),  # real
+    ])
+    assert stats["dropped_degenerate"] == 2
+    assert len(out) == 1
+    assert out[0].type == "segment"
+
+
+def test_exact_duplicate_across_bucket_boundary_is_dropped():
+    # Two identical segments whose endpoints straddle a dedup-grid boundary
+    # must still collapse to one — the naive bucket-rounding used to miss these.
+    a = _seg(3.0, 3.0, 103.0, 3.0)
+    b = _seg(2.9, 2.9, 103.1, 2.9)  # within tolerance, different rounded cell
+    out, stats = consolidate_entities([a, b, _seg(0, 400, 400, 400)])
+    assert stats["dropped_duplicate"] >= 1
+    # the two coincident horizontals became one; the far one stays
+    horizontals = [e for e in out if e.type == "segment" and abs(e.p1.y - 3.0) < 2]
+    assert len(horizontals) == 1
+
+
 def test_overlapping_duplicates_collapse():
     out, _ = consolidate_entities([
         _seg(0, 50, 100, 50),
