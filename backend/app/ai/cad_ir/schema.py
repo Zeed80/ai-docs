@@ -90,6 +90,11 @@ class _EntityBase(BaseModel):
     origin: EntityOrigin = "cv"
     assurance: Assurance = "inferred"
     source_region: SourceRegion | None = None
+    # A2: construction (auxiliary) geometry — a reference the user draws to
+    # constrain/align real geometry against. Rendered faintly on the canvas but
+    # excluded from the DXF/SVG export and from coverage, exactly like a CAD
+    # construction line: it guides the drawing, it is not part of it.
+    construction: bool = False
     # competing interpretations, highest-p first; resolved by cross-checks or
     # by the human in review — never silently by the model itself
     alternatives: list[Alternative] = Field(default_factory=list)

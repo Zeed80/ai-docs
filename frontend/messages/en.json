@@ -573,6 +573,8 @@
       "pattern_polar_pick_center": "Click the array rotation centre",
       "pattern_polar_prompt": "Count, angle° (e.g. 6, 360):",
       "pattern_bad_input": "Invalid array parameters",
+      "construction": "Construction",
+      "construction_hint": "Construction (auxiliary) geometry — shown on the canvas but excluded from the DXF/SVG/PDF export",
       "copy": "Copy",
       "copy_prompt": "Offset dx,dy (px):",
       "mirror": "Mirror",

@@ -972,6 +972,19 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
       }
       return;
     }
+    if (["construction", "вспом", "вспомогательная", "cons"].includes(lower)) {
+      // A2: toggle the selection between real and auxiliary (construction)
+      // geometry — the latter guides the drawing but is excluded from export.
+      if (selection.size) {
+        void apply(
+          Array.from(selection).map((id) => ({
+            op: "set_construction" as const,
+            entity_id: id,
+          })),
+        );
+      }
+      return;
+    }
     if (["fit", "f", "показать всё", "вписать"].includes(lower)) {
       setViewBox({
         x: 0,
@@ -1768,6 +1781,21 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                 )}
               </select>
             </label>
+            <button
+              type="button"
+              disabled={busy}
+              title={t("vector.construction_hint")}
+              onClick={() =>
+                apply([{ op: "set_construction", entity_id: selected.id }])
+              }
+              className={`rounded px-2 py-0.5 text-[11px] disabled:opacity-40 ${
+                selected.construction
+                  ? "bg-cyan-500/20 text-cyan-300"
+                  : "bg-white/5 text-zinc-300 hover:bg-white/10"
+              }`}
+            >
+              {t("vector.construction")}
+            </button>
             {selected.type === "text" && (
               <label className="flex items-center gap-1 text-zinc-400">
                 {t("vector.text_label")}

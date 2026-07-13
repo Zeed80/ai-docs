@@ -1219,6 +1219,7 @@ class IrPatchOp(BaseModel):
         "confirm", "delete", "update", "add", "set_scale", "set_sheet_format",
         "move", "copy", "mirror", "fillet", "chamfer", "hatch_click",
         "trim", "extend", "offset", "pattern_linear", "pattern_polar",
+        "set_construction",
         "set_constraints", "set_parameters", "set_title_block",
     ]
     sheet_format: str | None = None  # A4..A0, for set_sheet_format
@@ -1521,6 +1522,11 @@ async def patch_ir(
             for copy_entity in copies:
                 ir.entities.append(copy_entity)
                 by_id[copy_entity.id] = len(ir.entities) - 1
+        elif op.op == "set_construction":
+            idx = _index_of(op.entity_id)
+            entity = ir.entities[idx]
+            entity.construction = not entity.construction
+            entity.origin = "human"
         elif op.op == "set_constraints":
             _require(op.constraints, "constraints")
             try:

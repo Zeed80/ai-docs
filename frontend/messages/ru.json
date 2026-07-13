@@ -573,6 +573,8 @@
       "pattern_polar_pick_center": "Кликните центр вращения массива",
       "pattern_polar_prompt": "Количество, угол° (напр. 6, 360):",
       "pattern_bad_input": "Неверные параметры массива",
+      "construction": "Вспомогательная",
+      "construction_hint": "Вспомогательная (построительная) геометрия — видна на канве, но не попадает в экспорт DXF/SVG/PDF",
       "copy": "Копия",
       "copy_prompt": "Смещение dx,dy (px):",
       "mirror": "Зеркало",

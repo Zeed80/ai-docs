@@ -71,6 +71,8 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
         return (x * scale, (h - y) * scale)
 
     for entity in ir.entities:
+        if getattr(entity, "construction", False):
+            continue  # A2: auxiliary geometry never reaches the master CAD file
         layer = LINE_CLASS_LAYERS.get(entity.line_class, "OBJECT")
         attribs = {"layer": layer, "lineweight": _LINEWEIGHT[entity.width_class]}
         if isinstance(entity, Segment):

@@ -63,6 +63,25 @@ def test_dxf_readback_layers_and_geometry() -> None:
     assert {e.dxf.layer for e in msp} <= {"OBJECT", "OBJECT_THIN", "CENTER", "HIDDEN", "DIM", "HATCH", "ANNOTATION"}
 
 
+def test_construction_geometry_excluded_from_export() -> None:
+    # A2: auxiliary geometry guides the sketch but must not reach the DXF/SVG.
+    import io
+
+    import ezdxf
+
+    ir = CadIR(
+        source=SourceInfo(image_width=400, image_height=300),
+        scale=1.0,
+        entities=[
+            Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)),
+            Segment(p1=Point(x=0, y=50), p2=Point(x=100, y=50), construction=True),
+        ],
+    )
+    doc = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode("utf-8")))
+    assert sum(1 for e in doc.modelspace() if e.dxftype() == "LINE") == 1
+    assert render_ir_to_svg(ir).decode("utf-8").count("<line") == 1
+
+
 def test_dxf_renders_to_pdf() -> None:
     # I4: the editor's «Печать / PDF» derives a print PDF from the master DXF.
     from app.ai.cad_ir.dxf_render import render_dxf_to_pdf

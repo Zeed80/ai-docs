@@ -486,6 +486,7 @@ export interface IrEntity {
   origin: "neural" | "vlm" | "cv" | "human" | "spec";
   assurance: IrAssurance;
   source_region?: IrSourceRegion | null;
+  construction?: boolean;
   alternatives?: IrAlternative[];
   evidence?: string[];
   p1?: IrPoint;
@@ -678,6 +679,7 @@ export type IrPatchOp =
       click_y: number;
       value: number;
     }
+  | { op: "set_construction"; entity_id: string }
   | { op: "hatch_click"; click_x: number; click_y: number }
   | { op: "set_parameters"; parameters: CadIr["parameters"] }
   | { op: "set_constraints"; constraints: CadIr["constraints"] };

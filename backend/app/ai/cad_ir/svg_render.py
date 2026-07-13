@@ -55,6 +55,8 @@ def render_ir_to_svg(ir: CadIR) -> bytes:
         f'stroke-linecap="round" stroke-linejoin="round">'
     ]
     for e in ir.entities:
+        if getattr(e, "construction", False):
+            continue  # A2: auxiliary geometry is canvas-only, not in the export
         if isinstance(e, Segment):
             parts.append(
                 f'<line x1="{_fmt(e.p1.x)}" y1="{_fmt(e.p1.y)}" '

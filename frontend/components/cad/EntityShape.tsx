@@ -27,22 +27,27 @@ export default function EntityShape({
   tool: Tool;
   locked?: boolean;
 }) {
+  const construction = e.construction === true;
   const stroke = selected
     ? "#38bdf8"
     : flagged
       ? "#f59e0b"
-      : (ASSURANCE_STROKE[e.assurance] ?? "#a1a1aa");
+      : construction
+        ? "#22d3ee" // A2: auxiliary geometry — faint cyan, canvas-only
+        : (ASSURANCE_STROKE[e.assurance] ?? "#a1a1aa");
   const strokeWidth = e.width_class === "main" ? 2.5 : 1.5;
-  const dash =
-    e.line_class === "axis"
+  const dash = construction
+    ? "4 4"
+    : e.line_class === "axis"
       ? "12 3 3 3"
       : e.line_class === "hidden"
         ? "8 4"
         : undefined;
   const common = {
     stroke,
-    strokeWidth: selected ? strokeWidth + 1 : strokeWidth,
+    strokeWidth: selected ? strokeWidth + 1 : construction ? 1 : strokeWidth,
     strokeDasharray: dash,
+    strokeOpacity: construction && !selected ? 0.6 : undefined,
     fill: "none" as const,
     // I4: a locked layer is visible reference geometry — click-through so the
     // user can still snap to it while drawing, but it can't be picked/edited.
