@@ -260,13 +260,16 @@ export const ASSURANCE_COLOR: Record<string, string> = {
 
 // Geometry stroke color reflects assurance directly (not just "flagged or
 // not"): a hallucination-safe engineer needs to see at a glance what's
-// merely inferred vs cross-check-validated vs human-approved.
+// merely inferred vs cross-check-validated vs human-approved. Inferred/
+// observed use a readable dark grey (not the old faint zinc-400) so a
+// freshly-digitized drawing — where everything is "inferred" — actually
+// reads as a drawing on the white canvas instead of a faint wash.
 export const ASSURANCE_STROKE: Record<string, string> = {
-  observed: "#a1a1aa", // zinc-400 — read but not yet cross-checked
-  inferred: "#a1a1aa",
-  constraint_validated: "#38bdf8", // sky-400
-  calculation_validated: "#38bdf8",
-  human_approved: "#34d399", // emerald-400
+  observed: "#3f3f46", // zinc-700 — read but not yet cross-checked
+  inferred: "#3f3f46",
+  constraint_validated: "#0284c7", // sky-600
+  calculation_validated: "#0284c7",
+  human_approved: "#059669", // emerald-600
 };
 
 /** Critical annotation still unresolved at the bottom of the ladder — the

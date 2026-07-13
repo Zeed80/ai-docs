@@ -47,6 +47,10 @@ logger = structlog.get_logger()
 
 # Entities below this confidence are queued for human review.
 REVIEW_CONFIDENCE_THRESHOLD = 0.7
+# Only these entity types enter the review queue at low confidence — their
+# READING (a value/label) is what a human must confirm. Raw geometry is
+# judged visually and edited directly, never queued.
+_REVIEWABLE_TYPES = {"text", "dimension", "annotation"}
 
 _DUPLICATE_TOL_PX = 2.0
 _DANGLING_TOL_PX = 3.0
@@ -581,7 +585,14 @@ def validate_ir(ir: CadIR) -> ValidationReportIR:
     for e in ir.entities:
         if e.id in resolved or e.id in sticky_ids or e.assurance == "human_approved":
             continue
-        if e.confidence < REVIEW_CONFIDENCE_THRESHOLD:
+        # Only entities whose READING must be confirmed by a human — a
+        # dimension value, an annotation, a text label — enter the review
+        # queue at low confidence. A moderately-confident contour LINE does
+        # not: the user judges geometry by looking at the drawing and edits
+        # what's wrong, so queuing hundreds of recognized segments would make
+        # the queue un-actionable and block acceptance for no benefit (a
+        # fresh digitize came back with 216 "review" items, all geometry).
+        if e.type in _REVIEWABLE_TYPES and e.confidence < REVIEW_CONFIDENCE_THRESHOLD:
             review.append(ReviewItem(entity_id=e.id, reason="low_confidence"))
     flagged = {
         eid

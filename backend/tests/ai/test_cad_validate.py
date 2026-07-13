@@ -164,15 +164,21 @@ def test_geometry_checks_have_no_norm_citation() -> None:
     assert degenerate.norm_ref is None
 
 
-def test_low_confidence_entities_enter_review_queue() -> None:
+def test_low_confidence_annotation_enters_review_but_geometry_does_not() -> None:
+    # Only entities whose READING matters (text/dimension/annotation) queue at
+    # low confidence; a moderately-confident contour LINE does not — the user
+    # judges geometry visually, and flooding the queue with segments blocks
+    # acceptance for no benefit.
+    low_text = TextEntity(position=Point(x=5, y=5), text="Ø40", confidence=0.55)
     ir = _ir([
-        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0), confidence=0.55),
+        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0), confidence=0.55),  # geometry, not queued
         Segment(p1=Point(x=0, y=10), p2=Point(x=100, y=10), confidence=0.95),
+        low_text,
     ])
     validate_ir(ir)
     pending = [r for r in ir.review if not r.resolved]
     assert len(pending) == 1
-    assert pending[0].entity_id == ir.entities[0].id
+    assert pending[0].entity_id == low_text.id
     assert pending[0].reason == "low_confidence"
 
 
