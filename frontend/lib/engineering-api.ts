@@ -19,11 +19,15 @@ export type EngineeringRevision = {
   status: "validated" | "needs_review" | "approved";
   origin: string;
   change_summary: string | null;
-  validation: { issues?: Array<{ severity?: string; code?: string; message_ru?: string }> };
+  validation: {
+    issues?: Array<{ severity?: string; code?: string; message_ru?: string }>;
+  };
   created_at: string;
 };
 
-export type EngineeringProjectDetail = EngineeringProject & { revisions: EngineeringRevision[] };
+export type EngineeringProjectDetail = EngineeringProject & {
+  revisions: EngineeringRevision[];
+};
 
 export type EngineeringAnalysisCase = {
   id: string;
@@ -43,6 +47,24 @@ export type EngineeringMaterial = {
   density_kg_m3: number | null;
 };
 
+// A revision-safe link from an engineering revision to a domain artifact
+// (a CAD IR snapshot, a drawing, a BOM, a manufacturing process plan).
+// `state` is "current" until a newer canonical revision supersedes it,
+// then "stale".
+export type EngineeringProjectionEntityType =
+  "cad_ir_revision" | "drawing" | "bom" | "manufacturing_process_plan";
+
+export type EngineeringProjection = {
+  id: string;
+  engineering_revision_id: string;
+  projection_type: string;
+  entity_type: EngineeringProjectionEntityType | string;
+  entity_id: string;
+  state: "current" | "stale" | string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
@@ -53,23 +75,76 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
-  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+  if (!response.ok)
+    throw new Error(`${response.status} ${await response.text()}`);
   return response.json() as Promise<T>;
 }
 
 export const engineeringApi = {
-  listProjects: () => request<EngineeringProject[]>("/api/engineering/projects"),
-  createProject: (body: { name: string; code?: string; description?: string }) =>
-    request<EngineeringProject>("/api/engineering/projects", { method: "POST", body: JSON.stringify(body) }),
-  getProject: (projectId: string) => request<EngineeringProjectDetail>(`/api/engineering/projects/${projectId}`),
-  createRevision: (projectId: string, body: { base_revision: number | null; change_summary?: string }) =>
-    request<EngineeringRevision>(`/api/engineering/projects/${projectId}/revisions`, { method: "POST", body: JSON.stringify(body) }),
+  listProjects: () =>
+    request<EngineeringProject[]>("/api/engineering/projects"),
+  createProject: (body: {
+    name: string;
+    code?: string;
+    description?: string;
+  }) =>
+    request<EngineeringProject>("/api/engineering/projects", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getProject: (projectId: string) =>
+    request<EngineeringProjectDetail>(`/api/engineering/projects/${projectId}`),
+  createRevision: (
+    projectId: string,
+    body: { base_revision: number | null; change_summary?: string },
+  ) =>
+    request<EngineeringRevision>(
+      `/api/engineering/projects/${projectId}/revisions`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   validateRevision: (revisionId: string) =>
-    request<{ status: string; summary: { total: number; errors: number } }>(`/api/engineering/revisions/${revisionId}/validate`, { method: "POST" }),
-  listMaterials: () => request<EngineeringMaterial[]>("/api/engineering/materials"),
-  listAnalysisCases: (revisionId: string) => request<EngineeringAnalysisCase[]>(`/api/engineering/revisions/${revisionId}/analysis-cases`),
-  createAnalysisCase: (revisionId: string, body: { name: string; material_id?: string; inputs: Record<string, number> }) =>
-    request<EngineeringAnalysisCase>(`/api/engineering/revisions/${revisionId}/analysis-cases`, { method: "POST", body: JSON.stringify(body) }),
+    request<{ status: string; summary: { total: number; errors: number } }>(
+      `/api/engineering/revisions/${revisionId}/validate`,
+      { method: "POST" },
+    ),
+  listMaterials: () =>
+    request<EngineeringMaterial[]>("/api/engineering/materials"),
+  listAnalysisCases: (revisionId: string) =>
+    request<EngineeringAnalysisCase[]>(
+      `/api/engineering/revisions/${revisionId}/analysis-cases`,
+    ),
+  createAnalysisCase: (
+    revisionId: string,
+    body: {
+      name: string;
+      material_id?: string;
+      inputs: Record<string, number>;
+    },
+  ) =>
+    request<EngineeringAnalysisCase>(
+      `/api/engineering/revisions/${revisionId}/analysis-cases`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   runAnalysisCase: (caseId: string) =>
-    request<EngineeringAnalysisCase>(`/api/engineering/analysis-cases/${caseId}/run`, { method: "POST" }),
+    request<EngineeringAnalysisCase>(
+      `/api/engineering/analysis-cases/${caseId}/run`,
+      { method: "POST" },
+    ),
+  listProjections: (revisionId: string) =>
+    request<EngineeringProjection[]>(
+      `/api/engineering/revisions/${revisionId}/projections`,
+    ),
+  createProjection: (
+    revisionId: string,
+    body: {
+      projection_type: string;
+      entity_type: string;
+      entity_id: string;
+      metadata?: Record<string, unknown>;
+    },
+  ) =>
+    request<EngineeringProjection>(
+      `/api/engineering/revisions/${revisionId}/projections`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 };
