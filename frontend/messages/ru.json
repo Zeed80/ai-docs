@@ -858,6 +858,8 @@
     "sheet_title": "Название",
     "sheet_title_placeholder": "Например: Вал ведущий",
     "create": "Создать",
+    "rename": "Переименовать",
+    "rename_prompt": "Новое название чертежа:",
     "loading": "Загрузка…"
   }
 }

@@ -11,6 +11,7 @@ import {
   importDxf,
   listGenerations,
   resultUrl,
+  updateGenerationMeta,
 } from "@/lib/studio-api";
 
 type SheetFormat = "A4" | "A3" | "A2" | "A1";
@@ -98,6 +99,23 @@ export default function CadListPage() {
       }
     },
     [router],
+  );
+
+  const onRename = useCallback(
+    async (g: Generation, ev: React.MouseEvent) => {
+      // The card is a Link — don't navigate when renaming.
+      ev.preventDefault();
+      ev.stopPropagation();
+      const next = window.prompt(t("rename_prompt"), docTitle(g));
+      if (next === null) return;
+      try {
+        await updateGenerationMeta(g.id, { title: next.trim() });
+        await load();
+      } catch (e) {
+        setError(String((e as Error).message || e));
+      }
+    },
+    [load, t],
   );
 
   return (
@@ -238,12 +256,22 @@ export default function CadListPage() {
                   )}
                 </div>
                 <div className="space-y-1 p-3">
-                  <p
-                    className="truncate text-sm text-zinc-200"
-                    title={docTitle(g)}
-                  >
-                    {docTitle(g)}
-                  </p>
+                  <div className="flex items-center gap-1">
+                    <p
+                      className="flex-1 truncate text-sm text-zinc-200"
+                      title={docTitle(g)}
+                    >
+                      {docTitle(g)}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={(ev) => void onRename(g, ev)}
+                      title={t("rename")}
+                      className="shrink-0 rounded px-1 text-zinc-500 opacity-0 transition hover:bg-white/10 hover:text-zinc-200 group-hover:opacity-100"
+                    >
+                      ✎
+                    </button>
+                  </div>
                   <div className="flex flex-wrap items-center gap-1 text-[11px]">
                     <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-400">
                       {t(`badge_${kind}`)}

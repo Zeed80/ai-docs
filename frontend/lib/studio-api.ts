@@ -214,6 +214,18 @@ export async function acceptGeneration(id: string): Promise<Generation> {
   return jsonOrThrow<Generation>(res);
 }
 
+export async function updateGenerationMeta(
+  id: string,
+  meta: { title?: string; project?: string; object?: string },
+): Promise<Generation> {
+  const res = await mutFetch(`${BASE}/${id}/meta`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(meta),
+  });
+  return jsonOrThrow<Generation>(res);
+}
+
 export async function iterateGeneration(
   id: string,
   input: GenerateInput,

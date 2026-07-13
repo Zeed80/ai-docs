@@ -1579,6 +1579,38 @@ _BLANK_PX_PER_MM = 4.0
 _BLANK_SIZES_MM = {"A4": (210, 297), "A3": (297, 420), "A2": (420, 594), "A1": (594, 841)}
 
 
+class GenerationMetaRequest(BaseModel):
+    # I5: document lifecycle — rename a CAD document and edit lightweight
+    # metadata without touching the drawing itself. The display title is stored
+    # in `prompt` (what docTitle() reads); project/object are free-text tags.
+    title: str | None = None
+    project: str | None = None
+    object: str | None = None
+
+
+@router.patch("/{generation_id}/meta")
+async def update_generation_meta(
+    generation_id: uuid.UUID,
+    body: GenerationMetaRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    if body.title is not None:
+        gen.prompt = body.title.strip()[:200]
+    params = dict(gen.params or {})
+    if body.project is not None:
+        params["project"] = body.project.strip()[:120] or None
+    if body.object is not None:
+        params["object"] = body.object.strip()[:120] or None
+    gen.params = params
+    await db.commit()
+    await db.refresh(gen)
+    return _gen_out(gen)
+
+
 @router.post("/blank-sheet")
 async def create_blank_sheet(
     body: BlankSheetRequest,

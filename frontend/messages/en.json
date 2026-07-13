@@ -858,6 +858,8 @@
     "sheet_title": "Title",
     "sheet_title_placeholder": "e.g. Drive shaft",
     "create": "Create",
+    "rename": "Rename",
+    "rename_prompt": "New drawing title:",
     "loading": "Loading…"
   }
 }
