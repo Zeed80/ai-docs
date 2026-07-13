@@ -140,7 +140,7 @@ async def test_cad_trace_flags_diffusion_added_ink(db_session, fake_storage, mon
     # Tesseract falsely "reads" bare synthetic lines as text and its exclusion
     # boxes would reroute the hallucinated stroke into the raster path (which
     # has its own orphan-region issue). Pin OCR off to test the entity path.
-    monkeypatch.setattr("app.tasks.cad_trace._ocr_text_entities", lambda _b: ([], []))
+    monkeypatch.setattr("app.tasks.cad_trace._ocr_text_entities", lambda _b, **_k: ([], []))
 
     def _sheet(extra: bool) -> bytes:
         img = np.full((400, 500), 255, dtype=np.uint8)

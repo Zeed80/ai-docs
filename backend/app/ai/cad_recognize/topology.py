@@ -37,7 +37,11 @@ logger = structlog.get_logger()
 # _GAP_TOL_PX is deliberately below any ЕСКД dash gap so line-type patterns
 # (штриховая/штрихпунктирная) are not welded solid.
 _ANGLE_TOL_DEG = 3.0
-_OFFSET_TOL_PX = 2.5
+# Offset tolerance widened (2.5→4.0) after canonical snapping: the patch-based
+# neural model's fragments of one drawn line sit a few px apart across the
+# line; snapping aligns their angle, this lets the collinear pass actually
+# fuse them into one clean stroke instead of leaving a hairy band.
+_OFFSET_TOL_PX = 4.0
 _GAP_TOL_PX = 6.0
 _GRID_CELL_PX = 48
 # Post-merge specks: a merged run shorter than this is recognition noise.
@@ -55,12 +59,44 @@ _CHAIN_MIN_TOTAL_TURN_DEG = 50.0
 _CHAIN_MIDPOINT_DEV_CAP_PX = 3.5
 
 
+# Straightening: a fragment within this angle of a canonical ЕСКД direction
+# (0/45/90/135°) is jitter around that direction and is rotated to it exactly,
+# so the wavy fragments of one drawn line become collinear and merge into a
+# single clean stroke. Kept tight so a genuine shallow taper/cone (>3°) is
+# left alone.
+_CANONICAL_ANGLES = (0.0, 45.0, 90.0, 135.0)
+_ORTHO_SNAP_DEG = 3.0
+
+
 def _seg_len(seg: Segment) -> float:
     return math.hypot(seg.p2.x - seg.p1.x, seg.p2.y - seg.p1.y)
 
 
 def _angle_deg(seg: Segment) -> float:
     return math.degrees(math.atan2(seg.p2.y - seg.p1.y, seg.p2.x - seg.p1.x)) % 180.0
+
+
+def _snap_canonical(segments: list[Segment]) -> list[Segment]:
+    """Rotate each near-canonical fragment to its exact 0/45/90/135° direction
+    about its own midpoint. Straightens the jittery output of both backends so
+    the collinear-merge pass can fuse long lines instead of leaving them wavy."""
+    out: list[Segment] = []
+    for s in segments:
+        angle = _angle_deg(s)
+        target = min(_CANONICAL_ANGLES, key=lambda a: min(abs(angle - a), 180 - abs(angle - a)))
+        diff = min(abs(angle - target), 180 - abs(angle - target))
+        if diff > _ORTHO_SNAP_DEG or diff < 1e-6:
+            out.append(s)
+            continue
+        cx, cy = (s.p1.x + s.p2.x) / 2.0, (s.p1.y + s.p2.y) / 2.0
+        half = _seg_len(s) / 2.0
+        rad = math.radians(target)
+        ux, uy = math.cos(rad), math.sin(rad)
+        out.append(s.model_copy(update={
+            "p1": Point(x=cx - ux * half, y=cy - uy * half),
+            "p2": Point(x=cx + ux * half, y=cy + uy * half),
+        }))
+    return out
 
 
 def _angle_diff(a: float, b: float) -> float:
@@ -488,9 +524,14 @@ def consolidate_entities(entities: list[Entity]) -> tuple[list[Entity], dict[str
     if len(segments) < 2 and len(arcs) < 2:
         return entities, {"consolidated": False}
 
-    merged = _merge_collinear_segments(segments)
-    kept, fitted = _refit_chains_to_arcs(merged)
-    kept, dash_lines = _recognize_dash_patterns(kept)
+    # 1. Pull circle/arc chains out of the RAW short fragments first — before
+    #    canonical snapping would flatten their curvature.
+    straight, fitted = _refit_chains_to_arcs(segments)
+    # 2. Straighten near-axis/45° fragments so a wavy drawn line's pieces
+    #    become collinear, then merge them into one clean long stroke.
+    straight = _snap_canonical(straight)
+    merged = _merge_collinear_segments(straight)
+    kept, dash_lines = _recognize_dash_patterns(merged)
     all_arcs = arcs + [e for e in fitted if isinstance(e, Arc)]
     fitted_non_arc = [e for e in fitted if not isinstance(e, Arc)]
     kept_arcs, merged_arcs = _merge_cocircular_arcs(all_arcs)

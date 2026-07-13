@@ -9,6 +9,7 @@ contract.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import structlog
@@ -168,6 +169,85 @@ def _hatch_regions_from_solid(solid_mask) -> list[HatchRegion]:
     return out
 
 
+_HOUGH_DUP_CENTER_TOL_PX = 6.0
+_HOUGH_DUP_RADIUS_REL = 0.08
+
+
+def _hough_circles(ink: Any, existing: list[Entity]) -> list[Circle]:
+    """Detect circles directly from the ink via Hough transform — robust to
+    the skeleton fragmentation that leaves a drawn circle as a handful of
+    disconnected arcs. Circles are fundamental to mechanical drawings and both
+    the skeleton tracer and the line-only neural model miss them; this recovers
+    them from the raster itself. Deduplicated against circles already found."""
+    import cv2
+    import numpy as np
+
+    mask = np.asarray(ink)
+    if mask.ndim != 2:
+        return []
+    h, w = mask.shape[:2]
+    # On a densely-inked sheet (hatched plans, section fills) HoughCircles
+    # hallucinates circles in the texture and the on-ink test can't tell them
+    # from real outlines — skip it entirely there.
+    if float((mask > 0).mean()) > 0.16:
+        return []
+    min_dim = min(h, w)
+    blurred = cv2.GaussianBlur((mask > 0).astype(np.uint8) * 255, (5, 5), 1.2)
+    try:
+        found = cv2.HoughCircles(
+            blurred, cv2.HOUGH_GRADIENT, dp=1.0,
+            minDist=max(16.0, min_dim * 0.04),
+            param1=140, param2=52,   # strong accumulator peaks only
+            minRadius=max(6, int(min_dim * 0.008)),
+            maxRadius=int(min_dim * 0.45),
+        )
+    except cv2.error:
+        return []
+    if found is None:
+        return []
+
+    have = [
+        (e.center.x, e.center.y, e.radius)
+        for e in existing
+        if isinstance(e, (Circle, Arc))
+    ]
+    out: list[Circle] = []
+    for cx, cy, r in np.round(found[0]).astype(float):
+        if len(out) >= 20:  # a real sheet doesn't have dozens of Hough circles
+            break
+        if any(
+            math.hypot(cx - ex, cy - ey) <= _HOUGH_DUP_CENTER_TOL_PX
+            and abs(r - er) <= _HOUGH_DUP_RADIUS_REL * max(r, er)
+            for ex, ey, er in have
+        ):
+            continue
+        # A genuine circle outline: most on-circle samples are inked, AND the
+        # ring is a stroke, not the edge of a solid inked blob — points a few
+        # px INSIDE the radius should be mostly clear (a phantom circle inside
+        # hatching fails this).
+        samples = 32
+        on, inside = 0, 0
+        for k in range(samples):
+            a = 2 * math.pi * k / samples
+            ca, sa = math.cos(a), math.sin(a)
+            px, py = int(round(cx + r * ca)), int(round(cy + r * sa))
+            if 0 <= px < w and 0 <= py < h:
+                y0, y1 = max(0, py - 2), min(h, py + 3)
+                x0, x1 = max(0, px - 2), min(w, px + 3)
+                if (mask[y0:y1, x0:x1] > 0).any():
+                    on += 1
+            ipx, ipy = int(round(cx + 0.8 * r * ca)), int(round(cy + 0.8 * r * sa))
+            if 0 <= ipx < w and 0 <= ipy < h and mask[ipy, ipx] > 0:
+                inside += 1
+        if on / samples >= 0.85 and inside / samples <= 0.5:
+            out.append(Circle(
+                center=Point(x=float(cx), y=float(cy)), radius=float(r),
+                line_class="contour", width_class="main", origin="cv", confidence=0.8,
+            ))
+            have.append((cx, cy, r))
+    return out
+
+
 class CvRecognizer:
     name = "cv"
 
@@ -188,6 +268,8 @@ class CvRecognizer:
                 continue
             entities.append(entity)
         entities = _merge_cocircular_arcs(entities)
+        hough = _hough_circles(ink, entities)
+        entities.extend(hough)
         hatches = _hatch_regions_from_solid(result.solid_mask)
         entities.extend(hatches)
         logger.info(

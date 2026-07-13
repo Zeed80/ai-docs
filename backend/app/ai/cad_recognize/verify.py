@@ -109,6 +109,23 @@ _DISCREPANCY_RELATIVE_GAP = 0.30
 # OWN entities (pre-CV-supplement) and after topology consolidation, so the
 # ratio reflects genuine leftover fragmentation, not supplemented families.
 _NEURAL_FRAGMENTATION_RATIO = 3.0
+# Severe fragmentation override (2026-07-13, from VISUAL review of live
+# output — not coverage): the patch-based neural model routinely returns a
+# drawn line as dozens of tiny wavy fragments (e.g. 1345 segments where CV
+# reads 145 clean ones). Such a "fragment soup" scores high pixel coverage
+# yet is unusable as CAD — you cannot edit it, and it reads as a hairy
+# scribble, not a drawing. When neural is this much more fragmented than CV
+# and CV is a usable (not garbage) read, the CLEANER CV result wins even if
+# its coverage is lower: a clean, editable, complete-enough drawing beats a
+# complete-but-untouchable one. The user must be able to actually work with
+# the output — the whole point of digitization.
+# CV wins a fragmentation contest only when it is nearly COMPLETE (not just
+# non-garbage): a clean CV read that drops the drawing's main body is worse
+# than a rough-but-present neural one. 0.8 keeps neural whenever CV is
+# materially incomplete, and hands off to CV only for the simple drawings CV
+# reads almost fully AND cleanly.
+_NEURAL_SEVERE_FRAGMENTATION_RATIO = 5.0
+_CV_USABLE_MIN_RECALL = 0.8
 
 # The lone-survivor gate exists to reject a genuinely fabricated result
 # (recall AND precision both near zero — nothing recognizable overlaps real
@@ -260,8 +277,15 @@ def arbitrate_recognition(
         and neural_own_count / n_cv >= _NEURAL_FRAGMENTATION_RATIO
         and cv_score.ok
     )
+    # Severe fragmentation: a 5×+ segment explosion is unusable CAD even when
+    # CV didn't fully pass the coverage bar (visual review, 2026-07-13).
+    neural_severely_fragmented = (
+        n_cv > 0
+        and neural_own_count / n_cv >= _NEURAL_SEVERE_FRAGMENTATION_RATIO
+        and cv_score.recall >= _CV_USABLE_MIN_RECALL
+    )
 
-    if neural_fragmented:
+    if neural_fragmented or neural_severely_fragmented:
         chosen, used, chosen_score = cv_out, "cv", cv_score
         discrepancy = True
     elif discrepancy:
@@ -289,7 +313,7 @@ def arbitrate_recognition(
         notes={"neural_entities": n_neural, "cv_entities": n_cv,
                "neural_own_entities": neural_own_count,
                "cv_supplement_types": sorted(supplemented_types),
-               "neural_fragmented": neural_fragmented,
+               "neural_fragmented": neural_fragmented or neural_severely_fragmented,
                "neural_score": (neural_score.recall, neural_score.precision),
                "cv_score": (cv_score.recall, cv_score.precision)},
     )

@@ -289,24 +289,76 @@ def _extract_stamp_scale(text_entities: list, region: dict) -> str | None:
     return None
 
 
-def _ocr_text_entities(image_bytes: bytes):
-    """OCR → (TextEntity list, exclusion boxes for the recognizer). Low
-    tesseract confidence maps straight into entity confidence — bad reads
-    land in the review queue instead of silently shipping."""
+# A tesseract hit is one of three things on a dense CAD sheet:
+#   1. real text   → keep as a TextEntity, and exclude its box from tracing.
+#   2. geometry misread as a glyph (a vertical line as "|", a crosshair as
+#      "+", a tick as "~") → NOT text; must be TRACED, not excluded, so it is
+#      dropped entirely here (no box, no entity).
+#   3. a text-shaped smudge tesseract can't read confidently → exclude its
+#      box so its strokes aren't traced as messy lines, but DON'T ship a
+#      garbage TextEntity that clutters the drawing.
+# Without this split a clean sheet came back with 220+ single-char "в"/"8"/
+# "|" noise entities and holes punched in real geometry (B2 review, 2026-07-13).
+_TEXT_MIN_CONF_SINGLE = 70.0
+_TEXT_MIN_CONF_SHORT = 60.0   # 2 chars
+_TEXT_MIN_CONF_LONG = 58.0    # 3+ chars
+_TEXT_MAX_ASPECT = 8.0        # thinner than this = a line, not text
+_TEXT_MIN_ALNUM_RATIO = 0.6   # mostly letters/digits, not stray punctuation
+
+
+def _classify_ocr_region(region, lenient: bool = False) -> str:
+    """"text" (real label), "smudge" (exclude only) or "geometry" (ignore).
+
+    ``lenient`` keeps low-confidence but plausibly text-shaped reads as text
+    (for a downstream VLM re-read) instead of demoting them to smudge."""
+    compact = (region.text or "").strip().replace(" ", "")
+    w, h = max(region.w, 1), max(region.h, 1)
+    aspect = max(w / h, h / w)
+    # A very thin/elongated box or a pure-punctuation read is geometry.
+    if aspect > _TEXT_MAX_ASPECT:
+        return "geometry"
+    if compact and all(not c.isalnum() for c in compact):
+        return "geometry"
+    if not compact or not any(c.isalnum() for c in compact):
+        return "smudge"
+    # A confident read polluted with punctuation ("en)", "c~", "0009 Д") is a
+    # geometry-adjacent misread, not a clean label.
+    alnum_ratio = sum(c.isalnum() for c in compact) / len(compact)
+    if alnum_ratio < _TEXT_MIN_ALNUM_RATIO:
+        return "smudge"
+    if lenient:
+        return "text"  # let the VLM stage judge the reading
+    n = len(compact)
+    threshold = (
+        _TEXT_MIN_CONF_SINGLE if n == 1
+        else _TEXT_MIN_CONF_SHORT if n == 2
+        else _TEXT_MIN_CONF_LONG
+    )
+    return "text" if region.conf >= threshold else "smudge"
+
+
+def _ocr_text_entities(image_bytes: bytes, lenient: bool = False):
+    """OCR → (TextEntity list, exclusion boxes for the recognizer). Only
+    confident, text-shaped reads become entities; geometry misread as glyphs
+    is left for the recognizer to trace; unreadable smudges are excluded from
+    tracing but never shipped as garbage text. ``lenient`` keeps low-conf
+    text-shaped reads (VLM enrichment will re-read them)."""
     from app.ai.cad_ir.schema import Point, SourceRegion, TextEntity
     from app.ai.text_preserve import detect_text_regions
 
     entities = []
     boxes: list[tuple[int, int, int, int]] = []
     for region in detect_text_regions(image_bytes):
+        kind = _classify_ocr_region(region, lenient=lenient)
+        if kind == "geometry":
+            continue  # trace it as linework, don't exclude
         boxes.append((region.x, region.y, region.x + region.w, region.y + region.h))
-        text = (region.text or "").strip()
-        if not text:
-            continue
+        if kind != "text":
+            continue  # exclude the box, but ship no garbage TextEntity
         entities.append(
             TextEntity(
                 position=Point(x=float(region.x), y=float(region.y + region.h)),
-                text=text,
+                text=region.text.strip(),
                 height=float(max(region.h, 4)),
                 confidence=max(0.0, min(1.0, region.conf / 100.0)),
                 origin="cv",
@@ -439,8 +491,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # Stage 2: binarize.
         ink, w, h = _binarize(content)
 
-        # Stage 3: OCR text (annotations + exclusion zones).
-        text_entities, text_boxes = _ocr_text_entities(content)
+        # Stage 3: OCR text (annotations + exclusion zones). When VLM
+        # enrichment is on, keep low-confidence plausible reads so the VLM can
+        # rescue them (Stage 3.5); otherwise filter them out to keep the
+        # drawing clean.
+        text_entities, text_boxes = _ocr_text_entities(
+            content, lenient=bool(params.get("vlm_dimensions"))
+        )
 
         # Stage 3.5 (Ф4.1, opt-in via params): escalate low-confidence OCR
         # reads to a VLM crop read. Off by default — an extra network round
