@@ -440,22 +440,28 @@ async def create_analysis_case(revision_id: uuid.UUID, body: EngineeringAnalysis
 
 @router.post("/analysis-cases/{case_id}/run", response_model=EngineeringAnalysisCaseOut)
 async def run_analysis_case(case_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> EngineeringAnalysisCase:
+    """F1: run the deterministic solver for the case's analysis type. The
+    solver returns explicit assumptions alongside numbers; without a material
+    limit the verdict is "computed" — never a fake "passed"."""
+    from app.domain.analysis_solvers import SOLVERS, AnalysisInputError
+
     case = await db.get(EngineeringAnalysisCase, case_id)
     if not case:
         raise HTTPException(404, "Расчетный case не найден")
     await _editable_revision(db, case.engineering_revision_id)
-    if case.analysis_type != "axial_stress":
-        raise HTTPException(422, "Для этого типа еще не подключен solver")
-    force_n = float(case.inputs.get("force_n", 0))
-    area_mm2 = float(case.inputs.get("area_mm2", 0))
-    if area_mm2 <= 0:
-        raise HTTPException(422, "Для осевого расчета требуется положительная площадь area_mm2")
+    solver = SOLVERS.get(case.analysis_type)
+    if solver is None:
+        raise HTTPException(422, f"Для типа {case.analysis_type!r} нет solver; доступны: {', '.join(sorted(SOLVERS))}")
     material = await db.get(EngineeringMaterial, case.material_id) if case.material_id else None
-    stress_mpa = abs(force_n) / area_mm2
-    yield_mpa = material.yield_strength_mpa if material else None
-    factor = yield_mpa / stress_mpa if yield_mpa and stress_mpa else None
-    case.results = {"stress_mpa": stress_mpa, "yield_strength_mpa": yield_mpa, "safety_factor": factor}
-    case.status = "passed" if factor is None or factor >= 1 else "failed"
+    try:
+        outcome = solver(case.inputs or {}, material)
+    except AnalysisInputError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    case.results = outcome.results
+    case.assumptions = outcome.assumptions
+    case.status = (
+        "computed" if outcome.passed is None else ("passed" if outcome.passed else "failed")
+    )
     case.executed_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(case)
