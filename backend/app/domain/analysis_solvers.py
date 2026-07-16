@@ -21,7 +21,7 @@ from typing import Any, Callable
 # F2: bumped whenever any formula/threshold below changes — stored in every
 # run snapshot so an old result can be traced to the exact solver revision
 # that produced it.
-SOLVER_VERSION = "1.1.0"
+SOLVER_VERSION = "1.2.0"
 
 
 class AnalysisInputError(ValueError):
@@ -214,10 +214,148 @@ def solve_thermal_expansion(inputs: dict, material) -> SolverOutcome:
     return SolverOutcome(results=results, assumptions=assumptions, passed=passed)
 
 
+def _beam_system(
+    n_elements: int,
+    length: float,
+    ei: float,
+    supports: str,
+    loads: list[dict],
+):
+    """Assemble and solve the Euler-Bernoulli beam FE system (Hermite
+    2-node elements, DOFs [v, θ] per node). Returns nodal DOF vector."""
+    import numpy as np
+
+    n_nodes = n_elements + 1
+    le = length / n_elements
+    k_e = (ei / le**3) * np.array([
+        [12, 6 * le, -12, 6 * le],
+        [6 * le, 4 * le**2, -6 * le, 2 * le**2],
+        [-12, -6 * le, 12, -6 * le],
+        [6 * le, 2 * le**2, -6 * le, 4 * le**2],
+    ])
+    ndof = 2 * n_nodes
+    stiffness = np.zeros((ndof, ndof))
+    for element in range(n_elements):
+        i = 2 * element
+        stiffness[i:i + 4, i:i + 4] += k_e
+
+    load_vector = np.zeros(ndof)
+    for load in loads:
+        kind = load.get("type", "point")
+        if kind == "point":
+            force = float(load["force_n"])
+            position = float(load.get("position_mm", length))
+            position = min(max(position, 0.0), length)
+            element = min(int(position // le), n_elements - 1)
+            xi = (position - element * le) / le
+            # Hermite shape functions distribute the point load consistently
+            h = np.array([
+                1 - 3 * xi**2 + 2 * xi**3,
+                le * (xi - 2 * xi**2 + xi**3),
+                3 * xi**2 - 2 * xi**3,
+                le * (-(xi**2) + xi**3),
+            ])
+            load_vector[2 * element:2 * element + 4] += force * h
+        elif kind == "udl":
+            q = float(load["force_n_per_mm"])
+            fe = np.array([q * le / 2, q * le**2 / 12, q * le / 2, -q * le**2 / 12])
+            for element in range(n_elements):
+                load_vector[2 * element:2 * element + 4] += fe
+        else:
+            raise AnalysisInputError(f"Неизвестный тип нагрузки: {kind!r} (point | udl)")
+
+    if supports == "cantilever":
+        fixed = [0, 1]  # v(0) = θ(0) = 0
+    elif supports == "simply_supported":
+        fixed = [0, ndof - 2]  # v(0) = v(L) = 0
+    else:
+        raise AnalysisInputError("supports должен быть cantilever или simply_supported")
+    free = [dof for dof in range(ndof) if dof not in fixed]
+    solution = np.zeros(ndof)
+    solution[free] = np.linalg.solve(stiffness[np.ix_(free, free)], load_vector[free])
+    # element end moments from k_e @ u_e (θ-DOF rows) — bending moment at nodes
+    moments = np.zeros(n_nodes)
+    for element in range(n_elements):
+        forces = k_e @ solution[2 * element:2 * element + 4]
+        moments[element] = max(abs(moments[element]), abs(forces[1]))
+        moments[element + 1] = max(abs(moments[element + 1]), abs(forces[3]))
+    return solution, moments
+
+
+def solve_fea_beam(inputs: dict, material) -> SolverOutcome:
+    """F3: a real finite-element solve of a 1D Euler-Bernoulli beam — loads,
+    restraints, a mesh that is refined until the tip answer stops moving. A
+    non-converged mesh FAILS the case (blocking release), it is not rounded
+    into an answer."""
+    length = _positive(inputs, "length_mm")
+    modulus = getattr(material, "elastic_modulus_mpa", None) if material else None
+    if not modulus:
+        raise AnalysisInputError("Для FEA нужен материал с модулем упругости")
+    if "moment_inertia_mm4" in inputs:
+        inertia = _positive(inputs, "moment_inertia_mm4")
+        section_modulus = _positive(inputs, "section_modulus_mm3")
+    elif "diameter_mm" in inputs:
+        d = _positive(inputs, "diameter_mm")
+        inertia = math.pi * d**4 / 64
+        section_modulus = math.pi * d**3 / 32
+    else:
+        raise AnalysisInputError("Нужен diameter_mm или moment_inertia_mm4 + section_modulus_mm3")
+    loads = inputs.get("loads")
+    if not isinstance(loads, list) or not loads:
+        raise AnalysisInputError("Нужен список loads: [{type: point|udl, ...}]")
+    supports = str(inputs.get("supports", "cantilever"))
+
+    ei = modulus * inertia
+    tolerance = 0.005
+    max_elements = 256
+    previous: float | None = None
+    converged = False
+    n = 4
+    deflection = 0.0
+    moments = None
+    solution = None
+    while n <= max_elements:
+        solution, moments = _beam_system(n, length, ei, supports, loads)
+        deflection = float(max(abs(solution[0::2])))
+        if previous is not None and (
+            deflection == 0.0 or abs(deflection - previous) / max(abs(deflection), 1e-12) < tolerance
+        ):
+            converged = True
+            break
+        previous = deflection
+        n *= 2
+    max_moment = float(max(abs(moments))) if moments is not None else 0.0
+    stress = max_moment / section_modulus
+    yield_mpa = getattr(material, "yield_strength_mpa", None) if material else None
+    factor = _safety(yield_mpa, stress)
+    results = {
+        "max_deflection_mm": deflection,
+        "max_moment_nmm": max_moment,
+        "max_stress_mpa": stress,
+        "yield_strength_mpa": yield_mpa,
+        "safety_factor": factor,
+        "mesh_elements": n if converged else max_elements,
+        "converged": converged,
+        "convergence_tolerance": tolerance,
+    }
+    assumptions = [
+        "балка Эйлера-Бернулли (сдвиговые деформации не учтены)",
+        f"схема опор: {supports}",
+        "линейно-упругий материал, малые перемещения",
+        f"сетка уточнялась до сходимости прогиба <{tolerance:.1%}",
+    ]
+    if not converged:
+        # a non-converged solve is a FAILED case, never an answer
+        return SolverOutcome(results=results, assumptions=assumptions, passed=False)
+    passed = None if factor is None else factor >= 1
+    return SolverOutcome(results=results, assumptions=assumptions, passed=passed)
+
+
 SOLVERS: dict[str, Callable[[dict, Any], SolverOutcome]] = {
     "axial_stress": solve_axial_stress,
     "bending": solve_bending,
     "torsion": solve_torsion,
     "buckling": solve_buckling,
     "thermal_expansion": solve_thermal_expansion,
+    "fea_beam": solve_fea_beam,
 }

@@ -76,4 +76,53 @@ def test_no_material_limit_means_computed_not_passed():
 def test_registry_covers_all_documented_types():
     assert set(SOLVERS) == {
         "axial_stress", "bending", "torsion", "buckling", "thermal_expansion",
+        "fea_beam",
     }
+
+
+def test_fea_beam_cantilever_matches_analytics():
+    """F3: FE result must reproduce the closed-form cantilever answer —
+    v = FL³/3EI at the tip, σ = FL/W at the root."""
+    from app.domain.analysis_solvers import solve_fea_beam
+
+    out = solve_fea_beam(
+        {"length_mm": 1000, "diameter_mm": 40,
+         "supports": "cantilever",
+         "loads": [{"type": "point", "force_n": 1000, "position_mm": 1000}]},
+        STEEL,
+    )
+    inertia = math.pi * 40**4 / 64
+    modulus_w = math.pi * 40**3 / 32
+    v_exact = 1000 * 1000**3 / (3 * 200_000 * inertia)
+    sigma_exact = 1000 * 1000 / modulus_w
+    assert out.results["converged"] is True
+    assert out.results["max_deflection_mm"] == pytest.approx(v_exact, rel=0.01)
+    assert out.results["max_stress_mpa"] == pytest.approx(sigma_exact, rel=0.02)
+    assert out.passed is True  # σ≈159 < 300
+
+
+def test_fea_beam_simply_supported_udl():
+    """v_max = 5qL⁴/384EI, M_max = qL²/8 for a UDL on a simple span."""
+    from app.domain.analysis_solvers import solve_fea_beam
+
+    out = solve_fea_beam(
+        {"length_mm": 2000, "diameter_mm": 50,
+         "supports": "simply_supported",
+         "loads": [{"type": "udl", "force_n_per_mm": 2.0}]},
+        STEEL,
+    )
+    inertia = math.pi * 50**4 / 64
+    v_exact = 5 * 2.0 * 2000**4 / (384 * 200_000 * inertia)
+    m_exact = 2.0 * 2000**2 / 8
+    assert out.results["converged"] is True
+    assert out.results["max_deflection_mm"] == pytest.approx(v_exact, rel=0.01)
+    assert out.results["max_moment_nmm"] == pytest.approx(m_exact, rel=0.03)
+
+
+def test_fea_beam_requires_material_and_loads():
+    from app.domain.analysis_solvers import solve_fea_beam
+
+    with pytest.raises(AnalysisInputError):
+        solve_fea_beam({"length_mm": 100, "diameter_mm": 10, "loads": [{"type": "point", "force_n": 1}]}, None)
+    with pytest.raises(AnalysisInputError):
+        solve_fea_beam({"length_mm": 100, "diameter_mm": 10}, STEEL)
