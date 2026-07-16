@@ -25,7 +25,13 @@ class Feature(BaseModel):
     # unused here: the kernel builds geometry from ``params`` only.
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["extrude", "hole", "boss", "pocket", "fillet", "chamfer"]
+    kind: Literal[
+        "extrude", "hole", "boss", "pocket", "fillet", "chamfer",
+        # D3: revolve/loft are alternative BASE features (a shaft profile spun
+        # about Z; circular sections lofted along Z); shell hollows the final
+        # solid; thread is cosmetic per ЕСКД (reported, not modeled).
+        "revolve", "loft", "shell", "thread",
+    ]
     source_entity_ids: list[str] = Field(default_factory=list, max_length=500)
     params: dict[str, Any] = Field(default_factory=dict)
     param_provenance: dict[str, Any] = Field(default_factory=dict)
@@ -123,19 +129,129 @@ def _find_edge(shape: Part.Shape, key: str) -> Part.Edge:
     return matches[0]
 
 
+def _revolve_base(feature: Feature) -> Part.Shape:
+    """D3: a lathe part — the (r, z) profile polyline spun 360° about Z.
+    The profile is auto-closed onto the axis, so a simple stepped-shaft
+    outline (what a front view of a spindle gives you) is enough."""
+    raw = feature.params.get("profile_points")
+    if not isinstance(raw, list) or len(raw) < 2 or len(raw) > 200:
+        raise HTTPException(422, "revolve requires profile_points: 2..200 points of {r, z}")
+    points: list[App.Vector] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise HTTPException(422, "revolve profile point must be an object {r, z}")
+        r, z = item.get("r"), item.get("z")
+        for name, value in (("r", r), ("z", z)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise HTTPException(422, f"revolve profile point {name!r} must be a finite number")
+        if float(r) < 0 or float(r) > 100_000 or abs(float(z)) > 100_000:
+            raise HTTPException(422, "revolve profile point is outside supported bounds")
+        points.append(App.Vector(float(r), 0.0, float(z)))
+    if max(p.x for p in points) <= 0:
+        raise HTTPException(422, "revolve profile never leaves the axis — nothing to spin")
+    # close the loop onto the axis (r=0) at both ends unless already there
+    closed = list(points)
+    if closed[0].x > 1e-9:
+        closed.insert(0, App.Vector(0.0, 0.0, closed[0].z))
+    if closed[-1].x > 1e-9:
+        closed.append(App.Vector(0.0, 0.0, closed[-1].z))
+    closed.append(closed[0])
+    try:
+        face = Part.Face(Part.makePolygon(closed))
+        solid = face.revolve(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360)
+    except Exception as exc:
+        raise HTTPException(422, f"OpenCascade rejected the revolve profile: {exc}") from exc
+    return solid
+
+
+def _loft_base(feature: Feature) -> Part.Shape:
+    """D3: circular sections at increasing Z lofted into one solid — the
+    adapter/cone/transition class of parts."""
+    raw = feature.params.get("sections")
+    if not isinstance(raw, list) or len(raw) < 2 or len(raw) > 50:
+        raise HTTPException(422, "loft requires sections: 2..50 items of {z, diameter_mm}")
+    wires = []
+    last_z = None
+    for item in raw:
+        if not isinstance(item, dict):
+            raise HTTPException(422, "loft section must be an object {z, diameter_mm}")
+        z = item.get("z")
+        if isinstance(z, bool) or not isinstance(z, (int, float)) or not math.isfinite(float(z)) or abs(float(z)) > 100_000:
+            raise HTTPException(422, "loft section 'z' must be a finite number")
+        diameter = _number(item, "diameter_mm")
+        if last_z is not None and float(z) <= last_z:
+            raise HTTPException(422, "loft sections must have strictly increasing z")
+        last_z = float(z)
+        circle = Part.Circle(App.Vector(0, 0, float(z)), App.Vector(0, 0, 1), diameter / 2)
+        wires.append(Part.Wire(circle.toShape()))
+    try:
+        solid = Part.makeLoft(wires, True)
+    except Exception as exc:
+        raise HTTPException(422, f"OpenCascade rejected the loft sections: {exc}") from exc
+    return solid
+
+
+def _apply_shell(shape: Part.Shape, feature: Feature) -> Part.Shape:
+    """D3: hollow the solid leaving walls of the given thickness, opening the
+    top face (the face whose centre sits highest)."""
+    thickness = _number(feature.params, "thickness_mm", maximum=10_000)
+    if not shape.Faces:
+        raise HTTPException(422, "shell requires a solid with faces")
+    top = max(shape.Faces, key=lambda f: f.CenterOfMass.z)
+    try:
+        result = shape.makeThickness([top], -thickness, 1e-3)
+    except Exception as exc:
+        raise HTTPException(422, f"OpenCascade rejected shell: {exc}") from exc
+    if result.isNull() or not result.isValid() or result.Volume <= 0:
+        raise HTTPException(422, "OpenCascade produced invalid geometry after shell")
+    return result
+
+
 def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
-    extrudes = [feature for feature in request.candidate.features if feature.kind == "extrude"]
-    if len(extrudes) != 1:
-        raise HTTPException(422, "Exactly one base extrude is required")
+    bases = [
+        feature for feature in request.candidate.features
+        if feature.kind in ("extrude", "revolve", "loft")
+    ]
+    if len(bases) != 1:
+        raise HTTPException(422, "Exactly one base feature (extrude, revolve or loft) is required")
     if request.candidate.missing_data and not request.confirm_assumptions:
         raise HTTPException(409, "Explicit confirmation of feature-tree assumptions is required")
 
-    base = extrudes[0]
-    width = _number(base.params, "width_mm")
-    height = _number(base.params, "height_mm")
-    depth = _number(base.params, "depth_mm")
-    shape = Part.makeBox(width, height, depth)
+    base = bases[0]
     warnings: list[str] = []
+    if base.kind == "revolve":
+        shape = _revolve_base(base)
+        # boss/pocket/hole are positioned against the extrude box footprint;
+        # a lathe base has no such footprint, so only edge ops/shell apply.
+        unsupported = [
+            f.kind for f in request.candidate.features
+            if f.kind in ("boss", "pocket", "hole")
+        ]
+        if unsupported:
+            raise HTTPException(
+                422, f"{', '.join(sorted(set(unsupported)))} on a revolve base is not supported yet"
+            )
+        width = height = depth = max(
+            shape.BoundBox.XLength, shape.BoundBox.YLength, shape.BoundBox.ZLength
+        )
+    elif base.kind == "loft":
+        shape = _loft_base(base)
+        unsupported = [
+            f.kind for f in request.candidate.features
+            if f.kind in ("boss", "pocket", "hole")
+        ]
+        if unsupported:
+            raise HTTPException(
+                422, f"{', '.join(sorted(set(unsupported)))} on a loft base is not supported yet"
+            )
+        width = height = depth = max(
+            shape.BoundBox.XLength, shape.BoundBox.YLength, shape.BoundBox.ZLength
+        )
+    else:
+        width = _number(base.params, "width_mm")
+        height = _number(base.params, "height_mm")
+        depth = _number(base.params, "depth_mm")
+        shape = Part.makeBox(width, height, depth)
 
     for feature in request.candidate.features:
         if feature.kind not in ("boss", "pocket"):
@@ -223,10 +339,37 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
             )
         shape = shape.cut(cutter)
 
+    # D3: shell hollows the finished solid (after all add/cut operations).
+    shells = [f for f in request.candidate.features if f.kind == "shell"]
+    if len(shells) > 1:
+        raise HTTPException(422, "At most one shell feature is supported")
+    for feature in shells:
+        shape = _apply_shell(shape, feature)
+
     shape = shape.removeSplitter()
     if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
         raise HTTPException(422, "OpenCascade produced an invalid or empty solid")
     return shape, warnings
+
+
+def _cosmetic_threads(request: CompileRequest) -> list[dict[str, Any]]:
+    """D3: threads are cosmetic per ЕСКД (ГОСТ 2.311 draws them conventionally;
+    modeling helical geometry adds nothing downstream). Validated and carried
+    into the report so the drawing/technology layers can consume them."""
+    threads: list[dict[str, Any]] = []
+    for feature in request.candidate.features:
+        if feature.kind != "thread":
+            continue
+        spec = feature.params.get("spec")
+        if not isinstance(spec, str) or not (2 <= len(spec) <= 40):
+            raise HTTPException(422, "thread requires a 'spec' designation (e.g. М12x1.75)")
+        diameter = _number(feature.params, "diameter_mm", maximum=10_000)
+        entry: dict[str, Any] = {"spec": spec, "diameter_mm": diameter}
+        pitch = feature.params.get("pitch_mm")
+        if pitch is not None:
+            entry["pitch_mm"] = _number(feature.params, "pitch_mm", maximum=100)
+        threads.append(entry)
+    return threads
 
 
 @app.get("/health")
@@ -286,6 +429,7 @@ def _brep_report(shape: "Part.Shape", metadata: dict[str, Any], warnings: list[s
 
 @app.post("/compile")
 def compile_candidate(request: CompileRequest) -> Response:
+    cosmetic_threads = _cosmetic_threads(request)
     shape, warnings = _build_shape(request)
     document = App.newDocument("EngineeringModel")
     try:
@@ -325,6 +469,7 @@ def compile_candidate(request: CompileRequest) -> Response:
                             "z": bounds.ZLength,
                         },
                         "edges": _edge_descriptors(shape),
+                        "cosmetic_threads": cosmetic_threads,
                         "kernel": "FreeCAD/OpenCascade",
                     },
                     ensure_ascii=False,

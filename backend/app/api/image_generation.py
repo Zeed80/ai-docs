@@ -888,7 +888,7 @@ class FeatureParameterOverride(BaseModel):
 
 
 class AddedFeatureRequest(BaseModel):
-    kind: Literal["boss", "pocket", "fillet", "chamfer"]
+    kind: Literal["boss", "pocket", "fillet", "chamfer", "shell", "thread"]
     profile: Literal["circle", "rectangle"] | None = None
     center_x_mm: float | None = Field(default=None, ge=0, le=100_000)
     center_y_mm: float | None = Field(default=None, ge=0, le=100_000)
@@ -898,9 +898,23 @@ class AddedFeatureRequest(BaseModel):
     height_mm: float | None = Field(default=None, gt=0, le=100_000)
     edge_key: str | None = Field(default=None, min_length=16, max_length=128)
     size_mm: float | None = Field(default=None, gt=0, le=100_000)
+    # D3: shell wall thickness; cosmetic-thread designation per ГОСТ 2.311
+    thickness_mm: float | None = Field(default=None, gt=0, le=10_000)
+    spec: str | None = Field(default=None, min_length=2, max_length=40)
+    pitch_mm: float | None = Field(default=None, gt=0, le=100)
 
     @model_validator(mode="after")
     def validate_profile_dimensions(self) -> "AddedFeatureRequest":
+        if self.kind == "shell":
+            if self.thickness_mm is None:
+                raise ValueError("shell требует thickness_mm")
+            return self
+        if self.kind == "thread":
+            if self.spec is None or self.diameter_mm is None:
+                raise ValueError("thread требует spec и diameter_mm")
+            return self
+        if self.thickness_mm is not None or self.spec is not None or self.pitch_mm is not None:
+            raise ValueError("thickness_mm/spec/pitch_mm применимы только к shell/thread")
         if self.kind in ("fillet", "chamfer"):
             if self.edge_key is None or self.size_mm is None:
                 raise ValueError("Операция ребра требует edge_key и size_mm")
@@ -992,7 +1006,9 @@ def _append_human_features(candidate, additions: list[AddedFeatureRequest]):
     for item in additions:
         if item.kind in ("fillet", "chamfer"):
             edge_seen = True
-        elif edge_seen:
+        elif edge_seen and item.kind not in ("shell", "thread"):
+            # shell is applied last by the kernel regardless of list order;
+            # thread is cosmetic — neither invalidates edge selection.
             raise HTTPException(422, "Операции тела должны предшествовать фаскам и скруглениям")
     human_features = [
         Feature3D(

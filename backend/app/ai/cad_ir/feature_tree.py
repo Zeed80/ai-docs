@@ -48,7 +48,12 @@ class ParamProvenance(BaseModel):
 
 
 class Feature3D(BaseModel):
-    kind: Literal["extrude", "hole", "boss", "pocket", "fillet", "chamfer"]
+    # Kept in lockstep with infra/cad-kernel/server.py Feature.kind (the
+    # kernel boundary is extra="forbid" — a mismatch breaks every 3D build).
+    kind: Literal[
+        "extrude", "hole", "boss", "pocket", "fillet", "chamfer",
+        "revolve", "loft", "shell", "thread",
+    ]
     source_entity_ids: list[str] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
     # D2: per-parameter provenance, keyed by the param name in ``params``
