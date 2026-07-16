@@ -108,9 +108,9 @@ def _check_internal_radii(ir: CadIR, scale: float) -> list[DfmFinding]:
     return findings
 
 
-def _segments_parallel_gap_px(a: Segment, b: Segment) -> float | None:
-    """Perpendicular gap between two near-parallel segments whose projections
-    overlap — the wall-thickness candidate. None when not comparable."""
+def _segments_parallel_gap_px(a: Segment, b: Segment) -> tuple[float, float] | None:
+    """(perpendicular gap, projection overlap) between two near-parallel
+    segments — the wall-thickness candidate. None when not comparable."""
     ax, ay = a.p2.x - a.p1.x, a.p2.y - a.p1.y
     bx, by = b.p2.x - b.p1.x, b.p2.y - b.p1.y
     la, lb = math.hypot(ax, ay), math.hypot(bx, by)
@@ -130,7 +130,8 @@ def _segments_parallel_gap_px(a: Segment, b: Segment) -> float | None:
     if overlap <= max(la, lb) * 0.3:  # require meaningful shared span
         return None
     nx, ny = -uy, ux
-    return abs((b.p1.x - a.p1.x) * nx + (b.p1.y - a.p1.y) * ny)
+    gap = abs((b.p1.x - a.p1.x) * nx + (b.p1.y - a.p1.y) * ny)
+    return gap, overlap
 
 
 def _check_thin_walls(ir: CadIR, scale: float) -> list[DfmFinding]:
@@ -142,8 +143,13 @@ def _check_thin_walls(ir: CadIR, scale: float) -> list[DfmFinding]:
     reported: set[tuple[str, str]] = set()
     for i, first in enumerate(segments):
         for second in segments[i + 1:]:
-            gap_px = _segments_parallel_gap_px(first, second)
-            if gap_px is None:
+            pair = _segments_parallel_gap_px(first, second)
+            if pair is None:
+                continue
+            gap_px, overlap_px = pair
+            # A wall is a sustained feature: require ≥5 mm of shared span so
+            # hatching strokes and dimension-line fragments don't register.
+            if _mm(overlap_px, scale) < 5.0:
                 continue
             wall = _mm(gap_px, scale)
             # The lower cutoff (0.5 mm) filters digitization artifacts: a
