@@ -575,6 +575,7 @@ export interface CadIr {
     driven?: boolean;
   }[];
   configurations?: { name: string; values: Record<string, number> }[];
+  blocks?: { name: string; base: IrPoint; entities: IrEntity[] }[];
   recognizer_used: string | null;
 }
 
@@ -686,6 +687,15 @@ export type IrPatchOp =
   | { op: "set_construction"; entity_id: string }
   | { op: "set_configurations"; configurations: CadIr["configurations"] }
   | { op: "apply_configuration"; config_name: string }
+  | { op: "define_block"; block_name: string; entity_ids: string[] }
+  | {
+      op: "insert_block";
+      block_name: string;
+      click_x: number;
+      click_y: number;
+      value?: number;
+    }
+  | { op: "delete_block"; block_name: string }
   | { op: "hatch_click"; click_x: number; click_y: number }
   | { op: "set_parameters"; parameters: CadIr["parameters"] }
   | { op: "set_constraints"; constraints: CadIr["constraints"] };

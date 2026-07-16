@@ -185,6 +185,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const [sketchPending, setSketchPending] = useState<
     | { op: "offset"; entityId: string; value: number }
     | { op: "pattern_polar"; entityId: string }
+    | { op: "insert_block"; name: string }
     | null
   >(null);
   const [polylinePoints, setPolylinePoints] = useState<
@@ -289,6 +290,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     setPickedSegmentId(null);
     setMirrorTargetId(null);
     setPolylinePoints([]);
+    setSketchPending(null);
   }
 
   function selectOnly(id: string | null) {
@@ -758,6 +760,20 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         setErr(null);
         return;
       }
+      if (sketchPending.op === "insert_block") {
+        // Every subsequent click stamps another instance; switching tools or
+        // pressing Esc (clearDrafts) ends the insert session.
+        void apply([
+          {
+            op: "insert_block",
+            block_name: sketchPending.name,
+            click_x: raw.x,
+            click_y: raw.y,
+          },
+        ]);
+        setErr(null);
+        return;
+      }
       const entityId = sketchPending.entityId;
       const center = raw;
       setSketchPending(null);
@@ -1006,6 +1022,43 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           })),
         );
       }
+      return;
+    }
+    // A2 blocks: `block <имя>` snapshots the selection as a named block;
+    // `insert <имя>` starts click-to-stamp insertion; `blocks` lists them.
+    const blockMatch = lower.match(/^(?:block|блок)\s+(.+)$/);
+    if (blockMatch) {
+      if (!selection.size) {
+        setErr(t("vector.block_needs_selection"));
+        return;
+      }
+      void apply([
+        {
+          op: "define_block",
+          block_name: blockMatch[1].trim(),
+          entity_ids: Array.from(selection),
+        },
+      ]);
+      return;
+    }
+    const insertMatch = lower.match(/^(?:insert|вставить)\s+(.+)$/);
+    if (insertMatch) {
+      const name = insertMatch[1].trim();
+      if (!(ir.blocks ?? []).some((b) => b.name.toLowerCase() === name)) {
+        setErr(t("vector.block_not_found", { name }));
+        return;
+      }
+      setSketchPending({ op: "insert_block", name });
+      setErr(t("vector.block_pick_point", { name }));
+      return;
+    }
+    if (["blocks", "блоки"].includes(lower)) {
+      const names = (ir.blocks ?? []).map((b) => b.name).join(", ");
+      setErr(
+        names
+          ? t("vector.block_list", { names })
+          : t("vector.block_list_empty"),
+      );
       return;
     }
     if (["construction", "вспом", "вспомогательная", "cons"].includes(lower)) {

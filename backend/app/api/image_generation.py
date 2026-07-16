@@ -1222,6 +1222,7 @@ class IrPatchOp(BaseModel):
         "split", "join", "set_construction",
         "set_constraints", "set_parameters", "set_title_block",
         "set_configurations", "apply_configuration",
+        "define_block", "insert_block", "delete_block",
     ]
     sheet_format: str | None = None  # A4..A0, for set_sheet_format
     title_block: dict[str, Any] | None = None  # form-1 fields, for set_title_block
@@ -1241,6 +1242,8 @@ class IrPatchOp(BaseModel):
     parameters: list[dict[str, Any]] | None = None
     configurations: list[dict[str, Any]] | None = None  # set_configurations
     config_name: str | None = None  # apply_configuration
+    block_name: str | None = None  # define_block / insert_block / delete_block
+    entity_ids: list[str] | None = None  # define_block source selection
 
 
 class IrPatchRequest(BaseModel):
@@ -1619,6 +1622,37 @@ async def patch_ir(
                 ir.parameters = apply_parameter_expressions(ir.parameters)
             except ParamExprError as exc:
                 raise _patch_error(422, IrPatchErrorCode.INVALID_CONSTRAINT, str(exc)) from exc
+        elif op.op == "define_block":
+            from app.ai.cad_ir.blocks import define_block
+            from app.ai.cad_ir.transform import SketchOpError
+
+            _require(op.block_name, "block_name")
+            _require(op.entity_ids, "entity_ids")
+            try:
+                define_block(ir, op.block_name, op.entity_ids)
+            except SketchOpError as exc:
+                raise _patch_error(422, IrPatchErrorCode.SKETCH_OP_INVALID, str(exc)) from exc
+        elif op.op == "insert_block":
+            from app.ai.cad_ir.blocks import insert_block
+            from app.ai.cad_ir.transform import SketchOpError
+
+            _require(op.block_name, "block_name")
+            _require(op.click_x, "click_x")
+            _require(op.click_y, "click_y")
+            try:
+                inserted = insert_block(
+                    ir, op.block_name, op.click_x, op.click_y, op.value or 0.0
+                )
+            except SketchOpError as exc:
+                raise _patch_error(422, IrPatchErrorCode.SKETCH_OP_INVALID, str(exc)) from exc
+            by_id = {e.id: i for i, e in enumerate(ir.entities)}
+            del inserted
+        elif op.op == "delete_block":
+            _require(op.block_name, "block_name")
+            before = len(ir.blocks)
+            ir.blocks = [b for b in ir.blocks if b.name != op.block_name]
+            if len(ir.blocks) == before:
+                raise _patch_error(404, IrPatchErrorCode.ENTITY_NOT_FOUND, f"Блок {op.block_name!r} не найден")
         elif op.op == "set_title_block":
             from app.ai.cad_ir.title_block import apply_title_block
 

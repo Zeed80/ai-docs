@@ -326,6 +326,17 @@ class SketchConfiguration(BaseModel):
     values: dict[str, float] = Field(default_factory=dict)
 
 
+class BlockDef(BaseModel):
+    """A2: a reusable named block — a geometry snapshot normalized to its base
+    point. Inserting stamps translated/rotated COPIES into the sheet (the
+    entities stay ordinary IR entities, so every renderer/export works
+    unchanged); the definition itself is document data, not drawn."""
+
+    name: str = Field(min_length=1, max_length=80)
+    base: Point
+    entities: list[Entity] = Field(default_factory=list)
+
+
 class CadIR(BaseModel):
     schema_version: int = SCHEMA_VERSION
 
@@ -361,6 +372,7 @@ class CadIR(BaseModel):
     parameters: list[CadParameter] = Field(default_factory=list)
     constraints: list[GeometricConstraint] = Field(default_factory=list)
     configurations: list[SketchConfiguration] = Field(default_factory=list)
+    blocks: list[BlockDef] = Field(default_factory=list)
     # which recognizer produced revision 0: neural | cv | mixed | manual
     recognizer_used: str | None = None
 
