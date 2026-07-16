@@ -1759,6 +1759,42 @@ async def evaluate_ir_constraints(
     }
 
 
+@router.get("/{generation_id}/ir/dfm-check")
+async def dfm_check_ir(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """F4: deterministic manufacturability findings over the current drawing —
+    standard drill series, tool radii, wall/bridge thickness, thread series.
+    Advisory for the technologist; requires a confirmed metric scale."""
+    from app.ai.cad_dfm import check_dfm
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    _revision, ir = await _load_current_ir(db, gen)
+    try:
+        findings = check_dfm(ir)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {
+        "findings": [
+            {
+                "code": f.code,
+                "severity": f.severity,
+                "message": f.message,
+                "recommendation": f.recommendation,
+                "entity_ids": f.entity_ids,
+                "evidence": f.evidence,
+            }
+            for f in findings
+        ],
+        "errors": sum(1 for f in findings if f.severity == "error"),
+        "warnings": sum(1 for f in findings if f.severity == "warn"),
+    }
+
+
 @router.post("/{generation_id}/ir/revert")
 async def revert_ir(
     generation_id: uuid.UUID,
