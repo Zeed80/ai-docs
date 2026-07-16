@@ -137,3 +137,124 @@ async def test_failed_analysis_case_blocks_release(client: AsyncClient):
     validation = await client.post(f"/api/engineering/revisions/{revision['id']}/validate")
     assert validation.status_code == 200
     assert validation.json()["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_change_request_full_lifecycle(client: AsyncClient):
+    """E3: create with mandatory reason + auto impact, reviewer signatures
+    gate approval, apply mints a new draft revision from the affected one."""
+    project = (await client.post("/api/engineering/projects", json={"name": "Изменения"})).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions",
+            json={"base_revision": None, "payload": {"schema_version": 1}},
+        )
+    ).json()
+
+    created = await client.post(
+        f"/api/engineering/projects/{project['id']}/change-requests",
+        json={
+            "title": "Увеличить диаметр расточки",
+            "reason": "Не проходит подшипник 6205 по посадке",
+            "affected_revision_id": revision["id"],
+            "reviewers": ["chief", "techlead"],
+            "created_by": "engineer",
+        },
+    )
+    assert created.status_code == 201
+    change = created.json()
+    assert change["number"] == 1
+    assert change["status"] == "review"
+    assert change["impact"]["revision"] == 0
+
+    # apply before approval is refused
+    early = await client.post(f"/api/engineering/change-requests/{change['id']}/apply")
+    assert early.status_code == 409
+
+    # a non-reviewer cannot sign; a reviewer cannot sign twice
+    assert (
+        await client.post(
+            f"/api/engineering/change-requests/{change['id']}/sign",
+            json={"reviewer": "stranger", "decision": "approve"},
+        )
+    ).status_code == 403
+    first = await client.post(
+        f"/api/engineering/change-requests/{change['id']}/sign",
+        json={"reviewer": "chief", "decision": "approve"},
+    )
+    assert first.json()["status"] == "review"  # one of two signatures
+    assert (
+        await client.post(
+            f"/api/engineering/change-requests/{change['id']}/sign",
+            json={"reviewer": "chief", "decision": "approve"},
+        )
+    ).status_code == 409
+    second = await client.post(
+        f"/api/engineering/change-requests/{change['id']}/sign",
+        json={"reviewer": "techlead", "decision": "approve"},
+    )
+    assert second.json()["status"] == "approved"
+
+    applied = await client.post(f"/api/engineering/change-requests/{change['id']}/apply")
+    assert applied.status_code == 200
+    body = applied.json()
+    assert body["status"] == "applied"
+    assert body["applied_revision_id"]
+    detail = (await client.get(f"/api/engineering/projects/{project['id']}")).json()
+    minted = [r for r in detail["revisions"] if r["id"] == body["applied_revision_id"]]
+    assert minted and minted[0]["origin"] == "change_order"
+    assert minted[0]["base_revision"] == 0
+    assert minted[0]["status"] == "draft"
+
+
+@pytest.mark.asyncio
+async def test_change_request_reject_and_supersession(client: AsyncClient):
+    project = (await client.post("/api/engineering/projects", json={"name": "Отказ и замена"})).json()
+    revision = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/revisions",
+            json={"base_revision": None},
+        )
+    ).json()
+
+    first = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/change-requests",
+            json={
+                "title": "Вариант 1",
+                "reason": "Первый подход",
+                "affected_revision_id": revision["id"],
+                "reviewers": ["chief"],
+            },
+        )
+    ).json()
+    rejected = await client.post(
+        f"/api/engineering/change-requests/{first['id']}/sign",
+        json={"reviewer": "chief", "decision": "reject", "comment": "не согласован"},
+    )
+    assert rejected.json()["status"] == "rejected"
+    # a rejected request can no longer be signed or applied
+    assert (
+        await client.post(
+            f"/api/engineering/change-requests/{first['id']}/sign",
+            json={"reviewer": "chief", "decision": "approve"},
+        )
+    ).status_code == 409
+
+    second = (
+        await client.post(
+            f"/api/engineering/projects/{project['id']}/change-requests",
+            json={
+                "title": "Вариант 2",
+                "reason": "Учтены замечания",
+                "affected_revision_id": revision["id"],
+                "supersedes_id": first["id"],
+                "reviewers": [],
+            },
+        )
+    ).json()
+    assert second["number"] == 2
+    assert second["supersedes_id"] == first["id"]
+    listed = (await client.get(f"/api/engineering/projects/{project['id']}/change-requests")).json()
+    statuses = {item["id"]: item["status"] for item in listed}
+    assert statuses[first["id"]] == "superseded"

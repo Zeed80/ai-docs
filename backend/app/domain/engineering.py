@@ -1,6 +1,7 @@
 """Public contracts for the canonical engineering-project API."""
 
 from datetime import datetime
+from typing import Literal
 import uuid
 
 from pydantic import AliasChoices, BaseModel, Field
@@ -197,3 +198,41 @@ class EngineeringAnalysisCaseOut(EngineeringAnalysisCaseCreate):
 
 class EngineeringProjectDetail(EngineeringProjectOut):
     revisions: list[EngineeringRevisionOut] = Field(default_factory=list)
+
+
+class ChangeRequestCreate(BaseModel):
+    """E3: a change request must say WHAT (title), WHY (reason) and against
+    WHICH revision; reviewers are the people whose signatures gate approval."""
+
+    title: str = Field(min_length=1, max_length=300)
+    reason: str = Field(min_length=3, max_length=4000)
+    affected_revision_id: uuid.UUID
+    reviewers: list[str] = Field(default_factory=list, max_length=20)
+    supersedes_id: uuid.UUID | None = None
+    created_by: str | None = Field(default=None, max_length=255)
+
+
+class ChangeRequestSign(BaseModel):
+    reviewer: str = Field(min_length=1, max_length=255)
+    decision: Literal["approve", "reject"]
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class ChangeRequestOut(BaseModel):
+    id: uuid.UUID
+    engineering_project_id: uuid.UUID
+    number: int
+    title: str
+    reason: str
+    status: str
+    affected_revision_id: uuid.UUID
+    impact: dict
+    reviewers: list
+    signatures: list
+    supersedes_id: uuid.UUID | None
+    applied_revision_id: uuid.UUID | None
+    created_by: str | None
+    decided_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

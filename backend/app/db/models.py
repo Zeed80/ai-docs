@@ -409,6 +409,43 @@ class EngineeringAnalysisCase(UUIDPrimaryKey, TimestampMixin, Base):
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class EngineeringChangeRequest(UUIDPrimaryKey, TimestampMixin, Base):
+    """E3: a formal change request/order over an engineering revision.
+
+    Carries the mandatory reason, an auto-computed impact analysis of the
+    affected revision, the reviewer list with their signatures, and the
+    supersession chain. Applying an approved request mints a new draft
+    revision — the affected one is never mutated."""
+
+    __tablename__ = "engineering_change_requests"
+    __table_args__ = (
+        Index("ix_engineering_change_requests_project_number", "engineering_project_id", "number", unique=True),
+    )
+
+    engineering_project_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_projects.id"), nullable=False, index=True
+    )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    # draft → review → approved | rejected → applied; superseded terminally
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="review", index=True)
+    affected_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=False, index=True
+    )
+    impact: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    reviewers: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    signatures: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_change_requests.id"), nullable=True
+    )
+    applied_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("engineering_revisions.id"), nullable=True
+    )
+    created_by: Mapped[str | None] = mapped_column(String(255))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class DocumentVersion(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "document_versions"
 

@@ -9,9 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import add_timeline_event, log_action
-from app.db.models import BOM, CadIrRevision, Drawing, EngineeringAnalysisCase, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
+from app.db.models import BOM, CadIrRevision, Drawing, EngineeringAnalysisCase, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringChangeRequest, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
 from app.db.session import get_db
 from app.domain.engineering import (
+    ChangeRequestCreate,
+    ChangeRequestOut,
+    ChangeRequestSign,
     EngineeringApprovalRequest,
     EngineeringAssemblyComponentCreate,
     EngineeringAssemblyComponentOut,
@@ -430,3 +433,205 @@ async def approve_revision(
     await db.commit()
     await db.refresh(revision)
     return revision
+
+
+# ── E3: change management ─────────────────────────────────────────────────────
+
+
+async def _change_impact(db: AsyncSession, revision: EngineeringRevision) -> dict:
+    """Auto impact analysis of the affected revision — plain data, no LLM:
+    what depends on this geometry and would go stale if it changes."""
+    projections = (
+        await db.execute(
+            select(EngineeringProjection).where(
+                EngineeringProjection.engineering_revision_id == revision.id
+            )
+        )
+    ).scalars().all()
+    assemblies = (
+        await db.execute(
+            select(EngineeringAssembly).where(
+                EngineeringAssembly.engineering_revision_id == revision.id
+            )
+        )
+    ).scalars().all()
+    analysis_cases = (
+        await db.execute(
+            select(EngineeringAnalysisCase).where(
+                EngineeringAnalysisCase.engineering_revision_id == revision.id
+            )
+        )
+    ).scalars().all()
+    last_run = (
+        await db.execute(
+            select(EngineeringValidationRun)
+            .where(EngineeringValidationRun.engineering_revision_id == revision.id)
+            .order_by(EngineeringValidationRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    by_state: dict[str, int] = {}
+    for projection in projections:
+        by_state[projection.state] = by_state.get(projection.state, 0) + 1
+    return {
+        "revision": revision.revision,
+        "revision_status": revision.status,
+        "revision_approved": revision.status == "approved",
+        "projections": {
+            "total": len(projections),
+            "by_state": by_state,
+            "targets": [
+                {"type": p.projection_type, "entity_type": p.entity_type, "entity_id": str(p.entity_id)}
+                for p in projections
+            ],
+        },
+        "assemblies": len(assemblies),
+        "analysis_cases": len(analysis_cases),
+        "last_validation_status": last_run.status if last_run else None,
+    }
+
+
+@router.post("/projects/{project_id}/change-requests", response_model=ChangeRequestOut, status_code=status.HTTP_201_CREATED)
+async def create_change_request(
+    project_id: uuid.UUID, body: ChangeRequestCreate, db: AsyncSession = Depends(get_db)
+) -> EngineeringChangeRequest:
+    project = await db.get(EngineeringProject, project_id)
+    if not project:
+        raise HTTPException(404, "Инженерный проект не найден")
+    revision = await db.get(EngineeringRevision, body.affected_revision_id)
+    if not revision or revision.engineering_project_id != project_id:
+        raise HTTPException(404, "Затронутая ревизия не найдена в этом проекте")
+    superseded = None
+    if body.supersedes_id is not None:
+        superseded = await db.get(EngineeringChangeRequest, body.supersedes_id)
+        if not superseded or superseded.engineering_project_id != project_id:
+            raise HTTPException(404, "Заменяемый запрос изменения не найден в этом проекте")
+        if superseded.status == "applied":
+            raise HTTPException(409, "Применённый запрос изменения нельзя заменить — создайте новый поверх его ревизии")
+    last_number = (
+        await db.execute(
+            select(EngineeringChangeRequest.number)
+            .where(EngineeringChangeRequest.engineering_project_id == project_id)
+            .order_by(EngineeringChangeRequest.number.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    change = EngineeringChangeRequest(
+        engineering_project_id=project_id,
+        number=(last_number or 0) + 1,
+        title=body.title,
+        reason=body.reason,
+        status="review" if body.reviewers else "draft",
+        affected_revision_id=revision.id,
+        impact=await _change_impact(db, revision),
+        reviewers=body.reviewers,
+        signatures=[],
+        supersedes_id=body.supersedes_id,
+        created_by=body.created_by,
+    )
+    db.add(change)
+    if superseded is not None:
+        superseded.status = "superseded"
+    await db.flush()
+    await log_action(db, action="engineering.change_request.create", entity_type="engineering_change_request", entity_id=change.id, user_id=body.created_by)
+    await add_timeline_event(db, entity_type="engineering_change_request", entity_id=change.id, event_type="created", summary=f"Запрос изменения №{change.number}: {change.title}", actor=body.created_by)
+    await db.commit()
+    await db.refresh(change)
+    return change
+
+
+@router.get("/projects/{project_id}/change-requests", response_model=list[ChangeRequestOut])
+async def list_change_requests(project_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringChangeRequest]:
+    return list(
+        (
+            await db.execute(
+                select(EngineeringChangeRequest)
+                .where(EngineeringChangeRequest.engineering_project_id == project_id)
+                .order_by(EngineeringChangeRequest.number.desc())
+            )
+        ).scalars()
+    )
+
+
+@router.post("/change-requests/{change_id}/sign", response_model=ChangeRequestOut)
+async def sign_change_request(
+    change_id: uuid.UUID, body: ChangeRequestSign, db: AsyncSession = Depends(get_db)
+) -> EngineeringChangeRequest:
+    """A reviewer's signature. Every listed reviewer approving → approved;
+    any single reject → rejected. Signatures are append-only per reviewer."""
+    change = await db.get(EngineeringChangeRequest, change_id)
+    if not change:
+        raise HTTPException(404, "Запрос изменения не найден")
+    if change.status not in ("draft", "review"):
+        raise HTTPException(409, f"Запрос в статусе {change.status!r} больше не подписывается")
+    if body.reviewer not in (change.reviewers or []):
+        raise HTTPException(403, "Подписант не входит в список согласующих этого запроса")
+    if any(s.get("reviewer") == body.reviewer for s in (change.signatures or [])):
+        raise HTTPException(409, "Этот согласующий уже подписал запрос")
+    change.signatures = [
+        *(change.signatures or []),
+        {
+            "reviewer": body.reviewer,
+            "decision": body.decision,
+            "comment": body.comment,
+            "at": datetime.now(UTC).isoformat(),
+        },
+    ]
+    if body.decision == "reject":
+        change.status = "rejected"
+        change.decided_at = datetime.now(UTC)
+    elif {s["reviewer"] for s in change.signatures if s["decision"] == "approve"} >= set(change.reviewers):
+        change.status = "approved"
+        change.decided_at = datetime.now(UTC)
+    else:
+        change.status = "review"
+    await log_action(db, action="engineering.change_request.sign", entity_type="engineering_change_request", entity_id=change.id, user_id=body.reviewer)
+    await add_timeline_event(db, entity_type="engineering_change_request", entity_id=change.id, event_type=f"signed_{body.decision}", summary=f"{body.reviewer}: {body.decision}", actor=body.reviewer)
+    await db.commit()
+    await db.refresh(change)
+    return change
+
+
+@router.post("/change-requests/{change_id}/apply", response_model=ChangeRequestOut)
+async def apply_change_request(
+    change_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> EngineeringChangeRequest:
+    """Turn an approved change request into a change ORDER: mint a new draft
+    revision based on the affected one (which is never mutated) and record it
+    on the request. Editing then proceeds on the new revision as usual."""
+    change = await db.get(EngineeringChangeRequest, change_id)
+    if not change:
+        raise HTTPException(404, "Запрос изменения не найден")
+    if change.status != "approved":
+        raise HTTPException(409, "Применить можно только согласованный запрос (все подписи approve)")
+    affected = await db.get(EngineeringRevision, change.affected_revision_id)
+    if not affected:
+        raise HTTPException(404, "Затронутая ревизия не найдена")
+    last = (
+        await db.execute(
+            select(EngineeringRevision.revision)
+            .where(EngineeringRevision.engineering_project_id == change.engineering_project_id)
+            .order_by(EngineeringRevision.revision.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    new_revision = EngineeringRevision(
+        engineering_project_id=change.engineering_project_id,
+        revision=(last or 0) + 1,
+        base_revision=affected.revision,
+        status="draft",
+        origin="change_order",
+        change_summary=f"Изменение №{change.number}: {change.title} — {change.reason}",
+        payload=dict(affected.payload or {}),
+        validation={},
+        created_by=change.created_by,
+    )
+    db.add(new_revision)
+    await db.flush()
+    change.status = "applied"
+    change.applied_revision_id = new_revision.id
+    await log_action(db, action="engineering.change_request.apply", entity_type="engineering_change_request", entity_id=change.id, user_id=change.created_by)
+    await add_timeline_event(db, entity_type="engineering_change_request", entity_id=change.id, event_type="applied", summary=f"Создана ревизия {new_revision.revision} (база {affected.revision})", actor=change.created_by)
+    await db.commit()
+    await db.refresh(change)
+    return change
