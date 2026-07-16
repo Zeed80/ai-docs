@@ -1819,6 +1819,12 @@ class BOM(UUIDPrimaryKey, TimestampMixin, Base):
     version: Mapped[str] = mapped_column(String(50), default="1.0", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     # "draft" | "approved" | "obsolete"
+    # E4: engineering vs manufacturing BOM; an MBOM records the approved EBOM
+    # it was derived from.
+    kind: Mapped[str] = mapped_column(String(10), default="ebom", nullable=False)
+    source_bom_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("boms.id"), nullable=True
+    )
     document_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("documents.id")
     )
@@ -1849,6 +1855,12 @@ class BOMLine(UUIDPrimaryKey, Base):
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     unit: Mapped[str] = mapped_column(String(50), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
+    # E4: позиция на чертеже/спецификации, позиционное обозначение (ЕСКД),
+    # вариант исполнения и допустимые замены.
+    position: Mapped[str | None] = mapped_column(String(40))
+    reference_designator: Mapped[str | None] = mapped_column(String(100))
+    variant: Mapped[str | None] = mapped_column(String(100))
+    substitutes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
     bom: Mapped["BOM"] = relationship(back_populates="lines")
 

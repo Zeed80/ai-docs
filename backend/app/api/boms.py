@@ -36,6 +36,12 @@ class BOMLineCreate(BaseModel):
     canonical_item_id: uuid.UUID | None = None
     norm_card_id: uuid.UUID | None = None
     notes: str | None = None
+    # E4: позиция на чертеже, позиционное обозначение, вариант исполнения и
+    # допустимые замены ([{description, canonical_item_id?, note?}]).
+    position: str | None = None
+    reference_designator: str | None = None
+    variant: str | None = None
+    substitutes: list[dict[str, Any]] = []
 
 
 class BOMLineOut(BaseModel):
@@ -48,6 +54,10 @@ class BOMLineOut(BaseModel):
     canonical_item_id: uuid.UUID | None
     norm_card_id: uuid.UUID | None
     notes: str | None
+    position: str | None
+    reference_designator: str | None
+    variant: str | None
+    substitutes: list
     model_config = {"from_attributes": True}
 
 
@@ -56,6 +66,7 @@ class BOMCreate(BaseModel):
     product_code: str | None = None
     version: str = "1.0"
     notes: str | None = None
+    kind: str = "ebom"
     lines: list[BOMLineCreate] = []
 
 
@@ -74,6 +85,8 @@ class BOMOut(BaseModel):
     product_code: str | None
     version: str
     status: str
+    kind: str
+    source_bom_id: uuid.UUID | None
     document_id: uuid.UUID | None
     approved_by: str | None
     approved_at: datetime | None
@@ -136,11 +149,14 @@ async def create_bom(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: bom.create — Create a new BOM."""
+    if payload.kind not in ("ebom", "mbom"):
+        raise HTTPException(status_code=422, detail="kind должен быть ebom или mbom")
     bom = BOM(
         product_name=payload.product_name,
         product_code=payload.product_code,
         version=payload.version,
         notes=payload.notes,
+        kind=payload.kind,
     )
     db.add(bom)
     await db.flush()
@@ -157,6 +173,62 @@ async def create_bom(
         select(BOM).where(BOM.id == bom.id).options(selectinload(BOM.lines))
     )
     return result.scalar_one()
+
+
+# ── E4: where-used and EBOM → MBOM ───────────────────────────────────────────
+
+
+class WhereUsedEntry(BaseModel):
+    bom_id: uuid.UUID
+    product_name: str
+    product_code: str | None
+    bom_kind: str
+    bom_status: str
+    line_number: int
+    position: str | None
+    description: str
+    quantity: float
+    unit: str
+
+
+class WhereUsedResult(BaseModel):
+    total: int
+    entries: list[WhereUsedEntry]
+
+
+@router.get("/boms/where-used", response_model=WhereUsedResult)
+async def bom_where_used(
+    canonical_item_id: uuid.UUID | None = Query(default=None),
+    query: str | None = Query(default=None, min_length=2, max_length=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: bom.where_used — E4: every BOM line that uses the given item
+    (by canonical id, or by description substring when the item was never
+    normalized). The impact question a design change always starts with."""
+    if canonical_item_id is None and not query:
+        raise HTTPException(status_code=422, detail="Нужен canonical_item_id или query")
+    stmt = select(BOMLine, BOM).join(BOM, BOMLine.bom_id == BOM.id)
+    if canonical_item_id is not None:
+        stmt = stmt.where(BOMLine.canonical_item_id == canonical_item_id)
+    if query:
+        stmt = stmt.where(BOMLine.description.ilike(f"%{query}%"))
+    rows = (await db.execute(stmt.order_by(BOM.updated_at.desc()).limit(500))).all()
+    entries = [
+        WhereUsedEntry(
+            bom_id=bom.id,
+            product_name=bom.product_name,
+            product_code=bom.product_code,
+            bom_kind=bom.kind,
+            bom_status=bom.status,
+            line_number=line.line_number,
+            position=line.position,
+            description=line.description,
+            quantity=line.quantity,
+            unit=line.unit,
+        )
+        for line, bom in rows
+    ]
+    return WhereUsedResult(total=len(entries), entries=entries)
 
 
 @router.get("/boms/{bom_id}", response_model=BOMOut)
@@ -402,3 +474,63 @@ async def create_purchase_request_from_bom(
         "items_count": len(items_needed),
         "message": f"Создана заявка на {len(items_needed)} позиций",
     }
+
+
+# ── E4: EBOM → MBOM ─────────────────────────────────────────────────────────
+
+
+@router.post("/boms/{bom_id}/derive-mbom", response_model=BOMOut, status_code=201)
+async def derive_mbom(
+    bom_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: bom.derive_mbom — E4: mint a manufacturing BOM from an APPROVED
+    engineering BOM. The MBOM starts as an exact draft copy linked back to its
+    source (technology then edits it: workshop materials, process consumables);
+    the EBOM itself stays untouched."""
+    result = await db.execute(
+        select(BOM).where(BOM.id == bom_id).options(selectinload(BOM.lines))
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="BOM not found")
+    if source.kind != "ebom":
+        raise HTTPException(status_code=409, detail="MBOM выводится только из EBOM")
+    if source.status != "approved":
+        raise HTTPException(status_code=409, detail="MBOM выводится только из утверждённой EBOM")
+    mbom = BOM(
+        product_name=source.product_name,
+        product_code=None,  # unique constraint; MBOM gets its own code later
+        version=source.version,
+        status="draft",
+        kind="mbom",
+        source_bom_id=source.id,
+        engineering_revision_id=source.engineering_revision_id,
+        notes=source.notes,
+    )
+    db.add(mbom)
+    await db.flush()
+    for line in source.lines:
+        db.add(BOMLine(
+            bom_id=mbom.id,
+            line_number=line.line_number,
+            canonical_item_id=line.canonical_item_id,
+            norm_card_id=line.norm_card_id,
+            description=line.description,
+            quantity=line.quantity,
+            unit=line.unit,
+            notes=line.notes,
+            position=line.position,
+            reference_designator=line.reference_designator,
+            variant=line.variant,
+            substitutes=list(line.substitutes or []),
+        ))
+    await log_action(db, action="bom.derive_mbom", entity_type="bom", entity_id=mbom.id,
+                     details={"source_bom_id": str(source.id)})
+    await add_timeline_event(db, entity_type="bom", entity_id=mbom.id, event_type="derived",
+                             summary=f"MBOM выведена из EBOM {source.product_name} v{source.version}")
+    await db.commit()
+    result = await db.execute(
+        select(BOM).where(BOM.id == mbom.id).options(selectinload(BOM.lines))
+    )
+    return result.scalar_one()
