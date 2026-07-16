@@ -48,6 +48,19 @@ async def list_scenarios() -> list[dict]:
     return scenario_runner.list_scenarios()
 
 
+@router.post("/{name}/dry-run")
+async def dry_run_scenario(name: str, body: ScenarioRunRequest) -> dict:
+    """G1: plan the scenario without executing — which skills would be
+    called with which parameters, which steps are approval-gated, and which
+    referenced skills are missing from the registry."""
+    if name not in gateway_config.list_scenario_names():
+        raise HTTPException(status_code=404, detail=f"Scenario not found: {name!r}")
+    try:
+        return scenario_runner.dry_run(name, trigger=dict(body.trigger))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.post("/{name}/run", response_model=ScenarioRunResponse)
 async def run_scenario(
     name: str, body: ScenarioRunRequest, db: AsyncSession = Depends(get_db)

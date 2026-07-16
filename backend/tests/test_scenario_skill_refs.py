@@ -42,10 +42,11 @@ UNIMPLEMENTED_SKILLS = {
 
 
 def _valid_registry_skills() -> set[str]:
-    from app.ai.agent_loop import _load_registry
+    # The same merged catalog the scenario runner resolves against:
+    # active registry + capability names (image_studio, engineering, …).
+    from app.ai.scenario_runner import _skill_catalog
 
-    _, skill_map = _load_registry(expose_filter=None)
-    return {k.replace("__", ".") for k in skill_map}
+    return {k.replace("__", ".") for k in _skill_catalog()}
 
 
 def _scenario_skill_refs() -> dict[str, set[str]]:

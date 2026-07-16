@@ -320,6 +320,10 @@ scenarios:
   path: ./scenarios/draft-email.yml
   trigger:
     type: manual
+- name: cad_digitize_release
+  path: ./scenarios/cad-digitize-release.yml
+  trigger:
+    type: manual
 prompts:
   base: ./prompts/base.md
   # Роли-специалисты. У каждой: prompt (системный промпт роли) и capabilities —

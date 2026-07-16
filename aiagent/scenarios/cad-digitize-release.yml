@@ -1,0 +1,112 @@
+# G1: сквозная CAD-цепочка «скан → черновик выпуска» как исполняемая
+# спецификация. Draft-first: агент НИКОГДА не жмёт accept_vectorize и
+# revision_approve — оба объявлены approval-гейтами и остаются за человеком;
+# сценарий довозит работу ДО этих точек и останавливается.
+name: cad_digitize_release
+version: "1.0"
+description: |
+  Оцифровка чертежа в редактируемый CAD и подготовка черновика инженерного
+  выпуска: digitize → ожидание → сводка review → нормоконтроль (уровни 6-7)
+  → инженерный проект + ревизия + проекция на CAD IR. Приёмка чертежа и
+  утверждение ревизии — только человеком.
+
+trigger:
+  events:
+    - user_request            # «оцифруй и подготовь к выпуску»
+    - drawing_uploaded
+
+context_required:
+  - document_id: "UUID документа-источника (скан/фото чертежа)"
+  - project_name: "Название инженерного проекта для черновика выпуска"
+
+approval_gates:
+  - id: image_studio.accept_vectorize
+    action: "Принять оцифрованный чертёж"
+    risk: high
+    requires_human: true
+    description: Агент готовит и проверяет, принимает только человек.
+  - id: engineering.revision_approve
+    action: "Утвердить инженерную ревизию"
+    risk: high
+    requires_human: true
+    description: Утверждение выпуска — всегда решение человека.
+
+timeout: 900
+
+steps:
+  - id: digitize
+    name: "Запустить оцифровку (vectorize)"
+    skill: image_studio
+    params:
+      action: generate
+      operation: vectorize
+      source_document_ids: ["{{trigger.document_id}}"]
+    on_error: abort
+
+  - id: wait_done
+    name: "Дождаться завершения оцифровки"
+    skill: image_studio
+    params:
+      action: get
+      generation_id: "{{steps.digitize.id}}"
+    until: "last.status == 'done'"
+    poll_interval_s: 10
+    max_polls: 60
+    on_error: abort
+
+  - id: review_summary
+    name: "Сводка распознавания и спорных мест"
+    skill: cad_review
+    params:
+      action: get_ir
+      generation_id: "{{steps.digitize.id}}"
+    on_error: abort
+
+  - id: full_check
+    name: "Нормоконтроль ЕСКД (уровни 6-7)"
+    skill: cad_review
+    params:
+      action: full_check
+      generation_id: "{{steps.digitize.id}}"
+    on_error: continue   # LLM-критика — ценно, но её сбой не рушит цепочку
+
+  - id: create_project
+    name: "Создать инженерный проект"
+    skill: engineering
+    params:
+      action: project_create
+      body:
+        name: "{{trigger.project_name}}"
+    on_error: abort
+
+  - id: draft_revision
+    name: "Черновая инженерная ревизия"
+    skill: engineering
+    params:
+      action: revision_create
+      entity_id: "{{steps.create_project.id}}"
+      body:
+        base_revision: null
+        origin: "scenario"
+        change_summary: "Черновик выпуска из оцифровки {{steps.digitize.id}}"
+    on_error: abort
+
+  - id: link_cad
+    name: "Проекция ревизии на CAD IR оцифровки"
+    skill: engineering
+    params:
+      action: projection_create
+      entity_id: "{{steps.draft_revision.id}}"
+      body:
+        projection_type: "cad_source"
+        entity_type: "cad_ir_revision"
+        entity_id: "{{steps.review_summary.cad_revision_id}}"
+    on_error: continue   # проекция — трассируемость; без неё черновик всё равно есть
+
+  - id: validate_release
+    name: "Валидация ревизии перед выпуском"
+    skill: engineering
+    params:
+      action: revision_validate
+      entity_id: "{{steps.draft_revision.id}}"
+    on_error: abort

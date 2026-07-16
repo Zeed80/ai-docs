@@ -62,7 +62,14 @@ class _Context:
         self._data[key] = value
 
     def resolve(self, template: Any) -> Any:
-        """Resolve a value — strings with {{ }} get substituted."""
+        """Resolve a value — strings with {{ }} get substituted. Recurses into
+        lists and dicts so templates inside nested structures (e.g.
+        ``source_document_ids: ["{{trigger.document_id}}"]`` or a ``body:``
+        object) render too, not only top-level strings."""
+        if isinstance(template, list):
+            return [self.resolve(item) for item in template]
+        if isinstance(template, dict):
+            return {k: self.resolve(v) for k, v in template.items()}
         if not isinstance(template, str):
             return template
         # Single whole-string template → return actual typed value
@@ -125,13 +132,38 @@ class _Context:
 
 # ── Skill caller ──────────────────────────────────────────────────────────────
 
-async def _call_skill(skill_name: str, params: dict) -> dict:
-    """Execute a skill by name against the FastAPI backend."""
-    from app.ai.agent_loop import _execute_skill, _load_registry, _sanitize_name
+def _skill_catalog() -> dict[str, dict]:
+    """Skills visible to scenarios: the active registry PLUS the capability
+    catalog. Scenarios must resolve capability names (image_studio,
+    engineering, …) regardless of which skills_mode the chat agent runs in —
+    a scenario written against capabilities must not break when the agent is
+    flipped to legacy registry mode."""
+    from app.ai.agent_loop import _load_registry, _sanitize_name
 
     _, skill_map = _load_registry(expose_filter=None)  # all skills, no filter
-    sanitized = _sanitize_name(skill_name)
-    skill = skill_map.get(sanitized)
+    catalog = dict(skill_map)
+    try:
+        import yaml as _yaml
+
+        from app.ai.gateway_config import gateway_config as _gw
+
+        caps_path = _gw.capabilities_path
+        if caps_path.exists():
+            data = _yaml.safe_load(caps_path.read_text()) or {}
+            for cap in data.get("capabilities", []) or []:
+                name = _sanitize_name(cap.get("name", ""))
+                if name and name not in catalog:
+                    catalog[name] = cap
+    except Exception as exc:  # noqa: BLE001 — capability merge is additive
+        logger.warning("scenario_capability_catalog_failed", error=str(exc))
+    return catalog
+
+
+async def _call_skill(skill_name: str, params: dict) -> dict:
+    """Execute a skill by name against the FastAPI backend."""
+    from app.ai.agent_loop import _execute_skill, _sanitize_name
+
+    skill = _skill_catalog().get(_sanitize_name(skill_name))
     if not skill:
         return {"error": f"Skill not found: {skill_name}"}
     return await _execute_skill(skill, params)
@@ -145,12 +177,20 @@ class _StopScenario(Exception):
 
 async def _run_step(step: dict, ctx: _Context) -> Any:
     """Execute one scenario step and return its result."""
+    import asyncio
+
     skill_name: str = step.get("skill", "")
     on_error: str = step.get("on_error", "continue")
     condition: str | None = step.get("condition")
     for_each: str | None = step.get("for_each")
     params: dict = step.get("params", {})
     action: str | None = step.get("action")
+    # G1: polling — repeat the skill call until `until` evaluates truthy over
+    # the LAST result (exposed as {{ last.* }}). For async work (digitize)
+    # where the scenario must wait for a queued job to finish.
+    until: str | None = step.get("until")
+    poll_interval_s: float = float(step.get("poll_interval_s", 5))
+    max_polls: int = int(step.get("max_polls", 60))
 
     if condition and not ctx.evaluate(condition):
         return {"skipped": True, "reason": "condition_false"}
@@ -162,6 +202,17 @@ async def _run_step(step: dict, ctx: _Context) -> Any:
     resolved_params = ctx.resolve_dict(params)
 
     try:
+        if until:
+            result: Any = None
+            for attempt in range(max_polls):
+                result = await _call_skill(skill_name, ctx.resolve_dict(params))
+                ctx.set("last", result)
+                if ctx.evaluate(until):
+                    return {**(result if isinstance(result, dict) else {"value": result}),
+                            "_polls": attempt + 1}
+                await asyncio.sleep(poll_interval_s)
+            return {"error": f"until-условие не выполнено за {max_polls} попыток",
+                    "last": result, "_polls": max_polls}
         if for_each:
             items = ctx.resolve(for_each)
             if not isinstance(items, list):
@@ -302,6 +353,83 @@ class ScenarioRunner:
         }))
 
         return dict(ctx._data)
+
+    def dry_run(self, scenario_name: str, trigger: dict | None = None) -> dict:
+        """G1: plan a scenario WITHOUT executing anything.
+
+        Resolves every step against the skill registry (missing skills become
+        an explicit gap report, not a runtime surprise), templates the
+        parameters as far as the trigger allows, and flags the steps whose
+        capability action is approval-gated — so a human can see exactly what
+        the agent WOULD do, and where it would have to stop and ask, before
+        anything runs."""
+        from app.ai.agent_loop import _sanitize_name
+
+        scenario = gateway_config.load_scenario(scenario_name)
+        if not scenario:
+            raise ValueError(f"Scenario not found: {scenario_name!r}")
+        skill_map = _skill_catalog()
+        ctx = _Context(trigger)
+        planned: list[dict] = []
+        missing: list[str] = []
+        gated: list[str] = []
+        for idx, step in enumerate(scenario.get("steps", [])):
+            step_id = step.get("id", f"step_{idx}")
+            skill_name = step.get("skill", "")
+            skill = skill_map.get(_sanitize_name(skill_name)) if skill_name else None
+            if skill_name and skill is None:
+                missing.append(skill_name)
+            try:
+                resolved = ctx.resolve_dict(step.get("params", {}))
+            except Exception:  # noqa: BLE001 — later-step templates can't resolve yet
+                resolved = step.get("params", {})
+            gate_actions = set((skill or {}).get("gate_actions") or [])
+            requires_approval = bool(gate_actions and resolved.get("action") in gate_actions)
+            if requires_approval:
+                gated.append(step_id)
+            planned.append({
+                "step_id": step_id,
+                "name": step.get("name"),
+                "skill": skill_name or None,
+                "skill_found": skill is not None if skill_name else None,
+                "params": resolved,
+                "condition": step.get("condition"),
+                "until": step.get("until"),
+                "for_each": step.get("for_each"),
+                "on_error": step.get("on_error", "continue"),
+                "requires_approval": requires_approval,
+            })
+        plan = {
+            "scenario": scenario_name,
+            "description": scenario.get("description"),
+            "steps": planned,
+            "missing_skills": sorted(set(missing)),
+            "approval_gated_steps": gated,
+            "declared_gates": [g.get("id") for g in scenario.get("approval_gates", [])],
+            "executable": not missing,
+        }
+        import asyncio as _asyncio
+
+        started = datetime.now(timezone.utc)
+        _asyncio.create_task(_persist_trace({
+            "scenario_name": scenario_name,
+            "status": "dry_run",
+            "trigger": trigger,
+            "steps_total": len(planned),
+            "steps_done": 0,
+            "step_traces": [
+                {"step_id": p["step_id"], "skill": p["skill"] or "",
+                 "status": "planned", "duration_ms": 0, "error": None,
+                 "result_keys": None}
+                for p in planned
+            ],
+            "error": None,
+            "duration_ms": 0,
+            "started_at": started,
+            "finished_at": started,
+            "triggered_by": "dry_run",
+        }))
+        return plan
 
     def list_scenarios(self) -> list[dict]:
         """Return scenario metadata from gateway.yml."""
