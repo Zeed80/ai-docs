@@ -349,9 +349,10 @@ def _geometry_quality(entities) -> dict:
 
 
 def _dxf_roundtrip(entities, w: int, h: int) -> dict:
-    """B4: does the recognized geometry survive a DXF round-trip? Render IR →
-    DXF → re-parse with ezdxf. A drawing that can't be re-opened is useless
-    regardless of its coverage score."""
+    """B4/H1: the full downstream chain — IR → ЕСКД validation → DXF →
+    independent re-parse with ezdxf. A drawing that can't be re-opened is
+    useless regardless of its coverage score; the validator's blocking-error
+    count is the regression signal for the ЕСКД layer."""
     import io
 
     import ezdxf
@@ -366,9 +367,21 @@ def _dxf_roundtrip(entities, w: int, h: int) -> dict:
             scale_source="manual",
             entities=list(entities),
         )
+        eskd_errors = -1
+        try:
+            from app.ai.cad_validate import validate_ir
+
+            report = validate_ir(ir)
+            eskd_errors = len(report.blocking)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  validate_ir failed: {str(exc)[:100]}", file=sys.stderr)
         data = render_ir_to_dxf(ir)
         doc = ezdxf.read(io.StringIO(data.decode("utf-8")))
-        return {"dxf_reopens": True, "dxf_entities": sum(1 for _ in doc.modelspace())}
+        return {
+            "dxf_reopens": True,
+            "dxf_entities": sum(1 for _ in doc.modelspace()),
+            "eskd_errors": eskd_errors,
+        }
     except Exception as exc:  # noqa: BLE001
         return {"dxf_reopens": False, "dxf_error": str(exc)[:100]}
 
@@ -561,6 +574,11 @@ def main() -> int:
             "mean_duplicate_rate": _qmean("duplicate_rate"),
             "mean_open_endpoint_rate": _qmean("open_endpoint_rate"),
             "dxf_reopen_rate": round(sum(1 for r in oks if r.get("dxf_reopens")) / len(oks), 3),
+            "mean_eskd_errors": round(
+                sum(r.get("eskd_errors", 0) for r in oks if r.get("eskd_errors", -1) >= 0)
+                / max(sum(1 for r in oks if r.get("eskd_errors", -1) >= 0), 1),
+                2,
+            ),
         }
 
     results["summary"] = {"dwg": _agg(results["dwg"]), "photos": _agg(results["photos"])}
@@ -586,6 +604,7 @@ _LOWER_BETTER = {
     "mean_degenerate_rate": 0.02,
     "mean_duplicate_rate": 0.02,
     "mean_open_endpoint_rate": 0.05,
+    "mean_eskd_errors": 3.0,
 }
 
 

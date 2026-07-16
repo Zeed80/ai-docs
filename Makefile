@@ -207,6 +207,16 @@ regression:
 agent-regression:
 	python3 scripts/agent_role_regression_check.py
 
+# H1: golden vectorize regression — full production path (arbitrate) over the
+# DWG+photo corpus, then gate against the committed baseline (exit 1 on
+# recall/quality/DXF-reopen/ЕСКД regression). Runs inside the backend
+# container: it has dwg2dxf and reaches the technical-vectorizer service.
+cad-regression:
+	docker exec infra-backend-1 sh -c 'cd /app && python scripts/eval_vectorize.py \
+		--dir cleanup_test_files --recognizer arbitrate \
+		--out test-results/eval_vectorize_run.json \
+		--check-baseline test-results/eval_vectorize_baseline.json'
+
 agent-test:
 	cd infra/scripts && python3 run-agent-tests.py
 

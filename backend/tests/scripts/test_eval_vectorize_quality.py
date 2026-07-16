@@ -47,3 +47,14 @@ def test_degenerate_and_duplicate_rates() -> None:
 
 def test_empty_input() -> None:
     assert _geometry_quality([]) == {"n_segments": 0}
+
+
+def test_dxf_roundtrip_reports_eskd_errors() -> None:
+    # H1: the downstream chain (IR → ЕСКД validate → DXF → independent parse)
+    # must report reopen success and a non-negative blocking-error count.
+    from eval_vectorize import _dxf_roundtrip
+
+    out = _dxf_roundtrip([_seg(0, 0, 100, 0), _seg(100, 0, 100, 80)], 400, 300)
+    assert out["dxf_reopens"] is True
+    assert out["dxf_entities"] >= 2
+    assert out["eskd_errors"] >= 0
