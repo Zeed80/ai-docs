@@ -284,23 +284,72 @@ def _overlap(a: dict, b: dict) -> bool:
     return all(float(a[f"{axis}_min"]) < float(b[f"{axis}_max"]) and float(b[f"{axis}_min"]) < float(a[f"{axis}_max"]) for axis in ("x", "y", "z"))
 
 
+async def _exact_interference(components: list[EngineeringAssemblyComponent]) -> tuple[list[dict], list[str], str | None]:
+    """E5: exact B-Rep interference via the CAD kernel for components that
+    declare an occupancy solid (metadata.shape: box|cylinder + transform).
+    Returns (collisions, checked_instance_keys, degradation_note)."""
+    import httpx
+
+    from app.config import settings
+
+    exact = [
+        component for component in components
+        if not component.suppressed and isinstance(component.metadata_.get("shape"), dict)
+    ]
+    if len(exact) < 2:
+        return [], [], None
+    payload = {
+        "components": [
+            {
+                "key": component.instance_key,
+                "shape": component.metadata_["shape"],
+                "transform": component.transform or {},
+            }
+            for component in exact
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(f"{settings.cad_kernel_url.rstrip('/')}/interference", json=payload)
+        if response.status_code != 200:
+            return [], [], f"kernel отклонил exact-проверку: {response.text[:200]}"
+        return response.json().get("collisions", []), [component.instance_key for component in exact], None
+    except httpx.HTTPError as exc:
+        # The kernel being down must not block validation — degrade to AABB
+        # loudly, never silently.
+        return [], [], f"cad-kernel недоступен, точная проверка пропущена: {exc}"
+
+
 @router.post("/assemblies/{assembly_id}/validate", response_model=EngineeringAssemblyValidation)
 async def validate_assembly(assembly_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> EngineeringAssemblyValidation:
     assembly = await db.get(EngineeringAssembly, assembly_id)
     if not assembly:
         raise HTTPException(404, "Сборка не найдена")
     components = list((await db.execute(select(EngineeringAssemblyComponent).where(EngineeringAssemblyComponent.engineering_assembly_id == assembly_id))).scalars())
+    exact_collisions, exact_keys, degraded = await _exact_interference(components)
+    exact_key_set = set(exact_keys)
+    # AABB stays for components without declared geometry; exact-checked pairs
+    # are excluded so a bounding-box false positive can't contradict the kernel.
     collisions = [
         (first.instance_key, second.instance_key)
         for index, first in enumerate(components)
         if not first.suppressed and first.bounds
         for second in components[index + 1:]
         if not second.suppressed and second.bounds and _overlap(first.bounds, second.bounds)
+        and not (first.instance_key in exact_key_set and second.instance_key in exact_key_set)
     ]
+    collisions.extend((item["first"], item["second"]) for item in exact_collisions)
     keys = {component.instance_key for component in components}
     mates = list((await db.execute(select(EngineeringAssemblyMate).where(EngineeringAssemblyMate.engineering_assembly_id == assembly_id))).scalars())
     invalid = [str(mate.id) for mate in mates if mate.first_instance_key not in keys or mate.second_instance_key not in keys or mate.first_instance_key == mate.second_instance_key]
-    return EngineeringAssemblyValidation(assembly_id=assembly_id, collisions=collisions, invalid_mates=invalid)
+    return EngineeringAssemblyValidation(
+        assembly_id=assembly_id,
+        collisions=collisions,
+        invalid_mates=invalid,
+        exact_collisions=exact_collisions,
+        exact_checked=sorted(exact_key_set),
+        degraded=degraded,
+    )
 
 
 @router.get("/revisions/{revision_id}/validation-runs", response_model=list[EngineeringValidationRunOut])

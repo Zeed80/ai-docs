@@ -164,6 +164,12 @@ class EngineeringAssemblyValidation(BaseModel):
     assembly_id: uuid.UUID
     collisions: list[tuple[str, str]] = Field(default_factory=list)
     invalid_mates: list[str] = Field(default_factory=list)
+    # E5: exact B-Rep results — pairs with the actual intersection volume;
+    # which instances were kernel-checked; a loud note when the kernel path
+    # degraded to AABB (never a silent fallback).
+    exact_collisions: list[dict] = Field(default_factory=list)
+    exact_checked: list[str] = Field(default_factory=list)
+    degraded: str | None = None
 
 
 class EngineeringValidationRunOut(BaseModel):

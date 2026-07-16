@@ -258,3 +258,63 @@ async def test_change_request_reject_and_supersession(client: AsyncClient):
     listed = (await client.get(f"/api/engineering/projects/{project['id']}/change-requests")).json()
     statuses = {item["id"]: item["status"] for item in listed}
     assert statuses[first["id"]] == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_assembly_exact_interference_degrades_loudly_without_kernel(client: AsyncClient):
+    """E5: components with declared occupancy solids go to the kernel; when it
+    is unreachable the check degrades to AABB with an explicit note — never
+    silently."""
+    project = (await client.post("/api/engineering/projects", json={"name": "Точная сборка"})).json()
+    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    assembly = (await client.post(f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"})).json()
+    for key in ("a", "b"):
+        response = await client.post(
+            f"/api/engineering/assemblies/{assembly['id']}/components",
+            json={
+                "instance_key": key,
+                "designation": key,
+                "metadata": {"shape": {"kind": "box", "width_mm": 10, "height_mm": 10, "depth_mm": 10}},
+            },
+        )
+        assert response.status_code == 201
+    report = (await client.post(f"/api/engineering/assemblies/{assembly['id']}/validate")).json()
+    if report["degraded"]:
+        # kernel unreachable (host test run): loud degradation, no exact data
+        assert report["exact_collisions"] == []
+    else:
+        # kernel reachable (in-container run): both boxes sit at the origin —
+        # full 10³ interpenetration must be reported with its volume
+        assert report["exact_checked"] == ["a", "b"]
+        [collision] = report["exact_collisions"]
+        assert collision["volume_mm3"] == pytest.approx(1000, rel=1e-3)
+        assert ["a", "b"] in report["collisions"]
+
+
+@pytest.mark.asyncio
+async def test_assembly_exact_result_overrides_aabb(client: AsyncClient, monkeypatch):
+    """E5: for kernel-checked pairs the AABB verdict is discarded — a rotated
+    part whose bounding boxes overlap but geometry clears is NOT a collision."""
+    from app.api import engineering as engineering_api
+
+    async def fake_exact(components):
+        keys = [c.instance_key for c in components if not c.suppressed and c.metadata_.get("shape")]
+        return [], keys, None  # kernel says: no interference
+
+    monkeypatch.setattr(engineering_api, "_exact_interference", fake_exact)
+    project = (await client.post("/api/engineering/projects", json={"name": "Поворот"})).json()
+    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    assembly = (await client.post(f"/api/engineering/revisions/{revision['id']}/assemblies", json={"name": "Сборка"})).json()
+    overlapping = {"x_min": 0, "x_max": 10, "y_min": 0, "y_max": 10, "z_min": 0, "z_max": 10}
+    for key in ("bar", "cube"):
+        await client.post(
+            f"/api/engineering/assemblies/{assembly['id']}/components",
+            json={
+                "instance_key": key, "designation": key,
+                "bounds": overlapping,  # AABB says collision
+                "metadata": {"shape": {"kind": "box", "width_mm": 10, "height_mm": 10, "depth_mm": 10}},
+            },
+        )
+    report = (await client.post(f"/api/engineering/assemblies/{assembly['id']}/validate")).json()
+    assert report["collisions"] == []  # exact verdict wins over the AABB guess
+    assert sorted(report["exact_checked"]) == ["bar", "cube"]

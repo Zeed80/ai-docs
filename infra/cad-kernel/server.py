@@ -372,6 +372,80 @@ def _cosmetic_threads(request: CompileRequest) -> list[dict[str, Any]]:
     return threads
 
 
+class InterferenceComponent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=160)
+    # Primitive occupancy solid in the component's local frame (origin at its
+    # own corner/base): box(width/height/depth) or cylinder(diameter/height,
+    # axis +Z from the origin).
+    shape: dict[str, Any]
+    # translate [x, y, z] mm + rotation about Z (deg) into assembly space.
+    transform: dict[str, Any] = Field(default_factory=dict)
+
+
+class InterferenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    components: list[InterferenceComponent] = Field(min_length=2, max_length=50)
+    # Below this common volume a touch is contact, not interference.
+    tolerance_mm3: float = Field(default=1e-3, gt=0)
+
+
+def _component_solid(component: InterferenceComponent) -> Part.Shape:
+    shape = component.shape if isinstance(component.shape, dict) else {}
+    kind = shape.get("kind")
+    if kind == "box":
+        solid = Part.makeBox(
+            _number(shape, "width_mm"), _number(shape, "height_mm"), _number(shape, "depth_mm")
+        )
+    elif kind == "cylinder":
+        solid = Part.makeCylinder(_number(shape, "diameter_mm") / 2, _number(shape, "height_mm"))
+    else:
+        raise HTTPException(422, f"Component {component.key!r}: shape.kind must be box or cylinder")
+    transform = component.transform or {}
+    rotate = transform.get("rotate_z_deg", 0)
+    if isinstance(rotate, bool) or not isinstance(rotate, (int, float)) or not math.isfinite(float(rotate)):
+        raise HTTPException(422, f"Component {component.key!r}: rotate_z_deg must be a finite number")
+    if abs(float(rotate)) > 1e-9:
+        solid.rotate(App.Vector(0, 0, 0), App.Vector(0, 0, 1), float(rotate))
+    translate = transform.get("translate", [0, 0, 0])
+    if (
+        not isinstance(translate, list) or len(translate) != 3
+        or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) for v in translate)
+    ):
+        raise HTTPException(422, f"Component {component.key!r}: translate must be [x, y, z]")
+    solid.translate(App.Vector(*(float(v) for v in translate)))
+    return solid
+
+
+@app.post("/interference")
+def check_interference(request: InterferenceRequest) -> dict[str, Any]:
+    """E5: EXACT B-Rep interference — pairwise boolean common() volume between
+    positioned component solids, not an axis-aligned bounding-box guess. A
+    rotated part that clears its neighbour no longer reads as a collision, and
+    a genuine overlap reports how much material intersects."""
+    solids = [(component.key, _component_solid(component)) for component in request.components]
+    if len({key for key, _ in solids}) != len(solids):
+        raise HTTPException(422, "Component keys must be unique")
+    collisions: list[dict[str, Any]] = []
+    for index, (first_key, first) in enumerate(solids):
+        for second_key, second in solids[index + 1:]:
+            # cheap reject before the boolean op
+            if not first.BoundBox.intersect(second.BoundBox):
+                continue
+            try:
+                common = first.common(second)
+                volume = float(common.Volume)
+            except Exception as exc:
+                raise HTTPException(422, f"OpenCascade rejected {first_key}∩{second_key}: {exc}") from exc
+            if volume > request.tolerance_mm3:
+                collisions.append(
+                    {"first": first_key, "second": second_key, "volume_mm3": volume}
+                )
+    return {"collisions": collisions, "checked_pairs": len(solids) * (len(solids) - 1) // 2}
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
