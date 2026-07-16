@@ -146,7 +146,12 @@ def _check_thin_walls(ir: CadIR, scale: float) -> list[DfmFinding]:
             if gap_px is None:
                 continue
             wall = _mm(gap_px, scale)
-            if 0.05 < wall < MIN_WALL_MM:
+            # The lower cutoff (0.5 mm) filters digitization artifacts: a
+            # recognized drawing often carries doubled strokes 0.2-0.4 mm
+            # apart, which are the same line, not a wall. A real machined
+            # wall thinner than 0.5 mm is practically nonexistent on the
+            # drawings this system sees, so the band below is noise.
+            if 0.5 < wall < MIN_WALL_MM:
                 key = (first.id, second.id)
                 if key in reported:
                     continue
