@@ -409,6 +409,35 @@ class EngineeringAnalysisCase(UUIDPrimaryKey, TimestampMixin, Base):
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class EngineeringAnalysisRun(UUIDPrimaryKey, TimestampMixin, Base):
+    """F2: one immutable execution of an analysis case.
+
+    The run freezes everything the verdict depended on — the inputs, the
+    material card AS IT WAS at execution time (the live card can change
+    later), and the solver name/version — so any past number can be traced
+    to exactly what produced it. The case row only mirrors the latest run."""
+
+    __tablename__ = "engineering_analysis_runs"
+    __table_args__ = (
+        Index("ix_engineering_analysis_runs_case_number", "analysis_case_id", "run_number", unique=True),
+    )
+
+    analysis_case_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("engineering_analysis_cases.id"), nullable=False, index=True
+    )
+    run_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    # passed | failed | computed | invalid_input
+    inputs_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    material_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    solver_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    solver_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    results: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    assumptions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    executed_by: Mapped[str | None] = mapped_column(String(255))
+
+
 class EngineeringChangeRequest(UUIDPrimaryKey, TimestampMixin, Base):
     """E3: a formal change request/order over an engineering revision.
 

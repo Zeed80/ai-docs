@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import add_timeline_event, log_action
-from app.db.models import BOM, CadIrRevision, Drawing, EngineeringAnalysisCase, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringChangeRequest, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
+from app.db.models import BOM, CadIrRevision, Drawing, EngineeringAnalysisCase, EngineeringAnalysisRun, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringChangeRequest, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
 from app.db.session import get_db
 from app.domain.engineering import (
     ChangeRequestCreate,
@@ -25,6 +25,7 @@ from app.domain.engineering import (
     EngineeringAssemblyValidation,
     EngineeringAnalysisCaseCreate,
     EngineeringAnalysisCaseOut,
+    EngineeringAnalysisRunOut,
     EngineeringValidationRunOut,
     EngineeringMaterialAssignmentCreate,
     EngineeringMaterialAssignmentOut,
@@ -438,12 +439,42 @@ async def create_analysis_case(revision_id: uuid.UUID, body: EngineeringAnalysis
     return case
 
 
+def _material_snapshot(material: EngineeringMaterial | None) -> dict | None:
+    """F2: freeze the material card at run time — the live card may change."""
+    if material is None:
+        return None
+    return {
+        "id": str(material.id),
+        "designation": material.designation,
+        "standard": material.standard,
+        "density_kg_m3": material.density_kg_m3,
+        "elastic_modulus_mpa": material.elastic_modulus_mpa,
+        "yield_strength_mpa": material.yield_strength_mpa,
+        "tensile_strength_mpa": material.tensile_strength_mpa,
+        "thermal_expansion_1_k": material.thermal_expansion_1_k,
+    }
+
+
+async def _next_run_number(db: AsyncSession, case_id: uuid.UUID) -> int:
+    last = (
+        await db.execute(
+            select(EngineeringAnalysisRun.run_number)
+            .where(EngineeringAnalysisRun.analysis_case_id == case_id)
+            .order_by(EngineeringAnalysisRun.run_number.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return (last or 0) + 1
+
+
 @router.post("/analysis-cases/{case_id}/run", response_model=EngineeringAnalysisCaseOut)
 async def run_analysis_case(case_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> EngineeringAnalysisCase:
-    """F1: run the deterministic solver for the case's analysis type. The
-    solver returns explicit assumptions alongside numbers; without a material
-    limit the verdict is "computed" — never a fake "passed"."""
-    from app.domain.analysis_solvers import SOLVERS, AnalysisInputError
+    """F1/F2: run the deterministic solver AND record an immutable run — the
+    inputs, the material card as-of-now, the solver name/version and the
+    verdict are frozen per execution; the case row mirrors only the latest
+    run. A bad input is recorded too (status invalid_input) before the 422 —
+    the audit trail keeps failed attempts, not only successes."""
+    from app.domain.analysis_solvers import SOLVER_VERSION, SOLVERS, AnalysisInputError
 
     case = await db.get(EngineeringAnalysisCase, case_id)
     if not case:
@@ -453,19 +484,49 @@ async def run_analysis_case(case_id: uuid.UUID, db: AsyncSession = Depends(get_d
     if solver is None:
         raise HTTPException(422, f"Для типа {case.analysis_type!r} нет solver; доступны: {', '.join(sorted(SOLVERS))}")
     material = await db.get(EngineeringMaterial, case.material_id) if case.material_id else None
+    run = EngineeringAnalysisRun(
+        analysis_case_id=case.id,
+        run_number=await _next_run_number(db, case.id),
+        status="invalid_input",
+        inputs_snapshot=dict(case.inputs or {}),
+        material_snapshot=_material_snapshot(material),
+        solver_name=case.analysis_type,
+        solver_version=SOLVER_VERSION,
+    )
+    db.add(run)
     try:
         outcome = solver(case.inputs or {}, material)
     except AnalysisInputError as exc:
+        run.error = str(exc)
+        await db.commit()
         raise HTTPException(422, str(exc)) from exc
-    case.results = outcome.results
-    case.assumptions = outcome.assumptions
-    case.status = (
+    run.status = (
         "computed" if outcome.passed is None else ("passed" if outcome.passed else "failed")
     )
+    run.results = outcome.results
+    run.assumptions = outcome.assumptions
+    case.results = outcome.results
+    case.assumptions = outcome.assumptions
+    case.solver = f"analytical/{SOLVER_VERSION}"
+    case.status = run.status
     case.executed_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(case)
     return case
+
+
+@router.get("/analysis-cases/{case_id}/runs", response_model=list[EngineeringAnalysisRunOut])
+async def list_analysis_runs(case_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringAnalysisRun]:
+    """F2: the immutable execution history, newest first."""
+    return list(
+        (
+            await db.execute(
+                select(EngineeringAnalysisRun)
+                .where(EngineeringAnalysisRun.analysis_case_id == case_id)
+                .order_by(EngineeringAnalysisRun.run_number.desc())
+            )
+        ).scalars()
+    )
 
 
 @router.post("/revisions/{revision_id}/approve", response_model=EngineeringRevisionOut)

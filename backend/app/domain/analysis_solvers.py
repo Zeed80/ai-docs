@@ -18,6 +18,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 
+# F2: bumped whenever any formula/threshold below changes — stored in every
+# run snapshot so an old result can be traced to the exact solver revision
+# that produced it.
+SOLVER_VERSION = "1.1.0"
+
+
 class AnalysisInputError(ValueError):
     """Missing or non-physical input for the chosen analysis type."""
 

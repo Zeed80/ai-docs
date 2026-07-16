@@ -242,3 +242,24 @@ class ChangeRequestOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class EngineeringAnalysisRunOut(BaseModel):
+    """F2: an immutable execution record — inputs, material card and solver
+    version frozen at run time."""
+
+    id: uuid.UUID
+    analysis_case_id: uuid.UUID
+    run_number: int
+    status: str
+    inputs_snapshot: dict
+    material_snapshot: dict | None
+    solver_name: str
+    solver_version: str
+    results: dict
+    assumptions: list
+    error: str | None
+    executed_by: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

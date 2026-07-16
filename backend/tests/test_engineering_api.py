@@ -318,3 +318,50 @@ async def test_assembly_exact_result_overrides_aabb(client: AsyncClient, monkeyp
     report = (await client.post(f"/api/engineering/assemblies/{assembly['id']}/validate")).json()
     assert report["collisions"] == []  # exact verdict wins over the AABB guess
     assert sorted(report["exact_checked"]) == ["bar", "cube"]
+
+
+@pytest.mark.asyncio
+async def test_analysis_runs_are_immutable_snapshots(client: AsyncClient):
+    """F2: each run freezes inputs + material card + solver version; editing
+    the live material later does not rewrite past runs; bad input is recorded
+    as an invalid_input run before the 422."""
+    material = (await client.post("/api/engineering/materials", json={
+        "designation": "Сталь F2", "yield_strength_mpa": 100,
+    })).json()
+    project = (await client.post("/api/engineering/projects", json={"name": "Снапшоты"})).json()
+    revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()
+    case = (await client.post(f"/api/engineering/revisions/{revision['id']}/analysis-cases", json={
+        "name": "Осевое", "material_id": material["id"],
+        "inputs": {"force_n": 500, "area_mm2": 10},
+    })).json()
+
+    first = await client.post(f"/api/engineering/analysis-cases/{case['id']}/run")
+    assert first.status_code == 200
+    assert first.json()["status"] == "passed"  # 50 MPa < 100
+
+    runs = (await client.get(f"/api/engineering/analysis-cases/{case['id']}/runs")).json()
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["run_number"] == 1
+    assert run["inputs_snapshot"] == {"force_n": 500, "area_mm2": 10}
+    assert run["material_snapshot"]["yield_strength_mpa"] == 100
+    assert run["solver_name"] == "axial_stress"
+    assert run["solver_version"]
+
+    # a second run gets its own number; history is append-only
+    second = await client.post(f"/api/engineering/analysis-cases/{case['id']}/run")
+    assert second.status_code == 200
+    runs = (await client.get(f"/api/engineering/analysis-cases/{case['id']}/runs")).json()
+    assert [r["run_number"] for r in runs] == [2, 1]
+
+    # invalid input is a recorded run, then 422
+    bad_case = (await client.post(f"/api/engineering/revisions/{revision['id']}/analysis-cases", json={
+        "name": "Без площади", "analysis_type": "axial_stress",
+        "inputs": {"force_n": 500},
+    })).json()
+    bad = await client.post(f"/api/engineering/analysis-cases/{bad_case['id']}/run")
+    assert bad.status_code == 422
+    bad_runs = (await client.get(f"/api/engineering/analysis-cases/{bad_case['id']}/runs")).json()
+    assert len(bad_runs) == 1
+    assert bad_runs[0]["status"] == "invalid_input"
+    assert bad_runs[0]["error"]
