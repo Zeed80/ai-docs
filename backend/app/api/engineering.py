@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import add_timeline_event, log_action
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo, require_permission
 from app.db.models import BOM, CadIrRevision, Drawing, EngineeringAnalysisCase, EngineeringAnalysisRun, EngineeringAssembly, EngineeringAssemblyComponent, EngineeringAssemblyMate, EngineeringChangeRequest, EngineeringMaterial, EngineeringMaterialAssignment, EngineeringProject, EngineeringProjection, EngineeringRevision, EngineeringValidationRun, ManufacturingCheckResult, ManufacturingProcessPlan
 from app.db.session import get_db
 from app.domain.engineering import (
@@ -57,7 +59,12 @@ def _blocking_errors(validation: dict) -> bool:
 
 
 @router.post("/projects", response_model=EngineeringProjectOut, status_code=status.HTTP_201_CREATED)
-async def create_project(body: EngineeringProjectCreate, db: AsyncSession = Depends(get_db)) -> EngineeringProject:
+async def create_project(
+    body: EngineeringProjectCreate,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> EngineeringProject:
+    require_permission(user, "engineering.project_create")
     project = EngineeringProject(
         name=body.name,
         code=body.code,
@@ -106,8 +113,12 @@ async def get_project(project_id: uuid.UUID, db: AsyncSession = Depends(get_db))
 
 @router.post("/projects/{project_id}/revisions", response_model=EngineeringRevisionOut, status_code=status.HTTP_201_CREATED)
 async def create_revision(
-    project_id: uuid.UUID, body: EngineeringRevisionCreate, db: AsyncSession = Depends(get_db)
+    project_id: uuid.UUID,
+    body: EngineeringRevisionCreate,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
 ) -> EngineeringRevision:
+    require_permission(user, "engineering.revision_create")
     project = await db.get(EngineeringProject, project_id)
     if not project:
         raise HTTPException(404, "Инженерный проект не найден")
@@ -468,7 +479,12 @@ async def _next_run_number(db: AsyncSession, case_id: uuid.UUID) -> int:
 
 
 @router.post("/analysis-cases/{case_id}/run", response_model=EngineeringAnalysisCaseOut)
-async def run_analysis_case(case_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> EngineeringAnalysisCase:
+async def run_analysis_case(
+    case_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> EngineeringAnalysisCase:
+    require_permission(user, "engineering.analysis_run")
     """F1/F2: run the deterministic solver AND record an immutable run — the
     inputs, the material card as-of-now, the solver name/version and the
     verdict are frozen per execution; the case row mirrors only the latest
@@ -531,8 +547,12 @@ async def list_analysis_runs(case_id: uuid.UUID, db: AsyncSession = Depends(get_
 
 @router.post("/revisions/{revision_id}/approve", response_model=EngineeringRevisionOut)
 async def approve_revision(
-    revision_id: uuid.UUID, body: EngineeringApprovalRequest, db: AsyncSession = Depends(get_db)
+    revision_id: uuid.UUID,
+    body: EngineeringApprovalRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
 ) -> EngineeringRevision:
+    require_permission(user, "engineering.revision_approve")
     revision = await db.get(EngineeringRevision, revision_id)
     if not revision:
         raise HTTPException(404, "Инженерная ревизия не найдена")
@@ -609,8 +629,12 @@ async def _change_impact(db: AsyncSession, revision: EngineeringRevision) -> dic
 
 @router.post("/projects/{project_id}/change-requests", response_model=ChangeRequestOut, status_code=status.HTTP_201_CREATED)
 async def create_change_request(
-    project_id: uuid.UUID, body: ChangeRequestCreate, db: AsyncSession = Depends(get_db)
+    project_id: uuid.UUID,
+    body: ChangeRequestCreate,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
 ) -> EngineeringChangeRequest:
+    require_permission(user, "engineering.change_create")
     project = await db.get(EngineeringProject, project_id)
     if not project:
         raise HTTPException(404, "Инженерный проект не найден")
@@ -671,8 +695,12 @@ async def list_change_requests(project_id: uuid.UUID, db: AsyncSession = Depends
 
 @router.post("/change-requests/{change_id}/sign", response_model=ChangeRequestOut)
 async def sign_change_request(
-    change_id: uuid.UUID, body: ChangeRequestSign, db: AsyncSession = Depends(get_db)
+    change_id: uuid.UUID,
+    body: ChangeRequestSign,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
 ) -> EngineeringChangeRequest:
+    require_permission(user, "engineering.change_sign")
     """A reviewer's signature. Every listed reviewer approving → approved;
     any single reject → rejected. Signatures are append-only per reviewer."""
     change = await db.get(EngineeringChangeRequest, change_id)
@@ -710,8 +738,11 @@ async def sign_change_request(
 
 @router.post("/change-requests/{change_id}/apply", response_model=ChangeRequestOut)
 async def apply_change_request(
-    change_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    change_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
 ) -> EngineeringChangeRequest:
+    require_permission(user, "engineering.change_apply")
     """Turn an approved change request into a change ORDER: mint a new draft
     revision based on the affected one (which is never mutated) and record it
     on the request. Editing then proceeds on the new revision as usual."""

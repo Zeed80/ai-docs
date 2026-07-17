@@ -213,15 +213,18 @@ async def test_purge_all_viewer_gets_403(viewer_client):
 
 
 @pytest.mark.asyncio
-async def test_purge_all_production_guard(admin_client, monkeypatch):
-    """purge-all must return 403 even for admin when APP_ENV=production."""
+async def test_purge_all_admin_allowed_in_production(admin_client, monkeypatch):
+    """Deliberate decision (833a080): the admin "Полная очистка" tool IS
+    available in production — the admin role plus the exact confirmation
+    phrase are the authorization. This test used to assert a production 403
+    from an earlier audit and was left stale when that decision changed."""
     from app.config import settings
     monkeypatch.setattr(settings, "app_env", "production")
     resp = await admin_client.post(
         "/api/documents/dev/purge-all",
         json={"confirm": "DELETE ALL DOCUMENT DATA", "delete_files": False},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 200
 
 
 @pytest.mark.asyncio
