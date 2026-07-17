@@ -10,12 +10,15 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+import structlog
+
 from app.ai.agent_config import get_builtin_agent_config
 from app.ai.capability_manifest import load_capability_manifest
 from app.ai.policy_engine import check_tool_execution, classify_capability_action_risk
 from app.config import settings
 
 router = APIRouter(tags=["capabilities"])
+logger = structlog.get_logger()
 
 # Maps capability → action → (method, path_template, path_params)
 # path_params: list of arg keys that get interpolated into the URL
@@ -645,6 +648,12 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
     from app.ai.gateway_config import gateway_config
     base_url = gateway_config.backend_url
 
+    # G3: the agent may attach a free-text `reason` ("зачем этот вызов") to
+    # any capability call. It is audit metadata, never proxied downstream.
+    reason = body.pop("reason", None)
+    if reason is not None and not isinstance(reason, str):
+        reason = str(reason)
+
     # Flatten nested 'filters' and 'body' into top-level args for proxying
     if "filters" in body and isinstance(body["filters"], dict):
         body.update(body.pop("filters"))
@@ -653,5 +662,42 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
 
     _enforce_capability_policy(capability_name, action, body, request)
 
+    await _audit_tool_call(capability_name, action, reason, request)
+
     result = await _proxy(method, path_tpl, path_params, body, base_url)
     return JSONResponse(content=result)
+
+
+async def _audit_tool_call(
+    capability_name: str, action: str, reason: str | None, request: Request
+) -> None:
+    """G3: persist every capability tool call with its stated reason.
+
+    Best-effort — an audit-write failure must not sink the tool call itself,
+    but it is logged loudly so a silent audit gap can't go unnoticed."""
+    logger.info(
+        "capability_tool_call",
+        capability=capability_name,
+        action=action,
+        reason=reason,
+    )
+    try:
+        from app.audit.service import log_action
+        from app.db.session import _get_session_factory
+
+        actor = request.headers.get("x-agent-actor") or "agent"
+        async with _get_session_factory()() as db:
+            await log_action(
+                db,
+                action="agent.tool_call",
+                entity_type="capability",
+                user_id=actor[:255],
+                details={
+                    "capability": capability_name,
+                    "action": action,
+                    "reason": (reason or "")[:1000] or None,
+                },
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("capability_audit_failed", capability=capability_name, error=str(exc))
