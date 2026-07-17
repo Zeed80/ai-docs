@@ -359,20 +359,38 @@ def _ocr_text_entities(image_bytes: bytes, lenient: bool = False):
     from app.ai.cad_ir.schema import Point, SourceRegion, TextEntity
     from app.ai.text_preserve import detect_text_regions
 
+    classified = [
+        (region, _classify_ocr_region(region, lenient=lenient))
+        for region in detect_text_regions(image_bytes)
+    ]
+    # Height sanity (2026-07-17, user report "огромный текст"): tesseract
+    # sometimes merges hatching/dimension strokes into one tall region, and
+    # rendering that box height verbatim paints giant labels over the
+    # drawing. Judge every text box against the sheet's own median text
+    # height: an outlier ≥2.5× the median is a merged region → demote to
+    # smudge (excluded, not drawn); survivors get their render height clamped
+    # to 2× the median. ЕСКД text on one sheet simply doesn't vary 3×.
+    text_heights = sorted(r.h for r, kind in classified if kind == "text")
+    median_h = text_heights[len(text_heights) // 2] if text_heights else 0
+
     entities = []
     boxes: list[tuple[int, int, int, int]] = []
-    for region in detect_text_regions(image_bytes):
-        kind = _classify_ocr_region(region, lenient=lenient)
+    for region, kind in classified:
         if kind == "geometry":
             continue  # trace it as linework, don't exclude
         boxes.append((region.x, region.y, region.x + region.w, region.y + region.h))
         if kind != "text":
             continue  # exclude the box, but ship no garbage TextEntity
+        if median_h and region.h >= 2.5 * median_h and len(text_heights) >= 5:
+            continue  # merged-region outlier: keep the exclusion, drop the label
+        height = float(max(region.h, 4))
+        if median_h:
+            height = min(height, 2.0 * median_h)
         entities.append(
             TextEntity(
                 position=Point(x=float(region.x), y=float(region.y + region.h)),
                 text=region.text.strip(),
-                height=float(max(region.h, 4)),
+                height=height,
                 confidence=max(0.0, min(1.0, region.conf / 100.0)),
                 origin="cv",
                 source_region=SourceRegion(

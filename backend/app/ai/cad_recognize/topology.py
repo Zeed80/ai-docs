@@ -50,6 +50,12 @@ _MIN_SEGMENT_LEN_PX = 2.0
 # flag GEOM_DEGENERATE — dropped up front so it never becomes an IR entity or
 # an un-actionable review item (kept in step with cad_validate._MIN_SEGMENT_LEN_PX).
 _DEGENERATE_LEN_PX = 3.0
+# A short fragment BOTH of whose endpoints touch nothing else within snap
+# distance is recognition noise (an OCR leftover tick, a speckle stroke) —
+# real short strokes (dimension ticks, arrowhead edges) always meet other
+# geometry. User report 2026-07-17: "куча несвязанных линий".
+_ISOLATED_MAX_LEN_PX = 7.0
+_ISOLATED_SNAP_PX = 4.0
 # Two segments whose endpoints coincide within this are the same drawn line
 # traced twice; the redundant copy is dropped (validator's GEOM_DUPLICATE tol).
 _DUPLICATE_TOL_PX = 2.0
@@ -97,6 +103,43 @@ def _prune_noise_segments(segments: list[Segment]) -> tuple[list[Segment], int, 
         kept.append(seg)
     deduped, dropped_dup = _dedup_segments(kept)
     return deduped, dropped_degen, dropped_dup
+
+
+def _drop_isolated_specks(segments: list[Segment]) -> tuple[list[Segment], int]:
+    """Drop short segments neither of whose endpoints comes near any other
+    segment's endpoint — floating ticks the recognizer read out of noise."""
+    from collections import defaultdict
+
+    cell = _ISOLATED_SNAP_PX
+
+    def _key(p: Point) -> tuple[int, int]:
+        return (int(p.x // cell), int(p.y // cell))
+
+    counts: dict[tuple[int, int], int] = defaultdict(int)
+    for seg in segments:
+        counts[_key(seg.p1)] += 1
+        counts[_key(seg.p2)] += 1
+
+    def _neighbours(p: Point) -> int:
+        cx, cy = _key(p)
+        return sum(
+            counts.get((cx + dx, cy + dy), 0)
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+        )
+
+    kept: list[Segment] = []
+    dropped = 0
+    for seg in segments:
+        if _seg_len(seg) <= _ISOLATED_MAX_LEN_PX:
+            # For a ≤7px segment with 4px cells the two own endpoints see each
+            # other, contributing up to 4 to the sum — anything ≤4 means no
+            # OTHER endpoint is anywhere nearby.
+            if _neighbours(seg.p1) + _neighbours(seg.p2) <= 4:
+                dropped += 1
+                continue
+        kept.append(seg)
+    return kept, dropped
 
 
 def _dedup_segments(segments: list[Segment]) -> tuple[list[Segment], int]:
@@ -612,6 +655,11 @@ def consolidate_entities(entities: list[Entity]) -> tuple[list[Entity], dict[str
     merged, dropped_dup_post = _dedup_segments(merged)
     dropped_dup += dropped_dup_post
     kept, dash_lines = _recognize_dash_patterns(merged)
+    # Isolated micro-fragments are pruned only AFTER dash-pattern assembly:
+    # the dots of a штрихпунктирная line are individually "isolated" until
+    # the pattern pass welds them into one axis line.
+    kept, dropped_isolated = _drop_isolated_specks(kept)
+    dropped_degen += dropped_isolated
     all_arcs = arcs + [e for e in fitted if isinstance(e, Arc)]
     fitted_non_arc = [e for e in fitted if not isinstance(e, Arc)]
     kept_arcs, merged_arcs = _merge_cocircular_arcs(all_arcs)
