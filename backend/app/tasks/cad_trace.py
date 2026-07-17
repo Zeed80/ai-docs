@@ -526,8 +526,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # enrichment is on, keep low-confidence plausible reads so the VLM can
         # rescue them (Stage 3.5); otherwise filter them out to keep the
         # drawing clean.
+        # VLM enrichment is ON by default (2026-07-17): tesseract alone
+        # misreads dense CAD labels, and a local vision model (qwen3-vl)
+        # re-reads the uncertain crops far better. Pass vlm_dimensions=false
+        # to opt out (e.g. hosts without a vision model).
+        vlm_enrich = params.get("vlm_dimensions", True)
         text_entities, text_boxes = _ocr_text_entities(
-            content, lenient=bool(params.get("vlm_dimensions"))
+            content, lenient=bool(vlm_enrich)
         )
 
         # Stage 3.5 (Ф4.1, opt-in via params): escalate low-confidence OCR
@@ -536,8 +541,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # and fast; enable once evaluated for latency in your deployment.
         # The VLM NEVER overwrites truth here — apply_vlm_readings keeps the
         # result at assurance=inferred; Stage 6.7 cross-checks decide.
-        if params.get("vlm_dimensions"):
-            await _enrich_text_with_vlm(text_entities, content)
+        if vlm_enrich:
+            try:
+                await _enrich_text_with_vlm(text_entities, content)
+            except Exception as exc:  # noqa: BLE001 — enrichment must never sink digitize
+                logger.warning("cad_trace_vlm_enrich_failed", error=str(exc))
 
         # Stage 4: scale (manual override wins; else frame detection).
         manual_scale = params.get("scale_mm_per_px")

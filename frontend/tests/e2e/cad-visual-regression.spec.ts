@@ -9,6 +9,7 @@ import {
   type Page,
   type Route,
 } from "@playwright/test";
+// @ts-expect-error — pngjs ships no type declarations
 import { PNG } from "pngjs";
 
 const generationId = "66666666-6666-4666-8666-666666666666";

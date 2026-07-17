@@ -71,6 +71,7 @@ const NAV_REF = [
 ] as const;
 
 const NAV_ENGINEERING = [
+  { href: "/cad", icon: "drafting-compass", key: "cad" },
   { href: "/engineering", icon: "drafting-compass", key: "engineering" },
   { href: "/drawings", icon: "drafting-compass", key: "drawings" },
   { href: "/studio", icon: "image-studio", key: "studio" },
