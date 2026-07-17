@@ -898,6 +898,7 @@
     "subtitle": "Drawings: digitized scans, blank sheets and imported DXF",
     "open_studio": "Studio",
     "new_sheet": "New sheet",
+    "digitize_scan": "Digitize scan/photo",
     "import_dxf": "Import DXF",
     "search": "Search by name…",
     "empty": "No drawings yet — create a sheet, import a DXF or digitize a scan in the studio.",

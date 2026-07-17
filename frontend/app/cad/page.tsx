@@ -8,10 +8,12 @@ import { useTranslations } from "next-intl";
 import {
   createBlankSheet,
   Generation,
+  generate,
   importDxf,
   listGenerations,
   resultUrl,
   updateGenerationMeta,
+  uploadSource,
 } from "@/lib/studio-api";
 
 type SheetFormat = "A4" | "A3" | "A2" | "A1";
@@ -46,6 +48,7 @@ export default function CadListPage() {
   const [withFrame, setWithFrame] = useState(true);
   const [sheetTitle, setSheetTitle] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const scanRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -101,6 +104,28 @@ export default function CadListPage() {
     [router],
   );
 
+  const onDigitize = useCallback(
+    async (file: File) => {
+      // The main entry point for «оцифруй detal_126.png»: upload the scan/
+      // photo and launch vectorize; the editor page polls until it lands.
+      setBusy(true);
+      setError(null);
+      try {
+        const path = await uploadSource(file);
+        const gen = await generate({
+          operation: "vectorize",
+          source_image_paths: [path],
+          params: {},
+        });
+        router.push(`/cad/${gen.id}`);
+      } catch (e) {
+        setError(String((e as Error).message || e));
+        setBusy(false);
+      }
+    },
+    [router],
+  );
+
   const onRename = useCallback(
     async (g: Generation, ev: React.MouseEvent) => {
       // The card is a Link — don't navigate when renaming.
@@ -132,6 +157,25 @@ export default function CadListPage() {
           >
             {t("open_studio")}
           </Link>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => scanRef.current?.click()}
+            className="rounded bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-500 disabled:opacity-50"
+          >
+            {t("digitize_scan")}
+          </button>
+          <input
+            ref={scanRef}
+            type="file"
+            accept=".png,.jpg,.jpeg,.webp,.pdf"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void onDigitize(file);
+            }}
+          />
           <button
             type="button"
             disabled={busy}
