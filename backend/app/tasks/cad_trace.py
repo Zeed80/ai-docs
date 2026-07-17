@@ -546,6 +546,26 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 await _enrich_text_with_vlm(text_entities, content)
             except Exception as exc:  # noqa: BLE001 — enrichment must never sink digitize
                 logger.warning("cad_trace_vlm_enrich_failed", error=str(exc))
+            # Post-VLM strict pass: lenient OCR kept low-confidence reads only
+            # to give the VLM a chance; whatever the VLM did not rescue (or
+            # never reached within its per-run budget) is demoted to
+            # exclusion-only — its box already shields the recognizer, but a
+            # garbage label must not land in the drawing (live 2026-07-17:
+            # lenient-on shipped 138 texts / 94 review items).
+            before = len(text_entities)
+            text_entities = [
+                e for e in text_entities
+                if e.confidence * 100 >= (
+                    _TEXT_MIN_CONF_SINGLE if len((e.text or "").strip()) <= 1
+                    else _TEXT_MIN_CONF_SHORT if len((e.text or "").strip()) == 2
+                    else _TEXT_MIN_CONF_LONG
+                )
+            ]
+            if before != len(text_entities):
+                logger.info(
+                    "cad_trace_post_vlm_text_filter",
+                    kept=len(text_entities), dropped=before - len(text_entities),
+                )
 
         # Stage 4: scale (manual override wins; else frame detection).
         manual_scale = params.get("scale_mm_per_px")
