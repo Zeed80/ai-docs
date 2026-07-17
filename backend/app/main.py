@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 # Sentry — optional; gracefully skipped when DSN is not set
@@ -438,8 +438,23 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
+async def _metrics_auth(request: Request) -> None:
+    """G4: /metrics is reachable only inside the docker network (Traefik does
+    not publish it), and Prometheus can't do the SSO dance — so accept EITHER
+    an authenticated user OR the service key as a Bearer token (the same
+    secret agent→backend calls use; prometheus.yml supplies it via
+    `authorization.credentials_file`)."""
+    from app.config import settings as _settings
+
+    auth = request.headers.get("authorization", "")
+    token = auth[7:] if auth.lower().startswith("bearer ") else None
+    if token and _settings.agent_service_key and token == _settings.agent_service_key:
+        return
+    await _get_current_user(request)
+
+
 @app.get("/metrics", include_in_schema=False,
-         dependencies=[Depends(_get_current_user)])
+         dependencies=[Depends(_metrics_auth)])
 async def metrics_endpoint():
     """Prometheus metrics endpoint."""
     try:

@@ -10,6 +10,9 @@ services:
     restart: unless-stopped
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # G4: bearer token for the auth-gated backend /metrics. Generate once:
+      #   grep AGENT_SERVICE_KEY .env | cut -d= -f2 | tr -d '\n' > monitoring/backend-token
+      - ./monitoring/backend-token:/etc/prometheus/backend-token:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"

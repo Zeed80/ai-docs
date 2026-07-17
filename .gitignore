@@ -129,3 +129,4 @@ infra/traefik/prod/routes.yml
 # Local built APK artifact (do not commit)
 /sveta-debug.apk
 *.apk
+infra/monitoring/backend-token

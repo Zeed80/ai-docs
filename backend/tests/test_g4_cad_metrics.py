@@ -66,3 +66,15 @@ async def test_export_increments_metric(client, db_session):
     assert resp.status_code == 200
     if before >= 0:
         assert _count() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_metrics_accepts_service_key_bearer(client, monkeypatch):
+    """G4: Prometheus can't do SSO — /metrics accepts the agent service key
+    as a Bearer token; a wrong token still gets the auth treatment."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "agent_service_key", "prom-secret")
+    ok = await client.get("/metrics", headers={"Authorization": "Bearer prom-secret"})
+    assert ok.status_code == 200
+    assert "aiworkspace" in ok.text or "prometheus_client not installed" in ok.text

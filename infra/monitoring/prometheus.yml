@@ -7,6 +7,12 @@ scrape_configs:
     static_configs:
       - targets: ["backend:8000"]
     metrics_path: /metrics
+    # G4: /metrics is auth-gated; the backend accepts the agent service key
+    # as a Bearer token. The monitoring compose mounts the key from .env
+    # (AGENT_SERVICE_KEY) into this file.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/backend-token
 
   - job_name: "prometheus"
     static_configs:
