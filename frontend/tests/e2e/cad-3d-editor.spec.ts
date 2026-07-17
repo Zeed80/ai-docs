@@ -59,6 +59,8 @@ const ir = {
   ],
   validation: { issues: [], coverage_recall: 1, coverage_precision: 1 },
   review: [],
+  parameters: [],
+  constraints: [],
   recognizer_used: "manual",
 };
 
@@ -191,6 +193,9 @@ async function mockApi(page: Page) {
     if (url.pathname.endsWith("/result")) {
       return route.fulfill({ body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEAQH/6B9pAAAAAElFTkSuQmCC", "base64"), contentType: "image/png" });
     }
+    if (url.pathname.endsWith("/release-manifest")) {
+      return route.fulfill({ json: { manifest_version: "1", generation_id: generationId, revision: 3, dxf_version: "R2010", manifest_sha256: "a".repeat(64), artifact_hashes: {}, fully_reproducible: true, approval: { accepted_by: "e2e", accepted_at: "2026-07-17T10:00:00Z" } } });
+    }
     if (url.pathname === "/api/studio/queue") return route.fulfill({ json: { items: [] } });
     if (url.pathname === "/api/studio/queue/stats") return route.fulfill({ json: { control: { paused: false, drain: false }, limits: {}, totals: {}, active: 0, by_resource: {}, by_kind: {} } });
     if (url.pathname === "/api/lora/gpu-status") return route.fulfill({ json: { training_lock: null } });
@@ -208,7 +213,7 @@ test("CAD feature tree rebuild sends only editable 3D parameters", async ({ page
   await setAuthCookie(context);
   await mockApi(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(`/studio?id=${generationId}`);
+  await page.goto(`/cad/${generationId}`);
 
   const depth = page.getByLabel("Глубина выдавливания");
   await expect(depth).toHaveValue("20");
@@ -281,7 +286,7 @@ for (const viewport of [
     await setAuthCookie(context);
     await mockApi(page);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto(`/studio?id=${generationId}`);
+    await page.goto(`/cad/${generationId}`);
     await expect(page.getByText("Параметрическая 3D-модель")).toBeVisible({ timeout: 20_000 });
     await assertCanvasHasModel(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);

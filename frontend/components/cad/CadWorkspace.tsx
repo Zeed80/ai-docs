@@ -2116,7 +2116,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             <span className="text-zinc-500">· DXF {release.dxf_version}</span>
           </div>
           <div className="font-mono text-zinc-500">
-            manifest {release.manifest_sha256.slice(0, 16)}…
+            manifest {(release.manifest_sha256 ?? "").slice(0, 16)}…
           </div>
           {release.approval.accepted_by && (
             <div className="text-zinc-500">
