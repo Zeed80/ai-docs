@@ -85,11 +85,16 @@ async def compile_candidate(
         "confirm_assumptions": confirm_assumptions,
         "metadata": metadata,
     }
+    from app.core import metrics
+
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
             response = await client.post(f"{settings.cad_kernel_url.rstrip('/')}/compile", json=payload)
     except httpx.HTTPError as exc:
+        metrics.cad_kernel_compile_total.labels(status="error").inc()
         raise CadKernelUnavailable(f"cad-kernel недоступен: {exc}") from exc
+    if response.status_code != 200:
+        metrics.cad_kernel_compile_total.labels(status="error").inc()
     if response.status_code == 409:
         raise CadKernelRejected("Нужно явно подтвердить допущения выбранной 3D-гипотезы")
     if response.status_code == 422:
@@ -100,4 +105,5 @@ async def compile_candidate(
         raise CadKernelRejected(str(detail or "CAD-ядро отклонило некорректную геометрию"))
     if response.status_code != 200:
         raise CadKernelUnavailable(f"cad-kernel вернул HTTP {response.status_code}")
+    metrics.cad_kernel_compile_total.labels(status="ok").inc()
     return _decode_artifacts(response.content)

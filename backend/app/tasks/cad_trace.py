@@ -60,7 +60,20 @@ _TITLE_BLOCK_MIN_INK_FRACTION = 0.01
     time_limit=660,
 )
 def run_cad_trace(self, generation_id: str) -> dict:
-    return run_async(_run(generation_id, self.request.id))
+    import time as _time
+
+    from app.core import metrics
+
+    started = _time.monotonic()
+    try:
+        result = run_async(_run(generation_id, self.request.id))
+    except Exception:
+        metrics.cad_digitize_total.labels(status="error").inc()
+        raise
+    metrics.cad_digitize_duration_seconds.observe(_time.monotonic() - started)
+    status = "error" if result.get("error") else ("declined" if result.get("declined") else "done")
+    metrics.cad_digitize_total.labels(status=status).inc()
+    return result
 
 
 # A global Otsu threshold assumes a roughly bimodal histogram (clean dark

@@ -515,6 +515,9 @@ async def run_analysis_case(
     except AnalysisInputError as exc:
         run.error = str(exc)
         await db.commit()
+        from app.core import metrics
+
+        metrics.cad_solver_runs_total.labels(analysis_type=case.analysis_type, status="invalid_input").inc()
         raise HTTPException(422, str(exc)) from exc
     run.status = (
         "computed" if outcome.passed is None else ("passed" if outcome.passed else "failed")
@@ -526,6 +529,9 @@ async def run_analysis_case(
     case.solver = f"analytical/{SOLVER_VERSION}"
     case.status = run.status
     case.executed_at = datetime.now(UTC)
+    from app.core import metrics
+
+    metrics.cad_solver_runs_total.labels(analysis_type=case.analysis_type, status=run.status).inc()
     await db.commit()
     await db.refresh(case)
     return case

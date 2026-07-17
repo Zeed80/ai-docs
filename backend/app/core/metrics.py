@@ -201,6 +201,33 @@ if _PROMETHEUS_AVAILABLE:
     )
 
     # Scenario traces
+    # G4: CAD pipeline / solver / export observability
+    cad_digitize_total = Counter(
+        "aiworkspace_cad_digitize_total",
+        "CAD digitize (vectorize) runs",
+        ["status"],  # done | declined | error
+    )
+    cad_digitize_duration_seconds = Histogram(
+        "aiworkspace_cad_digitize_duration_seconds",
+        "CAD digitize pipeline duration",
+        buckets=(1, 5, 15, 30, 60, 120, 300),
+    )
+    cad_export_total = Counter(
+        "aiworkspace_cad_export_total",
+        "CAD artifact exports",
+        ["kind", "status"],  # dxf/dwg/svg/pdf/step/… × ok | error
+    )
+    cad_solver_runs_total = Counter(
+        "aiworkspace_cad_solver_runs_total",
+        "Engineering analysis solver runs",
+        ["analysis_type", "status"],  # passed | failed | computed | invalid_input
+    )
+    cad_kernel_compile_total = Counter(
+        "aiworkspace_cad_kernel_compile_total",
+        "CAD kernel 3D compile calls",
+        ["status"],  # ok | error
+    )
+
     scenario_runs_total = Counter(
         "aiworkspace_scenario_runs_total",
         "Total scenario executions",
@@ -265,6 +292,11 @@ else:
     normcontrol_failed_total = _noop
     gost_forms_exported_total = _noop
     tp_generation_duration_seconds = _noop
+    cad_digitize_total = _noop
+    cad_digitize_duration_seconds = _noop
+    cad_export_total = _noop
+    cad_solver_runs_total = _noop
+    cad_kernel_compile_total = _noop
     scenario_runs_total = _noop
     scenario_errors_total = _noop
     scenario_duration_seconds = _noop

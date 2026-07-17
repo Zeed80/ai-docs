@@ -611,6 +611,9 @@ async def get_artifact(
     if not path:
         raise HTTPException(404, "Артефакт не найден")
     data = download_file(path)
+    from app.core import metrics
+
+    metrics.cad_export_total.labels(kind=kind, status="ok").inc()
     return Response(content=data, media_type=_ARTIFACT_MEDIA_TYPES.get(kind, "application/octet-stream"))
 
 
