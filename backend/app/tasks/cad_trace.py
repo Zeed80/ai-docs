@@ -384,6 +384,39 @@ def _classify_ocr_region(region, lenient: bool = False) -> str:
     return "text" if region.conf >= threshold else "smudge"
 
 
+def _drop_in_glyph_segments(entities: list, text_entities: list) -> list:
+    """Remove segments that lie entirely inside a text glyph's box.
+
+    Text is deliberately not pre-excluded from tracing (blanking text boxes
+    deletes the geometry the dimension text sits on), so glyph strokes arrive
+    as tiny segments. A segment whose BOTH endpoints fall inside a text
+    entity's tight ``source_region`` is such a stroke and is dropped; a real
+    line that merely crosses a label extends beyond the box and is kept.
+    """
+    boxes = [
+        t.source_region for t in text_entities if getattr(t, "source_region", None)
+    ]
+    if not boxes:
+        return list(entities)
+
+    def _inside(x: float, y: float) -> bool:
+        return any(
+            box.x0 - 1.0 <= x <= box.x1 + 1.0 and box.y0 - 1.0 <= y <= box.y1 + 1.0
+            for box in boxes
+        )
+
+    kept = []
+    for entity in entities:
+        if (
+            entity.type == "segment"
+            and _inside(entity.p1.x, entity.p1.y)
+            and _inside(entity.p2.x, entity.p2.y)
+        ):
+            continue
+        kept.append(entity)
+    return kept
+
+
 def _ocr_text_entities(image_bytes: bytes, lenient: bool = False):
     """OCR → (TextEntity list, exclusion boxes for the recognizer). Only
     confident, text-shaped reads become entities; geometry misread as glyphs
@@ -686,16 +719,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 vlm_texts = []
 
         if vlm_texts:
-            # VLM read is the primary text layer. Also shield its glyph ink from
-            # the geometry tracer so a label tesseract missed does not resurface
-            # as spurious segments.
+            # VLM read is the primary text layer.
             text_entities = vlm_texts
-            for entity in vlm_texts:
-                region = entity.source_region
-                if region is not None:
-                    text_boxes.append(
-                        (int(region.x0), int(region.y0), int(region.x1), int(region.y1))
-                    )
             logger.info("cad_trace_vlm_sheet_text", texts=len(vlm_texts))
         elif vlm_enrich:
             # No VLM sheet read (model down/empty) → tesseract + per-crop
@@ -761,7 +786,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # Stage 5: recognize geometry — neural (if available) arbitrated
         # against CV by independent coverage scoring, never by the model's
         # own say-so (see cad_recognize/verify.arbitrate_recognition).
-        arbitration = arbitrate_recognition(ink, text_boxes, TechnicalVectorizerRecognizer(), CvRecognizer())
+        # Do NOT pre-exclude text regions from tracing: on a real drawing the
+        # dimension text sits ON the part (leader/dimension lines, hatching),
+        # so blanking text boxes deletes the geometry too — measured on
+        # detal_126 it dropped the main shaft body, ~78% of segments (2619 ->
+        # 584). Instead trace everything and remove only segments that lie
+        # ENTIRELY inside a text glyph's tight box afterwards.
+        arbitration = arbitrate_recognition(ink, None, TechnicalVectorizerRecognizer(), CvRecognizer())
         # B1: an empty recognition is a hard failure only when the sheet
         # itself is pathological (no ink at all / near-solid black). Anything
         # in between degrades to a reviewable draft: the ink ships as raster
@@ -792,8 +823,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # value, not floating text over a stroke. Deterministic; anything
         # ambiguous stays as separate text + line. Frame segments are contour,
         # not thin, so they can never be consumed here.
+        recognized = _drop_in_glyph_segments(arbitration.entities, text_entities)
         geometry, text_entities, dim_count = reconstruct_dimensions(
-            list(arbitration.entities), text_entities, scale, w, h,
+            recognized, text_entities, scale, w, h,
         )
 
         frame_px = None
