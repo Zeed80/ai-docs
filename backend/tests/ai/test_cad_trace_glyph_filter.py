@@ -32,3 +32,17 @@ def test_drops_stroke_fully_inside_glyph_but_keeps_crossing_line():
 def test_no_text_keeps_everything():
     seg = Segment(p1=Point(x=1, y=1), p2=Point(x=2, y=2))
     assert _drop_in_glyph_segments([seg], []) == [seg]
+
+
+def test_oversized_box_and_long_line_are_never_deleted():
+    # A mis-snapped label box that swallowed geometry (huge height vs the
+    # sheet's typical text) must not delete the shaft body line inside it.
+    normal = [_text(100 + 20 * i, 100, 115 + 20 * i, 118) for i in range(5)]  # h=18 each
+    huge = _text(200, 200, 700, 460)  # h=260, ~14x the median — a mis-snap
+    body = Segment(p1=Point(x=220, y=330), p2=Point(x=680, y=330))  # long line inside it
+    glyph = Segment(p1=Point(x=104, y=104), p2=Point(x=112, y=114))  # real glyph stroke
+
+    kept = _drop_in_glyph_segments([body, glyph], normal + [huge])
+    kept_ids = {id(e) for e in kept}
+    assert id(body) in kept_ids       # long line survives (guarded box + length)
+    assert id(glyph) not in kept_ids  # a genuine short stroke is still removed

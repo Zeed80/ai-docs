@@ -414,36 +414,48 @@ def _dewarp_photo(image_bytes: bytes) -> bytes:
 
 
 def _drop_in_glyph_segments(entities: list, text_entities: list) -> list:
-    """Remove segments that lie entirely inside a text glyph's box.
+    """Remove glyph-stroke segments that lie inside a text box.
 
     Text is deliberately not pre-excluded from tracing (blanking text boxes
     deletes the geometry the dimension text sits on), so glyph strokes arrive
-    as tiny segments. A segment whose BOTH endpoints fall inside a text
-    entity's tight ``source_region`` is such a stroke and is dropped; a real
-    line that merely crosses a label extends beyond the box and is kept.
+    as tiny segments and are dropped here. Two guards keep this from ever
+    eating real geometry when a text box is wrong:
+
+    * a box far taller than the sheet's typical text height is a mis-snapped
+      label that swallowed geometry — it is ignored, never used to delete; and
+    * only a stroke SHORTER than the box's own text height is removed, so a
+      long line (a shaft body edge, a dimension line) that merely passes
+      through a label survives even when the box is oversized.
     """
+    import math
+
     boxes = [
         t.source_region for t in text_entities if getattr(t, "source_region", None)
     ]
     if not boxes:
         return list(entities)
+    heights = sorted(box.y1 - box.y0 for box in boxes)
+    median_h = heights[len(heights) // 2] if heights else 0.0
+    usable = [
+        box for box in boxes if median_h <= 0 or (box.y1 - box.y0) <= 3.0 * median_h
+    ]
 
-    def _inside(x: float, y: float) -> bool:
-        return any(
-            box.x0 - 1.0 <= x <= box.x1 + 1.0 and box.y0 - 1.0 <= y <= box.y1 + 1.0
-            for box in boxes
-        )
+    def _is_glyph_stroke(seg) -> bool:
+        length = math.hypot(seg.p2.x - seg.p1.x, seg.p2.y - seg.p1.y)
+        for box in usable:
+            if (
+                box.x0 - 1.0 <= seg.p1.x <= box.x1 + 1.0
+                and box.y0 - 1.0 <= seg.p1.y <= box.y1 + 1.0
+                and box.x0 - 1.0 <= seg.p2.x <= box.x1 + 1.0
+                and box.y0 - 1.0 <= seg.p2.y <= box.y1 + 1.0
+                and length <= 1.5 * (box.y1 - box.y0)
+            ):
+                return True
+        return False
 
-    kept = []
-    for entity in entities:
-        if (
-            entity.type == "segment"
-            and _inside(entity.p1.x, entity.p1.y)
-            and _inside(entity.p2.x, entity.p2.y)
-        ):
-            continue
-        kept.append(entity)
-    return kept
+    return [
+        e for e in entities if not (e.type == "segment" and _is_glyph_stroke(e))
+    ]
 
 
 def _ocr_text_entities(image_bytes: bytes, lenient: bool = False):

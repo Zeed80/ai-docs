@@ -234,6 +234,13 @@ def _snap_text_to_ink(entities: list, gray) -> None:
         line = [g for g in glyphs if abs(g[4] - line_cy) <= 0.7 * text_h]
         xs = [g[0] for g in line] + [g[0] + g[2] for g in line]
         ys = [g[1] for g in line] + [g[1] + g[3] for g in line]
+        # Reject a snap that inflates the box beyond a plausible glyph extent:
+        # a single letter cannot be hundreds of px wide/tall — that means the
+        # cluster swallowed nearby geometry. Keep the VLM box in that case so a
+        # bad snap never yields a giant label (or, downstream, deletes lines).
+        plausible_w = max(3.0, len((entity.text or "").strip())) * 1.6 * text_h
+        if (max(xs) - min(xs)) > plausible_w or (max(ys) - min(ys)) > 2.2 * text_h:
+            continue
         entity.position = Point(x=min(xs), y=max(ys))  # baseline-left of the ink
         entity.source_region = SourceRegion(
             x0=min(xs), y0=min(ys), x1=max(xs), y1=max(ys)
