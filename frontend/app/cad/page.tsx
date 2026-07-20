@@ -9,14 +9,17 @@ import {
   createBlankSheet,
   Generation,
   generate,
+  getVectorizerDevelopmentStatus,
   importDxf,
   listGenerations,
   resultUrl,
   updateGenerationMeta,
   uploadSource,
+  VectorizerDevelopmentStatus,
 } from "@/lib/studio-api";
 
 type SheetFormat = "A4" | "A3" | "A2" | "A1";
+type DigitizationProfile = "auto" | "mechanical_eskd" | "construction";
 
 function docTitle(g: Generation): string {
   const params = (g.params ?? {}) as Record<string, unknown>;
@@ -39,6 +42,8 @@ export default function CadListPage() {
   const t = useTranslations("cad");
   const router = useRouter();
   const [items, setItems] = useState<Generation[]>([]);
+  const [vectorizerStatus, setVectorizerStatus] =
+    useState<VectorizerDevelopmentStatus | null>(null);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -47,6 +52,11 @@ export default function CadListPage() {
   const [landscape, setLandscape] = useState(false);
   const [withFrame, setWithFrame] = useState(true);
   const [sheetTitle, setSheetTitle] = useState("");
+  const [digitizationProfile, setDigitizationProfile] =
+    useState<DigitizationProfile>("auto");
+  const [digitizeSheetFormat, setDigitizeSheetFormat] = useState<
+    "" | SheetFormat
+  >("");
   const fileRef = useRef<HTMLInputElement | null>(null);
   const scanRef = useRef<HTMLInputElement | null>(null);
 
@@ -62,6 +72,9 @@ export default function CadListPage() {
 
   useEffect(() => {
     void load();
+    void getVectorizerDevelopmentStatus()
+      .then(setVectorizerStatus)
+      .catch(() => setVectorizerStatus(null));
     const timer = setInterval(load, 10000);
     return () => clearInterval(timer);
   }, [load]);
@@ -111,11 +124,37 @@ export default function CadListPage() {
       setBusy(true);
       setError(null);
       try {
+        let pdfPage = 0;
+        if (
+          file.type === "application/pdf" ||
+          file.name.toLowerCase().endsWith(".pdf")
+        ) {
+          const raw = window.prompt(t("pdf_page_prompt"), "1");
+          if (raw === null) {
+            setBusy(false);
+            return;
+          }
+          const parsed = Number(raw);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            throw new Error(t("pdf_page_invalid"));
+          }
+          pdfPage = parsed - 1;
+        }
         const path = await uploadSource(file);
         const gen = await generate({
           operation: "vectorize",
+          prompt: file.name,
           source_image_paths: [path],
-          params: {},
+          params: {
+            quality_mode: "exact_or_refuse",
+            digitization_profile: digitizationProfile,
+            source_filename: file.name,
+            pdf_page: pdfPage,
+            pdf_dpi: 300,
+            ...(digitizeSheetFormat
+              ? { sheet_format: digitizeSheetFormat }
+              : {}),
+          },
         });
         router.push(`/cad/${gen.id}`);
       } catch (e) {
@@ -123,7 +162,7 @@ export default function CadListPage() {
         setBusy(false);
       }
     },
-    [router],
+    [digitizationProfile, digitizeSheetFormat, router, t],
   );
 
   const onRename = useCallback(
@@ -157,6 +196,33 @@ export default function CadListPage() {
           >
             {t("open_studio")}
           </Link>
+          <select
+            value={digitizationProfile}
+            onChange={(e) =>
+              setDigitizationProfile(e.target.value as DigitizationProfile)
+            }
+            className="rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
+            title={t("digitization_profile")}
+          >
+            <option value="auto">{t("profile_auto")}</option>
+            <option value="mechanical_eskd">{t("profile_mechanical")}</option>
+            <option value="construction">{t("profile_construction")}</option>
+          </select>
+          <select
+            value={digitizeSheetFormat}
+            onChange={(e) =>
+              setDigitizeSheetFormat(e.target.value as "" | SheetFormat)
+            }
+            className="rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
+            title={t("digitization_sheet_format")}
+          >
+            <option value="">{t("sheet_format_unknown")}</option>
+            {(["A4", "A3", "A2", "A1"] as const).map((format) => (
+              <option key={format} value={format}>
+                {format}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             disabled={busy}
@@ -205,6 +271,63 @@ export default function CadListPage() {
           </button>
         </div>
       </header>
+
+      {vectorizerStatus && (
+        <section
+          className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-4 py-3"
+          aria-label={t("vectorizer_progress_title")}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-amber-200">
+              {t("vectorizer_progress_title")}
+            </h2>
+            <span className="rounded bg-red-500/20 px-2 py-1 text-xs font-medium text-red-200">
+              {t("vectorizer_gate_refused")}
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-zinc-300">
+            {t("vectorizer_progress_summary", {
+              models: vectorizerStatus.corpus.projected_models,
+              sheets: vectorizerStatus.corpus.exact_sheets,
+              tiles: vectorizerStatus.corpus.training_tiles.toLocaleString(),
+            })}
+          </p>
+          <p className="mt-1 text-xs text-zinc-400">
+            {t("vectorizer_quality_summary", {
+              layoutF1:
+                vectorizerStatus.candidate.sheet_layout.view_f1_iou50.toFixed(3),
+              heatmapLineF1:
+                vectorizerStatus.candidate.directional_fields.real_holdout_line_f1.toFixed(
+                  3,
+                ),
+              endpointF1:
+                vectorizerStatus.candidate.directional_fields.real_holdout_endpoint_f1.toFixed(
+                  3,
+                ),
+              junctionF1:
+                vectorizerStatus.candidate.directional_fields.real_holdout_junction_f1.toFixed(
+                  3,
+                ),
+              entityF1:
+                vectorizerStatus.candidate.graph_iterations.source_snapped_entity_f1.toFixed(
+                  3,
+                ),
+              exactRate:
+                vectorizerStatus.candidate.graph_iterations.source_snapped_exact_sheet_rate.toFixed(
+                  3,
+                ),
+              nativeDxfF1:
+                vectorizerStatus.candidate.native_dxf_benchmark.cv_entity_f1.toFixed(
+                  3,
+                ),
+              falseExact:
+                vectorizerStatus.candidate.native_dxf_benchmark.cv_false_exact_rate.toFixed(
+                  3,
+                ),
+            })}
+          </p>
+        </section>
+      )}
 
       {showNewSheet && (
         <section className="flex flex-wrap items-end gap-3 rounded-lg border border-white/10 bg-zinc-900/40 p-4">

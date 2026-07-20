@@ -71,25 +71,50 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
             if not revisions or revisions[0].revision != 0 or revisions[0].origin != "auto":
                 skipped += 1
                 continue
-            latest = revisions[-1]
-            if latest.revision < min_revision or latest.origin not in ("review", "editor"):
+            gen = await db.get(ImageGeneration, gen_id)
+            if (
+                gen is None
+                or not gen.source_image_paths
+                or not gen.accepted
+                or gen.accepted_revision is None
+                or not gen.accepted_by
+                or (gen.params or {}).get("exclude_from_learning") is True
+            ):
                 skipped += 1
                 continue
 
-            gen = await db.get(ImageGeneration, gen_id)
-            if gen is None or not gen.source_image_paths:
+            accepted = next(
+                (row for row in revisions if row.revision == gen.accepted_revision),
+                None,
+            )
+            if accepted is None:
+                skipped += 1
+                continue
+            if accepted.revision < min_revision:
                 skipped += 1
                 continue
 
             try:
-                corrected_ir = CadIR.model_validate_json(download_file(latest.ir_path))
+                corrected_ir = CadIR.model_validate_json(download_file(accepted.ir_path))
             except Exception as exc:  # noqa: BLE001
                 print(f"SKIP {gen_id}: bad corrected IR ({exc})", file=sys.stderr)
                 skipped += 1
                 continue
+            if (
+                corrected_ir.validation.blocking
+                or any(not region.resolved for region in corrected_ir.unresolved_regions)
+                or corrected_ir.digitization_status == "refused"
+            ):
+                print(f"SKIP {gen_id}: accepted revision is not training-safe", file=sys.stderr)
+                skipped += 1
+                continue
 
             try:
-                image_bytes = download_file(gen.source_image_paths[0])
+                source_path = (
+                    (gen.params or {}).get("normalized_source_path")
+                    or gen.source_image_paths[0]
+                )
+                image_bytes = download_file(source_path)
             except Exception as exc:  # noqa: BLE001
                 print(f"SKIP {gen_id}: source image unavailable ({exc})", file=sys.stderr)
                 skipped += 1
@@ -103,11 +128,17 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
             rows_out.append({
                 "image": str(image_path.resolve()),
                 "sequence": str(seq_path.resolve()),
-                "ir": latest.ir_path,
+                "ir": accepted.ir_path,
                 "generation_id": str(gen_id),
                 "auto_revision_ir": revisions[0].ir_path,
-                "correction_origin": latest.origin,
-                "revisions_span": latest.revision,
+                "correction_origin": accepted.origin,
+                "accepted_revision": accepted.revision,
+                "accepted_by": gen.accepted_by,
+                "domain_profile": (gen.params or {}).get("digitization_profile", "unknown"),
+                "source_kind": corrected_ir.source.kind,
+                "model_version": (gen.params or {}).get("recognizer_version"),
+                "dataset_provenance": "human_accepted_production_revision",
+                "revisions_span": accepted.revision,
             })
 
     manifest_path = out_dir / "self_learning.jsonl"

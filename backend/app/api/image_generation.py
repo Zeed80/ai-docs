@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.cad_vectorizer_status import get_cad_vectorizer_development_status
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo, UserRole
 from app.db.models import (
@@ -47,8 +48,11 @@ _SOURCE_PREFIX = "image-gen-src"
 _ALLOWED_OPERATIONS = {"edit", "generate", "inpaint", "cleanup", "eskd", "vectorize"}
 # Engineering results whose acceptance is approval-gated for the agent.
 _GATED_OPERATIONS = {"techdraw", "vectorize"}
-_ALLOWED_UPLOAD_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp", "application/octet-stream"}
-_ALLOWED_UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp"}
+_ALLOWED_UPLOAD_TYPES = {
+    "image/png", "image/jpeg", "image/jpg", "image/webp",
+    "application/pdf", "application/octet-stream",
+}
+_ALLOWED_UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp", "pdf"}
 _MAX_SOURCE_BYTES = 50 * 1024 * 1024
 
 
@@ -317,7 +321,7 @@ async def upload_source(
         raise HTTPException(400, "kind должен быть source или mask")
     ctype = (file.content_type or "").split(";")[0].lower()
     if ctype and ctype not in _ALLOWED_UPLOAD_TYPES:
-        raise HTTPException(400, "Поддержаны только PNG, JPEG и WebP изображения.")
+        raise HTTPException(400, "Поддержаны PNG, JPEG, WebP и PDF.")
     content = await file.read()
     if not content:
         raise HTTPException(400, "Пустой файл")
@@ -327,7 +331,7 @@ async def upload_source(
     if file.filename and "." in file.filename:
         ext = file.filename.rsplit(".", 1)[-1].lower()[:5]
     if ext not in _ALLOWED_UPLOAD_EXTS:
-        raise HTTPException(400, "Поддержаны только PNG, JPEG и WebP изображения.")
+        raise HTTPException(400, "Поддержаны PNG, JPEG, WebP и PDF.")
     path = f"{_SOURCE_PREFIX}/{user.sub}/{uuid.uuid4().hex}.{ext}"
     upload_file(content, path, file.content_type or "image/png")
     return {"path": path}
@@ -466,6 +470,19 @@ async def list_generations(
         )
     ).scalars().all()
     return {"items": [_gen_out(g) for g in rows]}
+
+
+@router.get("/vectorizer-development-status")
+async def vectorizer_development_status(
+    _user: UserInfo = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Expose honest holdout metrics for the CAD page.
+
+    Keep this static route above ``/{generation_id}``, otherwise FastAPI would
+    try to parse ``vectorizer-development-status`` as a UUID.
+    """
+
+    return get_cad_vectorizer_development_status()
 
 
 @router.get("/{generation_id}")
@@ -728,6 +745,16 @@ async def accept_vectorize_generation(
             409,
             "Текущая ревизия не прошла полную проверку — запустите её после последнего изменения.",
         )
+    if (gen.params or {}).get("full_check_status") not in ("passed", "findings"):
+        raise HTTPException(
+            409,
+            "Полная проверка не завершилась успешно; недоступность модели не считается проверкой.",
+        )
+    if any(not region.resolved for region in ir.unresolved_regions):
+        raise HTTPException(
+            409,
+            "В чертеже остались нераспознанные области — обработайте их перед приёмкой.",
+        )
     errors = len(validate_ir(ir).blocking)
     if errors:
         raise HTTPException(
@@ -839,6 +866,7 @@ def _invalidate_vector_approval(gen: ImageGeneration) -> None:
         return
     params = dict(gen.params or {})
     params.pop("full_check_revision", None)
+    params.pop("full_check_status", None)
     gen.params = params
     if gen.accepted:
         gen.accepted = False
@@ -861,7 +889,7 @@ async def run_full_check(
     design. Any previous levels 6-7 issues are replaced, not accumulated:
     they're a judgement about a specific render, stale the moment the
     drawing changes again."""
-    from app.ai.cad_validate import run_llm_review_levels
+    from app.ai.cad_validate import FullCheckUnavailableError, run_llm_review_levels
     from app.ai.norm_citation import resolve_norm_citations
     from app.services import cad_ir_store
 
@@ -873,13 +901,31 @@ async def run_full_check(
         raise HTTPException(409, "Нет рендера для проверки — сначала сохраните ревизию.")
     png_bytes = download_file(gen.result_path)
 
-    llm_issues = await run_llm_review_levels(png_bytes, confidential=True)
+    try:
+        llm_issues = await run_llm_review_levels(
+            png_bytes, confidential=True, strict=True
+        )
+    except FullCheckUnavailableError as exc:
+        gen.params = {
+            **(gen.params or {}),
+            "full_check_status": "unavailable",
+        }
+        await db.commit()
+        raise HTTPException(
+            503,
+            "Полная проверка не выполнена: локальная модель недоступна. "
+            "Ревизия не считается проверенной.",
+        ) from exc
     kept = [i for i in ir.validation.issues if i.code not in ("NORMCONTROL_LLM", "VLM_CRITIC")]
     ir.validation.issues = await resolve_norm_citations(kept + llm_issues, db)
 
     _invalidate_vector_approval(gen)
     row = await cad_ir_store.save_revision(db, gen, ir, origin="llm_review", created_by=user.sub)
-    gen.params = {**(gen.params or {}), "full_check_revision": row.revision}
+    gen.params = {
+        **(gen.params or {}),
+        "full_check_revision": row.revision,
+        "full_check_status": "findings" if llm_issues else "passed",
+    }
     await db.commit()
     return {"revision": row.revision, "origin": row.origin, "summary": row.summary, "ir": ir.model_dump()}
 
@@ -1242,11 +1288,13 @@ class IrPatchOp(BaseModel):
         "set_constraints", "set_parameters", "set_title_block",
         "set_configurations", "apply_configuration",
         "define_block", "insert_block", "delete_block",
+        "resolve_region",
     ]
     sheet_format: str | None = None  # A4..A0, for set_sheet_format
     title_block: dict[str, Any] | None = None  # form-1 fields, for set_title_block
     entity_id: str | None = None
     entity_id_2: str | None = None  # second segment, for fillet/chamfer
+    region_id: str | None = None
     entity: dict[str, Any] | None = None
     scale: float | None = Field(default=None, gt=0)
     dx: float | None = None  # move/copy
@@ -1296,6 +1344,27 @@ async def get_ir(
     }
 
 
+@router.get("/{generation_id}/ir/engineering-verification")
+async def get_ir_engineering_verification(
+    generation_id: uuid.UUID,
+    profile: Literal["mechanical", "construction", "auto"] = "auto",
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Return the interpreted drawing graph and its independent exactness gate."""
+    from app.ai.cad_engineering_verify import verify_engineering_ir
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    revision, ir = await _load_current_ir(db, gen)
+    verification = verify_engineering_ir(ir, profile=profile)
+    return {
+        "revision": revision.revision,
+        "verification": verification.model_dump(),
+    }
+
+
 @router.patch("/{generation_id}/ir")
 async def patch_ir(
     generation_id: uuid.UUID,
@@ -1309,7 +1378,7 @@ async def patch_ir(
     from pydantic import TypeAdapter, ValidationError
 
     from app.ai.cad_ir.assurance import sanitize_incoming, set_assurance
-    from app.ai.cad_ir.schema import CadParameter, Entity, GeometricConstraint, ReviewItem
+    from app.ai.cad_ir.schema import CadParameter, Entity, GeometricConstraint
     from app.ai.cad_validate import validate_ir
     from app.services import cad_ir_store
 
@@ -1341,7 +1410,20 @@ async def patch_ir(
     # commits: a batch either lands as ONE new revision or leaves none at
     # all (verified by test_patch_ir_batch_failure_saves_no_partial_revision).
     for op in body.ops:
-        if op.op == "confirm":
+        if op.op == "resolve_region":
+            _require(op.region_id, "region_id")
+            region = next(
+                (item for item in ir.unresolved_regions if item.id == op.region_id),
+                None,
+            )
+            if region is None:
+                raise _patch_error(
+                    404,
+                    IrPatchErrorCode.ENTITY_NOT_FOUND,
+                    f"Нераспознанная область {op.region_id!r} не найдена",
+                )
+            region.resolved = True
+        elif op.op == "confirm":
             idx = _index_of(op.entity_id)
             entity = ir.entities[idx]
             entity.confidence = 1.0
@@ -1397,7 +1479,7 @@ async def patch_ir(
             # scale is derived from the detected frame's pixel span (or the
             # full sheet when no frame box was stored). A-series aspect ratios
             # are identical, so this is the only reliable metric anchor.
-            from app.tasks.cad_trace import _GOST_SHEETS
+            from app.tasks.cad_trace import _GOST_SHEETS, _frame_dimensions_mm
 
             fmt = op.sheet_format
             if fmt not in _GOST_SHEETS:
@@ -1405,17 +1487,27 @@ async def patch_ir(
                     400, IrPatchErrorCode.MISSING_FIELD,
                     f"Неизвестный формат листа: {fmt}. Допустимо: {', '.join(_GOST_SHEETS)}",
                 )
-            _short_mm, long_mm = _GOST_SHEETS[fmt]
+            short_mm, long_mm = _GOST_SHEETS[fmt]
             frame_px = ir.sheet.frame_px
-            long_px = (
-                max(frame_px[2], frame_px[3])
-                if frame_px
-                else max(ir.source.image_width, ir.source.image_height)
-            )
-            ir.scale = long_mm / max(long_px, 1.0)
+            landscape = ir.source.image_width >= ir.source.image_height
+            if frame_px:
+                expected_w, expected_h = _frame_dimensions_mm(
+                    fmt, landscape=landscape
+                )
+                ir.scale = (
+                    expected_w / max(frame_px[2], 1.0)
+                    + expected_h / max(frame_px[3], 1.0)
+                ) / 2
+            else:
+                paper_w, paper_h = (
+                    (long_mm, short_mm) if landscape else (short_mm, long_mm)
+                )
+                ir.scale = (
+                    paper_w / ir.source.image_width
+                    + paper_h / ir.source.image_height
+                ) / 2
             ir.scale_source = "sheet_format"
             ir.sheet.format = fmt
-            short_mm = _short_mm
             ir.sheet.width_mm, ir.sheet.height_mm = (
                 (long_mm, short_mm)
                 if ir.source.image_width >= ir.source.image_height
@@ -1680,8 +1772,36 @@ async def patch_ir(
             # entity list changed underneath the by_id cache; rebuild it.
             by_id = {e.id: i for i, e in enumerate(ir.entities)}
 
+    # Recompute honest source→DXF fidelity after every edit. Otherwise a
+    # manually repaired drawing would remain blocked by revision-0 scores,
+    # while a blind "resolve" click could clear a region without adding the
+    # missing CAD geometry.
+    normalized_source = (gen.params or {}).get("normalized_source_path")
+    if gen.operation == "vectorize" and normalized_source:
+        try:
+            from app.tasks.cad_trace import _assess_export_fidelity, _binarize
+
+            source_bytes = download_file(normalized_source)
+            ink, _width, _height = _binarize(source_bytes)
+            _assess_export_fidelity(
+                ir,
+                ink,
+                cad_ir_store._load_keep_raster(gen),
+                int((gen.params or {}).get("render_thin_px") or 1),
+                int((gen.params or {}).get("render_thick_px") or 2),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "cad_ir_fidelity_refresh_failed",
+                generation_id=str(gen.id),
+                error=str(exc)[:160],
+            )
+            ir.digitization_status = "review_required"
     validate_ir(ir)
-    origin = "review" if all(o.op in ("confirm", "delete", "set_scale", "set_sheet_format") for o in body.ops) else "editor"
+    origin = "review" if all(
+        o.op in ("confirm", "delete", "set_scale", "set_sheet_format", "resolve_region")
+        for o in body.ops
+    ) else "editor"
     _invalidate_vector_approval(gen)
     row = await cad_ir_store.save_revision(db, gen, ir, origin=origin, created_by=user.sub)
     await db.commit()

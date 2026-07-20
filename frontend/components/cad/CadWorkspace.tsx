@@ -341,6 +341,10 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     () => (ir?.review ?? []).filter((r) => !r.resolved),
     [ir],
   );
+  const unresolved = useMemo(
+    () => (ir?.unresolved_regions ?? []).filter((region) => !region.resolved),
+    [ir],
+  );
   const flaggedIds = useMemo(
     () => new Set(pending.map((r) => r.entity_id)),
     [pending],
@@ -1203,14 +1207,30 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         <span className="px-2 py-0.5 rounded bg-white/5">
           {t("vector.revision", { n: revision })}
         </span>
-        {ir.validation.coverage_recall != null && (
+        <span
+          className={`rounded px-2 py-0.5 ${
+            ir.digitization_status === "exact_candidate"
+              ? "bg-emerald-500/10 text-emerald-300"
+              : ir.digitization_status === "refused"
+                ? "bg-red-500/10 text-red-300"
+                : "bg-amber-500/10 text-amber-300"
+          }`}
+        >
+          {t(`vector.status_${ir.digitization_status}`)}
+        </span>
+        {ir.validation.vector_recall != null && (
           <span className="px-2 py-0.5 rounded bg-white/5">
-            {t("vector.coverage", {
-              recall: Math.round((ir.validation.coverage_recall ?? 0) * 100),
+            {t("vector.vector_fidelity", {
+              recall: Math.round((ir.validation.vector_recall ?? 0) * 100),
               precision: Math.round(
-                (ir.validation.coverage_precision ?? 0) * 100,
+                (ir.validation.vector_precision ?? 0) * 100,
               ),
             })}
+          </span>
+        )}
+        {unresolved.length > 0 && (
+          <span className="rounded bg-red-500/10 px-2 py-0.5 text-red-300">
+            {t("vector.unresolved_count", { n: unresolved.length })}
           </span>
         )}
         {ir.scale ? (
@@ -1532,6 +1552,20 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
               preserveAspectRatio="none"
             />
           )}
+          {unresolved.map((item) => (
+            <rect
+              key={item.id}
+              x={item.region.x0}
+              y={item.region.y0}
+              width={item.region.x1 - item.region.x0}
+              height={item.region.y1 - item.region.y0}
+              fill="#ef444422"
+              stroke="#ef4444"
+              strokeWidth={2}
+              strokeDasharray="8 4"
+              pointerEvents="none"
+            />
+          ))}
           {ir.entities
             .filter(
               (e) =>
@@ -1668,6 +1702,57 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
       />
 
       {err && <div className="text-xs text-red-400">{err}</div>}
+
+      {unresolved.length > 0 && (
+        <section className="rounded border border-red-500/30 bg-red-500/5 p-2 text-xs">
+          <div className="mb-2 font-medium text-red-300">
+            {t("vector.unresolved_title")}
+          </div>
+          <div className="max-h-44 space-y-1 overflow-auto">
+            {unresolved.map((item, index) => (
+              <div
+                key={item.id}
+                className="flex flex-wrap items-center gap-2 rounded bg-black/20 px-2 py-1"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    const width = Math.max(
+                      item.region.x1 - item.region.x0,
+                      ir.source.image_width / 10,
+                    );
+                    const height =
+                      width *
+                      (ir.source.image_height / ir.source.image_width);
+                    setViewBox({
+                      x: Math.max(0, item.region.x0 - width * 0.25),
+                      y: Math.max(0, item.region.y0 - height * 0.25),
+                      width: Math.min(width * 1.5, ir.source.image_width),
+                      height: Math.min(height * 1.5, ir.source.image_height),
+                    });
+                  }}
+                  className="text-left text-red-200 hover:text-red-100"
+                >
+                  #{index + 1} · {item.ink_pixels} px · {item.reason}
+                </button>
+                <span className="flex-1" />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    void apply([
+                      { op: "resolve_region", region_id: item.id },
+                    ])
+                  }
+                  className="rounded bg-emerald-600/80 px-2 py-0.5 text-white disabled:opacity-50"
+                >
+                  {t("vector.unresolved_resolve")}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Bulk actions for a multi-entity selection */}
       {selectedList.length > 1 && (
@@ -2026,14 +2111,14 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           download={`studio-${gen.id}.dxf`}
           className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
         >
-          DXF
+          {gen.accepted ? "DXF" : t("vector.draft_dxf")}
         </a>
         <a
           href={artifactUrl(gen.id, "dwg")}
           download={`studio-${gen.id}.dwg`}
           className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm"
         >
-          DWG
+          {gen.accepted ? "DWG" : t("vector.draft_dwg")}
         </a>
         <a
           href={artifactUrl(gen.id, "svg")}
@@ -2057,6 +2142,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
               busy ||
               blocking.length > 0 ||
               pending.length > 0 ||
+              unresolved.length > 0 ||
               !fullCheckCurrent
             }
             title={
@@ -2066,6 +2152,10 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                   ? t("vector.accept_blocked_review", {
                       n: pending.length,
                     })
+                  : unresolved.length > 0
+                    ? t("vector.accept_blocked_unresolved", {
+                        n: unresolved.length,
+                      })
                   : !fullCheckCurrent
                     ? t("vector.accept_blocked_full_check")
                     : undefined

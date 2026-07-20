@@ -11,9 +11,12 @@ pytest.importorskip("ezdxf")
 from app.ai.cad_ir.adapters.from_dxf import DxfImportError, dxf_to_ir
 from app.ai.cad_ir.dxf_render import render_ir_to_dxf
 from app.ai.cad_ir.schema import (
+    AnnotationEntity,
     Arc,
     CadIR,
     Circle,
+    DimensionEntity,
+    HatchRegion,
     Point,
     Polyline,
     Segment,
@@ -37,6 +40,38 @@ def _source_ir() -> CadIR:
                 closed=False,
             ),
             TextEntity(position=Point(x=150, y=550), text="Ø40H7", height=14),
+            DimensionEntity(
+                p1=Point(x=200, y=200),
+                p2=Point(x=400, y=200),
+                kind="linear",
+                text="50",
+                value_mm=50,
+            ),
+            DimensionEntity(
+                p1=Point(x=200, y=250),
+                p2=Point(x=400, y=250),
+                kind="diameter",
+                text="50",
+                value_mm=50,
+            ),
+            HatchRegion(
+                boundary=[
+                    Point(x=500, y=350),
+                    Point(x=650, y=350),
+                    Point(x=650, y=500),
+                    Point(x=500, y=500),
+                ],
+                holes=[[
+                    Point(x=540, y=390),
+                    Point(x=580, y=390),
+                    Point(x=580, y=430),
+                ]],
+            ),
+            AnnotationEntity(
+                position=Point(x=250, y=500),
+                kind="roughness",
+                value="3.2",
+            ),
         ],
     )
 
@@ -47,7 +82,16 @@ def test_roundtrip_via_own_exporter_preserves_entities():
     counts: dict[str, int] = {}
     for e in ir.entities:
         counts[e.type] = counts.get(e.type, 0) + 1
-    assert counts == {"segment": 2, "circle": 1, "arc": 1, "polyline": 1, "text": 1}
+    assert counts == {
+        "segment": 2,
+        "circle": 1,
+        "arc": 1,
+        "polyline": 1,
+        "text": 1,
+        "dimension": 2,
+        "hatch": 1,
+        "annotation": 1,
+    }
     assert ir.source.kind == "import"
     assert ir.scale is not None and ir.scale_source is not None
     assert all(e.origin == "human" for e in ir.entities)
@@ -86,6 +130,42 @@ def test_layer_names_map_back_to_line_classes():
     assert seg_classes == ["axis", "contour"]
 
 
+def test_dimension_hatch_and_annotation_semantics_survive_roundtrip():
+    ir = dxf_to_ir(render_ir_to_dxf(_source_ir()))
+
+    dimensions = [entity for entity in ir.entities if entity.type == "dimension"]
+    assert [entity.kind for entity in dimensions] == ["linear", "diameter"]
+    assert [entity.value_mm for entity in dimensions] == [50.0, 50.0]
+    hatch = next(entity for entity in ir.entities if entity.type == "hatch")
+    assert hatch.pattern == "ansi31"
+    assert len(hatch.boundary) >= 4
+    assert len(hatch.holes) == 1
+    annotation = next(entity for entity in ir.entities if entity.type == "annotation")
+    assert annotation.kind == "roughness"
+    assert annotation.value == "Ra 3.2"
+
+
+def test_nested_insert_is_expanded_with_transform():
+    import io
+
+    import ezdxf
+
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 4
+    child = doc.blocks.new("CHILD")
+    child.add_circle((0, 0), 2)
+    parent = doc.blocks.new("PARENT")
+    parent.add_blockref("CHILD", (10, 0))
+    doc.modelspace().add_blockref("PARENT", (100, 50))
+    stream = io.StringIO()
+    doc.write(stream)
+
+    ir = dxf_to_ir(stream.getvalue().encode())
+
+    circle = next(entity for entity in ir.entities if entity.type == "circle")
+    assert circle.radius == pytest.approx(8.0)
+
+
 def test_inches_units_convert_to_mm():
     import ezdxf
 
@@ -109,8 +189,9 @@ def test_garbage_bytes_raise_import_error():
 
 
 def test_empty_modelspace_raises():
-    import ezdxf
     import io
+
+    import ezdxf
 
     doc = ezdxf.new("R2010")
     buf = io.StringIO()

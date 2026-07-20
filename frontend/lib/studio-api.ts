@@ -58,6 +58,140 @@ export interface Generation {
   case_id: string | null;
 }
 
+export interface VectorizerDevelopmentStatus {
+  pipeline_revision: string;
+  evaluated_at: string;
+  corpus: {
+    licensed_web_assets: number;
+    step_assets: number;
+    projected_models: number;
+    exact_sheets: number;
+    exact_entities: number;
+    training_tiles: number;
+    train_tiles: number;
+    validation_tiles: number;
+    layout_sheets: number;
+    layout_view_targets: number;
+  };
+  candidate: {
+    checkpoint_step: number;
+    standalone: {
+      raster_precision: number;
+      raster_recall: number;
+      entity_precision: number;
+      entity_recall: number;
+      entity_f1: number;
+      exact_sheet_rate: number;
+    };
+    hybrid: {
+      entity_precision: number;
+      entity_recall: number;
+      entity_f1: number;
+      exact_sheet_rate: number;
+      dxf_reopen_rate: number;
+    };
+    sheet_layout: {
+      reserved_web_holdout_sheets: number;
+      view_precision_iou50: number;
+      view_recall_iou50: number;
+      view_f1_iou50: number;
+      mean_matched_iou: number;
+      exact_layout_rate: number;
+    };
+    hierarchical_standalone: {
+      raster_precision: number;
+      raster_recall: number;
+      entity_precision: number;
+      entity_recall: number;
+      entity_f1: number;
+      exact_sheet_rate: number;
+    };
+    hierarchical_hybrid: {
+      entity_precision: number;
+      entity_recall: number;
+      entity_f1: number;
+      exact_sheet_rate: number;
+      dxf_reopen_rate: number;
+    };
+    evidence_heatmap: {
+      checkpoint_step: number;
+      validation_macro_f1: number;
+      real_holdout_line_precision: number;
+      real_holdout_line_recall: number;
+      real_holdout_line_f1: number;
+      real_holdout_circle_f1: number;
+      real_holdout_arc_f1: number;
+      real_holdout_macro_f1: number;
+    };
+    evidence_vectorization: {
+      entity_precision: number;
+      entity_recall: number;
+      entity_f1: number;
+      exact_sheet_rate: number;
+      dxf_reopen_rate: number;
+      false_exact_rate: number;
+      source_coordinates_preserved: boolean;
+    };
+    directional_fields: {
+      checkpoint_step: number;
+      validation_selection_score: number;
+      real_holdout_line_f1: number;
+      real_holdout_endpoint_f1: number;
+      real_holdout_junction_f1: number;
+      real_holdout_direction_cosine: number;
+      real_holdout_circle_f1: number;
+      real_holdout_arc_f1: number;
+    };
+    directional_vectorization: {
+      entity_precision: number;
+      entity_recall: number;
+      entity_f1: number;
+      exact_sheet_rate: number;
+      dxf_reopen_rate: number;
+      false_exact_rate: number;
+      decoder_selection_split: string;
+      production_regression: boolean;
+    };
+    graph_iterations: {
+      unordered_query_graph_best_validation_f1: number;
+      dense_edge_verifier_validation_f1: number;
+      dense_edge_verifier_full_sheet_holdout_f1: number;
+      tiled_edge_graph_entity_precision: number;
+      tiled_edge_graph_entity_recall: number;
+      tiled_edge_graph_entity_f1: number;
+      source_snapped_entity_precision: number;
+      source_snapped_entity_recall: number;
+      source_snapped_entity_f1: number;
+      source_snapped_exact_sheet_rate: number;
+      source_snapped_dxf_reopen_rate: number;
+      line_only_architecture: boolean;
+    };
+    native_dxf_benchmark: {
+      truth_kind: string;
+      semantic_ground_truth: boolean;
+      cv_entity_precision: number;
+      cv_entity_recall: number;
+      cv_entity_f1: number;
+      cv_exact_sheet_rate: number;
+      cv_false_exact_rate: number;
+      circle_f1: number;
+      arc_f1: number;
+      segment_f1: number;
+      text_f1: number;
+      pdf_path_holdout_is_semantic_ground_truth: boolean;
+    };
+    promotion_status: "refused" | "promoted";
+    promotion_thresholds: {
+      entity_precision: number;
+      entity_recall: number;
+      exact_sheet_rate: number;
+      dxf_reopen_rate: number;
+      false_exact_rate: number;
+    };
+    production_default_changed: boolean;
+  };
+}
+
 export interface StudioJob {
   id: string;
   kind: StudioJobKind;
@@ -202,6 +336,11 @@ export async function listGenerations(): Promise<Generation[]> {
   const res = await apiFetch(`${BASE}`);
   const body = await jsonOrThrow<{ items: Generation[] }>(res);
   return body.items;
+}
+
+export async function getVectorizerDevelopmentStatus(): Promise<VectorizerDevelopmentStatus> {
+  const res = await apiFetch(`${BASE}/vectorizer-development-status`);
+  return jsonOrThrow<VectorizerDevelopmentStatus>(res);
 }
 
 export async function getGeneration(id: string): Promise<Generation> {
@@ -531,6 +670,18 @@ export interface IrReviewItem {
   resolved: boolean;
 }
 
+export interface IrUnresolvedRegion {
+  id: string;
+  region: IrSourceRegion;
+  reason:
+    | "unvectorized_ink"
+    | "ocr_unresolved"
+    | "recognizer_disagreement"
+    | "unsupported_content";
+  ink_pixels: number;
+  resolved: boolean;
+}
+
 export interface CadIr {
   schema_version: number;
   units: string;
@@ -555,8 +706,17 @@ export interface CadIr {
     issues: IrValidationIssue[];
     coverage_recall: number | null;
     coverage_precision: number | null;
+    vector_recall?: number | null;
+    vector_precision?: number | null;
+    raster_passthrough_fraction?: number;
+    dxf_reopens?: boolean | null;
   };
   review: IrReviewItem[];
+  unresolved_regions: IrUnresolvedRegion[];
+  digitization_status:
+    | "exact_candidate"
+    | "review_required"
+    | "refused";
   parameters: {
     name: string;
     value: number;
@@ -632,6 +792,7 @@ export interface AddedCadEdgeFeature {
 }
 
 export type IrPatchOp =
+  | { op: "resolve_region"; region_id: string }
   | { op: "confirm"; entity_id: string }
   | { op: "delete"; entity_id: string }
   | { op: "update"; entity_id: string; entity: Partial<IrEntity> }

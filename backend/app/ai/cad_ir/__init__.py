@@ -22,6 +22,7 @@ from app.ai.cad_ir.schema import (
     SheetInfo,
     SourceInfo,
     TextEntity,
+    UnresolvedRegion,
     ValidationIssueIR,
     ValidationReportIR,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "SheetInfo",
     "SourceInfo",
     "TextEntity",
+    "UnresolvedRegion",
     "ValidationIssueIR",
     "ValidationReportIR",
 ]

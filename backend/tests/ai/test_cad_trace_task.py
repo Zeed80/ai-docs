@@ -361,9 +361,12 @@ def test_sheet_scale_requires_confirmed_format_and_never_guesses_a4():
 
     from app.tasks import cad_trace
 
-    a3 = np.array([[[0, 0]], [[296, 0]], [[296, 419]], [[0, 419]]], dtype=np.int32)
-    assert cad_trace._scale_from_quad(a3, 297, 420) == (None, None)
-    scale, detected = cad_trace._scale_from_quad(a3, 297, 420, "A3")
+    # Detector returns the INNER ГОСТ frame.  For portrait A3 that is
+    # (297 - 20 - 5) x (420 - 5 - 5) = 272 x 410 mm.  OpenCV's boundingRect
+    # includes both integer endpoints, hence max coordinates 271 and 409.
+    a3 = np.array([[[0, 0]], [[271, 0]], [[271, 409]], [[0, 409]]], dtype=np.int32)
+    assert cad_trace._scale_from_quad(a3, 272, 410) == (None, None)
+    scale, detected = cad_trace._scale_from_quad(a3, 272, 410, "A3")
     assert detected == "A3"
     assert scale == pytest.approx(1.0)
 

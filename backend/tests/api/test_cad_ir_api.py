@@ -43,7 +43,11 @@ async def _mark_full_check_current(db_session, generation_id: str) -> int:
     ).scalar_one()
     gen = await db_session.get(ImageGeneration, gen_id)
     assert gen is not None
-    gen.params = {**(gen.params or {}), "full_check_revision": revision}
+    gen.params = {
+        **(gen.params or {}),
+        "full_check_revision": revision,
+        "full_check_status": "passed",
+    }
     await db_session.commit()
     return int(revision)
 
@@ -184,9 +188,10 @@ async def test_patch_ir_set_sheet_format_derives_scale(client, fake_storage):
     ir = body["ir"]
     assert ir["scale_source"] == "sheet_format"
     assert ir["sheet"]["format"] == "A3"
-    # image is portrait A4 pixels; long side maps to 420mm
-    long_px = max(ir["source"]["image_width"], ir["source"]["image_height"])
-    assert ir["scale"] == pytest.approx(420.0 / long_px, rel=1e-6)
+    # Scale uses both paper axes; it cannot silently stretch one axis to make
+    # a non-matching aspect ratio look exact.
+    w, h = ir["source"]["image_width"], ir["source"]["image_height"]
+    assert ir["scale"] == pytest.approx(((297.0 / w) + (420.0 / h)) / 2, rel=1e-6)
 
 
 async def test_patch_ir_set_sheet_format_rejects_unknown(client, fake_storage):
@@ -916,6 +921,62 @@ async def test_full_check_merges_llm_issues_into_a_new_revision(client, fake_sto
     assert "GEOM_DEGENERATE" in codes  # level 1-5 result preserved, not wiped
     detail = await client.get(f"/api/image-gen/{gen_id}")
     assert detail.json()["params"]["full_check_revision"] == body["revision"]
+
+
+@pytest.mark.asyncio
+async def test_full_check_is_fail_closed_when_local_model_is_unavailable(
+    client, fake_storage, monkeypatch
+):
+    from app.ai.cad_validate import FullCheckUnavailableError
+
+    async def _unavailable(*args, **kwargs):
+        raise FullCheckUnavailableError("local model offline")
+
+    monkeypatch.setattr("app.ai.cad_validate.run_llm_review_levels", _unavailable)
+    gen = (await client.post("/api/image-gen/blank-sheet", json={"format": "A4"})).json()
+
+    response = await client.post(f"/api/image-gen/{gen['id']}/ir/full-check")
+    assert response.status_code == 503
+    detail = (await client.get(f"/api/image-gen/{gen['id']}")).json()
+    assert detail["params"]["full_check_status"] == "unavailable"
+    assert "full_check_revision" not in detail["params"]
+
+
+@pytest.mark.asyncio
+async def test_accept_vectorize_rejects_unresolved_source_regions(
+    client, fake_storage, db_session
+):
+    import uuid
+
+    from app.ai.cad_ir.schema import SourceRegion, UnresolvedRegion
+    from app.db.models import ImageGeneration
+    from app.services import cad_ir_store
+
+    gen_out = (await client.post(
+        "/api/image-gen/blank-sheet", json={"format": "A4"}
+    )).json()
+    gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
+    revision = await cad_ir_store.latest_revision(db_session, gen.id)
+    ir = cad_ir_store.load_ir(revision)
+    ir.unresolved_regions = [
+        UnresolvedRegion(
+            region=SourceRegion(x0=10, y0=10, x1=40, y1=40),
+            ink_pixels=100,
+        )
+    ]
+    row = await cad_ir_store.save_revision(
+        db_session, gen, ir, origin="auto", created_by="dev-user"
+    )
+    gen.params = {
+        **(gen.params or {}),
+        "full_check_revision": row.revision,
+        "full_check_status": "passed",
+    }
+    await db_session.commit()
+
+    response = await client.post(f"/api/image-gen/{gen.id}/accept-vectorize")
+    assert response.status_code == 409
+    assert "нераспознанные области" in response.text
 
 
 @pytest.mark.asyncio

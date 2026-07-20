@@ -41,6 +41,8 @@ _GOST_SHEETS = {
     "A1": (594.0, 841.0),
     "A0": (841.0, 1189.0),
 }
+_FRAME_LEFT_MARGIN_MM = 20.0
+_FRAME_OTHER_MARGIN_MM = 5.0
 _FRAME_MIN_AREA_FRACTION = 0.5
 _FRAME_ASPECT_TOL = 0.06
 
@@ -205,14 +207,46 @@ def _scale_from_quad(
     if confirmed_format not in _GOST_SHEETS:
         return None, None
     _x, _y, fw, fh = cv2.boundingRect(quad)
-    frame_aspect = max(fw, fh) / max(min(fw, fh), 1.0)
-    short_mm, long_mm = _GOST_SHEETS[confirmed_format]
-    expected_aspect = long_mm / short_mm
+    expected_w, expected_h = _frame_dimensions_mm(
+        confirmed_format, landscape=fw >= fh
+    )
+    frame_aspect = fw / max(fh, 1.0)
+    expected_aspect = expected_w / expected_h
     if abs(frame_aspect - expected_aspect) / expected_aspect > _FRAME_ASPECT_TOL:
         return None, None
-    scale = long_mm / max(fw, fh)
+    # The detected rectangle is the INNER drawing frame, not the paper edge.
+    # ГОСТ margins are 20 mm on the binding side and 5 mm elsewhere.
+    scale = ((expected_w / max(fw, 1.0)) + (expected_h / max(fh, 1.0))) / 2
     logger.info("sheet_frame_scale_confirmed", format=confirmed_format, scale=round(scale, 5))
     return scale, confirmed_format
+
+
+def _frame_dimensions_mm(sheet_format: str, *, landscape: bool) -> tuple[float, float]:
+    """Physical width/height of the inner ГОСТ frame for an A-series sheet."""
+    short_mm, long_mm = _GOST_SHEETS[sheet_format]
+    paper_w, paper_h = (long_mm, short_mm) if landscape else (short_mm, long_mm)
+    return (
+        paper_w - _FRAME_LEFT_MARGIN_MM - _FRAME_OTHER_MARGIN_MM,
+        paper_h - 2 * _FRAME_OTHER_MARGIN_MM,
+    )
+
+
+def _pdf_page_to_png(pdf_bytes: bytes, page_index: int = 0, dpi: int = 300) -> bytes:
+    """Render one PDF page into the same PNG contract as raster uploads."""
+    import fitz
+
+    if dpi < 72 or dpi > 600:
+        raise ValueError("PDF DPI должен быть в диапазоне 72..600")
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+        if not 0 <= page_index < document.page_count:
+            raise ValueError(
+                f"Страница PDF {page_index + 1} отсутствует; всего страниц: {document.page_count}"
+            )
+        pixmap = document[page_index].get_pixmap(
+            matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0),
+            alpha=False,
+        )
+        return pixmap.tobytes("png")
 
 
 def _frame_segments_from_quad(quad):
@@ -455,6 +489,95 @@ async def _enrich_lines_with_vlm(ir, source_bytes: bytes) -> None:
             apply_line_hypotheses(entity, result)
 
 
+def _assess_export_fidelity(ir, ink, keep_raster, thin_px: int, thick_px: int) -> None:
+    """Measure only geometry that will actually reach DXF.
+
+    Text source boxes represented by structured text/dimension entities are
+    evaluated semantically by confidence/review rules, not by font-pixel
+    identity. Every other source-ink component missed by the vector render
+    becomes an explicit unresolved region and blocks exactness.
+    """
+    import io
+
+    import cv2
+    import ezdxf
+    import numpy as np
+
+    from app.ai.cad_ir.dxf_render import render_ir_to_dxf
+    from app.ai.cad_ir.png_render import rasterize_entities
+    from app.ai.cad_ir.schema import SourceRegion, UnresolvedRegion
+    from app.ai.cad_recognize.verify import score_coverage
+    from app.ai.drawing_vectorize import _coverage_dilate_px
+
+    ink_bool = np.asarray(ink) > 0
+    h, w = ink_bool.shape[:2]
+    geometry_ink = ink_bool.copy()
+    vector_entities = []
+    for entity in ir.entities:
+        if entity.type in ("text", "annotation"):
+            region = entity.source_region
+            if region is not None:
+                x0, y0 = max(0, int(region.x0)), max(0, int(region.y0))
+                x1, y1 = min(w, int(region.x1)), min(h, int(region.y1))
+                geometry_ink[y0:y1, x0:x1] = False
+            continue
+        vector_entities.append(entity)
+
+    score = score_coverage(
+        vector_entities,
+        geometry_ink,
+        keep_raster=None,
+        thin_px=thin_px,
+        thick_px=thick_px,
+    )
+    ir.validation.coverage_recall = score.recall
+    ir.validation.coverage_precision = score.precision
+    ir.validation.vector_recall = score.recall
+    ir.validation.vector_precision = score.precision
+    ir.validation.raster_passthrough_fraction = (
+        round(
+            float((ink_bool & np.asarray(keep_raster).astype(bool)).sum())
+            / max(int(ink_bool.sum()), 1),
+            4,
+        )
+        if keep_raster is not None
+        else 0.0
+    )
+
+    drawn = rasterize_entities(vector_entities, w, h, thin_px, thick_px) < 128
+    radius = _coverage_dilate_px(h, w)
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
+    )
+    drawn_grown = cv2.dilate(drawn.astype(np.uint8), kernel) > 0
+    missed = (geometry_ink & ~drawn_grown).astype(np.uint8)
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(missed, connectivity=8)
+    min_pixels = max(8, round(w * h * 0.000002))
+    unresolved = []
+    for index in range(1, count):
+        x, y, width, height, area = [int(v) for v in stats[index]]
+        if area < min_pixels:
+            continue
+        unresolved.append(
+            UnresolvedRegion(
+                region=SourceRegion(
+                    x0=float(x), y0=float(y), x1=float(x + width), y1=float(y + height)
+                ),
+                reason="unvectorized_ink",
+                ink_pixels=area,
+            )
+        )
+    ir.unresolved_regions = unresolved
+
+    try:
+        data = render_ir_to_dxf(ir)
+        ezdxf.read(io.StringIO(data.decode("utf-8")))
+        ir.validation.dxf_reopens = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cad_trace_dxf_reopen_failed", error=str(exc)[:160])
+        ir.validation.dxf_reopens = False
+
+
 async def _run(generation_id: str, task_id: str | None) -> dict:
     from app.ai.cad_ir import CadIR, SourceInfo
     from app.ai.cad_ir.schema import SheetInfo
@@ -510,6 +633,15 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if not source_paths:
             return await _fail("Для оцифровки нужен исходный скан/фото.")
         content = download_file(source_paths[0])
+        if content.startswith(b"%PDF"):
+            try:
+                content = _pdf_page_to_png(
+                    content,
+                    page_index=int(params.get("pdf_page", 0)),
+                    dpi=int(params.get("pdf_dpi", 300)),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return await _fail(f"Не удалось подготовить страницу PDF: {exc}")
 
         # Stage 1: classical preprocess — same module the cleanup path trusts.
         try:
@@ -566,6 +698,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     "cad_trace_post_vlm_text_filter",
                     kept=len(text_entities), dropped=before - len(text_entities),
                 )
+
+        from app.ai.cad_profile import choose_profile
+
+        profile_decision = choose_profile(
+            str(params.get("digitization_profile") or params.get("profile") or "auto"),
+            [entity.text for entity in text_entities],
+            str(params.get("source_filename") or ""),
+        )
 
         # Stage 4: scale (manual override wins; else frame detection).
         manual_scale = params.get("scale_mm_per_px")
@@ -690,6 +830,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         resolve_hypotheses(ir)
         resolve_line_hypotheses(ir)
 
+        _assess_export_fidelity(ir, ink, keep_raster, thin_px, thick_px)
         validate_ir(ir)
 
         # Recognition-provenance signals are appended AFTER validate_ir:
@@ -725,6 +866,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     f"— использован результат {arbitration.recognizer_used}, сверьте с оригиналом."
                 ),
             ))
+
+        if degraded_recognition or not arbitration.neural_available or arbitration.discrepancy:
+            ir.digitization_status = "review_required"
 
         # Stage 6.5: pixel provenance for diffusion-derived sources — diffusion
         # output is not a truth source. Findings are sticky (survive later
@@ -810,6 +954,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             gen.params = {
                 **(gen.params or {}),
                 "normalized_source_path": normalized_path,
+                "digitization_profile": profile_decision.profile,
+                "digitization_profile_confidence": profile_decision.confidence,
+                "digitization_profile_evidence": list(profile_decision.evidence),
             }
             await cad_ir_store.save_revision(
                 db, gen, ir,
