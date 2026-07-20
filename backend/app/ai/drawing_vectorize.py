@@ -641,6 +641,15 @@ def _fit_circle_or_arc(ptsf, closed: bool) -> RawPrimitive | None:
     a0, a1 = float(angles[0]), float(angles[-1])
     if abs(a1 - a0) > 370.0:
         return None
+    # Canonicalize to the DXF/CadIR convention: an arc sweeps CCW from start to
+    # end. The traced chain may run either way around the curve, which would
+    # otherwise emit start/end reversed — geometrically the same arc (the PNG
+    # render is order-agnostic) but a mismatch for anything that reads the
+    # convention (native-DXF entity comparison, downstream angle math). The
+    # unwrapped samples are monotonic, so ordering the endpoints puts the same
+    # covered points in CCW order.
+    if a1 < a0:
+        a0, a1 = a1, a0
     return RawPrimitive(
         kind="arc",
         thickness_px=1,

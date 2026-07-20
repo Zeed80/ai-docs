@@ -82,6 +82,29 @@ def test_circle_survives_as_a_circle():
         assert _ink_of(out)[qy, qx].any(), "circle lost a quadrant"
 
 
+def test_fitted_arc_is_canonical_ccw_regardless_of_trace_direction():
+    from app.ai.drawing_vectorize import _fit_circle_or_arc
+
+    cx, cy, r = 150.0, 150.0, 100.0
+    degrees = np.linspace(-172.0, -8.0, 40)  # the bottom sweep, CCW order
+    ccw_pts = np.array(
+        [[cx + r * np.cos(np.radians(d)), cy + r * np.sin(np.radians(d))] for d in degrees],
+        dtype=np.float32,
+    )
+    forward = _fit_circle_or_arc(ccw_pts, closed=False)
+    backward = _fit_circle_or_arc(ccw_pts[::-1], closed=False)  # same arc, traced the other way
+
+    assert forward is not None and forward.kind == "arc"
+    assert backward is not None and backward.kind == "arc"
+    # Both trace directions yield the same CCW-canonical start <= end arc.
+    assert forward.start_angle <= forward.end_angle
+    assert backward.start_angle <= backward.end_angle
+    assert forward.start_angle == pytest.approx(backward.start_angle, abs=1.0)
+    assert forward.end_angle == pytest.approx(backward.end_angle, abs=1.0)
+    assert forward.start_angle == pytest.approx(-172.0, abs=2.0)
+    assert forward.end_angle == pytest.approx(-8.0, abs=2.0)
+
+
 def test_free_curve_is_preserved_not_flattened():
     ink = _blank(300, 400)
     # An S-curve no line/circle fit should claim.
