@@ -289,6 +289,15 @@ cad-corpus-acquire:
 		--registry tools/cad-dataset/source_registry.json \
 		--out cad-dataset-out/open-sources
 
+# Generative-vectorization stage 1: reshape (image, CadIR) corpus pairs into
+# Qwen3-VL SFT records (image -> isotropic 0..1000 primitive DSL).
+cad-vlm-sft:
+	python3 tools/cad-dataset/build_vlm_sft.py \
+		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
+		--manifest cad-dataset-out/profile-corpus/manifest.jsonl \
+		--manifest cad-dataset-out/web-step-corpus/manifest.jsonl \
+		--out cad-dataset-out/vlm-sft --backend backend
+
 cad-web-dxf-corpus:
 	python3 tools/cad-dataset/build_dxf_raster_corpus.py \
 		--assets cad-dataset-out/open-sources/assets.jsonl \
