@@ -115,8 +115,11 @@ async def read_sheet_text_entities(
 
     async def _read_tile(ox: int, oy: int) -> list:
         tx1, ty1 = min(width, ox + tile_size), min(height, oy + tile_size)
+        tile_w, tile_h = tx1 - ox, ty1 - oy
         tile = sheet.crop((ox, oy, tx1, ty1)).convert("RGB")
-        # Upscale so ~7px title text becomes legible to the VLM.
+        # Upscale so ~7px title text becomes legible. Grounding coordinates are
+        # scale-invariant (normalized 0..1000), so upscaling does not affect the
+        # coordinate mapping below.
         upscale = max(1.0, 1400 / max(tile.width, tile.height, 1))
         if upscale > 1.0:
             tile = tile.resize(
@@ -144,16 +147,21 @@ async def read_sheet_text_entities(
             if not isinstance(item, dict):
                 continue
             text = str(item.get("text") or "").strip()
-            box = item.get("bbox")
+            box = item.get("bbox") or item.get("bbox_2d")
             if not text or not isinstance(box, (list, tuple)) or len(box) != 4:
                 continue
             try:
-                bx1, by1, bx2, by2 = (float(v) / upscale for v in box)
+                bx1, by1, bx2, by2 = (float(v) for v in box)
             except (TypeError, ValueError):
                 continue
             if bx2 <= bx1 or by2 <= by1:
                 continue
-            sx1, sy1, sx2, sy2 = ox + bx1, oy + by1, ox + bx2, oy + by2
+            # qwen3-vl grounds boxes in a per-axis 0..1000 normalized space, not
+            # input pixels — map each axis by the tile's own dimension.
+            sx1 = ox + (bx1 / 1000.0) * tile_w
+            sy1 = oy + (by1 / 1000.0) * tile_h
+            sx2 = ox + (bx2 / 1000.0) * tile_w
+            sy2 = oy + (by2 / 1000.0) * tile_h
             out.append(
                 TextEntity(
                     position=Point(x=sx1, y=sy2),  # baseline-left, matches DXF insert
@@ -172,7 +180,55 @@ async def read_sheet_text_entities(
     import asyncio
 
     tiles = await asyncio.gather(*[_read_tile(ox, oy) for ox, oy in origins])
-    return _dedup_sheet_text([e for tile in tiles for e in tile])
+    entities = [e for tile in tiles for e in tile]
+    _snap_text_to_ink(entities, sheet)
+    return _dedup_sheet_text(entities)
+
+
+def _snap_text_to_ink(entities: list, gray) -> None:
+    """Tighten each VLM read onto the actual glyph ink (in place).
+
+    The VLM reads the string reliably but grounds it only within ~1-2× text
+    height. Once that is close, snapping to the source ink recovers an exact
+    position: within a small window around the coarse box, keep only text-sized
+    connected components (drop long strokes and large blobs — those are
+    geometry) and take their tight bounding box as the glyph extent.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except Exception:  # noqa: BLE001 — snapping is best-effort
+        return
+
+    from app.ai.cad_ir.schema import Point, SourceRegion
+
+    ink = (np.asarray(gray) < 128).astype(np.uint8)
+    count, _labels, stats, centroids = cv2.connectedComponentsWithStats(ink, 8)
+    for entity in entities:
+        region = entity.source_region
+        if region is None:
+            continue
+        text_h = max(entity.height, 6.0)
+        pad = int(max(12.0, 0.8 * text_h))
+        wx0, wy0 = region.x0 - pad, region.y0 - pad
+        wx1, wy1 = region.x1 + pad, region.y1 + pad
+        xs: list[float] = []
+        ys: list[float] = []
+        for i in range(1, count):
+            cx, cy = centroids[i]
+            left, top, comp_w, comp_h, _area = stats[i]
+            if not (wx0 <= cx <= wx1 and wy0 <= cy <= wy1):
+                continue
+            if comp_h > 2.5 * text_h or comp_w > 6.0 * text_h or comp_h < 0.3 * text_h:
+                continue  # a line or a large blob, not a glyph
+            xs += [float(left), float(left + comp_w)]
+            ys += [float(top), float(top + comp_h)]
+        if not xs:
+            continue
+        entity.position = Point(x=min(xs), y=max(ys))  # baseline-left of the ink
+        entity.source_region = SourceRegion(
+            x0=min(xs), y0=min(ys), x1=max(xs), y1=max(ys)
+        )
 
 
 def _dedup_sheet_text(entities: list) -> list:

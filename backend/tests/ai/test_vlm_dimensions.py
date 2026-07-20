@@ -131,8 +131,38 @@ def test_read_sheet_text_entities_maps_tile_boxes_to_sheet(monkeypatch):
     entity = entities[0]
     assert entity.text == "A1"
     assert entity.origin == "vlm"
-    # 1400/600 ≈ 2.333 upscale → box divided back into sheet pixels.
-    factor = 1400 / 600
-    assert entity.position.x == pytest.approx(10 / factor, abs=1.0)   # baseline-left x
-    assert entity.position.y == pytest.approx(40 / factor, abs=1.0)   # baseline y (box bottom)
+    # qwen3-vl grounds in a per-axis 0..1000 space: map by the tile's own
+    # dimensions (600×400 single tile). The blank sheet has no ink, so the
+    # ink-snap leaves the mapped position untouched.
+    assert entity.position.x == pytest.approx(10 / 1000 * 600, abs=1.0)  # baseline-left x
+    assert entity.position.y == pytest.approx(40 / 1000 * 400, abs=1.0)  # baseline y (box bottom)
     assert entity.source_region is not None
+
+
+def test_snap_text_to_ink_tightens_coarse_box_onto_glyph():
+    pytest.importorskip("cv2")
+    import io
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    from app.ai.cad_ir.schema import Point, SourceRegion, TextEntity
+    from app.ai.vlm_dimensions import _snap_text_to_ink
+
+    gray = Image.new("L", (300, 200), color=255)
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+    ImageDraw.Draw(gray).text((150, 90), "7", fill=0, font=font)
+    # Bounding box of the ink itself (black glyph), not the white background.
+    ink_box = gray.point(lambda v: 255 if v < 128 else 0).getbbox()
+
+    # A VLM read whose box is ~18px up-left of the real glyph.
+    entity = TextEntity(
+        position=Point(x=132, y=105),
+        text="7",
+        height=30,
+        source_region=SourceRegion(x0=132, y0=75, x1=150, y1=105),
+    )
+    _snap_text_to_ink([entity], gray)
+
+    # Snapped baseline-left now sits on the glyph ink, not the coarse box.
+    assert entity.position.x == pytest.approx(ink_box[0], abs=3)
+    assert entity.position.y == pytest.approx(ink_box[3], abs=3)
