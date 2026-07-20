@@ -663,27 +663,47 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # re-reads the uncertain crops far better. Pass vlm_dimensions=false
         # to opt out (e.g. hosts without a vision model).
         vlm_enrich = params.get("vlm_dimensions", True)
-        text_entities, text_boxes = _ocr_text_entities(
-            content, lenient=bool(vlm_enrich)
-        )
+        # Tesseract still runs — but only to supply exclusion boxes that keep
+        # text ink out of the geometry tracer. It is a weak *reader*: it cannot
+        # even detect isolated single glyphs or sub-10px title-block text, so a
+        # tesseract-first text layer is capped by its detection blind spots.
+        tess_texts, text_boxes = _ocr_text_entities(content, lenient=bool(vlm_enrich))
+        text_entities = tess_texts
 
-        # Stage 3.5 (Ф4.1, opt-in via params): escalate low-confidence OCR
-        # reads to a VLM crop read. Off by default — an extra network round
-        # trip per uncertain text on a pipeline that was previously pure-CPU
-        # and fast; enable once evaluated for latency in your deployment.
-        # The VLM NEVER overwrites truth here — apply_vlm_readings keeps the
-        # result at assurance=inferred; Stage 6.7 cross-checks decide.
+        # Stage 3.5: primary text layer from a local vision model. qwen3-vl
+        # reads whole-sheet text (single letters/digits, small annotations)
+        # that tesseract never detects, and grounds each read with a box.
+        # Confidential: local model only. Falls back to tesseract + per-crop
+        # enrichment when no VLM is reachable.
+        vlm_texts: list = []
         if vlm_enrich:
+            try:
+                from app.ai.vlm_dimensions import read_sheet_text_entities
+
+                vlm_texts = await read_sheet_text_entities(content, confidential=True)
+            except Exception as exc:  # noqa: BLE001 — text read must never sink digitize
+                logger.warning("cad_trace_vlm_sheet_text_failed", error=str(exc))
+                vlm_texts = []
+
+        if vlm_texts:
+            # VLM read is the primary text layer. Also shield its glyph ink from
+            # the geometry tracer so a label tesseract missed does not resurface
+            # as spurious segments.
+            text_entities = vlm_texts
+            for entity in vlm_texts:
+                region = entity.source_region
+                if region is not None:
+                    text_boxes.append(
+                        (int(region.x0), int(region.y0), int(region.x1), int(region.y1))
+                    )
+            logger.info("cad_trace_vlm_sheet_text", texts=len(vlm_texts))
+        elif vlm_enrich:
+            # No VLM sheet read (model down/empty) → tesseract + per-crop
+            # enrichment, then the strict post-VLM filter (previous behavior).
             try:
                 await _enrich_text_with_vlm(text_entities, content)
             except Exception as exc:  # noqa: BLE001 — enrichment must never sink digitize
                 logger.warning("cad_trace_vlm_enrich_failed", error=str(exc))
-            # Post-VLM strict pass: lenient OCR kept low-confidence reads only
-            # to give the VLM a chance; whatever the VLM did not rescue (or
-            # never reached within its per-run budget) is demoted to
-            # exclusion-only — its box already shields the recognizer, but a
-            # garbage label must not land in the drawing (live 2026-07-17:
-            # lenient-on shipped 138 texts / 94 review items).
             before = len(text_entities)
             text_entities = [
                 e for e in text_entities

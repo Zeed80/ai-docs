@@ -87,3 +87,52 @@ def test_crop_bytes_for_region_returns_none_on_degenerate_region():
         x0, y0, x1, y1 = 500, 500, 500, 500  # entirely outside the image
 
     assert crop_bytes_for_region(buf.getvalue(), _BadRegion()) is None
+
+
+def test_parse_json_array_tolerates_fences_and_trailing_text():
+    from app.ai.vlm_dimensions import _parse_json_array
+
+    assert _parse_json_array('[{"text": "A", "bbox": [1, 2, 3, 4]}]') == [
+        {"text": "A", "bbox": [1, 2, 3, 4]}
+    ]
+    fenced = '```json\n[{"text": "M20", "bbox": [0, 0, 5, 5]}]\n```'
+    assert _parse_json_array(fenced)[0]["text"] == "M20"
+    # An object (not an array) is not a grounding response.
+    assert _parse_json_array('{"text": "A"}') == []
+    assert _parse_json_array("no json here") == []
+
+
+def test_read_sheet_text_entities_maps_tile_boxes_to_sheet(monkeypatch):
+    import asyncio
+    import io
+
+    from PIL import Image
+
+    import app.ai.vlm_dimensions as vd
+
+    class _Resp:
+        text = '[{"text": "A1", "bbox": [10, 20, 30, 40]}]'
+
+    class _Router:
+        async def run(self, request):
+            return _Resp()
+
+    # A sheet small enough to be a single tile, so the reported box needs no
+    # tile offset but is divided back by the legibility upscale factor.
+    image = Image.new("L", (600, 400), color=255)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+
+    entities = asyncio.get_event_loop().run_until_complete(
+        vd.read_sheet_text_entities(buffer.getvalue(), router=_Router())
+    )
+
+    assert len(entities) == 1
+    entity = entities[0]
+    assert entity.text == "A1"
+    assert entity.origin == "vlm"
+    # 1400/600 ≈ 2.333 upscale → box divided back into sheet pixels.
+    factor = 1400 / 600
+    assert entity.position.x == pytest.approx(10 / factor, abs=1.0)   # baseline-left x
+    assert entity.position.y == pytest.approx(40 / factor, abs=1.0)   # baseline y (box bottom)
+    assert entity.source_region is not None

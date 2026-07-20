@@ -103,3 +103,30 @@ def test_unsupported_dxf_is_rejected_instead_of_becoming_partial_truth(
     assert summary["accepted_source_groups"] == 0
     assert summary["rejected_source_groups"] == 1
     assert summary["rejected"][0]["issues"] == ["unsupported:ELLIPSE"]
+
+
+def test_overlay_text_glyphs_draws_readable_ink_at_position():
+    """render_ir_to_png omits text (production gets it from keep_raster), so a
+    synthetic corpus must draw its own glyphs or OCR has nothing to read."""
+    import numpy as np
+    from PIL import Image
+
+    sys.path.insert(0, str(ROOT / "backend"))
+    from app.ai.cad_ir.png_render import render_ir_to_png
+    from app.ai.cad_ir.schema import CadIR, Point, SourceInfo, TextEntity
+
+    ir = CadIR(
+        source=SourceInfo(image_width=400, image_height=200),
+        entities=[TextEntity(position=Point(x=60, y=120), text="M20", height=40)],
+    )
+    base = render_ir_to_png(ir)
+    base_ink = int((np.array(Image.open(io.BytesIO(base)).convert("L")) < 128).sum())
+    assert base_ink == 0  # nothing drawn yet — text is not stroke geometry
+
+    with_text = MODULE._overlay_text_glyphs(base, ir)
+    painted = np.array(Image.open(io.BytesIO(with_text)).convert("L")) < 128
+    assert int(painted.sum()) > 0  # glyphs are now on the raster
+    # The ink lands around the entity position (baseline-left), not elsewhere.
+    ys, xs = np.nonzero(painted)
+    assert 55 <= xs.min() <= 120
+    assert 75 <= ys.min() and ys.max() <= 130

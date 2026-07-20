@@ -22,6 +22,60 @@ import sys
 from collections import Counter
 
 
+_FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+)
+
+
+def _overlay_text_glyphs(png_bytes: bytes, ir) -> bytes:
+    """Draw the sheet's TEXT entities into the raster.
+
+    ``render_ir_to_png`` deliberately omits text — in production the text
+    pixels arrive from the source scan via ``keep_raster``. A synthetic corpus
+    has no source scan, so without this step the raster contains no glyphs and
+    OCR has literally nothing to read (text F1 is then a corpus artifact, not a
+    recognizer result). Each glyph is placed so its baseline-left sits at the
+    entity position — the same insert point ``from_dxf`` records — so a read
+    back can be scored against ground truth on both string and location.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    texts = [e for e in ir.entities if e.type == "text" and (e.text or "").strip()]
+    if not texts:
+        return png_bytes
+    font_path = next((p for p in _FONT_CANDIDATES if pathlib.Path(p).exists()), None)
+    if font_path is None:
+        return png_bytes
+
+    image = Image.open(io.BytesIO(png_bytes)).convert("L")
+    for entity in texts:
+        size = max(6, int(round(entity.height)))
+        try:
+            font = ImageFont.truetype(font_path, size)
+        except OSError:
+            continue
+        ascent, _descent = font.getmetrics()
+        content = (entity.text or "").strip()
+        rotation = float(getattr(entity, "rotation", 0.0) or 0.0)
+        left, right = font.getbbox(content)[0], font.getbbox(content)[2]
+        width = max(1, right - left)
+        glyph = Image.new("L", (width + 2, size + 2), color=255)
+        ImageDraw.Draw(glyph).text((1 - left, 1), content, fill=0, font=font)
+        if abs(rotation) > 0.5:
+            glyph = glyph.rotate(rotation, expand=True, fillcolor=255)
+        # Paste so the glyph baseline-left lands on the insert point.
+        top = int(round(entity.position.y - ascent))
+        image.paste(
+            Image.eval(glyph, lambda v: v),
+            (int(round(entity.position.x)), top),
+            mask=Image.eval(glyph, lambda v: 255 - v),
+        )
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue()
+
+
 SUPPORTED_DXF_TYPES = {
     "LINE",
     "CIRCLE",
@@ -165,7 +219,7 @@ def build(
         ir.source.kind = "scan"
         ir.recognizer_used = "human-authored-dxf-ground-truth"
         ir.digitization_status = "exact_candidate"
-        exact_png = render_ir_to_png(ir)
+        exact_png = _overlay_text_glyphs(render_ir_to_png(ir), ir)
         digest = asset["sha256"]
         base = pathlib.Path(asset["relative_path"]).stem
         safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in base)

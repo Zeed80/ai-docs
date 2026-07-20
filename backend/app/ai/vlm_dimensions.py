@@ -29,6 +29,175 @@ if TYPE_CHECKING:
 # bound cost/latency directly instead.
 MAX_CROP_READS_PER_RUN = 20
 
+# Upper bound on VLM tiles for a whole-sheet text read (cost/latency guard).
+MAX_TEXT_TILES_PER_RUN = 16
+
+_SHEET_TEXT_PROMPT = """На изображении — фрагмент технического чертежа (ЕСКД).
+Найди ВЕСЬ читаемый текст: надписи основной надписи, номера позиций, буквы и
+цифры координатной сетки, обозначения, размерные числа, примечания.
+
+Верни СТРОГО JSON-массив без markdown. Каждый элемент:
+{"text": "строка ровно как на чертеже", "bbox": [x1, y1, x2, y2]}
+где bbox — пиксельные координаты рамки текста В ЭТОМ изображении
+(x1,y1 — левый верх, x2,y2 — правый низ). Одиночные буквы и цифры тоже включай.
+Не выдумывай текст, которого нет. Если текста нет — верни []."""
+
+
+def _parse_json_array(raw: str) -> list:
+    """Extract a top-level JSON array of records from a VLM response.
+
+    The shared ``_parse_json_response`` is object-shaped and collapses a JSON
+    array, so grounding output (``[{...}, {...}]``) needs its own tolerant
+    parse: strip markdown fences, then load the outermost ``[...]``.
+    """
+    import json
+    import re
+
+    text = re.sub(r"^```(?:json)?|```$", "", (raw or "").strip(), flags=re.MULTILINE).strip()
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, list) else []
+    except (ValueError, TypeError):
+        pass
+    start, end = text.find("["), text.rfind("]")
+    if 0 <= start < end:
+        try:
+            value = json.loads(text[start : end + 1])
+            return value if isinstance(value, list) else []
+        except (ValueError, TypeError):
+            return []
+    return []
+
+
+async def read_sheet_text_entities(
+    image_bytes: bytes,
+    *,
+    router: "AIRouter | None" = None,
+    confidential: bool = True,
+    tile_size: int = 1024,
+    overlap: int = 160,
+    max_tiles: int = MAX_TEXT_TILES_PER_RUN,
+) -> list:
+    """VLM-first whole-sheet text reader (replaces tesseract-gated detection).
+
+    Tesseract cannot even *detect* isolated single glyphs or sub-10px title-
+    block text, so a tesseract-first pipeline can never reach them — the VLM
+    enrichment only ever re-reads what tesseract already found. A modern local
+    VLM (qwen3-vl) reads those directly and grounds each read with a box. The
+    sheet is tiled (small text survives), each tile upscaled for legibility,
+    read with grounding, mapped back to sheet pixels and de-duplicated across
+    tile overlaps. Confidential by default: local model only, never cloud.
+    """
+    import base64
+    import io
+
+    from PIL import Image
+
+    from app.ai.cad_ir.schema import Point, SourceRegion, TextEntity
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
+
+    if router is None:
+        from app.ai.router import ai_router
+
+        router = ai_router
+
+    try:
+        sheet = Image.open(io.BytesIO(image_bytes)).convert("L")
+    except Exception:  # noqa: BLE001
+        return []
+    width, height = sheet.size
+    step = max(1, tile_size - overlap)
+    origins = [
+        (x, y)
+        for y in range(0, max(1, height - overlap), step)
+        for x in range(0, max(1, width - overlap), step)
+    ][:max_tiles]
+
+    async def _read_tile(ox: int, oy: int) -> list:
+        tx1, ty1 = min(width, ox + tile_size), min(height, oy + tile_size)
+        tile = sheet.crop((ox, oy, tx1, ty1)).convert("RGB")
+        # Upscale so ~7px title text becomes legible to the VLM.
+        upscale = max(1.0, 1400 / max(tile.width, tile.height, 1))
+        if upscale > 1.0:
+            tile = tile.resize(
+                (round(tile.width * upscale), round(tile.height * upscale)), Image.LANCZOS
+            )
+        buffer = io.BytesIO()
+        tile.save(buffer, format="PNG")
+        request = AIRequest(
+            task=AITask.DRAWING_ANALYSIS_VLM,
+            messages=[ChatMessage(role="user", content=_SHEET_TEXT_PROMPT)],
+            images=[base64.b64encode(buffer.getvalue()).decode()],
+            confidential=confidential,
+            allow_cloud=False,
+        )
+        try:
+            response = await router.run(request)
+        except Exception as exc:  # noqa: BLE001 — one tile must not fail the run
+            logger.warning("vlm_sheet_text_tile_failed", error=str(exc)[:160])
+            return []
+        parsed = _parse_json_array(response.text or "")
+        if not parsed:
+            return []
+        out = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            box = item.get("bbox")
+            if not text or not isinstance(box, (list, tuple)) or len(box) != 4:
+                continue
+            try:
+                bx1, by1, bx2, by2 = (float(v) / upscale for v in box)
+            except (TypeError, ValueError):
+                continue
+            if bx2 <= bx1 or by2 <= by1:
+                continue
+            sx1, sy1, sx2, sy2 = ox + bx1, oy + by1, ox + bx2, oy + by2
+            out.append(
+                TextEntity(
+                    position=Point(x=sx1, y=sy2),  # baseline-left, matches DXF insert
+                    text=text,
+                    height=max(4.0, sy2 - sy1),
+                    origin="vlm",
+                    line_class="dim",
+                    width_class="thin",
+                    confidence=0.9,
+                    source_region=SourceRegion(x0=sx1, y0=sy1, x1=sx2, y1=sy2),
+                    evidence=["vlm:qwen-vl grounded"],
+                )
+            )
+        return out
+
+    import asyncio
+
+    tiles = await asyncio.gather(*[_read_tile(ox, oy) for ox, oy in origins])
+    return _dedup_sheet_text([e for tile in tiles for e in tile])
+
+
+def _dedup_sheet_text(entities: list) -> list:
+    """Drop the same string read twice in a tile-overlap band (keep the first)."""
+    import re
+
+    kept: list = []
+    for entity in entities:
+        norm = re.sub(r"\s+", " ", (entity.text or "").strip()).casefold()
+        height = max(entity.height, 6.0)
+        duplicate = False
+        for other in kept:
+            other_norm = re.sub(r"\s+", " ", (other.text or "").strip()).casefold()
+            if other_norm != norm:
+                continue
+            if (
+                abs(entity.position.x - other.position.x) <= height
+                and abs(entity.position.y - other.position.y) <= height
+            ):
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(entity)
+    return kept
+
 _SYSTEM_PROMPT = """Ты читаешь МАЛЕНЬКИЙ вырезанный фрагмент технического чертежа —
 одну размерную надпись, допуск, обозначение резьбы или шероховатости.
 Изображение может быть нечётким, повёрнутым или частично обрезанным.
