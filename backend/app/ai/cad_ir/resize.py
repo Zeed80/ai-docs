@@ -30,7 +30,10 @@ def resize_ir(ir: CadIR, width: int, height: int) -> CadIR:
     old_height = ir.source.image_height
     factor_x = width / old_width
     factor_y = height / old_height
-    if abs(factor_x - factor_y) > 0.002:
+    # Relative tolerance: an absolute one rejects legitimate large up/downscales
+    # where integer target dimensions cannot hold the ratio exactly (e.g.
+    # 112×100 → 1024×914 drifts 0.003 in absolute factor but < 0.05% in ratio).
+    if abs(factor_x - factor_y) > 0.01 * max(factor_x, factor_y):
         raise ValueError("CadIR resize must preserve aspect ratio")
     factor = (factor_x + factor_y) / 2
     out = ir.model_copy(deep=True)
@@ -71,6 +74,28 @@ def fit_ir_to_long_side(ir: CadIR, long_side: int) -> CadIR:
     if current <= long_side:
         return ir.model_copy(deep=True)
     factor = long_side / current
+    width = max(1, round(ir.source.image_width * factor))
+    height = max(1, round(ir.source.image_height * factor))
+    return resize_ir(ir, width, height)
+
+
+def ensure_min_long_side(ir: CadIR, min_long_side: int) -> CadIR:
+    """Upscale ``ir`` only when its raster frame is below ``min_long_side``.
+
+    A physically tiny drawing (an M4 bolt is a few millimetres) whose native
+    DXF extents map to a ~100 px frame is unrecoverable at that resolution — a
+    hexagon side spans ~5 px, below what any recognizer can resolve. A real
+    scan of the same sheet on A4 at 300 DPI is ~2500 px, so the tiny render is
+    the unrealistic one. This floor renders such drawings at a resolution where
+    their smallest primitives are actually resolvable, without ever shrinking a
+    drawing that is already large enough.
+    """
+    if min_long_side <= 0:
+        raise ValueError("min_long_side must be positive")
+    current = max(ir.source.image_width, ir.source.image_height)
+    if current >= min_long_side:
+        return ir.model_copy(deep=True)
+    factor = min_long_side / current
     width = max(1, round(ir.source.image_width * factor))
     height = max(1, round(ir.source.image_height * factor))
     return resize_ir(ir, width, height)

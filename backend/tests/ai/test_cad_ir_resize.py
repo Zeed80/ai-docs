@@ -1,4 +1,10 @@
-from app.ai.cad_ir.resize import fit_ir_to_long_side, resize_ir
+import pytest
+
+from app.ai.cad_ir.resize import (
+    ensure_min_long_side,
+    fit_ir_to_long_side,
+    resize_ir,
+)
 from app.ai.cad_ir.schema import (
     CadIR,
     Circle,
@@ -60,6 +66,31 @@ def test_resize_ir_preserves_physical_dimensions() -> None:
 def test_fit_ir_to_long_side_never_upscales() -> None:
     original = _ir()
     out = fit_ir_to_long_side(original, 1600)
+
+    assert out.source.image_width == 1000
+    assert out is not original
+
+
+def test_ensure_min_long_side_upscales_tiny_frames() -> None:
+    tiny = CadIR(
+        source=SourceInfo(image_width=112, image_height=100),
+        scale=1.0,
+        entities=[Circle(center=Point(x=56, y=50), radius=16)],
+    )
+
+    out = ensure_min_long_side(tiny, 1024)
+
+    # Long side reaches the floor; aspect ratio and physical size preserved.
+    factor = 1024 / 112
+    assert out.source.image_width == 1024
+    assert abs(out.source.image_height - round(100 * factor)) <= 1
+    assert out.entities[0].radius == pytest.approx(16 * factor, rel=0.01)
+    assert out.scale == pytest.approx(1.0 / factor, rel=0.01)
+
+
+def test_ensure_min_long_side_leaves_large_frames_untouched() -> None:
+    original = _ir()
+    out = ensure_min_long_side(original, 800)
 
     assert out.source.image_width == 1000
     assert out is not original

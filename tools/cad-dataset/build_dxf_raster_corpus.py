@@ -112,6 +112,7 @@ def build(
     train_variants: int = 4,
     eval_variants: int = 2,
     long_side: int = 2048,
+    min_long_side: int = 1024,
     repo: pathlib.Path | None = None,
 ) -> dict:
     import ezdxf
@@ -120,10 +121,12 @@ def build(
     sys.path.insert(0, str(repo / "backend"))
     from app.ai.cad_ir.adapters.from_dxf import dxf_to_ir
     from app.ai.cad_ir.png_render import render_ir_to_png
-    from app.ai.cad_ir.resize import fit_ir_to_long_side
+    from app.ai.cad_ir.resize import ensure_min_long_side, fit_ir_to_long_side
 
     if train_variants < 1 or eval_variants < 1 or long_side < 256:
         raise ValueError("variant counts must be positive and long_side >= 256")
+    if not 256 <= min_long_side <= long_side:
+        raise ValueError("min_long_side must be in [256, long_side]")
     assets = [
         json.loads(line)
         for line in assets_path.read_text().splitlines()
@@ -149,6 +152,7 @@ def build(
                 rejected.append({"path": str(path), "issues": issues})
                 continue
             ir = fit_ir_to_long_side(dxf_to_ir(path.read_bytes()), long_side)
+            ir = ensure_min_long_side(ir, min_long_side)
         except Exception as exc:  # noqa: BLE001 - corpus records every rejection
             rejected.append(
                 {"path": str(path), "issues": [f"import:{type(exc).__name__}"]}
@@ -244,6 +248,7 @@ def main() -> int:
     parser.add_argument("--train-variants", type=int, default=4)
     parser.add_argument("--eval-variants", type=int, default=2)
     parser.add_argument("--long-side", type=int, default=2048)
+    parser.add_argument("--min-long-side", type=int, default=1024)
     args = parser.parse_args()
     summary = build(
         args.assets,
@@ -252,6 +257,7 @@ def main() -> int:
         train_variants=args.train_variants,
         eval_variants=args.eval_variants,
         long_side=args.long_side,
+        min_long_side=args.min_long_side,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["accepted_source_groups"] else 1

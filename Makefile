@@ -293,7 +293,7 @@ cad-web-dxf-corpus:
 	python3 tools/cad-dataset/build_dxf_raster_corpus.py \
 		--assets cad-dataset-out/open-sources/assets.jsonl \
 		--out cad-dataset-out/web-dxf-corpus \
-		--train-variants 4 --eval-variants 2 --long-side 2048
+		--train-variants 4 --eval-variants 2 --long-side 2048 --min-long-side 1024
 
 cad-web-dxf-eval:
 	python3 backend/scripts/eval_cad_manifest.py \
