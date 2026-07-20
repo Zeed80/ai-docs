@@ -1,0 +1,52 @@
+# LLaMA-Factory LoRA SFT config for the generative 2D vectorizer.
+# Teaches Qwen3-VL to emit our isotropic-0..1000 CAD primitive DSL from a
+# drawing image (build_vlm_sft.py corpus). Runs on one RTX 3090 (24 GB) — but
+# only with the production qwen3-vl:32b stopped, so the GPU is free (see README).
+
+### model
+model_name_or_path: Qwen/Qwen3-VL-2B-Instruct
+image_max_pixels: 1048576          # ~1024x1024 tiles; drawings are large
+trust_remote_code: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 32
+lora_alpha: 64
+lora_target: all
+freeze_vision_tower: true          # adapt the language/decoding side; keep the
+freeze_multi_modal_projector: false #  visual encoder, adapt how it reads geometry
+
+### dataset
+dataset: cad_vlm_sft_train
+eval_dataset: cad_vlm_sft_val
+dataset_dir: /data                 # holds dataset_info.json + the *.jsonl
+template: qwen3_vl
+cutoff_len: 4096
+overwrite_cache: true
+preprocessing_num_workers: 8
+dataloader_num_workers: 4
+
+### output
+output_dir: /out/qwen3vl-cad-lora
+logging_steps: 10
+save_steps: 200
+plot_loss: true
+overwrite_output_dir: true
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-4
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+
+### eval
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 200

@@ -298,6 +298,20 @@ cad-vlm-sft:
 		--manifest cad-dataset-out/web-step-corpus/manifest.jsonl \
 		--out cad-dataset-out/vlm-sft --backend backend
 
+# Stage 2: LoRA fine-tune Qwen3-VL on the SFT set. Needs the GPU free — stop
+# the production qwen3-vl:32b in ollama first (see infra/vlm-finetune/README).
+cad-vlm-train-image:
+	docker build -t vlm-finetune infra/vlm-finetune
+
+cad-vlm-train:
+	cp infra/vlm-finetune/dataset_info.json infra/vlm-finetune/qwen3vl_lora_sft.yaml cad-dataset-out/vlm-sft/
+	docker run --rm --gpus all \
+		-v $(CURDIR)/cad-dataset-out:$(CURDIR)/cad-dataset-out \
+		-v $(CURDIR)/cad-dataset-out/vlm-sft:/data \
+		-v $(CURDIR)/cad-dataset-out/vlm-sft/out:/out \
+		-v $(HOME)/.cache/huggingface:/root/.cache/huggingface \
+		vlm-finetune
+
 cad-web-dxf-corpus:
 	python3 tools/cad-dataset/build_dxf_raster_corpus.py \
 		--assets cad-dataset-out/open-sources/assets.jsonl \
