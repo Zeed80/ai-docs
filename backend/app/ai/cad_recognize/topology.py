@@ -26,7 +26,7 @@ from typing import Any
 
 import structlog
 
-from app.ai.cad_ir.schema import Arc, Circle, Entity, Point, Segment
+from app.ai.cad_ir.schema import Arc, Circle, Entity, Point, Polyline, Segment
 from app.ai.drawing_vectorize import _fit_circle_or_arc
 
 logger = structlog.get_logger()
@@ -496,6 +496,59 @@ def _total_turn_deg(pts: list[Point]) -> float:
     return abs(total)
 
 
+# An ellipse chain is accepted only when every vertex lies on the fitted
+# ellipse (guards against rectangles/polygons), and it must be meaningfully
+# non-circular (a near-circle belongs to the circle fitter, not here).
+_ELLIPSE_MAX_RESIDUAL = 0.12
+_ELLIPSE_MIN_AXIS_PX = 4.0
+_ELLIPSE_MAX_AXIS_RATIO = 0.9
+
+
+def _fit_chain_ellipse(members: list[Segment], pts: list[Point]) -> Entity | None:
+    """Fit a closed chain to an ellipse; return a smooth closed Polyline or None."""
+    import cv2
+    import numpy as np
+
+    if len(pts) < 8:
+        return None
+    sample = np.array([[p.x, p.y] for p in pts], dtype=np.float32)
+    try:
+        (cx, cy), (d1, d2), angle = cv2.fitEllipse(sample)
+    except cv2.error:
+        return None
+    semi_a, semi_b = d1 / 2.0, d2 / 2.0
+    if min(semi_a, semi_b) < _ELLIPSE_MIN_AXIS_PX:
+        return None
+    if min(semi_a, semi_b) / max(semi_a, semi_b) > _ELLIPSE_MAX_AXIS_RATIO:
+        return None  # ~circle — the circle fitter owns it
+    theta = math.radians(angle)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    for x, y in sample:
+        dx, dy = float(x) - cx, float(y) - cy
+        u = dx * cos_t + dy * sin_t
+        v = -dx * sin_t + dy * cos_t
+        if abs(math.hypot(u / semi_a, v / semi_b) - 1.0) > _ELLIPSE_MAX_RESIDUAL:
+            return None  # a vertex off the ellipse → not an ellipse (e.g. a polygon)
+
+    steps = 48
+    points: list[Point] = []
+    for i in range(steps):
+        t = 2.0 * math.pi * i / steps
+        u, v = semi_a * math.cos(t), semi_b * math.sin(t)
+        points.append(
+            Point(x=cx + u * cos_t - v * sin_t, y=cy + u * sin_t + v * cos_t)
+        )
+    anchor = max(members, key=_seg_len)
+    return Polyline(
+        points=points,
+        closed=True,
+        line_class=anchor.line_class,
+        width_class=anchor.width_class,
+        confidence=round(min(s.confidence for s in members), 4),
+        origin=anchor.origin,
+    )
+
+
 def _refit_chain(members: list[Segment], pts: list[Point], closed: bool) -> Entity | None:
     """Kåsa circle fit over chain vertices, accepted only when edge midpoints
     also sit on the circle (rejects genuine polygonal contours)."""
@@ -506,7 +559,11 @@ def _refit_chain(members: list[Segment], pts: list[Point], closed: bool) -> Enti
     ptsf = np.array([[p.x, p.y] for p in pts], dtype=np.float32)
     prim = _fit_circle_or_arc(ptsf, closed)
     if prim is None or prim.center is None or prim.radius is None:
-        return None
+        # Not a circle/arc. A closed chain may still be an ellipse — a hole or
+        # cylinder seen at an angle, extremely common in mechanical views. CadIR
+        # has no ellipse primitive, so emit a smooth closed polyline sampling
+        # the fitted ellipse instead of leaving jittery segment "scribble".
+        return _fit_chain_ellipse(members, pts) if closed else None
     for i in range(len(pts) - 1):
         mx, my = (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2
         dev = abs(math.hypot(mx - prim.center[0], my - prim.center[1]) - prim.radius)

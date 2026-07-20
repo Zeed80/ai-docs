@@ -244,3 +244,42 @@ def test_single_segment_untouched():
     out, stats = consolidate_entities([seg])
     assert out == [seg]
     assert stats == {"consolidated": False}
+
+
+def test_fit_chain_ellipse_accepts_ellipse_rejects_polygon_and_circle():
+    import math
+
+    from app.ai.cad_recognize.topology import _fit_chain_ellipse
+    from app.ai.cad_ir.schema import Point, Segment
+
+    def _chain(points):
+        # members are only used for style/anchor; geometry comes from pts
+        segs = [
+            Segment(p1=Point(x=a[0], y=a[1]), p2=Point(x=b[0], y=b[1]), width_class="thin")
+            for a, b in zip(points, points[1:] + points[:1])
+        ]
+        return segs, [Point(x=x, y=y) for x, y in points]
+
+    # A genuine ellipse (a=80, b=40, rotated 30°) -> smooth closed polyline.
+    cx, cy, a, b, ang = 200.0, 150.0, 80.0, 40.0, math.radians(30)
+    ell = [
+        (
+            cx + a * math.cos(t) * math.cos(ang) - b * math.sin(t) * math.sin(ang),
+            cy + a * math.cos(t) * math.sin(ang) + b * math.sin(t) * math.cos(ang),
+        )
+        for t in [i * 2 * math.pi / 20 for i in range(20)]
+    ]
+    out = _fit_chain_ellipse(*_chain(ell))
+    assert out is not None and out.type == "polyline" and out.closed
+    assert len(out.points) >= 24
+
+    # A rectangle must NOT be mistaken for an ellipse.
+    rect = [(0, 0), (100, 0), (100, 60), (0, 60), (50, 0), (100, 30), (50, 60), (0, 30)]
+    assert _fit_chain_ellipse(*_chain(rect)) is None
+
+    # A circle belongs to the circle fitter, not the ellipse path.
+    circ = [
+        (200 + 50 * math.cos(i * 2 * math.pi / 20), 150 + 50 * math.sin(i * 2 * math.pi / 20))
+        for i in range(20)
+    ]
+    assert _fit_chain_ellipse(*_chain(circ)) is None
