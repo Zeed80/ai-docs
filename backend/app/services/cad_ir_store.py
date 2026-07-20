@@ -59,6 +59,10 @@ def _summary(ir: CadIR) -> dict[str, Any]:
         "scale": ir.scale,
         "scale_source": ir.scale_source,
         "recognizer_used": ir.recognizer_used,
+        "digitization_status": ir.digitization_status,
+        "unresolved_regions": sum(1 for r in ir.unresolved_regions if not r.resolved),
+        "vector_recall": ir.validation.vector_recall,
+        "vector_precision": ir.validation.vector_precision,
     }
 
 
@@ -161,7 +165,10 @@ async def save_revision(
         ir_bytes = ir.model_dump_json().encode("utf-8")
         _tracked_upload(ir_bytes, ir_path, "application/json")
 
-        png = render_ir_to_png(ir, keep_raster=keep_raster, thin_px=thin_px, thick_px=thick_px)
+        # The primary preview must represent the same vector content as
+        # SVG/DXF. Raster passthrough is kept only as diagnostic evidence;
+        # painting it into PNG made incomplete DXFs look complete.
+        png = render_ir_to_png(ir, keep_raster=None, thin_px=thin_px, thick_px=thick_px)
         svg = render_ir_to_svg(ir)
         dxf = render_ir_to_dxf(ir)
         _tracked_upload(png, f"{base}.png", "image/png")
@@ -223,7 +230,13 @@ async def save_revision(
                 "errors": len(ir.validation.blocking),
                 "coverage_recall": ir.validation.coverage_recall,
                 "coverage_precision": ir.validation.coverage_precision,
+                "vector_recall": ir.validation.vector_recall,
+                "vector_precision": ir.validation.vector_precision,
+                "raster_passthrough_fraction": ir.validation.raster_passthrough_fraction,
+                "dxf_reopens": ir.validation.dxf_reopens,
             },
+            "digitization_status": ir.digitization_status,
+            "unresolved_regions": sum(1 for r in ir.unresolved_regions if not r.resolved),
             "review_pending": sum(1 for r in ir.review if not r.resolved),
         }
     )

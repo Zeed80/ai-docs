@@ -1,0 +1,176 @@
+"""Auditable status of the current scan-to-CAD development candidate.
+
+This is deliberately not called an accuracy score.  The values below come
+from the source-grouped web STEP experiment and the independent local holdout
+gate.  Updating the candidate requires updating this record together with the
+evaluation report and plan.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
+    "pipeline_revision": "source-snapped-edge-graph-v1",
+    "evaluated_at": "2026-07-20",
+    "corpus": {
+        "licensed_web_assets": 216,
+        "step_assets": 181,
+        "projected_models": 135,
+        "exact_sheets": 402,
+        "exact_entities": 46_654,
+        "training_tiles": 1_320,
+        "train_tiles": 1_030,
+        "validation_tiles": 192,
+        "layout_sheets": 1_008,
+        "layout_view_targets": 3_021,
+        "native_dxf_source_groups": 29,
+        "native_dxf_pairs": 106,
+        "native_dxf_holdout_pairs": 6,
+        "native_dxf_entities": 1_661,
+    },
+    "candidate": {
+        "checkpoint_step": 1_000,
+        "standalone": {
+            "raster_precision": 0.2295,
+            "raster_recall": 0.2635,
+            "entity_precision": 0.0,
+            "entity_recall": 0.0,
+            "entity_f1": 0.0,
+            "exact_sheet_rate": 0.0,
+        },
+        "hybrid": {
+            "entity_precision": 0.193738,
+            "entity_recall": 0.038253,
+            "entity_f1": 0.063892,
+            "exact_sheet_rate": 0.0,
+            "dxf_reopen_rate": 1.0,
+        },
+        "sheet_layout": {
+            "reserved_web_holdout_sheets": 39,
+            "view_precision_iou50": 1.0,
+            "view_recall_iou50": 1.0,
+            "view_f1_iou50": 1.0,
+            "mean_matched_iou": 0.928079,
+            "exact_layout_rate": 1.0,
+        },
+        "hierarchical_standalone": {
+            "raster_precision": 0.2207,
+            "raster_recall": 0.1295,
+            "entity_precision": 0.0,
+            "entity_recall": 0.0,
+            "entity_f1": 0.0,
+            "exact_sheet_rate": 0.0,
+        },
+        "hierarchical_hybrid": {
+            "entity_precision": 0.193738,
+            "entity_recall": 0.038253,
+            "entity_f1": 0.063892,
+            "exact_sheet_rate": 0.0,
+            "dxf_reopen_rate": 1.0,
+        },
+        "evidence_heatmap": {
+            "checkpoint_step": 1_200,
+            "validation_macro_f1": 0.210539,
+            "real_holdout_line_precision": 0.723886,
+            "real_holdout_line_recall": 0.875653,
+            "real_holdout_line_f1": 0.792570,
+            "real_holdout_circle_f1": 0.0,
+            "real_holdout_arc_f1": 0.0,
+            "real_holdout_macro_f1": 0.264190,
+        },
+        "evidence_vectorization": {
+            "entity_precision": 0.215812,
+            "entity_recall": 0.039026,
+            "entity_f1": 0.066099,
+            "exact_sheet_rate": 0.0,
+            "dxf_reopen_rate": 1.0,
+            "false_exact_rate": 0.0,
+            "source_coordinates_preserved": True,
+        },
+        "directional_fields": {
+            "checkpoint_step": 1_800,
+            "validation_selection_score": 0.375319,
+            "real_holdout_line_f1": 0.798937,
+            "real_holdout_endpoint_f1": 0.714469,
+            "real_holdout_junction_f1": 0.643966,
+            "real_holdout_direction_cosine": 0.780814,
+            "real_holdout_circle_f1": 0.0,
+            "real_holdout_arc_f1": 0.0,
+        },
+        "directional_vectorization": {
+            "entity_precision": 0.028436,
+            "entity_recall": 0.013910,
+            "entity_f1": 0.018682,
+            "exact_sheet_rate": 0.0,
+            "dxf_reopen_rate": 1.0,
+            "false_exact_rate": 0.0,
+            "decoder_selection_split": "source_grouped_val",
+            "production_regression": True,
+        },
+        "graph_iterations": {
+            "unordered_query_graph_best_validation_f1": 0.000062,
+            "dense_edge_verifier_validation_f1": 0.006717,
+            "dense_edge_verifier_full_sheet_holdout_f1": 0.001981,
+            "tiled_edge_graph_entity_precision": 0.030769,
+            "tiled_edge_graph_entity_recall": 0.027048,
+            "tiled_edge_graph_entity_f1": 0.028789,
+            "source_snapped_entity_precision": 0.084000,
+            "source_snapped_entity_recall": 0.040572,
+            "source_snapped_entity_f1": 0.054716,
+            "source_snapped_exact_sheet_rate": 0.0,
+            "source_snapped_dxf_reopen_rate": 1.0,
+            "line_only_architecture": True,
+        },
+        "native_dxf_benchmark": {
+            "truth_kind": "native_dxf_entities",
+            "semantic_ground_truth": True,
+            "cv_entity_precision": 0.190476,
+            "cv_entity_recall": 0.045714,
+            "cv_entity_f1": 0.073733,
+            "cv_exact_sheet_rate": 0.0,
+            "cv_false_exact_rate": 0.666667,
+            "circle_f1": 0.666667,
+            "arc_f1": 0.0,
+            "segment_f1": 0.088889,
+            "text_f1": 0.0,
+            "pdf_path_holdout_is_semantic_ground_truth": False,
+        },
+        "promotion_status": "refused",
+        "promotion_thresholds": {
+            "entity_precision": 0.995,
+            "entity_recall": 0.995,
+            "exact_sheet_rate": 0.99,
+            "dxf_reopen_rate": 1.0,
+            "false_exact_rate": 0.0,
+        },
+        "production_default_changed": False,
+    },
+}
+
+
+def get_cad_vectorizer_development_status() -> dict[str, Any]:
+    """Return a copy so an API caller cannot mutate process-wide evidence."""
+
+    corpus = dict(CAD_VECTORIZER_DEVELOPMENT_STATUS["corpus"])
+    candidate = CAD_VECTORIZER_DEVELOPMENT_STATUS["candidate"]
+    return {
+        **CAD_VECTORIZER_DEVELOPMENT_STATUS,
+        "corpus": corpus,
+        "candidate": {
+            **candidate,
+            "standalone": dict(candidate["standalone"]),
+            "hybrid": dict(candidate["hybrid"]),
+            "sheet_layout": dict(candidate["sheet_layout"]),
+            "hierarchical_standalone": dict(candidate["hierarchical_standalone"]),
+            "hierarchical_hybrid": dict(candidate["hierarchical_hybrid"]),
+            "evidence_heatmap": dict(candidate["evidence_heatmap"]),
+            "evidence_vectorization": dict(candidate["evidence_vectorization"]),
+            "directional_fields": dict(candidate["directional_fields"]),
+            "directional_vectorization": dict(candidate["directional_vectorization"]),
+            "graph_iterations": dict(candidate["graph_iterations"]),
+            "native_dxf_benchmark": dict(candidate["native_dxf_benchmark"]),
+            "promotion_thresholds": dict(candidate["promotion_thresholds"]),
+        },
+    }

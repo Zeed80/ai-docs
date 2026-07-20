@@ -35,7 +35,6 @@ import structlog
 
 from app.ai.cad_ir.schema import (
     CadIR,
-    Circle,
     Polyline,
     ReviewItem,
     Segment,
@@ -44,6 +43,10 @@ from app.ai.cad_ir.schema import (
 )
 
 logger = structlog.get_logger()
+
+
+class FullCheckUnavailableError(RuntimeError):
+    """The mandatory model-backed check did not actually run."""
 
 # Entities below this confidence are queued for human review.
 REVIEW_CONFIDENCE_THRESHOLD = 0.7
@@ -72,6 +75,8 @@ class CadCheckCode(str, Enum):
     # B1: recognition returned no vector geometry; the sheet shipped as a
     # raster-passthrough draft for manual review/tracing instead of failing.
     RECOGNITION_EMPTY = "RECOGNITION_EMPTY"
+    UNRESOLVED_REGIONS = "UNRESOLVED_REGIONS"
+    DXF_REOPEN_FAILED = "DXF_REOPEN_FAILED"
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
     # pixel provenance of diffusion-prepared sources (sticky across revalidation)
     DIFFUSION_ADDED_INK = "DIFFUSION_ADDED_INK"
@@ -286,8 +291,16 @@ def _check_line_weights(ir: CadIR) -> list[ValidationIssueIR]:
 
 
 def _check_coverage(ir: CadIR) -> list[ValidationIssueIR]:
-    rec = ir.validation.coverage_recall
-    prec = ir.validation.coverage_precision
+    rec = (
+        ir.validation.vector_recall
+        if ir.validation.vector_recall is not None
+        else ir.validation.coverage_recall
+    )
+    prec = (
+        ir.validation.vector_precision
+        if ir.validation.vector_precision is not None
+        else ir.validation.coverage_precision
+    )
     if rec is None or prec is None:
         return []
     if rec < 0.85 or prec < 0.85:
@@ -295,6 +308,29 @@ def _check_coverage(ir: CadIR) -> list[ValidationIssueIR]:
             CadCheckCode.COVERAGE_LOW, "error",
             f"Распознанная геометрия покрывает исходник недостаточно "
             f"(recall {rec:.0%}, precision {prec:.0%}) — результат требует ручной проверки",
+        )]
+    return []
+
+
+def _check_unresolved_regions(ir: CadIR) -> list[ValidationIssueIR]:
+    pending = [region for region in ir.unresolved_regions if not region.resolved]
+    if not pending:
+        return []
+    ink = sum(region.ink_pixels for region in pending)
+    return [_issue(
+        CadCheckCode.UNRESOLVED_REGIONS,
+        "error",
+        f"В {len(pending)} областях осталось {ink} пикселей, не представленных "
+        "экспортируемыми CAD-сущностями. DXF является черновиком.",
+    )]
+
+
+def _check_dxf_reopen(ir: CadIR) -> list[ValidationIssueIR]:
+    if ir.validation.dxf_reopens is False:
+        return [_issue(
+            CadCheckCode.DXF_REOPEN_FAILED,
+            "error",
+            "Экспортированный DXF не прошёл независимое повторное открытие.",
         )]
     return []
 
@@ -544,6 +580,8 @@ _CHECKS = (
     _check_annotations,
     _check_roughness_values,
     _check_coverage,
+    _check_unresolved_regions,
+    _check_dxf_reopen,
     _check_dimension_chains,
     _check_constraints,
 )
@@ -572,6 +610,10 @@ def validate_ir(ir: CadIR) -> ValidationReportIR:
         issues=issues,
         coverage_recall=ir.validation.coverage_recall,
         coverage_precision=ir.validation.coverage_precision,
+        vector_recall=ir.validation.vector_recall,
+        vector_precision=ir.validation.vector_precision,
+        raster_passthrough_fraction=ir.validation.raster_passthrough_fraction,
+        dxf_reopens=ir.validation.dxf_reopens,
         eskd_profile_version=ESKD_PROFILE_VERSION,
     )
     ir.validation = report
@@ -604,6 +646,20 @@ def validate_ir(ir: CadIR) -> ValidationReportIR:
     for eid in flagged - queued - resolved:
         review.append(ReviewItem(entity_id=eid, reason="validation_error"))
     ir.review = review
+    verified_entities = all(
+        entity.assurance in ("constraint_validated", "human_approved")
+        or entity.construction
+        for entity in ir.entities
+    )
+    ir.digitization_status = (
+        "exact_candidate"
+        if not report.blocking
+        and not any(not region.resolved for region in ir.unresolved_regions)
+        and not any(not item.resolved for item in review)
+        and verified_entities
+        and report.dxf_reopens is True
+        else "review_required"
+    )
 
     logger.info(
         "cad_validate",
@@ -657,6 +713,7 @@ async def run_llm_review_levels(
     *,
     router: "object | None" = None,
     confidential: bool = True,
+    strict: bool = False,
 ) -> list[ValidationIssueIR]:
     """Levels 6-7 of the assurance pipeline (Ф7.1): LLM-based ЕСКД
     normcontrol + VLM visual critique over the rendered drawing.
@@ -700,4 +757,6 @@ async def run_llm_review_levels(
         return issues
     except Exception as exc:  # noqa: BLE001 — a bad LLM call must not fail the caller
         logger.warning("cad_llm_review_failed", error=str(exc)[:200])
+        if strict:
+            raise FullCheckUnavailableError(str(exc)) from exc
         return []

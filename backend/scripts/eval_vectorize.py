@@ -39,6 +39,8 @@ _GT_TYPE_MAP = {
     "POLYLINE": "polyline",
     "TEXT": "text",
     "MTEXT": "text",
+    "DIMENSION": "dimension",
+    "HATCH": "hatch",
 }
 
 
@@ -84,11 +86,49 @@ def _convert_dwg(dwg_path: pathlib.Path, tmp_dir: pathlib.Path) -> pathlib.Path 
 
 def _gt_counts(doc) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for e in doc.modelspace():
-        mapped = _GT_TYPE_MAP.get(e.dxftype())
+    def visit(entity, depth: int = 0) -> None:
+        mapped = _GT_TYPE_MAP.get(entity.dxftype())
         if mapped:
             counts[mapped] = counts.get(mapped, 0) + 1
+        elif entity.dxftype() == "INSERT" and depth < 16:
+            try:
+                for child in entity.virtual_entities():
+                    visit(child, depth + 1)
+            except Exception:  # noqa: BLE001 — integrity report handles this
+                pass
+
+    for entity in doc.modelspace():
+        visit(entity)
     return counts
+
+
+def _ground_truth_integrity(doc) -> tuple[bool, list[str]]:
+    """Reject sheets whose CAD source cannot produce complete semantic GT."""
+    supported = set(_GT_TYPE_MAP) | {"INSERT"}
+    issues: list[str] = []
+
+    def visit(entity, depth: int = 0) -> None:
+        kind = entity.dxftype()
+        if kind not in supported:
+            issues.append(f"unsupported:{kind}")
+            return
+        if kind != "INSERT":
+            return
+        if depth >= 16:
+            issues.append("insert_depth")
+            return
+        try:
+            children = list(entity.virtual_entities())
+        except Exception:  # noqa: BLE001
+            issues.append(f"broken_insert:{getattr(entity.dxf, 'name', '?')}")
+            return
+        for child in children:
+            visit(child, depth + 1)
+
+    for entity in doc.modelspace():
+        visit(entity)
+    unique = sorted(set(issues))
+    return not unique, unique
 
 
 def _render_dxf_png(doc, long_side: int) -> bytes | None:
@@ -144,7 +184,14 @@ def _render_dxf_png(doc, long_side: int) -> bytes | None:
         ax.margins(0)
         ax.autoscale_view()
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=dpi, facecolor="white", bbox_inches="tight", pad_inches=0.1)
+        fig.savefig(
+            buf,
+            format="png",
+            dpi=dpi,
+            facecolor="white",
+            bbox_inches="tight",
+            pad_inches=0.1,
+        )
         plt.close(fig)
         return buf.getvalue()
     except Exception as exc:  # noqa: BLE001
@@ -392,11 +439,17 @@ def _recognize(
     recognizer: str = "cv",
     report_dir: pathlib.Path | None = None,
     stem: str = "",
+    truth_ir=None,
 ) -> dict | None:
-    """``recognizer``: "cv" (baseline), "neural" (technical-vectorizer model
-    only, no CV fallback — a clean read of what the network alone
-    achieves), or "arbitrate" (production path: neural vs CV, independently
-    scored)."""
+    """``recognizer``: "cv" (baseline), "neural" (the seq2seq
+    ``cad-vectorizer`` model only, no CV fallback — a clean read of what the
+    candidate network alone achieves), or "arbitrate" (the production
+    technical-vectorizer vs CV path, independently scored).
+
+    Keep the two remote recognizers explicit here: evaluating a candidate
+    checkpoint through ``TechnicalVectorizerRecognizer`` silently measures a
+    different service and makes the candidate report meaningless.
+    """
     from app.ai.cad_recognize import CvRecognizer
     from app.ai.cad_recognize.verify import score_coverage
     from app.tasks.cad_trace import _binarize, _ocr_text_entities
@@ -410,8 +463,9 @@ def _recognize(
             print(f"  enhance failed: {str(exc)[:120]}", file=sys.stderr)
     ink, w, h = _binarize(image_bytes)
     try:
-        _texts, text_boxes = _ocr_text_entities(image_bytes)
+        texts, text_boxes = _ocr_text_entities(image_bytes)
     except Exception:  # noqa: BLE001
+        texts = []
         text_boxes = []
 
     started = time.monotonic()
@@ -419,22 +473,94 @@ def _recognize(
     if recognizer == "cv":
         out = CvRecognizer().recognize(ink, exclusion_boxes=text_boxes)
         score = (
-            score_coverage(out.entities, ink, out.keep_raster, thin_px=out.thin_px, thick_px=out.thick_px)
+            score_coverage(
+                out.entities,
+                ink,
+                out.keep_raster,
+                thin_px=out.thin_px,
+                thick_px=out.thick_px,
+            )
             if out is not None else None
         )
-    elif recognizer == "neural":
-        from app.ai.cad_recognize.technical_vectorizer import TechnicalVectorizerRecognizer
+    elif recognizer in (
+        "neural",
+        "neural-tiled",
+        "primitive-set",
+        "directional-fields",
+        "edge-graph",
+        "edge-graph-snapped",
+        "evidence-heatmap",
+        "hierarchical-sheet",
+        "hybrid-engineering",
+        "hybrid-hierarchical",
+    ):
+        if recognizer in ("hybrid-engineering", "hybrid-hierarchical"):
+            from app.ai.cad_recognize.hybrid_engineering import HybridEngineeringRecognizer
 
-        out = TechnicalVectorizerRecognizer().recognize(ink, exclusion_boxes=text_boxes)
+            if recognizer == "hybrid-hierarchical":
+                from app.ai.cad_recognize.hierarchical_sheet import (
+                    HierarchicalSheetRecognizer,
+                )
+
+                candidate = HybridEngineeringRecognizer(
+                    primitive=HierarchicalSheetRecognizer()
+                )
+            else:
+                candidate = HybridEngineeringRecognizer()
+        elif recognizer == "hierarchical-sheet":
+            from app.ai.cad_recognize.hierarchical_sheet import HierarchicalSheetRecognizer
+
+            candidate = HierarchicalSheetRecognizer()
+        elif recognizer == "evidence-heatmap":
+            from app.ai.cad_recognize.evidence_heatmap import EvidenceHeatmapRecognizer
+
+            candidate = EvidenceHeatmapRecognizer()
+        elif recognizer == "directional-fields":
+            from app.ai.cad_recognize.directional_fields import (
+                DirectionalFieldRecognizer,
+            )
+
+            candidate = DirectionalFieldRecognizer()
+        elif recognizer == "edge-graph":
+            from app.ai.cad_recognize.edge_graph import EdgeGraphRecognizer
+
+            candidate = EdgeGraphRecognizer()
+        elif recognizer == "edge-graph-snapped":
+            from app.ai.cad_recognize.edge_graph import SourceSnappedEdgeGraphRecognizer
+
+            candidate = SourceSnappedEdgeGraphRecognizer()
+        elif recognizer == "primitive-set":
+            from app.ai.cad_recognize.primitive_set import PrimitiveSetRecognizer
+
+            candidate = PrimitiveSetRecognizer()
+        else:
+            from app.ai.cad_recognize.neural import NeuralRecognizer
+
+            candidate = NeuralRecognizer(
+                tile_size=640 if recognizer == "neural-tiled" else None,
+                tile_overlap=160,
+            )
+        out = candidate.recognize(ink, exclusion_boxes=text_boxes)
         score = (
-            score_coverage(out.entities, ink, out.keep_raster, thin_px=out.thin_px, thick_px=out.thick_px)
+            score_coverage(
+                out.entities,
+                ink,
+                out.keep_raster,
+                thin_px=out.thin_px,
+                thick_px=out.thick_px,
+            )
             if out is not None else None
         )
     else:  # arbitrate — the actual production decision path
         from app.ai.cad_recognize.technical_vectorizer import TechnicalVectorizerRecognizer
         from app.ai.cad_recognize.verify import arbitrate_recognition
 
-        result = arbitrate_recognition(ink, text_boxes, TechnicalVectorizerRecognizer(), CvRecognizer())
+        result = arbitrate_recognition(
+            ink,
+            text_boxes,
+            TechnicalVectorizerRecognizer(),
+            CvRecognizer(),
+        )
         out = result if result.entities else None
         score = result.score if result.entities else None
         used = result.recognizer_used
@@ -443,26 +569,50 @@ def _recognize(
     if out is None or not out.entities:
         if report_dir is not None:
             _write_report(report_dir, stem, ink, [], None, 1, 2)
-        return {"declined": True, "seconds": round(elapsed, 2), "size": [w, h], "recognizer_used": used}
+        return {
+            "declined": True,
+            "seconds": round(elapsed, 2),
+            "size": [w, h],
+            "recognizer_used": used,
+        }
+    recognized_entities = [*out.entities, *texts]
     counts: dict[str, int] = {}
-    for e in out.entities:
+    for e in recognized_entities:
         counts[e.type] = counts.get(e.type, 0) + 1
     rec = {
         "declined": False,
         "seconds": round(elapsed, 2),
         "size": [w, h],
         "counts": counts,
-        "entities": len(out.entities),
+        "entities": len(recognized_entities),
         "coverage_recall": score.recall,
         "coverage_precision": score.precision,
         "coverage_ok": score.ok,
         "recognizer_used": used,
-        "quality": _geometry_quality(out.entities),
-        **_dxf_roundtrip(out.entities, w, h),
+        "quality": _geometry_quality(recognized_entities),
+        **_dxf_roundtrip(recognized_entities, w, h),
     }
+    if truth_ir is not None:
+        from app.ai.cad_entity_metrics import compare_entities
+
+        entity_metrics = compare_entities(
+            recognized_entities,
+            truth_ir.entities,
+            predicted_size=(w, h),
+            truth_size=(
+                truth_ir.source.image_width,
+                truth_ir.source.image_height,
+            ),
+        )
+        rec["entity_metrics"] = entity_metrics
+        rec["exact_sheet"] = entity_metrics["exact_sheet"]
+        # This exposes the old lie directly: a green pixel score claiming a
+        # usable result while entity-level ground truth says it is not exact.
+        rec["legacy_claimed_exact"] = bool(score.ok)
+        rec["false_exact"] = bool(score.ok and not entity_metrics["exact_sheet"])
     if report_dir is not None:
         rec.update(_write_report(
-            report_dir, stem, ink, out.entities, out.keep_raster, out.thin_px, out.thick_px,
+            report_dir, stem, ink, recognized_entities, out.keep_raster, out.thin_px, out.thick_px,
         ))
     return rec
 
@@ -473,11 +623,40 @@ def main() -> int:
     parser.add_argument("--long-side", type=int, default=1600)
     parser.add_argument("--limit-dwg", type=int, default=0, help="0 = all")
     parser.add_argument("--limit-photos", type=int, default=0, help="0 = all")
+    parser.add_argument("--skip-dwg", action="store_true")
+    parser.add_argument("--skip-photos", action="store_true")
     parser.add_argument("--out", default="test-results/eval_vectorize.json")
     parser.add_argument(
-        "--recognizer", choices=["cv", "neural", "arbitrate"], default="cv",
-        help="cv=CV-baseline (default); neural=Ф3 model alone (no CV fallback); "
-             "arbitrate=production decision path (neural vs CV, independently scored)",
+        "--recognizer",
+        choices=[
+            "cv",
+            "neural",
+            "neural-tiled",
+            "primitive-set",
+            "directional-fields",
+            "edge-graph",
+            "edge-graph-snapped",
+            "evidence-heatmap",
+            "hierarchical-sheet",
+            "hybrid-engineering",
+            "hybrid-hierarchical",
+            "arbitrate",
+        ],
+        default="cv",
+        help="cv=CV-baseline (default); neural=cad-vectorizer seq2seq candidate "
+             "alone (no CV fallback); neural-tiled=overlapping 640px candidate "
+             "tiles; primitive-set=unordered multi-type detector candidate; "
+             "directional-fields=direct endpoint/direction line proposals; "
+             "edge-graph=learned line-of-interest adjacency over dense nodes; "
+             "edge-graph-snapped=the same graph snapped to source skeleton nodes; "
+             "evidence-heatmap=learned geometry evidence plus deterministic fitter; "
+             "hierarchical-sheet=global view regions then local primitives; "
+             "hybrid-engineering=CV global geometry plus independently "
+             "ink-verified learned circles/arcs; "
+             "hybrid-hierarchical=the same conservative fusion using the "
+             "sheet-level candidate; "
+             "arbitrate=production technical-vectorizer "
+             "vs CV path, independently scored",
     )
     parser.add_argument(
         "--report-dir", default="",
@@ -497,7 +676,7 @@ def main() -> int:
     root = pathlib.Path(args.dir)
     results: dict[str, dict] = {"dwg": {}, "photos": {}}
 
-    dwg_files = sorted(root.glob("*.dwg"))
+    dwg_files = [] if args.skip_dwg else sorted(root.glob("*.dwg"))
     if args.limit_dwg:
         dwg_files = dwg_files[: args.limit_dwg]
     with tempfile.TemporaryDirectory() as tmp:
@@ -519,20 +698,47 @@ def main() -> int:
                     results["dwg"][dwg.name] = {"error": f"read_failed: {str(exc)[:80]}"}
                     continue
             gt = _gt_counts(doc)
-            png = _render_dxf_png(doc, args.long_side)
-            if png is None:
+            gt_complete, gt_issues = _ground_truth_integrity(doc)
+            try:
+                from app.ai.cad_ir.adapters.from_dxf import dxf_to_ir
+                from app.ai.cad_ir.png_render import render_ir_to_png
+                from app.ai.cad_ir.resize import fit_ir_to_long_side
+
+                truth_ir = fit_ir_to_long_side(
+                    dxf_to_ir(dxf.read_bytes()),
+                    args.long_side,
+                )
+                png = render_ir_to_png(truth_ir, thin_px=2, thick_px=3)
+            except Exception as exc:  # noqa: BLE001
                 results["dwg"][dwg.name] = {"error": "render_failed", "gt_counts": gt}
+                print(f"  canonical GT failed: {str(exc)[:120]}", file=sys.stderr)
                 continue
             rec = _recognize(
                 png, enhance=False, recognizer=args.recognizer,
                 report_dir=report_dir, stem=_safe_stem(dwg.name),
+                truth_ir=truth_ir,
             )
+            from app.ai.cad_profile import choose_profile
+
+            profile = choose_profile(
+                "auto",
+                [
+                    entity.text
+                    for entity in truth_ir.entities
+                    if entity.type in ("text", "dimension", "annotation")
+                ],
+                dwg.name,
+            )
+            rec["profile"] = profile.profile
+            rec["profile_confidence"] = profile.confidence
             rec["gt_counts"] = gt
+            rec["ground_truth_complete"] = gt_complete
+            rec["ground_truth_issues"] = gt_issues
             results["dwg"][dwg.name] = rec
             print(f"  -> {rec.get('entities', 'declined')} entities, "
                   f"recall={rec.get('coverage_recall')}, precision={rec.get('coverage_precision')}")
 
-    photos = sorted([
+    photos = [] if args.skip_photos else sorted([
         *root.glob("*.jpg"), *root.glob("*.jpeg"), *root.glob("*.JPG"),
         *root.glob("*.png"), *root.glob("*.PNG"),
     ])
@@ -549,6 +755,46 @@ def main() -> int:
               f"recall={rec.get('coverage_recall')}, precision={rec.get('coverage_precision')}")
 
     # Aggregates
+    def _entity_aggregates(records: list[dict]) -> dict:
+        evaluated = [
+            r
+            for r in records
+            if r.get("entity_metrics") and r.get("ground_truth_complete", True)
+        ]
+        if not evaluated:
+            return {}
+        matched = sum(r["entity_metrics"]["micro"]["matched"] for r in evaluated)
+        false_positive = sum(
+            r["entity_metrics"]["micro"]["false_positive"] for r in evaluated
+        )
+        false_negative = sum(
+            r["entity_metrics"]["micro"]["false_negative"] for r in evaluated
+        )
+        precision = matched / max(matched + false_positive, 1)
+        recall = matched / max(matched + false_negative, 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+        claims = [r for r in evaluated if r.get("legacy_claimed_exact")]
+        return {
+            "entity_precision": round(precision, 6),
+            "entity_recall": round(recall, 6),
+            "entity_f1": round(f1, 6),
+            "exact_sheet_rate": round(
+                sum(1 for r in evaluated if r.get("exact_sheet")) / len(evaluated),
+                6,
+            ),
+            "false_exact_rate": round(
+                sum(1 for r in claims if r.get("false_exact")) / max(len(claims), 1),
+                6,
+            ),
+            "entity_evaluated_files": len(evaluated),
+            "ground_truth_excluded_files": sum(
+                1
+                for record in records
+                if record.get("entity_metrics")
+                and not record.get("ground_truth_complete", True)
+            ),
+        }
+
     def _agg(section: dict) -> dict:
         oks = [r for r in section.values() if r and not r.get("error") and not r.get("declined")]
         declined = sum(1 for r in section.values() if r.get("declined"))
@@ -579,9 +825,26 @@ def main() -> int:
                 / max(sum(1 for r in oks if r.get("eskd_errors", -1) >= 0), 1),
                 2,
             ),
+            **_entity_aggregates(oks),
         }
 
-    results["summary"] = {"dwg": _agg(results["dwg"]), "photos": _agg(results["photos"])}
+    profile_names = sorted({
+        record.get("profile", "auto")
+        for record in results["dwg"].values()
+        if record and not record.get("error")
+    })
+    results["summary"] = {
+        "dwg": _agg(results["dwg"]),
+        "photos": _agg(results["photos"]),
+        "profiles": {
+            profile: _agg({
+                name: record
+                for name, record in results["dwg"].items()
+                if record.get("profile", "auto") == profile
+            })
+            for profile in profile_names
+        },
+    }
 
     out_path = pathlib.Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -598,13 +861,22 @@ def main() -> int:
 
 # Metrics where higher is better vs. lower is better, and how much drift is
 # tolerated before it counts as a regression.
-_HIGHER_BETTER = {"mean_recall": 0.03, "coverage_ok_rate": 0.05, "dxf_reopen_rate": 0.01}
+_HIGHER_BETTER = {
+    "mean_recall": 0.03,
+    "coverage_ok_rate": 0.05,
+    "dxf_reopen_rate": 0.01,
+    "entity_precision": 0.005,
+    "entity_recall": 0.005,
+    "entity_f1": 0.005,
+    "exact_sheet_rate": 0.005,
+}
 _LOWER_BETTER = {
     "mean_fragmentation": 0.3,
     "mean_degenerate_rate": 0.02,
     "mean_duplicate_rate": 0.02,
     "mean_open_endpoint_rate": 0.05,
     "mean_eskd_errors": 3.0,
+    "false_exact_rate": 0.0,
 }
 
 

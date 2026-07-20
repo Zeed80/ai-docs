@@ -1,0 +1,18 @@
+{
+  "contract": "entity-level-v1",
+  "measured_at": "2026-07-19",
+  "corpus": "cleanup_test_files",
+  "recognizer": "cv",
+  "note": "Integrity-clean subset: 6 of 10 DWG sheets; four broken-block sources excluded.",
+  "summary": {
+    "dwg": {
+      "entity_precision": 0.10297,
+      "entity_recall": 0.020093,
+      "entity_f1": 0.033624,
+      "exact_sheet_rate": 0.0,
+      "false_exact_rate": 0.0,
+      "dxf_reopen_rate": 1.0,
+      "entity_evaluated_files": 6
+    }
+  }
+}

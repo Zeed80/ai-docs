@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "qcad_open_library",
+      "profile": "mixed",
+      "kind": "vector_seed",
+      "url": "https://github.com/qcad/qcad",
+      "revision": "2b1838b42e35d0725f71e1f01ee9b82aad66893e",
+      "license": "per-file RDF: Public Domain Mark 1.0 or CC BY 3.0",
+      "commercial_training": true,
+      "status": "approved",
+      "notes": "Use only DXF files with a sidecar RDF declaring an allow-listed license."
+    },
+    {
+      "id": "freecad_parts_library",
+      "profile": "mechanical",
+      "kind": "step_training_seed",
+      "url": "https://github.com/FreeCAD/FreeCAD-library",
+      "revision": "27c1d48e2b33a29d11ac7cfb323294b295cd20a2",
+      "license": "CC BY 3.0",
+      "commercial_training": true,
+      "status": "approved",
+      "selection_roots": [
+        "Mechanical Parts/Bearings",
+        "Mechanical Parts/Mountings",
+        "Mechanical Parts/Pulleys",
+        "Mechanical Parts/Coupling",
+        "Mechanical Parts/Carpentry iron profile",
+        "Mechanical Parts/Racor",
+        "Mechanical Parts/Fasteners/Bolts & Screws",
+        "Mechanical Parts/Fasteners/Nuts",
+        "Mechanical Parts/Fasteners/RetainingRings",
+        "Mechanical Parts/Fasteners/Shaft Couplers & Dowel Pins",
+        "Architectural Parts/Doors",
+        "Architectural Parts/Windows",
+        "Architectural Parts/Construction blocks"
+      ],
+      "max_per_family": 35,
+      "max_assets": 260,
+      "notes": "Exact community-authored STEP/FcStd parts. Download a pinned, family-balanced STEP subset and generate deterministic orthographic projections; preserve source attribution."
+    },
+    {
+      "id": "buildingsmart_sample_test_files",
+      "profile": "construction",
+      "kind": "ifc_training_seed",
+      "url": "https://github.com/buildingSMART/Sample-Test-Files",
+      "revision": "cecf656112a54a0d8cdd8b06b9398bfea5163886",
+      "license": "CC BY 4.0",
+      "commercial_training": true,
+      "status": "approved_staged",
+      "notes": "Official IFC sample/test models. Stage separately until deterministic IFC-to-drawing projection and source-group leakage tests are in place."
+    },
+    {
+      "id": "nist_mbe_pmi",
+      "profile": "mechanical",
+      "kind": "vector_holdout",
+      "url": "https://www.nist.gov/ctl/smart-connected-systems-division/smart-connected-manufacturing-systems-group/mbe-pmi-validation",
+      "license": "NIST Open Access to Data and Code",
+      "commercial_training": true,
+      "status": "approved_holdout",
+      "notes": "Government conformance cases with 2D PMI drawings, CAD models and STEP validation artifacts."
+    },
+    {
+      "id": "engineering_drawings_as1100",
+      "profile": "mechanical",
+      "kind": "raster_domain_holdout",
+      "url": "https://huggingface.co/datasets/jcrzd/engineering-drawings-as1100",
+      "revision": "562139a",
+      "license": "CC BY 4.0",
+      "commercial_training": true,
+      "status": "approved_holdout",
+      "notes": "210 images but only five base parts. Split/group by part_number; never treat fault variants as independent source drawings."
+    },
+    {
+      "id": "floorplancad",
+      "profile": "construction",
+      "kind": "vector_benchmark",
+      "url": "https://floorplancad.github.io/",
+      "license": "annotations CC BY-NC 4.0; drawing copyright not owned by dataset authors",
+      "commercial_training": false,
+      "status": "quarantined",
+      "notes": "Research benchmark only after explicit legal approval. Never download into the product training corpus."
+    },
+    {
+      "id": "archcad_400k",
+      "profile": "construction",
+      "kind": "vector_benchmark",
+      "url": "https://arxiv.org/abs/2503.22346",
+      "license": "CC BY-NC 4.0",
+      "commercial_training": false,
+      "status": "quarantined",
+      "notes": "Non-commercial dataset; excluded from product training."
+    },
+    {
+      "id": "sketchgraphs",
+      "profile": "mechanical",
+      "kind": "constraint_graph",
+      "url": "https://github.com/PrincetonLIPS/SketchGraphs",
+      "license": "code MIT; original sketch creators retain copyright",
+      "commercial_training": false,
+      "status": "quarantined",
+      "notes": "Repository code is MIT, dataset rights are not equivalent to an unrestricted commercial training license."
+    }
+  ]
+}

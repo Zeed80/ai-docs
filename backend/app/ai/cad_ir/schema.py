@@ -15,7 +15,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 LineClass = Literal["contour", "axis", "dim", "hatch", "hidden", "thin"]
 WidthClass = Literal["main", "thin"]
@@ -68,6 +68,21 @@ class SourceRegion(BaseModel):
     y0: float
     x1: float
     y1: float
+
+
+class UnresolvedRegion(BaseModel):
+    """Source area that did not become verified, exportable CAD entities."""
+
+    id: str = Field(default_factory=_entity_id)
+    region: SourceRegion
+    reason: Literal[
+        "unvectorized_ink",
+        "ocr_unresolved",
+        "recognizer_disagreement",
+        "unsupported_content",
+    ] = "unvectorized_ink"
+    ink_pixels: int = Field(default=0, ge=0)
+    resolved: bool = False
 
 
 class Alternative(BaseModel):
@@ -251,6 +266,12 @@ class ValidationReportIR(BaseModel):
     # raster coverage of the recognized geometry vs the source ink
     coverage_recall: float | None = None
     coverage_precision: float | None = None
+    # Export fidelity calculated from vector entities only. The legacy
+    # coverage values remain readable for old stored revisions.
+    vector_recall: float | None = None
+    vector_precision: float | None = None
+    raster_passthrough_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
+    dxf_reopens: bool | None = None
     # C2: which versioned ЕСКД ruleset produced these findings — a stored
     # report stays interpretable after the profile tightens.
     eskd_profile_version: str | None = None
@@ -358,6 +379,10 @@ class CadIR(BaseModel):
             self.scale_source = "sheet_format"
         if self.schema_version < 3:
             self.schema_version = SCHEMA_VERSION
+        if self.schema_version < 4:
+            if self.source.kind in ("scan", "photo"):
+                self.digitization_status = "review_required"
+            self.schema_version = SCHEMA_VERSION
         return self
     units: Literal["mm"] = "mm"
     # mm per source pixel; None until frame detection / manual input
@@ -369,6 +394,10 @@ class CadIR(BaseModel):
     entities: list[Entity] = Field(default_factory=list)
     validation: ValidationReportIR = Field(default_factory=ValidationReportIR)
     review: list[ReviewItem] = Field(default_factory=list)
+    unresolved_regions: list[UnresolvedRegion] = Field(default_factory=list)
+    digitization_status: Literal[
+        "exact_candidate", "review_required", "refused"
+    ] = "review_required"
     parameters: list[CadParameter] = Field(default_factory=list)
     constraints: list[GeometricConstraint] = Field(default_factory=list)
     configurations: list[SketchConfiguration] = Field(default_factory=list)
