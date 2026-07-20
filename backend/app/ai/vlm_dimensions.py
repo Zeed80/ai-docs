@@ -209,22 +209,31 @@ def _snap_text_to_ink(entities: list, gray) -> None:
         if region is None:
             continue
         text_h = max(entity.height, 6.0)
-        pad = int(max(12.0, 0.8 * text_h))
-        wx0, wy0 = region.x0 - pad, region.y0 - pad
-        wx1, wy1 = region.x1 + pad, region.y1 + pad
-        xs: list[float] = []
-        ys: list[float] = []
+        # The residual VLM localization error (~30-60px) is roughly constant and
+        # far exceeds a small glyph's height, so the search window must be
+        # generous, not height-proportional-tiny; the line clustering below then
+        # keeps only the correct text line inside it.
+        pad = max(40.0, 2.5 * text_h)
+        box_cx = (region.x0 + region.x1) / 2
+        box_cy = (region.y0 + region.y1) / 2
+        box_half_w = (region.x1 - region.x0) / 2
+        glyphs: list[tuple[float, float, float, float, float]] = []
         for i in range(1, count):
             cx, cy = centroids[i]
             left, top, comp_w, comp_h, _area = stats[i]
-            if not (wx0 <= cx <= wx1 and wy0 <= cy <= wy1):
+            if comp_h > 2.5 * text_h or comp_w > 8.0 * text_h or comp_h < 0.35 * text_h:
+                continue  # a stroke or a large blob, not a glyph
+            if abs(cx - box_cx) > pad + box_half_w or abs(cy - box_cy) > pad:
                 continue
-            if comp_h > 2.5 * text_h or comp_w > 6.0 * text_h or comp_h < 0.3 * text_h:
-                continue  # a line or a large blob, not a glyph
-            xs += [float(left), float(left + comp_w)]
-            ys += [float(top), float(top + comp_h)]
-        if not xs:
+            glyphs.append((float(left), float(top), float(comp_w), float(comp_h), float(cy)))
+        if not glyphs:
             continue
+        # Keep only the text line nearest the coarse box (drop glyphs from a
+        # neighbouring row the wide window may have caught).
+        line_cy = min(glyphs, key=lambda g: abs(g[4] - box_cy))[4]
+        line = [g for g in glyphs if abs(g[4] - line_cy) <= 0.7 * text_h]
+        xs = [g[0] for g in line] + [g[0] + g[2] for g in line]
+        ys = [g[1] for g in line] + [g[1] + g[3] for g in line]
         entity.position = Point(x=min(xs), y=max(ys))  # baseline-left of the ink
         entity.source_region = SourceRegion(
             x0=min(xs), y0=min(ys), x1=max(xs), y1=max(ys)
