@@ -55,3 +55,29 @@ sudo systemctl start ollama
   (`make cad-corpus-generate` with a higher `--count`) before a serious run.
 - Consider starting from `ADSKAILab/Zero-To-CAD-Qwen3-VL-2B` (already
   CAD-pretrained) instead of the base instruct model — set `model_name_or_path`.
+
+## First training run (2026-07-21) — honest result
+
+- **Data:** 2784/387/337 SFT pairs (web-dxf + profile-corpus-large + web-step).
+- **Train:** LoRA rank-32 on Qwen3-VL-2B, 3 epochs (~2.9 h). train_loss
+  0.86 -> 0.088, **eval_loss 0.052** (in-distribution synthetic val — strong,
+  no overfit).
+- **Inference:** clean primitives, NO fragmentation (the core "куча отрезков"
+  complaint is gone). On the real shaft: 28 lines + 2 circles (vs 9 lines
+  zero-shot) — more structure, but incomplete/imprecise out-of-distribution.
+- **Entity gate (6 real-QCAD holdout, the honest test):** raw VLM
+  **F1 = 0.000** vs CV baseline 0.186 — positions too coarse for the exact
+  0.0025 tolerance, and one sheet emitted nothing. **Does NOT beat CV yet.**
+
+### Why, and what's next
+The paradigm produces clean structure but not pixel-exact geometry (the known
+VLM-localization wall). To make it useful:
+1. **Hybrid:** VLM proposes clean primitives -> classical CV snaps each to the
+   source ink for pixel precision (the intended production path; raw VLM alone
+   fails the exact gate).
+2. **Data:** 2784 synthetic-heavy samples is proof-of-concept scale; grow the
+   corpus and make it more like real scans (domain gap on the QCAD holdout).
+3. Promote only if the hybrid beats CV on `make cad-candidate-gate`.
+
+Reproduce: `infer.py` (visual), `dump_holdout_dsl.py` + `score_holdout.py`
+(entity F1). Adapter: `cad-dataset-out/vlm-sft/out/qwen3vl-cad-lora/`.
