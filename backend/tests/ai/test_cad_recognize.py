@@ -39,6 +39,52 @@ def test_cv_recognizer_produces_typed_entities():
         assert entity.width_class in ("main", "thin")
 
 
+def test_consolidate_polylines_splits_into_segments_and_keeps_curves():
+    from app.ai.cad_ir.schema import Polyline
+    from app.ai.cad_recognize.cv import _consolidate_polylines
+
+    square = Polyline(
+        points=[
+            Point(x=0, y=0),
+            Point(x=100, y=0),
+            Point(x=100, y=100),
+            Point(x=0, y=100),
+        ],
+        closed=True,
+        line_class="contour",
+        width_class="main",
+        confidence=0.9,
+        origin="cv",
+    )
+    circle = Circle(center=Point(x=50, y=50), radius=20, origin="cv")
+
+    out = _consolidate_polylines([square, circle])
+
+    # The traced polygon becomes four LINE-convention segments, the circle
+    # passes through, and no monolithic polyline survives.
+    assert not any(e.type == "polyline" for e in out)
+    assert sum(e.type == "circle" for e in out) == 1
+    segments = [e for e in out if e.type == "segment"]
+    assert len(segments) == 4
+    assert all(s.width_class == "main" and s.confidence == 0.9 for s in segments)
+
+
+def test_consolidate_polylines_remerges_collinear_fragments():
+    from app.ai.cad_recognize.cv import _consolidate_polylines
+
+    left = Segment(p1=Point(x=0, y=0), p2=Point(x=50, y=0), origin="cv")
+    right = Segment(p1=Point(x=50, y=0), p2=Point(x=100, y=0), origin="cv")
+
+    out = _consolidate_polylines([left, right])
+
+    segments = [e for e in out if e.type == "segment"]
+    assert len(segments) == 1
+    span = max(segments[0].p1.x, segments[0].p2.x) - min(
+        segments[0].p1.x, segments[0].p2.x
+    )
+    assert span == pytest.approx(100.0, abs=1.0)
+
+
 def test_cv_recognizer_geometry_close_to_source():
     out = CvRecognizer().recognize(_simple_sheet())
     circles = [e for e in out.entities if e.type == "circle"]

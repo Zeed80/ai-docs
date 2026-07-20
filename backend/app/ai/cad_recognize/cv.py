@@ -15,6 +15,7 @@ import structlog
 
 from app.ai.cad_ir.schema import Arc, Circle, Entity, HatchRegion, Point, Polyline, Segment
 from app.ai.cad_recognize.base import RecognizeOutput
+from app.ai.cad_recognize.topology import _merge_collinear_segments
 from app.ai.drawing_vectorize import RawPrimitive, extract_primitives
 
 logger = structlog.get_logger()
@@ -109,6 +110,47 @@ def _merge_cocircular_arcs(entities: list[Entity]) -> list[Entity]:
     return out
 
 
+def _consolidate_polylines(entities: list[Entity]) -> list[Entity]:
+    """Emit engineer-intent straight geometry instead of traced polylines.
+
+    The skeleton tracer packs any connected run of straight edges into a single
+    ``Polyline``. Human-authored CAD, however, overwhelmingly stores straight
+    edges as individual ``LINE`` entities (segments). Every polyline edge is
+    geometrically a segment, so we split polylines back into their edges and
+    then re-merge collinear runs into the longest straight line — recovering the
+    primitive an engineer would have drawn instead of a monolithic trace. Arcs,
+    circles, hatches and text are left untouched; genuine curved geometry is
+    already fitted to ``Arc``/``Circle`` upstream.
+    """
+    segments: list[Segment] = []
+    passthrough: list[Entity] = []
+    for entity in entities:
+        if isinstance(entity, Polyline) and len(entity.points) >= 2:
+            vertices = list(entity.points)
+            if entity.closed:
+                vertices.append(entity.points[0])
+            for start, end in zip(vertices, vertices[1:]):
+                segments.append(
+                    Segment(
+                        p1=Point(x=start.x, y=start.y),
+                        p2=Point(x=end.x, y=end.y),
+                        line_class=entity.line_class,
+                        width_class=entity.width_class,
+                        confidence=entity.confidence,
+                        origin=entity.origin,
+                        assurance=entity.assurance,
+                        construction=entity.construction,
+                    )
+                )
+        elif isinstance(entity, Segment):
+            segments.append(entity)
+        else:
+            passthrough.append(entity)
+    if segments:
+        segments = _merge_collinear_segments(segments)
+    return segments + passthrough
+
+
 # Below this pixel area a "solid" blob is an arrowhead/junction dot, not
 # hatching worth a structured HatchRegion — same order of magnitude as
 # drawing_vectorize's own dot-vs-primitive distinction.
@@ -193,6 +235,7 @@ class CvRecognizer:
                 continue
             entities.append(entity)
         entities = _merge_cocircular_arcs(entities)
+        entities = _consolidate_polylines(entities)
         hatches = _hatch_regions_from_solid(result.solid_mask)
         entities.extend(hatches)
         logger.info(
