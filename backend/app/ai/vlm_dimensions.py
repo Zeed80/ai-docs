@@ -182,7 +182,48 @@ async def read_sheet_text_entities(
     tiles = await asyncio.gather(*[_read_tile(ox, oy) for ox, oy in origins])
     entities = [e for tile in tiles for e in tile]
     _snap_text_to_ink(entities, sheet)
+    _normalize_text_sizes(entities)
     return _dedup_sheet_text(entities)
+
+
+def _normalize_text_sizes(entities: list) -> None:
+    """Clamp label height/box to the sheet's typical text size (in place).
+
+    ЕСКД text on one sheet does not vary several-fold; a label many times the
+    median height is a mis-read or a snap that swallowed geometry, and rendered
+    verbatim it paints a giant unreadable overlay across the drawing. Drop the
+    worst outliers and clamp the rest — both the height field and the
+    source_region — so text renders at a sane, readable size and the glyph
+    filter downstream sees a plausible box.
+    """
+    from app.ai.cad_ir.schema import Point, SourceRegion
+
+    heights = sorted(e.height for e in entities if e.height > 0)
+    if len(heights) < 3:
+        return
+    median = heights[len(heights) // 2]
+    if median <= 0:
+        return
+    cap = 2.0 * median
+    kept: list = []
+    for entity in entities:
+        if entity.height > 3.5 * median:
+            continue  # a giant mis-read/mis-snap — drop rather than overlay it
+        if entity.height > cap and entity.source_region is not None:
+            region = entity.source_region
+            # Clamp the box around the recorded baseline-left, keeping width in
+            # proportion to the clamped height so it cannot stay a wide band.
+            max_w = max(3.0, len((entity.text or "").strip())) * 1.6 * cap
+            width = min(region.x1 - region.x0, max_w)
+            entity.source_region = SourceRegion(
+                x0=entity.position.x,
+                y0=entity.position.y - cap,
+                x1=entity.position.x + width,
+                y1=entity.position.y,
+            )
+            entity.height = cap
+        kept.append(entity)
+    entities[:] = kept
 
 
 def _snap_text_to_ink(entities: list, gray) -> None:

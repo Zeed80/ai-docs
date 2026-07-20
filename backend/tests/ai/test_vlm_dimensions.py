@@ -166,3 +166,31 @@ def test_snap_text_to_ink_tightens_coarse_box_onto_glyph():
     # Snapped baseline-left now sits on the glyph ink, not the coarse box.
     assert entity.position.x == pytest.approx(ink_box[0], abs=3)
     assert entity.position.y == pytest.approx(ink_box[3], abs=3)
+
+
+def test_normalize_text_sizes_clamps_giants_and_drops_monsters():
+    from app.ai.cad_ir.schema import Point, SourceRegion, TextEntity
+    from app.ai.vlm_dimensions import _normalize_text_sizes
+
+    def _t(text, h):
+        return TextEntity(
+            position=Point(x=100, y=200), text=text, height=h,
+            source_region=SourceRegion(x0=100, y0=200 - h, x1=100 + 5 * h, y1=200),
+        )
+
+    normal = [_t(f"d{i}", 20) for i in range(9)]  # median height 20
+    giant = _t("Ø80js6", 60)     # 3x median -> clamped to 40
+    monster = _t("garbage", 200)  # 10x median -> dropped
+
+    out = _normalize_text_sizes_wrapper(normal + [giant, monster])
+    texts = {e.text: e for e in out}
+    assert "garbage" not in texts            # monster dropped
+    assert texts["Ø80js6"].height == 40.0    # giant clamped to 2x median
+    assert all(e.height <= 40.0 for e in out)
+
+
+def _normalize_text_sizes_wrapper(entities):
+    from app.ai.vlm_dimensions import _normalize_text_sizes
+
+    _normalize_text_sizes(entities)
+    return entities
