@@ -126,6 +126,47 @@ _NEURAL_FRAGMENTATION_RATIO = 3.0
 # reads almost fully AND cleanly.
 _NEURAL_SEVERE_FRAGMENTATION_RATIO = 5.0
 _CV_USABLE_MIN_RECALL = 0.8
+# Disconnection guard (2026-07-20, from entity-level measurement, not pixels):
+# the line model can cover every source pixel yet leave a drawn line as many
+# short segments whose ends float free instead of meeting other geometry. Such
+# a read wins pixel coverage but is worse CAD than CV's — measured entity F1
+# on the native-DXF holdout was LOWER for neural (0.141) than for CV (0.202)
+# precisely because of these spurious floating fragments. When CV is itself a
+# near-complete read (>= _CV_USABLE_MIN_RECALL) AND its endpoints connect this
+# much more tightly than neural's, the cleaner CV wins. Self-referential (no
+# ground truth), so it holds on photos too. The count-ratio guards above miss
+# this: neural's fragment count is only ~2× CV's here, below their 3×/5×.
+_NEURAL_OPEN_ENDPOINT_MARGIN = 0.15
+
+
+def _open_endpoint_rate(entities: list[Any]) -> float | None:
+    """Fraction of segment endpoints that meet no other geometry.
+
+    A self-referential cleanliness signal: real CAD lines share vertices, so a
+    high open-endpoint rate marks disconnected/hallucinated fragments. Returns
+    ``None`` when there are too few segments to judge.
+    """
+    segments = [e for e in entities if e.type == "segment"]
+    if len(segments) < 4:
+        return None
+    from collections import defaultdict
+
+    snap = 4.0
+    points = [p for s in segments for p in (s.p1, s.p2)]
+    buckets: dict[tuple[int, int], int] = defaultdict(int)
+    for point in points:
+        buckets[(round(point.x / snap), round(point.y / snap))] += 1
+    open_ends = 0
+    for point in points:
+        cx, cy = round(point.x / snap), round(point.y / snap)
+        neighbours = sum(
+            buckets.get((cx + dx, cy + dy), 0)
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+        )
+        if neighbours <= 1:  # only this endpoint itself → nothing meets it
+            open_ends += 1
+    return open_ends / (2 * len(segments))
 
 # The lone-survivor gate exists to reject a genuinely fabricated result
 # (recall AND precision both near zero — nothing recognizable overlaps real
@@ -284,8 +325,20 @@ def arbitrate_recognition(
         and neural_own_count / n_cv >= _NEURAL_SEVERE_FRAGMENTATION_RATIO
         and cv_score.recall >= _CV_USABLE_MIN_RECALL
     )
+    # Disconnection guard: neural covers the ink but with floating fragments,
+    # while a near-complete CV read connects cleanly. Only fires when CV is
+    # itself near-complete, so an incomplete-but-clean CV never beats a fuller
+    # neural read (the tension the fragmentation comments above warn about).
+    cv_open = _open_endpoint_rate(cv_out.entities)
+    neural_open = _open_endpoint_rate(neural_out.entities)
+    neural_disconnected = (
+        cv_score.recall >= _CV_USABLE_MIN_RECALL
+        and cv_open is not None
+        and neural_open is not None
+        and neural_open - cv_open >= _NEURAL_OPEN_ENDPOINT_MARGIN
+    )
 
-    if neural_fragmented or neural_severely_fragmented:
+    if neural_fragmented or neural_severely_fragmented or neural_disconnected:
         chosen, used, chosen_score = cv_out, "cv", cv_score
         discrepancy = True
     elif discrepancy:
@@ -314,6 +367,8 @@ def arbitrate_recognition(
                "neural_own_entities": neural_own_count,
                "cv_supplement_types": sorted(supplemented_types),
                "neural_fragmented": neural_fragmented or neural_severely_fragmented,
+               "neural_disconnected": neural_disconnected,
+               "open_endpoint": (cv_open, neural_open),
                "neural_score": (neural_score.recall, neural_score.precision),
                "cv_score": (cv_score.recall, cv_score.precision)},
     )

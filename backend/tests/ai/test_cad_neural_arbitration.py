@@ -15,7 +15,7 @@ from app.ai.cad_ir.schema import Circle, Point, Segment
 from app.ai.cad_recognize.base import RecognizeOutput
 from app.ai.cad_recognize.neural import NeuralRecognizer
 from app.ai.cad_recognize.primitive_set import PrimitiveSetRecognizer
-from app.ai.cad_recognize.verify import arbitrate_recognition
+from app.ai.cad_recognize.verify import _open_endpoint_rate, arbitrate_recognition
 
 
 def _sheet() -> np.ndarray:
@@ -230,6 +230,53 @@ def test_arbitration_flags_discrepancy_when_both_pass_but_disagree_on_count():
     assert result.recognizer_used == "neural+cv"
     assert result.notes["cv_entities"] == len(good)
     assert result.notes["neural_entities"] == len(inflated)
+
+
+def test_open_endpoint_rate_distinguishes_connected_from_floating():
+    # A closed square: every endpoint meets a neighbour → nothing floats.
+    square = [
+        Segment(p1=Point(x=0, y=0), p2=Point(x=100, y=0)),
+        Segment(p1=Point(x=100, y=0), p2=Point(x=100, y=100)),
+        Segment(p1=Point(x=100, y=100), p2=Point(x=0, y=100)),
+        Segment(p1=Point(x=0, y=100), p2=Point(x=0, y=0)),
+    ]
+    assert _open_endpoint_rate(square) == 0.0
+    # Four isolated, far-apart segments: all eight endpoints float free.
+    floating = [
+        Segment(p1=Point(x=20 + 40 * i, y=200), p2=Point(x=20 + 40 * i, y=250))
+        for i in range(4)
+    ]
+    assert _open_endpoint_rate(floating) == 1.0
+    assert _open_endpoint_rate(square[:2]) is None  # too few to judge
+
+
+def test_arbitration_prefers_clean_cv_over_disconnected_neural():
+    # CV reads the square cleanly and completely; neural covers the same ink
+    # but sprays extra disconnected fragments the count-ratio guard (3×) would
+    # miss (8 vs 4). The disconnection guard hands the sheet to the cleaner CV.
+    ink = np.zeros((320, 320), dtype=np.uint8)
+    cv2.rectangle(ink, (40, 40), (280, 280), 255, 4)
+    square = [
+        Segment(p1=Point(x=40, y=40), p2=Point(x=280, y=40), width_class="main"),
+        Segment(p1=Point(x=280, y=40), p2=Point(x=280, y=280), width_class="main"),
+        Segment(p1=Point(x=280, y=280), p2=Point(x=40, y=280), width_class="main"),
+        Segment(p1=Point(x=40, y=280), p2=Point(x=40, y=40), width_class="main"),
+    ]
+    cv_out = RecognizeOutput(entities=list(square), thin_px=2, thick_px=4)
+    floating = [
+        Segment(p1=Point(x=120, y=120 + 40 * i), p2=Point(x=170, y=120 + 40 * i))
+        for i in range(4)
+    ]
+    neural_out = RecognizeOutput(entities=square + floating, thin_px=2, thick_px=4)
+
+    result = arbitrate_recognition(
+        ink, None, _FakeRecognizer("neural", neural_out), _FakeRecognizer("cv", cv_out)
+    )
+
+    assert result.recognizer_used == "cv"
+    assert result.notes["neural_disconnected"] is True
+    assert result.notes["neural_fragmented"] is False  # count ratio 2× < 3×
+    assert result.discrepancy
 
 
 def test_arbitration_rejects_runaway_neural_fragmentation():
