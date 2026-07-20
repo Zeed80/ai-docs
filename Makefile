@@ -294,7 +294,7 @@ cad-corpus-acquire:
 cad-vlm-sft:
 	python3 tools/cad-dataset/build_vlm_sft.py \
 		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
-		--manifest cad-dataset-out/profile-corpus/manifest.jsonl \
+		--manifest cad-dataset-out/profile-corpus-large/manifest.jsonl \
 		--manifest cad-dataset-out/web-step-corpus/manifest.jsonl \
 		--out cad-dataset-out/vlm-sft --backend backend
 
