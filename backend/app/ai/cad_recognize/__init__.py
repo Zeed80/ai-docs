@@ -8,5 +8,21 @@ generation never grades itself.
 
 from app.ai.cad_recognize.base import RecognizeOutput
 from app.ai.cad_recognize.cv import CvRecognizer
+from app.ai.cad_recognize.directional_fields import DirectionalFieldRecognizer
+from app.ai.cad_recognize.edge_graph import EdgeGraphRecognizer, SourceSnappedEdgeGraphRecognizer
+from app.ai.cad_recognize.evidence_heatmap import EvidenceHeatmapRecognizer
+from app.ai.cad_recognize.hybrid_engineering import HybridEngineeringRecognizer
+from app.ai.cad_recognize.hierarchical_sheet import HierarchicalSheetRecognizer
+from app.ai.cad_recognize.primitive_set import PrimitiveSetRecognizer
 
-__all__ = ["CvRecognizer", "RecognizeOutput"]
+__all__ = [
+    "CvRecognizer",
+    "DirectionalFieldRecognizer",
+    "EdgeGraphRecognizer",
+    "SourceSnappedEdgeGraphRecognizer",
+    "EvidenceHeatmapRecognizer",
+    "HybridEngineeringRecognizer",
+    "HierarchicalSheetRecognizer",
+    "PrimitiveSetRecognizer",
+    "RecognizeOutput",
+]

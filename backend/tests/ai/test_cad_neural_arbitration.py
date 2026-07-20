@@ -14,6 +14,7 @@ import cv2  # noqa: E402
 from app.ai.cad_ir.schema import Circle, Point, Segment
 from app.ai.cad_recognize.base import RecognizeOutput
 from app.ai.cad_recognize.neural import NeuralRecognizer
+from app.ai.cad_recognize.primitive_set import PrimitiveSetRecognizer
 from app.ai.cad_recognize.verify import arbitrate_recognition
 
 
@@ -72,6 +73,34 @@ def test_neural_recognizer_parses_valid_response():
     assert out.notes["model_step"] == 500
 
 
+def test_primitive_set_recognizer_uses_candidate_endpoint():
+    rec = PrimitiveSetRecognizer(base_url="http://fake", tile_size=1000)
+    payload = {
+        "entities": [
+            {
+                "type": "circle",
+                "center": {"x": 50, "y": 60},
+                "radius": 12,
+                "line_class": "contour",
+                "width_class": "main",
+                "confidence": 0.91,
+                "origin": "neural",
+                "assurance": "inferred",
+            }
+        ],
+        "model_step": 200,
+    }
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = payload
+    with patch("httpx.post", return_value=response) as post:
+        out = rec.recognize(_sheet())
+
+    assert out is not None
+    assert out.entities[0].type == "circle"
+    assert post.call_args.args[0] == "http://fake/detect-primitives"
+
+
 def test_neural_recognizer_skips_malformed_entities_but_keeps_valid_ones():
     rec = NeuralRecognizer(base_url="http://fake")
     payload = {"entities": [
@@ -90,13 +119,51 @@ def test_neural_recognizer_skips_malformed_entities_but_keeps_valid_ones():
     assert out.entities[0].type == "circle"
 
 
+def test_neural_recognizer_tiles_and_restores_sheet_coordinates(monkeypatch):
+    import numpy as np
+
+    from app.ai.cad_ir.schema import Point, Segment
+    from app.ai.cad_recognize.base import RecognizeOutput
+
+    rec = NeuralRecognizer(base_url="http://unused", tile_size=64, tile_overlap=16)
+    calls = []
+
+    def fake_once(ink, exclusion_boxes=None):
+        calls.append(ink.shape)
+        return RecognizeOutput(
+            entities=[
+                Segment(
+                    p1=Point(x=20, y=20),
+                    p2=Point(x=30, y=20),
+                    origin="neural",
+                )
+            ],
+            notes={"model_step": 7},
+        )
+
+    monkeypatch.setattr(rec, "_recognize_once", fake_once)
+    out = rec.recognize(np.zeros((64, 112), dtype=np.uint8))
+
+    assert out is not None
+    assert calls == [(64, 64), (64, 64)]
+    assert out.notes == {"model_step": 7, "tiled": True, "tiles": 2}
+    assert len(out.entities) == 2
+    assert out.entities[0].p1.x == 20
+    assert out.entities[1].p1.x == 68
+
+
 # ── Arbitration ──────────────────────────────────────────────────────────────
 
 
 def test_arbitration_falls_back_to_cv_when_neural_unavailable():
     ink = _sheet()
     cv_out = RecognizeOutput(entities=_good_entities(), thin_px=2, thick_px=4)
-    result = arbitrate_recognition(ink, None, _FakeRecognizer("neural", None), _FakeRecognizer("cv", cv_out))
+    result = arbitrate_recognition(
+        ink,
+        None,
+        _FakeRecognizer("neural", None),
+        _FakeRecognizer("cv", cv_out),
+    )
     assert result.recognizer_used == "cv"
     assert not result.neural_available
     assert result.score.ok

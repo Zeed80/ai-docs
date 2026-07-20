@@ -21,7 +21,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt \
     --extra-index-url https://download.pytorch.org/whl/cu126
 
-COPY model.py dataset.py serve.py .
+COPY model.py dataset.py primitive_dataset.py primitive_model.py \
+    sheet_layout_dataset.py sheet_layout_model.py \
+    evidence_dataset.py evidence_model.py \
+    directional_dataset.py directional_model.py directional_decode.py \
+    edge_verifier.py serve.py .
 
 RUN groupadd --gid 10001 cadvec \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin cadvec \
@@ -30,6 +34,11 @@ RUN groupadd --gid 10001 cadvec \
 USER 10001:10001
 
 ENV CAD_VECTORIZER_CHECKPOINT=/models/best.pt
+ENV CAD_PRIMITIVE_CHECKPOINT=/models/primitive-best.pt
+ENV CAD_SHEET_LAYOUT_CHECKPOINT=/models/sheet-layout-best.pt
+ENV CAD_EVIDENCE_CHECKPOINT=/models/evidence-best.pt
+ENV CAD_DIRECTIONAL_CHECKPOINT=/models/directional-best.pt
+ENV CAD_EDGE_VERIFIER_CHECKPOINT=/models/edge-verifier-best.pt
 ENV REPO_BACKEND=/repo/backend
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 

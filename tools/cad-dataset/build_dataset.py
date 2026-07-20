@@ -40,6 +40,17 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=pathlib.Path)
     ap.add_argument("--val-fraction", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--image-source",
+        choices=("control", "clean", "both"),
+        default="control",
+        help="training raster source; web STEP corpus uses degraded clean tiles",
+    )
+    ap.add_argument(
+        "--split-manifest",
+        type=pathlib.Path,
+        help="optional source-grouped manifest.jsonl; synthetic holdout rows are excluded",
+    )
     ap.add_argument("--repo", type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[2])
     args = ap.parse_args()
 
@@ -48,6 +59,7 @@ def main() -> int:
 
     from app.ai.cad_ir.schema import CadIR
     from app.ai.cad_ir.sequence import COMMANDS, N_PARAMS, encode
+    from app.ai.cad_profile import choose_profile
 
     args.out.mkdir(parents=True, exist_ok=True)
     for split in ("train", "val", "holdout"):
@@ -58,6 +70,12 @@ def main() -> int:
     )
 
     rng = random.Random(args.seed)
+    split_rows: dict[str, dict] = {}
+    if args.split_manifest:
+        with args.split_manifest.open() as stream:
+            for line in stream:
+                row = json.loads(line)
+                split_rows[row["id"]] = row
 
     # ── Synthetic: split by clean stem, one sequence per stem, many degraded
     # image variants sharing it ────────────────────────────────────────────
@@ -71,6 +89,15 @@ def main() -> int:
     rows = {"train": [], "val": [], "holdout": []}
     skipped = 0
     for stem in stems:
+        split_meta = split_rows.get(stem)
+        if split_rows and split_meta is None:
+            print(f"SKIP {stem}: absent from split manifest", file=sys.stderr)
+            skipped += 1
+            continue
+        if split_meta and split_meta["split"] == "holdout":
+            # The final holdout remains real-only. Synthetic holdout groups
+            # are reserved for corpus audits and must not enter optimization.
+            continue
         ir_path = ir_dir / f"{stem}.json"
         try:
             ir = CadIR.model_validate_json(ir_path.read_text())
@@ -78,22 +105,37 @@ def main() -> int:
             print(f"SKIP {stem}: invalid IR ({exc})", file=sys.stderr)
             skipped += 1
             continue
-        split = "val" if stem in val_stems else "train"
+        split = split_meta["split"] if split_meta else ("val" if stem in val_stems else "train")
         seq = np.array(encode(ir), dtype=np.float32)
         seq_path = args.out / "sequences" / split / f"{stem}.npy"
         np.save(seq_path, seq)
 
-        variants = sorted(control_dir.glob(f"{stem}__v*.png"))
+        control_variants = sorted(control_dir.glob(f"{stem}__v*.png"))
+        clean_path = args.synth / "clean" / f"{stem}.png"
+        variants = []
+        if args.image_source in ("clean", "both") and clean_path.exists():
+            variants.append(clean_path)
+        if args.image_source in ("control", "both"):
+            variants.extend(control_variants)
         if not variants:
             print(f"SKIP {stem}: no degraded variants found", file=sys.stderr)
             skipped += 1
             continue
         for variant in variants:
-            rows[split].append({
+            row = {
                 "image": str(variant.resolve()),
                 "sequence": str(seq_path.resolve()),
                 "ir": str(ir_path.resolve()),
-            })
+            }
+            if split_meta:
+                row.update(
+                    {
+                        "profile": split_meta["profile"],
+                        "source_group_id": split_meta["source_group_id"],
+                        "truth_kind": split_meta["kind"],
+                    }
+                )
+            rows[split].append(row)
 
     # ── Holdout: real DWG-derived, clean render as input, never trained on ──
     h_ir_dir = args.holdout / "ir"
@@ -118,6 +160,9 @@ def main() -> int:
             "image": str(clean_path.resolve()),
             "sequence": str(seq_path.resolve()),
             "ir": str(ir_path.resolve()),
+            "profile": choose_profile("auto", [], stem).profile,
+            "source_group_id": f"real_holdout:{stem}",
+            "truth_kind": "real_local_holdout",
         })
 
     for split, items in rows.items():
