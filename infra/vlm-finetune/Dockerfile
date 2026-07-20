@@ -8,13 +8,14 @@ ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends git && \
     rm -rf /var/lib/apt/lists/*
 
-# LLaMA-Factory pulls its compatible stack; then UPGRADE transformers to git —
-# Qwen3-VL needs >=4.57, not yet on PyPI at build time. deepspeed/av dropped:
-# single-GPU LoRA needs neither.
+# LLaMA-Factory pulls its compatible stack; then pin transformers into the range
+# it supports (>=4.55,<=5.8, !=4.57.0/5.6.0) that ALSO has Qwen3-VL (>=4.57.1).
+# git-main transformers (5.15.dev) is too new and fails LLaMA-Factory's check.
+# deepspeed/av dropped: single-GPU LoRA needs neither.
 RUN pip install --no-cache-dir \
     "llamafactory @ git+https://github.com/hiyouga/LLaMA-Factory.git" \
     accelerate peft trl qwen-vl-utils
-RUN pip install --no-cache-dir -U "git+https://github.com/huggingface/transformers.git"
+RUN pip install --no-cache-dir -U "transformers>=4.57.1,<5.0"
 
 WORKDIR /workspace
 # Config + dataset registration are mounted at /data; SFT jsonl + images too.
