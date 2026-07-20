@@ -384,6 +384,35 @@ def _classify_ocr_region(region, lenient: bool = False) -> str:
     return "text" if region.conf >= threshold else "smudge"
 
 
+def _dewarp_photo(image_bytes: bytes) -> bytes:
+    """Perspective-correct a phone photo to a straight-on sheet view.
+
+    A raw album photo carries the desk, the spiral binding and perspective
+    skew — all of which the recognizer otherwise traces as geometry (measured
+    live: binding perforations and the table edge became segments). Reuse the
+    cleanup path's document-scanner dewarp, which is saturation-based and only
+    fires on a confident paper quad; for a clean scan/export it returns None
+    and this is a no-op.
+    """
+    try:
+        import io
+
+        import numpy as np
+        from PIL import Image
+
+        from app.ai.drawing_cleanup import _dewarp_sheet
+
+        arr = np.array(Image.open(io.BytesIO(image_bytes)).convert("RGB"))
+        warped = _dewarp_sheet(arr)
+        if warped is None:
+            return image_bytes
+        buffer = io.BytesIO()
+        Image.fromarray(warped).save(buffer, format="PNG")
+        return buffer.getvalue()
+    except Exception:  # noqa: BLE001 — dewarp is best-effort, never fatal
+        return image_bytes
+
+
 def _drop_in_glyph_segments(entities: list, text_entities: list) -> list:
     """Remove segments that lie entirely inside a text glyph's box.
 
@@ -675,6 +704,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 )
             except Exception as exc:  # noqa: BLE001
                 return await _fail(f"Не удалось подготовить страницу PDF: {exc}")
+
+        # Stage 0.9: dewarp a phone photo to a straight-on sheet view, dropping
+        # the desk/binding background before anything is traced. No-op for a
+        # clean scan (no confident paper quad).
+        content = _dewarp_photo(content)
 
         # Stage 1: classical preprocess — same module the cleanup path trusts.
         try:
