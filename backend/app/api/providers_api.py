@@ -690,7 +690,9 @@ _SLOTS = [
     ("rerank", "Поиск", "Реранкинг",
      "Переранжирование результатов поиска", True),
     ("cad_spec_read", "Оцифровка", "Чтение чертежа (VLM)",
-     "Метод «по описанию»: VLM читает чертёж в структурную спецификацию", True),
+     "Вспомогательное чтение параметрического ТЗ; не основной graph-reader", True),
+    ("cad_drawing_graph_read", "Оцифровка", "Координатный reader листа",
+     "Основной метод «по описанию»: все элементы, текст, размеры и связи с координатами", True),
     ("cad_spec_draft", "Оцифровка", "Чертёжник (по описанию)",
      "Генеративная модель строит геометрию из описания (можно LoRA). "
      "Не задано → детерминированный чертёжник тел вращения", True),
@@ -707,6 +709,7 @@ _SLOT_MODALITY = {
     "embedding": "embedding",
     "rerank": "rerank",
     "cad_spec_read": "vision",
+    "cad_drawing_graph_read": "vision",
     "cad_spec_draft": "text",
 }
 
@@ -719,6 +722,7 @@ _SLOT_THINKING_TASKS: dict[str, list[str]] = {
     "structured_extraction": ["structured_extraction", "long_context_summarization"],
     "agent_email": ["email_drafting"],
     "agent_large": ["code_generation"],
+    "cad_drawing_graph_read": ["cad_drawing_graph_read"],
 }
 _SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_orchestrator": ["orchestrator_disable_thinking", "worker_disable_thinking"],
@@ -768,6 +772,8 @@ def _slot_current_model(slot: str, registry) -> str | None:
         return get_routing_for(AITask.EMAIL_DRAFTING).primary
     if slot == "cad_spec_read":
         return get_routing_for(AITask.CAD_SPEC_READ).primary
+    if slot == "cad_drawing_graph_read":
+        return get_routing_for(AITask.CAD_DRAWING_GRAPH_READ).primary
     if slot == "cad_spec_draft":
         return get_routing_for(AITask.CAD_SPEC_DRAFT).primary
     if slot == "ocr_large":
@@ -956,6 +962,8 @@ def _slot_affected(slot: str) -> list[str]:
         return [AITask.EMAIL_DRAFTING.value]
     if slot == "cad_spec_read":
         return [AITask.CAD_SPEC_READ.value]
+    if slot == "cad_drawing_graph_read":
+        return [AITask.CAD_DRAWING_GRAPH_READ.value]
     if slot == "cad_spec_draft":
         return [AITask.CAD_SPEC_DRAFT.value]
     if slot == "agent_orchestrator":
@@ -1165,6 +1173,15 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
                 AITask.CAD_SPEC_READ,
                 key,
                 fallback_keys=list(cad_route.fallback_chain) if cad_route else [],
+            )
+        elif slot == "cad_drawing_graph_read":
+            graph_route = registry.routes.get(AITask.CAD_DRAWING_GRAPH_READ)
+            _assign_task(
+                AITask.CAD_DRAWING_GRAPH_READ,
+                key,
+                fallback_keys=(
+                    list(graph_route.fallback_chain) if graph_route else []
+                ),
             )
         elif slot == "cad_spec_draft":
             _set_primary(AITask.CAD_SPEC_DRAFT, key)

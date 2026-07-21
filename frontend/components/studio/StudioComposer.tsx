@@ -52,7 +52,7 @@ type StudioComposerPrefs = {
   mode?: "image" | "tech" | "vector";
   vectorScale?: string;
   vectorSheetFormat?: "" | "A4" | "A3" | "A2" | "A1" | "A0";
-  vectorMethod?: "trace" | "spec";
+  vectorMethod?: "trace" | "spec" | "text_spec";
   vectorDescription?: string;
   vectorLandscape?: boolean;
   blankFormat?: "A4" | "A3" | "A2" | "A1";
@@ -146,10 +146,11 @@ export default function StudioComposer({
   const [vectorSheetFormat, setVectorSheetFormat] = useState<
     "" | "A4" | "A3" | "A2" | "A1" | "A0"
   >(prefs.vectorSheetFormat ?? "");
-  // Digitization method: "trace" (pixel tracing) or "spec" (VLM reads the
-  // drawing → parametric drafter builds clean geometry, β). With "spec" a
-  // chosen sheet + orientation drive an automatic ГОСТ 2.302 scale.
-  const [vectorMethod, setVectorMethod] = useState<"trace" | "spec">(
+  // "spec" is graph-first sheet recognition; "text_spec" is the separate
+  // auxiliary text-to-parametric-drawing workflow.
+  const [vectorMethod, setVectorMethod] = useState<
+    "trace" | "spec" | "text_spec"
+  >(
     prefs.vectorMethod ?? "trace",
   );
   const [vectorDescription, setVectorDescription] = useState(
@@ -590,7 +591,7 @@ export default function StudioComposer({
 
   async function submitVector() {
     const directDescription =
-      vectorMethod === "spec" ? vectorDescription.trim() : "";
+      vectorMethod === "text_spec" ? vectorDescription.trim() : "";
     if (!sourceFile && !sourceGenerationId && !directDescription) {
       setErr(t("error_need_source"));
       return;
@@ -614,7 +615,7 @@ export default function StudioComposer({
       } else if (vectorSheetFormat) {
         (input.params as Record<string, unknown>).sheet_format =
           vectorSheetFormat;
-        if (vectorMethod === "spec") {
+        if (vectorMethod === "spec" || vectorMethod === "text_spec") {
           (input.params as Record<string, unknown>).sheet_orientation =
             vectorLandscape ? "landscape" : "portrait";
         }
@@ -625,7 +626,7 @@ export default function StudioComposer({
       }
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
-      } else {
+      } else if (sourceGenerationId) {
         input.source_image_paths = [`generation:${sourceGenerationId}`];
       }
       await generate(input);
@@ -1279,12 +1280,15 @@ export default function StudioComposer({
             <select
               value={vectorMethod}
               onChange={(e) =>
-                setVectorMethod(e.target.value as "trace" | "spec")
+                setVectorMethod(
+                  e.target.value as "trace" | "spec" | "text_spec",
+                )
               }
               className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
             >
               <option value="trace">{t("method_trace")}</option>
               <option value="spec">{t("method_spec")}</option>
+              <option value="text_spec">{t("method_text_spec")}</option>
             </select>
           </label>
 
@@ -1294,11 +1298,11 @@ export default function StudioComposer({
                 {t("vector_scale_label")}
               </span>
               <input
-                value={vectorMethod === "spec" ? "" : vectorScale}
-                disabled={vectorMethod === "spec"}
+                value={vectorMethod !== "trace" ? "" : vectorScale}
+                disabled={vectorMethod !== "trace"}
                 onChange={(e) => setVectorScale(e.target.value)}
                 placeholder={
-                  vectorMethod === "spec"
+                  vectorMethod !== "trace"
                     ? t("vector_scale_auto")
                     : t("vector_scale_placeholder")
                 }
@@ -1331,8 +1335,14 @@ export default function StudioComposer({
             </label>
           </div>
 
-          {/* Orientation + auto-scale — only meaningful for the spec method. */}
           {vectorMethod === "spec" && (
+            <p className="rounded border border-sky-400/20 bg-sky-950/20 px-3 py-2 text-[11px] text-sky-100">
+              {t("vector_graph_hint")}
+            </p>
+          )}
+
+          {/* Free text is a separate auxiliary workflow, not graph recognition. */}
+          {vectorMethod === "text_spec" && (
             <div className="space-y-1">
               <label className="block">
                 <span className="text-xs text-zinc-500">
@@ -1409,7 +1419,7 @@ export default function StudioComposer({
               busy ||
               (!sourceFile &&
                 !sourceGenerationId &&
-                !(vectorMethod === "spec" && vectorDescription.trim()))
+                !(vectorMethod === "text_spec" && vectorDescription.trim()))
             }
             className="w-full px-4 py-2.5 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium disabled:opacity-50"
           >

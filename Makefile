@@ -5,7 +5,7 @@
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
         test test-cov e2e regression agent-regression agent-test agent-ws-smoke \
-        studio-queue-smoke cad-regression cad-candidate-gate \
+        studio-queue-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval \
         cad-corpus-acquire cad-corpus-generate cad-corpus-tile cad-corpus-pack \
         turboquant-benchmark turboquant-quality \
         lint lint-fix \
@@ -66,6 +66,7 @@ help:
 	@echo "    make regression       — manifest regression checks"
 	@echo "    make cad-regression   — scan-to-DXF golden regression"
 	@echo "    make cad-candidate-gate — fail-closed entity-level model promotion gate"
+	@echo "    make cad-drawing-graph-eval — exact EngineeringDrawingGraph → DXF contract benchmark"
 	@echo "    make cad-corpus-acquire — лицензированный внешний CAD-корпус"
 	@echo "    make cad-corpus-generate — 300 mechanical + 300 construction эталонов"
 	@echo "    make cad-corpus-tile — exact local tiles без source-group leakage"
@@ -275,6 +276,11 @@ cad-description-eval:
 	PYTHONPATH=backend python3 backend/scripts/eval_cad_descriptions.py \
 		--cases tools/cad-dataset/description_cases.json \
 		--out test-results/eval_cad_descriptions.json
+
+cad-drawing-graph-eval:
+	PYTHONPATH=backend python3 backend/scripts/eval_cad_drawing_graphs.py \
+		--cases tools/cad-dataset/drawing_graph_cases.json \
+		--out test-results/eval_cad_drawing_graphs.json
 
 cad-web-primitive-train:
 	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_primitives.py \

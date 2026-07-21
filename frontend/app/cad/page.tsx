@@ -386,6 +386,14 @@ export default function CadListPage() {
               reopen: vectorizerStatus.description_drafting.dxf_reopen_rate.toFixed(2),
             })}
           </p>
+          <p className="mt-2 rounded border border-sky-400/20 bg-sky-950/20 px-2 py-1 text-xs text-sky-100">
+            {t("drawing_graph_status", {
+              passed: vectorizerStatus.drawing_graph_drafting.passed_cases,
+              cases: vectorizerStatus.drawing_graph_drafting.evaluated_cases,
+              exact: vectorizerStatus.drawing_graph_drafting.exact_graph_rate.toFixed(2),
+              reopen: vectorizerStatus.drawing_graph_drafting.dxf_reopen_rate.toFixed(2),
+            })}
+          </p>
           <div className="mt-3 grid gap-2 rounded border border-white/10 bg-black/20 p-3 text-xs text-zinc-300 md:grid-cols-2">
             <div>
               <div className="font-medium text-zinc-200">{t("pipeline_models")}</div>
@@ -393,10 +401,13 @@ export default function CadListPage() {
                 {t("pipeline_geometry")}: {vectorizerStatus.runtime_pipeline.components.geometry.assignment}
               </div>
               <div>
-                {t("pipeline_reader")}: {vectorizerStatus.runtime_pipeline.components.spec_reader.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
+                {t("pipeline_graph_reader")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
               </div>
               <div>
-                {t("pipeline_drafter")}: {vectorizerStatus.runtime_pipeline.components.spec_drafter.models.map((m) => m.key).join(" → ") || t("pipeline_deterministic")}
+                {t("pipeline_graph_drafter")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_drafter?.version || t("pipeline_deterministic")}
+              </div>
+              <div className="text-zinc-500">
+                {t("pipeline_text_reader")}: {vectorizerStatus.runtime_pipeline.components.spec_reader.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
               </div>
             </div>
             <div>

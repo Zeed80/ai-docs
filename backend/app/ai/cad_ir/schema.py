@@ -15,7 +15,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 LineClass = Literal["contour", "axis", "dim", "hatch", "hidden", "thin"]
 WidthClass = Literal["main", "thin"]
@@ -295,6 +295,32 @@ class ReviewItem(BaseModel):
     resolved: bool = False
 
 
+class CadEntityRelation(BaseModel):
+    """Persisted semantic relation between stable CadIR entity identifiers."""
+
+    id: str = Field(default_factory=_entity_id)
+    kind: Literal[
+        "connected",
+        "coincident",
+        "parallel",
+        "perpendicular",
+        "tangent",
+        "concentric",
+        "equal",
+        "dimension_applies_to",
+        "annotation_applies_to",
+        "same_feature_across_views",
+        "projection_alignment",
+        "part_of",
+    ]
+    source_entity_id: str
+    target_entity_ids: list[str] = Field(min_length=1)
+    parameters: dict[str, float | int | str | bool] = Field(default_factory=dict)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    assurance: Assurance = "inferred"
+    evidence: list[str] = Field(default_factory=list)
+
+
 ConstraintKind = Literal[
     "coincident", "horizontal", "vertical", "parallel", "perpendicular",
     "tangent", "concentric", "equal", "distance", "angle", "radius", "diameter",
@@ -383,6 +409,8 @@ class CadIR(BaseModel):
             if self.source.kind in ("scan", "photo"):
                 self.digitization_status = "review_required"
             self.schema_version = SCHEMA_VERSION
+        if self.schema_version < 5:
+            self.schema_version = SCHEMA_VERSION
         return self
     units: Literal["mm"] = "mm"
     # mm per source pixel; None until frame detection / manual input
@@ -392,6 +420,7 @@ class CadIR(BaseModel):
     source: SourceInfo
     sheet: SheetInfo = Field(default_factory=SheetInfo)
     entities: list[Entity] = Field(default_factory=list)
+    relations: list[CadEntityRelation] = Field(default_factory=list)
     validation: ValidationReportIR = Field(default_factory=ValidationReportIR)
     review: list[ReviewItem] = Field(default_factory=list)
     unresolved_regions: list[UnresolvedRegion] = Field(default_factory=list)
@@ -404,6 +433,24 @@ class CadIR(BaseModel):
     blocks: list[BlockDef] = Field(default_factory=list)
     # which recognizer produced revision 0: neural | cv | mixed | manual
     recognizer_used: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_relation_references(self) -> "CadIR":
+        entity_ids = [entity.id for entity in self.entities]
+        if len(entity_ids) != len(set(entity_ids)):
+            raise ValueError("CadIR entity ids must be unique")
+        relation_ids = [relation.id for relation in self.relations]
+        if len(relation_ids) != len(set(relation_ids)):
+            raise ValueError("CadIR relation ids must be unique")
+        known = set(entity_ids)
+        for relation in self.relations:
+            refs = [relation.source_entity_id, *relation.target_entity_ids]
+            missing = sorted({ref for ref in refs if ref not in known})
+            if missing:
+                raise ValueError(
+                    f"relation {relation.id} references missing entities: {missing}"
+                )
+        return self
 
     def entity_by_id(self, entity_id: str) -> Entity | None:
         for entity in self.entities:

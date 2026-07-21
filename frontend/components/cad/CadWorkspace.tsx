@@ -1213,6 +1213,16 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const draftingSpec = gen.params?.spec as
     | { optional_unresolved?: string[]; unresolved?: string[] }
     | undefined;
+  const drawingGraph = gen.params?.drawing_graph as
+    | {
+        graph_status?: string;
+        evidence?: unknown[];
+        views?: unknown[];
+        entities?: unknown[];
+        relations?: unknown[];
+        unresolved_regions?: Array<{ resolved?: boolean }>;
+      }
+    | undefined;
 
   return (
     <div className="flex flex-col gap-3 pb-24 sm:pb-0">
@@ -1305,6 +1315,12 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             <div>{t("vector.pipeline_method")}: {pipelineManifest.method}</div>
             <div>{t("vector.pipeline_input")}: {pipelineManifest.input_kind}</div>
             <div>{t("vector.pipeline_reader")}: {pipelineManifest.components.spec_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
+            {pipelineManifest.components.drawing_graph_reader && (
+              <div>{t("vector.pipeline_graph_reader")}: {pipelineManifest.components.drawing_graph_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
+            )}
+            {pipelineManifest.components.drawing_graph_drafter && (
+              <div>{t("vector.pipeline_graph_drafter")}: {pipelineManifest.components.drawing_graph_drafter.version}</div>
+            )}
             <div>{t("vector.pipeline_drafter")}: {pipelineManifest.components.spec_drafter.models.map((model) => model.key).join(" → ") || t("vector.pipeline_deterministic")}</div>
             <div>{t("vector.pipeline_contract")}: {pipelineManifest.components.spec_drafter.deterministic_contract}</div>
             <div className="md:col-span-2">
@@ -1319,6 +1335,20 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             </Link>
           </div>
         </details>
+      )}
+
+      {drawingGraph && (
+        <div className="rounded border border-sky-400/20 bg-sky-950/20 px-3 py-2 text-xs text-sky-100">
+          <div className="font-medium">{t("vector.drawing_graph_title")}</div>
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-sky-200/80">
+            <span>{t("vector.drawing_graph_status")}: {drawingGraph.graph_status ?? "—"}</span>
+            <span>{t("vector.drawing_graph_views")}: {drawingGraph.views?.length ?? 0}</span>
+            <span>{t("vector.drawing_graph_entities")}: {drawingGraph.entities?.length ?? 0}</span>
+            <span>{t("vector.drawing_graph_relations")}: {drawingGraph.relations?.length ?? 0}</span>
+            <span>{t("vector.drawing_graph_evidence")}: {drawingGraph.evidence?.length ?? 0}</span>
+            <span>{t("vector.drawing_graph_unresolved")}: {drawingGraph.unresolved_regions?.filter((item) => !item.resolved).length ?? 0}</span>
+          </div>
+        </div>
       )}
 
       {draftingSpec?.optional_unresolved && draftingSpec.optional_unresolved.length > 0 && (

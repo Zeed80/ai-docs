@@ -87,6 +87,20 @@ export interface VectorizerDevelopmentStatus {
     supported_geometry: string[];
     scope_warning: string;
   };
+  drawing_graph_drafting: {
+    contract: string;
+    schema_version: number;
+    reference_cases: string;
+    evaluated_cases: number;
+    passed_cases: number;
+    exact_graph_rate: number;
+    dxf_reopen_rate: number;
+    entity_ids_preserved: boolean;
+    relations_preserved: boolean;
+    graph_first_enabled: boolean;
+    reader_promotion_passed: boolean;
+    scope_warning: string;
+  };
   corpus: {
     licensed_web_assets: number;
     step_assets: number;
@@ -271,6 +285,21 @@ export interface CadPipelineManifest {
       }>;
     };
     spec_reader: { task: string; models: CadPipelineModelAssignment[]; parameter_profile: string };
+    drawing_graph_reader?: {
+      task: string;
+      models: CadPipelineModelAssignment[];
+      parameter_profile: string;
+      contract: string;
+      authority: string;
+      promotion_status: string;
+    };
+    drawing_graph_drafter?: {
+      kind: string;
+      version: string;
+      interpretation_allowed: boolean;
+      preserves_entity_ids: boolean;
+      preserves_relations: boolean;
+    };
     spec_drafter: {
       task: string;
       models: CadPipelineModelAssignment[];
@@ -285,6 +314,7 @@ export interface CadPipelineManifest {
     model_assignments: string;
     profiles: string[];
     description_cases: string;
+    drawing_graph_cases: string;
   };
 }
 

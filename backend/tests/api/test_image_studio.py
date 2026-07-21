@@ -69,7 +69,7 @@ async def test_vectorize_from_description_does_not_require_source_image(client):
         json={
             "operation": "vectorize",
             "prompt": "Пластина 120×80×10 мм с четырьмя отверстиями Ø10",
-            "params": {"vectorize_method": "spec", "sheet_format": "A3"},
+            "params": {"vectorize_method": "text_spec", "sheet_format": "A3"},
             "source_image_paths": [],
         },
     )
@@ -78,6 +78,20 @@ async def test_vectorize_from_description_does_not_require_source_image(client):
     assert body["operation"] == "vectorize"
     assert body["source_image_paths"] == []
     assert body["prompt"].startswith("Пластина")
+
+
+@pytest.mark.asyncio
+async def test_graph_description_method_requires_source_sheet(client):
+    resp = await client.post(
+        "/api/image-gen/generate",
+        json={
+            "operation": "vectorize",
+            "prompt": "",
+            "params": {"vectorize_method": "spec", "sheet_format": "A3"},
+            "source_image_paths": [],
+        },
+    )
+    assert resp.status_code == 400
 
 
 @pytest.mark.asyncio

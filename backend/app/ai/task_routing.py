@@ -43,8 +43,16 @@ CONFIDENTIAL_TASKS: set[AITask] = {
     AITask.EMBEDDING,
     AITask.RERANKING,
     # Drawing content is confidential — spec read/draft stay local-only.
+    AITask.CAD_DRAWING_GRAPH_READ,
     AITask.CAD_SPEC_READ,
     AITask.CAD_SPEC_DRAFT,
+}
+
+# Coordinate extraction is a constrained observation task.  Keep the routing
+# default aligned with the explicit reader call so the UI and captured manifest
+# reproduce the actual no-thinking invocation.
+TASK_DEFAULT_THINKING: dict[AITask, bool] = {
+    AITask.CAD_DRAWING_GRAPH_READ: False,
 }
 
 
@@ -126,6 +134,7 @@ def _registry_defaults() -> dict[str, TaskRouting]:
                 profile=TASK_DEFAULT_PROFILE.get(task, "balanced"),
                 local_only=local_only,
                 allow_cloud=not local_only,
+                thinking=TASK_DEFAULT_THINKING.get(task),
             ),
         )
     _defaults_cache = out

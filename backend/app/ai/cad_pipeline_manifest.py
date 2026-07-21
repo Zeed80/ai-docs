@@ -11,7 +11,7 @@ from app.ai.schemas import AITask
 from app.ai.task_routing import get_routing_for
 
 MANIFEST_VERSION = "1.0"
-PIPELINE_REVISION = "description-drafter-v3"
+PIPELINE_REVISION = "drawing-graph-foundation-v1"
 
 MULTI_TYPE_CANDIDATE = {
     "key": "multi-type-proposal-v2",
@@ -82,6 +82,19 @@ def build_cad_pipeline_manifest(
             "available_candidates": [dict(MULTI_TYPE_CANDIDATE)],
         },
         "spec_reader": _route(AITask.CAD_SPEC_READ),
+        "drawing_graph_reader": {
+            **_route(AITask.CAD_DRAWING_GRAPH_READ),
+            "contract": "engineering-drawing-graph-v1",
+            "authority": "observations_only",
+            "promotion_status": "experimental_fail_closed",
+        },
+        "drawing_graph_drafter": {
+            "kind": "deterministic",
+            "version": "drawing-graph-drafter-v1",
+            "interpretation_allowed": False,
+            "preserves_entity_ids": True,
+            "preserves_relations": True,
+        },
         "spec_drafter": {
             **_route(AITask.CAD_SPEC_DRAFT),
             "coverage": "model-dependent; fail-closed outside supported geometry",
@@ -120,5 +133,6 @@ def build_cad_pipeline_manifest(
             "model_assignments": "/settings/models",
             "profiles": sorted(PROFILE_GATES),
             "description_cases": "tools/cad-dataset/description_cases.json",
+            "drawing_graph_cases": "tools/cad-dataset/drawing_graph_cases.json",
         },
     }

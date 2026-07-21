@@ -602,6 +602,18 @@ routes:
       authoritative geometry source: deterministic verification and two-person
       certification remain mandatory. Qwen3-VL is deliberately excluded after
       failing the real-drawing digitization evaluation.
+  cad_drawing_graph_read:
+    required_modalities: ["vision"]
+    local_only: true
+    fallback_chain:
+      - "qwen3_6_35b_apex_ollama"
+      - "gemma4_e4b_ollama"
+    manual_review_fallback: true
+    notes: >
+      Experimental full-sheet coordinate graph reader. The assigned model is
+      only a stage coordinator and cannot certify geometry. Its output must
+      validate as EngineeringDrawingGraph and pass independent completeness,
+      topology, dimension and pixel-evidence gates before redrawing.
   engineering_reasoning:
     required_modalities: ["text"]
     local_only: true

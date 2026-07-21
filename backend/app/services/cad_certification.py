@@ -98,6 +98,16 @@ async def _project_revision(
                 evidence=list(entity.evidence),
             )
         )
+    for relation in ir.relations:
+        db.add(CadRelationRecord(
+            cad_ir_revision_id=revision.id,
+            relation_id=relation.id,
+            relation_type=f"source_graph:{relation.kind}",
+            source_element_id=relation.source_entity_id,
+            target_element_ids=relation.target_entity_ids,
+            payload=relation.model_dump(mode="json"),
+            evidence=relation.evidence,
+        ))
     graph = result.graph
     for view in graph.views:
         db.add(CadRelationRecord(

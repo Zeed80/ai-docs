@@ -12,7 +12,7 @@ from typing import Any
 
 
 CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
-    "pipeline_revision": "description-drafter-v3",
+    "pipeline_revision": "drawing-graph-foundation-v1",
     "evaluated_at": "2026-07-21",
     "accuracy_contract": {
         "mode": "fail_closed_two_person_certification",
@@ -92,6 +92,23 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
             "capsule_slots",
         ],
         "scope_warning": "Exact only for explicit values inside supported deterministic profiles",
+    },
+    "drawing_graph_drafting": {
+        "contract": "engineering-drawing-graph-cadir-dxf-v1",
+        "schema_version": 1,
+        "reference_cases": "tools/cad-dataset/drawing_graph_cases.json",
+        "evaluated_cases": 2,
+        "passed_cases": 2,
+        "exact_graph_rate": 1.0,
+        "dxf_reopen_rate": 1.0,
+        "entity_ids_preserved": True,
+        "relations_preserved": True,
+        "graph_first_enabled": True,
+        "reader_promotion_passed": False,
+        "scope_warning": (
+            "Contract/drafter benchmark only; the experimental reader has not "
+            "passed a real full-sheet recognition gate"
+        ),
     },
     "candidate": {
         "checkpoint_step": 1_000,

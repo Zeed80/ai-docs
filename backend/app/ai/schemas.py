@@ -76,6 +76,7 @@ class AITask(str, Enum):
     # CAD_SPEC_READ: the VLM that reads a drawing into a structured feature/dim spec.
     # CAD_SPEC_DRAFT: an (optional) generative model that drafts CAD geometry from
     # that spec; unassigned → the deterministic parametric drafter is used.
+    CAD_DRAWING_GRAPH_READ = "cad_drawing_graph_read"
     CAD_SPEC_READ = "cad_spec_read"
     CAD_SPEC_DRAFT = "cad_spec_draft"
 

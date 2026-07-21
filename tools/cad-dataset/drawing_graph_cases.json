@@ -1,0 +1,187 @@
+[
+  {
+    "id": "mechanical_view_geometry_text_dimension_relation",
+    "graph": {
+      "schema_version": 1,
+      "graph_status": "verified",
+      "source": {
+        "image_width": 1000,
+        "image_height": 800,
+        "kind": "scan",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "scale_mm_per_px": 0.25,
+      "scale_source": "calibration",
+      "evidence": [
+        {
+          "id": "ev-main",
+          "kind": "constraint_check",
+          "region": {"x0": 50, "y0": 50, "x1": 900, "y1": 700},
+          "confidence": 1.0
+        }
+      ],
+      "views": [
+        {
+          "id": "view-front",
+          "kind": "front",
+          "region": {"x0": 50, "y0": 50, "x1": 900, "y1": 700},
+          "entity_ids": ["edge-1", "hole-1", "label-1", "dim-1"],
+          "confidence": 1.0,
+          "evidence": ["ev-main"]
+        }
+      ],
+      "entities": [
+        {
+          "id": "edge-1",
+          "type": "segment",
+          "p1": {"x": 100, "y": 200},
+          "p2": {"x": 500, "y": 200},
+          "origin": "spec",
+          "assurance": "constraint_validated",
+          "evidence": ["ev-main"]
+        },
+        {
+          "id": "hole-1",
+          "type": "circle",
+          "center": {"x": 300, "y": 350},
+          "radius": 40,
+          "origin": "spec",
+          "assurance": "constraint_validated",
+          "evidence": ["ev-main"]
+        },
+        {
+          "id": "label-1",
+          "type": "text",
+          "position": {"x": 150, "y": 600},
+          "text": "ДЕТАЛЬ 01",
+          "height": 16,
+          "origin": "spec",
+          "assurance": "constraint_validated",
+          "evidence": ["ev-main"]
+        },
+        {
+          "id": "dim-1",
+          "type": "dimension",
+          "kind": "linear",
+          "p1": {"x": 100, "y": 250},
+          "p2": {"x": 500, "y": 250},
+          "text": "100±0,1",
+          "value_mm": 100,
+          "tolerance": "±0,1",
+          "origin": "spec",
+          "assurance": "constraint_validated",
+          "evidence": ["ev-main"]
+        }
+      ],
+      "relations": [
+        {
+          "id": "rel-dim-edge",
+          "kind": "dimension_applies_to",
+          "source_entity_id": "dim-1",
+          "target_entity_ids": ["edge-1"],
+          "confidence": 1.0,
+          "assurance": "constraint_validated",
+          "evidence": ["ev-main"]
+        }
+      ]
+    },
+    "expected": {
+      "entity_counts": {"segment": 1, "circle": 1, "text": 1, "dimension": 1},
+      "entity_ids": ["edge-1", "hole-1", "label-1", "dim-1"],
+      "relation_kinds": ["dimension_applies_to"],
+      "texts": ["ДЕТАЛЬ 01"],
+      "dimension_values_mm": [100],
+      "dxf_types": ["LINE", "CIRCLE", "TEXT", "DIMENSION"]
+    }
+  },
+  {
+    "id": "mechanical_section_hatch_annotation_relation",
+    "graph": {
+      "schema_version": 1,
+      "graph_status": "verified",
+      "source": {
+        "image_width": 800,
+        "image_height": 600,
+        "kind": "scan",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "scale_mm_per_px": 0.5,
+      "scale_source": "calibration",
+      "evidence": [
+        {
+          "id": "ev-section",
+          "kind": "constraint_check",
+          "region": {"x0": 50, "y0": 50, "x1": 750, "y1": 550},
+          "confidence": 1.0
+        }
+      ],
+      "views": [
+        {
+          "id": "view-section",
+          "kind": "section",
+          "region": {"x0": 50, "y0": 50, "x1": 750, "y1": 550},
+          "entity_ids": ["profile-1", "hatch-1", "roughness-1"],
+          "confidence": 1.0,
+          "evidence": ["ev-section"]
+        }
+      ],
+      "entities": [
+        {
+          "id": "profile-1",
+          "type": "polyline",
+          "points": [
+            {"x": 100, "y": 100}, {"x": 600, "y": 100},
+            {"x": 600, "y": 400}, {"x": 100, "y": 400}
+          ],
+          "closed": true,
+          "origin": "spec",
+          "assurance": "constraint_validated",
+          "evidence": ["ev-section"]
+        },
+        {
+          "id": "hatch-1",
+          "type": "hatch",
+          "boundary": [
+            {"x": 100, "y": 100}, {"x": 600, "y": 100},
+            {"x": 600, "y": 400}, {"x": 100, "y": 400}
+          ],
+          "pattern": "ansi31",
+          "origin": "spec",
+          "assurance": "constraint_validated",
+          "evidence": ["ev-section"]
+        },
+        {
+          "id": "roughness-1",
+          "type": "annotation",
+          "kind": "roughness",
+          "position": {"x": 650, "y": 150},
+          "leader": {"x": 600, "y": 100},
+          "text": "Ra 3.2",
+          "value": "3.2",
+          "origin": "spec",
+          "assurance": "constraint_validated",
+          "evidence": ["ev-section"]
+        }
+      ],
+      "relations": [
+        {
+          "id": "rel-roughness-profile",
+          "kind": "annotation_applies_to",
+          "source_entity_id": "roughness-1",
+          "target_entity_ids": ["profile-1"],
+          "confidence": 1.0,
+          "assurance": "constraint_validated",
+          "evidence": ["ev-section"]
+        }
+      ]
+    },
+    "expected": {
+      "entity_counts": {"polyline": 1, "hatch": 1, "annotation": 1},
+      "entity_ids": ["profile-1", "hatch-1", "roughness-1"],
+      "relation_kinds": ["annotation_applies_to"],
+      "texts": [],
+      "dimension_values_mm": [],
+      "dxf_types": ["LWPOLYLINE", "HATCH", "TEXT", "LINE"]
+    }
+  }
+]

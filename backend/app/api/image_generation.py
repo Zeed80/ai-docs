@@ -384,7 +384,7 @@ async def generate(
 
     description_vector = (
         body.operation == "vectorize"
-        and str((body.params or {}).get("vectorize_method") or "trace") == "spec"
+        and str((body.params or {}).get("vectorize_method") or "trace") == "text_spec"
         and bool((body.prompt or "").strip())
     )
     if (

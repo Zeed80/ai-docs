@@ -750,7 +750,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         import hashlib
 
         vectorize_method = str(params.get("vectorize_method") or "trace")
-        description_mode = vectorize_method == "spec" and bool(description)
+        description_mode = vectorize_method == "text_spec" and bool(description)
         if not source_paths and not description_mode:
             return await _fail("Для оцифровки нужен исходный скан/фото.")
         content = download_file(source_paths[0]) if source_paths else b""
@@ -791,24 +791,114 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 }
                 await db.commit()
 
-        # Method toggle: "spec" = the understanding->drafting path (a VLM reads
-        # the drawing into a structured spec, then a parametric drafter builds a
-        # CLEAN drawing from it) instead of tracing the raster. Kept behind an
-        # explicit flag; "trace" (default) is the established pixel path below.
-        if str(params.get("vectorize_method") or "trace") == "spec":
+        # Explicitly separate the graph-first source-sheet workflow ("spec")
+        # from the auxiliary free-text parametric workflow ("text_spec").
+        # "trace" remains the established pixel path below.
+        if vectorize_method in ("spec", "text_spec"):
+            if vectorize_method == "spec":
+                from app.ai.cad_drawing_graph import (
+                    DrawingGraphDraftError,
+                    draft_drawing_graph,
+                    read_drawing_graph,
+                    verify_drawing_graph,
+                )
+
+                graph = await read_drawing_graph(content)
+                if graph is None:
+                    return await _fail(
+                        "Метод «по описанию»: координатный reader не вернул "
+                        "полный валидный EngineeringDrawingGraph. Частичный "
+                        "чертёж не создан; проверьте graph-reader и исходный лист."
+                    )
+                try:
+                    graph_ir = draft_drawing_graph(graph)
+                except DrawingGraphDraftError as exc:
+                    return await _fail(
+                        "Метод «по описанию»: graph drafter остановлен: " + str(exc)
+                    )
+                graph_ir.source.generation_id = generation_id
+                graph_ink, graph_width, graph_height = _binarize(content)
+                if (
+                    graph_width != graph.source.image_width
+                    or graph_height != graph.source.image_height
+                ):
+                    return await _fail(
+                        "Метод «по описанию»: размер graph не совпадает с "
+                        "нормализованным исходным листом."
+                    )
+                _assess_export_fidelity(graph_ir, graph_ink, None, 2, 4)
+                graph_verification = verify_drawing_graph(
+                    graph,
+                    pixel_recall=graph_ir.validation.vector_recall,
+                    pixel_precision=graph_ir.validation.vector_precision,
+                )
+                if graph_verification.blocking:
+                    return await _fail(
+                        "Метод «по описанию»: graph не прошёл независимую проверку: "
+                        + "; ".join(
+                            issue.message for issue in graph_verification.blocking[:5]
+                        )
+                    )
+                validate_ir(graph_ir)
+                if graph_ir.validation.blocking:
+                    return await _fail(
+                        "Метод «по описанию»: CadIR validation заблокировала "
+                        "построение: "
+                        + "; ".join(
+                            issue.message_ru
+                            for issue in graph_ir.validation.blocking[:5]
+                        )
+                    )
+                async with factory() as db:
+                    gen = await db.get(ImageGeneration, gen_uuid)
+                    if not gen or gen.status == ImageGenStatus.cancelled:
+                        return {"cancelled": True}
+                    normalized_path = (
+                        f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
+                    )
+                    upload_file(content, normalized_path, "image/png")
+                    gen.params = {
+                        **(gen.params or {}),
+                        "vectorize_method": "spec",
+                        "description_mode": False,
+                        "drawing_graph": graph.model_dump(mode="json"),
+                        "drawing_graph_sha256": graph.content_sha256(),
+                        "drawing_graph_verification": graph_verification.model_dump(
+                            mode="json"
+                        ),
+                        "cad_pipeline_manifest": pipeline_manifest,
+                        "normalized_source_path": normalized_path,
+                    }
+                    await cad_ir_store.save_revision(
+                        db,
+                        gen,
+                        graph_ir,
+                        origin="auto",
+                        created_by=owner_sub,
+                        keep_raster=None,
+                        thin_px=2,
+                        thick_px=4,
+                    )
+                    gen.status = ImageGenStatus.done
+                    job = await studio_queue.job_for_generation(db, gen_uuid)
+                    await studio_queue.mark_job_done(db, job)
+                    await db.commit()
+                return {
+                    "ok": True,
+                    "generation_id": generation_id,
+                    "entities": len(graph_ir.entities),
+                    "relations": len(graph_ir.relations),
+                    "method": "drawing_graph",
+                }
+
             from app.ai.cad_recognize.spec_vectorize import (
                 draft_from_spec_async,
                 read_description_spec,
-                read_drawing_spec,
             )
             from app.ai.schemas import AITask
             from app.ai.task_routing import get_routing_for
 
-            spec = (
-                await read_description_spec(description)
-                if description_mode
-                else await read_drawing_spec(content)
-            )
+            spec = await read_description_spec(description)
             if not spec:
                 return await _fail(
                     "Метод «по описанию»: модель чтения не вернула валидную "
@@ -854,7 +944,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     upload_file(content, normalized_path, "image/png")
                 gen.params = {
                     **(gen.params or {}),
-                    "vectorize_method": "spec",
+                    "vectorize_method": "text_spec",
                     "description_mode": description_mode,
                     "spec": spec,
                     "cad_pipeline_manifest": pipeline_manifest,
