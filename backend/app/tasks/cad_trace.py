@@ -780,7 +780,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             # Model 2: a generative drafter when one is assigned in Settings →
             # Models → Оцифровка → «Чертёжник» (e.g. a LoRA); else deterministic.
             draft_model = get_routing_for(AITask.CAD_SPEC_DRAFT).primary
-            spec_ir = await draft_from_spec_async(spec, draft_model=draft_model)
+            # Sheet + orientation → auto scale (ГОСТ 2.302). No sheet → free-fit.
+            spec_sheet = str(params.get("sheet_format") or "").upper() or None
+            spec_landscape = str(
+                params.get("sheet_orientation") or "landscape"
+            ).lower() != "portrait"
+            spec_ir = await draft_from_spec_async(
+                spec,
+                draft_model=draft_model,
+                sheet_format=spec_sheet,
+                landscape=spec_landscape,
+            )
             if spec_ir is None:
                 return await _fail(
                     "Метод «по описанию»: не удалось построить деталь из описания "

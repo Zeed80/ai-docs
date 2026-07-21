@@ -52,6 +52,8 @@ type StudioComposerPrefs = {
   mode?: "image" | "tech" | "vector";
   vectorScale?: string;
   vectorSheetFormat?: "" | "A4" | "A3" | "A2" | "A1" | "A0";
+  vectorMethod?: "trace" | "spec";
+  vectorLandscape?: boolean;
   blankFormat?: "A4" | "A3" | "A2" | "A1";
   blankLandscape?: boolean;
   prompt?: string;
@@ -143,6 +145,15 @@ export default function StudioComposer({
   const [vectorSheetFormat, setVectorSheetFormat] = useState<
     "" | "A4" | "A3" | "A2" | "A1" | "A0"
   >(prefs.vectorSheetFormat ?? "");
+  // Digitization method: "trace" (pixel tracing) or "spec" (VLM reads the
+  // drawing → parametric drafter builds clean geometry, β). With "spec" a
+  // chosen sheet + orientation drive an automatic ГОСТ 2.302 scale.
+  const [vectorMethod, setVectorMethod] = useState<"trace" | "spec">(
+    prefs.vectorMethod ?? "trace",
+  );
+  const [vectorLandscape, setVectorLandscape] = useState(
+    prefs.vectorLandscape ?? true,
+  );
   const [blankFormat, setBlankFormat] = useState<"A4" | "A3" | "A2" | "A1">(
     prefs.blankFormat ?? "A4",
   );
@@ -244,6 +255,8 @@ export default function StudioComposer({
           mode,
           vectorScale,
           vectorSheetFormat,
+          vectorMethod,
+          vectorLandscape,
           blankFormat,
           blankLandscape,
           prompt,
@@ -276,6 +289,8 @@ export default function StudioComposer({
     mode,
     vectorScale,
     vectorSheetFormat,
+    vectorMethod,
+    vectorLandscape,
     blankFormat,
     blankLandscape,
     prompt,
@@ -581,11 +596,19 @@ export default function StudioComposer({
         source_image_paths: [],
         ...link,
       };
+      (input.params as Record<string, unknown>).vectorize_method = vectorMethod;
       const s = Number(vectorScale.replace(",", "."));
-      if (Number.isFinite(s) && s > 0) {
+      // The "spec" method auto-picks a ГОСТ 2.302 scale from the sheet +
+      // orientation, so a manual scale is ignored there (but the sheet is used).
+      if (vectorMethod === "trace" && Number.isFinite(s) && s > 0) {
         (input.params as Record<string, unknown>).scale_mm_per_px = s;
       } else if (vectorSheetFormat) {
-        (input.params as Record<string, unknown>).sheet_format = vectorSheetFormat;
+        (input.params as Record<string, unknown>).sheet_format =
+          vectorSheetFormat;
+        if (vectorMethod === "spec") {
+          (input.params as Record<string, unknown>).sheet_orientation =
+            vectorLandscape ? "landscape" : "portrait";
+        }
       }
       if (vlmEnrich) {
         (input.params as Record<string, unknown>).vlm_dimensions = true;
@@ -1239,16 +1262,38 @@ export default function StudioComposer({
           )}
           <p className="text-[11px] text-zinc-600">{t("vector_cleanup_tip")}</p>
 
+          {/* Method: pixel tracing vs understanding→drafting (β). */}
+          <label className="block">
+            <span className="text-xs text-zinc-500">
+              {t("vectorize_method")}
+            </span>
+            <select
+              value={vectorMethod}
+              onChange={(e) =>
+                setVectorMethod(e.target.value as "trace" | "spec")
+              }
+              className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+            >
+              <option value="trace">{t("method_trace")}</option>
+              <option value="spec">{t("method_spec")}</option>
+            </select>
+          </label>
+
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="block">
               <span className="text-xs text-zinc-500">
                 {t("vector_scale_label")}
               </span>
               <input
-                value={vectorScale}
+                value={vectorMethod === "spec" ? "" : vectorScale}
+                disabled={vectorMethod === "spec"}
                 onChange={(e) => setVectorScale(e.target.value)}
-                placeholder={t("vector_scale_placeholder")}
-                className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                placeholder={
+                  vectorMethod === "spec"
+                    ? t("vector_scale_auto")
+                    : t("vector_scale_placeholder")
+                }
+                className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200 disabled:opacity-50"
               />
             </label>
             <label className="block">
@@ -1257,7 +1302,9 @@ export default function StudioComposer({
               </span>
               <select
                 value={vectorSheetFormat}
-                disabled={Boolean(vectorScale.trim())}
+                disabled={
+                  vectorMethod === "trace" && Boolean(vectorScale.trim())
+                }
                 onChange={(e) =>
                   setVectorSheetFormat(
                     e.target.value as "" | "A4" | "A3" | "A2" | "A1" | "A0",
@@ -1267,11 +1314,43 @@ export default function StudioComposer({
               >
                 <option value="">{t("vector_sheet_format_unknown")}</option>
                 {(["A4", "A3", "A2", "A1", "A0"] as const).map((format) => (
-                  <option key={format} value={format}>{format}</option>
+                  <option key={format} value={format}>
+                    {format}
+                  </option>
                 ))}
               </select>
             </label>
           </div>
+
+          {/* Orientation + auto-scale — only meaningful for the spec method. */}
+          {vectorMethod === "spec" && (
+            <div className="space-y-1">
+              <label className="block">
+                <span className="text-xs text-zinc-500">
+                  {t("vector_orientation_label")}
+                </span>
+                <select
+                  value={vectorLandscape ? "landscape" : "portrait"}
+                  onChange={(e) =>
+                    setVectorLandscape(e.target.value === "landscape")
+                  }
+                  className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                >
+                  <option value="landscape">
+                    {t("vector_orientation_landscape")}
+                  </option>
+                  <option value="portrait">
+                    {t("vector_orientation_portrait")}
+                  </option>
+                </select>
+              </label>
+              <p className="text-[11px] text-zinc-600">
+                {vectorSheetFormat
+                  ? t("vector_autoscale_hint")
+                  : t("vector_autoscale_need_sheet")}
+              </p>
+            </div>
+          )}
 
           <label className="flex items-center gap-2 text-xs text-zinc-400">
             <input
