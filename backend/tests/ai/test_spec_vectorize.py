@@ -115,22 +115,29 @@ class _FakeRouter:
 
 
 @pytest.mark.asyncio
-async def test_generative_model_used_only_when_deterministic_declines():
-    # A non-rotation part: the parametric drafter declines → the generative
-    # model (e.g. a LoRA) takes over.
-    router = _FakeRouter('{"lines":[[0,0,120,0],[120,0,120,60],[120,60,0,60],[0,60,0,0]],"circles":[[60,30,8]],"arcs":[],"polylines":[]}')
-    spec = {"main_view": {"type": "призматическая", "features": [{"kind": "plate"}]}}
-    ir = await draft_from_spec_async(spec, draft_model="my-lora", router=router)
+async def test_generative_model_used_first_when_assigned_even_for_rotation():
+    # Generative-first: a rotation body ALSO goes through the model (it handles
+    # multiple bodies / mis-read cases the single-stack drafter can't).
+    router = _FakeRouter('{"lines":[[0,0,100,0],[100,0,100,50],[0,50,100,50]],"circles":[],"arcs":[],"polylines":[]}')
+    spec = {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "features": [
+                {"kind": "cylinder", "diameter_mm": 50, "length_mm": 150},
+                {"kind": "cylinder", "diameter_mm": 30, "length_mm": 100},
+            ],
+        }
+    }
+    ir = await draft_from_spec_async(spec, draft_model="apex", router=router)
     assert ir is not None
     assert ir.recognizer_used == "spec-drafter-generative"
-    assert router.seen.preferred_model == "my-lora"
+    assert router.seen.preferred_model == "apex"
     assert router.seen.confidential is True and router.seen.allow_cloud is False
 
 
 @pytest.mark.asyncio
-async def test_rotation_body_never_calls_generative_model():
-    # Deterministic-first: a rotation body is built exactly, and the assigned
-    # generative model is not even consulted (no regression from a weak model).
+async def test_falls_back_to_deterministic_when_generative_fails():
+    # Model returns junk → deterministic parametric drafter is the safety net.
     router = _FakeRouter("not json")
     spec = {
         "main_view": {
@@ -141,7 +148,35 @@ async def test_rotation_body_never_calls_generative_model():
             ],
         }
     }
-    ir = await draft_from_spec_async(spec, draft_model="my-lora", router=router)
+    ir = await draft_from_spec_async(spec, draft_model="apex", router=router)
     assert ir is not None
     assert ir.recognizer_used == "spec-drafter-rotation"
-    assert router.seen is None  # generative model never called
+
+
+@pytest.mark.asyncio
+async def test_no_model_assigned_uses_deterministic():
+    spec = {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "features": [
+                {"kind": "cylinder", "diameter_mm": 50, "length_mm": 150},
+                {"kind": "cylinder", "diameter_mm": 30, "length_mm": 100},
+            ],
+        }
+    }
+    ir = await draft_from_spec_async(spec, draft_model=None)
+    assert ir is not None and ir.recognizer_used == "spec-drafter-rotation"
+
+
+def test_layout_on_sheet_scales_generative_geometry():
+    from app.ai.cad_recognize.spec_vectorize import _dsl_to_ir, _layout_on_sheet
+    ir = _dsl_to_ir({"lines": [[0, 0, 100, 0], [100, 0, 100, 50], [0, 50, 100, 50]],
+                     "circles": [], "arcs": [], "polylines": []})
+    spec = {"dimensions": [{"value": "300"}, {"value": "150"}]}
+    _layout_on_sheet(ir, spec, "A3", True)
+    assert ir.sheet.format == "A3"
+    assert ir.scale_source == "sheet_format"
+    assert ir.source.image_width == 1680 and ir.source.image_height == 1188
+    # geometry moved into the sheet frame (positive, within canvas)
+    xs = [e.p1.x for e in ir.entities if e.type == "segment"]
+    assert all(0 < x < 1680 for x in xs)

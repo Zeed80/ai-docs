@@ -26,16 +26,20 @@ from app.ai.cad_ir.schema import (
 
 
 _SPEC_PROMPT = (
-    "Ты — инженер-конструктор. Изучи чертёж и опиши деталь СТРУКТУРНО как "
+    "Ты — инженер-конструктор. Изучи чертёж и опиши деталь(и) СТРУКТУРНО как "
     "спецификацию для повторного черчения. Верни СТРОГО JSON:\n"
     '{"part":"название",'
     '"views":[{"name":"главный вид/разрез А-А/...","role":"main|section|detail"}],'
     '"main_view":{"type":"тело вращения (вал)|призматическая|...",'
     '"features":[{"kind":"cylinder|cone|step|keyway|hole|chamfer|thread|groove",'
     '"diameter_mm":0,"length_mm":0,"pos":"положение","note":"..."}]},'
+    '"parts":[{"name":"..","type":"..","features":[...]}],'
     '"dimensions":[{"value":"Ø80js6(±0.0095)","applies_to":"..."}],'
     '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":"Ra 0.8"}],'
     '"title_block":{"material":"..","scale":".."}}\n'
+    "ВАЖНО: если на листе НЕСКОЛЬКО деталей/тел — перечисли КАЖДОЕ в parts[] "
+    "(со своими features и размерами), а главную продублируй в main_view. "
+    "Если деталь одна — parts можно опустить. "
     "Читай реальные значения с чертежа. Только JSON."
 )
 
@@ -375,39 +379,60 @@ async def draft_from_spec_async(
 ) -> CadIR | None:
     """Async variant: usable from inside a running event loop (the digitize task).
 
-    Deterministic-first (exact for rotation bodies); a generative model is used
-    only for parts the parametric drafter declines (prismatic/complex geometry).
+    Generative-first when a model is assigned: it handles what the single-stack
+    parametric drafter can't — MULTIPLE bodies on one sheet, mixed/prismatic
+    parts, and rotation bodies it mis-reads/mis-builds. The deterministic
+    parametric drafter is the fallback (used when no model is assigned, or when
+    the model returns nothing usable).
     """
-    deterministic = draft_rotation_body(
-        spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
-    )
-    if deterministic is not None:
-        return deterministic
     if draft_model:
         try:
-            generated = await _draft_generative(spec, draft_model, router=router)
+            generated = await _draft_generative(
+                spec, draft_model, router=router,
+                sheet_format=sheet_format, landscape=landscape,
+            )
             if generated is not None and generated.entities:
                 return generated
         except Exception:  # noqa: BLE001
             pass
-    return None
+    return draft_rotation_body(
+        spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
+    )
 
 
 _DRAFT_PROMPT = (
-    "Ты — генеративный чертёжник САПР. По СПЕЦИФИКАЦИИ детали построй геометрию "
-    "главного вида и верни СТРОГО JSON примитивов в изотропном пространстве 0..1000 "
-    "(обе оси в одном масштабе, 0,0 — верхний левый угол):\n"
+    "Ты — генеративный чертёжник САПР. По СПЕЦИФИКАЦИИ построй ЧИСТУЮ геометрию "
+    "главного вида (для тел вращения — продольный контур с осью; для "
+    "призматических — очертание и отверстия). ВАЖНО:\n"
+    "1) Если деталей/тел НЕСКОЛЬКО — начерти КАЖДОЕ, разнеся их по горизонтали, "
+    "не накладывая друг на друга.\n"
+    "2) Строго соблюдай ПРОПОРЦИИ по указанным размерам (диаметры/длины из "
+    "features и dimensions). Ступень большего диаметра — шире по вертикали.\n"
+    "3) Тело вращения симметрично относительно оси; вычерти обе образующие "
+    "(верх и низ) и осевую линию.\n"
+    "Верни СТРОГО JSON примитивов в изотропном пространстве 0..1000 (обе оси в "
+    "одном масштабе, 0,0 — верхний левый угол):\n"
     '{"lines":[[x1,y1,x2,y2],...],"circles":[[cx,cy,r],...],'
     '"arcs":[[cx,cy,r,start_deg,end_deg],...],'
-    '"polylines":[{"pts":[[x,y],...],"closed":0}]}\n'
+    '"polylines":[{"pts":[[x,y],...],"closed":0}],'
+    '"axes":[[x1,y1,x2,y2],...]}\n'
     "Только JSON, без пояснений.\nСПЕЦИФИКАЦИЯ:\n"
 )
 
 
 async def _draft_generative(
-    spec: dict, draft_model: str, *, router: Any | None = None
+    spec: dict,
+    draft_model: str,
+    *,
+    router: Any | None = None,
+    sheet_format: str | None = None,
+    landscape: bool = True,
 ) -> CadIR | None:
-    """Model 2 (generative): a model turns the spec text into a geometry DSL."""
+    """Model 2 (generative): a model turns the spec text into a geometry DSL.
+
+    Handles multiple bodies. When ``sheet_format`` is set, the generated geometry
+    is laid out on that ГОСТ sheet at an auto-chosen standard scale.
+    """
     import json
 
     from app.ai.schemas import AIRequest, AITask, ChatMessage
@@ -428,7 +453,12 @@ async def _draft_generative(
     )
     response = await router.run(request)
     dsl = _parse_spec_json(response.text or "")
-    return _dsl_to_ir(dsl) if dsl else None
+    if not dsl:
+        return None
+    ir = _dsl_to_ir(dsl)
+    if ir is not None and sheet_format:
+        _layout_on_sheet(ir, spec, sheet_format, landscape)
+    return ir
 
 
 def _dsl_to_ir(dsl: dict, *, canvas: int = 1000) -> CadIR | None:
@@ -476,6 +506,13 @@ def _dsl_to_ir(dsl: dict, *, canvas: int = 1000) -> CadIR | None:
                 line_class="contour", width_class="main",
                 origin="spec", assurance="inferred",
             ))
+    for ax in dsl.get("axes", []) or []:
+        if isinstance(ax, (list, tuple)) and len(ax) >= 4:
+            entities.append(Segment(
+                p1=_pt(ax[0], ax[1]), p2=_pt(ax[2], ax[3]),
+                line_class="axis", width_class="thin",
+                origin="spec", assurance="inferred",
+            ))
     if not entities:
         return None
     return CadIR(
@@ -484,4 +521,94 @@ def _dsl_to_ir(dsl: dict, *, canvas: int = 1000) -> CadIR | None:
         entities=entities,
         recognizer_used="spec-drafter-generative",
         digitization_status="review_required",
+    )
+
+
+def _entity_points(e: Any) -> list[tuple[float, float]]:
+    """All defining points of an entity, for bbox computation."""
+    if e.type == "segment":
+        return [(e.p1.x, e.p1.y), (e.p2.x, e.p2.y)]
+    if e.type == "circle":
+        return [(e.center.x - e.radius, e.center.y - e.radius),
+                (e.center.x + e.radius, e.center.y + e.radius)]
+    if e.type == "arc":
+        return [(e.center.x - e.radius, e.center.y - e.radius),
+                (e.center.x + e.radius, e.center.y + e.radius)]
+    if e.type == "polyline":
+        return [(p.x, p.y) for p in e.points]
+    return []
+
+
+def _translate_scale(e: Any, k: float, ox: float, oy: float, bx0: float, by0: float) -> None:
+    """In-place map an entity from generated space to sheet px: (p-b0)*k+o."""
+    def m(px, py):
+        return (px - bx0) * k + ox, (py - by0) * k + oy
+
+    if e.type == "segment":
+        e.p1.x, e.p1.y = m(e.p1.x, e.p1.y)
+        e.p2.x, e.p2.y = m(e.p2.x, e.p2.y)
+    elif e.type in ("circle", "arc"):
+        e.center.x, e.center.y = m(e.center.x, e.center.y)
+        e.radius *= k
+    elif e.type == "polyline":
+        for p in e.points:
+            p.x, p.y = m(p.x, p.y)
+
+
+def _layout_on_sheet(ir: CadIR, spec: dict, sheet_format: str, landscape: bool) -> None:
+    """Fit generated (relative 0..1000) geometry onto a ГОСТ sheet, in place.
+
+    Chooses a standard ГОСТ 2.302 scale when the spec states a real overall size
+    (the largest generated span maps to the largest stated dimension); otherwise
+    fits the drawing into the frame without claiming a named scale.
+    """
+    from app.ai.cad_ir.schema import SheetInfo
+
+    pts = [p for e in ir.entities for p in _entity_points(e)]
+    if not pts:
+        return
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    bx0, bx1, by0, by1 = min(xs), max(xs), min(ys), max(ys)
+    gen_w = max(bx1 - bx0, 1e-6); gen_h = max(by1 - by0, 1e-6)
+
+    short, long = _GOST_SHEETS.get(sheet_format.upper(), _GOST_SHEETS["A4"])
+    pw_mm, ph_mm = (long, short) if landscape else (short, long)
+    ppp = 4.0  # px per paper mm
+    frame_x0 = _FRAME_LEFT_MM * ppp
+    frame_y0 = _FRAME_OTHER_MM * ppp
+    frame_w = (pw_mm - _FRAME_LEFT_MM - _FRAME_OTHER_MM) * ppp
+    frame_h = (ph_mm - 2 * _FRAME_OTHER_MM) * ppp
+
+    # Real overall dimensions from the spec (largest numeric on each axis).
+    dims = []
+    for d in spec.get("dimensions", []) or []:
+        v = _num(d.get("value"))
+        if v and v > 0:
+            dims.append(v)
+    real_max = max(dims) if dims else None
+
+    scale_label = None
+    if real_max:
+        # Largest generated span == largest real dimension → mm per gen-unit.
+        mm_per_unit = real_max / max(gen_w, gen_h)
+        real_w = gen_w * mm_per_unit
+        real_h = gen_h * mm_per_unit
+        ratio, scale_label = choose_standard_scale(real_w, real_h, sheet_format, landscape=landscape)
+        k = mm_per_unit * ratio * ppp  # gen-unit → paper px at the standard scale
+        ir.scale = 1.0 / (ratio * ppp)  # real mm per px
+        ir.scale_source = "sheet_format"
+    else:
+        k = min(frame_w / gen_w, frame_h / gen_h) * 0.8  # fit-to-frame, 80%
+
+    draw_w = gen_w * k; draw_h = gen_h * k
+    ox = frame_x0 + max((frame_w - draw_w) / 2.0, 0.0)
+    oy = frame_y0 + max((frame_h - draw_h) / 2.0, 0.0)
+    for e in ir.entities:
+        _translate_scale(e, k, ox, oy, bx0, by0)
+
+    ir.source.image_width = int(pw_mm * ppp)
+    ir.source.image_height = int(ph_mm * ppp)
+    ir.sheet = SheetInfo(
+        format=sheet_format.upper(), frame=False,
+        title_block={"scale": scale_label} if scale_label else {},
     )

@@ -793,8 +793,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             )
             if spec_ir is None:
                 return await _fail(
-                    "Метод «по описанию»: не удалось построить деталь из описания "
-                    "(пока поддержаны тела вращения). Попробуйте метод «трассировка»."
+                    "Метод «по описанию»: не удалось построить деталь из описания. "
+                    "Проверьте, что назначена модель-чертёжник (Настройки → Модели "
+                    "→ Оцифровка), или попробуйте метод «трассировка»."
                 )
             spec_ir.source.generation_id = generation_id
             _overlay_spec_annotations(spec_ir, spec)
