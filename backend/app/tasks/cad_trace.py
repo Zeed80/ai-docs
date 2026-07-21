@@ -769,10 +769,18 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # CLEAN drawing from it) instead of tracing the raster. Kept behind an
         # explicit flag; "trace" (default) is the established pixel path below.
         if str(params.get("vectorize_method") or "trace") == "spec":
-            from app.ai.cad_recognize.spec_vectorize import draft_from_spec, read_drawing_spec
+            from app.ai.cad_recognize.spec_vectorize import (
+                draft_from_spec_async,
+                read_drawing_spec,
+            )
+            from app.ai.schemas import AITask
+            from app.ai.task_routing import get_routing_for
 
             spec = await read_drawing_spec(content)
-            spec_ir = draft_from_spec(spec)
+            # Model 2: a generative drafter when one is assigned in Settings →
+            # Models → Оцифровка → «Чертёжник» (e.g. a LoRA); else deterministic.
+            draft_model = get_routing_for(AITask.CAD_SPEC_DRAFT).primary
+            spec_ir = await draft_from_spec_async(spec, draft_model=draft_model)
             if spec_ir is None:
                 return await _fail(
                     "Метод «по описанию»: не удалось построить деталь из описания "

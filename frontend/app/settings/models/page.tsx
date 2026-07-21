@@ -2007,8 +2007,7 @@ function ParametersTab() {
                 ] as const
               ).map(({ key, label, min, max, step, desc }) => {
                 const val = (editing ?? current)[key as keyof Profile] as
-                  | number
-                  | undefined;
+                  number | undefined;
                 return (
                   <div key={key} className="space-y-1">
                     <div className="flex justify-between text-xs">
@@ -2466,6 +2465,7 @@ const GROUP_ICON: Record<string, string> = {
   Документы: "📄",
   Агент: "🤖",
   Поиск: "🔎",
+  Оцифровка: "📐",
 };
 
 function AssignmentTab() {
@@ -2733,7 +2733,8 @@ function AssignmentTab() {
     effective: boolean | null | undefined,
     source: string | undefined,
   ) => {
-    if (effective === null || effective === undefined) return "не поддерживается";
+    if (effective === null || effective === undefined)
+      return "не поддерживается";
     const state = effective ? "вкл" : "выкл";
     const src = source === "slot" ? "слот" : "модель";
     return `${state} · ${src}`;
@@ -2741,7 +2742,7 @@ function AssignmentTab() {
 
   if (loading) return <div className="text-sm text-slate-500">Загрузка…</div>;
 
-  const groups = ["Документы", "Агент", "Поиск"];
+  const groups = ["Документы", "Агент", "Поиск", "Оцифровка"];
   const provList = Array.from(new Set(models.map((m) => m.provider)));
   const provModels = models.filter(
     (m) => m.provider === selProv && selectable(m),
@@ -2857,6 +2858,12 @@ function AssignmentTab() {
                   можно облачные модели (на ваш выбор)
                 </span>
               )}
+              {g === "Оцифровка" && (
+                <span className="text-xs text-slate-500">
+                  🔒 конфиденциально — только локальные модели · метод «по
+                  описанию»
+                </span>
+              )}
             </div>
             <div className="p-4 space-y-3">
               {gslots.map((s) => {
@@ -2877,7 +2884,7 @@ function AssignmentTab() {
                 const selectedThinkingCapable =
                   slotSupportsThinking && selectedSupportsThinking;
                 const effectiveThinking = selectedThinkingCapable
-                  ? thinkingOverride ?? selectedModelDefault
+                  ? (thinkingOverride ?? selectedModelDefault)
                   : null;
                 const thinkingSource = !selectedThinkingCapable
                   ? "unsupported"

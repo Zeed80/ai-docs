@@ -67,8 +67,18 @@ async def read_drawing_spec(
     image.thumbnail((1400, 1400))
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
+    # Dedicated slot for the spec reader (Settings → Models → Оцифровка). When it
+    # has no assignment, fall back to the shared drawing-analysis VLM so behaviour
+    # is unchanged out of the box.
+    from app.ai.task_routing import get_routing_for
+
+    read_task = (
+        AITask.CAD_SPEC_READ
+        if get_routing_for(AITask.CAD_SPEC_READ).primary
+        else AITask.DRAWING_ANALYSIS_VLM
+    )
     request = AIRequest(
-        task=AITask.DRAWING_ANALYSIS_VLM,
+        task=read_task,
         messages=[ChatMessage(role="user", content=_SPEC_PROMPT)],
         images=[base64.b64encode(buffer.getvalue()).decode()],
         confidential=confidential,
@@ -215,11 +225,157 @@ def draft_rotation_body(spec: dict, *, px_per_mm: float | None = None) -> CadIR 
     return ir
 
 
-def draft_from_spec(spec: dict, *, px_per_mm: float | None = None) -> CadIR | None:
-    """Dispatch a structured spec to the right parametric drafter."""
+def draft_from_spec(
+    spec: dict,
+    *,
+    px_per_mm: float | None = None,
+    draft_model: str | None = None,
+    router: Any | None = None,
+) -> CadIR | None:
+    """Dispatch a structured spec to a drafter (Model 2).
+
+    When ``draft_model`` is set (Settings → Models → Оцифровка → «Чертёжник»),
+    a generative model — e.g. a LoRA fine-tuned drafter — turns the spec into
+    geometry. On any failure, or when no model is assigned, fall back to the
+    deterministic parametric drafter (clean by construction, rotation bodies).
+    """
+    if draft_model:
+        try:
+            import asyncio
+
+            generated = asyncio.get_event_loop().run_until_complete(
+                _draft_generative(spec, draft_model, router=router)
+            ) if not _in_running_loop() else None
+            if generated is not None and generated.entities:
+                return generated
+        except Exception:  # noqa: BLE001 — never sink the pipeline on a model error
+            pass
+
     main = (spec.get("main_view") or {})
     part_type = str(main.get("type", "")).lower()
     if "враще" in part_type or "вал" in part_type or "shaft" in part_type or "rotation" in part_type:
         return draft_rotation_body(spec, px_per_mm=px_per_mm)
     # Rotation body is a strong default when the features read as coaxial cylinders.
     return draft_rotation_body(spec, px_per_mm=px_per_mm)
+
+
+def _in_running_loop() -> bool:
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+async def draft_from_spec_async(
+    spec: dict,
+    *,
+    px_per_mm: float | None = None,
+    draft_model: str | None = None,
+    router: Any | None = None,
+) -> CadIR | None:
+    """Async variant: usable from inside a running event loop (the digitize task)."""
+    if draft_model:
+        try:
+            generated = await _draft_generative(spec, draft_model, router=router)
+            if generated is not None and generated.entities:
+                return generated
+        except Exception:  # noqa: BLE001
+            pass
+    return draft_from_spec(spec, px_per_mm=px_per_mm)
+
+
+_DRAFT_PROMPT = (
+    "Ты — генеративный чертёжник САПР. По СПЕЦИФИКАЦИИ детали построй геометрию "
+    "главного вида и верни СТРОГО JSON примитивов в изотропном пространстве 0..1000 "
+    "(обе оси в одном масштабе, 0,0 — верхний левый угол):\n"
+    '{"lines":[[x1,y1,x2,y2],...],"circles":[[cx,cy,r],...],'
+    '"arcs":[[cx,cy,r,start_deg,end_deg],...],'
+    '"polylines":[{"pts":[[x,y],...],"closed":0}]}\n'
+    "Только JSON, без пояснений.\nСПЕЦИФИКАЦИЯ:\n"
+)
+
+
+async def _draft_generative(
+    spec: dict, draft_model: str, *, router: Any | None = None
+) -> CadIR | None:
+    """Model 2 (generative): a model turns the spec text into a geometry DSL."""
+    import json
+
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
+
+    if router is None:
+        from app.ai.router import ai_router
+
+        router = ai_router
+    request = AIRequest(
+        task=AITask.CAD_SPEC_DRAFT,
+        messages=[ChatMessage(
+            role="user",
+            content=_DRAFT_PROMPT + json.dumps(spec, ensure_ascii=False),
+        )],
+        preferred_model=draft_model,
+        confidential=True,
+        allow_cloud=False,
+    )
+    response = await router.run(request)
+    dsl = _parse_spec_json(response.text or "")
+    return _dsl_to_ir(dsl) if dsl else None
+
+
+def _dsl_to_ir(dsl: dict, *, canvas: int = 1000) -> CadIR | None:
+    """Decode a 0..1000 isotropic geometry DSL into a clean CadIR.
+
+    Inverse of ``tools/cad-dataset/build_vlm_sft.ir_to_dsl`` — the format the
+    generative drafter is trained to emit.
+    """
+    from app.ai.cad_ir.schema import Arc, Circle, Polyline
+
+    entities: list[Any] = []
+
+    def _pt(x, y):
+        return Point(x=float(x), y=float(y))
+
+    for ln in dsl.get("lines", []) or []:
+        if isinstance(ln, (list, tuple)) and len(ln) >= 4:
+            entities.append(Segment(
+                p1=_pt(ln[0], ln[1]), p2=_pt(ln[2], ln[3]),
+                line_class="contour", width_class="main",
+                origin="spec", assurance="inferred",
+            ))
+    for c in dsl.get("circles", []) or []:
+        if isinstance(c, (list, tuple)) and len(c) >= 3:
+            entities.append(Circle(
+                center=_pt(c[0], c[1]), radius=float(c[2]),
+                line_class="contour", width_class="main",
+                origin="spec", assurance="inferred",
+            ))
+    for a in dsl.get("arcs", []) or []:
+        if isinstance(a, (list, tuple)) and len(a) >= 5:
+            entities.append(Arc(
+                center=_pt(a[0], a[1]), radius=float(a[2]),
+                start_angle=float(a[3]), end_angle=float(a[4]),
+                line_class="contour", width_class="main",
+                origin="spec", assurance="inferred",
+            ))
+    for pl in dsl.get("polylines", []) or []:
+        if not isinstance(pl, dict):
+            continue
+        pts = [_pt(p[0], p[1]) for p in (pl.get("pts") or []) if len(p) >= 2]
+        if len(pts) >= 2:
+            entities.append(Polyline(
+                points=pts, closed=bool(pl.get("closed")),
+                line_class="contour", width_class="main",
+                origin="spec", assurance="inferred",
+            ))
+    if not entities:
+        return None
+    return CadIR(
+        source=SourceInfo(image_width=canvas, image_height=canvas, kind="scan"),
+        scale=1.0,
+        entities=entities,
+        recognizer_used="spec-drafter-generative",
+        digitization_status="review_required",
+    )

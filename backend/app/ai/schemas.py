@@ -72,6 +72,12 @@ class AITask(str, Enum):
     SPEECH = "speech"
     ORCHESTRATOR_PLANNING = "orchestrator_planning"
     CODE_GENERATION = "code_generation"
+    # CAD digitization — understanding->drafting ("two-model") path.
+    # CAD_SPEC_READ: the VLM that reads a drawing into a structured feature/dim spec.
+    # CAD_SPEC_DRAFT: an (optional) generative model that drafts CAD geometry from
+    # that spec; unassigned → the deterministic parametric drafter is used.
+    CAD_SPEC_READ = "cad_spec_read"
+    CAD_SPEC_DRAFT = "cad_spec_draft"
 
 
 class ChatMessage(BaseModel):

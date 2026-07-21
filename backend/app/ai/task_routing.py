@@ -42,6 +42,9 @@ CONFIDENTIAL_TASKS: set[AITask] = {
     AITask.DRAWING_ANALYSIS_VLM,
     AITask.EMBEDDING,
     AITask.RERANKING,
+    # Drawing content is confidential — spec read/draft stay local-only.
+    AITask.CAD_SPEC_READ,
+    AITask.CAD_SPEC_DRAFT,
 }
 
 

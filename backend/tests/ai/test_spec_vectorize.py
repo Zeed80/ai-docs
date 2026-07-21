@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.ai.cad_recognize.spec_vectorize import (
+    _dsl_to_ir,
     _num,
     _parse_spec_json,
+    draft_from_spec_async,
     draft_rotation_body,
 )
 
@@ -46,3 +50,63 @@ def test_draft_rotation_body_builds_clean_stepped_profile():
 
 def test_draft_rotation_body_declines_when_no_sections():
     assert draft_rotation_body({"main_view": {"features": [{"kind": "hole", "diameter_mm": 10}]}}) is None
+
+
+def test_dsl_to_ir_decodes_all_primitive_kinds():
+    ir = _dsl_to_ir({
+        "lines": [[0, 0, 100, 0], [100, 0, 100, 50]],
+        "circles": [[50, 25, 10]],
+        "arcs": [[50, 25, 20, 0, 90]],
+        "polylines": [{"pts": [[0, 0], [10, 10], [20, 0]], "closed": 1}],
+    })
+    assert ir is not None
+    kinds = sorted(e.type for e in ir.entities)
+    assert kinds == ["arc", "circle", "polyline", "segment", "segment"]
+    assert ir.recognizer_used == "spec-drafter-generative"
+    assert _dsl_to_ir({"lines": [], "circles": [], "arcs": [], "polylines": []}) is None
+
+
+class _FakeResp:
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeRouter:
+    """Stand-in Model 2: returns a fixed geometry DSL, records the request."""
+
+    def __init__(self, text):
+        self._text = text
+        self.seen = None
+
+    async def run(self, request):
+        self.seen = request
+        return _FakeResp(self._text)
+
+
+@pytest.mark.asyncio
+async def test_draft_from_spec_uses_generative_model_when_assigned():
+    router = _FakeRouter('{"lines":[[0,0,100,0],[100,0,100,50]],"circles":[],"arcs":[],"polylines":[]}')
+    spec = {"main_view": {"type": "тело вращения (вал)", "features": []}}
+    ir = await draft_from_spec_async(spec, draft_model="my-lora", router=router)
+    assert ir is not None
+    assert ir.recognizer_used == "spec-drafter-generative"
+    assert router.seen.preferred_model == "my-lora"
+    assert router.seen.confidential is True and router.seen.allow_cloud is False
+
+
+@pytest.mark.asyncio
+async def test_draft_from_spec_falls_back_to_deterministic_on_bad_output():
+    router = _FakeRouter("not json")
+    spec = {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "features": [
+                {"kind": "cylinder", "diameter_mm": 50, "length_mm": 150},
+                {"kind": "cylinder", "diameter_mm": 30, "length_mm": 100},
+            ],
+        }
+    }
+    ir = await draft_from_spec_async(spec, draft_model="my-lora", router=router)
+    assert ir is not None
+    # Generative output was unusable → deterministic drafter took over.
+    assert ir.recognizer_used == "spec-drafter-rotation"

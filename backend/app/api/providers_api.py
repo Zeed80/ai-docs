@@ -689,6 +689,11 @@ _SLOTS = [
      "Семантический поиск по документам", True),
     ("rerank", "Поиск", "Реранкинг",
      "Переранжирование результатов поиска", True),
+    ("cad_spec_read", "Оцифровка", "Чтение чертежа (VLM)",
+     "Метод «по описанию»: VLM читает чертёж в структурную спецификацию", True),
+    ("cad_spec_draft", "Оцифровка", "Чертёжник (по описанию)",
+     "Генеративная модель строит геометрию из описания (можно LoRA). "
+     "Не задано → детерминированный чертёжник тел вращения", True),
 ]
 
 _SLOT_MODALITY = {
@@ -701,6 +706,8 @@ _SLOT_MODALITY = {
     "agent_large": "text",
     "embedding": "embedding",
     "rerank": "rerank",
+    "cad_spec_read": "vision",
+    "cad_spec_draft": "text",
 }
 
 # Per-assignment thinking storage. Task slots store the override in
@@ -759,6 +766,10 @@ def _slot_current_model(slot: str, registry) -> str | None:
         return get_routing_for(AITask.RERANKING).primary
     if slot == "agent_email":
         return get_routing_for(AITask.EMAIL_DRAFTING).primary
+    if slot == "cad_spec_read":
+        return get_routing_for(AITask.CAD_SPEC_READ).primary
+    if slot == "cad_spec_draft":
+        return get_routing_for(AITask.CAD_SPEC_DRAFT).primary
     if slot == "ocr_large":
         try:
             from app.api.ai_settings import get_ai_config
@@ -943,6 +954,10 @@ def _slot_affected(slot: str) -> list[str]:
         return [AITask.RERANKING.value]
     if slot == "agent_email":
         return [AITask.EMAIL_DRAFTING.value]
+    if slot == "cad_spec_read":
+        return [AITask.CAD_SPEC_READ.value]
+    if slot == "cad_spec_draft":
+        return [AITask.CAD_SPEC_DRAFT.value]
     if slot == "agent_orchestrator":
         return [
             "agent_config.orchestrator_model",
@@ -1135,6 +1150,10 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
             _mirror_ai_config(DocumentGroup(rerank_model=key))
         elif slot == "agent_email":
             _assign_task(AITask.EMAIL_DRAFTING, key)
+        elif slot == "cad_spec_read":
+            _set_primary(AITask.CAD_SPEC_READ, key)
+        elif slot == "cad_spec_draft":
+            _set_primary(AITask.CAD_SPEC_DRAFT, key)
         elif slot == "agent_orchestrator":
             # Orchestrator + worker + base model. fast_model is a SEPARATE slot
             # (agent_fast) so a heavy orchestrator no longer forces a heavy router.
