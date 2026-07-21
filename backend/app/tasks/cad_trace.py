@@ -413,6 +413,48 @@ def _dewarp_photo(image_bytes: bytes) -> bytes:
         return image_bytes
 
 
+def _overlay_spec_annotations(ir, spec: dict) -> None:
+    """Place the spec's dimensions/annotations/material as text below the draft.
+
+    The spec-drafted geometry carries no labels; list the read dimensions,
+    tolerances, roughness, hardness and title-block material as text so the
+    'draft from description' result keeps the semantic layer the VLM captured.
+    """
+    from app.ai.cad_ir.schema import Point, TextEntity
+
+    lines: list[str] = []
+    for dim in spec.get("dimensions", []) or []:
+        value = str(dim.get("value", "")).strip()
+        target = str(dim.get("applies_to", "")).strip()
+        if value:
+            lines.append(f"{value}" + (f" — {target}" if target else ""))
+    for ann in spec.get("annotations", []) or []:
+        text = str(ann.get("text", "")).strip()
+        if text:
+            lines.append(text)
+    title = spec.get("title_block") or {}
+    if title.get("material"):
+        lines.append(str(title["material"]))
+    if title.get("scale"):
+        lines.append(str(title["scale"]))
+    if not lines:
+        return
+    height = 14.0
+    x = 20.0
+    y = ir.source.image_height + height
+    for text in lines:
+        ir.entities.append(
+            TextEntity(
+                position=Point(x=x, y=y), text=text, height=height,
+                line_class="dim", width_class="thin", origin="spec",
+                assurance="constraint_validated",
+            )
+        )
+        y += height * 1.6
+    # Grow the sheet to fit the annotation column.
+    ir.source.image_height = int(y + height)
+
+
 def _drop_in_glyph_segments(entities: list, text_entities: list) -> list:
     """Remove glyph-stroke segments that lie inside a text box.
 
@@ -721,6 +763,48 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # the desk/binding background before anything is traced. No-op for a
         # clean scan (no confident paper quad).
         content = _dewarp_photo(content)
+
+        # Method toggle: "spec" = the understanding->drafting path (a VLM reads
+        # the drawing into a structured spec, then a parametric drafter builds a
+        # CLEAN drawing from it) instead of tracing the raster. Kept behind an
+        # explicit flag; "trace" (default) is the established pixel path below.
+        if str(params.get("vectorize_method") or "trace") == "spec":
+            from app.ai.cad_recognize.spec_vectorize import draft_from_spec, read_drawing_spec
+
+            spec = await read_drawing_spec(content)
+            spec_ir = draft_from_spec(spec)
+            if spec_ir is None:
+                return await _fail(
+                    "Метод «по описанию»: не удалось построить деталь из описания "
+                    "(пока поддержаны тела вращения). Попробуйте метод «трассировка»."
+                )
+            spec_ir.source.generation_id = generation_id
+            _overlay_spec_annotations(spec_ir, spec)
+            validate_ir(spec_ir)
+            async with factory() as db:
+                gen = await db.get(ImageGeneration, gen_uuid)
+                if not gen or gen.status == ImageGenStatus.cancelled:
+                    return {"cancelled": True}
+                normalized_path = f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
+                upload_file(content, normalized_path, "image/png")
+                gen.params = {
+                    **(gen.params or {}),
+                    "normalized_source_path": normalized_path,
+                    "vectorize_method": "spec",
+                    "spec": spec,
+                }
+                await cad_ir_store.save_revision(
+                    db, gen, spec_ir, origin="auto", created_by=owner_sub,
+                    keep_raster=None, thin_px=2, thick_px=4,
+                )
+                gen.status = ImageGenStatus.done
+                job = await studio_queue.job_for_generation(db, gen_uuid)
+                await studio_queue.mark_job_done(db, job)
+                await db.commit()
+            return {
+                "ok": True, "generation_id": generation_id,
+                "entities": len(spec_ir.entities), "method": "spec",
+            }
 
         # Stage 1: classical preprocess — same module the cleanup path trusts.
         try:

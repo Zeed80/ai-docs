@@ -57,6 +57,9 @@ export default function CadListPage() {
   const [digitizeSheetFormat, setDigitizeSheetFormat] = useState<
     "" | SheetFormat
   >("");
+  const [vectorizeMethod, setVectorizeMethod] = useState<"trace" | "spec">(
+    "trace",
+  );
   const fileRef = useRef<HTMLInputElement | null>(null);
   const scanRef = useRef<HTMLInputElement | null>(null);
 
@@ -148,6 +151,7 @@ export default function CadListPage() {
           params: {
             quality_mode: "exact_or_refuse",
             digitization_profile: digitizationProfile,
+            vectorize_method: vectorizeMethod,
             source_filename: file.name,
             pdf_page: pdfPage,
             pdf_dpi: 300,
@@ -162,7 +166,7 @@ export default function CadListPage() {
         setBusy(false);
       }
     },
-    [digitizationProfile, digitizeSheetFormat, router, t],
+    [digitizationProfile, digitizeSheetFormat, vectorizeMethod, router, t],
   );
 
   const onRename = useCallback(
@@ -196,6 +200,17 @@ export default function CadListPage() {
           >
             {t("open_studio")}
           </Link>
+          <select
+            value={vectorizeMethod}
+            onChange={(e) =>
+              setVectorizeMethod(e.target.value as "trace" | "spec")
+            }
+            className="rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
+            title={t("vectorize_method")}
+          >
+            <option value="trace">{t("method_trace")}</option>
+            <option value="spec">{t("method_spec")}</option>
+          </select>
           <select
             value={digitizationProfile}
             onChange={(e) =>
@@ -295,7 +310,9 @@ export default function CadListPage() {
           <p className="mt-1 text-xs text-zinc-400">
             {t("vectorizer_quality_summary", {
               layoutF1:
-                vectorizerStatus.candidate.sheet_layout.view_f1_iou50.toFixed(3),
+                vectorizerStatus.candidate.sheet_layout.view_f1_iou50.toFixed(
+                  3,
+                ),
               heatmapLineF1:
                 vectorizerStatus.candidate.directional_fields.real_holdout_line_f1.toFixed(
                   3,
