@@ -4,7 +4,10 @@
 # only with the production qwen3-vl:32b stopped, so the GPU is free (see README).
 
 ### model
-model_name_or_path: Qwen/Qwen3-VL-2B-Instruct
+# Start from the CAD-pretrained ADSK checkpoint (a fine-tune OF Qwen3-VL-2B-
+# Instruct, so same architecture/processor) — better transfer than the plain
+# instruct base for our CAD-primitive task.
+model_name_or_path: ADSKAILab/Zero-To-CAD-Qwen3-VL-2B
 image_max_pixels: 1048576          # ~1024x1024 tiles; drawings are large
 trust_remote_code: true
 
