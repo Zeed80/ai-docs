@@ -72,6 +72,18 @@ def test_small_coordinate_jitter_is_tolerated_but_large_shift_is_not():
     assert compare_ir(far, truth)["exact_sheet"] is False
 
 
+def test_error_details_identify_geometry_near_miss():
+    truth = _ir([Circle(id="truth-circle", center=Point(x=300, y=200), radius=50)])
+    predicted = _ir([Circle(id="pred-circle", center=Point(x=320, y=200), radius=50)])
+
+    result = compare_ir(predicted, truth, include_details=True)
+    details = result["error_details"]["circle"]
+
+    assert details["unmatched_predicted_ids"] == ["pred-circle"]
+    assert details["unmatched_truth_ids"] == ["truth-circle"]
+    assert details["near_misses"][0]["reason"] == "geometry_out_of_tolerance"
+
+
 def test_dimension_symbol_variants_and_annotation_canonical_text_match():
     truth = _ir([
         DimensionEntity(

@@ -61,6 +61,20 @@ export interface Generation {
 export interface VectorizerDevelopmentStatus {
   pipeline_revision: string;
   evaluated_at: string;
+  runtime_pipeline: CadPipelineManifest;
+  latest_real_stack_regression: {
+    evaluated_at: string;
+    dwg_files: number;
+    photo_files: number;
+    entity_precision: number;
+    entity_recall: number;
+    entity_f1: number;
+    exact_sheet_rate: number;
+    false_exact_rate: number;
+    dxf_reopen_rate: number;
+    promotion_passed: boolean;
+    entity_f1_by_type: Record<string, number>;
+  };
   corpus: {
     licensed_web_assets: number;
     step_assets: number;
@@ -189,6 +203,33 @@ export interface VectorizerDevelopmentStatus {
       false_exact_rate: number;
     };
     production_default_changed: boolean;
+  };
+}
+
+export interface CadPipelineModelAssignment {
+  key: string;
+  provider: string | null;
+  provider_model: string | null;
+}
+
+export interface CadPipelineManifest {
+  manifest_version: string;
+  pipeline_revision: string;
+  profile: string;
+  method: string;
+  config_sha256: string;
+  source_sha256?: string | null;
+  captured_at: string;
+  promotion_gate: Record<string, number>;
+  components: {
+    geometry: { assignment: string; version: string; authoritative: boolean };
+    spec_reader: { task: string; models: CadPipelineModelAssignment[]; parameter_profile: string };
+    spec_drafter: { task: string; models: CadPipelineModelAssignment[]; parameter_profile: string };
+    [key: string]: unknown;
+  };
+  user_extensible_via: {
+    model_assignments: string;
+    profiles: string[];
   };
 }
 

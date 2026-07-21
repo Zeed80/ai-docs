@@ -10,6 +10,7 @@ between neural and CV proposals per region.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -139,7 +140,9 @@ _CV_USABLE_MIN_RECALL = 0.8
 _NEURAL_OPEN_ENDPOINT_MARGIN = 0.15
 
 
-def _open_endpoint_rate(entities: list[Any]) -> float | None:
+def _open_endpoint_rate(
+    entities: list[Any], *, min_segments: int = 4
+) -> float | None:
     """Fraction of segment endpoints that meet no other geometry.
 
     A self-referential cleanliness signal: real CAD lines share vertices, so a
@@ -147,25 +150,34 @@ def _open_endpoint_rate(entities: list[Any]) -> float | None:
     ``None`` when there are too few segments to judge.
     """
     segments = [e for e in entities if e.type == "segment"]
-    if len(segments) < 4:
+    if len(segments) < min_segments:
         return None
-    from collections import defaultdict
-
     snap = 4.0
-    points = [p for s in segments for p in (s.p1, s.p2)]
-    buckets: dict[tuple[int, int], int] = defaultdict(int)
-    for point in points:
-        buckets[(round(point.x / snap), round(point.y / snap))] += 1
+
+    def _distance_to_segment(point, segment) -> float:
+        dx = segment.p2.x - segment.p1.x
+        dy = segment.p2.y - segment.p1.y
+        length_sq = dx * dx + dy * dy
+        if length_sq <= 1e-12:
+            return math.hypot(point.x - segment.p1.x, point.y - segment.p1.y)
+        projection = (
+            (point.x - segment.p1.x) * dx + (point.y - segment.p1.y) * dy
+        ) / length_sq
+        projection = max(0.0, min(1.0, projection))
+        closest_x = segment.p1.x + projection * dx
+        closest_y = segment.p1.y + projection * dy
+        return math.hypot(point.x - closest_x, point.y - closest_y)
+
     open_ends = 0
-    for point in points:
-        cx, cy = round(point.x / snap), round(point.y / snap)
-        neighbours = sum(
-            buckets.get((cx + dx, cy + dy), 0)
-            for dx in (-1, 0, 1)
-            for dy in (-1, 0, 1)
-        )
-        if neighbours <= 1:  # only this endpoint itself → nothing meets it
-            open_ends += 1
+    for own_index, own in enumerate(segments):
+        for point in (own.p1, own.p2):
+            connected = any(
+                other_index != own_index
+                and _distance_to_segment(point, other) <= snap
+                for other_index, other in enumerate(segments)
+            )
+            if not connected:
+                open_ends += 1
     return open_ends / (2 * len(segments))
 
 # The lone-survivor gate exists to reject a genuinely fabricated result

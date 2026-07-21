@@ -1,11 +1,13 @@
 "use client";
 
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CadIr,
   CadCertification,
+  CadPipelineManifest,
   Generation,
   IrEntity,
   IrLineClass,
@@ -1205,6 +1207,9 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const cmdHint = cmdPrompt
     ? ""
     : t("vector.cmd_hint", { tool: t(`vector.tool_${tool}`) });
+  const pipelineManifest = gen.params?.cad_pipeline_manifest as
+    | CadPipelineManifest
+    | undefined;
 
   return (
     <div className="flex flex-col gap-3 pb-24 sm:pb-0">
@@ -1286,6 +1291,24 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           </span>
         )}
       </div>
+
+      {pipelineManifest && (
+        <details className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-400">
+          <summary className="cursor-pointer text-zinc-300">
+            {t("vector.pipeline_manifest")}: {pipelineManifest.pipeline_revision} · {pipelineManifest.config_sha256.slice(0, 12)}…
+          </summary>
+          <div className="mt-2 grid gap-1 md:grid-cols-2">
+            <div>{t("vector.pipeline_profile")}: {pipelineManifest.profile}</div>
+            <div>{t("vector.pipeline_method")}: {pipelineManifest.method}</div>
+            <div>{t("vector.pipeline_reader")}: {pipelineManifest.components.spec_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
+            <div>{t("vector.pipeline_drafter")}: {pipelineManifest.components.spec_drafter.models.map((model) => model.key).join(" → ") || t("vector.pipeline_deterministic")}</div>
+            <div className="font-mono text-[10px]">source {pipelineManifest.source_sha256?.slice(0, 16) ?? "—"}…</div>
+            <Link href="/settings/models" className="text-sky-300 hover:text-sky-200">
+              {t("vector.pipeline_change_models")}
+            </Link>
+          </div>
+        </details>
+      )}
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-1">

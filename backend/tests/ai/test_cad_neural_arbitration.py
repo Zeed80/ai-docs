@@ -250,6 +250,19 @@ def test_open_endpoint_rate_distinguishes_connected_from_floating():
     assert _open_endpoint_rate(square[:2]) is None  # too few to judge
 
 
+def test_open_endpoint_rate_counts_t_junction_as_connected():
+    geometry = [
+        Segment(p1=Point(x=0, y=50), p2=Point(x=100, y=50)),
+        Segment(p1=Point(x=50, y=0), p2=Point(x=50, y=50)),
+        Segment(p1=Point(x=0, y=0), p2=Point(x=0, y=50)),
+        Segment(p1=Point(x=100, y=0), p2=Point(x=100, y=50)),
+    ]
+
+    # Bottom endpoint of the vertical segment touches the middle of the
+    # horizontal segment and is therefore a real junction, not a floating end.
+    assert _open_endpoint_rate(geometry) == 3 / 8
+
+
 def test_arbitration_prefers_clean_cv_over_disconnected_neural():
     # CV reads the square cleanly and completely; neural covers the same ink
     # but sprays extra disconnected fragments the count-ratio guard (3×) would

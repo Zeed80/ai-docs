@@ -746,9 +746,12 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         return {"error": message}
 
     try:
+        import hashlib
+
         if not source_paths:
             return await _fail("Для оцифровки нужен исходный скан/фото.")
         content = download_file(source_paths[0])
+        source_sha256 = hashlib.sha256(content).hexdigest()
         if content.startswith(b"%PDF"):
             try:
                 content = _pdf_page_to_png(
@@ -763,6 +766,23 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # the desk/binding background before anything is traced. No-op for a
         # clean scan (no confident paper quad).
         content = _dewarp_photo(content)
+        from app.ai.cad_pipeline_manifest import build_cad_pipeline_manifest
+
+        pipeline_manifest = build_cad_pipeline_manifest(
+            profile=str(params.get("digitization_profile") or "auto"),
+            method=str(params.get("vectorize_method") or "trace"),
+            source_sha256=source_sha256,
+        )
+        # Persist the exact component/model snapshot before inference starts so
+        # failed and interrupted attempts remain reproducible in the UI too.
+        async with factory() as db:
+            manifest_gen = await db.get(ImageGeneration, gen_uuid)
+            if manifest_gen:
+                manifest_gen.params = {
+                    **(manifest_gen.params or {}),
+                    "cad_pipeline_manifest": pipeline_manifest,
+                }
+                await db.commit()
 
         # Method toggle: "spec" = the understanding->drafting path (a VLM reads
         # the drawing into a structured spec, then a parametric drafter builds a
@@ -793,9 +813,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             )
             if spec_ir is None:
                 return await _fail(
-                    "Метод «по описанию»: не удалось построить деталь из описания. "
-                    "Проверьте, что назначена модель-чертёжник (Настройки → Модели "
-                    "→ Оцифровка), или попробуйте метод «трассировка»."
+                    "Метод «по описанию»: назначенный чертёжник не смог построить "
+                    "поддерживаемую параметрическую геометрию для этого профиля. "
+                    "Попробуйте другую модель в Настройки → Модели → Оцифровка "
+                    "или используйте трассировку с обязательной проверкой."
                 )
             spec_ir.source.generation_id = generation_id
             _overlay_spec_annotations(spec_ir, spec)
@@ -811,6 +832,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     "normalized_source_path": normalized_path,
                     "vectorize_method": "spec",
                     "spec": spec,
+                    "cad_pipeline_manifest": pipeline_manifest,
                 }
                 await cad_ir_store.save_revision(
                     db, gen, spec_ir, origin="auto", created_by=owner_sub,
@@ -1158,6 +1180,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 "digitization_profile": profile_decision.profile,
                 "digitization_profile_confidence": profile_decision.confidence,
                 "digitization_profile_evidence": list(profile_decision.evidence),
+                "cad_pipeline_manifest": build_cad_pipeline_manifest(
+                    profile=profile_decision.profile,
+                    method="trace",
+                    source_sha256=source_sha256,
+                ),
             }
             await cad_ir_store.save_revision(
                 db, gen, ir,

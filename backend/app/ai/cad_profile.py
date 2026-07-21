@@ -43,7 +43,14 @@ def choose_profile(
 ) -> ProfileDecision:
     """Resolve ``auto`` to a domain without pretending weak evidence is fact."""
     normalized = (requested or "auto").strip().lower()
-    if normalized in ("mechanical", "mechanical_eskd", "construction"):
+    if normalized in (
+        "mechanical",
+        "mechanical_eskd",
+        "construction",
+        "electrical",
+        "hydraulic",
+        "pid",
+    ):
         profile = "mechanical" if normalized == "mechanical_eskd" else normalized
         return ProfileDecision(profile, 1.0, ("user_selected",))
 

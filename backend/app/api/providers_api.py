@@ -1104,7 +1104,12 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
     from app.ai.schemas import AITask
     from app.ai.task_routing import get_routing_for, save_task_routing
 
-    def _assign_task(task: AITask, model_key: str) -> None:
+    def _assign_task(
+        task: AITask,
+        model_key: str,
+        *,
+        fallback_keys: list[str] | None = None,
+    ) -> None:
         """Set primary + local/cloud policy from the model (non-confidential tasks).
 
         Cloud model → local_only=False, allow_cloud=True so the AI router won't
@@ -1119,7 +1124,8 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
                 task=task.value,
                 models=stale_tail,
             )
-        tail = [m for m in current.models if m != model_key and m in valid_keys]
+        source_tail = current.models if fallback_keys is None else fallback_keys
+        tail = [m for m in source_tail if m != model_key and m in valid_keys]
         routing = current.model_copy(update={
             "models": [model_key, *tail],
             "local_only": cap.local_only,
@@ -1151,7 +1157,15 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
         elif slot == "agent_email":
             _assign_task(AITask.EMAIL_DRAFTING, key)
         elif slot == "cad_spec_read":
-            _set_primary(AITask.CAD_SPEC_READ, key)
+            # This slot has a safety-reviewed dedicated route. Do not retain an
+            # old generic-VLM tail (notably qwen3-vl) after the operator changes
+            # its primary model through the UI.
+            cad_route = registry.routes.get(AITask.CAD_SPEC_READ)
+            _assign_task(
+                AITask.CAD_SPEC_READ,
+                key,
+                fallback_keys=list(cad_route.fallback_chain) if cad_route else [],
+            )
         elif slot == "cad_spec_draft":
             _set_primary(AITask.CAD_SPEC_DRAFT, key)
         elif slot == "agent_orchestrator":

@@ -25,3 +25,11 @@ def test_ambiguous_auto_profile_stays_unknown() -> None:
 def test_explicit_construction_filename_is_sufficient_evidence() -> None:
     decision = choose_profile("auto", [], "Фасад 1-3.dwg")
     assert decision.profile == "construction"
+
+
+def test_explicit_extended_profiles_are_preserved() -> None:
+    for profile in ("electrical", "hydraulic", "pid"):
+        decision = choose_profile(profile, ["ambiguous title"])
+        assert decision.profile == profile
+        assert decision.confidence == 1.0
+        assert decision.evidence == ("user_selected",)

@@ -56,6 +56,25 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
         "native_dxf_holdout_pairs": 6,
         "native_dxf_entities": 1_661,
     },
+    "latest_real_stack_regression": {
+        "evaluated_at": "2026-07-21",
+        "dwg_files": 10,
+        "photo_files": 19,
+        "entity_precision": 0.055452,
+        "entity_recall": 0.035688,
+        "entity_f1": 0.043427,
+        "exact_sheet_rate": 0.0,
+        "false_exact_rate": 1.0,
+        "dxf_reopen_rate": 1.0,
+        "promotion_passed": False,
+        "entity_f1_by_type": {
+            "segment": 0.033300,
+            "circle": 0.669903,
+            "arc": 0.0,
+            "hatch": 0.0,
+            "text": 0.0,
+        },
+    },
     "candidate": {
         "checkpoint_step": 1_000,
         "standalone": {
@@ -179,10 +198,16 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
 def get_cad_vectorizer_development_status() -> dict[str, Any]:
     """Return a copy so an API caller cannot mutate process-wide evidence."""
 
+    from app.ai.cad_pipeline_manifest import build_cad_pipeline_manifest
+
     corpus = dict(CAD_VECTORIZER_DEVELOPMENT_STATUS["corpus"])
     candidate = CAD_VECTORIZER_DEVELOPMENT_STATUS["candidate"]
+    latest = CAD_VECTORIZER_DEVELOPMENT_STATUS["latest_real_stack_regression"]
     return {
         **CAD_VECTORIZER_DEVELOPMENT_STATUS,
+        "runtime_pipeline": build_cad_pipeline_manifest(
+            profile="auto", method="trace"
+        ),
         "accuracy_contract": {
             **CAD_VECTORIZER_DEVELOPMENT_STATUS["accuracy_contract"],
             "required_signatures": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["accuracy_contract"]["required_signatures"]),
@@ -194,6 +219,10 @@ def get_cad_vectorizer_development_status() -> dict[str, Any]:
             "rejected_as_authoritative": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"]["rejected_as_authoritative"]),
         },
         "corpus": corpus,
+        "latest_real_stack_regression": {
+            **latest,
+            "entity_f1_by_type": dict(latest["entity_f1_by_type"]),
+        },
         "candidate": {
             **candidate,
             "standalone": dict(candidate["standalone"]),

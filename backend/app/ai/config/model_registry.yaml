@@ -590,6 +590,18 @@ routes:
       - "qwen3_vl_32b_ollama"
       - "claude_sonnet_anthropic"
     manual_review_fallback: true
+  cad_spec_read:
+    required_modalities: ["vision"]
+    local_only: true
+    fallback_chain:
+      - "qwen3_6_35b_apex_ollama"
+      - "gemma4_e4b_ollama"
+    manual_review_fallback: true
+    notes: >
+      Drawing-to-specification reader for the description method. It is not an
+      authoritative geometry source: deterministic verification and two-person
+      certification remain mandatory. Qwen3-VL is deliberately excluded after
+      failing the real-drawing digitization evaluation.
   engineering_reasoning:
     required_modalities: ["text"]
     local_only: true

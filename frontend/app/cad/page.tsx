@@ -19,7 +19,13 @@ import {
 } from "@/lib/studio-api";
 
 type SheetFormat = "A4" | "A3" | "A2" | "A1";
-type DigitizationProfile = "auto" | "mechanical_eskd" | "construction";
+type DigitizationProfile =
+  | "auto"
+  | "mechanical_eskd"
+  | "construction"
+  | "electrical"
+  | "hydraulic"
+  | "pid";
 
 function docTitle(g: Generation): string {
   const params = (g.params ?? {}) as Record<string, unknown>;
@@ -222,6 +228,9 @@ export default function CadListPage() {
             <option value="auto">{t("profile_auto")}</option>
             <option value="mechanical_eskd">{t("profile_mechanical")}</option>
             <option value="construction">{t("profile_construction")}</option>
+            <option value="electrical">{t("profile_electrical")}</option>
+            <option value="hydraulic">{t("profile_hydraulic")}</option>
+            <option value="pid">{t("profile_pid")}</option>
           </select>
           <select
             value={digitizeSheetFormat}
@@ -343,6 +352,50 @@ export default function CadListPage() {
                 ),
             })}
           </p>
+          <p className="mt-2 rounded border border-red-400/20 bg-red-950/20 px-2 py-1 text-xs text-red-100">
+            {t("latest_real_regression", {
+              dwg: vectorizerStatus.latest_real_stack_regression.dwg_files,
+              photos: vectorizerStatus.latest_real_stack_regression.photo_files,
+              precision:
+                vectorizerStatus.latest_real_stack_regression.entity_precision.toFixed(4),
+              recall:
+                vectorizerStatus.latest_real_stack_regression.entity_recall.toFixed(4),
+              f1: vectorizerStatus.latest_real_stack_regression.entity_f1.toFixed(4),
+              exact:
+                vectorizerStatus.latest_real_stack_regression.exact_sheet_rate.toFixed(2),
+              falseExact:
+                vectorizerStatus.latest_real_stack_regression.false_exact_rate.toFixed(2),
+            })}
+          </p>
+          <div className="mt-3 grid gap-2 rounded border border-white/10 bg-black/20 p-3 text-xs text-zinc-300 md:grid-cols-2">
+            <div>
+              <div className="font-medium text-zinc-200">{t("pipeline_models")}</div>
+              <div className="mt-1">
+                {t("pipeline_geometry")}: {vectorizerStatus.runtime_pipeline.components.geometry.assignment}
+              </div>
+              <div>
+                {t("pipeline_reader")}: {vectorizerStatus.runtime_pipeline.components.spec_reader.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
+              </div>
+              <div>
+                {t("pipeline_drafter")}: {vectorizerStatus.runtime_pipeline.components.spec_drafter.models.map((m) => m.key).join(" → ") || t("pipeline_deterministic")}
+              </div>
+            </div>
+            <div>
+              <div>{t("pipeline_revision")}: {vectorizerStatus.runtime_pipeline.pipeline_revision}</div>
+              <div className="font-mono text-[10px] text-zinc-500">
+                config {vectorizerStatus.runtime_pipeline.config_sha256.slice(0, 16)}…
+              </div>
+              <div className="mt-1">
+                {t("pipeline_profiles")}: {vectorizerStatus.runtime_pipeline.user_extensible_via.profiles.join(", ")}
+              </div>
+              <Link
+                href={vectorizerStatus.runtime_pipeline.user_extensible_via.model_assignments}
+                className="mt-2 inline-block text-sky-300 hover:text-sky-200"
+              >
+                {t("pipeline_assign_models")}
+              </Link>
+            </div>
+          </div>
         </section>
       )}
 

@@ -179,6 +179,7 @@ def compare_entities(
     predicted_size: tuple[int, int],
     truth_size: tuple[int, int],
     tolerance: float = 0.0025,
+    include_details: bool = False,
 ) -> dict:
     """Hungarian matching by entity type with strict semantic agreement."""
     import numpy as np
@@ -195,6 +196,7 @@ def compare_entities(
 
     per_type: dict[str, dict] = {}
     total_tp = total_fp = total_fn = 0
+    error_details: dict[str, dict] = {}
     for entity_type in sorted(set(predicted_by_type) | set(truth_by_type)):
         pred = predicted_by_type[entity_type]
         gt = truth_by_type[entity_type]
@@ -214,11 +216,27 @@ def compare_entities(
                 for p in pred
             ])
             rows, columns = linear_sum_assignment(costs)
+            matched_pred: set[int] = set()
+            matched_truth: set[int] = set()
+            near_misses: list[dict] = []
             for row, column in zip(rows, columns):
                 distance = float(costs[row, column])
                 if distance <= tolerance:
                     matched += 1
                     distances.append(distance)
+                    matched_pred.add(int(row))
+                    matched_truth.add(int(column))
+                elif include_details:
+                    near_misses.append({
+                        "predicted_id": pred[row].id,
+                        "truth_id": gt[column].id,
+                        "distance": round(distance, 6),
+                        "reason": "semantic_mismatch" if distance >= 1.0 else "geometry_out_of_tolerance",
+                    })
+        else:
+            matched_pred = set()
+            matched_truth = set()
+            near_misses = []
         fp, fn = len(pred) - matched, len(gt) - matched
         precision = matched / len(pred) if pred else (1.0 if not gt else 0.0)
         recall = matched / len(gt) if gt else (1.0 if not pred else 0.0)
@@ -238,6 +256,16 @@ def compare_entities(
             "f1": round(f1, 6),
             "max_distance": round(max(distances), 6) if distances else None,
         }
+        if include_details:
+            error_details[entity_type] = {
+                "unmatched_predicted_ids": [
+                    entity.id for index, entity in enumerate(pred) if index not in matched_pred
+                ],
+                "unmatched_truth_ids": [
+                    entity.id for index, entity in enumerate(gt) if index not in matched_truth
+                ],
+                "near_misses": near_misses,
+            }
         total_tp += matched
         total_fp += fp
         total_fn += fn
@@ -250,7 +278,7 @@ def compare_entities(
         else 0.0
     )
     exact = total_fp == 0 and total_fn == 0
-    return {
+    result = {
         "per_type": per_type,
         "micro": {
             "matched": total_tp,
@@ -262,13 +290,23 @@ def compare_entities(
         },
         "exact_sheet": exact,
     }
+    if include_details:
+        result["error_details"] = error_details
+    return result
 
 
-def compare_ir(predicted: CadIR, truth: CadIR, tolerance: float = 0.0025) -> dict:
+def compare_ir(
+    predicted: CadIR,
+    truth: CadIR,
+    tolerance: float = 0.0025,
+    *,
+    include_details: bool = False,
+) -> dict:
     return compare_entities(
         predicted.entities,
         truth.entities,
         predicted_size=(predicted.source.image_width, predicted.source.image_height),
         truth_size=(truth.source.image_width, truth.source.image_height),
         tolerance=tolerance,
+        include_details=include_details,
     )

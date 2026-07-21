@@ -336,8 +336,6 @@ def _geometry_quality(entities) -> dict:
     noise, and how many endpoints float free instead of meeting other geometry.
     Lower is better for every rate; fragmentation 1.0 = already consolidated."""
     import math
-    from collections import defaultdict
-
     segs = [e for e in entities if e.type == "segment"]
     n = len(segs)
     if n == 0:
@@ -360,21 +358,7 @@ def _geometry_quality(entities) -> dict:
         else:
             seen.add(key)
 
-    snap = 4.0
-    pts = [p for s in segs for p in (s.p1, s.p2)]
-    buckets: dict = defaultdict(int)
-    for p in pts:
-        buckets[(round(p.x / snap), round(p.y / snap))] += 1
-    open_ends = 0
-    for p in pts:
-        cx, cy = round(p.x / snap), round(p.y / snap)
-        neigh = sum(
-            buckets.get((cx + dx, cy + dy), 0)
-            for dx in (-1, 0, 1)
-            for dy in (-1, 0, 1)
-        )
-        if neigh <= 1:  # only this endpoint itself → nothing meets it
-            open_ends += 1
+    from app.ai.cad_recognize.verify import _open_endpoint_rate
 
     frag = 1.0
     try:
@@ -391,7 +375,10 @@ def _geometry_quality(entities) -> dict:
         "fragmentation": frag,
         "degenerate_rate": round(degen / n, 3),
         "duplicate_rate": round(dup / n, 3),
-        "open_endpoint_rate": round(open_ends / (2 * n), 3),
+        "open_endpoint_rate": round(
+            _open_endpoint_rate(segs, min_segments=2) or 0.0,
+            3,
+        ),
     }
 
 
@@ -603,6 +590,7 @@ def _recognize(
                 truth_ir.source.image_width,
                 truth_ir.source.image_height,
             ),
+            include_details=True,
         )
         rec["entity_metrics"] = entity_metrics
         rec["exact_sheet"] = entity_metrics["exact_sheet"]
@@ -679,6 +667,38 @@ def main() -> int:
     dwg_files = [] if args.skip_dwg else sorted(root.glob("*.dwg"))
     if args.limit_dwg:
         dwg_files = dwg_files[: args.limit_dwg]
+    photos = [] if args.skip_photos else sorted([
+        *root.glob("*.jpg"), *root.glob("*.jpeg"), *root.glob("*.JPG"),
+        *root.glob("*.png"), *root.glob("*.PNG"),
+    ])
+    if args.limit_photos:
+        photos = photos[: args.limit_photos]
+    if not dwg_files and not photos:
+        print(
+            f"ERROR: no DWG or raster drawings found in {root}; regression was not executed.",
+            file=sys.stderr,
+        )
+        return 2
+    import hashlib
+
+    from app.ai.cad_pipeline_manifest import build_cad_pipeline_manifest
+
+    inputs = [
+        {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        for path in [*dwg_files, *photos]
+    ]
+    results["run_manifest"] = {
+        **build_cad_pipeline_manifest(profile="auto", method="trace"),
+        "evaluator": {
+            "recognizer": args.recognizer,
+            "long_side": args.long_side,
+            "entity_tolerance": 0.0025,
+        },
+        "inputs": inputs,
+        "input_set_sha256": hashlib.sha256(
+            json.dumps(inputs, sort_keys=True).encode()
+        ).hexdigest(),
+    }
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = pathlib.Path(tmp)
         for dwg in dwg_files:
@@ -738,18 +758,6 @@ def main() -> int:
             print(f"  -> {rec.get('entities', 'declined')} entities, "
                   f"recall={rec.get('coverage_recall')}, precision={rec.get('coverage_precision')}")
 
-    photos = [] if args.skip_photos else sorted([
-        *root.glob("*.jpg"), *root.glob("*.jpeg"), *root.glob("*.JPG"),
-        *root.glob("*.png"), *root.glob("*.PNG"),
-    ])
-    if args.limit_photos:
-        photos = photos[: args.limit_photos]
-    if not dwg_files and not photos:
-        print(
-            f"ERROR: no DWG or raster drawings found in {root}; regression was not executed.",
-            file=sys.stderr,
-        )
-        return 2
     for photo in photos:
         print(f"[photo] {photo.name}")
         rec = _recognize(
@@ -780,6 +788,31 @@ def main() -> int:
         recall = matched / max(matched + false_negative, 1)
         f1 = 2 * precision * recall / max(precision + recall, 1e-12)
         claims = [r for r in evaluated if r.get("legacy_claimed_exact")]
+        per_type: dict[str, dict[str, int | float]] = {}
+        entity_types = sorted({
+            kind
+            for record in evaluated
+            for kind in record["entity_metrics"]["per_type"]
+        })
+        for kind in entity_types:
+            rows = [
+                record["entity_metrics"]["per_type"].get(kind, {})
+                for record in evaluated
+            ]
+            tp = sum(int(row.get("matched", 0)) for row in rows)
+            fp = sum(int(row.get("false_positive", 0)) for row in rows)
+            fn = sum(int(row.get("false_negative", 0)) for row in rows)
+            kind_precision = tp / max(tp + fp, 1)
+            kind_recall = tp / max(tp + fn, 1)
+            kind_f1 = 2 * kind_precision * kind_recall / max(kind_precision + kind_recall, 1e-12)
+            per_type[kind] = {
+                "matched": tp,
+                "false_positive": fp,
+                "false_negative": fn,
+                "precision": round(kind_precision, 6),
+                "recall": round(kind_recall, 6),
+                "f1": round(kind_f1, 6),
+            }
         return {
             "entity_precision": round(precision, 6),
             "entity_recall": round(recall, 6),
@@ -799,6 +832,7 @@ def main() -> int:
                 if record.get("entity_metrics")
                 and not record.get("ground_truth_complete", True)
             ),
+            "entity_errors_by_type": per_type,
         }
 
     def _agg(section: dict) -> dict:
