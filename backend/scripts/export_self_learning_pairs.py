@@ -43,8 +43,17 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
     from app.db.session import _get_session_factory
     from app.storage import download_file
 
+    import hashlib
+
     (out_dir / "sequences" / "self_learning").mkdir(parents=True, exist_ok=True)
     (out_dir / "images" / "self_learning").mkdir(parents=True, exist_ok=True)
+    (out_dir / "ir" / "self_learning").mkdir(parents=True, exist_ok=True)
+
+    def _split_for(gen_id: str) -> str:
+        # Deterministic per-generation split so the flywheel keeps a held-out
+        # slice for honest eval (and a source never straddles splits on retrain).
+        bucket = int(hashlib.sha256(str(gen_id).encode()).hexdigest()[:8], 16) % 100
+        return "holdout" if bucket < 10 else "val" if bucket < 20 else "train"
 
     factory = _get_session_factory()
     rows_out = []
@@ -125,10 +134,16 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
             seq = np.array(encode(corrected_ir), dtype=np.float32)
             seq_path = out_dir / "sequences" / "self_learning" / f"{gen_id}.npy"
             np.save(seq_path, seq)
+            # Local copy of the accepted IR + a split, so this manifest feeds
+            # tools/cad-dataset/build_vlm_sft.py directly (generative retrain).
+            local_ir = out_dir / "ir" / "self_learning" / f"{gen_id}.json"
+            local_ir.write_text(corrected_ir.model_dump_json())
             rows_out.append({
                 "image": str(image_path.resolve()),
                 "sequence": str(seq_path.resolve()),
-                "ir": accepted.ir_path,
+                "ir": str(local_ir.resolve()),
+                "storage_ir": accepted.ir_path,
+                "split": _split_for(gen_id),
                 "generation_id": str(gen_id),
                 "auto_revision_ir": revisions[0].ir_path,
                 "correction_origin": accepted.origin,

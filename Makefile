@@ -299,6 +299,25 @@ cad-vlm-sft:
 		--manifest cad-dataset-out/web-step-corpus/manifest.jsonl \
 		--out cad-dataset-out/vlm-sft --backend backend
 
+# --- B5 active-learning flywheel: production accepted edits -> generative retrain ---
+# 1. Export accepted (image, human-corrected IR) pairs from the prod DB (needs
+#    DB access -> runs inside infra-backend-1). Empty until the system has usage.
+cad-flywheel-export:
+	docker exec infra-backend-1 sh -c 'cd /app && python scripts/export_self_learning_pairs.py \
+		--out /app/data/self-learning'
+	docker cp infra-backend-1:/app/data/self-learning cad-dataset-out/self-learning
+
+# 2. Rebuild the SFT set = synthetic corpora + the real accepted pairs (gold).
+cad-flywheel-sft:
+	python3 tools/cad-dataset/build_vlm_sft.py \
+		--manifest cad-dataset-out/self-learning/self_learning.jsonl \
+		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
+		--manifest cad-dataset-out/profile-corpus-large/manifest.jsonl \
+		--manifest cad-dataset-out/profile-corpus-xl/manifest.jsonl \
+		--manifest cad-dataset-out/web-step-corpus/manifest.jsonl \
+		--out cad-dataset-out/vlm-sft --backend backend
+	# 3. then `make cad-vlm-train` (ADSK base) and score on the flywheel holdout.
+
 # Stage 2: LoRA fine-tune Qwen3-VL on the SFT set. Needs the GPU free — stop
 # the production qwen3-vl:32b in ollama first (see infra/vlm-finetune/README).
 cad-vlm-train-image:
