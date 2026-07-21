@@ -116,16 +116,25 @@ def _rotation_sections(spec: dict) -> list[dict]:
     just transitions between them and carry no length of their own.
     """
     main = spec.get("main_view") or {}
+    # A section is any coaxial body-of-revolution segment. The VLM labels these
+    # inconsistently (cylinder/cone/step/neck/journal/shaft/…), so accept any
+    # feature that carries a diameter UNLESS it is clearly a sub-feature cut
+    # into the body (a hole/keyway/thread/chamfer/groove).
+    sub_features = {"hole", "keyway", "thread", "chamfer", "groove", "slot", "bore", "fillet"}
     sections: list[dict] = []
     for feature in main.get("features", []) or []:
         if not isinstance(feature, dict):
             continue
         kind = str(feature.get("kind", "")).lower()
-        if kind in ("cylinder", "cone", "step"):
-            diameter = _num(feature.get("diameter_mm"))
-            length = _num(feature.get("length_mm"))
-            if diameter is not None:
-                sections.append({"d": diameter, "l": length, "note": feature.get("note")})
+        if any(sub in kind for sub in sub_features):
+            continue
+        diameter = _num(feature.get("diameter_mm")) or _num(feature.get("diameter"))
+        if diameter is not None and diameter > 0:
+            sections.append({
+                "d": diameter,
+                "l": _num(feature.get("length_mm")) or _num(feature.get("length")),
+                "note": feature.get("note"),
+            })
     return sections
 
 
