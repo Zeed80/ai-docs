@@ -123,24 +123,21 @@ def _num(value: Any) -> float | None:
     return float(match.group().replace(",", ".")) if match else None
 
 
-def _rotation_sections(spec: dict) -> list[dict]:
-    """Pull ordered cylindrical sections (diameter, length) from the spec.
+# A section is any coaxial body-of-revolution segment. The VLM labels these
+# inconsistently (cylinder/cone/step/neck/journal/shaft/…), so accept any
+# feature that carries a diameter UNLESS it is clearly a sub-feature cut into
+# the body (a hole/keyway/thread/chamfer/groove).
+_SUB_FEATURES = {"hole", "keyway", "thread", "chamfer", "groove", "slot", "bore", "fillet"}
 
-    A rotation body's main view is a run of coaxial cylinders/cones; steps are
-    just transitions between them and carry no length of their own.
-    """
-    main = spec.get("main_view") or {}
-    # A section is any coaxial body-of-revolution segment. The VLM labels these
-    # inconsistently (cylinder/cone/step/neck/journal/shaft/…), so accept any
-    # feature that carries a diameter UNLESS it is clearly a sub-feature cut
-    # into the body (a hole/keyway/thread/chamfer/groove).
-    sub_features = {"hole", "keyway", "thread", "chamfer", "groove", "slot", "bore", "fillet"}
+
+def _sections_from_features(features: Any) -> list[dict]:
+    """Ordered (diameter, length) cylindrical sections from a features list."""
     sections: list[dict] = []
-    for feature in main.get("features", []) or []:
+    for feature in features or []:
         if not isinstance(feature, dict):
             continue
         kind = str(feature.get("kind", "")).lower()
-        if any(sub in kind for sub in sub_features):
+        if any(sub in kind for sub in _SUB_FEATURES):
             continue
         diameter = _num(feature.get("diameter_mm")) or _num(feature.get("diameter"))
         if diameter is not None and diameter > 0:
@@ -150,6 +147,75 @@ def _rotation_sections(spec: dict) -> list[dict]:
                 "note": feature.get("note"),
             })
     return sections
+
+
+def _rotation_sections(spec: dict) -> list[dict]:
+    """Sections of the single main-view rotation body (back-compat helper)."""
+    return _sections_from_features((spec.get("main_view") or {}).get("features", []))
+
+
+def _rotation_parts(spec: dict) -> list[list[dict]]:
+    """One ordered section-list PER rotation body on the sheet.
+
+    Uses ``parts[]`` when the reader found several bodies, else the single
+    ``main_view``. Only bodies with ≥2 diameter sections qualify (a real
+    stepped profile), so prismatic parts fall through to the generative model.
+    """
+    result: list[list[dict]] = []
+    for part in spec.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        sections = _sections_from_features(part.get("features", []))
+        if len(sections) >= 2:
+            result.append(sections)
+    if not result:
+        sections = _rotation_sections(spec)
+        if len(sections) >= 2:
+            result.append(sections)
+    return result
+
+
+def _fill_lengths(sections: list[dict], spec: dict) -> None:
+    """Fill missing section lengths so the profile stays proportionate."""
+    diameters = [s["d"] for s in sections if s["d"]] or [10.0]
+    overall = None
+    for dim in spec.get("dimensions", []) or []:
+        text = str(dim.get("applies_to", "")) + " " + str(dim.get("value", ""))
+        if any(word in text.lower() for word in ("общая", "overall", "длина детали")):
+            overall = _num(dim.get("value"))
+            break
+    known = sum(s["l"] for s in sections if s["l"])
+    missing = [s for s in sections if not s["l"]]
+    if missing:
+        remaining = (overall - known) if (overall and overall > known) else max(known, len(missing) * max(diameters))
+        each = max(1.0, remaining / len(missing))
+        for s in missing:
+            s["l"] = each
+
+
+def _emit_profile(sections: list[dict], px_per_mm: float, x_left: float, axis_y: float, seg) -> float:
+    """Emit one stepped rotation profile (both generatrices + its OWN axis).
+
+    The axis is CONSTRUCTED here, never guessed — the profile is exactly
+    symmetric about it. Returns the right edge x (for canvas sizing).
+    """
+    x = x_left
+    prev_r = None
+    for s in sections:
+        length_px = s["l"] * px_per_mm
+        r = s["d"] * px_per_mm / 2.0
+        if prev_r is None:
+            seg(x, axis_y - r, x, axis_y + r)  # left end cap
+        elif abs(r - prev_r) > 0.5:
+            seg(x, axis_y - prev_r, x, axis_y - r)
+            seg(x, axis_y + prev_r, x, axis_y + r)
+        seg(x, axis_y - r, x + length_px, axis_y - r)  # top generatrix
+        seg(x, axis_y + r, x + length_px, axis_y + r)  # bottom generatrix
+        x += length_px
+        prev_r = r
+    seg(x, axis_y - prev_r, x, axis_y + prev_r)  # right end cap
+    seg(x_left - 20, axis_y, x + 20, axis_y, cls="axis", width="thin")  # centreline
+    return x
 
 
 # ГОСТ 2.301 sheet sizes (short, long) mm; ГОСТ 2.302 standard scale series.
@@ -201,66 +267,57 @@ def draft_rotation_body(
     sheet_format: str | None = None,
     landscape: bool = True,
 ) -> CadIR | None:
-    """Construct a clean stepped-shaft main view from a rotation-body spec.
+    """Construct clean stepped-shaft main view(s) from a rotation-body spec.
 
-    When ``sheet_format`` is given, the profile is laid out on that ГОСТ sheet
-    at an automatically chosen standard scale (ГОСТ 2.302): the largest scale
-    from the series at which the part fits. Otherwise it is fit into ~900 px.
+    Handles MULTIPLE bodies (``parts[]``): each is drafted as an exact symmetric
+    stepped profile about its OWN constructed axis, and the bodies are stacked
+    vertically so they never overlap. The axis is never "found" — it is built,
+    so the contour is always correct.
 
-    Returns None when the spec isn't a usable rotation body (too few sections
-    with a diameter), so the caller can fall back to another method.
+    When ``sheet_format`` is given, all bodies share one auto-chosen ГОСТ 2.302
+    scale and are centred on that sheet. Otherwise they free-fit.
+
+    Returns None when the spec has no usable rotation body (so the caller can
+    fall back to the generative model for prismatic/complex geometry).
     """
-    sections = _rotation_sections(spec)
-    diameters = [s["d"] for s in sections if s["d"]]
-    if len(sections) < 2 or not diameters:
+    parts = _rotation_parts(spec)
+    if not parts:
         return None
+    for sections in parts:
+        _fill_lengths(sections, spec)
 
-    # Fill missing lengths: distribute the overall length (or a default) across
-    # the sections that lack one, so the profile is still proportionate.
-    overall = None
-    for dim in spec.get("dimensions", []) or []:
-        text = str(dim.get("applies_to", "")) + " " + str(dim.get("value", ""))
-        if any(word in text.lower() for word in ("общая", "overall", "длина детали")):
-            overall = _num(dim.get("value"))
-            break
-    known = sum(s["l"] for s in sections if s["l"])
-    missing = [s for s in sections if not s["l"]]
-    if missing:
-        remaining = (overall - known) if (overall and overall > known) else max(known, len(missing) * max(diameters))
-        each = max(1.0, remaining / len(missing))
-        for s in missing:
-            s["l"] = each
+    part_dims = [(sum(s["l"] for s in secs), max(s["d"] for s in secs)) for secs in parts]
+    layout_w = max(w for w, _ in part_dims)
+    gap_mm = 0.2 * max(h for _, h in part_dims)  # vertical gap between bodies
+    layout_h = sum(h for _, h in part_dims) + gap_mm * (len(parts) - 1)
 
-    total_len = sum(s["l"] for s in sections)
-    max_d = max(diameters)
-
-    # Layout: on a named sheet at an auto-chosen standard scale, else free-fit.
     scale_label: str | None = None
     scale_source: str | None = None
     sheet_info = None
     if sheet_format:
         ratio, scale_label = choose_standard_scale(
-            total_len, max_d, sheet_format, landscape=landscape
+            layout_w, layout_h, sheet_format, landscape=landscape
         )
-        px_per_paper_mm = 4.0  # paper resolution for the sheet canvas
-        px_per_mm = ratio * px_per_paper_mm  # real mm → drawn px (scale applied)
+        ppp = 4.0  # paper resolution for the sheet canvas
+        px_per_mm = ratio * ppp
         short, long = _GOST_SHEETS.get(sheet_format.upper(), _GOST_SHEETS["A4"])
         pw_mm, ph_mm = (long, short) if landscape else (short, long)
-        width_px = pw_mm * px_per_paper_mm
-        height_px = ph_mm * px_per_paper_mm
-        frame_x0 = _FRAME_LEFT_MM * px_per_paper_mm
-        frame_y0 = _FRAME_OTHER_MM * px_per_paper_mm
-        frame_w = (pw_mm - _FRAME_LEFT_MM - _FRAME_OTHER_MM) * px_per_paper_mm
-        frame_h = (ph_mm - 2 * _FRAME_OTHER_MM) * px_per_paper_mm
-        obj_w = total_len * px_per_mm
-        margin = frame_x0 + max((frame_w - obj_w) / 2.0, 0.0)  # centre horizontally
-        axis_y = frame_y0 + frame_h / 2.0  # centre vertically in the frame
+        width_px = pw_mm * ppp
+        height_px = ph_mm * ppp
+        frame_x0 = _FRAME_LEFT_MM * ppp
+        frame_y0 = _FRAME_OTHER_MM * ppp
+        frame_w = (pw_mm - _FRAME_LEFT_MM - _FRAME_OTHER_MM) * ppp
+        frame_h = (ph_mm - 2 * _FRAME_OTHER_MM) * ppp
+        x_left = frame_x0 + max((frame_w - layout_w * px_per_mm) / 2.0, 0.0)
+        y_top = frame_y0 + max((frame_h - layout_h * px_per_mm) / 2.0, 0.0)
         scale_source = "sheet_format"
     else:
         if px_per_mm is None:
-            px_per_mm = 900.0 / max(total_len, 1.0)  # fit the length into ~900px
-        margin = 60.0
-        axis_y = margin + max_d * px_per_mm / 2.0
+            px_per_mm = 900.0 / max(layout_w, 1.0)
+        x_left = 60.0
+        y_top = 60.0
+        width_px = height_px = 0.0  # computed from content below
+
     entities: list[Any] = []
 
     def seg(x1, y1, x2, y2, cls="contour", width="main"):
@@ -271,26 +328,12 @@ def draft_rotation_body(
             )
         )
 
-    x = margin
-    prev_r = None
-    for s in sections:
-        length_px = s["l"] * px_per_mm
-        r = s["d"] * px_per_mm / 2.0
-        # vertical step at the boundary between the previous and this diameter
-        if prev_r is None:
-            seg(x, axis_y - r, x, axis_y + r)  # left end cap
-        elif abs(r - prev_r) > 0.5:
-            seg(x, axis_y - prev_r, x, axis_y - r)
-            seg(x, axis_y + prev_r, x, axis_y + r)
-        # top and bottom edges of this cylinder
-        seg(x, axis_y - r, x + length_px, axis_y - r)
-        seg(x, axis_y + r, x + length_px, axis_y + r)
-        x += length_px
-        prev_r = r
-    seg(x, axis_y - prev_r, x, axis_y + prev_r)  # right end cap
-
-    # Axis centreline (dash-dot), a touch past both ends.
-    seg(margin - 20, axis_y, x + 20, axis_y, cls="axis", width="thin")
+    cursor_y = y_top
+    right_edge = x_left
+    for sections, (_w, h) in zip(parts, part_dims):
+        axis_y = cursor_y + h * px_per_mm / 2.0
+        right_edge = max(right_edge, _emit_profile(sections, px_per_mm, x_left, axis_y, seg))
+        cursor_y += (h + gap_mm) * px_per_mm
 
     if sheet_format:
         from app.ai.cad_ir.schema import SheetInfo
@@ -301,8 +344,8 @@ def draft_rotation_body(
             title_block={"scale": scale_label} if scale_label else {},
         )
     else:
-        width_px = x + margin
-        height_px = axis_y + max_d * px_per_mm / 2.0 + margin
+        width_px = right_edge + 60.0
+        height_px = cursor_y + 60.0
 
     extra = {"sheet": sheet_info} if sheet_info is not None else {}
     ir = CadIR(
@@ -379,12 +422,16 @@ async def draft_from_spec_async(
 ) -> CadIR | None:
     """Async variant: usable from inside a running event loop (the digitize task).
 
-    Generative-first when a model is assigned: it handles what the single-stack
-    parametric drafter can't — MULTIPLE bodies on one sheet, mixed/prismatic
-    parts, and rotation bodies it mis-reads/mis-builds. The deterministic
-    parametric drafter is the fallback (used when no model is assigned, or when
-    the model returns nothing usable).
+    Deterministic-first for rotation bodies: their axis+symmetry are CONSTRUCTED
+    (never guessed), so the contour is always correct — and the parametric
+    drafter now handles MULTIPLE bodies too. A generative model is used only for
+    parts it declines (prismatic/complex), where free drawing is the only option.
     """
+    deterministic = draft_rotation_body(
+        spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
+    )
+    if deterministic is not None:
+        return deterministic
     if draft_model:
         try:
             generated = await _draft_generative(
@@ -395,9 +442,7 @@ async def draft_from_spec_async(
                 return generated
         except Exception:  # noqa: BLE001
             pass
-    return draft_rotation_body(
-        spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
-    )
+    return None
 
 
 _DRAFT_PROMPT = (

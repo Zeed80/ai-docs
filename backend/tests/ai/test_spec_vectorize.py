@@ -53,6 +53,30 @@ def test_draft_rotation_body_declines_when_no_sections():
     assert draft_rotation_body({"main_view": {"features": [{"kind": "hole", "diameter_mm": 10}]}}) is None
 
 
+def test_draft_multiple_rotation_bodies_each_with_own_axis():
+    spec = {
+        "parts": [
+            {"name": "Вал 1", "type": "тело вращения", "features": [
+                {"kind": "cylinder", "diameter_mm": 30, "length_mm": 40},
+                {"kind": "cylinder", "diameter_mm": 50, "length_mm": 120},
+            ]},
+            {"name": "Вал 2", "type": "тело вращения", "features": [
+                {"kind": "cylinder", "diameter_mm": 20, "length_mm": 60},
+                {"kind": "cylinder", "diameter_mm": 40, "length_mm": 80},
+            ]},
+        ]
+    }
+    ir = draft_rotation_body(spec, sheet_format="A3", landscape=True)
+    assert ir is not None
+    axes = [e for e in ir.entities if e.type == "segment" and e.line_class == "axis"]
+    assert len(axes) == 2  # one constructed axis per body
+    # The two axes are at different heights (bodies stacked, not overlapping).
+    ys = sorted(a.p1.y for a in axes)
+    assert ys[1] - ys[0] > 1.0
+    # Each profile is exactly symmetric about its axis (top/bottom mirror).
+    assert ir.sheet.format == "A3"
+
+
 def test_choose_standard_scale_reduces_enlarges_and_fits():
     # A big part reduces to a standard reduction that fits the frame.
     assert choose_standard_scale(300, 80, "A4", landscape=True) == (0.5, "1:2")
@@ -115,30 +139,10 @@ class _FakeRouter:
 
 
 @pytest.mark.asyncio
-async def test_generative_model_used_first_when_assigned_even_for_rotation():
-    # Generative-first: a rotation body ALSO goes through the model (it handles
-    # multiple bodies / mis-read cases the single-stack drafter can't).
-    router = _FakeRouter('{"lines":[[0,0,100,0],[100,0,100,50],[0,50,100,50]],"circles":[],"arcs":[],"polylines":[]}')
-    spec = {
-        "main_view": {
-            "type": "тело вращения (вал)",
-            "features": [
-                {"kind": "cylinder", "diameter_mm": 50, "length_mm": 150},
-                {"kind": "cylinder", "diameter_mm": 30, "length_mm": 100},
-            ],
-        }
-    }
-    ir = await draft_from_spec_async(spec, draft_model="apex", router=router)
-    assert ir is not None
-    assert ir.recognizer_used == "spec-drafter-generative"
-    assert router.seen.preferred_model == "apex"
-    assert router.seen.confidential is True and router.seen.allow_cloud is False
-
-
-@pytest.mark.asyncio
-async def test_falls_back_to_deterministic_when_generative_fails():
-    # Model returns junk → deterministic parametric drafter is the safety net.
-    router = _FakeRouter("not json")
+async def test_rotation_body_uses_constructed_axis_not_generative():
+    # Deterministic-first: a rotation body's axis is CONSTRUCTED, so the model
+    # (which mis-places the axis) is not consulted at all.
+    router = _FakeRouter('{"lines":[[0,0,100,0]],"circles":[],"arcs":[],"polylines":[]}')
     spec = {
         "main_view": {
             "type": "тело вращения (вал)",
@@ -151,6 +155,19 @@ async def test_falls_back_to_deterministic_when_generative_fails():
     ir = await draft_from_spec_async(spec, draft_model="apex", router=router)
     assert ir is not None
     assert ir.recognizer_used == "spec-drafter-rotation"
+    assert router.seen is None  # generative model never called for a rotation body
+
+
+@pytest.mark.asyncio
+async def test_prismatic_part_uses_generative_model():
+    # A non-rotation part: the parametric drafter declines → generative model.
+    router = _FakeRouter('{"lines":[[0,0,120,0],[120,0,120,60],[120,60,0,60],[0,60,0,0]],"circles":[[60,30,8]],"arcs":[],"polylines":[]}')
+    spec = {"main_view": {"type": "призматическая", "features": [{"kind": "plate"}]}}
+    ir = await draft_from_spec_async(spec, draft_model="apex", router=router)
+    assert ir is not None
+    assert ir.recognizer_used == "spec-drafter-generative"
+    assert router.seen.preferred_model == "apex"
+    assert router.seen.confidential is True and router.seen.allow_cloud is False
 
 
 @pytest.mark.asyncio
