@@ -744,6 +744,12 @@ def main() -> int:
     ])
     if args.limit_photos:
         photos = photos[: args.limit_photos]
+    if not dwg_files and not photos:
+        print(
+            f"ERROR: no DWG or raster drawings found in {root}; regression was not executed.",
+            file=sys.stderr,
+        )
+        return 2
     for photo in photos:
         print(f"[photo] {photo.name}")
         rec = _recognize(
@@ -884,8 +890,8 @@ def _check_regression(summary: dict, baseline_path: pathlib.Path) -> int:
     """Fail (exit 1) if any section regressed beyond tolerance vs the baseline.
     This is what turns eval_vectorize into an automated quality gate (B4/H1)."""
     if not baseline_path.exists():
-        print(f"baseline {baseline_path} not found — nothing to check against", file=sys.stderr)
-        return 0
+        print(f"ERROR: baseline {baseline_path} not found", file=sys.stderr)
+        return 2
     base = json.loads(baseline_path.read_text()).get("summary", {})
     regressions: list[str] = []
     for section in ("dwg", "photos"):

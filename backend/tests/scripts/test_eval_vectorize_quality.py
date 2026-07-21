@@ -50,6 +50,24 @@ def test_empty_input() -> None:
     assert _geometry_quality([]) == {"n_segments": 0}
 
 
+def test_empty_corpus_fails_instead_of_false_green(tmp_path, monkeypatch) -> None:
+    from eval_vectorize import main
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["eval_vectorize.py", "--dir", str(tmp_path), "--out", str(tmp_path / "out.json")],
+    )
+
+    assert main() == 2
+
+
+def test_missing_requested_baseline_fails(tmp_path) -> None:
+    from eval_vectorize import _check_regression
+
+    assert _check_regression({}, tmp_path / "missing.json") == 2
+
+
 def test_dxf_roundtrip_reports_eskd_errors() -> None:
     # H1: the downstream chain (IR → ЕСКД validate → DXF → independent parse)
     # must report reopen success and a non-negative blocking-error count.

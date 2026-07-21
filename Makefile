@@ -219,10 +219,18 @@ agent-regression:
 # recall/quality/DXF-reopen/ЕСКД regression). Runs inside the backend
 # container: it has dwg2dxf and reaches the technical-vectorizer service.
 cad-regression:
-	docker exec infra-backend-1 sh -c 'cd /app && python scripts/eval_vectorize.py \
-		--dir cleanup_test_files --recognizer arbitrate \
-		--out test-results/eval_vectorize_run.json \
-		--check-baseline test-results/eval_vectorize_baseline.json'
+	@run_dir=$$(docker exec infra-backend-1 mktemp -d /tmp/cad-regression.XXXXXX); \
+		docker exec infra-backend-1 mkdir -p $$run_dir/input $$run_dir/results; \
+		docker cp cleanup_test_files/. infra-backend-1:$$run_dir/input; \
+		docker cp test-results/eval_vectorize_baseline.json infra-backend-1:$$run_dir/baseline.json; \
+		docker exec infra-backend-1 python scripts/eval_vectorize.py \
+			--dir $$run_dir/input --recognizer arbitrate \
+			--out $$run_dir/results/eval_vectorize_run.json \
+			--check-baseline $$run_dir/baseline.json; \
+		status=$$?; \
+		docker cp infra-backend-1:$$run_dir/results/eval_vectorize_run.json \
+			test-results/eval_vectorize_run.json 2>/dev/null || true; \
+		exit $$status
 
 # Promotion is deliberately stricter than ordinary regression: legacy pixel
 # coverage cannot pass it, and false "exact" claims are forbidden.
