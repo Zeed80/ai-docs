@@ -26,20 +26,28 @@ from app.ai.cad_ir.schema import (
 
 
 _SPEC_PROMPT = (
-    "Ты — инженер-конструктор. Изучи чертёж и опиши деталь(и) СТРУКТУРНО как "
-    "спецификацию для повторного черчения. Верни СТРОГО JSON:\n"
+    "Ты — инженер-конструктор. Изучи чертёж и опиши деталь СТРУКТУРНО для "
+    "повторного черчения. Верни СТРОГО JSON:\n"
     '{"part":"название",'
-    '"views":[{"name":"главный вид/разрез А-А/...","role":"main|section|detail"}],'
-    '"main_view":{"type":"тело вращения (вал)|призматическая|...",'
-    '"features":[{"kind":"cylinder|cone|step|keyway|hole|chamfer|thread|groove",'
-    '"diameter_mm":0,"length_mm":0,"pos":"положение","note":"..."}]},'
-    '"parts":[{"name":"..","type":"..","features":[...]}],'
-    '"dimensions":[{"value":"Ø80js6(±0.0095)","applies_to":"..."}],'
-    '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":"Ra 0.8"}],'
+    '"main_view":{"type":"тело вращения (вал)|призматическая",'
+    '"outer":[{"diameter_mm":0,"length_mm":0,"note":"резьба/конус/..."}],'
+    '"bore":[{"diameter_mm":0,"length_mm":0,"note":"..."}]},'
+    '"parts":[{"name":"..","type":"..","outer":[...],"bore":[...]}],'
+    '"dimensions":[{"value":"Ø80js6","applies_to":".."}],'
+    '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":".."}],'
     '"title_block":{"material":"..","scale":".."}}\n'
-    "ВАЖНО: если на листе НЕСКОЛЬКО деталей/тел — перечисли КАЖДОЕ в parts[] "
-    "(со своими features и размерами), а главную продублируй в main_view. "
-    "Если деталь одна — parts можно опустить. "
+    "ПРАВИЛА для тела вращения:\n"
+    "1) outer[] — ВСЕ ступени наружного контура ПО ПОРЯДКУ слева направо, БЕЗ "
+    "пропусков (включая резьбовые участки — бери наружный диаметр резьбы, и "
+    "конусы — средний диаметр).\n"
+    "2) length_mm — ОСЕВАЯ ДЛИНА ИМЕННО ЭТОЙ ступени, а НЕ размер с цепочки. "
+    "Если на чертеже цепочка накопительных размеров от торца — вычисли длину "
+    "ступени как РАЗНОСТЬ соседних размеров.\n"
+    "3) Сумма length_mm ≈ полная длина детали (сверься с габаритным размером).\n"
+    "4) Если деталь ПОЛАЯ (в разрезе видно осевое отверстие/расточку) — опиши "
+    "внутренний контур в bore[] так же по порядку.\n"
+    "5) Фаски/канавки/шпонпазы/поперечные отверстия НЕ включай в outer/bore.\n"
+    "Если деталей несколько — каждую в parts[], главную продублируй в main_view.\n"
     "Читай реальные значения с чертежа. Только JSON."
 )
 
@@ -130,8 +138,24 @@ def _num(value: Any) -> float | None:
 _SUB_FEATURES = {"hole", "keyway", "thread", "chamfer", "groove", "slot", "bore", "fillet"}
 
 
+def _sections_from_list(items: Any) -> list[dict]:
+    """Ordered (diameter, length) sections from a plain outer/bore list."""
+    sections: list[dict] = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        diameter = _num(it.get("diameter_mm")) or _num(it.get("diameter"))
+        if diameter is not None and diameter > 0:
+            sections.append({
+                "d": diameter,
+                "l": _num(it.get("length_mm")) or _num(it.get("length")),
+                "note": it.get("note"),
+            })
+    return sections
+
+
 def _sections_from_features(features: Any) -> list[dict]:
-    """Ordered (diameter, length) cylindrical sections from a features list."""
+    """Ordered sections from a legacy ``features`` list (kind-filtered)."""
     sections: list[dict] = []
     for feature in features or []:
         if not isinstance(feature, dict):
@@ -149,29 +173,42 @@ def _sections_from_features(features: Any) -> list[dict]:
     return sections
 
 
+def _outer_sections(node: dict) -> list[dict]:
+    """Outer profile sections of a body node: prefer ``outer``, else ``features``."""
+    if node.get("outer"):
+        return _sections_from_list(node.get("outer"))
+    return _sections_from_features(node.get("features", []))
+
+
+def _bore_sections(node: dict) -> list[dict]:
+    """Inner bore sections of a body node (empty when solid)."""
+    return _sections_from_list(node.get("bore"))
+
+
 def _rotation_sections(spec: dict) -> list[dict]:
-    """Sections of the single main-view rotation body (back-compat helper)."""
-    return _sections_from_features((spec.get("main_view") or {}).get("features", []))
+    """Outer sections of the single main-view rotation body (back-compat helper)."""
+    return _outer_sections(spec.get("main_view") or {})
 
 
-def _rotation_parts(spec: dict) -> list[list[dict]]:
-    """One ordered section-list PER rotation body on the sheet.
+def _rotation_parts(spec: dict) -> list[dict]:
+    """One body descriptor PER rotation body: {"outer":[...], "bore":[...]}.
 
-    Uses ``parts[]`` when the reader found several bodies, else the single
-    ``main_view``. Only bodies with ≥2 diameter sections qualify (a real
-    stepped profile), so prismatic parts fall through to the generative model.
+    Uses ``parts[]`` when the reader found several bodies, else ``main_view``.
+    Only bodies with ≥2 outer sections qualify (a real stepped profile), so
+    prismatic parts fall through to the generative model.
     """
-    result: list[list[dict]] = []
+    result: list[dict] = []
     for part in spec.get("parts") or []:
         if not isinstance(part, dict):
             continue
-        sections = _sections_from_features(part.get("features", []))
-        if len(sections) >= 2:
-            result.append(sections)
+        outer = _outer_sections(part)
+        if len(outer) >= 2:
+            result.append({"outer": outer, "bore": _bore_sections(part)})
     if not result:
-        sections = _rotation_sections(spec)
-        if len(sections) >= 2:
-            result.append(sections)
+        main = spec.get("main_view") or {}
+        outer = _outer_sections(main)
+        if len(outer) >= 2:
+            result.append({"outer": outer, "bore": _bore_sections(main)})
     return result
 
 
@@ -193,11 +230,16 @@ def _fill_lengths(sections: list[dict], spec: dict) -> None:
             s["l"] = each
 
 
-def _emit_profile(sections: list[dict], px_per_mm: float, x_left: float, axis_y: float, seg) -> float:
+def _emit_profile(
+    sections: list[dict], px_per_mm: float, x_left: float, axis_y: float, seg,
+    bore: list[dict] | None = None,
+) -> float:
     """Emit one stepped rotation profile (both generatrices + its OWN axis).
 
     The axis is CONSTRUCTED here, never guessed — the profile is exactly
-    symmetric about it. Returns the right edge x (for canvas sizing).
+    symmetric about it. When ``bore`` is given the part is hollow: its inner
+    stepped contour is drawn symmetric about the same axis. Returns the right
+    edge x (for canvas sizing).
     """
     x = x_left
     prev_r = None
@@ -213,9 +255,30 @@ def _emit_profile(sections: list[dict], px_per_mm: float, x_left: float, axis_y:
         seg(x, axis_y + r, x + length_px, axis_y + r)  # bottom generatrix
         x += length_px
         prev_r = r
+    right = x
     seg(x, axis_y - prev_r, x, axis_y + prev_r)  # right end cap
-    seg(x_left - 20, axis_y, x + 20, axis_y, cls="axis", width="thin")  # centreline
-    return x
+
+    if bore:
+        # Inner bore contour (hollow part), symmetric about the same axis.
+        bx = x_left
+        prev_br = None
+        for s in bore:
+            length_px = s["l"] * px_per_mm
+            br = s["d"] * px_per_mm / 2.0
+            if prev_br is None:
+                seg(bx, axis_y - br, bx, axis_y + br)  # bore mouth
+            elif abs(br - prev_br) > 0.5:
+                seg(bx, axis_y - prev_br, bx, axis_y - br)
+                seg(bx, axis_y + prev_br, bx, axis_y + br)
+            seg(bx, axis_y - br, bx + length_px, axis_y - br)
+            seg(bx, axis_y + br, bx + length_px, axis_y + br)
+            bx += length_px
+            prev_br = br
+        if prev_br is not None and bx < right:
+            seg(bx, axis_y - prev_br, bx, axis_y + prev_br)  # bore bottom
+
+    seg(x_left - 20, axis_y, right + 20, axis_y, cls="axis", width="thin")  # centreline
+    return right
 
 
 # ГОСТ 2.301 sheet sizes (short, long) mm; ГОСТ 2.302 standard scale series.
@@ -283,10 +346,15 @@ def draft_rotation_body(
     parts = _rotation_parts(spec)
     if not parts:
         return None
-    for sections in parts:
-        _fill_lengths(sections, spec)
+    for body in parts:
+        _fill_lengths(body["outer"], spec)
+        if body.get("bore"):
+            _fill_lengths(body["bore"], spec)
 
-    part_dims = [(sum(s["l"] for s in secs), max(s["d"] for s in secs)) for secs in parts]
+    part_dims = [
+        (sum(s["l"] for s in body["outer"]), max(s["d"] for s in body["outer"]))
+        for body in parts
+    ]
     layout_w = max(w for w, _ in part_dims)
     gap_mm = 0.2 * max(h for _, h in part_dims)  # vertical gap between bodies
     layout_h = sum(h for _, h in part_dims) + gap_mm * (len(parts) - 1)
@@ -330,9 +398,11 @@ def draft_rotation_body(
 
     cursor_y = y_top
     right_edge = x_left
-    for sections, (_w, h) in zip(parts, part_dims):
+    for body, (_w, h) in zip(parts, part_dims):
         axis_y = cursor_y + h * px_per_mm / 2.0
-        right_edge = max(right_edge, _emit_profile(sections, px_per_mm, x_left, axis_y, seg))
+        right_edge = max(right_edge, _emit_profile(
+            body["outer"], px_per_mm, x_left, axis_y, seg, bore=body.get("bore"),
+        ))
         cursor_y += (h + gap_mm) * px_per_mm
 
     if sheet_format:
