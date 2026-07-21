@@ -12,7 +12,9 @@ from app.ai.cad_recognize.spec_vectorize import (
     _spec_images,
     choose_standard_scale,
     draft_from_spec_async,
+    draft_prismatic_body,
     draft_rotation_body,
+    read_description_spec,
 )
 
 
@@ -84,6 +86,25 @@ def test_engineering_spec_marks_incomplete_rotation_profile_unresolved():
     assert "body:0:outer:1:length-missing" in spec.unresolved
 
 
+def test_engineering_spec_marks_prismatic_body_without_profile_unresolved():
+    spec = EngineeringDrawingSpec.model_validate({
+        "main_view": {"type": "призматическая пластина"},
+    })
+    assert "body:0:profile-missing" in spec.unresolved
+
+
+def test_optional_metadata_does_not_block_complete_geometry():
+    spec = EngineeringDrawingSpec.model_validate({
+        "main_view": {
+            "type": "призматическая пластина",
+            "profile": {"shape": "rectangle", "width_mm": 120, "height_mm": 80},
+        },
+        "unresolved": ["материал детали не указан", "масштаб чертежа не указан"],
+    })
+    assert spec.unresolved == []
+    assert len(spec.optional_unresolved) == 2
+
+
 def test_spec_images_preserve_source_resolution_in_tiles():
     from PIL import Image
 
@@ -147,6 +168,44 @@ def test_draft_rotation_body_lays_out_on_sheet_with_auto_scale():
     assert ir.source.image_width == 1680 and ir.source.image_height == 1188
 
 
+def test_prismatic_plate_drafter_emits_exact_geometry_dimensions_and_holes():
+    spec = {
+        "main_view": {
+            "type": "призматическая пластина",
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 120,
+                "height_mm": 80,
+                "thickness_mm": 10,
+                "holes": [
+                    {"center_x_mm": -45, "center_y_mm": 25, "diameter_mm": 10, "tolerance": "H7"},
+                    {"center_x_mm": 45, "center_y_mm": -25, "diameter_mm": 10},
+                ],
+            },
+        },
+    }
+    ir = draft_prismatic_body(spec, sheet_format="A3")
+    assert ir is not None
+    assert ir.recognizer_used == "spec-drafter-prismatic"
+    assert ir.sheet.format == "A3"
+    assert len([entity for entity in ir.entities if entity.type == "circle"]) == 2
+    values = [
+        entity.value_mm for entity in ir.entities if entity.type == "dimension"
+    ]
+    assert sorted(values) == [10, 10, 80, 120]
+    assert all(entity.origin == "spec" for entity in ir.entities)
+    assert all(entity.assurance == "constraint_validated" for entity in ir.entities)
+
+
+def test_prismatic_drafter_declines_incomplete_profile():
+    assert draft_prismatic_body({
+        "main_view": {
+            "type": "призматическая",
+            "profile": {"shape": "rectangle", "width_mm": 120},
+        },
+    }) is None
+
+
 def test_dsl_to_ir_decodes_all_primitive_kinds():
     ir = _dsl_to_ir({
         "lines": [[0, 0, 100, 0], [100, 0, 100, 50]],
@@ -176,6 +235,29 @@ class _FakeRouter:
     async def run(self, request):
         self.seen = request
         return _FakeResp(self._text)
+
+
+@pytest.mark.asyncio
+async def test_description_reader_accepts_valid_ready_json_without_model():
+    router = _FakeRouter("should not be used")
+    spec = await read_description_spec(
+        '{"schema_version":1,"part":"Плита","main_view":{"type":"призматическая пластина","profile":{"shape":"rectangle","width_mm":120,"height_mm":80,"thickness_mm":10,"holes":[]}}}',
+        router=router,
+    )
+    assert spec["main_view"]["profile"]["width_mm"] == 120
+    assert router.seen is None
+
+
+@pytest.mark.asyncio
+async def test_description_reader_uses_local_cad_reader_for_free_text():
+    router = _FakeRouter(
+        '{"schema_version":1,"part":"Плита","main_view":{"type":"призматическая пластина","profile":{"shape":"rectangle","width_mm":120,"height_mm":80,"thickness_mm":10,"holes":[]}}}'
+    )
+    spec = await read_description_spec("Пластина 120 на 80", router=router)
+    assert spec["main_view"]["profile"]["height_mm"] == 80
+    assert router.seen.task.value == "cad_spec_read"
+    assert router.seen.confidential is True
+    assert router.seen.allow_cloud is False
 
 
 @pytest.mark.asyncio

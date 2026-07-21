@@ -1,0 +1,75 @@
+[
+  {
+    "id": "mechanical_rect_plate_two_holes",
+    "profile": "mechanical",
+    "description": "Прямоугольная пластина 120×80×10 мм. Два сквозных отверстия Ø10H7 с центрами (-45; 25) и (45; -25) мм от центра.",
+    "spec": {
+      "schema_version": 1,
+      "part": "Пластина",
+      "main_view": {
+        "type": "призматическая пластина",
+        "profile": {
+          "shape": "rectangle",
+          "width_mm": 120,
+          "height_mm": 80,
+          "thickness_mm": 10,
+          "holes": [
+            {"center_x_mm": -45, "center_y_mm": 25, "diameter_mm": 10, "tolerance": "H7"},
+            {"center_x_mm": 45, "center_y_mm": -25, "diameter_mm": 10}
+          ]
+        }
+      }
+    },
+    "expected": {
+      "entity_counts": {"segment": 6, "circle": 2, "dimension": 4},
+      "dimension_values_mm": [10, 10, 80, 120]
+    }
+  },
+  {
+    "id": "mechanical_round_flange_four_holes",
+    "profile": "mechanical",
+    "description": "Круглый фланец Ø160 толщиной 16 мм, четыре отверстия Ø12 по координатам (±50; ±50) мм от центра.",
+    "spec": {
+      "schema_version": 1,
+      "part": "Фланец",
+      "main_view": {
+        "type": "круглый фланец",
+        "profile": {
+          "shape": "circle",
+          "diameter_mm": 160,
+          "thickness_mm": 16,
+          "holes": [
+            {"center_x_mm": -50, "center_y_mm": 50, "diameter_mm": 12},
+            {"center_x_mm": 50, "center_y_mm": 50, "diameter_mm": 12},
+            {"center_x_mm": -50, "center_y_mm": -50, "diameter_mm": 12},
+            {"center_x_mm": 50, "center_y_mm": -50, "diameter_mm": 12}
+          ]
+        }
+      }
+    },
+    "expected": {
+      "entity_counts": {"segment": 2, "circle": 5, "dimension": 5},
+      "dimension_values_mm": [12, 12, 12, 12, 160]
+    }
+  },
+  {
+    "id": "mechanical_two_step_shaft",
+    "profile": "mechanical",
+    "description": "Ступенчатый вал: первая ступень Ø30 длиной 40 мм, вторая Ø50 длиной 60 мм. Общая длина 100 мм.",
+    "spec": {
+      "schema_version": 1,
+      "part": "Вал",
+      "main_view": {
+        "type": "тело вращения (вал)",
+        "outer": [
+          {"diameter_mm": 30, "length_mm": 40},
+          {"diameter_mm": 50, "length_mm": 60}
+        ]
+      }
+    },
+    "expected": {
+      "entity_counts": {"segment": 9, "dimension": 5},
+      "dimension_values_mm": [30, 40, 50, 60, 100]
+    }
+  }
+]

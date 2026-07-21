@@ -722,6 +722,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         await studio_queue.mark_job_running(db, job, task_id=task_id)
         await db.commit()
         owner_sub = gen.owner_sub
+        description = (gen.prompt or "").strip()
         params = dict(gen.params or {})
         source_paths = list(gen.source_image_paths or [])
         # Ancestry for pixel provenance: when the source is a previous
@@ -748,10 +749,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     try:
         import hashlib
 
-        if not source_paths:
+        vectorize_method = str(params.get("vectorize_method") or "trace")
+        description_mode = vectorize_method == "spec" and bool(description)
+        if not source_paths and not description_mode:
             return await _fail("Для оцифровки нужен исходный скан/фото.")
-        content = download_file(source_paths[0])
-        source_sha256 = hashlib.sha256(content).hexdigest()
+        content = download_file(source_paths[0]) if source_paths else b""
+        source_sha256 = hashlib.sha256(
+            content if content else description.encode("utf-8")
+        ).hexdigest()
         if content.startswith(b"%PDF"):
             try:
                 content = _pdf_page_to_png(
@@ -765,13 +770,15 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # Stage 0.9: dewarp a phone photo to a straight-on sheet view, dropping
         # the desk/binding background before anything is traced. No-op for a
         # clean scan (no confident paper quad).
-        content = _dewarp_photo(content)
+        if content:
+            content = _dewarp_photo(content)
         from app.ai.cad_pipeline_manifest import build_cad_pipeline_manifest
 
         pipeline_manifest = build_cad_pipeline_manifest(
             profile=str(params.get("digitization_profile") or "auto"),
             method=str(params.get("vectorize_method") or "trace"),
             source_sha256=source_sha256,
+            input_kind="description" if description_mode else "source_image",
         )
         # Persist the exact component/model snapshot before inference starts so
         # failed and interrupted attempts remain reproducible in the UI too.
@@ -791,12 +798,28 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         if str(params.get("vectorize_method") or "trace") == "spec":
             from app.ai.cad_recognize.spec_vectorize import (
                 draft_from_spec_async,
+                read_description_spec,
                 read_drawing_spec,
             )
             from app.ai.schemas import AITask
             from app.ai.task_routing import get_routing_for
 
-            spec = await read_drawing_spec(content)
+            spec = (
+                await read_description_spec(description)
+                if description_mode
+                else await read_drawing_spec(content)
+            )
+            if not spec:
+                return await _fail(
+                    "Метод «по описанию»: модель чтения не вернула валидную "
+                    "EngineeringDrawingSpec. Проверьте назначение CAD reader и описание."
+                )
+            unresolved = [str(item) for item in spec.get("unresolved", []) if str(item)]
+            if unresolved:
+                return await _fail(
+                    "Метод «по описанию»: построение остановлено — не определены "
+                    "обязательные данные: " + ", ".join(unresolved[:8])
+                )
             # Model 2: a generative drafter when one is assigned in Settings →
             # Models → Оцифровка → «Чертёжник» (e.g. a LoRA); else deterministic.
             draft_model = get_routing_for(AITask.CAD_SPEC_DRAFT).primary
@@ -825,15 +848,19 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 gen = await db.get(ImageGeneration, gen_uuid)
                 if not gen or gen.status == ImageGenStatus.cancelled:
                     return {"cancelled": True}
-                normalized_path = f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
-                upload_file(content, normalized_path, "image/png")
+                normalized_path = None
+                if content:
+                    normalized_path = f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
+                    upload_file(content, normalized_path, "image/png")
                 gen.params = {
                     **(gen.params or {}),
-                    "normalized_source_path": normalized_path,
                     "vectorize_method": "spec",
+                    "description_mode": description_mode,
                     "spec": spec,
                     "cad_pipeline_manifest": pipeline_manifest,
                 }
+                if normalized_path:
+                    gen.params["normalized_source_path"] = normalized_path
                 await cad_ir_store.save_revision(
                     db, gen, spec_ir, origin="auto", created_by=owner_sub,
                     keep_raster=None, thin_px=2, thick_px=4,

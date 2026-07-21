@@ -1210,6 +1210,9 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const pipelineManifest = gen.params?.cad_pipeline_manifest as
     | CadPipelineManifest
     | undefined;
+  const draftingSpec = gen.params?.spec as
+    | { optional_unresolved?: string[]; unresolved?: string[] }
+    | undefined;
 
   return (
     <div className="flex flex-col gap-3 pb-24 sm:pb-0">
@@ -1300,14 +1303,27 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           <div className="mt-2 grid gap-1 md:grid-cols-2">
             <div>{t("vector.pipeline_profile")}: {pipelineManifest.profile}</div>
             <div>{t("vector.pipeline_method")}: {pipelineManifest.method}</div>
+            <div>{t("vector.pipeline_input")}: {pipelineManifest.input_kind}</div>
             <div>{t("vector.pipeline_reader")}: {pipelineManifest.components.spec_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
             <div>{t("vector.pipeline_drafter")}: {pipelineManifest.components.spec_drafter.models.map((model) => model.key).join(" → ") || t("vector.pipeline_deterministic")}</div>
+            <div>{t("vector.pipeline_contract")}: {pipelineManifest.components.spec_drafter.deterministic_contract}</div>
             <div className="font-mono text-[10px]">source {pipelineManifest.source_sha256?.slice(0, 16) ?? "—"}…</div>
             <Link href="/settings/models" className="text-sky-300 hover:text-sky-200">
               {t("vector.pipeline_change_models")}
             </Link>
           </div>
         </details>
+      )}
+
+      {draftingSpec?.optional_unresolved && draftingSpec.optional_unresolved.length > 0 && (
+        <div className="rounded border border-amber-400/20 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
+          <div className="font-medium">{t("vector.spec_optional_missing")}</div>
+          <ul className="mt-1 list-disc pl-4">
+            {draftingSpec.optional_unresolved.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* Toolbar */}

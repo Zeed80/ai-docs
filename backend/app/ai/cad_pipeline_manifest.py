@@ -11,7 +11,7 @@ from app.ai.schemas import AITask
 from app.ai.task_routing import get_routing_for
 
 MANIFEST_VERSION = "1.0"
-PIPELINE_REVISION = "multi-type-proposal-v2"
+PIPELINE_REVISION = "description-drafter-v2"
 
 MULTI_TYPE_CANDIDATE = {
     "key": "multi-type-proposal-v2",
@@ -66,6 +66,7 @@ def build_cad_pipeline_manifest(
     profile: str,
     method: str,
     source_sha256: str | None = None,
+    input_kind: str = "source_image",
 ) -> dict[str, Any]:
     normalized_profile = "mechanical" if profile == "mechanical_eskd" else profile
     normalized_profile = (
@@ -84,6 +85,13 @@ def build_cad_pipeline_manifest(
         "spec_drafter": {
             **_route(AITask.CAD_SPEC_DRAFT),
             "coverage": "model-dependent; fail-closed outside supported geometry",
+            "deterministic_contract": "engineering-drawing-spec-v1",
+            "supported_geometry": [
+                "stepped_rotation_body",
+                "rectangular_plate_with_through_holes",
+                "circular_flange_with_through_holes",
+            ],
+            "reference_cases": "tools/cad-dataset/description_cases.json",
         },
         "engineering_graph": {"kind": "deterministic", "version": "engineering-graph-v1"},
         "constraint_verifier": {"kind": "deterministic", "version": "fail-closed-v1"},
@@ -94,6 +102,7 @@ def build_cad_pipeline_manifest(
         "pipeline_revision": PIPELINE_REVISION,
         "profile": normalized_profile,
         "method": method,
+        "input_kind": input_kind,
         "components": components,
         "promotion_gate": PROFILE_GATES[normalized_profile],
     }
@@ -108,5 +117,6 @@ def build_cad_pipeline_manifest(
         "user_extensible_via": {
             "model_assignments": "/settings/models",
             "profiles": sorted(PROFILE_GATES),
+            "description_cases": "tools/cad-dataset/description_cases.json",
         },
     }

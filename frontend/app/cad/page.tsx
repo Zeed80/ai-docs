@@ -378,6 +378,14 @@ export default function CadListPage() {
               textF1: vectorizerStatus.candidate.multi_type_proposal.text_anchor_f1.toFixed(4),
             })}
           </p>
+          <p className="mt-2 rounded border border-emerald-400/20 bg-emerald-950/20 px-2 py-1 text-xs text-emerald-100">
+            {t("description_drafting_status", {
+              passed: vectorizerStatus.description_drafting.passed_cases,
+              cases: vectorizerStatus.description_drafting.evaluated_cases,
+              exact: vectorizerStatus.description_drafting.exact_case_rate.toFixed(2),
+              reopen: vectorizerStatus.description_drafting.dxf_reopen_rate.toFixed(2),
+            })}
+          </p>
           <div className="mt-3 grid gap-2 rounded border border-white/10 bg-black/20 p-3 text-xs text-zinc-300 md:grid-cols-2">
             <div>
               <div className="font-medium text-zinc-200">{t("pipeline_models")}</div>

@@ -271,6 +271,11 @@ cad-multi-type-holdout:
 		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
 		--split holdout --out test-results/multi-type-web-holdout.json
 
+cad-description-eval:
+	PYTHONPATH=backend python3 backend/scripts/eval_cad_descriptions.py \
+		--cases tools/cad-dataset/description_cases.json \
+		--out test-results/eval_cad_descriptions.json
+
 cad-web-primitive-train:
 	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_primitives.py \
 		--data cad-dataset-out/web-step-packed \

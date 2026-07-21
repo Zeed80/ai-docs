@@ -382,7 +382,16 @@ async def generate(
         if not _can_access_document(doc, user):
             raise HTTPException(404, "Документ для связи не найден")
 
-    if body.operation in ("edit", "inpaint", "cleanup", "vectorize") and not source_paths:
+    description_vector = (
+        body.operation == "vectorize"
+        and str((body.params or {}).get("vectorize_method") or "trace") == "spec"
+        and bool((body.prompt or "").strip())
+    )
+    if (
+        body.operation in ("edit", "inpaint", "cleanup", "vectorize")
+        and not source_paths
+        and not description_vector
+    ):
         raise HTTPException(400, "Для этой операции нужно исходное изображение.")
     if body.operation in ("edit", "inpaint") and not _prompt_text(body):
         raise HTTPException(400, "Для редактирования нужно текстовое указание (prompt).")

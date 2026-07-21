@@ -12,7 +12,7 @@ from typing import Any
 
 
 CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
-    "pipeline_revision": "multi-type-proposal-v2",
+    "pipeline_revision": "description-drafter-v2",
     "evaluated_at": "2026-07-21",
     "accuracy_contract": {
         "mode": "fail_closed_two_person_certification",
@@ -74,6 +74,22 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
             "hatch": 0.0,
             "text": 0.0,
         },
+    },
+    "description_drafting": {
+        "contract": "description-spec-cadir-dxf-v1",
+        "reference_cases": "tools/cad-dataset/description_cases.json",
+        "evaluated_cases": 3,
+        "passed_cases": 3,
+        "exact_case_rate": 1.0,
+        "dxf_reopen_rate": 1.0,
+        "direct_text_without_image": True,
+        "unresolved_is_blocking": True,
+        "supported_geometry": [
+            "stepped_rotation_body",
+            "rectangular_plate_with_through_holes",
+            "circular_flange_with_through_holes",
+        ],
+        "scope_warning": "Exact only for explicit values inside supported deterministic profiles",
     },
     "candidate": {
         "checkpoint_step": 1_000,
@@ -224,6 +240,7 @@ def get_cad_vectorizer_development_status() -> dict[str, Any]:
     corpus = dict(CAD_VECTORIZER_DEVELOPMENT_STATUS["corpus"])
     candidate = CAD_VECTORIZER_DEVELOPMENT_STATUS["candidate"]
     latest = CAD_VECTORIZER_DEVELOPMENT_STATUS["latest_real_stack_regression"]
+    description = CAD_VECTORIZER_DEVELOPMENT_STATUS["description_drafting"]
     return {
         **CAD_VECTORIZER_DEVELOPMENT_STATUS,
         "runtime_pipeline": build_cad_pipeline_manifest(
@@ -243,6 +260,10 @@ def get_cad_vectorizer_development_status() -> dict[str, Any]:
         "latest_real_stack_regression": {
             **latest,
             "entity_f1_by_type": dict(latest["entity_f1_by_type"]),
+        },
+        "description_drafting": {
+            **description,
+            "supported_geometry": list(description["supported_geometry"]),
         },
         "candidate": {
             **candidate,

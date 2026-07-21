@@ -53,6 +53,7 @@ type StudioComposerPrefs = {
   vectorScale?: string;
   vectorSheetFormat?: "" | "A4" | "A3" | "A2" | "A1" | "A0";
   vectorMethod?: "trace" | "spec";
+  vectorDescription?: string;
   vectorLandscape?: boolean;
   blankFormat?: "A4" | "A3" | "A2" | "A1";
   blankLandscape?: boolean;
@@ -150,6 +151,9 @@ export default function StudioComposer({
   // chosen sheet + orientation drive an automatic ГОСТ 2.302 scale.
   const [vectorMethod, setVectorMethod] = useState<"trace" | "spec">(
     prefs.vectorMethod ?? "trace",
+  );
+  const [vectorDescription, setVectorDescription] = useState(
+    prefs.vectorDescription ?? "",
   );
   const [vectorLandscape, setVectorLandscape] = useState(
     prefs.vectorLandscape ?? true,
@@ -256,6 +260,7 @@ export default function StudioComposer({
           vectorScale,
           vectorSheetFormat,
           vectorMethod,
+          vectorDescription,
           vectorLandscape,
           blankFormat,
           blankLandscape,
@@ -290,6 +295,7 @@ export default function StudioComposer({
     vectorScale,
     vectorSheetFormat,
     vectorMethod,
+    vectorDescription,
     vectorLandscape,
     blankFormat,
     blankLandscape,
@@ -583,7 +589,9 @@ export default function StudioComposer({
   }
 
   async function submitVector() {
-    if (!sourceFile && !sourceGenerationId) {
+    const directDescription =
+      vectorMethod === "spec" ? vectorDescription.trim() : "";
+    if (!sourceFile && !sourceGenerationId && !directDescription) {
       setErr(t("error_need_source"));
       return;
     }
@@ -592,6 +600,7 @@ export default function StudioComposer({
     try {
       const input: GenerateInput = {
         operation: "vectorize",
+        prompt: directDescription || undefined,
         params: {},
         source_image_paths: [],
         ...link,
@@ -1327,6 +1336,21 @@ export default function StudioComposer({
             <div className="space-y-1">
               <label className="block">
                 <span className="text-xs text-zinc-500">
+                  {t("vector_description_label")}
+                </span>
+                <textarea
+                  value={vectorDescription}
+                  onChange={(e) => setVectorDescription(e.target.value)}
+                  rows={5}
+                  placeholder={t("vector_description_placeholder")}
+                  className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                />
+              </label>
+              <p className="text-[11px] text-zinc-600">
+                {t("vector_description_hint")}
+              </p>
+              <label className="block">
+                <span className="text-xs text-zinc-500">
                   {t("vector_orientation_label")}
                 </span>
                 <select
@@ -1364,7 +1388,12 @@ export default function StudioComposer({
           {err && <div className="text-xs text-red-400">{err}</div>}
           <button
             onClick={submitVector}
-            disabled={busy || (!sourceFile && !sourceGenerationId)}
+            disabled={
+              busy ||
+              (!sourceFile &&
+                !sourceGenerationId &&
+                !(vectorMethod === "spec" && vectorDescription.trim()))
+            }
             className="w-full px-4 py-2.5 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium disabled:opacity-50"
           >
             {busy ? t("vector_submit_busy") : t("vector_submit")}

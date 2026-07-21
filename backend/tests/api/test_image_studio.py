@@ -63,6 +63,24 @@ async def test_generate_requires_source_for_edit(client):
 
 
 @pytest.mark.asyncio
+async def test_vectorize_from_description_does_not_require_source_image(client):
+    resp = await client.post(
+        "/api/image-gen/generate",
+        json={
+            "operation": "vectorize",
+            "prompt": "Пластина 120×80×10 мм с четырьмя отверстиями Ø10",
+            "params": {"vectorize_method": "spec", "sheet_format": "A3"},
+            "source_image_paths": [],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["operation"] == "vectorize"
+    assert body["source_image_paths"] == []
+    assert body["prompt"].startswith("Пластина")
+
+
+@pytest.mark.asyncio
 async def test_generate_can_use_previous_generation_result_as_source(client, db_session, monkeypatch):
     from app.db.models import ImageGeneration, ImageGenStatus
 

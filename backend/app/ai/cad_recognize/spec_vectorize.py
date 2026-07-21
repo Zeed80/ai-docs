@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.ai.cad_ir.schema import (
     CadIR,
+    Circle,
     DimensionEntity,
     Point,
     Segment,
@@ -42,11 +43,39 @@ class SpecSection(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
+class SpecHole(BaseModel):
+    """Through-hole position relative to the profile centre, in millimetres."""
+
+    center_x_mm: float
+    center_y_mm: float
+    diameter_mm: float = Field(gt=0)
+    tolerance: str | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
+class SpecPrismaticProfile(BaseModel):
+    shape: Literal["rectangle", "circle"]
+    width_mm: float | None = Field(default=None, gt=0)
+    height_mm: float | None = Field(default=None, gt=0)
+    diameter_mm: float | None = Field(default=None, gt=0)
+    thickness_mm: float | None = Field(default=None, gt=0)
+    holes: list[SpecHole] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_shape_dimensions(self) -> "SpecPrismaticProfile":
+        if self.shape == "rectangle" and (self.width_mm is None or self.height_mm is None):
+            raise ValueError("rectangle requires width_mm and height_mm")
+        if self.shape == "circle" and self.diameter_mm is None:
+            raise ValueError("circle requires diameter_mm")
+        return self
+
+
 class SpecBody(BaseModel):
     name: str | None = None
     type: str = "unknown"
     outer: list[SpecSection] = Field(default_factory=list)
     bore: list[SpecSection] = Field(default_factory=list)
+    profile: SpecPrismaticProfile | None = None
     # Accepted only for compatibility with already stored prototype responses.
     # The deterministic drafter still requires explicit, complete outer[] data.
     features: list[dict[str, Any]] = Field(default_factory=list)
@@ -75,11 +104,18 @@ class EngineeringDrawingSpec(BaseModel):
     annotations: list[SpecAnnotation] = Field(default_factory=list)
     title_block: dict[str, Any] = Field(default_factory=dict)
     unresolved: list[str] = Field(default_factory=list)
+    optional_unresolved: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _record_incomplete_rotation_sections(self) -> "EngineeringDrawingSpec":
         bodies = [self.main_view, *self.parts]
         for body_index, body in enumerate(bodies):
+            prismatic = any(
+                word in body.type.lower()
+                for word in ("призмат", "пласт", "флан", "plate", "flange")
+            )
+            if prismatic and body.profile is None:
+                self.unresolved.append(f"body:{body_index}:profile-missing")
             rotation = any(word in body.type.lower() for word in ("вращ", "вал", "shaft"))
             if not rotation:
                 continue
@@ -95,7 +131,19 @@ class EngineeringDrawingSpec(BaseModel):
                     self.unresolved.append(
                         f"body:{body_index}:bore:{section_index}:length-missing"
                     )
-        self.unresolved = sorted(set(self.unresolved))
+        optional_markers = (
+            "масштаб", "материал", "обозначен", "штамп", "основн", "масса",
+            "scale", "material", "designation", "title block", "mass",
+        )
+        blocking = []
+        optional = list(self.optional_unresolved)
+        for item in self.unresolved:
+            if any(marker in item.lower() for marker in optional_markers):
+                optional.append(item)
+            else:
+                blocking.append(item)
+        self.unresolved = sorted(set(blocking))
+        self.optional_unresolved = sorted(set(optional))
         return self
 
 
@@ -108,12 +156,16 @@ _SPEC_PROMPT = (
     '"main_view":{"type":"тело вращения (вал)|призматическая",'
     '"outer":[{"diameter_mm":0,"length_mm":0,"note":"резьба/конус/...",'
     '"evidence":[{"image_index":1,"bbox":[0,0,100,30],"raw_text":"Ø40"}]}],'
-    '"bore":[{"diameter_mm":0,"length_mm":0,"note":"..."}]},'
+    '"bore":[{"diameter_mm":0,"length_mm":0,"note":"..."}],'
+    '"profile":{"shape":"rectangle|circle","width_mm":0,"height_mm":0,'
+    '"diameter_mm":null,"thickness_mm":0,"holes":['
+    '{"center_x_mm":0,"center_y_mm":0,"diameter_mm":0,"tolerance":null}]}},'
     '"parts":[{"name":"..","type":"..","outer":[...],"bore":[...]}],'
     '"dimensions":[{"value":"Ø80js6","applies_to":".."}],'
     '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":".."}],'
     '"title_block":{"material":"..","scale":".."},'
-    '"unresolved":["что именно не удалось доказать"]}\n'
+    '"unresolved":["обязательная геометрия, которую не удалось доказать"],'
+    '"optional_unresolved":["необязательные метаданные: материал/масштаб/штамп"]}\n'
     "ПРАВИЛА для тела вращения:\n"
     "1) outer[] — ВСЕ ступени наружного контура ПО ПОРЯДКУ слева направо, БЕЗ "
     "пропусков (включая резьбовые участки — бери наружный диаметр резьбы, и "
@@ -125,11 +177,68 @@ _SPEC_PROMPT = (
     "4) Если деталь ПОЛАЯ (в разрезе видно осевое отверстие/расточку) — опиши "
     "внутренний контур в bore[] так же по порядку.\n"
     "5) Фаски/канавки/шпонпазы/поперечные отверстия НЕ включай в outer/bore.\n"
+    "ПРАВИЛА для пластин/фланцев:\n"
+    "1) profile обязателен: rectangle требует width_mm+height_mm, circle — diameter_mm.\n"
+    "2) Координаты holes задавай от ЦЕНТРА профиля: +x вправо, +y вверх.\n"
+    "3) Включай только отверстия с доказанными диаметром и двумя координатами.\n"
     "Если деталей несколько — каждую в parts[], главную продублируй в main_view.\n"
     "Читай только реально видимые значения. ЗАПРЕЩЕНО угадывать, усреднять или "
     "достраивать отсутствующие размеры. Неизвестное оставь null и добавь причину "
     "в unresolved. Для каждого прочитанного размера приложи evidence. Только JSON."
 )
+
+_DESCRIPTION_SPEC_PROMPT = (
+    "Ты преобразуешь текстовое техническое задание в EngineeringDrawingSpec. "
+    "Не черти и не вычисляй отсутствующие размеры. Используй тот же JSON-контракт "
+    "и правила, что ниже. Для текстового задания evidence оставляй пустым. Если "
+    "размер не указан однозначно, добавь его в unresolved. Только JSON.\n"
+)
+
+
+async def read_description_spec(
+    description: str, *, router: Any | None = None, confidential: bool = True
+) -> dict:
+    """Turn an engineer's text into the same auditable drafting contract.
+
+    A ready JSON spec bypasses the model but never Pydantic validation. Free
+    text uses the locally assigned CAD_SPEC_READ model and cannot use cloud.
+    """
+    text = description.strip()
+    if not text:
+        return {}
+    parsed = _parse_spec_json(text)
+    if parsed:
+        try:
+            return EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
+        except ValidationError:
+            return {}
+
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
+
+    if router is None:
+        from app.ai.router import ai_router
+
+        router = ai_router
+    request = AIRequest(
+        task=AITask.CAD_SPEC_READ,
+        messages=[ChatMessage(
+            role="user",
+            content=_DESCRIPTION_SPEC_PROMPT + _SPEC_PROMPT + "\nОПИСАНИЕ:\n" + text,
+        )],
+        confidential=confidential,
+        allow_cloud=False,
+    )
+    try:
+        response = await router.run(request)
+    except Exception:  # noqa: BLE001
+        return {}
+    parsed = _parse_spec_json(response.text or "")
+    if not parsed:
+        return {}
+    try:
+        return EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
+    except ValidationError:
+        return {}
 
 
 def _spec_images(image, *, tile_size: int = 1400, overlap: int = 160) -> tuple[list[bytes], list[str]]:
@@ -511,6 +620,40 @@ def draft_rotation_body(
         right_edge = max(right_edge, _emit_profile(
             body["outer"], px_per_mm, x_left, axis_y, seg, bore=body.get("bore"),
         ))
+        section_x = x_left
+        dim_y = axis_y + h * px_per_mm / 2.0 + 10.0 * px_per_mm
+        for section in body["outer"]:
+            length_px = section["l"] * px_per_mm
+            diameter_px = section["d"] * px_per_mm
+            entities.append(DimensionEntity(
+                kind="linear",
+                p1=Point(x=section_x, y=dim_y),
+                p2=Point(x=section_x + length_px, y=dim_y),
+                text=f"{section['l']:g}",
+                value_mm=section["l"],
+                origin="spec",
+                assurance="inferred",
+            ))
+            mid_x = section_x + length_px / 2.0
+            entities.append(DimensionEntity(
+                kind="diameter",
+                p1=Point(x=mid_x, y=axis_y - diameter_px / 2.0),
+                p2=Point(x=mid_x, y=axis_y + diameter_px / 2.0),
+                text=f"Ø{section['d']:g}",
+                value_mm=section["d"],
+                origin="spec",
+                assurance="inferred",
+            ))
+            section_x += length_px
+        entities.append(DimensionEntity(
+            kind="linear",
+            p1=Point(x=x_left, y=dim_y + 8.0 * px_per_mm),
+            p2=Point(x=section_x, y=dim_y + 8.0 * px_per_mm),
+            text=f"{_w:g}",
+            value_mm=_w,
+            origin="spec",
+            assurance="inferred",
+        ))
         cursor_y += (h + gap_mm) * px_per_mm
 
     if sheet_format:
@@ -538,6 +681,172 @@ def draft_rotation_body(
     return ir
 
 
+def _prismatic_profiles(spec: dict) -> list[dict]:
+    bodies = [body for body in (spec.get("parts") or []) if isinstance(body, dict)]
+    if not bodies:
+        bodies = [spec.get("main_view") or {}]
+    return [body["profile"] for body in bodies if isinstance(body.get("profile"), dict)]
+
+
+def draft_prismatic_body(
+    spec: dict,
+    *,
+    px_per_mm: float | None = None,
+    sheet_format: str | None = None,
+    landscape: bool = True,
+) -> CadIR | None:
+    """Draft exact rectangular/circular plates and their through holes.
+
+    Every coordinate comes from the validated spec. Missing shape dimensions
+    decline before any entity is emitted; the generative fallback never fills
+    these gaps silently.
+    """
+    profiles = _prismatic_profiles(spec)
+    if not profiles:
+        return None
+
+    dimensions: list[tuple[float, float]] = []
+    for profile in profiles:
+        shape = profile.get("shape")
+        if shape == "rectangle":
+            width, height = _num(profile.get("width_mm")), _num(profile.get("height_mm"))
+        elif shape == "circle":
+            width = height = _num(profile.get("diameter_mm"))
+        else:
+            return None
+        if not width or not height:
+            return None
+        for hole in profile.get("holes") or []:
+            if not isinstance(hole, dict) or not _num(hole.get("diameter_mm")):
+                return None
+            if _num(hole.get("center_x_mm")) is None or _num(hole.get("center_y_mm")) is None:
+                return None
+        dimensions.append((width, height))
+
+    layout_w = max(width for width, _ in dimensions)
+    gap_mm = max(12.0, 0.2 * max(height for _, height in dimensions))
+    layout_h = sum(height for _, height in dimensions) + gap_mm * (len(dimensions) - 1)
+    scale_label = None
+    sheet_info = None
+    if sheet_format:
+        ratio, scale_label = choose_standard_scale(
+            layout_w, layout_h, sheet_format, landscape=landscape
+        )
+        paper_px_per_mm = 4.0
+        px_per_mm = ratio * paper_px_per_mm
+        short, long = _GOST_SHEETS.get(sheet_format.upper(), _GOST_SHEETS["A4"])
+        paper_w, paper_h = (long, short) if landscape else (short, long)
+        width_px, height_px = paper_w * paper_px_per_mm, paper_h * paper_px_per_mm
+        frame_x0 = _FRAME_LEFT_MM * paper_px_per_mm
+        frame_y0 = _FRAME_OTHER_MM * paper_px_per_mm
+        frame_w = (paper_w - _FRAME_LEFT_MM - _FRAME_OTHER_MM) * paper_px_per_mm
+        frame_h = (paper_h - 2 * _FRAME_OTHER_MM) * paper_px_per_mm
+        x_left = frame_x0 + max((frame_w - layout_w * px_per_mm) / 2.0, 0.0)
+        y_top = frame_y0 + max((frame_h - layout_h * px_per_mm) / 2.0, 0.0)
+        scale_source = "sheet_format"
+        from app.ai.cad_ir.schema import SheetInfo
+
+        sheet_info = SheetInfo(
+            format=sheet_format.upper(),
+            frame=False,
+            title_block={"scale": scale_label} if scale_label else {},
+        )
+    else:
+        px_per_mm = px_per_mm or 4.0
+        x_left = y_top = 60.0
+        width_px = layout_w * px_per_mm + 120.0
+        height_px = layout_h * px_per_mm + 120.0
+        scale_source = "description"
+
+    common = {
+        "origin": "spec",
+        "assurance": "constraint_validated",
+    }
+    entities: list[Any] = []
+    cursor_y = y_top
+    for profile, (width_mm, height_mm) in zip(profiles, dimensions, strict=True):
+        local_x = x_left + (layout_w - width_mm) * px_per_mm / 2.0
+        local_y = cursor_y
+        center_x = local_x + width_mm * px_per_mm / 2.0
+        center_y = local_y + height_mm * px_per_mm / 2.0
+        if profile["shape"] == "rectangle":
+            corners = [
+                Point(x=local_x, y=local_y),
+                Point(x=local_x + width_mm * px_per_mm, y=local_y),
+                Point(x=local_x + width_mm * px_per_mm, y=local_y + height_mm * px_per_mm),
+                Point(x=local_x, y=local_y + height_mm * px_per_mm),
+            ]
+            for p1, p2 in zip(corners, corners[1:] + corners[:1], strict=True):
+                entities.append(Segment(p1=p1, p2=p2, **common))
+            dim_y = local_y + height_mm * px_per_mm + 10.0 * px_per_mm
+            entities.append(DimensionEntity(
+                kind="linear",
+                p1=Point(x=local_x, y=dim_y),
+                p2=Point(x=local_x + width_mm * px_per_mm, y=dim_y),
+                text=f"{width_mm:g}", value_mm=width_mm, **common,
+            ))
+            dim_x = local_x + width_mm * px_per_mm + 10.0 * px_per_mm
+            entities.append(DimensionEntity(
+                kind="linear",
+                p1=Point(x=dim_x, y=local_y),
+                p2=Point(x=dim_x, y=local_y + height_mm * px_per_mm),
+                text=f"{height_mm:g}", value_mm=height_mm, **common,
+            ))
+        else:
+            radius = width_mm * px_per_mm / 2.0
+            entities.append(Circle(center=Point(x=center_x, y=center_y), radius=radius, **common))
+            entities.append(DimensionEntity(
+                kind="diameter",
+                p1=Point(x=center_x - radius, y=center_y),
+                p2=Point(x=center_x + radius, y=center_y),
+                text=f"Ø{width_mm:g}", value_mm=width_mm, **common,
+            ))
+
+        axis_common = {**common, "line_class": "axis", "width_class": "thin"}
+        entities.append(Segment(
+            p1=Point(x=center_x - 6 * px_per_mm, y=center_y),
+            p2=Point(x=center_x + 6 * px_per_mm, y=center_y),
+            **axis_common,
+        ))
+        entities.append(Segment(
+            p1=Point(x=center_x, y=center_y - 6 * px_per_mm),
+            p2=Point(x=center_x, y=center_y + 6 * px_per_mm),
+            **axis_common,
+        ))
+        for hole in profile.get("holes") or []:
+            hole_x = center_x + float(hole["center_x_mm"]) * px_per_mm
+            # Spec uses engineering +y upward; image coordinates grow downward.
+            hole_y = center_y - float(hole["center_y_mm"]) * px_per_mm
+            diameter = float(hole["diameter_mm"])
+            radius = diameter * px_per_mm / 2.0
+            entities.append(Circle(
+                center=Point(x=hole_x, y=hole_y), radius=radius, **common
+            ))
+            entities.append(DimensionEntity(
+                kind="diameter",
+                p1=Point(x=hole_x, y=hole_y - radius),
+                p2=Point(x=hole_x, y=hole_y + radius),
+                text=f"Ø{diameter:g}" + str(hole.get("tolerance") or ""),
+                value_mm=diameter,
+                tolerance=hole.get("tolerance") or None,
+                **common,
+            ))
+        cursor_y += (height_mm + gap_mm) * px_per_mm
+
+    extra = {"sheet": sheet_info} if sheet_info is not None else {}
+    return CadIR(
+        source=SourceInfo(
+            image_width=int(width_px), image_height=int(height_px), kind="spec"
+        ),
+        scale=1.0 / px_per_mm,
+        scale_source=scale_source,
+        entities=entities,
+        recognizer_used="spec-drafter-prismatic",
+        digitization_status="review_required",
+        **extra,
+    )
+
+
 def draft_from_spec(
     spec: dict,
     *,
@@ -561,6 +870,11 @@ def draft_from_spec(
     # what it handles (rotation bodies) — no model beats it there. A generative
     # model is used ONLY for parts it declines (returns None): prismatic/complex.
     deterministic = draft_rotation_body(
+        spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
+    )
+    if deterministic is not None:
+        return deterministic
+    deterministic = draft_prismatic_body(
         spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
     )
     if deterministic is not None:
@@ -606,6 +920,11 @@ async def draft_from_spec_async(
     parts it declines (prismatic/complex), where free drawing is the only option.
     """
     deterministic = draft_rotation_body(
+        spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
+    )
+    if deterministic is not None:
+        return deterministic
+    deterministic = draft_prismatic_body(
         spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
     )
     if deterministic is not None:
