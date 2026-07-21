@@ -115,9 +115,11 @@ class _FakeRouter:
 
 
 @pytest.mark.asyncio
-async def test_draft_from_spec_uses_generative_model_when_assigned():
-    router = _FakeRouter('{"lines":[[0,0,100,0],[100,0,100,50]],"circles":[],"arcs":[],"polylines":[]}')
-    spec = {"main_view": {"type": "тело вращения (вал)", "features": []}}
+async def test_generative_model_used_only_when_deterministic_declines():
+    # A non-rotation part: the parametric drafter declines → the generative
+    # model (e.g. a LoRA) takes over.
+    router = _FakeRouter('{"lines":[[0,0,120,0],[120,0,120,60],[120,60,0,60],[0,60,0,0]],"circles":[[60,30,8]],"arcs":[],"polylines":[]}')
+    spec = {"main_view": {"type": "призматическая", "features": [{"kind": "plate"}]}}
     ir = await draft_from_spec_async(spec, draft_model="my-lora", router=router)
     assert ir is not None
     assert ir.recognizer_used == "spec-drafter-generative"
@@ -126,7 +128,9 @@ async def test_draft_from_spec_uses_generative_model_when_assigned():
 
 
 @pytest.mark.asyncio
-async def test_draft_from_spec_falls_back_to_deterministic_on_bad_output():
+async def test_rotation_body_never_calls_generative_model():
+    # Deterministic-first: a rotation body is built exactly, and the assigned
+    # generative model is not even consulted (no regression from a weak model).
     router = _FakeRouter("not json")
     spec = {
         "main_view": {
@@ -139,5 +143,5 @@ async def test_draft_from_spec_falls_back_to_deterministic_on_bad_output():
     }
     ir = await draft_from_spec_async(spec, draft_model="my-lora", router=router)
     assert ir is not None
-    # Generative output was unusable → deterministic drafter took over.
     assert ir.recognizer_used == "spec-drafter-rotation"
+    assert router.seen is None  # generative model never called

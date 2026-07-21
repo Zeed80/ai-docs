@@ -332,6 +332,14 @@ def draft_from_spec(
     ``sheet_format`` (+ ``landscape``) lays the part out on that ГОСТ sheet at an
     automatically chosen standard scale (ГОСТ 2.302).
     """
+    # Deterministic-first: the parametric drafter is exact by construction for
+    # what it handles (rotation bodies) — no model beats it there. A generative
+    # model is used ONLY for parts it declines (returns None): prismatic/complex.
+    deterministic = draft_rotation_body(
+        spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
+    )
+    if deterministic is not None:
+        return deterministic
     if draft_model:
         try:
             import asyncio
@@ -343,8 +351,7 @@ def draft_from_spec(
                 return generated
         except Exception:  # noqa: BLE001 — never sink the pipeline on a model error
             pass
-
-    return draft_rotation_body(spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape)
+    return None
 
 
 def _in_running_loop() -> bool:
@@ -366,7 +373,16 @@ async def draft_from_spec_async(
     sheet_format: str | None = None,
     landscape: bool = True,
 ) -> CadIR | None:
-    """Async variant: usable from inside a running event loop (the digitize task)."""
+    """Async variant: usable from inside a running event loop (the digitize task).
+
+    Deterministic-first (exact for rotation bodies); a generative model is used
+    only for parts the parametric drafter declines (prismatic/complex geometry).
+    """
+    deterministic = draft_rotation_body(
+        spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
+    )
+    if deterministic is not None:
+        return deterministic
     if draft_model:
         try:
             generated = await _draft_generative(spec, draft_model, router=router)
@@ -374,9 +390,7 @@ async def draft_from_spec_async(
                 return generated
         except Exception:  # noqa: BLE001
             pass
-    return draft_from_spec(
-        spec, px_per_mm=px_per_mm, sheet_format=sheet_format, landscape=landscape
-    )
+    return None
 
 
 _DRAFT_PROMPT = (

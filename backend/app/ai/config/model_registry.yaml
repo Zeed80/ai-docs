@@ -644,3 +644,14 @@ routes:
     fallback_chain: ["claude_sonnet_anthropic", "qwen3_6_35b_apex_ollama"]
     manual_review_fallback: false
     notes: "CapabilityBuilder code generation: Claude API preferred, local 26b as fallback."
+  cad_spec_draft:
+    required_modalities: ["text"]
+    local_only: true
+    fallback_chain: ["qwen3_6_35b_apex_ollama"]
+    manual_review_fallback: true
+    notes: >
+      Generative CAD drafter (spec -> geometry DSL) for parts the deterministic
+      parametric drafter declines (prismatic/complex). APEX won a geometry-fidelity
+      benchmark (IoU 0.667 vs deterministic ref, aspect-error 0.04) over
+      qwen3.6:35b/Qwopus/gemma4:31b. Deterministic-first: this model never runs on
+      rotation bodies, only on parts the parametric drafter can't build.
