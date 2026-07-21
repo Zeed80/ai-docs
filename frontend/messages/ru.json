@@ -938,6 +938,7 @@
     "pipeline_unassigned": "не назначена",
     "pipeline_deterministic": "детерминированный",
     "latest_real_regression": "Последний live-прогон: {dwg} DWG + {photos} фото; entity precision {precision}, recall {recall}, F1 {f1}; exact-sheet {exact}, false-exact {falseExact}. Gate не пройден.",
+    "multi_type_candidate_status": "Multi-type v2, checkpoint {step}: независимый native-DXF holdout ({sheets} листов) — proposal precision {precision}, recall {recall}, F1 {f1}; segment F1 {segmentF1}, text-anchor F1 {textF1}. OCR-содержимое и связи не входят в эту метрику. Кандидат только opt-in, gate не пройден.",
     "open_studio": "Студия",
     "new_sheet": "Новый лист",
     "digitize_scan": "Оцифровать скан/фото",

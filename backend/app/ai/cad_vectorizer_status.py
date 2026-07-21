@@ -12,7 +12,7 @@ from typing import Any
 
 
 CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
-    "pipeline_revision": "source-snapped-edge-graph-v1",
+    "pipeline_revision": "multi-type-proposal-v2",
     "evaluated_at": "2026-07-21",
     "accuracy_contract": {
         "mode": "fail_closed_two_person_certification",
@@ -182,6 +182,27 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
             "text_f1": 0.0,
             "pdf_path_holdout_is_semantic_ground_truth": False,
         },
+        "multi_type_proposal": {
+            "architecture": "multi-type-proposal-v2",
+            "checkpoint_step": 1059,
+            "checkpoint_sha256": "166bb77a893c0a3de9a9d32d3346a40c0a090bddaf99dbb101b6d9ab07bbece8",
+            "training_source": "synthetic_profile_then_real_native_dxf",
+            "independent_holdout_sheets": 6,
+            "proposal_tolerance": 0.01,
+            "entity_precision": 0.025180,
+            "entity_recall": 0.019663,
+            "entity_f1": 0.022082,
+            "segment_f1": 0.004556,
+            "circle_f1": 0.0,
+            "arc_f1": 0.0,
+            "text_anchor_f1": 0.067416,
+            "dimension_f1": 0.0,
+            "annotation_f1": 0.0,
+            "hatch_f1": 0.0,
+            "ocr_payload_included": False,
+            "runtime_mode": "opt_in_only",
+            "promotion_passed": False,
+        },
         "promotion_status": "refused",
         "promotion_thresholds": {
             "entity_precision": 0.995,
@@ -236,6 +257,7 @@ def get_cad_vectorizer_development_status() -> dict[str, Any]:
             "directional_vectorization": dict(candidate["directional_vectorization"]),
             "graph_iterations": dict(candidate["graph_iterations"]),
             "native_dxf_benchmark": dict(candidate["native_dxf_benchmark"]),
+            "multi_type_proposal": dict(candidate["multi_type_proposal"]),
             "promotion_thresholds": dict(candidate["promotion_thresholds"]),
         },
     }

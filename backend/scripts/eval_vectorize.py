@@ -473,6 +473,7 @@ def _recognize(
         "neural",
         "neural-tiled",
         "primitive-set",
+        "multi-type-proposal",
         "directional-fields",
         "edge-graph",
         "edge-graph-snapped",
@@ -520,6 +521,10 @@ def _recognize(
             from app.ai.cad_recognize.primitive_set import PrimitiveSetRecognizer
 
             candidate = PrimitiveSetRecognizer()
+        elif recognizer == "multi-type-proposal":
+            from app.ai.cad_recognize.multi_type import MultiTypeProposalRecognizer
+
+            candidate = MultiTypeProposalRecognizer()
         else:
             from app.ai.cad_recognize.neural import NeuralRecognizer
 
@@ -621,6 +626,7 @@ def main() -> int:
             "neural",
             "neural-tiled",
             "primitive-set",
+            "multi-type-proposal",
             "directional-fields",
             "edge-graph",
             "edge-graph-snapped",
@@ -634,6 +640,7 @@ def main() -> int:
         help="cv=CV-baseline (default); neural=cad-vectorizer seq2seq candidate "
              "alone (no CV fallback); neural-tiled=overlapping 640px candidate "
              "tiles; primitive-set=unordered multi-type detector candidate; "
+             "multi-type-proposal=full CadIR geometry and semantic-anchor proposals; "
              "directional-fields=direct endpoint/direction line proposals; "
              "edge-graph=learned line-of-interest adjacency over dense nodes; "
              "edge-graph-snapped=the same graph snapped to source skeleton nodes; "

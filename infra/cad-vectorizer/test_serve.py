@@ -12,6 +12,7 @@ from serve import (  # noqa: E402
     _directional_output_to_entities,
     _verified_edge_output_to_entities,
     _layout_outputs_to_regions,
+    _multi_type_outputs_to_entities,
     _primitive_outputs_to_entities,
     _rows_to_entities,
 )
@@ -65,6 +66,45 @@ def test_primitive_set_outputs_preserve_confidence_and_image_scale() -> None:
     assert entities[0].p1 == {"x": 400.0, "y": 500.0}
     assert entities[0].p2 == {"x": 1200.0, "y": 500.0}
     assert entities[0].confidence > 0.99
+
+
+def test_multi_type_outputs_are_valid_inferred_cad_ir_proposals() -> None:
+    import torch
+    from pydantic import TypeAdapter
+
+    from app.ai.cad_ir.schema import Entity
+
+    outputs = {
+        "type_logits": torch.full((1, 7, 8), -8.0),
+        "params": torch.tensor([[
+            [0.1, 0.2, 0.3, 0.4, 0, 0, 0, 0],
+            [0.5, 0.5, 0.1, 0, 0, 0, 0, 0],
+            [0.5, 0.5, 0.1, 0.25, 0.75, 0, 0, 0],
+            [0.2, 0.3, 0.02, 0.5, 0, 0, 0, 0],
+            [0.1, 0.2, 0.8, 0.2, 0, 0, 0, 0],
+            [0.3, 0.4, 0.7, 0.8, 0, 0, 0, 0],
+            [0.8, 0.8, 0.2, 0.2, 0, 0, 0, 0],
+        ]]),
+        "line_logits": torch.zeros(1, 7, 6),
+        "width_logits": torch.zeros(1, 7, 2),
+        "subtype_logits": torch.zeros(1, 7, 12),
+    }
+    for index in range(7):
+        outputs["type_logits"][0, index, index + 1] = 8.0
+    outputs["subtype_logits"][0, 4, 2] = 8.0  # diameter
+    outputs["subtype_logits"][0, 5, 8] = 8.0  # datum
+    outputs["subtype_logits"][0, 6, 11] = 8.0  # solid
+
+    entities = _multi_type_outputs_to_entities(outputs, 1000, 500)
+    assert [entity.type for entity in entities] == [
+        "segment", "circle", "arc", "text", "dimension", "annotation", "hatch"
+    ]
+    adapter = TypeAdapter(Entity)
+    parsed = [adapter.validate_python(entity.model_dump()) for entity in entities]
+    assert all(entity.assurance == "inferred" for entity in parsed)
+    assert parsed[4].kind == "diameter"
+    assert parsed[5].kind == "datum"
+    assert parsed[6].pattern == "solid"
 
 
 def test_layout_regions_scale_to_sheet_and_suppress_duplicate_queries() -> None:

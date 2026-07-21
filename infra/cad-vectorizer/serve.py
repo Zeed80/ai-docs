@@ -33,6 +33,9 @@ from directional_decode import decode_line_segments
 from directional_model import DirectionalFieldModel
 from edge_verifier import EdgeVerifier, decode_verified_edges
 from model import IMG_SIZE, CadVectorizerModel
+from multi_type_dataset import SUBTYPE_NAMES as MULTI_SUBTYPE_NAMES
+from multi_type_dataset import TYPE_NAMES as MULTI_TYPE_NAMES
+from multi_type_model import MultiTypeProposalModel
 from primitive_dataset import LINE_CLASSES, TYPE_NAMES, WIDTH_CLASSES
 from primitive_model import PrimitiveSetModel
 from sheet_layout_dataset import VIEW_NAMES
@@ -47,6 +50,7 @@ _SHEET_LAYOUT_MODEL: SheetLayoutModel | None = None
 _EVIDENCE_MODEL: EvidenceHeatmapModel | None = None
 _DIRECTIONAL_MODEL: DirectionalFieldModel | None = None
 _EDGE_VERIFIER: EdgeVerifier | None = None
+_MULTI_TYPE_MODEL: MultiTypeProposalModel | None = None
 _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _CHECKPOINT = pathlib.Path(os.environ.get("CAD_VECTORIZER_CHECKPOINT", "/models/best.pt"))
 _PRIMITIVE_CHECKPOINT = pathlib.Path(
@@ -63,6 +67,9 @@ _DIRECTIONAL_CHECKPOINT = pathlib.Path(
 )
 _EDGE_VERIFIER_CHECKPOINT = pathlib.Path(
     os.environ.get("CAD_EDGE_VERIFIER_CHECKPOINT", "/models/edge-verifier-best.pt")
+)
+_MULTI_TYPE_CHECKPOINT = pathlib.Path(
+    os.environ.get("CAD_MULTI_TYPE_CHECKPOINT", "/models/multi-type-best.pt")
 )
 
 
@@ -81,6 +88,20 @@ class EntityOut(BaseModel):
     end_angle: float | None = None
     points: list[dict] | None = None
     closed: bool | None = None
+    position: dict | None = None
+    text: str | None = None
+    height: float | None = None
+    rotation: float | None = None
+    kind: str | None = None
+    value_mm: float | None = None
+    tolerance: str | None = None
+    boundary: list[dict] | None = None
+    holes: list[list[dict]] | None = None
+    pattern: str | None = None
+    value: str | None = None
+    symbol: str | None = None
+    datum_refs: list[str] | None = None
+    leader: dict | None = None
 
 
 class VectorizeResponse(BaseModel):
@@ -182,6 +203,24 @@ def _load_edge_verifier() -> EdgeVerifier | None:
     return model
 
 
+def _load_multi_type_model() -> MultiTypeProposalModel | None:
+    global _MULTI_TYPE_MODEL
+    if _MULTI_TYPE_MODEL is not None:
+        return _MULTI_TYPE_MODEL
+    if not _MULTI_TYPE_CHECKPOINT.exists():
+        return None
+    state = torch.load(_MULTI_TYPE_CHECKPOINT, map_location=_DEVICE)
+    if state.get("architecture") != "multi-type-proposal-v2":
+        raise RuntimeError("multi-type checkpoint architecture mismatch")
+    model = MultiTypeProposalModel(**state.get("model_config", {})).to(_DEVICE)
+    model.load_state_dict(state["model"])
+    model.eval()
+    app.state.multi_type_model_step = state.get("step")
+    app.state.multi_type_validation = state.get("validation", {})
+    _MULTI_TYPE_MODEL = model
+    return model
+
+
 @app.on_event("startup")
 def _startup() -> None:
     _load_model()
@@ -190,6 +229,7 @@ def _startup() -> None:
     _load_evidence_model()
     _load_directional_model()
     _load_edge_verifier()
+    _load_multi_type_model()
 
 
 @app.get("/health")
@@ -209,6 +249,9 @@ def health() -> dict:
         "directional_checkpoint_loaded": _DIRECTIONAL_CHECKPOINT.exists(),
         "edge_verifier_checkpoint": str(_EDGE_VERIFIER_CHECKPOINT),
         "edge_verifier_checkpoint_loaded": _EDGE_VERIFIER_CHECKPOINT.exists(),
+        "multi_type_checkpoint": str(_MULTI_TYPE_CHECKPOINT),
+        "multi_type_checkpoint_loaded": _MULTI_TYPE_CHECKPOINT.exists(),
+        "multi_type_validation": getattr(app.state, "multi_type_validation", None),
     }
 
 
@@ -423,6 +466,93 @@ def _primitive_outputs_to_entities(
                 )
             )
     return entities
+
+
+def _multi_type_outputs_to_entities(
+    outputs: dict[str, torch.Tensor],
+    image_width: int,
+    image_height: int,
+    *,
+    min_confidence: float = 0.5,
+) -> list[EntityOut]:
+    probabilities = outputs["type_logits"][0].softmax(-1)
+    scores, kinds = probabilities.max(-1)
+    params = outputs["params"][0]
+    line_classes = outputs["line_logits"][0].argmax(-1)
+    width_classes = outputs["width_logits"][0].argmax(-1)
+    subtypes = outputs["subtype_logits"][0].argmax(-1)
+    radius_scale = max(image_width, image_height)
+    entities = []
+    dimension_kinds = {"linear", "diameter", "radial", "angular"}
+    annotation_kinds = {"roughness", "thread", "tolerance", "datum", "weld"}
+    for index in range(kinds.numel()):
+        kind_index = int(kinds[index])
+        confidence = float(scores[index])
+        if kind_index == 0 or confidence < min_confidence:
+            continue
+        kind = MULTI_TYPE_NAMES[kind_index]
+        values = params[index].tolist()
+        subtype = MULTI_SUBTYPE_NAMES[int(subtypes[index])]
+        common = {
+            "type": kind,
+            "line_class": LINE_CLASSES[int(line_classes[index])],
+            "width_class": WIDTH_CLASSES[int(width_classes[index])],
+            "confidence": confidence,
+        }
+        p1 = {"x": values[0] * image_width, "y": values[1] * image_height}
+        p2 = {"x": values[2] * image_width, "y": values[3] * image_height}
+        if kind == "segment":
+            entities.append(EntityOut(**common, p1=p1, p2=p2))
+        elif kind == "circle":
+            entities.append(EntityOut(**common, center=p1, radius=max(values[2] * radius_scale, 1e-3)))
+        elif kind == "arc":
+            entities.append(EntityOut(**common, center=p1, radius=max(values[2] * radius_scale, 1e-3), start_angle=values[3] * 360.0, end_angle=values[4] * 360.0))
+        elif kind == "text":
+            entities.append(EntityOut(**common, position=p1, text="", height=max(values[2] * radius_scale, 0.5), rotation=values[3] * 360.0))
+        elif kind == "dimension":
+            entities.append(EntityOut(**common, kind=subtype if subtype in dimension_kinds else "linear", p1=p1, p2=p2, text=""))
+        elif kind == "annotation":
+            entities.append(EntityOut(
+                **common,
+                kind=subtype if subtype in annotation_kinds else "roughness",
+                position=p1,
+                leader=p2,
+                text="",
+                datum_refs=[],
+                height=3.5,
+            ))
+        elif kind == "hatch":
+            x0, x1 = sorted((p1["x"], p2["x"]))
+            y0, y1 = sorted((p1["y"], p2["y"]))
+            if x1 - x0 >= 1 and y1 - y0 >= 1:
+                entities.append(EntityOut(**common, boundary=[{"x": x0, "y": y0}, {"x": x1, "y": y0}, {"x": x1, "y": y1}, {"x": x0, "y": y1}], holes=[], pattern=subtype if subtype in {"ansi31", "solid"} else "ansi31"))
+    return entities
+
+
+@app.post("/detect-multi-type", response_model=VectorizeResponse)
+async def detect_multi_type(
+    file: UploadFile = File(...),
+    min_confidence: float = 0.5,
+) -> VectorizeResponse:
+    """Return inferred CadIR proposals; semantic payloads remain unverified."""
+    model = _load_multi_type_model()
+    if model is None:
+        raise HTTPException(503, "multi-type checkpoint is not configured")
+    content = await file.read()
+    try:
+        image = Image.open(io.BytesIO(content)).convert("L")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"invalid image: {exc}") from exc
+    width, height = image.size
+    resized = image.resize((IMG_SIZE, IMG_SIZE), Image.Resampling.LANCZOS)
+    pixels = 1.0 - np.asarray(resized, dtype=np.float32) / 255.0
+    tensor = torch.from_numpy(pixels).unsqueeze(0).unsqueeze(0).to(_DEVICE)
+    with torch.no_grad():
+        outputs = model(tensor)
+    return VectorizeResponse(
+        entities=_multi_type_outputs_to_entities(outputs, width, height, min_confidence=min_confidence),
+        model_step=getattr(app.state, "multi_type_model_step", None),
+    )
 
 
 def _layout_outputs_to_regions(

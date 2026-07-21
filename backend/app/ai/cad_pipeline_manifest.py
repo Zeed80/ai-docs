@@ -11,7 +11,17 @@ from app.ai.schemas import AITask
 from app.ai.task_routing import get_routing_for
 
 MANIFEST_VERSION = "1.0"
-PIPELINE_REVISION = "hierarchical-multitype-foundation-v1"
+PIPELINE_REVISION = "multi-type-proposal-v2"
+
+MULTI_TYPE_CANDIDATE = {
+    "key": "multi-type-proposal-v2",
+    "service": "cad-vectorizer",
+    "endpoint": "/detect-multi-type",
+    "checkpoint_step": 1059,
+    "checkpoint_sha256": "166bb77a893c0a3de9a9d32d3346a40c0a090bddaf99dbb101b6d9ab07bbece8",
+    "runtime_mode": "opt_in_only",
+    "promotion_passed": False,
+}
 
 PROFILE_GATES: dict[str, dict[str, float]] = {
     profile: {
@@ -68,6 +78,7 @@ def build_cad_pipeline_manifest(
             "assignment": "technical-vectorizer + CV fail-closed arbitration",
             "version": "technical-vectorizer-line-candidate",
             "authoritative": False,
+            "available_candidates": [dict(MULTI_TYPE_CANDIDATE)],
         },
         "spec_reader": _route(AITask.CAD_SPEC_READ),
         "spec_drafter": {

@@ -194,6 +194,27 @@ export interface VectorizerDevelopmentStatus {
       text_f1: number;
       pdf_path_holdout_is_semantic_ground_truth: boolean;
     };
+    multi_type_proposal: {
+      architecture: string;
+      checkpoint_step: number;
+      checkpoint_sha256: string;
+      training_source: string;
+      independent_holdout_sheets: number;
+      proposal_tolerance: number;
+      entity_precision: number;
+      entity_recall: number;
+      entity_f1: number;
+      segment_f1: number;
+      circle_f1: number;
+      arc_f1: number;
+      text_anchor_f1: number;
+      dimension_f1: number;
+      annotation_f1: number;
+      hatch_f1: number;
+      ocr_payload_included: boolean;
+      runtime_mode: string;
+      promotion_passed: boolean;
+    };
     promotion_status: "refused" | "promoted";
     promotion_thresholds: {
       entity_precision: number;
@@ -222,7 +243,20 @@ export interface CadPipelineManifest {
   captured_at: string;
   promotion_gate: Record<string, number>;
   components: {
-    geometry: { assignment: string; version: string; authoritative: boolean };
+    geometry: {
+      assignment: string;
+      version: string;
+      authoritative: boolean;
+      available_candidates: Array<{
+        key: string;
+        service: string;
+        endpoint: string;
+        checkpoint_step: number;
+        checkpoint_sha256: string;
+        runtime_mode: string;
+        promotion_passed: boolean;
+      }>;
+    };
     spec_reader: { task: string; models: CadPipelineModelAssignment[]; parameter_profile: string };
     spec_drafter: { task: string; models: CadPipelineModelAssignment[]; parameter_profile: string };
     [key: string]: unknown;

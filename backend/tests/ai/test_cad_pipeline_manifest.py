@@ -14,6 +14,10 @@ def test_pipeline_manifest_is_reproducible_and_exposes_assignments():
     assert first["components"]["spec_reader"]["task"] == "cad_spec_read"
     assert first["components"]["spec_drafter"]["task"] == "cad_spec_draft"
     assert first["promotion_gate"]["false_exact_rate"] == 0.0
+    candidate = first["components"]["geometry"]["available_candidates"][0]
+    assert candidate["endpoint"] == "/detect-multi-type"
+    assert candidate["runtime_mode"] == "opt_in_only"
+    assert candidate["promotion_passed"] is False
 
 
 def test_unknown_profile_fails_to_auto_without_weakening_gate():

@@ -245,6 +245,32 @@ cad-primitive-train:
 		--out cad-dataset-out/primitive-set-checkpoints \
 		--epochs 10 --batch-size 32 --num-workers 0
 
+cad-multi-type-train:
+	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_multi_type.py \
+		--manifest cad-dataset-out/profile-corpus-xl/manifest.jsonl \
+		--out cad-dataset-out/multi-type-checkpoints \
+		--epochs 10 --batch-size 4 --num-workers 0
+
+cad-multi-type-finetune:
+	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_multi_type.py \
+		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
+		--out cad-dataset-out/multi-type-web-checkpoints \
+		--resume cad-dataset-out/multi-type-checkpoints/best.pt \
+		--epochs 25 --batch-size 8 --lr 5e-5 --num-workers 4
+
+cad-multi-type-refine:
+	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_multi_type.py \
+		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
+		--out cad-dataset-out/multi-type-web-equivalent-checkpoints \
+		--resume cad-dataset-out/multi-type-web-checkpoints/best.pt \
+		--epochs 30 --batch-size 8 --lr 3e-5 --num-workers 4
+
+cad-multi-type-holdout:
+	cad-dataset-out/venv/bin/python infra/cad-vectorizer/eval_multi_type.py \
+		--checkpoint cad-dataset-out/multi-type-web-equivalent-checkpoints/best.pt \
+		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
+		--split holdout --out test-results/multi-type-web-holdout.json
+
 cad-web-primitive-train:
 	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_primitives.py \
 		--data cad-dataset-out/web-step-packed \

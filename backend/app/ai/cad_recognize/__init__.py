@@ -13,6 +13,7 @@ from app.ai.cad_recognize.edge_graph import EdgeGraphRecognizer, SourceSnappedEd
 from app.ai.cad_recognize.evidence_heatmap import EvidenceHeatmapRecognizer
 from app.ai.cad_recognize.hybrid_engineering import HybridEngineeringRecognizer
 from app.ai.cad_recognize.hierarchical_sheet import HierarchicalSheetRecognizer
+from app.ai.cad_recognize.multi_type import MultiTypeProposalRecognizer
 from app.ai.cad_recognize.primitive_set import PrimitiveSetRecognizer
 
 __all__ = [
@@ -24,5 +25,6 @@ __all__ = [
     "HybridEngineeringRecognizer",
     "HierarchicalSheetRecognizer",
     "PrimitiveSetRecognizer",
+    "MultiTypeProposalRecognizer",
     "RecognizeOutput",
 ]

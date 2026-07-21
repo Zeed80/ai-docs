@@ -938,6 +938,7 @@
     "pipeline_unassigned": "unassigned",
     "pipeline_deterministic": "deterministic",
     "latest_real_regression": "Latest live run: {dwg} DWG + {photos} photos; entity precision {precision}, recall {recall}, F1 {f1}; exact-sheet {exact}, false-exact {falseExact}. Gate failed.",
+    "multi_type_candidate_status": "Multi-type v2, checkpoint {step}: independent native-DXF holdout ({sheets} sheets) — proposal precision {precision}, recall {recall}, F1 {f1}; segment F1 {segmentF1}, text-anchor F1 {textF1}. OCR payload and relations are excluded. Candidate remains opt-in; gate failed.",
     "open_studio": "Studio",
     "new_sheet": "New sheet",
     "digitize_scan": "Digitize scan/photo",

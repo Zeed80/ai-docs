@@ -367,6 +367,17 @@ export default function CadListPage() {
                 vectorizerStatus.latest_real_stack_regression.false_exact_rate.toFixed(2),
             })}
           </p>
+          <p className="mt-2 rounded border border-amber-400/20 bg-amber-950/20 px-2 py-1 text-xs text-amber-100">
+            {t("multi_type_candidate_status", {
+              step: vectorizerStatus.candidate.multi_type_proposal.checkpoint_step,
+              sheets: vectorizerStatus.candidate.multi_type_proposal.independent_holdout_sheets,
+              precision: vectorizerStatus.candidate.multi_type_proposal.entity_precision.toFixed(4),
+              recall: vectorizerStatus.candidate.multi_type_proposal.entity_recall.toFixed(4),
+              f1: vectorizerStatus.candidate.multi_type_proposal.entity_f1.toFixed(4),
+              segmentF1: vectorizerStatus.candidate.multi_type_proposal.segment_f1.toFixed(4),
+              textF1: vectorizerStatus.candidate.multi_type_proposal.text_anchor_f1.toFixed(4),
+            })}
+          </p>
           <div className="mt-3 grid gap-2 rounded border border-white/10 bg-black/20 p-3 text-xs text-zinc-300 md:grid-cols-2">
             <div>
               <div className="font-medium text-zinc-200">{t("pipeline_models")}</div>

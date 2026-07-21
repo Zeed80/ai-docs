@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir --break-system-packages -r requirements.txt \
     --extra-index-url https://download.pytorch.org/whl/cu126
 
 COPY model.py dataset.py primitive_dataset.py primitive_model.py \
+    multi_type_dataset.py multi_type_model.py \
     sheet_layout_dataset.py sheet_layout_model.py \
     evidence_dataset.py evidence_model.py \
     directional_dataset.py directional_model.py directional_decode.py \
@@ -39,6 +40,7 @@ ENV CAD_SHEET_LAYOUT_CHECKPOINT=/models/sheet-layout-best.pt
 ENV CAD_EVIDENCE_CHECKPOINT=/models/evidence-best.pt
 ENV CAD_DIRECTIONAL_CHECKPOINT=/models/directional-best.pt
 ENV CAD_EDGE_VERIFIER_CHECKPOINT=/models/edge-verifier-best.pt
+ENV CAD_MULTI_TYPE_CHECKPOINT=/models/multi-type-best.pt
 ENV REPO_BACKEND=/repo/backend
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
