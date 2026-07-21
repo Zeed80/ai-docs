@@ -39,7 +39,7 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
 
     from app.ai.cad_ir import CadIR
     from app.ai.cad_ir.sequence import encode
-    from app.db.models import CadIrRevision, ImageGeneration
+    from app.db.models import CadCertification, CadIrRevision, ImageGeneration
     from app.db.session import _get_session_factory
     from app.storage import download_file
 
@@ -102,6 +102,22 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
             if accepted.revision < min_revision:
                 skipped += 1
                 continue
+            certificate = (
+                await db.execute(
+                    select(CadCertification).where(
+                        CadCertification.cad_ir_revision_id == accepted.id,
+                        CadCertification.status == "certified",
+                    )
+                )
+            ).scalar_one_or_none()
+            if (
+                certificate is None
+                or not certificate.drafter_approved_by
+                or not certificate.normcontrol_approved_by
+                or certificate.drafter_approved_by == certificate.normcontrol_approved_by
+            ):
+                skipped += 1
+                continue
 
             try:
                 corrected_ir = CadIR.model_validate_json(download_file(accepted.ir_path))
@@ -152,7 +168,10 @@ async def _run(out_dir: pathlib.Path, min_revision: int) -> int:
                 "domain_profile": (gen.params or {}).get("digitization_profile", "unknown"),
                 "source_kind": corrected_ir.source.kind,
                 "model_version": (gen.params or {}).get("recognizer_version"),
-                "dataset_provenance": "human_accepted_production_revision",
+                "dataset_provenance": "two_person_certified_production_revision",
+                "drafter_approved_by": certificate.drafter_approved_by,
+                "normcontrol_approved_by": certificate.normcontrol_approved_by,
+                "certification_manifest_hash": certificate.manifest_hash,
                 "revisions_span": accepted.revision,
             })
 

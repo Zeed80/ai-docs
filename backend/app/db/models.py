@@ -3487,6 +3487,72 @@ class CadIrRevision(UUIDPrimaryKey, TimestampMixin, Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CadElementRecord(UUIDPrimaryKey, TimestampMixin, Base):
+    """Queryable, lossless DB projection of one entity from a CAD IR revision."""
+
+    __tablename__ = "cad_element_records"
+    __table_args__ = (
+        Index(
+            "ix_cad_element_records_revision_element",
+            "cad_ir_revision_id",
+            "element_id",
+            unique=True,
+        ),
+    )
+
+    cad_ir_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("cad_ir_revisions.id"), nullable=False, index=True
+    )
+    element_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    element_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    assurance: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    source_region: Mapped[dict | None] = mapped_column(JSON)
+    evidence: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+
+class CadRelationRecord(UUIDPrimaryKey, TimestampMixin, Base):
+    """Normalized view/feature/dimension relation derived from a CAD revision."""
+
+    __tablename__ = "cad_relation_records"
+    __table_args__ = (
+        Index(
+            "ix_cad_relation_records_revision_relation",
+            "cad_ir_revision_id",
+            "relation_id",
+            unique=True,
+        ),
+    )
+
+    cad_ir_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("cad_ir_revisions.id"), nullable=False, index=True
+    )
+    relation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    source_element_id: Mapped[str | None] = mapped_column(String(255))
+    target_element_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    evidence: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+
+class CadCertification(UUIDPrimaryKey, TimestampMixin, Base):
+    """Two-person, revision-bound release certificate for exact digitization."""
+
+    __tablename__ = "cad_certifications"
+
+    cad_ir_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("cad_ir_revisions.id"), nullable=False, unique=True, index=True
+    )
+    profile: Mapped[str] = mapped_column(String(40), nullable=False, default="auto")
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="draft", index=True)
+    verification: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    drafter_approved_by: Mapped[str | None] = mapped_column(String(255))
+    drafter_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    normcontrol_approved_by: Mapped[str | None] = mapped_column(String(255))
+    normcontrol_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    manifest_hash: Mapped[str | None] = mapped_column(String(64))
+
+
 class StudioJob(UUIDPrimaryKey, TimestampMixin, Base):
     """Unified queue ledger for long-running studio work.
 

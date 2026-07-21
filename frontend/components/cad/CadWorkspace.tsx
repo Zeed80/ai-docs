@@ -5,14 +5,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CadIr,
+  CadCertification,
   Generation,
   IrEntity,
   IrLineClass,
   IrPatchOp,
   ReleaseManifest,
-  acceptVectorize,
+  approveCadAsDrafter,
+  approveCadAsNormcontroller,
   artifactUrl,
   getIr,
+  getCadCertification,
   getReleaseManifest,
   patchIr,
   releasePackageUrl,
@@ -140,6 +143,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   );
   const [err, setErr] = useState<string | null>(null);
   const [release, setRelease] = useState<ReleaseManifest | null>(null);
+  const [certification, setCertification] = useState<CadCertification | null>(null);
   // Multi-select (A3): the whole selection set; `selected` below is the
   // single-entity view used by the property grid when exactly one is picked.
   const [selection, setSelection] = useState<Set<string>>(new Set());
@@ -241,8 +245,10 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const load = useCallback(async () => {
     try {
       const env = await getIr(gen.id);
+      const certificate = await getCadCertification(gen.id);
       setIr(env.ir);
       setRevision(env.revision);
+      setCertification(certificate);
       setFullCheckedRevision(
         typeof gen.params?.full_check_revision === "number"
           ? gen.params.full_check_revision
@@ -2136,7 +2142,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         >
           {t("vector.print_pdf")}
         </a>
-        {!gen.accepted && (
+        {!gen.accepted && certification?.status !== "drafter_approved" && (
           <button
             disabled={
               busy ||
@@ -2164,7 +2170,28 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
               setBusy(true);
               setErr(null);
               try {
-                await acceptVectorize(gen.id);
+                const certificate = await approveCadAsDrafter(gen.id);
+                setCertification(certificate);
+              } catch (e) {
+                setErr(String((e as Error).message || e));
+              } finally {
+                setBusy(false);
+              }
+            }}
+            className="ml-auto px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm disabled:opacity-50"
+          >
+            {t("vector.certify_drafter")}
+          </button>
+        )}
+        {!gen.accepted && certification?.status === "drafter_approved" && (
+          <button
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setErr(null);
+              try {
+                const certificate = await approveCadAsNormcontroller(gen.id);
+                setCertification(certificate);
                 onChanged();
               } catch (e) {
                 setErr(String((e as Error).message || e));
@@ -2174,7 +2201,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             }}
             className="ml-auto px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm disabled:opacity-50"
           >
-            {t("vector.accept")}
+            {t("vector.certify_normcontrol")}
           </button>
         )}
         {gen.accepted && (

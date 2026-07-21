@@ -965,6 +965,43 @@ export async function acceptVectorize(id: string): Promise<Generation> {
   return jsonOrThrow<Generation>(res);
 }
 
+export interface CadCertification {
+  id?: string;
+  revision: number;
+  profile: "auto" | "mechanical" | "construction" | "electrical" | "hydraulic" | "pid";
+  status: "draft" | "drafter_approved" | "certified";
+  verification?: { exact_ready?: boolean; checks?: Record<string, boolean> };
+  drafter_approved_by?: string | null;
+  drafter_approved_at?: string | null;
+  normcontrol_approved_by?: string | null;
+  normcontrol_approved_at?: string | null;
+  manifest_hash?: string | null;
+}
+
+export async function getCadCertification(id: string): Promise<CadCertification> {
+  const res = await apiFetch(`${BASE}/${id}/certification`);
+  return jsonOrThrow<CadCertification>(res);
+}
+
+export async function approveCadAsDrafter(
+  id: string,
+  profile: CadCertification["profile"] = "auto",
+): Promise<CadCertification> {
+  const res = await mutFetch(`${BASE}/${id}/certification/drafter-approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profile }),
+  });
+  return jsonOrThrow<CadCertification>(res);
+}
+
+export async function approveCadAsNormcontroller(id: string): Promise<CadCertification> {
+  const res = await mutFetch(`${BASE}/${id}/certification/normcontrol-approve`, {
+    method: "POST",
+  });
+  return jsonOrThrow<CadCertification>(res);
+}
+
 export async function getFeatureTreeCandidates(
   id: string,
 ): Promise<FeatureTreeCandidate[]> {

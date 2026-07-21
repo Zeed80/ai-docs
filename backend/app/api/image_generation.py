@@ -30,6 +30,7 @@ from app.ai.cad_vectorizer_status import get_cad_vectorizer_development_status
 from app.auth.jwt import get_current_user
 from app.auth.models import UserInfo, UserRole
 from app.db.models import (
+    CadCertification,
     ComfyWorkflow,
     Document,
     ImageGeneration,
@@ -54,6 +55,12 @@ _ALLOWED_UPLOAD_TYPES = {
 }
 _ALLOWED_UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp", "pdf"}
 _MAX_SOURCE_BYTES = 50 * 1024 * 1024
+
+
+class CadCertificationRequest(BaseModel):
+    profile: Literal[
+        "auto", "mechanical", "construction", "electrical", "hydraulic", "pid"
+    ] = "auto"
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -780,11 +787,112 @@ async def accept_vectorize_generation(
     return _gen_out(gen)
 
 
+def _has_any_role(user: UserInfo, *roles: UserRole) -> bool:
+    return UserRole.admin in user.roles or any(role in user.roles for role in roles)
+
+
+@router.get("/{generation_id}/certification")
+async def get_vectorize_certification(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Return the certificate of the current revision; stale signatures never carry forward."""
+    from app.services.cad_certification import certification_out
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    revision, _ir = await _load_current_ir(db, gen)
+    row = (
+        await db.execute(
+            select(CadCertification).where(CadCertification.cad_ir_revision_id == revision.id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return {"revision": revision.revision, "profile": "auto", "status": "draft"}
+    return certification_out(row, revision)
+
+
+@router.post("/{generation_id}/certification/drafter-approve")
+async def approve_vectorize_as_drafter(
+    generation_id: uuid.UUID,
+    body: CadCertificationRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    from app.services.cad_certification import (
+        CertificationBlocked,
+        approve_by_drafter,
+        certification_out,
+    )
+
+    if not _has_any_role(user, UserRole.engineer):
+        raise HTTPException(403, "Подписать как чертёжник может только инженер.")
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    if gen.operation != "vectorize" or gen.status != ImageGenStatus.done:
+        raise HTTPException(400, "Сертифицировать можно только готовую оцифровку.")
+    revision, ir = await _load_current_ir(db, gen)
+    try:
+        row = await approve_by_drafter(
+            db, revision, ir, actor_sub=user.sub, profile=body.profile
+        )
+    except CertificationBlocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await db.commit()
+    return certification_out(row, revision)
+
+
+@router.post("/{generation_id}/certification/normcontrol-approve")
+async def approve_vectorize_as_normcontroller(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    from app.services.cad_certification import (
+        CertificationBlocked,
+        approve_by_normcontroller,
+        certification_out,
+    )
+
+    if not _has_any_role(user, UserRole.normcontroller):
+        raise HTTPException(403, "Финальную подпись может поставить только нормоконтролёр.")
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    if gen.operation != "vectorize" or gen.status != ImageGenStatus.done:
+        raise HTTPException(400, "Сертифицировать можно только готовую оцифровку.")
+    revision, ir = await _load_current_ir(db, gen)
+    try:
+        row = await approve_by_normcontroller(
+            db, gen, revision, ir, actor_sub=user.sub
+        )
+    except CertificationBlocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await db.commit()
+    return certification_out(row, revision)
+
+
 async def _build_manifest(db: AsyncSession, gen: ImageGeneration) -> dict:
     from app.ai.cad_validate import validate_ir
     from app.services.cad_release import ReleaseBlocked, build_release_manifest
 
     revision, ir = await _load_current_ir(db, gen)
+    certificate = (
+        await db.execute(
+            select(CadCertification).where(
+                CadCertification.cad_ir_revision_id == revision.id,
+                CadCertification.status == "certified",
+            )
+        )
+    ).scalar_one_or_none()
+    if certificate is None:
+        raise HTTPException(
+            409,
+            "Текущая ревизия не имеет двух независимых подписей чертёжника и нормоконтролёра.",
+        )
     validate_ir(ir)  # freshest report; blocking issues are re-derived here
     try:
         return build_release_manifest(
@@ -799,6 +907,17 @@ async def _build_manifest(db: AsyncSession, gen: ImageGeneration) -> dict:
             accepted_revision=gen.accepted_revision,
             approved_by=revision.approved_by,
             approved_at=revision.approved_at.isoformat() if revision.approved_at else None,
+            certification={
+                "status": certificate.status,
+                "profile": certificate.profile,
+                "drafter_approved_by": certificate.drafter_approved_by,
+                "drafter_approved_at": certificate.drafter_approved_at.isoformat()
+                if certificate.drafter_approved_at else None,
+                "normcontrol_approved_by": certificate.normcontrol_approved_by,
+                "normcontrol_approved_at": certificate.normcontrol_approved_at.isoformat()
+                if certificate.normcontrol_approved_at else None,
+                "manifest_hash": certificate.manifest_hash,
+            },
         )
     except ReleaseBlocked as exc:
         raise HTTPException(409, str(exc)) from exc

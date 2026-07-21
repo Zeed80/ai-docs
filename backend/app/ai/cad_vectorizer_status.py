@@ -13,7 +13,33 @@ from typing import Any
 
 CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
     "pipeline_revision": "source-snapped-edge-graph-v1",
-    "evaluated_at": "2026-07-20",
+    "evaluated_at": "2026-07-21",
+    "accuracy_contract": {
+        "mode": "fail_closed_two_person_certification",
+        "vlm_is_authoritative": False,
+        "normalized_db_projection_required": True,
+        "required_signatures": ["drafter", "normcontroller"],
+    },
+    "selected_model_direction": {
+        "kind": "hierarchical_multi_type_cad_vectorizer",
+        "deployment": "experimental",
+        "hardware_budget": "single_rtx_3090_24gb",
+        "stages": [
+            "sheet_layout",
+            "source_resolution_tiles",
+            "primitive_and_symbol_heads",
+            "engineering_graph",
+            "constraint_solver",
+        ],
+        "heads": [
+            "line", "endpoint", "junction", "circle", "arc",
+            "text", "dimension", "annotation", "hatch",
+        ],
+        "rejected_as_authoritative": [
+            "qwen3_vl", "zero_to_cad_qwen3_vl", "line_only_vectorizer",
+        ],
+        "promotion_requires_profile_gate": True,
+    },
     "corpus": {
         "licensed_web_assets": 216,
         "step_assets": 181,
@@ -157,6 +183,16 @@ def get_cad_vectorizer_development_status() -> dict[str, Any]:
     candidate = CAD_VECTORIZER_DEVELOPMENT_STATUS["candidate"]
     return {
         **CAD_VECTORIZER_DEVELOPMENT_STATUS,
+        "accuracy_contract": {
+            **CAD_VECTORIZER_DEVELOPMENT_STATUS["accuracy_contract"],
+            "required_signatures": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["accuracy_contract"]["required_signatures"]),
+        },
+        "selected_model_direction": {
+            **CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"],
+            "stages": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"]["stages"]),
+            "heads": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"]["heads"]),
+            "rejected_as_authoritative": list(CAD_VECTORIZER_DEVELOPMENT_STATUS["selected_model_direction"]["rejected_as_authoritative"]),
+        },
         "corpus": corpus,
         "candidate": {
             **candidate,

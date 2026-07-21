@@ -657,6 +657,8 @@
       "level_7": "Level 7 · Visual critique (VLM)",
       "show_entity": "show",
       "accept": "Accept drawing",
+      "certify_drafter": "Sign: drafter",
+      "certify_normcontrol": "Sign: norm control",
       "accept_blocked": "Fix blocking validation errors first",
       "accept_blocked_critical": "{n} unconfirmed critical dimension(s)/label(s) — confirm or fix them in the review queue before accepting",
       "accept_blocked_review": "{n} unresolved entities — finish the review queue before accepting",

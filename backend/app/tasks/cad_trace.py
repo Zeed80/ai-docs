@@ -447,7 +447,7 @@ def _overlay_spec_annotations(ir, spec: dict) -> None:
             TextEntity(
                 position=Point(x=x, y=y), text=text, height=height,
                 line_class="dim", width_class="thin", origin="spec",
-                assurance="constraint_validated",
+                assurance="inferred",
             )
         )
         y += height * 1.6

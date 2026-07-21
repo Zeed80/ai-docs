@@ -13,7 +13,9 @@ spec) lives alongside the existing VLM text reader.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.ai.cad_ir.schema import (
     CadIR,
@@ -25,17 +27,93 @@ from app.ai.cad_ir.schema import (
 )
 
 
+class SpecEvidence(BaseModel):
+    """Auditable source observation backing one structured spec value."""
+
+    image_index: int = Field(ge=0)
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    raw_text: str | None = None
+
+
+class SpecSection(BaseModel):
+    diameter_mm: float = Field(gt=0)
+    length_mm: float | None = Field(default=None, gt=0)
+    note: str | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
+class SpecBody(BaseModel):
+    name: str | None = None
+    type: str = "unknown"
+    outer: list[SpecSection] = Field(default_factory=list)
+    bore: list[SpecSection] = Field(default_factory=list)
+    # Accepted only for compatibility with already stored prototype responses.
+    # The deterministic drafter still requires explicit, complete outer[] data.
+    features: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SpecDimension(BaseModel):
+    value: str = Field(min_length=1)
+    applies_to: str = ""
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
+class SpecAnnotation(BaseModel):
+    kind: Literal["roughness", "hardness", "tolerance", "thread", "material", "other"]
+    text: str = Field(min_length=1)
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
+class EngineeringDrawingSpec(BaseModel):
+    """Fail-closed contract between drawing recognition and CAD drafting."""
+
+    schema_version: Literal[1] = 1
+    part: str = ""
+    main_view: SpecBody
+    parts: list[SpecBody] = Field(default_factory=list)
+    dimensions: list[SpecDimension] = Field(default_factory=list)
+    annotations: list[SpecAnnotation] = Field(default_factory=list)
+    title_block: dict[str, Any] = Field(default_factory=dict)
+    unresolved: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _record_incomplete_rotation_sections(self) -> "EngineeringDrawingSpec":
+        bodies = [self.main_view, *self.parts]
+        for body_index, body in enumerate(bodies):
+            rotation = any(word in body.type.lower() for word in ("вращ", "вал", "shaft"))
+            if not rotation:
+                continue
+            if len(body.outer) < 2:
+                self.unresolved.append(f"body:{body_index}:outer-profile-incomplete")
+            for section_index, section in enumerate(body.outer):
+                if section.length_mm is None:
+                    self.unresolved.append(
+                        f"body:{body_index}:outer:{section_index}:length-missing"
+                    )
+            for section_index, section in enumerate(body.bore):
+                if section.length_mm is None:
+                    self.unresolved.append(
+                        f"body:{body_index}:bore:{section_index}:length-missing"
+                    )
+        self.unresolved = sorted(set(self.unresolved))
+        return self
+
+
 _SPEC_PROMPT = (
     "Ты — инженер-конструктор. Изучи чертёж и опиши деталь СТРУКТУРНО для "
-    "повторного черчения. Верни СТРОГО JSON:\n"
-    '{"part":"название",'
+    "повторного черчения. Изображение 0 — общий вид листа, остальные изображения "
+    "— полноразмерные перекрывающиеся фрагменты; их границы перечислены ниже. "
+    "Верни СТРОГО JSON:\n"
+    '{"schema_version":1,"part":"название",'
     '"main_view":{"type":"тело вращения (вал)|призматическая",'
-    '"outer":[{"diameter_mm":0,"length_mm":0,"note":"резьба/конус/..."}],'
+    '"outer":[{"diameter_mm":0,"length_mm":0,"note":"резьба/конус/...",'
+    '"evidence":[{"image_index":1,"bbox":[0,0,100,30],"raw_text":"Ø40"}]}],'
     '"bore":[{"diameter_mm":0,"length_mm":0,"note":"..."}]},'
     '"parts":[{"name":"..","type":"..","outer":[...],"bore":[...]}],'
     '"dimensions":[{"value":"Ø80js6","applies_to":".."}],'
     '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":".."}],'
-    '"title_block":{"material":"..","scale":".."}}\n'
+    '"title_block":{"material":"..","scale":".."},'
+    '"unresolved":["что именно не удалось доказать"]}\n'
     "ПРАВИЛА для тела вращения:\n"
     "1) outer[] — ВСЕ ступени наружного контура ПО ПОРЯДКУ слева направо, БЕЗ "
     "пропусков (включая резьбовые участки — бери наружный диаметр резьбы, и "
@@ -48,8 +126,43 @@ _SPEC_PROMPT = (
     "внутренний контур в bore[] так же по порядку.\n"
     "5) Фаски/канавки/шпонпазы/поперечные отверстия НЕ включай в outer/bore.\n"
     "Если деталей несколько — каждую в parts[], главную продублируй в main_view.\n"
-    "Читай реальные значения с чертежа. Только JSON."
+    "Читай только реально видимые значения. ЗАПРЕЩЕНО угадывать, усреднять или "
+    "достраивать отсутствующие размеры. Неизвестное оставь null и добавь причину "
+    "в unresolved. Для каждого прочитанного размера приложи evidence. Только JSON."
 )
+
+
+def _spec_images(image, *, tile_size: int = 1400, overlap: int = 160) -> tuple[list[bytes], list[str]]:
+    """Build a context image plus source-resolution tiles without data loss."""
+    import io
+
+    context = image.copy()
+    context.thumbnail((1400, 1400))
+    buffer = io.BytesIO()
+    context.save(buffer, format="PNG")
+    encoded = [buffer.getvalue()]
+    descriptions = [f"image 0: overview 0,0,{image.width},{image.height}"]
+    if image.width <= tile_size and image.height <= tile_size:
+        return encoded, descriptions
+    step = tile_size - overlap
+    xs = list(range(0, max(image.width - tile_size, 0) + 1, step))
+    ys = list(range(0, max(image.height - tile_size, 0) + 1, step))
+    if not xs or xs[-1] != max(image.width - tile_size, 0):
+        xs.append(max(image.width - tile_size, 0))
+    if not ys or ys[-1] != max(image.height - tile_size, 0):
+        ys.append(max(image.height - tile_size, 0))
+    # Bound latency for unusually large sheets while covering both edges and centre.
+    boxes = [(x, y, min(x + tile_size, image.width), min(y + tile_size, image.height)) for y in ys for x in xs]
+    if len(boxes) > 8:
+        indexes = sorted({0, len(boxes) - 1, *(round(i * (len(boxes) - 1) / 7) for i in range(8))})
+        boxes = [boxes[index] for index in indexes]
+    for index, box in enumerate(boxes, start=1):
+        tile = image.crop(box)
+        tile_buffer = io.BytesIO()
+        tile.save(tile_buffer, format="PNG")
+        encoded.append(tile_buffer.getvalue())
+        descriptions.append(f"image {index}: source bbox {box[0]},{box[1]},{box[2]},{box[3]}")
+    return encoded, descriptions
 
 
 async def read_drawing_spec(
@@ -76,9 +189,7 @@ async def read_drawing_spec(
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception:  # noqa: BLE001
         return {}
-    image.thumbnail((1400, 1400))
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
+    images, tile_descriptions = _spec_images(image)
     # Dedicated slot for the spec reader (Settings → Models → Оцифровка). When it
     # has no assignment, fall back to the shared drawing-analysis VLM so behaviour
     # is unchanged out of the box.
@@ -91,8 +202,11 @@ async def read_drawing_spec(
     )
     request = AIRequest(
         task=read_task,
-        messages=[ChatMessage(role="user", content=_SPEC_PROMPT)],
-        images=[base64.b64encode(buffer.getvalue()).decode()],
+        messages=[ChatMessage(
+            role="user",
+            content=_SPEC_PROMPT + "\nКАРТА ИЗОБРАЖЕНИЙ:\n" + "\n".join(tile_descriptions),
+        )],
+        images=[base64.b64encode(value).decode() for value in images],
         confidential=confidential,
         allow_cloud=False,
     )
@@ -100,7 +214,13 @@ async def read_drawing_spec(
         response = await router.run(request)
     except Exception:  # noqa: BLE001 — never sink the pipeline on a VLM error
         return {}
-    return _parse_spec_json(response.text or "")
+    parsed = _parse_spec_json(response.text or "")
+    if not parsed:
+        return {}
+    try:
+        return EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
+    except ValidationError:
+        return {}
 
 
 def _parse_spec_json(raw: str) -> dict:
@@ -212,22 +332,9 @@ def _rotation_parts(spec: dict) -> list[dict]:
     return result
 
 
-def _fill_lengths(sections: list[dict], spec: dict) -> None:
-    """Fill missing section lengths so the profile stays proportionate."""
-    diameters = [s["d"] for s in sections if s["d"]] or [10.0]
-    overall = None
-    for dim in spec.get("dimensions", []) or []:
-        text = str(dim.get("applies_to", "")) + " " + str(dim.get("value", ""))
-        if any(word in text.lower() for word in ("общая", "overall", "длина детали")):
-            overall = _num(dim.get("value"))
-            break
-    known = sum(s["l"] for s in sections if s["l"])
-    missing = [s for s in sections if not s["l"]]
-    if missing:
-        remaining = (overall - known) if (overall and overall > known) else max(known, len(missing) * max(diameters))
-        each = max(1.0, remaining / len(missing))
-        for s in missing:
-            s["l"] = each
+def _sections_are_complete(sections: list[dict]) -> bool:
+    """A missing dimension is an unresolved fact, never a drafting hint."""
+    return bool(sections) and all(section.get("d") and section.get("l") for section in sections)
 
 
 def _emit_profile(
@@ -347,9 +454,10 @@ def draft_rotation_body(
     if not parts:
         return None
     for body in parts:
-        _fill_lengths(body["outer"], spec)
-        if body.get("bore"):
-            _fill_lengths(body["bore"], spec)
+        if not _sections_are_complete(body["outer"]):
+            return None
+        if body.get("bore") and not _sections_are_complete(body["bore"]):
+            return None
 
     part_dims = [
         (sum(s["l"] for s in body["outer"]), max(s["d"] for s in body["outer"]))
@@ -392,7 +500,7 @@ def draft_rotation_body(
         entities.append(
             Segment(
                 p1=Point(x=x1, y=y1), p2=Point(x=x2, y=y2),
-                line_class=cls, width_class=width, origin="spec", assurance="constraint_validated",
+                line_class=cls, width_class=width, origin="spec", assurance="inferred",
             )
         )
 

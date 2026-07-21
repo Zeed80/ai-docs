@@ -136,6 +136,14 @@ async def save_revision(
     base = _base_path(gen)
     prev = await latest_revision(db, gen.id)
     revision = 0 if prev is None else prev.revision + 1
+    # A signature belongs to immutable content, never to a generation id.
+    # Any edit creates new content and immediately returns the generation to
+    # draft even if an earlier revision was certified.
+    if prev is not None:
+        gen.accepted = False
+        gen.accepted_by = None
+        gen.accepted_at = None
+        gen.accepted_revision = None
 
     params_in = dict(gen.params or {})
     if keep_raster is None:

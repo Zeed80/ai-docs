@@ -49,6 +49,7 @@ def build_release_manifest(
     accepted_revision: int | None,
     approved_by: str | None,
     approved_at: str | None,
+    certification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble (and self-verify) the release manifest for one accepted CAD IR
     revision. Raises ``ReleaseBlocked`` when the drawing is not releasable."""
@@ -123,6 +124,7 @@ def build_release_manifest(
             "accepted_revision": accepted_revision,
             "approved_by": approved_by,
             "approved_at": approved_at,
+            "certification": certification,
         },
     }
     manifest["fully_reproducible"] = ir_reproducible and all(reproducible.values())

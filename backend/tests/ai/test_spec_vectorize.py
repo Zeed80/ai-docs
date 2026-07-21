@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 
 from app.ai.cad_recognize.spec_vectorize import (
+    EngineeringDrawingSpec,
     _dsl_to_ir,
     _num,
     _parse_spec_json,
+    _spec_images,
     choose_standard_scale,
     draft_from_spec_async,
     draft_rotation_body,
@@ -42,15 +44,53 @@ def test_draft_rotation_body_builds_clean_stepped_profile():
     ir = draft_rotation_body(spec)
     assert ir is not None
     segs = [e for e in ir.entities if e.type == "segment"]
-    # Clean, not fragmented: a handful of edges, all spec-origin/validated.
+    # Clean, not fragmented, but still inferred until source evidence is
+    # independently checked or a human confirms it.
     assert 6 <= len(segs) <= 20
-    assert all(s.origin == "spec" and s.assurance == "constraint_validated" for s in segs)
+    assert all(s.origin == "spec" and s.assurance == "inferred" for s in segs)
     assert any(s.line_class == "axis" for s in segs)  # centreline
     assert ir.recognizer_used == "spec-drafter-rotation"
 
 
 def test_draft_rotation_body_declines_when_no_sections():
     assert draft_rotation_body({"main_view": {"features": [{"kind": "hole", "diameter_mm": 10}]}}) is None
+
+
+def test_draft_rotation_body_never_invents_missing_lengths():
+    spec = {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": None},
+            ],
+        }
+    }
+    assert draft_rotation_body(spec) is None
+
+
+def test_engineering_spec_marks_incomplete_rotation_profile_unresolved():
+    spec = EngineeringDrawingSpec.model_validate({
+        "schema_version": 1,
+        "part": "Вал",
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": None},
+            ],
+        },
+    })
+    assert "body:0:outer:1:length-missing" in spec.unresolved
+
+
+def test_spec_images_preserve_source_resolution_in_tiles():
+    from PIL import Image
+
+    images, descriptions = _spec_images(Image.new("RGB", (2484, 1758), "white"))
+    assert len(images) > 1
+    assert descriptions[0] == "image 0: overview 0,0,2484,1758"
+    assert any("2484" in description for description in descriptions[1:])
 
 
 def test_draft_multiple_rotation_bodies_each_with_own_axis():
