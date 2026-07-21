@@ -81,3 +81,26 @@ VLM-localization wall). To make it useful:
 
 Reproduce: `infer.py` (visual), `dump_holdout_dsl.py` + `score_holdout.py`
 (entity F1). Adapter: `cad-dataset-out/vlm-sft/out/qwen3vl-cad-lora/`.
+
+## Second run (2026-07-21) — ADSK base + 2x data — still doesn't beat CV
+
+- **Base:** ADSKAILab/Zero-To-CAD-Qwen3-VL-2B (CAD-pretrained). **Data:** 5969/
+  808/731 (added profile-corpus-xl). **eval_loss 0.038** (better than 0.052) —
+  synthetic fit improved.
+- **Entity gate (real-QCAD holdout):** raw VLM **F1 = 0.000** again. Best
+  primitives are ~20 px off (the bolt circle: VLM (509,489,r127) vs GT
+  (512,512,r146)) — far beyond the exact 2.56 px tolerance; one sheet emits
+  nothing; polygon structure partly wrong.
+- **Hybrid (VLM proposes -> CV supplies precision):** F1 **0.011** (recovers 1
+  entity) — still far below CV's 0.186. The VLM structure is too sparse/coarse
+  to select CV's primitives without losing most of CV's recall.
+
+### Honest conclusion
+Two thorough iterations (instruct base then CAD-pretrained base, 2x-4x data)
+both hit entity F1 ~0 on real drawings. The synthetic fit keeps improving
+(eval_loss 0.052 -> 0.038) but does NOT transfer to real-drawing pixel accuracy
+— a synthetic-to-real DOMAIN GAP, not a recipe problem. More synthetic data
+won't cross it. **CV stays production (F1 0.186).** The generative branch is a
+validated pipeline + paradigm (clean, fragmentation-free output) but needs REAL
+labeled data — the B5 active-learning flywheel (accepted human edits from
+production) — to progress. Not shipped.
