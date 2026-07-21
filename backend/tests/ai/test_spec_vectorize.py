@@ -206,6 +206,105 @@ def test_prismatic_drafter_declines_incomplete_profile():
     }) is None
 
 
+def test_bolt_circle_expands_to_exact_holes_and_pitch_dimension():
+    spec = EngineeringDrawingSpec.model_validate({
+        "main_view": {
+            "type": "круглый фланец",
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 180,
+                "hole_patterns": [{
+                    "kind": "bolt_circle",
+                    "count": 6,
+                    "bolt_circle_diameter_mm": 140,
+                    "hole_diameter_mm": 14,
+                    "start_angle_deg": 0,
+                    "tolerance": "H7",
+                }],
+            },
+        },
+    }).model_dump(mode="json")
+    ir = draft_prismatic_body(spec, px_per_mm=2)
+    assert ir is not None
+    circles = [entity for entity in ir.entities if entity.type == "circle"]
+    assert len(circles) == 7
+    values = sorted(
+        entity.value_mm for entity in ir.entities if entity.type == "dimension"
+    )
+    assert values == [14, 14, 14, 14, 14, 14, 140, 180]
+    flange_center = circles[0].center
+    first_hole = circles[1].center
+    assert first_hole.x - flange_center.x == pytest.approx(140)
+    assert first_hole.y == pytest.approx(flange_center.y)
+
+
+def test_capsule_slot_emits_two_exact_lines_two_arcs_and_dimensions():
+    spec = EngineeringDrawingSpec.model_validate({
+        "main_view": {
+            "type": "призматическая пластина",
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 100,
+                "height_mm": 60,
+                "slots": [{
+                    "center_x_mm": 0,
+                    "center_y_mm": 0,
+                    "length_mm": 40,
+                    "width_mm": 12,
+                    "rotation_deg": 30,
+                }],
+            },
+        },
+    }).model_dump(mode="json")
+    ir = draft_prismatic_body(spec, px_per_mm=4)
+    assert ir is not None
+    assert len([entity for entity in ir.entities if entity.type == "arc"]) == 2
+    assert len([entity for entity in ir.entities if entity.type == "segment"]) == 8
+    values = sorted(
+        entity.value_mm for entity in ir.entities if entity.type == "dimension"
+    )
+    assert values == [12, 40, 60, 100]
+
+
+def test_prismatic_drafter_fails_closed_for_feature_outside_profile():
+    spec = {
+        "main_view": {
+            "type": "призматическая пластина",
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 100,
+                "height_mm": 60,
+                "holes": [{
+                    "center_x_mm": 49,
+                    "center_y_mm": 0,
+                    "diameter_mm": 10,
+                }],
+            },
+        },
+    }
+    assert draft_prismatic_body(spec) is None
+
+
+def test_spec_rejects_slot_with_length_below_width():
+    with pytest.raises(ValueError):
+        EngineeringDrawingSpec.model_validate({
+            "main_view": {
+                "type": "призматическая пластина",
+                "profile": {
+                    "shape": "rectangle",
+                    "width_mm": 100,
+                    "height_mm": 60,
+                    "slots": [{
+                        "center_x_mm": 0,
+                        "center_y_mm": 0,
+                        "length_mm": 10,
+                        "width_mm": 12,
+                    }],
+                },
+            },
+        })
+
+
 def test_dsl_to_ir_decodes_all_primitive_kinds():
     ir = _dsl_to_ir({
         "lines": [[0, 0, 100, 0], [100, 0, 100, 50]],
@@ -258,6 +357,35 @@ async def test_description_reader_uses_local_cad_reader_for_free_text():
     assert router.seen.task.value == "cad_spec_read"
     assert router.seen.confidential is True
     assert router.seen.allow_cloud is False
+
+
+@pytest.mark.asyncio
+async def test_description_reader_does_not_block_on_unrequested_tolerances_or_rounding():
+    router = _FakeRouter(
+        '{"schema_version":1,"part":"Плита","main_view":{"type":"призматическая пластина",'
+        '"profile":{"shape":"rectangle","width_mm":100,"height_mm":60,"slots":['
+        '{"center_x_mm":0,"center_y_mm":0,"length_mm":40,"width_mm":12}]}},'
+        '"unresolved":["допуски на габаритные размеры",'
+        '"радиусы скруглений углов пластины"]}'
+    )
+    spec = await read_description_spec(
+        "Прямоугольная пластина 100×60 с пазом 40×12 в центре", router=router
+    )
+    assert spec["unresolved"] == []
+    assert len(spec["optional_unresolved"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_description_reader_keeps_explicitly_requested_missing_radius_blocking():
+    router = _FakeRouter(
+        '{"schema_version":1,"part":"Плита","main_view":{"type":"призматическая пластина",'
+        '"profile":{"shape":"rectangle","width_mm":100,"height_mm":60}},'
+        '"unresolved":["радиус скругления явно запрошен, но не указан"]}'
+    )
+    spec = await read_description_spec(
+        "Пластина 100×60 со скруглёнными углами, радиус не указан", router=router
+    )
+    assert spec["unresolved"] == ["радиус скругления явно запрошен, но не указан"]
 
 
 @pytest.mark.asyncio

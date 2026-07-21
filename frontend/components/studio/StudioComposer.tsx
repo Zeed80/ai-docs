@@ -1349,6 +1349,23 @@ export default function StudioComposer({
               <p className="text-[11px] text-zinc-600">
                 {t("vector_description_hint")}
               </p>
+              <div className="space-y-1">
+                <div className="text-[11px] text-zinc-500">
+                  {t("vector_description_templates")}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(["plate", "flange", "slot"] as const).map((template) => (
+                    <button
+                      key={template}
+                      type="button"
+                      onClick={() => setVectorDescription(t(`vector_template_${template}_text`))}
+                      className="rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-zinc-300 hover:bg-white/10"
+                    >
+                      {t(`vector_template_${template}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <label className="block">
                 <span className="text-xs text-zinc-500">
                   {t("vector_orientation_label")}

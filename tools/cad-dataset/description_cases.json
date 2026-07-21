@@ -71,5 +71,67 @@
       "entity_counts": {"segment": 9, "dimension": 5},
       "dimension_values_mm": [30, 40, 50, 60, 100]
     }
+  },
+  {
+    "id": "mechanical_flange_six_hole_bolt_circle",
+    "profile": "mechanical",
+    "description": "Круглый фланец Ø180 толщиной 20 мм. Шесть отверстий Ø14H7 равномерно по делительной окружности Ø140, первое отверстие справа.",
+    "spec": {
+      "schema_version": 1,
+      "part": "Фланец",
+      "main_view": {
+        "type": "круглый фланец",
+        "profile": {
+          "shape": "circle",
+          "diameter_mm": 180,
+          "thickness_mm": 20,
+          "hole_patterns": [
+            {
+              "kind": "bolt_circle",
+              "count": 6,
+              "bolt_circle_diameter_mm": 140,
+              "hole_diameter_mm": 14,
+              "start_angle_deg": 0,
+              "tolerance": "H7"
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "entity_counts": {"segment": 2, "circle": 7, "dimension": 8},
+      "dimension_values_mm": [14, 14, 14, 14, 14, 14, 140, 180]
+    }
+  },
+  {
+    "id": "mechanical_plate_rotated_capsule_slot",
+    "profile": "mechanical",
+    "description": "Прямоугольная пластина 100×60×8 мм. В центре сквозной продолговатый паз общей длиной 40 мм и шириной 12 мм, повёрнутый на 30° против часовой стрелки.",
+    "spec": {
+      "schema_version": 1,
+      "part": "Пластина с пазом",
+      "main_view": {
+        "type": "призматическая пластина",
+        "profile": {
+          "shape": "rectangle",
+          "width_mm": 100,
+          "height_mm": 60,
+          "thickness_mm": 8,
+          "slots": [
+            {
+              "center_x_mm": 0,
+              "center_y_mm": 0,
+              "length_mm": 40,
+              "width_mm": 12,
+              "rotation_deg": 30
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "entity_counts": {"segment": 8, "arc": 2, "dimension": 4},
+      "dimension_values_mm": [12, 40, 60, 100]
+    }
   }
 ]

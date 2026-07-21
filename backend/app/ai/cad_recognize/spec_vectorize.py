@@ -13,11 +13,13 @@ spec) lives alongside the existing VLM text reader.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.ai.cad_ir.schema import (
+    Arc,
     CadIR,
     Circle,
     DimensionEntity,
@@ -53,6 +55,36 @@ class SpecHole(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
+class SpecHolePattern(BaseModel):
+    """Equally spaced through holes on a pitch circle."""
+
+    kind: Literal["bolt_circle"] = "bolt_circle"
+    count: int = Field(ge=2, le=128)
+    bolt_circle_diameter_mm: float = Field(gt=0)
+    hole_diameter_mm: float = Field(gt=0)
+    start_angle_deg: float = 0.0
+    tolerance: str | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
+class SpecSlot(BaseModel):
+    """Capsule slot; length is the overall end-to-end dimension."""
+
+    center_x_mm: float
+    center_y_mm: float
+    length_mm: float = Field(gt=0)
+    width_mm: float = Field(gt=0)
+    rotation_deg: float = 0.0
+    tolerance: str | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_capsule_length(self) -> "SpecSlot":
+        if self.length_mm < self.width_mm:
+            raise ValueError("slot length_mm must be greater than or equal to width_mm")
+        return self
+
+
 class SpecPrismaticProfile(BaseModel):
     shape: Literal["rectangle", "circle"]
     width_mm: float | None = Field(default=None, gt=0)
@@ -60,6 +92,8 @@ class SpecPrismaticProfile(BaseModel):
     diameter_mm: float | None = Field(default=None, gt=0)
     thickness_mm: float | None = Field(default=None, gt=0)
     holes: list[SpecHole] = Field(default_factory=list)
+    hole_patterns: list[SpecHolePattern] = Field(default_factory=list)
+    slots: list[SpecSlot] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _require_shape_dimensions(self) -> "SpecPrismaticProfile":
@@ -159,7 +193,12 @@ _SPEC_PROMPT = (
     '"bore":[{"diameter_mm":0,"length_mm":0,"note":"..."}],'
     '"profile":{"shape":"rectangle|circle","width_mm":0,"height_mm":0,'
     '"diameter_mm":null,"thickness_mm":0,"holes":['
-    '{"center_x_mm":0,"center_y_mm":0,"diameter_mm":0,"tolerance":null}]}},'
+    '{"center_x_mm":0,"center_y_mm":0,"diameter_mm":0,"tolerance":null}],'
+    '"hole_patterns":[{"kind":"bolt_circle","count":6,'
+    '"bolt_circle_diameter_mm":140,"hole_diameter_mm":14,'
+    '"start_angle_deg":0,"tolerance":null}],'
+    '"slots":[{"center_x_mm":0,"center_y_mm":0,"length_mm":40,'
+    '"width_mm":12,"rotation_deg":0,"tolerance":null}]}},'
     '"parts":[{"name":"..","type":"..","outer":[...],"bore":[...]}],'
     '"dimensions":[{"value":"Ø80js6","applies_to":".."}],'
     '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":".."}],'
@@ -181,6 +220,11 @@ _SPEC_PROMPT = (
     "1) profile обязателен: rectangle требует width_mm+height_mm, circle — diameter_mm.\n"
     "2) Координаты holes задавай от ЦЕНТРА профиля: +x вправо, +y вверх.\n"
     "3) Включай только отверстия с доказанными диаметром и двумя координатами.\n"
+    "4) Равномерный массив отверстий по делительной окружности задавай ОДНИМ "
+    "hole_patterns: count, bolt_circle_diameter_mm (PCD), hole_diameter_mm и "
+    "start_angle_deg; 0° означает первое отверстие справа, углы растут против часовой.\n"
+    "5) Продолговатый паз задавай в slots: центр, габаритные length_mm и width_mm, "
+    "rotation_deg; 0° — горизонтальный паз, углы растут против часовой.\n"
     "Если деталей несколько — каждую в parts[], главную продублируй в main_view.\n"
     "Читай только реально видимые значения. ЗАПРЕЩЕНО угадывать, усреднять или "
     "достраивать отсутствующие размеры. Неизвестное оставь null и добавь причину "
@@ -191,8 +235,42 @@ _DESCRIPTION_SPEC_PROMPT = (
     "Ты преобразуешь текстовое техническое задание в EngineeringDrawingSpec. "
     "Не черти и не вычисляй отсутствующие размеры. Используй тот же JSON-контракт "
     "и правила, что ниже. Для текстового задания evidence оставляй пустым. Если "
-    "размер не указан однозначно, добавь его в unresolved. Только JSON.\n"
+    "ЗАПРОШЕННЫЙ обязательный размер не указан однозначно, добавь его в unresolved. "
+    "Не требуй параметры, которых в задании нет: прямоугольный профиль означает "
+    "прямые углы, пока скругления явно не упомянуты; неуказанные общие допуски, "
+    "материал, шероховатость и данные штампа относятся к optional_unresolved и "
+    "не блокируют номинальную геометрию. Только JSON.\n"
 )
+
+
+def _normalize_model_unresolved(spec: dict, description: str) -> dict:
+    """Demote model-requested metadata that was never requested by the engineer."""
+    source = description.lower()
+    explicitly_requests_tolerance = any(
+        marker in source for marker in ("допуск", "tolerance")
+    )
+    explicitly_requests_rounding = any(
+        marker in source
+        for marker in ("скругл", "радиус", "галтел", "rounded", "fillet", "radius")
+    )
+    blocking: list[str] = []
+    optional = list(spec.get("optional_unresolved") or [])
+    for item in spec.get("unresolved") or []:
+        lowered = str(item).lower()
+        model_added_tolerance = any(
+            marker in lowered for marker in ("допуск", "tolerance")
+        ) and not explicitly_requests_tolerance
+        model_added_rounding = any(
+            marker in lowered
+            for marker in ("скругл", "радиус", "галтел", "rounded", "fillet", "radius")
+        ) and not explicitly_requests_rounding
+        if model_added_tolerance or model_added_rounding:
+            optional.append(str(item))
+        else:
+            blocking.append(str(item))
+    spec["unresolved"] = sorted(set(blocking))
+    spec["optional_unresolved"] = sorted(set(optional))
+    return spec
 
 
 async def read_description_spec(
@@ -236,7 +314,8 @@ async def read_description_spec(
     if not parsed:
         return {}
     try:
-        return EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
+        validated = EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
+        return _normalize_model_unresolved(validated, text)
     except ValidationError:
         return {}
 
@@ -688,6 +767,47 @@ def _prismatic_profiles(spec: dict) -> list[dict]:
     return [body["profile"] for body in bodies if isinstance(body.get("profile"), dict)]
 
 
+def _expanded_profile_holes(profile: dict) -> list[dict] | None:
+    """Expand exact pitch-circle declarations without model-generated coordinates."""
+    holes = [dict(hole) for hole in profile.get("holes") or [] if isinstance(hole, dict)]
+    if len(holes) != len(profile.get("holes") or []):
+        return None
+    for pattern in profile.get("hole_patterns") or []:
+        if not isinstance(pattern, dict) or pattern.get("kind", "bolt_circle") != "bolt_circle":
+            return None
+        count = pattern.get("count")
+        pcd = _num(pattern.get("bolt_circle_diameter_mm"))
+        diameter = _num(pattern.get("hole_diameter_mm"))
+        start = _num(pattern.get("start_angle_deg"))
+        if not isinstance(count, int) or count < 2 or not pcd or not diameter or start is None:
+            return None
+        for index in range(count):
+            angle = math.radians(start + index * 360.0 / count)
+            holes.append({
+                "center_x_mm": pcd * math.cos(angle) / 2.0,
+                "center_y_mm": pcd * math.sin(angle) / 2.0,
+                "diameter_mm": diameter,
+                "tolerance": pattern.get("tolerance"),
+            })
+    return holes
+
+
+def _feature_fits_profile(
+    profile: dict, *, center_x: float, center_y: float, radius: float
+) -> bool:
+    """Conservatively prove a circular envelope lies inside its parent profile."""
+    epsilon = 1e-9
+    if profile.get("shape") == "rectangle":
+        width = float(profile["width_mm"])
+        height = float(profile["height_mm"])
+        return (
+            abs(center_x) + radius <= width / 2.0 + epsilon
+            and abs(center_y) + radius <= height / 2.0 + epsilon
+        )
+    diameter = float(profile["diameter_mm"])
+    return math.hypot(center_x, center_y) + radius <= diameter / 2.0 + epsilon
+
+
 def draft_prismatic_body(
     spec: dict,
     *,
@@ -706,6 +826,7 @@ def draft_prismatic_body(
         return None
 
     dimensions: list[tuple[float, float]] = []
+    expanded_holes: list[list[dict]] = []
     for profile in profiles:
         shape = profile.get("shape")
         if shape == "rectangle":
@@ -716,12 +837,39 @@ def draft_prismatic_body(
             return None
         if not width or not height:
             return None
-        for hole in profile.get("holes") or []:
+        profile_holes = _expanded_profile_holes(profile)
+        if profile_holes is None:
+            return None
+        for hole in profile_holes:
             if not isinstance(hole, dict) or not _num(hole.get("diameter_mm")):
                 return None
             if _num(hole.get("center_x_mm")) is None or _num(hole.get("center_y_mm")) is None:
                 return None
+            if not _feature_fits_profile(
+                profile,
+                center_x=float(hole["center_x_mm"]),
+                center_y=float(hole["center_y_mm"]),
+                radius=float(hole["diameter_mm"]) / 2.0,
+            ):
+                return None
+        for slot in profile.get("slots") or []:
+            if not isinstance(slot, dict):
+                return None
+            length = _num(slot.get("length_mm"))
+            slot_width = _num(slot.get("width_mm"))
+            slot_x = _num(slot.get("center_x_mm"))
+            slot_y = _num(slot.get("center_y_mm"))
+            rotation = _num(slot.get("rotation_deg"))
+            if (
+                not length or not slot_width or length < slot_width
+                or slot_x is None or slot_y is None or rotation is None
+                or not _feature_fits_profile(
+                    profile, center_x=slot_x, center_y=slot_y, radius=length / 2.0
+                )
+            ):
+                return None
         dimensions.append((width, height))
+        expanded_holes.append(profile_holes)
 
     layout_w = max(width for width, _ in dimensions)
     gap_mm = max(12.0, 0.2 * max(height for _, height in dimensions))
@@ -756,7 +904,7 @@ def draft_prismatic_body(
         x_left = y_top = 60.0
         width_px = layout_w * px_per_mm + 120.0
         height_px = layout_h * px_per_mm + 120.0
-        scale_source = "description"
+        scale_source = "manual"
 
     common = {
         "origin": "spec",
@@ -764,7 +912,9 @@ def draft_prismatic_body(
     }
     entities: list[Any] = []
     cursor_y = y_top
-    for profile, (width_mm, height_mm) in zip(profiles, dimensions, strict=True):
+    for profile, (width_mm, height_mm), profile_holes in zip(
+        profiles, dimensions, expanded_holes, strict=True
+    ):
         local_x = x_left + (layout_w - width_mm) * px_per_mm / 2.0
         local_y = cursor_y
         center_x = local_x + width_mm * px_per_mm / 2.0
@@ -813,7 +963,7 @@ def draft_prismatic_body(
             p2=Point(x=center_x, y=center_y + 6 * px_per_mm),
             **axis_common,
         ))
-        for hole in profile.get("holes") or []:
+        for hole in profile_holes:
             hole_x = center_x + float(hole["center_x_mm"]) * px_per_mm
             # Spec uses engineering +y upward; image coordinates grow downward.
             hole_y = center_y - float(hole["center_y_mm"]) * px_per_mm
@@ -831,6 +981,82 @@ def draft_prismatic_body(
                 tolerance=hole.get("tolerance") or None,
                 **common,
             ))
+        for pattern in profile.get("hole_patterns") or []:
+            pcd = float(pattern["bolt_circle_diameter_mm"])
+            pcd_radius = pcd * px_per_mm / 2.0
+            entities.append(DimensionEntity(
+                kind="diameter",
+                p1=Point(x=center_x - pcd_radius, y=center_y),
+                p2=Point(x=center_x + pcd_radius, y=center_y),
+                text=f"Ø{pcd:g} PCD",
+                value_mm=pcd,
+                **common,
+            ))
+        for slot in profile.get("slots") or []:
+            slot_x_mm = float(slot["center_x_mm"])
+            slot_y_mm = float(slot["center_y_mm"])
+            length_mm = float(slot["length_mm"])
+            slot_width_mm = float(slot["width_mm"])
+            theta = math.radians(float(slot.get("rotation_deg", 0.0)))
+            ux, uy = math.cos(theta), math.sin(theta)
+            vx, vy = -uy, ux
+            half_straight = (length_mm - slot_width_mm) / 2.0
+            radius_mm = slot_width_mm / 2.0
+
+            def slot_point(x_mm: float, y_mm: float) -> Point:
+                return Point(
+                    x=center_x + (slot_x_mm + x_mm) * px_per_mm,
+                    y=center_y - (slot_y_mm + y_mm) * px_per_mm,
+                )
+
+            left_x, left_y = -ux * half_straight, -uy * half_straight
+            right_x, right_y = ux * half_straight, uy * half_straight
+            entities.extend([
+                Segment(
+                    p1=slot_point(left_x + vx * radius_mm, left_y + vy * radius_mm),
+                    p2=slot_point(right_x + vx * radius_mm, right_y + vy * radius_mm),
+                    **common,
+                ),
+                Segment(
+                    p1=slot_point(left_x - vx * radius_mm, left_y - vy * radius_mm),
+                    p2=slot_point(right_x - vx * radius_mm, right_y - vy * radius_mm),
+                    **common,
+                ),
+            ])
+            image_angle = -math.degrees(theta)
+            entities.extend([
+                Arc(
+                    center=slot_point(left_x, left_y),
+                    radius=radius_mm * px_per_mm,
+                    start_angle=image_angle + 90.0,
+                    end_angle=image_angle + 270.0,
+                    **common,
+                ),
+                Arc(
+                    center=slot_point(right_x, right_y),
+                    radius=radius_mm * px_per_mm,
+                    start_angle=image_angle - 90.0,
+                    end_angle=image_angle + 90.0,
+                    **common,
+                ),
+            ])
+            entities.extend([
+                DimensionEntity(
+                    kind="linear",
+                    p1=slot_point(-ux * length_mm / 2.0, -uy * length_mm / 2.0),
+                    p2=slot_point(ux * length_mm / 2.0, uy * length_mm / 2.0),
+                    text=f"{length_mm:g}", value_mm=length_mm,
+                    tolerance=slot.get("tolerance") or None,
+                    **common,
+                ),
+                DimensionEntity(
+                    kind="linear",
+                    p1=slot_point(-vx * radius_mm, -vy * radius_mm),
+                    p2=slot_point(vx * radius_mm, vy * radius_mm),
+                    text=f"{slot_width_mm:g}", value_mm=slot_width_mm,
+                    **common,
+                ),
+            ])
         cursor_y += (height_mm + gap_mm) * px_per_mm
 
     extra = {"sheet": sheet_info} if sheet_info is not None else {}

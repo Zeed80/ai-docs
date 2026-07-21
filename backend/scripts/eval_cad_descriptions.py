@@ -42,6 +42,7 @@ def main() -> int:
             counts = Counter()
             values = []
             dxf_reopens = False
+            dxf_counts = Counter()
         else:
             counts = Counter(entity.type for entity in ir.entities)
             values = sorted(
@@ -50,15 +51,25 @@ def main() -> int:
                 if entity.type == "dimension" and entity.value_mm is not None
             )
             try:
-                ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode("utf-8")))
+                doc = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode("utf-8")))
+                dxf_counts = Counter(entity.dxftype().lower() for entity in doc.modelspace())
                 dxf_reopens = True
             except Exception as exc:  # noqa: BLE001
                 dxf_reopens = False
+                dxf_counts = Counter()
                 errors.append(f"dxf={str(exc)[:120]}")
         expected = case["expected"]
         expected_counts = expected["entity_counts"]
         if dict(counts) != expected_counts:
             errors.append(f"counts={dict(counts)} expected={expected_counts}")
+        dxf_expected = {
+            {"segment": "line", "circle": "circle", "arc": "arc", "dimension": "dimension"}[kind]: value
+            for kind, value in expected_counts.items()
+            if kind in {"segment", "circle", "arc", "dimension"}
+        }
+        dxf_actual = {kind: dxf_counts.get(kind, 0) for kind in dxf_expected}
+        if dxf_actual != dxf_expected:
+            errors.append(f"dxf_counts={dxf_actual} expected={dxf_expected}")
         expected_values = sorted(float(value) for value in expected["dimension_values_mm"])
         if values != expected_values:
             errors.append(f"dimensions={values} expected={expected_values}")
@@ -72,11 +83,12 @@ def main() -> int:
             "entity_counts": dict(counts),
             "dimension_values_mm": values,
             "dxf_reopens": dxf_reopens,
+            "dxf_entity_counts": dict(dxf_counts),
         })
 
     passed = sum(result["passed"] for result in results)
     report = {
-        "contract": "description-spec-cadir-dxf-v1",
+        "contract": "description-spec-cadir-dxf-v2",
         "cases": len(results),
         "passed": passed,
         "exact_case_rate": passed / max(len(results), 1),

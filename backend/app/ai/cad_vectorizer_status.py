@@ -12,7 +12,7 @@ from typing import Any
 
 
 CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
-    "pipeline_revision": "description-drafter-v2",
+    "pipeline_revision": "description-drafter-v3",
     "evaluated_at": "2026-07-21",
     "accuracy_contract": {
         "mode": "fail_closed_two_person_certification",
@@ -76,10 +76,10 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
         },
     },
     "description_drafting": {
-        "contract": "description-spec-cadir-dxf-v1",
+        "contract": "description-spec-cadir-dxf-v2",
         "reference_cases": "tools/cad-dataset/description_cases.json",
-        "evaluated_cases": 3,
-        "passed_cases": 3,
+        "evaluated_cases": 5,
+        "passed_cases": 5,
         "exact_case_rate": 1.0,
         "dxf_reopen_rate": 1.0,
         "direct_text_without_image": True,
@@ -88,6 +88,8 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
             "stepped_rotation_body",
             "rectangular_plate_with_through_holes",
             "circular_flange_with_through_holes",
+            "equally_spaced_holes_on_bolt_circle",
+            "capsule_slots",
         ],
         "scope_warning": "Exact only for explicit values inside supported deterministic profiles",
     },

@@ -1307,6 +1307,12 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             <div>{t("vector.pipeline_reader")}: {pipelineManifest.components.spec_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
             <div>{t("vector.pipeline_drafter")}: {pipelineManifest.components.spec_drafter.models.map((model) => model.key).join(" → ") || t("vector.pipeline_deterministic")}</div>
             <div>{t("vector.pipeline_contract")}: {pipelineManifest.components.spec_drafter.deterministic_contract}</div>
+            <div className="md:col-span-2">
+              {t("vector.pipeline_supported_geometry")}: {pipelineManifest.components.spec_drafter.supported_geometry.join(", ")}
+            </div>
+            <div className="md:col-span-2 font-mono text-[10px]">
+              {t("vector.pipeline_reference_cases")}: {pipelineManifest.components.spec_drafter.reference_cases}
+            </div>
             <div className="font-mono text-[10px]">source {pipelineManifest.source_sha256?.slice(0, 16) ?? "—"}…</div>
             <Link href="/settings/models" className="text-sky-300 hover:text-sky-200">
               {t("vector.pipeline_change_models")}

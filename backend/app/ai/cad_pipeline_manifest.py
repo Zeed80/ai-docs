@@ -11,7 +11,7 @@ from app.ai.schemas import AITask
 from app.ai.task_routing import get_routing_for
 
 MANIFEST_VERSION = "1.0"
-PIPELINE_REVISION = "description-drafter-v2"
+PIPELINE_REVISION = "description-drafter-v3"
 
 MULTI_TYPE_CANDIDATE = {
     "key": "multi-type-proposal-v2",
@@ -85,11 +85,13 @@ def build_cad_pipeline_manifest(
         "spec_drafter": {
             **_route(AITask.CAD_SPEC_DRAFT),
             "coverage": "model-dependent; fail-closed outside supported geometry",
-            "deterministic_contract": "engineering-drawing-spec-v1",
+            "deterministic_contract": "engineering-drawing-spec-v2",
             "supported_geometry": [
                 "stepped_rotation_body",
                 "rectangular_plate_with_through_holes",
                 "circular_flange_with_through_holes",
+                "equally_spaced_holes_on_bolt_circle",
+                "capsule_slots",
             ],
             "reference_cases": "tools/cad-dataset/description_cases.json",
         },

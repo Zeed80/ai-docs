@@ -20,6 +20,8 @@ def test_pipeline_manifest_is_reproducible_and_exposes_assignments():
     assert candidate["promotion_passed"] is False
     drafter = first["components"]["spec_drafter"]
     assert "rectangular_plate_with_through_holes" in drafter["supported_geometry"]
+    assert "equally_spaced_holes_on_bolt_circle" in drafter["supported_geometry"]
+    assert "capsule_slots" in drafter["supported_geometry"]
     assert first["user_extensible_via"]["description_cases"].endswith(".json")
 
 
