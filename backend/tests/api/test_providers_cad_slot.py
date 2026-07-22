@@ -107,9 +107,10 @@ def test_drawing_graph_vlm_evidence_has_independent_assignment(monkeypatch):
         ),
         (
             "cad_drawing_graph_fragment_read",
-            "qwen3_5_9b_ollama",
+            "ministral_3_8b_ollama",
             "cad_drawing_graph_fragment_read",
             [
+                "ministral_3_8b_ollama",
                 "qwen3_5_9b_ollama",
             ],
         ),

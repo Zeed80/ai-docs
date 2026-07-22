@@ -630,11 +630,15 @@ routes:
     required_modalities: ["vision"]
     local_only: true
     fallback_chain:
+      - "ministral_3_8b_ollama"
       - "qwen3_5_9b_ollama"
     manual_review_fallback: true
     notes: >
       Source-resolution VLM stage that emits bounded graph fragments inside a
-      deterministic ownership region. No classic OCR and no whole-sheet JSON.
+      deterministic ownership region. Ministral is primary after Qwen3.5 9B
+      repeated dimensions and truncated JSON on a real A3 sheet; schema-invalid
+      output falls back through router validation. No classic OCR and no
+      whole-sheet JSON.
   cad_drawing_graph_evidence_verify:
     required_modalities: ["vision"]
     local_only: true

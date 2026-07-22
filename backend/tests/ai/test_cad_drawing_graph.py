@@ -24,6 +24,8 @@ from app.ai.cad_drawing_graph import (
     read_drawing_graph_staged_attempt,
     verify_drawing_graph,
     verify_graph_evidence_with_vlm,
+    _normalize_fragment_evidence_kinds,
+    _normalize_fragment_entity_wrappers,
 )
 from app.ai.cad_ir.dxf_render import render_ir_to_dxf
 
@@ -575,6 +577,43 @@ async def test_staged_reader_assembles_layout_and_bounded_fragments():
         "cad_drawing_graph_fragment_read",
         "cad_drawing_graph_fragment_read",
     ]
+    assert all(request.response_schema is None for request in router.requests[1:])
+
+
+@pytest.mark.asyncio
+async def test_staged_reader_preserves_invalid_attempt_and_uses_next_vlm(monkeypatch):
+    from PIL import Image
+
+    class FallbackRouter(_StagedRouter):
+        async def run(self, request):
+            response = await super().run(request)
+            if request.task.value == "cad_drawing_graph_fragment_read":
+                response.model = request.preferred_model or response.model
+                if request.preferred_model == "bad-vlm":
+                    response.text = "unfinished {"
+            return response
+
+    image = Image.new("RGB", (1600, 800), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    router = FallbackRouter()
+    monkeypatch.setattr("app.ai.router.ai_router", router)
+    monkeypatch.setattr(
+        "app.ai.task_routing.get_routing_for",
+        lambda _task: SimpleNamespace(models=["bad-vlm", "good-vlm"]),
+    )
+
+    attempt = await read_drawing_graph_staged_attempt(buffer.getvalue())
+
+    assert attempt.valid is True
+    assert [item.get("requested_model") for item in attempt.stage_attempts[1:]] == [
+        "bad-vlm",
+        "good-vlm",
+        "bad-vlm",
+        "good-vlm",
+    ]
+    assert attempt.stage_attempts[1]["validation_errors"]
+    assert attempt.stage_attempts[2]["validation_errors"] == []
 
 
 def test_fragment_assembly_rejects_entity_outside_ownership_region():
@@ -622,3 +661,70 @@ def test_fragment_assembly_rejects_entity_outside_ownership_region():
             fragments=[fragment],
             reader_manifest={},
         )
+
+
+def test_fragment_contract_rejects_repeated_evidence_regions():
+    payload = {
+        "tile_id": "tile-00-00",
+        "source_region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+        "ownership_region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+        "evidence": [
+            {
+                "id": f"tile-00-00:ev-{index}",
+                "kind": "ocr",
+                "region": {"x0": 10, "y0": 20, "x1": 50, "y1": 40},
+                "raw_text": "51",
+                "confidence": 0.8,
+            }
+            for index in (1, 2)
+        ],
+    }
+
+    with pytest.raises(ValueError, match="duplicate evidence regions"):
+        DrawingGraphFragment.model_validate(payload)
+
+
+def test_flat_wire_entity_is_assigned_to_smallest_containing_view():
+    layout = DrawingGraphLayout.model_validate({
+        "views": [
+            {
+                "id": "main",
+                "kind": "front",
+                "region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+                "confidence": 1.0,
+            },
+            {
+                "id": "detail",
+                "kind": "detail",
+                "region": {"x0": 100, "y0": 100, "x1": 400, "y1": 300},
+                "confidence": 1.0,
+            },
+        ],
+    })
+    payload = {
+        "entities": [{
+            "id": "tile-00-00:segment-1",
+            "type": "segment",
+            "p1": {"x": 150, "y": 150},
+            "p2": {"x": 250, "y": 150},
+            "origin": "vlm",
+            "assurance": "observed",
+            "source_region": {"x0": 140, "y0": 140, "x1": 260, "y1": 160},
+            "evidence": ["tile-00-00:ev-1"],
+        }],
+    }
+
+    normalized = _normalize_fragment_entity_wrappers(payload, layout.views)
+
+    assert normalized["entities"][0]["view_id"] == "detail"
+    assert normalized["entities"][0]["entity"]["type"] == "segment"
+    assert normalized["evidence"][0]["id"] == "tile-00-00:ev-1"
+    assert normalized["evidence"][0]["kind"] == "pixel_support"
+
+
+def test_fragment_wire_evidence_alias_is_normalized():
+    normalized = _normalize_fragment_evidence_kinds({
+        "evidence": [{"id": "ev-1", "kind": "dimension_detector"}],
+    })
+
+    assert normalized["evidence"][0]["kind"] == "geometry_detector"

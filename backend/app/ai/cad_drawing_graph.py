@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 from app.ai.cad_ir.schema import (
     AnnotationEntity,
@@ -347,10 +347,55 @@ class DrawingGraphFragment(BaseModel):
     tile_id: str
     source_region: SourceRegion
     ownership_region: SourceRegion
-    evidence: list[DrawingGraphEvidence] = Field(default_factory=list)
-    entities: list[DrawingGraphFragmentEntity] = Field(default_factory=list)
+    evidence: list[DrawingGraphEvidence] = Field(default_factory=list, max_length=64)
+    entities: list[DrawingGraphFragmentEntity] = Field(default_factory=list, max_length=64)
     relations: list[DrawingGraphRelation] = Field(default_factory=list)
     unresolved_regions: list[UnresolvedRegion] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _reject_repeated_observations(self) -> "DrawingGraphFragment":
+        regions = [
+            (item.region.x0, item.region.y0, item.region.x1, item.region.y1)
+            for item in self.evidence
+        ]
+        if len(regions) != len(set(regions)):
+            raise ValueError("fragment contains duplicate evidence regions")
+        ids = [item.id for item in self.evidence]
+        ids.extend(item.entity.id for item in self.entities)
+        ids.extend(item.id for item in self.relations)
+        if len(ids) != len(set(ids)):
+            raise ValueError("fragment contains duplicate ids")
+        return self
+
+
+class DrawingGraphFragmentWire(BaseModel):
+    """VLM wire contract accepting nested or flat CadIR entities.
+
+    Some otherwise schema-compliant VLMs omit the transport-only ``view_id`` /
+    ``entity`` wrapper.  Geometry remains strict here; the wrapper is restored
+    deterministically from layout regions before the canonical contract is
+    validated.
+    """
+
+    tile_id: str
+    source_region: SourceRegion
+    ownership_region: SourceRegion
+    evidence: list[DrawingGraphEvidence] = Field(default_factory=list, max_length=64)
+    entities: list[DrawingGraphFragmentEntity | Entity] = Field(
+        default_factory=list, max_length=64
+    )
+    relations: list[DrawingGraphRelation] = Field(default_factory=list)
+    unresolved_regions: list[UnresolvedRegion] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _reject_repeated_observations(self) -> "DrawingGraphFragmentWire":
+        regions = [
+            (item.region.x0, item.region.y0, item.region.x1, item.region.y1)
+            for item in self.evidence
+        ]
+        if len(regions) != len(set(regions)):
+            raise ValueError("fragment contains duplicate evidence regions")
+        return self
 
 
 @dataclass(frozen=True)
@@ -749,6 +794,29 @@ _FRAGMENT_PROMPT = """Ты — VLM стадии source-resolution graph fragment
  "entities":[{"view_id":string,"entity":CadIR-entity}],
  "relations":[...],"unresolved_regions":[...]}
 
+CadIR-entity — РОВНО один из следующих объектов (не выдумывай другие поля):
+{"id":string,"type":"segment","p1":{"x":number,"y":number},
+ "p2":{"x":number,"y":number},"line_class":"contour|axis|dim|hatch|hidden|thin",
+ "origin":"vlm","assurance":"observed|inferred","confidence":number,
+ "source_region":{"x0":number,"y0":number,"x1":number,"y1":number},"evidence":[string]}
+{"id":string,"type":"circle","center":{"x":number,"y":number},"radius":number,...}
+{"id":string,"type":"arc","center":{"x":number,"y":number},"radius":number,
+ "start_angle":number,"end_angle":number,...}
+{"id":string,"type":"polyline","points":[{"x":number,"y":number}],"closed":bool,...}
+{"id":string,"type":"text","position":{"x":number,"y":number},"text":string,
+ "height":number,"rotation":number,...}
+{"id":string,"type":"dimension","kind":"linear|diameter|radial|angular",
+ "p1":{"x":number,"y":number},"p2":{"x":number,"y":number},"text":string,
+ "value_mm":number|null,"tolerance":string|null,...}
+{"id":string,"type":"annotation","kind":"roughness|thread|tolerance|datum|weld",
+ "position":{"x":number,"y":number},"text":string,"value":string|null,
+ "symbol":string|null,"datum_refs":[string],"leader":{"x":number,"y":number}|null,...}
+В каждом ... обязательны общие поля id, line_class, origin, assurance, confidence,
+source_region и evidence из первого примера.
+
+relation имеет РОВНО схему {"id":string,"kind":"connected|coincident|parallel|perpendicular|tangent|concentric|equal|dimension_applies_to|annotation_applies_to|same_feature_across_views|projection_alignment|part_of","source_entity_id":string,"target_entity_ids":[string],"parameters":{},"confidence":number,"assurance":"observed|inferred","evidence":[string]}.
+unresolved_region имеет РОВНО схему {"id":string,"region":{"x0":number,"y0":number,"x1":number,"y1":number},"reason":"unvectorized_ink|ocr_unresolved|recognizer_disagreement|unsupported_content","ink_pixels":0,"resolved":false}.
+
 Извлекай только сущности, чья опорная точка находится ВНУТРИ ownership_region.
 Crop может включать overlap вне ownership_region только как контекст. Все
 координаты entities/evidence/relations — ГЛОБАЛЬНЫЕ пиксели полного листа.
@@ -756,6 +824,9 @@ ID каждого evidence/entity/relation должен начинаться с 
 ДВОЕТОЧИЯ, например tile-00-00:ev-1. Поле bbox_2d запрещено: используй region.
 Поле text_content запрещено: используй raw_text. Один видимый объект — ровно
 одна evidence и одна entity; дубли с одинаковым region запрещены.
+Максимум 64 evidence и 64 entities на crop. Если лимита недостаточно, прекрати
+извлечение, закрой JSON и добавь остаток как unresolved_region; никогда не
+повторяй уже выведенный объект и никогда не обрывай JSON.
 Не повторяй сущности из overlap. Для text сохраняй строку дословно.
 Для dimension обязательны kind linear|diameter|radial|angular, p1/p2, text,
 value_mm/tolerance и dimension_applies_to. Для annotation обязательна
@@ -843,6 +914,91 @@ def _entity_anchor(entity: Entity) -> Point:
 
 def _inside(region: SourceRegion, point: Point) -> bool:
     return region.x0 <= point.x < region.x1 and region.y0 <= point.y < region.y1
+
+
+def _normalize_fragment_entity_wrappers(
+    payload: dict[str, Any],
+    views: list[DrawingGraphView],
+) -> dict[str, Any]:
+    """Restore a transport wrapper omitted by some VLM JSON implementations."""
+    normalized = dict(payload)
+    observations: list[dict[str, Any]] = []
+    entity_adapter = TypeAdapter(Entity)
+    for item in payload.get("entities") or []:
+        if not isinstance(item, dict):
+            raise ValueError("fragment entity must be a JSON object")
+        if isinstance(item.get("entity"), dict) and item.get("view_id"):
+            observations.append(item)
+            continue
+        entity = entity_adapter.validate_python(item)
+        anchor = _entity_anchor(entity)
+        candidates = [view for view in views if _inside(view.region, anchor)]
+        if not candidates:
+            raise ValueError(
+                f"flat fragment entity {entity.id} is outside every layout view"
+            )
+        # Nested section/detail regions are more specific than the enclosing
+        # main view.  Area ordering is stable and needs no model inference.
+        view = min(
+            candidates,
+            key=lambda candidate: (
+                (candidate.region.x1 - candidate.region.x0)
+                * (candidate.region.y1 - candidate.region.y0),
+                candidate.id,
+            ),
+        )
+        observations.append({
+            "view_id": view.id,
+            "entity": entity.model_dump(mode="json"),
+        })
+    normalized["entities"] = observations
+    evidence = [dict(item) for item in (payload.get("evidence") or [])]
+    known_evidence = {
+        str(item.get("id")) for item in evidence if isinstance(item, dict)
+    }
+    for observation in observations:
+        entity = entity_adapter.validate_python(observation["entity"])
+        for evidence_id in entity.evidence:
+            if evidence_id in known_evidence:
+                continue
+            if entity.source_region is None:
+                raise ValueError(
+                    f"entity {entity.id} references missing evidence {evidence_id} "
+                    "without source_region"
+                )
+            raw_text = None
+            if isinstance(entity, (TextEntity, DimensionEntity, AnnotationEntity)):
+                raw_text = entity.text
+            evidence.append({
+                "id": evidence_id,
+                "kind": "pixel_support",
+                "region": entity.source_region.model_dump(mode="json"),
+                "image_index": 0,
+                "raw_text": raw_text,
+                "model_key": "fragment-vlm-derived",
+                "confidence": entity.confidence,
+            })
+            known_evidence.add(evidence_id)
+    normalized["evidence"] = evidence
+    return normalized
+
+
+def _normalize_fragment_evidence_kinds(payload: dict[str, Any]) -> dict[str, Any]:
+    """Map harmless VLM wire aliases onto the closed evidence vocabulary."""
+    normalized = dict(payload)
+    aliases = {
+        "dimension_detector": "geometry_detector",
+        "text_detector": "ocr",
+    }
+    evidence = []
+    for item in payload.get("evidence") or []:
+        if not isinstance(item, dict):
+            raise ValueError("fragment evidence must be a JSON object")
+        value = dict(item)
+        value["kind"] = aliases.get(str(value.get("kind")), value.get("kind"))
+        evidence.append(value)
+    normalized["evidence"] = evidence
+    return normalized
 
 
 def assemble_drawing_graph_fragments(
@@ -1173,6 +1329,7 @@ async def read_drawing_graph_staged_attempt(
 
     from app.ai.schemas import AIRequest, AITask, ChatMessage
 
+    use_configured_fragment_fallbacks = router is None
     if router is None:
         from app.ai.router import ai_router
 
@@ -1254,6 +1411,12 @@ async def read_drawing_graph_staged_attempt(
         }
         for view in layout.views
     ]
+    fragment_model_candidates: list[str | None] = [None]
+    if use_configured_fragment_fallbacks:
+        from app.ai.task_routing import get_routing_for
+
+        configured = get_routing_for(AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ).models
+        fragment_model_candidates = list(dict.fromkeys(configured)) or [None]
     fragments: list[DrawingGraphFragment] = []
     for tile in tiles:
         prompt = (
@@ -1276,53 +1439,73 @@ async def read_drawing_graph_staged_attempt(
             thinking=False,
             metadata={
                 "contract": "drawing-graph-fragment-v1",
-                "num_predict": 6144,
+                "num_predict": 8192,
                 "tile_id": tile.tile_id,
                 "source_region": tile.source_region.model_dump(mode="json"),
                 "ownership_region": tile.ownership_region.model_dump(mode="json"),
             },
         )
-        fragment_raw = ""
-        try:
-            response = await router.run(request)
-            fragment_raw = response.text or ""
-            raw_parts.append(fragment_raw)
-            parsed = _parse_graph_json(fragment_raw)
-            if not parsed:
-                raise ValueError("fragment output does not contain valid JSON")
-            parsed["tile_id"] = tile.tile_id
-            parsed["source_region"] = tile.source_region.model_dump(mode="json")
-            parsed["ownership_region"] = tile.ownership_region.model_dump(mode="json")
-            fragment = DrawingGraphFragment.model_validate(parsed)
-            for evidence in fragment.evidence:
-                if not (
-                    tile.source_region.x0 <= evidence.region.x0 < evidence.region.x1 <= tile.source_region.x1
-                    and tile.source_region.y0 <= evidence.region.y0 < evidence.region.y1 <= tile.source_region.y1
-                ):
-                    raise ValueError(
-                        f"evidence {evidence.id} lies outside tile source region"
-                    )
-            fragments.append(fragment)
-            if response.model not in reader_models:
-                reader_models.append(response.model)
-            stage_attempts.append({
-                "stage": "fragment",
-                "tile_id": tile.tile_id,
-                "task": AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value,
-                "model": response.model,
-                "provider": response.provider.value,
-                "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
-                "parsed_payload": parsed,
-                "validation_errors": [],
-            })
-        except Exception as exc:  # noqa: BLE001
-            errors = _validation_errors(exc, stage=f"fragment:{tile.tile_id}")
-            stage_attempts.append({
-                "stage": "fragment",
-                "tile_id": tile.tile_id,
-                "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
-                "validation_errors": errors,
-            })
+        fragment: DrawingGraphFragment | None = None
+        errors: list[dict[str, Any]] = []
+        for candidate in fragment_model_candidates:
+            fragment_raw = ""
+            response = None
+            try:
+                candidate_request = request.model_copy(
+                    update={"preferred_model": candidate}
+                ) if candidate else request
+                response = await router.run(candidate_request)
+                fragment_raw = response.text or ""
+                raw_parts.append(fragment_raw)
+                parsed = _parse_graph_json(fragment_raw)
+                if not parsed:
+                    raise ValueError("fragment output does not contain valid JSON")
+                # Transport coordinates are authoritative tiler data. Never
+                # trust or require the VLM to reproduce them byte-for-byte.
+                parsed["tile_id"] = tile.tile_id
+                parsed["source_region"] = tile.source_region.model_dump(mode="json")
+                parsed["ownership_region"] = tile.ownership_region.model_dump(mode="json")
+                parsed = _normalize_fragment_evidence_kinds(parsed)
+                DrawingGraphFragmentWire.model_validate(parsed)
+                parsed = _normalize_fragment_entity_wrappers(parsed, layout.views)
+                fragment = DrawingGraphFragment.model_validate(parsed)
+                for evidence in fragment.evidence:
+                    if not (
+                        tile.source_region.x0 <= evidence.region.x0 < evidence.region.x1 <= tile.source_region.x1
+                        and tile.source_region.y0 <= evidence.region.y0 < evidence.region.y1 <= tile.source_region.y1
+                    ):
+                        raise ValueError(
+                            f"evidence {evidence.id} lies outside tile source region"
+                        )
+                if response.model not in reader_models:
+                    reader_models.append(response.model)
+                stage_attempts.append({
+                    "stage": "fragment",
+                    "tile_id": tile.tile_id,
+                    "task": AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value,
+                    "requested_model": candidate,
+                    "model": response.model,
+                    "provider": response.provider.value,
+                    "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
+                    "parsed_payload": parsed,
+                    "validation_errors": [],
+                })
+                break
+            except Exception as exc:  # noqa: BLE001
+                errors = _validation_errors(exc, stage=f"fragment:{tile.tile_id}")
+                stage_attempts.append({
+                    "stage": "fragment",
+                    "tile_id": tile.tile_id,
+                    "task": AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value,
+                    "requested_model": candidate,
+                    "model": getattr(response, "model", None),
+                    "provider": getattr(
+                        getattr(response, "provider", None), "value", None
+                    ),
+                    "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
+                    "validation_errors": errors,
+                })
+        if fragment is None:
             combined = "\n\n--- stage ---\n\n".join(raw_parts)
             return DrawingGraphReadAttempt(
                 raw_text=combined,
@@ -1331,6 +1514,7 @@ async def read_drawing_graph_staged_attempt(
                 reader_manifest={"models": reader_models},
                 stage_attempts=stage_attempts,
             )
+        fragments.append(fragment)
 
     source = DrawingGraphSource(
         image_width=image.width,
