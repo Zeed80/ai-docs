@@ -799,12 +799,24 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 from app.ai.cad_drawing_graph import (
                     DrawingGraphDraftError,
                     draft_drawing_graph,
-                    read_drawing_graph,
+                    read_drawing_graph_attempt,
                     verify_drawing_graph,
+                    verify_graph_evidence_with_vlm,
                 )
 
-                graph = await read_drawing_graph(content)
+                graph_attempt = await read_drawing_graph_attempt(content)
+                graph = graph_attempt.graph
                 if graph is None:
+                    async with factory() as db:
+                        failed_gen = await db.get(ImageGeneration, gen_uuid)
+                        if failed_gen:
+                            failed_gen.params = {
+                                **(failed_gen.params or {}),
+                                "drawing_graph_read_attempt": graph_attempt.model_dump(
+                                    mode="json", exclude={"graph"}
+                                ),
+                            }
+                            await db.commit()
                     return await _fail(
                         "Метод «по описанию»: координатный reader не вернул "
                         "полный валидный EngineeringDrawingGraph. Частичный "
@@ -827,12 +839,33 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "нормализованным исходным листом."
                     )
                 _assess_export_fidelity(graph_ir, graph_ink, None, 2, 4)
+                vlm_evidence = await verify_graph_evidence_with_vlm(content, graph)
                 graph_verification = verify_drawing_graph(
                     graph,
                     pixel_recall=graph_ir.validation.vector_recall,
                     pixel_precision=graph_ir.validation.vector_precision,
+                    vlm_evidence=vlm_evidence,
+                    require_vlm_evidence=True,
                 )
                 if graph_verification.blocking:
+                    async with factory() as db:
+                        blocked_gen = await db.get(ImageGeneration, gen_uuid)
+                        if blocked_gen:
+                            blocked_gen.params = {
+                                **(blocked_gen.params or {}),
+                                "drawing_graph": graph.model_dump(mode="json"),
+                                "drawing_graph_read_attempt": graph_attempt.model_dump(
+                                    mode="json", exclude={"graph"}
+                                ),
+                                "drawing_graph_sha256": graph.content_sha256(),
+                                "drawing_graph_vlm_evidence": vlm_evidence.model_dump(
+                                    mode="json"
+                                ),
+                                "drawing_graph_verification": (
+                                    graph_verification.model_dump(mode="json")
+                                ),
+                            }
+                            await db.commit()
                     return await _fail(
                         "Метод «по описанию»: graph не прошёл независимую проверку: "
                         + "; ".join(
@@ -862,7 +895,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "vectorize_method": "spec",
                         "description_mode": False,
                         "drawing_graph": graph.model_dump(mode="json"),
+                        "drawing_graph_read_attempt": graph_attempt.model_dump(
+                            mode="json", exclude={"graph", "parsed_payload"}
+                        ),
                         "drawing_graph_sha256": graph.content_sha256(),
+                        "drawing_graph_vlm_evidence": vlm_evidence.model_dump(
+                            mode="json"
+                        ),
                         "drawing_graph_verification": graph_verification.model_dump(
                             mode="json"
                         ),

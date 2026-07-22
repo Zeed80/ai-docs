@@ -14,6 +14,11 @@ def test_pipeline_manifest_is_reproducible_and_exposes_assignments():
     assert first["components"]["spec_reader"]["task"] == "cad_spec_read"
     assert first["components"]["drawing_graph_reader"]["task"] == "cad_drawing_graph_read"
     assert first["components"]["drawing_graph_reader"]["authority"] == "observations_only"
+    evidence = first["components"]["drawing_graph_evidence_verifier"]
+    assert evidence["task"] == "cad_drawing_graph_evidence_verify"
+    assert evidence["classic_ocr_used"] is False
+    assert evidence["geometry_authority"] is False
+    assert evidence["must_differ_from_reader_model"] is True
     assert first["components"]["drawing_graph_drafter"]["preserves_entity_ids"] is True
     assert first["components"]["spec_drafter"]["task"] == "cad_spec_draft"
     assert first["promotion_gate"]["false_exact_rate"] == 0.0

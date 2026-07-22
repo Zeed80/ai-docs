@@ -44,6 +44,7 @@ CONFIDENTIAL_TASKS: set[AITask] = {
     AITask.RERANKING,
     # Drawing content is confidential — spec read/draft stay local-only.
     AITask.CAD_DRAWING_GRAPH_READ,
+    AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY,
     AITask.CAD_SPEC_READ,
     AITask.CAD_SPEC_DRAFT,
 }
@@ -53,6 +54,7 @@ CONFIDENTIAL_TASKS: set[AITask] = {
 # reproduce the actual no-thinking invocation.
 TASK_DEFAULT_THINKING: dict[AITask, bool] = {
     AITask.CAD_DRAWING_GRAPH_READ: False,
+    AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY: False,
 }
 
 

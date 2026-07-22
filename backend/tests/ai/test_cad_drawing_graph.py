@@ -15,7 +15,9 @@ from app.ai.cad_drawing_graph import (
     EngineeringDrawingGraph,
     draft_drawing_graph,
     read_drawing_graph,
+    read_drawing_graph_attempt,
     verify_drawing_graph,
+    verify_graph_evidence_with_vlm,
 )
 from app.ai.cad_ir.dxf_render import render_ir_to_dxf
 
@@ -329,3 +331,116 @@ async def test_graph_reader_rejects_partial_model_output():
     image.save(buffer, format="PNG")
     router = _GraphRouter({"views": [], "entities": []})
     assert await read_drawing_graph(buffer.getvalue(), router=router) is None
+
+    attempt = await read_drawing_graph_attempt(buffer.getvalue(), router=router)
+    assert attempt.valid is False
+    assert attempt.raw_text
+    assert attempt.raw_sha256
+    assert attempt.parsed_payload is not None
+    assert attempt.validation_errors
+
+
+class _EvidenceRouter:
+    def __init__(self, *, model: str = "qwen3-vl-crop-verifier"):
+        self.model = model
+        self.requests = []
+
+    async def run(self, request):
+        self.requests.append(request)
+        entity_id = request.metadata["entity_id"]
+        observed = {
+            "text-1": {
+                "visible": True,
+                "entity_type": "text",
+                "text": "ДЕТАЛЬ 1",
+                "confidence": 0.99,
+            },
+            "dimension-1": {
+                "visible": True,
+                "entity_type": "dimension",
+                "text": "100±0,1",
+                "value_mm": 100,
+                "tolerance": "±0,1",
+                "confidence": 0.99,
+            },
+            "roughness-1": {
+                "visible": True,
+                "entity_type": "annotation",
+                "text": "Ra 3.2",
+                "value": "3.2",
+                "symbol": None,
+                "confidence": 0.99,
+            },
+        }[entity_id]
+        return SimpleNamespace(
+            text=json.dumps(observed, ensure_ascii=False),
+            provider=SimpleNamespace(value="ollama"),
+            model=self.model,
+        )
+
+
+@pytest.mark.asyncio
+async def test_vlm_crop_evidence_verifier_is_exact_independent_and_ocr_free():
+    from PIL import Image
+
+    image = Image.new("RGB", (1000, 800), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    payload = _graph_payload()
+    payload["reader_manifest"] = {"model": "coordinate-reader"}
+    graph = EngineeringDrawingGraph.model_validate(payload)
+    router = _EvidenceRouter()
+
+    report = await verify_graph_evidence_with_vlm(
+        buffer.getvalue(), graph, router=router
+    )
+
+    assert report.expected_checks == 3
+    assert report.exact_checks == 3
+    assert report.complete is True
+    assert report.independent is True
+    assert report.classic_ocr_used is False
+    assert all(check.raw_sha256 for check in report.checks)
+    assert all(
+        request.task.value == "cad_drawing_graph_evidence_verify"
+        and request.thinking is False
+        and request.allow_cloud is False
+        and len(request.images) == 1
+        for request in router.requests
+    )
+    verification = verify_drawing_graph(
+        graph,
+        pixel_recall=1.0,
+        pixel_precision=1.0,
+        vlm_evidence=report,
+        require_vlm_evidence=True,
+    )
+    assert not verification.blocking
+
+
+@pytest.mark.asyncio
+async def test_vlm_crop_evidence_must_use_a_different_model_from_reader():
+    from PIL import Image
+
+    image = Image.new("RGB", (1000, 800), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    payload = _graph_payload()
+    payload["reader_manifest"] = {"model": "same-vlm"}
+    graph = EngineeringDrawingGraph.model_validate(payload)
+    report = await verify_graph_evidence_with_vlm(
+        buffer.getvalue(), graph, router=_EvidenceRouter(model="same-vlm")
+    )
+
+    assert report.complete is True
+    assert report.independent is False
+    verification = verify_drawing_graph(
+        graph,
+        pixel_recall=1.0,
+        pixel_precision=1.0,
+        vlm_evidence=report,
+        require_vlm_evidence=True,
+    )
+    assert {issue.code for issue in verification.blocking} == {
+        "GRAPH_VLM_VERIFIER_NOT_INDEPENDENT"
+    }

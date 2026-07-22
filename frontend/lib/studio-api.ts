@@ -98,6 +98,8 @@ export interface VectorizerDevelopmentStatus {
     entity_ids_preserved: boolean;
     relations_preserved: boolean;
     graph_first_enabled: boolean;
+    vlm_crop_evidence_required: boolean;
+    classic_ocr_used: boolean;
     reader_promotion_passed: boolean;
     scope_warning: string;
   };
@@ -292,6 +294,16 @@ export interface CadPipelineManifest {
       contract: string;
       authority: string;
       promotion_status: string;
+    };
+    drawing_graph_evidence_verifier?: {
+      task: string;
+      models: CadPipelineModelAssignment[];
+      parameter_profile: string;
+      contract: string;
+      scope: string;
+      classic_ocr_used: boolean;
+      geometry_authority: boolean;
+      must_differ_from_reader_model: boolean;
     };
     drawing_graph_drafter?: {
       kind: string;

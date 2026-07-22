@@ -12,7 +12,7 @@ from typing import Any
 
 
 CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
-    "pipeline_revision": "drawing-graph-foundation-v1",
+        "pipeline_revision": "drawing-graph-vlm-evidence-v2",
     "evaluated_at": "2026-07-21",
     "accuracy_contract": {
         "mode": "fail_closed_two_person_certification",
@@ -104,6 +104,8 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
         "entity_ids_preserved": True,
         "relations_preserved": True,
         "graph_first_enabled": True,
+        "vlm_crop_evidence_required": True,
+        "classic_ocr_used": False,
         "reader_promotion_passed": False,
         "scope_warning": (
             "Contract/drafter benchmark only; the experimental reader has not "

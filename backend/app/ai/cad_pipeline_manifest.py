@@ -11,7 +11,7 @@ from app.ai.schemas import AITask
 from app.ai.task_routing import get_routing_for
 
 MANIFEST_VERSION = "1.0"
-PIPELINE_REVISION = "drawing-graph-foundation-v1"
+PIPELINE_REVISION = "drawing-graph-vlm-evidence-v2"
 
 MULTI_TYPE_CANDIDATE = {
     "key": "multi-type-proposal-v2",
@@ -87,6 +87,14 @@ def build_cad_pipeline_manifest(
             "contract": "engineering-drawing-graph-v1",
             "authority": "observations_only",
             "promotion_status": "experimental_fail_closed",
+        },
+        "drawing_graph_evidence_verifier": {
+            **_route(AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY),
+            "contract": "vlm-graph-evidence-verifier-v1",
+            "scope": "source-resolution text/dimension/annotation crops",
+            "classic_ocr_used": False,
+            "geometry_authority": False,
+            "must_differ_from_reader_model": True,
         },
         "drawing_graph_drafter": {
             "kind": "deterministic",

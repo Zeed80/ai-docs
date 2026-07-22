@@ -277,6 +277,59 @@ class DrawingGraphVerification(BaseModel):
         return [issue for issue in self.issues if issue.severity == "error"]
 
 
+class DrawingGraphReadAttempt(BaseModel):
+    """Auditable reader result, including output rejected by the graph schema."""
+
+    contract: Literal["engineering-drawing-graph-read-attempt-v1"] = (
+        "engineering-drawing-graph-read-attempt-v1"
+    )
+    graph: EngineeringDrawingGraph | None = None
+    raw_text: str = ""
+    raw_sha256: str
+    parsed_payload: dict[str, Any] | None = None
+    validation_errors: list[dict[str, Any]] = Field(default_factory=list)
+    reader_manifest: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def valid(self) -> bool:
+        return self.graph is not None
+
+
+class VlmEvidenceCheck(BaseModel):
+    entity_id: str
+    entity_type: Literal["text", "dimension", "annotation"]
+    evidence_id: str
+    region: SourceRegion
+    expected: dict[str, str | float | None]
+    observed: dict[str, str | float | bool | None] = Field(default_factory=dict)
+    exact_match: bool = False
+    model: str | None = None
+    provider: str | None = None
+    raw_sha256: str | None = None
+    error: str | None = None
+
+
+class VlmGraphEvidenceReport(BaseModel):
+    contract: Literal["vlm-graph-evidence-verifier-v1"] = (
+        "vlm-graph-evidence-verifier-v1"
+    )
+    task: Literal["cad_drawing_graph_evidence_verify"] = (
+        "cad_drawing_graph_evidence_verify"
+    )
+    classic_ocr_used: Literal[False] = False
+    reader_model: str | None = None
+    verifier_models: list[str] = Field(default_factory=list)
+    checks: list[VlmEvidenceCheck] = Field(default_factory=list)
+    expected_checks: int = 0
+    exact_checks: int = 0
+    complete: bool = False
+    independent: bool = False
+
+    @property
+    def blocking(self) -> bool:
+        return not self.complete or not self.independent
+
+
 def _measured_dimension_value(
     dimension: DimensionEntity, target: Entity, scale: float
 ) -> float | None:
@@ -296,6 +349,8 @@ def verify_drawing_graph(
     *,
     pixel_recall: float | None = None,
     pixel_precision: float | None = None,
+    vlm_evidence: VlmGraphEvidenceReport | None = None,
+    require_vlm_evidence: bool = False,
 ) -> DrawingGraphVerification:
     """Independently check completeness and dimension-to-geometry consistency."""
     issues: list[DrawingGraphVerificationIssue] = []
@@ -328,6 +383,33 @@ def verify_drawing_graph(
                 f"Pixel gate failed: recall={pixel_recall:.4f}, "
                 f"precision={pixel_precision:.4f}"
             ),
+        ))
+    if require_vlm_evidence and vlm_evidence is None:
+        issues.append(DrawingGraphVerificationIssue(
+            code="GRAPH_VLM_EVIDENCE_MISSING",
+            severity="error",
+            message="Independent crop-level VLM evidence verification has not run",
+        ))
+    elif vlm_evidence is not None and vlm_evidence.blocking:
+        failed_ids = [
+            check.entity_id for check in vlm_evidence.checks if not check.exact_match
+        ]
+        issues.append(DrawingGraphVerificationIssue(
+            code=(
+                "GRAPH_VLM_VERIFIER_NOT_INDEPENDENT"
+                if not vlm_evidence.independent
+                else "GRAPH_VLM_EVIDENCE_MISMATCH"
+            ),
+            severity="error",
+            message=(
+                "Crop-level VLM verification is not independent from the reader"
+                if not vlm_evidence.independent
+                else (
+                    "Crop-level VLM verification failed for "
+                    f"{len(failed_ids)} text/symbol entities"
+                )
+            ),
+            entity_ids=failed_ids,
         ))
 
     entities = {entity.id: entity for entity in graph.entities}
@@ -518,15 +600,182 @@ def _parse_graph_json(raw: str) -> dict:
         return {}
 
 
-async def read_drawing_graph(
+def _textual_expectation(
+    entity: TextEntity | DimensionEntity | AnnotationEntity,
+) -> dict[str, str | float | None]:
+    if isinstance(entity, TextEntity):
+        return {"text": entity.text}
+    if isinstance(entity, DimensionEntity):
+        return {
+            "text": entity.text,
+            "value_mm": entity.value_mm,
+            "tolerance": entity.tolerance,
+        }
+    return {
+        "text": entity.text,
+        "value": entity.value,
+        "symbol": entity.symbol,
+    }
+
+
+def _vlm_observation_matches(
+    expected: dict[str, str | float | None], observed: dict[str, Any]
+) -> bool:
+    if observed.get("visible") is not True:
+        return False
+    for key, value in expected.items():
+        if value is None:
+            continue
+        actual = observed.get(key)
+        if isinstance(value, float):
+            try:
+                if abs(float(actual) - value) > 1e-6:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        elif actual != value:
+            return False
+    return True
+
+
+_VLM_EVIDENCE_PROMPT = """Ты — независимый VLM-проверяющий фрагмента технического чертежа.
+Прочитай только видимое содержимое crop без догадок и без исправлений.
+Верни один JSON:
+{"visible":bool,"entity_type":"text|dimension|annotation","text":string|null,
+ "value_mm":number|null,"tolerance":string|null,"value":string|null,
+ "symbol":string|null,"confidence":number}
+Сохраняй регистр, знаки диаметра/радиуса, запятые, точки, ±, индексы и пробелы
+точно как на изображении. Не используй сведения из expected как ответ: expected
+передан только для указания полей, которые надо независимо прочитать. Только JSON.
+"""
+
+
+async def verify_graph_evidence_with_vlm(
+    image_bytes: bytes,
+    graph: EngineeringDrawingGraph,
+    *,
+    router: Any | None = None,
+    max_checks: int = 256,
+) -> VlmGraphEvidenceReport:
+    """Verify every text/dimension/annotation crop with an independent VLM."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
+
+    if router is None:
+        from app.ai.router import ai_router
+
+        router = ai_router
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    evidence = {item.id: item for item in graph.evidence}
+    textual = [
+        entity
+        for entity in graph.entities
+        if isinstance(entity, (TextEntity, DimensionEntity, AnnotationEntity))
+    ]
+    checks: list[VlmEvidenceCheck] = []
+    verifier_models: list[str] = []
+    reader_model = str(graph.reader_manifest.get("model") or "") or None
+    for entity in textual[:max_checks]:
+        evidence_id = entity.evidence[0]
+        item = evidence[evidence_id]
+        region = item.region
+        pad = max(8, int(max(region.x1 - region.x0, region.y1 - region.y0) * 0.08))
+        crop_box = (
+            max(0, region.x0 - pad),
+            max(0, region.y0 - pad),
+            min(image.width, region.x1 + pad),
+            min(image.height, region.y1 + pad),
+        )
+        crop = image.crop(crop_box)
+        buffer = io.BytesIO()
+        crop.save(buffer, format="PNG")
+        expected = _textual_expectation(entity)
+        check = VlmEvidenceCheck(
+            entity_id=entity.id,
+            entity_type=entity.type,
+            evidence_id=evidence_id,
+            region=region,
+            expected=expected,
+        )
+        request = AIRequest(
+            task=AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY,
+            messages=[ChatMessage(
+                role="user",
+                content=(
+                    _VLM_EVIDENCE_PROMPT
+                    + "\nТИП ПРОВЕРКИ: "
+                    + entity.type
+                    + "\nПОЛЯ: "
+                    + ", ".join(expected)
+                ),
+            )],
+            images=[base64.b64encode(buffer.getvalue()).decode()],
+            confidential=True,
+            allow_cloud=False,
+            thinking=False,
+            metadata={
+                "contract": "vlm-graph-evidence-verifier-v1",
+                "entity_id": entity.id,
+                "evidence_id": evidence_id,
+            },
+        )
+        try:
+            response = await router.run(request)
+            raw = response.text or ""
+            observed = _parse_graph_json(raw)
+            model = response.model
+            provider = response.provider.value
+            check.model = model
+            check.provider = provider
+            check.raw_sha256 = hashlib.sha256(raw.encode()).hexdigest()
+            check.observed = {
+                key: value
+                for key, value in observed.items()
+                if key in {
+                    "visible", "entity_type", "text", "value_mm",
+                    "tolerance", "value", "symbol", "confidence",
+                }
+            }
+            check.exact_match = (
+                observed.get("entity_type") == entity.type
+                and _vlm_observation_matches(expected, observed)
+            )
+            if model not in verifier_models:
+                verifier_models.append(model)
+        except Exception as exc:  # noqa: BLE001
+            check.error = str(exc)[:500]
+        checks.append(check)
+    exact_checks = sum(check.exact_match for check in checks)
+    complete = len(textual) <= max_checks and len(checks) == len(textual)
+    complete = complete and exact_checks == len(textual)
+    independent = not textual or (
+        bool(verifier_models)
+        and all(model != reader_model for model in verifier_models)
+    )
+    return VlmGraphEvidenceReport(
+        reader_model=reader_model,
+        verifier_models=verifier_models,
+        checks=checks,
+        expected_checks=len(textual),
+        exact_checks=exact_checks,
+        complete=complete,
+        independent=independent,
+    )
+
+
+async def read_drawing_graph_attempt(
     image_bytes: bytes,
     *,
     router: Any | None = None,
     confidential: bool = True,
     source_kind: Literal["scan", "photo", "pdf_page", "import"] = "scan",
     page_index: int = 0,
-) -> EngineeringDrawingGraph | None:
-    """Read a full source sheet into the strict graph contract or fail closed."""
+) -> DrawingGraphReadAttempt:
+    """Read a sheet and retain diagnostics even when strict validation fails."""
     import base64
     import io
 
@@ -537,8 +786,14 @@ async def read_drawing_graph(
 
     try:
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    except Exception:  # noqa: BLE001
-        return None
+    except Exception as exc:  # noqa: BLE001
+        return DrawingGraphReadAttempt(
+            raw_sha256=hashlib.sha256(b"").hexdigest(),
+            validation_errors=[{
+                "type": "source_image_invalid",
+                "msg": str(exc)[:500],
+            }],
+        )
     if router is None:
         from app.ai.router import ai_router
 
@@ -563,11 +818,33 @@ async def read_drawing_graph(
     )
     try:
         response = await router.run(request)
-    except Exception:  # noqa: BLE001
-        return None
-    payload = _parse_graph_json(response.text or "")
+    except Exception as exc:  # noqa: BLE001
+        return DrawingGraphReadAttempt(
+            raw_sha256=hashlib.sha256(b"").hexdigest(),
+            validation_errors=[{
+                "type": "reader_call_failed",
+                "msg": str(exc)[:500],
+            }],
+        )
+    raw = response.text or ""
+    raw_sha256 = hashlib.sha256(raw.encode()).hexdigest()
+    payload = _parse_graph_json(raw)
+    reader_manifest = {
+        "task": AITask.CAD_DRAWING_GRAPH_READ.value,
+        "provider": response.provider.value,
+        "model": response.model,
+        "contract": "engineering-drawing-graph-v1",
+    }
     if not payload:
-        return None
+        return DrawingGraphReadAttempt(
+            raw_text=raw,
+            raw_sha256=raw_sha256,
+            validation_errors=[{
+                "type": "reader_json_invalid",
+                "msg": "Reader output does not contain one valid JSON object",
+            }],
+            reader_manifest=reader_manifest,
+        )
     payload["schema_version"] = 1
     payload["graph_status"] = "reader_output"
     payload["source"] = {
@@ -577,13 +854,50 @@ async def read_drawing_graph(
         "page_index": page_index,
         "sha256": hashlib.sha256(image_bytes).hexdigest(),
     }
-    payload["reader_manifest"] = {
-        "task": AITask.CAD_DRAWING_GRAPH_READ.value,
-        "provider": response.provider.value,
-        "model": response.model,
-        "contract": "engineering-drawing-graph-v1",
-    }
+    payload["reader_manifest"] = reader_manifest
     try:
-        return EngineeringDrawingGraph.model_validate(payload)
-    except ValueError:
-        return None
+        graph = EngineeringDrawingGraph.model_validate(payload)
+        return DrawingGraphReadAttempt(
+            graph=graph,
+            raw_text=raw,
+            raw_sha256=raw_sha256,
+            parsed_payload=payload,
+            reader_manifest=reader_manifest,
+        )
+    except ValueError as exc:
+        if hasattr(exc, "json"):
+            import json
+
+            validation_errors = json.loads(
+                exc.json(include_url=False, include_input=False)
+            )
+        else:
+            validation_errors = [
+                {"type": "graph_validation_failed", "msg": str(exc)[:1000]}
+            ]
+        return DrawingGraphReadAttempt(
+            raw_text=raw,
+            raw_sha256=raw_sha256,
+            parsed_payload=payload,
+            validation_errors=validation_errors,
+            reader_manifest=reader_manifest,
+        )
+
+
+async def read_drawing_graph(
+    image_bytes: bytes,
+    *,
+    router: Any | None = None,
+    confidential: bool = True,
+    source_kind: Literal["scan", "photo", "pdf_page", "import"] = "scan",
+    page_index: int = 0,
+) -> EngineeringDrawingGraph | None:
+    """Compatibility wrapper returning only a fully valid strict graph."""
+    attempt = await read_drawing_graph_attempt(
+        image_bytes,
+        router=router,
+        confidential=confidential,
+        source_kind=source_kind,
+        page_index=page_index,
+    )
+    return attempt.graph

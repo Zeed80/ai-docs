@@ -614,6 +614,19 @@ routes:
       only a stage coordinator and cannot certify geometry. Its output must
       validate as EngineeringDrawingGraph and pass independent completeness,
       topology, dimension and pixel-evidence gates before redrawing.
+  cad_drawing_graph_evidence_verify:
+    required_modalities: ["vision"]
+    local_only: true
+    fallback_chain:
+      - "qwen3_vl_32b_ollama"
+      - "gemma4_e4b_ollama"
+      - "qwen3_6_35b_apex_ollama"
+    manual_review_fallback: true
+    notes: >
+      Crop-level VLM verifier for exact text, dimensions, tolerances and
+      engineering symbols. Qwen3-VL is used only for source-resolution visual
+      reading, never as coordinate or geometry authority. Classic OCR engines
+      are forbidden in this graph-first stage.
   engineering_reasoning:
     required_modalities: ["text"]
     local_only: true

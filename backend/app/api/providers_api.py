@@ -693,6 +693,8 @@ _SLOTS = [
      "Вспомогательное чтение параметрического ТЗ; не основной graph-reader", True),
     ("cad_drawing_graph_read", "Оцифровка", "Координатный reader листа",
      "Основной метод «по описанию»: все элементы, текст, размеры и связи с координатами", True),
+    ("cad_drawing_graph_evidence_verify", "Оцифровка", "VLM-проверка надписей",
+     "Независимое чтение source-resolution crops: текст, размеры, допуски и обозначения; без Tesseract", True),
     ("cad_spec_draft", "Оцифровка", "Чертёжник (по описанию)",
      "Генеративная модель строит геометрию из описания (можно LoRA). "
      "Не задано → детерминированный чертёжник тел вращения", True),
@@ -710,6 +712,7 @@ _SLOT_MODALITY = {
     "rerank": "rerank",
     "cad_spec_read": "vision",
     "cad_drawing_graph_read": "vision",
+    "cad_drawing_graph_evidence_verify": "vision",
     "cad_spec_draft": "text",
 }
 
@@ -723,6 +726,7 @@ _SLOT_THINKING_TASKS: dict[str, list[str]] = {
     "agent_email": ["email_drafting"],
     "agent_large": ["code_generation"],
     "cad_drawing_graph_read": ["cad_drawing_graph_read"],
+    "cad_drawing_graph_evidence_verify": ["cad_drawing_graph_evidence_verify"],
 }
 _SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_orchestrator": ["orchestrator_disable_thinking", "worker_disable_thinking"],
@@ -774,6 +778,8 @@ def _slot_current_model(slot: str, registry) -> str | None:
         return get_routing_for(AITask.CAD_SPEC_READ).primary
     if slot == "cad_drawing_graph_read":
         return get_routing_for(AITask.CAD_DRAWING_GRAPH_READ).primary
+    if slot == "cad_drawing_graph_evidence_verify":
+        return get_routing_for(AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY).primary
     if slot == "cad_spec_draft":
         return get_routing_for(AITask.CAD_SPEC_DRAFT).primary
     if slot == "ocr_large":
@@ -964,6 +970,8 @@ def _slot_affected(slot: str) -> list[str]:
         return [AITask.CAD_SPEC_READ.value]
     if slot == "cad_drawing_graph_read":
         return [AITask.CAD_DRAWING_GRAPH_READ.value]
+    if slot == "cad_drawing_graph_evidence_verify":
+        return [AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY.value]
     if slot == "cad_spec_draft":
         return [AITask.CAD_SPEC_DRAFT.value]
     if slot == "agent_orchestrator":
@@ -1181,6 +1189,17 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
                 key,
                 fallback_keys=(
                     list(graph_route.fallback_chain) if graph_route else []
+                ),
+            )
+        elif slot == "cad_drawing_graph_evidence_verify":
+            evidence_route = registry.routes.get(
+                AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY
+            )
+            _assign_task(
+                AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY,
+                key,
+                fallback_keys=(
+                    list(evidence_route.fallback_chain) if evidence_route else []
                 ),
             )
         elif slot == "cad_spec_draft":

@@ -1223,6 +1223,16 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         unresolved_regions?: Array<{ resolved?: boolean }>;
       }
     | undefined;
+  const drawingGraphVlmEvidence = gen.params?.drawing_graph_vlm_evidence as
+    | {
+        expected_checks?: number;
+        exact_checks?: number;
+        complete?: boolean;
+        independent?: boolean;
+        classic_ocr_used?: boolean;
+        verifier_models?: string[];
+      }
+    | undefined;
 
   return (
     <div className="flex flex-col gap-3 pb-24 sm:pb-0">
@@ -1318,6 +1328,9 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             {pipelineManifest.components.drawing_graph_reader && (
               <div>{t("vector.pipeline_graph_reader")}: {pipelineManifest.components.drawing_graph_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
             )}
+            {pipelineManifest.components.drawing_graph_evidence_verifier && (
+              <div>{t("vector.pipeline_graph_vlm_verifier")}: {pipelineManifest.components.drawing_graph_evidence_verifier.models.map((model) => model.key).join(" → ") || "—"}</div>
+            )}
             {pipelineManifest.components.drawing_graph_drafter && (
               <div>{t("vector.pipeline_graph_drafter")}: {pipelineManifest.components.drawing_graph_drafter.version}</div>
             )}
@@ -1347,6 +1360,18 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             <span>{t("vector.drawing_graph_relations")}: {drawingGraph.relations?.length ?? 0}</span>
             <span>{t("vector.drawing_graph_evidence")}: {drawingGraph.evidence?.length ?? 0}</span>
             <span>{t("vector.drawing_graph_unresolved")}: {drawingGraph.unresolved_regions?.filter((item) => !item.resolved).length ?? 0}</span>
+          </div>
+        </div>
+      )}
+
+      {drawingGraphVlmEvidence && (
+        <div className={`rounded border px-3 py-2 text-xs ${drawingGraphVlmEvidence.complete && drawingGraphVlmEvidence.independent ? "border-emerald-400/20 bg-emerald-950/20 text-emerald-100" : "border-amber-400/20 bg-amber-950/20 text-amber-100"}`}>
+          <div className="font-medium">{t("vector.graph_vlm_evidence_title")}</div>
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+            <span>{t("vector.graph_vlm_evidence_exact")}: {drawingGraphVlmEvidence.exact_checks ?? 0}/{drawingGraphVlmEvidence.expected_checks ?? 0}</span>
+            <span>{t("vector.graph_vlm_evidence_independent")}: {drawingGraphVlmEvidence.independent ? t("vector.yes") : t("vector.no")}</span>
+            <span>{t("vector.graph_vlm_evidence_models")}: {drawingGraphVlmEvidence.verifier_models?.join(" → ") || "—"}</span>
+            <span>{t("vector.graph_vlm_evidence_ocr")}: {drawingGraphVlmEvidence.classic_ocr_used ? t("vector.yes") : t("vector.no")}</span>
           </div>
         </div>
       )}

@@ -67,3 +67,29 @@ def test_drawing_graph_reader_defaults_to_no_thinking(monkeypatch):
     routing = task_routing.get_routing_for(AITask.CAD_DRAWING_GRAPH_READ)
 
     assert routing.thinking is False
+
+
+def test_drawing_graph_vlm_evidence_has_independent_assignment(monkeypatch):
+    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+    current = TaskRouting(task="cad_drawing_graph_evidence_verify", models=[])
+    saved = {}
+
+    monkeypatch.setattr(
+        "app.ai.task_routing.get_routing_for",
+        lambda _task: current,
+    )
+    monkeypatch.setattr(
+        "app.ai.task_routing.save_task_routing",
+        lambda task, routing: saved.update(task=task, routing=routing),
+    )
+
+    _apply_slot_assignment(
+        "cad_drawing_graph_evidence_verify", "qwen3_vl_32b_ollama", registry
+    )
+
+    assert saved["task"].value == "cad_drawing_graph_evidence_verify"
+    assert saved["routing"].models == [
+        "qwen3_vl_32b_ollama",
+        "gemma4_e4b_ollama",
+        "qwen3_6_35b_apex_ollama",
+    ]

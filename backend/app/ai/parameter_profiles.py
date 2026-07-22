@@ -64,6 +64,7 @@ TASK_DEFAULT_PROFILE: dict[AITask, str] = {
     AITask.DRAWING_ANALYSIS: "anti_hallucination",
     AITask.DRAWING_ANALYSIS_VLM: "anti_hallucination",
     AITask.CAD_DRAWING_GRAPH_READ: "anti_hallucination",
+    AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY: "anti_hallucination",
     AITask.CAD_SPEC_READ: "anti_hallucination",
     AITask.CAD_SPEC_DRAFT: "anti_hallucination",
     AITask.CLASSIFICATION: "anti_hallucination",

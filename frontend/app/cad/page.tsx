@@ -404,6 +404,9 @@ export default function CadListPage() {
                 {t("pipeline_graph_reader")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
               </div>
               <div>
+                {t("pipeline_graph_vlm_verifier")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_evidence_verifier?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
+              </div>
+              <div>
                 {t("pipeline_graph_drafter")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_drafter?.version || t("pipeline_deterministic")}
               </div>
               <div className="text-zinc-500">

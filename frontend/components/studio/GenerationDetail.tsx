@@ -49,6 +49,17 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const hasDxf = typeof gen.params?.dxf_path === "string";
+  const graphReadAttempt = gen.params?.drawing_graph_read_attempt as
+    | {
+        raw_sha256?: string;
+        reader_manifest?: { model?: string; provider?: string; contract?: string };
+        validation_errors?: Array<{
+          type?: string;
+          msg?: string;
+          loc?: Array<string | number>;
+        }>;
+      }
+    | undefined;
   const selectedWorkflow = workflows.find((w) => w.id === workflowId) ?? null;
   const selectedParamsSchema = (selectedWorkflow?.params_schema ||
     {}) as Record<string, Record<string, unknown>>;
@@ -497,8 +508,31 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
       )}
 
       {gen.status === "failed" && (
-        <div className="text-xs text-red-400 bg-red-500/10 rounded p-2 whitespace-pre-wrap max-h-40 overflow-y-auto">
-          {gen.error}
+        <div className="space-y-2">
+          <div className="text-xs text-red-400 bg-red-500/10 rounded p-2 whitespace-pre-wrap max-h-40 overflow-y-auto">
+            {gen.error}
+          </div>
+          {graphReadAttempt && (
+            <details className="rounded border border-amber-400/20 bg-amber-950/20 p-2 text-xs text-amber-100">
+              <summary className="cursor-pointer font-medium">
+                {t("detail.graph_reader_diagnostics", {
+                  count: graphReadAttempt.validation_errors?.length ?? 0,
+                })}
+              </summary>
+              <div className="mt-2 space-y-1 text-[11px]">
+                <div>{t("detail.graph_reader_model")}: {graphReadAttempt.reader_manifest?.model ?? "—"}</div>
+                <div className="font-mono">SHA {graphReadAttempt.raw_sha256?.slice(0, 20) ?? "—"}…</div>
+                <ul className="list-disc space-y-1 pl-4">
+                  {graphReadAttempt.validation_errors?.slice(0, 8).map((issue, index) => (
+                    <li key={`${issue.type ?? "validation"}-${index}`}>
+                      <span className="font-mono">{issue.loc?.join(".") || issue.type || "validation"}</span>
+                      {issue.msg ? `: ${issue.msg}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </details>
+          )}
         </div>
       )}
 
