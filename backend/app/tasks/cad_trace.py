@@ -799,12 +799,12 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 from app.ai.cad_drawing_graph import (
                     DrawingGraphDraftError,
                     draft_drawing_graph,
-                    read_drawing_graph_attempt,
+                    read_drawing_graph_staged_attempt,
                     verify_drawing_graph,
                     verify_graph_evidence_with_vlm,
                 )
 
-                graph_attempt = await read_drawing_graph_attempt(content)
+                graph_attempt = await read_drawing_graph_staged_attempt(content)
                 graph = graph_attempt.graph
                 if graph is None:
                     async with factory() as db:

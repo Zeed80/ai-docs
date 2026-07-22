@@ -14,6 +14,13 @@ def test_pipeline_manifest_is_reproducible_and_exposes_assignments():
     assert first["components"]["spec_reader"]["task"] == "cad_spec_read"
     assert first["components"]["drawing_graph_reader"]["task"] == "cad_drawing_graph_read"
     assert first["components"]["drawing_graph_reader"]["authority"] == "observations_only"
+    assert first["components"]["drawing_graph_layout_reader"]["task"] == (
+        "cad_drawing_graph_layout"
+    )
+    fragment = first["components"]["drawing_graph_fragment_reader"]
+    assert fragment["task"] == "cad_drawing_graph_fragment_read"
+    assert fragment["ownership"] == "deterministic_non_overlapping_core"
+    assert fragment["classic_ocr_used"] is False
     evidence = first["components"]["drawing_graph_evidence_verifier"]
     assert evidence["task"] == "cad_drawing_graph_evidence_verify"
     assert evidence["classic_ocr_used"] is False

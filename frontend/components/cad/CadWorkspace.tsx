@@ -1328,6 +1328,12 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             {pipelineManifest.components.drawing_graph_reader && (
               <div>{t("vector.pipeline_graph_reader")}: {pipelineManifest.components.drawing_graph_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
             )}
+            {pipelineManifest.components.drawing_graph_layout_reader && (
+              <div>{t("vector.pipeline_graph_layout")}: {pipelineManifest.components.drawing_graph_layout_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
+            )}
+            {pipelineManifest.components.drawing_graph_fragment_reader && (
+              <div>{t("vector.pipeline_graph_fragments")}: {pipelineManifest.components.drawing_graph_fragment_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
+            )}
             {pipelineManifest.components.drawing_graph_evidence_verifier && (
               <div>{t("vector.pipeline_graph_vlm_verifier")}: {pipelineManifest.components.drawing_graph_evidence_verifier.models.map((model) => model.key).join(" → ") || "—"}</div>
             )}

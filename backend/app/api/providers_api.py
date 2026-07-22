@@ -692,7 +692,11 @@ _SLOTS = [
     ("cad_spec_read", "Оцифровка", "Чтение чертежа (VLM)",
      "Вспомогательное чтение параметрического ТЗ; не основной graph-reader", True),
     ("cad_drawing_graph_read", "Оцифровка", "Координатный reader листа",
-     "Основной метод «по описанию»: все элементы, текст, размеры и связи с координатами", True),
+     "Legacy whole-sheet coordinator; не используется staged production pipeline", True),
+    ("cad_drawing_graph_layout", "Оцифровка", "VLM разметки листа",
+     "Overview-стадия: виды, разрезы, таблицы и основная надпись без геометрии", True),
+    ("cad_drawing_graph_fragment_read", "Оцифровка", "VLM фрагментов листа",
+     "Source-resolution tiles: элементы, размеры, текст и связи в ownership-зонах", True),
     ("cad_drawing_graph_evidence_verify", "Оцифровка", "VLM-проверка надписей",
      "Независимое чтение source-resolution crops: текст, размеры, допуски и обозначения; без Tesseract", True),
     ("cad_spec_draft", "Оцифровка", "Чертёжник (по описанию)",
@@ -712,6 +716,8 @@ _SLOT_MODALITY = {
     "rerank": "rerank",
     "cad_spec_read": "vision",
     "cad_drawing_graph_read": "vision",
+    "cad_drawing_graph_layout": "vision",
+    "cad_drawing_graph_fragment_read": "vision",
     "cad_drawing_graph_evidence_verify": "vision",
     "cad_spec_draft": "text",
 }
@@ -726,6 +732,8 @@ _SLOT_THINKING_TASKS: dict[str, list[str]] = {
     "agent_email": ["email_drafting"],
     "agent_large": ["code_generation"],
     "cad_drawing_graph_read": ["cad_drawing_graph_read"],
+    "cad_drawing_graph_layout": ["cad_drawing_graph_layout"],
+    "cad_drawing_graph_fragment_read": ["cad_drawing_graph_fragment_read"],
     "cad_drawing_graph_evidence_verify": ["cad_drawing_graph_evidence_verify"],
 }
 _SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
@@ -778,6 +786,10 @@ def _slot_current_model(slot: str, registry) -> str | None:
         return get_routing_for(AITask.CAD_SPEC_READ).primary
     if slot == "cad_drawing_graph_read":
         return get_routing_for(AITask.CAD_DRAWING_GRAPH_READ).primary
+    if slot == "cad_drawing_graph_layout":
+        return get_routing_for(AITask.CAD_DRAWING_GRAPH_LAYOUT).primary
+    if slot == "cad_drawing_graph_fragment_read":
+        return get_routing_for(AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ).primary
     if slot == "cad_drawing_graph_evidence_verify":
         return get_routing_for(AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY).primary
     if slot == "cad_spec_draft":
@@ -970,6 +982,10 @@ def _slot_affected(slot: str) -> list[str]:
         return [AITask.CAD_SPEC_READ.value]
     if slot == "cad_drawing_graph_read":
         return [AITask.CAD_DRAWING_GRAPH_READ.value]
+    if slot == "cad_drawing_graph_layout":
+        return [AITask.CAD_DRAWING_GRAPH_LAYOUT.value]
+    if slot == "cad_drawing_graph_fragment_read":
+        return [AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value]
     if slot == "cad_drawing_graph_evidence_verify":
         return [AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY.value]
     if slot == "cad_spec_draft":
@@ -1189,6 +1205,26 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
                 key,
                 fallback_keys=(
                     list(graph_route.fallback_chain) if graph_route else []
+                ),
+            )
+        elif slot == "cad_drawing_graph_layout":
+            layout_route = registry.routes.get(AITask.CAD_DRAWING_GRAPH_LAYOUT)
+            _assign_task(
+                AITask.CAD_DRAWING_GRAPH_LAYOUT,
+                key,
+                fallback_keys=(
+                    list(layout_route.fallback_chain) if layout_route else []
+                ),
+            )
+        elif slot == "cad_drawing_graph_fragment_read":
+            fragment_route = registry.routes.get(
+                AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ
+            )
+            _assign_task(
+                AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ,
+                key,
+                fallback_keys=(
+                    list(fragment_route.fallback_chain) if fragment_route else []
                 ),
             )
         elif slot == "cad_drawing_graph_evidence_verify":

@@ -11,11 +11,17 @@ import pytest
 from pydantic import ValidationError
 
 from app.ai.cad_drawing_graph import (
+    DrawingGraphFragment,
+    DrawingGraphLayout,
+    DrawingGraphSource,
     DrawingGraphDraftError,
     EngineeringDrawingGraph,
+    assemble_drawing_graph_fragments,
+    build_drawing_graph_tiles,
     draft_drawing_graph,
     read_drawing_graph,
     read_drawing_graph_attempt,
+    read_drawing_graph_staged_attempt,
     verify_drawing_graph,
     verify_graph_evidence_with_vlm,
 )
@@ -444,3 +450,175 @@ async def test_vlm_crop_evidence_must_use_a_different_model_from_reader():
     assert {issue.code for issue in verification.blocking} == {
         "GRAPH_VLM_VERIFIER_NOT_INDEPENDENT"
     }
+
+
+class _StagedRouter:
+    def __init__(self):
+        self.requests = []
+
+    async def run(self, request):
+        self.requests.append(request)
+        if request.task.value == "cad_drawing_graph_layout":
+            payload = {
+                "sheet": {"format": "A3", "frame": True},
+                "scale_mm_per_px": 0.25,
+                "scale_source": "calibration",
+                "views": [{
+                    "id": "view-main",
+                    "kind": "front",
+                    "region": {"x0": 0, "y0": 0, "x1": 1600, "y1": 800},
+                    "entity_ids": [],
+                    "confidence": 0.99,
+                    "evidence": [],
+                }],
+                "unresolved_regions": [],
+            }
+            model = "layout-vlm"
+        else:
+            tile_id = request.metadata["tile_id"]
+            left = 100 if tile_id == "tile-00-00" else 1000
+            payload = {
+                "tile_id": tile_id,
+                "source_region": request.metadata["source_region"],
+                "ownership_region": request.metadata["ownership_region"],
+                "evidence": [{
+                    "id": f"{tile_id}:ev-1",
+                    "kind": "pixel_support",
+                    "region": {
+                        "x0": left,
+                        "y0": 100,
+                        "x1": left + 100,
+                        "y1": 130,
+                    },
+                    "model_key": "fragment-vlm",
+                    "confidence": 0.99,
+                }],
+                "entities": [{
+                    "view_id": "view-main",
+                    "entity": {
+                        "id": f"{tile_id}:segment-1",
+                        "type": "segment",
+                        "p1": {"x": left, "y": 115},
+                        "p2": {"x": left + 100, "y": 115},
+                        "origin": "cv",
+                        "assurance": "observed",
+                        "evidence": [f"{tile_id}:ev-1"],
+                    },
+                }],
+                "relations": [],
+                "unresolved_regions": [],
+            }
+            model = "fragment-vlm"
+        return SimpleNamespace(
+            text=json.dumps(payload),
+            provider=SimpleNamespace(value="ollama"),
+            model=model,
+        )
+
+
+def test_staged_tiles_overlap_but_ownership_regions_partition_sheet():
+    from PIL import Image
+
+    tiles = build_drawing_graph_tiles(Image.new("RGB", (1600, 800), "white"))
+
+    assert len(tiles) == 2
+    assert tiles[0].source_region.x1 > tiles[1].source_region.x0
+    assert tiles[0].ownership_region.x0 == 0
+    assert tiles[0].ownership_region.x1 == tiles[1].ownership_region.x0
+    assert tiles[1].ownership_region.x1 == 1600
+
+
+def test_layout_discards_only_empty_unresolved_string_placeholders():
+    payload = {
+        "views": [{
+            "id": "view-main",
+            "kind": "front",
+            "region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+            "entity_ids": [],
+            "confidence": 1.0,
+        }],
+        "unresolved_regions": ["", "   "],
+    }
+
+    layout = DrawingGraphLayout.model_validate(payload)
+
+    assert layout.unresolved_regions == []
+
+
+@pytest.mark.asyncio
+async def test_staged_reader_assembles_layout_and_bounded_fragments():
+    from PIL import Image
+
+    image = Image.new("RGB", (1600, 800), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    router = _StagedRouter()
+
+    attempt = await read_drawing_graph_staged_attempt(
+        buffer.getvalue(), router=router
+    )
+
+    assert attempt.valid is True
+    assert attempt.graph is not None
+    assert len(attempt.graph.entities) == 2
+    assert attempt.graph.views[0].entity_ids == [
+        "tile-00-00:segment-1",
+        "tile-00-01:segment-1",
+    ]
+    assert attempt.reader_manifest["contract"] == (
+        "engineering-drawing-graph-staged-v2"
+    )
+    assert attempt.reader_manifest["tiles"] == 2
+    assert len(attempt.stage_attempts) == 3
+    assert [request.task.value for request in router.requests] == [
+        "cad_drawing_graph_layout",
+        "cad_drawing_graph_fragment_read",
+        "cad_drawing_graph_fragment_read",
+    ]
+
+
+def test_fragment_assembly_rejects_entity_outside_ownership_region():
+    layout = DrawingGraphLayout.model_validate({
+        "views": [{
+            "id": "view-main",
+            "kind": "front",
+            "region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+            "entity_ids": [],
+            "confidence": 1.0,
+        }],
+    })
+    fragment = DrawingGraphFragment.model_validate({
+        "tile_id": "tile-00-00",
+        "source_region": {"x0": 0, "y0": 0, "x1": 1000, "y1": 800},
+        "ownership_region": {"x0": 0, "y0": 0, "x1": 500, "y1": 800},
+        "evidence": [{
+            "id": "tile-00-00:ev-1",
+            "kind": "pixel_support",
+            "region": {"x0": 600, "y0": 100, "x1": 700, "y1": 130},
+            "confidence": 1.0,
+        }],
+        "entities": [{
+            "view_id": "view-main",
+            "entity": {
+                "id": "tile-00-00:segment-1",
+                "type": "segment",
+                "p1": {"x": 600, "y": 115},
+                "p2": {"x": 700, "y": 115},
+                "origin": "cv",
+                "assurance": "observed",
+                "evidence": ["tile-00-00:ev-1"],
+            },
+        }],
+    })
+    source = DrawingGraphSource(
+        image_width=1000,
+        image_height=800,
+        sha256="a" * 64,
+    )
+    with pytest.raises(ValueError, match="outside tile ownership"):
+        assemble_drawing_graph_fragments(
+            source=source,
+            layout=layout,
+            fragments=[fragment],
+            reader_manifest={},
+        )

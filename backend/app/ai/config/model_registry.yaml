@@ -393,7 +393,7 @@ models:
   qwen3_6_35b_ollama:
     provider: "ollama"
     provider_model: "qwen3.6:35b"
-    status: "disabled"
+    status: "candidate"
     modalities: ["text", "vision", "tool_calling"]
     max_context_tokens: 262144
     supports_structured_output: true
@@ -408,7 +408,7 @@ models:
     provider: "ollama"
     provider_model: "fredrezones55/Qwen3.6-35B-A3B-APEX:Compact"
     status: "production"
-    modalities: ["text", "vision", "tool_calling"]
+    modalities: ["text", "tool_calling"]
     max_context_tokens: 32768
     supports_structured_output: true
     supports_tool_calling: true
@@ -419,14 +419,16 @@ models:
     quality_score: 0.90
     speed_score: 0.95
     notes: >
-      Qwen3.6-35B-A3B (MoE, 3B active) в кванте APEX Compact с vision (mmproj).
+      Qwen3.6-35B-A3B (MoE, 3B active) в кванте APEX Compact. Текущий
+      установленный Ollama artifact не объявляет capability vision, поэтому
+      модель запрещена в VLM-слотах до появления проверенного projector.
       Бенч на RTX 3090: 135 tok/s — быстрее qwen3.5:9b при качестве класса 30B+.
       Основная модель отдела ИИ: worker/orchestrator/builder.
   qwen3_6_27b_qwopus_ollama:
     provider: "ollama"
     provider_model: "fredrezones55/Qwopus3.6:27b"
     status: "production"
-    modalities: ["text", "vision", "tool_calling"]
+    modalities: ["text", "tool_calling"]
     max_context_tokens: 32768
     supports_structured_output: true
     supports_tool_calling: true
@@ -457,16 +459,16 @@ models:
   ministral_3_8b_ollama:
     provider: "ollama"
     provider_model: "ministral-3:8b"
-    status: "disabled"
-    modalities: ["text", "tool_calling"]
-    max_context_tokens: 32000
+    status: "candidate"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 262144
     supports_structured_output: true
     supports_tool_calling: true
     local_only: true
     vram_gb_estimate: 4.8
     quality_score: 0.75
     speed_score: 0.98
-    notes: "Ministral-3 8B — ultra-fast local model. Primary worker and orchestrator model. Excellent tool calling."
+    notes: "Ministral-3 8B — installed multimodal Ollama artifact; candidate for compact CAD sheet layout, not geometry authority."
   # ── Специализированные VLM для технических чертежей (май 2026) ──────────────
   # Источники: arXiv:2511.21631 (Qwen3-VL), ollama.com/library/qwen3-vl,
   #            arXiv:2411.02810 (CAD feature recognition), arXiv:2510.21862 (hybrid framework)
@@ -606,27 +608,45 @@ routes:
     required_modalities: ["vision"]
     local_only: true
     fallback_chain:
-      - "qwen3_6_35b_apex_ollama"
-      - "gemma4_e4b_ollama"
+      - "qwen3_6_35b_ollama"
+      - "qwen3_5_9b_ollama"
     manual_review_fallback: true
     notes: >
       Experimental full-sheet coordinate graph reader. The assigned model is
       only a stage coordinator and cannot certify geometry. Its output must
       validate as EngineeringDrawingGraph and pass independent completeness,
       topology, dimension and pixel-evidence gates before redrawing.
+  cad_drawing_graph_layout:
+    required_modalities: ["vision"]
+    local_only: true
+    fallback_chain:
+      - "ministral_3_8b_ollama"
+      - "qwen3_6_35b_ollama"
+    manual_review_fallback: true
+    notes: >
+      Overview-only VLM stage for sheet, title block and view regions. It emits
+      no geometry and cannot certify the drawing.
+  cad_drawing_graph_fragment_read:
+    required_modalities: ["vision"]
+    local_only: true
+    fallback_chain:
+      - "qwen3_5_9b_ollama"
+    manual_review_fallback: true
+    notes: >
+      Source-resolution VLM stage that emits bounded graph fragments inside a
+      deterministic ownership region. No classic OCR and no whole-sheet JSON.
   cad_drawing_graph_evidence_verify:
     required_modalities: ["vision"]
     local_only: true
     fallback_chain:
       - "qwen3_vl_32b_ollama"
-      - "gemma4_e4b_ollama"
-      - "qwen3_6_35b_apex_ollama"
+      - "qwen3_5_9b_ollama"
     manual_review_fallback: true
     notes: >
       Crop-level VLM verifier for exact text, dimensions, tolerances and
-      engineering symbols. Qwen3-VL is used only for source-resolution visual
-      reading, never as coordinate or geometry authority. Classic OCR engines
-      are forbidden in this graph-first stage.
+      engineering symbols. It must differ from every model used by layout and
+      fragment reading. Classic OCR engines are forbidden in this graph-first
+      stage.
   engineering_reasoning:
     required_modalities: ["text"]
     local_only: true

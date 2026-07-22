@@ -98,6 +98,10 @@ export interface VectorizerDevelopmentStatus {
     entity_ids_preserved: boolean;
     relations_preserved: boolean;
     graph_first_enabled: boolean;
+    staged_reader_enabled: boolean;
+    fragment_tile_size_px: number;
+    fragment_overlap_px: number;
+    fragment_max_tiles: number;
     vlm_crop_evidence_required: boolean;
     classic_ocr_used: boolean;
     reader_promotion_passed: boolean;
@@ -294,6 +298,22 @@ export interface CadPipelineManifest {
       contract: string;
       authority: string;
       promotion_status: string;
+    };
+    drawing_graph_layout_reader?: {
+      task: string;
+      models: CadPipelineModelAssignment[];
+      parameter_profile: string;
+      contract: string;
+      geometry_authority: boolean;
+    };
+    drawing_graph_fragment_reader?: {
+      task: string;
+      models: CadPipelineModelAssignment[];
+      parameter_profile: string;
+      contract: string;
+      coordinates: string;
+      ownership: string;
+      classic_ocr_used: boolean;
     };
     drawing_graph_evidence_verifier?: {
       task: string;

@@ -404,6 +404,12 @@ export default function CadListPage() {
                 {t("pipeline_graph_reader")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
               </div>
               <div>
+                {t("pipeline_graph_layout")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_layout_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
+              </div>
+              <div>
+                {t("pipeline_graph_fragments")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_fragment_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
+              </div>
+              <div>
                 {t("pipeline_graph_vlm_verifier")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_evidence_verifier?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
               </div>
               <div>

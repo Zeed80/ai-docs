@@ -149,7 +149,12 @@ class OllamaProvider(AIProvider):
             prompt_text = "\n\n".join(user_parts)
 
         opts = _inference_options(request, default_temperature=0.0)
-        opts["num_predict"] = 8192
+        requested_num_predict = (request.metadata or {}).get("num_predict")
+        opts["num_predict"] = (
+            max(1, min(int(requested_num_predict), 8192))
+            if requested_num_predict is not None
+            else 8192
+        )
         payload: dict = {
             "model": model,
             "prompt": prompt_text,

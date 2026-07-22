@@ -11,7 +11,7 @@ from app.ai.schemas import AITask
 from app.ai.task_routing import get_routing_for
 
 MANIFEST_VERSION = "1.0"
-PIPELINE_REVISION = "drawing-graph-vlm-evidence-v2"
+PIPELINE_REVISION = "drawing-graph-staged-reader-v3"
 
 MULTI_TYPE_CANDIDATE = {
     "key": "multi-type-proposal-v2",
@@ -87,6 +87,18 @@ def build_cad_pipeline_manifest(
             "contract": "engineering-drawing-graph-v1",
             "authority": "observations_only",
             "promotion_status": "experimental_fail_closed",
+        },
+        "drawing_graph_layout_reader": {
+            **_route(AITask.CAD_DRAWING_GRAPH_LAYOUT),
+            "contract": "drawing-graph-layout-v1",
+            "geometry_authority": False,
+        },
+        "drawing_graph_fragment_reader": {
+            **_route(AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ),
+            "contract": "drawing-graph-fragment-v1",
+            "coordinates": "global_source_pixels",
+            "ownership": "deterministic_non_overlapping_core",
+            "classic_ocr_used": False,
         },
         "drawing_graph_evidence_verifier": {
             **_route(AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY),

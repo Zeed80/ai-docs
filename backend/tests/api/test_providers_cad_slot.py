@@ -1,3 +1,5 @@
+import pytest
+
 from app.ai.model_registry import ModelRegistry
 from app.ai.schemas import AITask
 from app.ai.task_routing import TaskRouting
@@ -48,13 +50,13 @@ def test_drawing_graph_reader_has_independent_assignment(monkeypatch):
     )
 
     _apply_slot_assignment(
-        "cad_drawing_graph_read", "qwen3_6_35b_apex_ollama", registry
+        "cad_drawing_graph_read", "qwen3_6_35b_ollama", registry
     )
 
     assert saved["task"].value == "cad_drawing_graph_read"
     assert saved["routing"].models == [
-        "qwen3_6_35b_apex_ollama",
-        "gemma4_e4b_ollama",
+        "qwen3_6_35b_ollama",
+        "qwen3_5_9b_ollama",
     ]
 
 
@@ -90,6 +92,44 @@ def test_drawing_graph_vlm_evidence_has_independent_assignment(monkeypatch):
     assert saved["task"].value == "cad_drawing_graph_evidence_verify"
     assert saved["routing"].models == [
         "qwen3_vl_32b_ollama",
-        "gemma4_e4b_ollama",
-        "qwen3_6_35b_apex_ollama",
+        "qwen3_5_9b_ollama",
     ]
+
+
+@pytest.mark.parametrize(
+    ("slot", "model", "task", "fallbacks"),
+    [
+        (
+            "cad_drawing_graph_layout",
+            "ministral_3_8b_ollama",
+            "cad_drawing_graph_layout",
+            ["ministral_3_8b_ollama", "qwen3_6_35b_ollama"],
+        ),
+        (
+            "cad_drawing_graph_fragment_read",
+            "qwen3_5_9b_ollama",
+            "cad_drawing_graph_fragment_read",
+            [
+                "qwen3_5_9b_ollama",
+            ],
+        ),
+    ],
+)
+def test_staged_graph_slots_have_independent_assignments(
+    monkeypatch, slot, model, task, fallbacks
+):
+    registry = ModelRegistry.from_yaml("backend/app/ai/config/model_registry.yaml")
+    current = TaskRouting(task=task, models=[])
+    saved = {}
+    monkeypatch.setattr(
+        "app.ai.task_routing.get_routing_for", lambda _task: current
+    )
+    monkeypatch.setattr(
+        "app.ai.task_routing.save_task_routing",
+        lambda saved_task, routing: saved.update(task=saved_task, routing=routing),
+    )
+
+    _apply_slot_assignment(slot, model, registry)
+
+    assert saved["task"].value == task
+    assert saved["routing"].models == fallbacks

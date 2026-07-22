@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -289,10 +290,75 @@ class DrawingGraphReadAttempt(BaseModel):
     parsed_payload: dict[str, Any] | None = None
     validation_errors: list[dict[str, Any]] = Field(default_factory=list)
     reader_manifest: dict[str, Any] = Field(default_factory=dict)
+    stage_attempts: list[dict[str, Any]] = Field(default_factory=list)
 
     @property
     def valid(self) -> bool:
         return self.graph is not None
+
+
+class DrawingGraphLayout(BaseModel):
+    """Compact overview result. Geometry is deliberately forbidden here."""
+
+    sheet: SheetInfo = Field(default_factory=SheetInfo)
+    scale_mm_per_px: float | None = Field(default=None, gt=0)
+    scale_source: Literal["manual", "calibration", "dpi", "sheet_format"] | None = None
+    views: list[DrawingGraphView] = Field(min_length=1)
+    unresolved_regions: list[UnresolvedRegion] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _discard_empty_unresolved_placeholders(cls, value: Any) -> Any:
+        """Accept a VLM's empty-string sentinel without hiding real content."""
+        if not isinstance(value, dict):
+            return value
+        unresolved = value.get("unresolved_regions")
+        if not isinstance(unresolved, list):
+            return value
+        cleaned = [
+            item
+            for item in unresolved
+            if not (isinstance(item, str) and not item.strip())
+        ]
+        if cleaned == unresolved:
+            return value
+        normalized = dict(value)
+        normalized["unresolved_regions"] = cleaned
+        return normalized
+
+    @model_validator(mode="after")
+    def _layout_has_unique_empty_views(self) -> "DrawingGraphLayout":
+        ids = [view.id for view in self.views]
+        if len(ids) != len(set(ids)):
+            raise ValueError("layout view ids must be unique")
+        if any(view.entity_ids for view in self.views):
+            raise ValueError("layout stage cannot assign entities")
+        if self.scale_mm_per_px is not None and self.scale_source is None:
+            raise ValueError("layout scale requires scale_source")
+        return self
+
+
+class DrawingGraphFragmentEntity(BaseModel):
+    view_id: str
+    entity: Entity
+
+
+class DrawingGraphFragment(BaseModel):
+    tile_id: str
+    source_region: SourceRegion
+    ownership_region: SourceRegion
+    evidence: list[DrawingGraphEvidence] = Field(default_factory=list)
+    entities: list[DrawingGraphFragmentEntity] = Field(default_factory=list)
+    relations: list[DrawingGraphRelation] = Field(default_factory=list)
+    unresolved_regions: list[UnresolvedRegion] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DrawingGraphTile:
+    tile_id: str
+    image_bytes: bytes
+    source_region: SourceRegion
+    ownership_region: SourceRegion
 
 
 class VlmEvidenceCheck(BaseModel):
@@ -650,6 +716,194 @@ _VLM_EVIDENCE_PROMPT = """Ты — независимый VLM-проверяющ
 """
 
 
+_LAYOUT_PROMPT = """Ты — VLM стадии layout технического чертежа.
+По обзорному изображению верни компактный JSON СТРОГО по схеме:
+{"sheet":{"format":string|null,"width_mm":number|null,"height_mm":number|null,
+ "frame":bool,"title_block":{},"frame_px":[x,y,w,h]|null},
+ "scale_mm_per_px":number|null,"scale_source":"manual|calibration|dpi|sheet_format"|null,
+ "views":[{"id":string,"kind":"sheet|front|top|side|section|detail|title_block|table|unknown",
+ "region":{"x0":number,"y0":number,"x1":number,"y1":number},
+ "entity_ids":[],"parent_view_id":string|null,"label":string|null,
+ "confidence":number,"evidence":[]}],
+ "unresolved_regions":[{"id":string,
+ "region":{"x0":number,"y0":number,"x1":number,"y1":number},
+ "reason":"unvectorized_ink|ocr_unresolved|recognizer_disagreement|unsupported_content",
+ "ink_pixels":0,"resolved":false}]}
+Координаты views — глобальные пиксели полного листа. На этой стадии запрещено
+возвращать entities, evidence геометрии и relations. Не угадывай масштаб.
+Каждый вид, разрез, таблица и основная надпись должны иметь отдельный bbox.
+Если неизвестных областей нет, unresolved_regions ДОЛЖЕН быть ровно [].
+Никогда не помещай строки или null в unresolved_regions.
+Только один завершённый JSON.
+"""
+
+
+_FRAGMENT_PROMPT = """Ты — VLM стадии source-resolution graph fragment.
+Верни один завершённый JSON:
+{"tile_id":string,
+ "source_region":{"x0":number,"y0":number,"x1":number,"y1":number},
+ "ownership_region":{"x0":number,"y0":number,"x1":number,"y1":number},
+ "evidence":[{"id":string,"kind":"pixel_support|ocr|geometry_detector|symbol_detector|relation_model|constraint_check|human",
+ "region":{"x0":number,"y0":number,"x1":number,"y1":number},
+ "image_index":0,"raw_text":string|null,"model_key":string|null,"confidence":number}],
+ "entities":[{"view_id":string,"entity":CadIR-entity}],
+ "relations":[...],"unresolved_regions":[...]}
+
+Извлекай только сущности, чья опорная точка находится ВНУТРИ ownership_region.
+Crop может включать overlap вне ownership_region только как контекст. Все
+координаты entities/evidence/relations — ГЛОБАЛЬНЫЕ пиксели полного листа.
+ID каждого evidence/entity/relation должен начинаться с указанного tile_id и
+ДВОЕТОЧИЯ, например tile-00-00:ev-1. Поле bbox_2d запрещено: используй region.
+Поле text_content запрещено: используй raw_text. Один видимый объект — ровно
+одна evidence и одна entity; дубли с одинаковым region запрещены.
+Не повторяй сущности из overlap. Для text сохраняй строку дословно.
+Для dimension обязательны kind linear|diameter|radial|angular, p1/p2, text,
+value_mm/tolerance и dimension_applies_to. Для annotation обязательна
+annotation_applies_to. Не видимое или обрезанное добавляй в unresolved_regions.
+Классические OCR не используются. Только JSON без пояснений.
+"""
+
+
+def _tile_origins(length: int, tile_size: int, overlap: int) -> list[int]:
+    if length <= tile_size:
+        return [0]
+    step = tile_size - overlap
+    values = list(range(0, length - tile_size + 1, step))
+    last = length - tile_size
+    if values[-1] != last:
+        values.append(last)
+    return values
+
+
+def _ownership_bounds(origins: list[int], length: int, tile_size: int) -> list[tuple[int, int]]:
+    centers = [origin + min(tile_size, length - origin) / 2 for origin in origins]
+    boundaries = [0]
+    boundaries.extend(round((left + right) / 2) for left, right in zip(centers, centers[1:]))
+    boundaries.append(length)
+    return list(zip(boundaries, boundaries[1:]))
+
+
+def build_drawing_graph_tiles(
+    image: Any,
+    *,
+    tile_size: int = 1000,
+    overlap: int = 120,
+    max_tiles: int = 16,
+) -> list[DrawingGraphTile]:
+    """Build overlapping crops with non-overlapping deterministic ownership."""
+    import io
+
+    xs = _tile_origins(image.width, tile_size, overlap)
+    ys = _tile_origins(image.height, tile_size, overlap)
+    if len(xs) * len(ys) > max_tiles:
+        raise ValueError(
+            f"sheet requires {len(xs) * len(ys)} tiles, limit is {max_tiles}"
+        )
+    x_ownership = _ownership_bounds(xs, image.width, tile_size)
+    y_ownership = _ownership_bounds(ys, image.height, tile_size)
+    tiles: list[DrawingGraphTile] = []
+    for row, y in enumerate(ys):
+        for column, x in enumerate(xs):
+            x1 = min(x + tile_size, image.width)
+            y1 = min(y + tile_size, image.height)
+            buffer = io.BytesIO()
+            image.crop((x, y, x1, y1)).save(buffer, format="PNG")
+            tiles.append(DrawingGraphTile(
+                tile_id=f"tile-{row:02d}-{column:02d}",
+                image_bytes=buffer.getvalue(),
+                source_region=SourceRegion(x0=x, y0=y, x1=x1, y1=y1),
+                ownership_region=SourceRegion(
+                    x0=x_ownership[column][0],
+                    y0=y_ownership[row][0],
+                    x1=x_ownership[column][1],
+                    y1=y_ownership[row][1],
+                ),
+            ))
+    return tiles
+
+
+def _entity_anchor(entity: Entity) -> Point:
+    if isinstance(entity, Segment):
+        return Point(x=(entity.p1.x + entity.p2.x) / 2, y=(entity.p1.y + entity.p2.y) / 2)
+    if isinstance(entity, (Circle, Arc)):
+        return entity.center
+    if isinstance(entity, Polyline):
+        return entity.points[len(entity.points) // 2]
+    if isinstance(entity, TextEntity):
+        return entity.position
+    if isinstance(entity, DimensionEntity):
+        return Point(x=(entity.p1.x + entity.p2.x) / 2, y=(entity.p1.y + entity.p2.y) / 2)
+    if isinstance(entity, HatchRegion):
+        return Point(
+            x=sum(point.x for point in entity.boundary) / len(entity.boundary),
+            y=sum(point.y for point in entity.boundary) / len(entity.boundary),
+        )
+    return entity.position
+
+
+def _inside(region: SourceRegion, point: Point) -> bool:
+    return region.x0 <= point.x < region.x1 and region.y0 <= point.y < region.y1
+
+
+def assemble_drawing_graph_fragments(
+    *,
+    source: DrawingGraphSource,
+    layout: DrawingGraphLayout,
+    fragments: list[DrawingGraphFragment],
+    reader_manifest: dict[str, Any],
+) -> EngineeringDrawingGraph:
+    """Deterministically assemble validated bounded fragments without guessing."""
+    views = {view.id: view.model_copy(deep=True) for view in layout.views}
+    evidence: list[DrawingGraphEvidence] = []
+    entities: list[Entity] = []
+    relations: list[DrawingGraphRelation] = []
+    unresolved = [item.model_copy(deep=True) for item in layout.unresolved_regions]
+    seen_ids: set[str] = set()
+    for fragment in fragments:
+        prefix = fragment.tile_id + ":"
+        for collection in (fragment.evidence, fragment.relations):
+            for item in collection:
+                if not item.id.startswith(prefix):
+                    raise ValueError(f"{item.id} does not use tile prefix {prefix}")
+                if item.id in seen_ids:
+                    raise ValueError(f"duplicate staged graph id: {item.id}")
+                seen_ids.add(item.id)
+        evidence.extend(item.model_copy(deep=True) for item in fragment.evidence)
+        relations.extend(item.model_copy(deep=True) for item in fragment.relations)
+        for observation in fragment.entities:
+            entity = observation.entity
+            if not entity.id.startswith(prefix):
+                raise ValueError(f"{entity.id} does not use tile prefix {prefix}")
+            if entity.id in seen_ids:
+                raise ValueError(f"duplicate staged graph id: {entity.id}")
+            if observation.view_id not in views:
+                raise ValueError(
+                    f"fragment {fragment.tile_id} references unknown view {observation.view_id}"
+                )
+            if not _inside(fragment.ownership_region, _entity_anchor(entity)):
+                raise ValueError(
+                    f"entity {entity.id} anchor lies outside tile ownership region"
+                )
+            seen_ids.add(entity.id)
+            entities.append(entity.model_copy(deep=True))
+            views[observation.view_id].entity_ids.append(entity.id)
+        unresolved.extend(item.model_copy(deep=True) for item in fragment.unresolved_regions)
+    if not entities:
+        raise ValueError("staged graph contains no entities")
+    return EngineeringDrawingGraph(
+        source=source,
+        scale_mm_per_px=layout.scale_mm_per_px,
+        scale_source=layout.scale_source,
+        sheet=layout.sheet.model_copy(deep=True),
+        evidence=evidence,
+        views=list(views.values()),
+        entities=entities,
+        relations=relations,
+        unresolved_regions=unresolved,
+        reader_manifest=reader_manifest,
+    )
+
+
 async def verify_graph_evidence_with_vlm(
     image_bytes: bytes,
     graph: EngineeringDrawingGraph,
@@ -679,6 +933,11 @@ async def verify_graph_evidence_with_vlm(
     checks: list[VlmEvidenceCheck] = []
     verifier_models: list[str] = []
     reader_model = str(graph.reader_manifest.get("model") or "") or None
+    reader_models = {
+        str(model) for model in (graph.reader_manifest.get("models") or []) if model
+    }
+    if reader_model and not reader_models:
+        reader_models.add(reader_model)
     for entity in textual[:max_checks]:
         evidence_id = entity.evidence[0]
         item = evidence[evidence_id]
@@ -719,6 +978,7 @@ async def verify_graph_evidence_with_vlm(
             thinking=False,
             metadata={
                 "contract": "vlm-graph-evidence-verifier-v1",
+                "num_predict": 1024,
                 "entity_id": entity.id,
                 "evidence_id": evidence_id,
             },
@@ -754,7 +1014,7 @@ async def verify_graph_evidence_with_vlm(
     complete = complete and exact_checks == len(textual)
     independent = not textual or (
         bool(verifier_models)
-        and all(model != reader_model for model in verifier_models)
+        and all(model not in reader_models for model in verifier_models)
     )
     return VlmGraphEvidenceReport(
         reader_model=reader_model,
@@ -882,6 +1142,237 @@ async def read_drawing_graph_attempt(
             validation_errors=validation_errors,
             reader_manifest=reader_manifest,
         )
+
+
+def _validation_errors(exc: Exception, *, stage: str) -> list[dict[str, Any]]:
+    if hasattr(exc, "json"):
+        import json
+
+        errors = json.loads(exc.json(include_url=False, include_input=False))
+    else:
+        errors = [{"type": "stage_validation_failed", "msg": str(exc)[:1000]}]
+    for error in errors:
+        error["loc"] = [stage, *list(error.get("loc") or [])]
+    return errors
+
+
+async def read_drawing_graph_staged_attempt(
+    image_bytes: bytes,
+    *,
+    router: Any | None = None,
+    confidential: bool = True,
+    source_kind: Literal["scan", "photo", "pdf_page", "import"] = "scan",
+    page_index: int = 0,
+) -> DrawingGraphReadAttempt:
+    """Read layout and bounded source-resolution fragments in separate VLM calls."""
+    import base64
+    import io
+    import json
+
+    from PIL import Image
+
+    from app.ai.schemas import AIRequest, AITask, ChatMessage
+
+    if router is None:
+        from app.ai.router import ai_router
+
+        router = ai_router
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        tiles = build_drawing_graph_tiles(image)
+    except Exception as exc:  # noqa: BLE001
+        errors = _validation_errors(exc, stage="source")
+        return DrawingGraphReadAttempt(
+            raw_sha256=hashlib.sha256(b"").hexdigest(),
+            validation_errors=errors,
+        )
+
+    stage_attempts: list[dict[str, Any]] = []
+    raw_parts: list[str] = []
+    reader_models: list[str] = []
+
+    overview = image.copy()
+    overview.thumbnail((1600, 1600))
+    overview_buffer = io.BytesIO()
+    overview.save(overview_buffer, format="PNG")
+    layout_request = AIRequest(
+        task=AITask.CAD_DRAWING_GRAPH_LAYOUT,
+        messages=[ChatMessage(
+            role="user",
+            content=(
+                _LAYOUT_PROMPT
+                + f"\nПОЛНЫЙ ЛИСТ: {image.width}x{image.height}px. "
+                + f"OVERVIEW: {overview.width}x{overview.height}px."
+            ),
+        )],
+        images=[base64.b64encode(overview_buffer.getvalue()).decode()],
+        confidential=confidential,
+        allow_cloud=False,
+        thinking=False,
+        metadata={"contract": "drawing-graph-layout-v1", "num_predict": 2048},
+    )
+    layout_raw = ""
+    try:
+        response = await router.run(layout_request)
+        layout_raw = response.text or ""
+        raw_parts.append(layout_raw)
+        parsed = _parse_graph_json(layout_raw)
+        if not parsed:
+            raise ValueError("layout output does not contain valid JSON")
+        layout = DrawingGraphLayout.model_validate(parsed)
+        reader_models.append(response.model)
+        stage_attempts.append({
+            "stage": "layout",
+            "task": AITask.CAD_DRAWING_GRAPH_LAYOUT.value,
+            "model": response.model,
+            "provider": response.provider.value,
+            "raw_sha256": hashlib.sha256(layout_raw.encode()).hexdigest(),
+            "parsed_payload": parsed,
+            "validation_errors": [],
+        })
+    except Exception as exc:  # noqa: BLE001
+        errors = _validation_errors(exc, stage="layout")
+        stage_attempts.append({
+            "stage": "layout",
+            "raw_sha256": hashlib.sha256(layout_raw.encode()).hexdigest(),
+            "validation_errors": errors,
+        })
+        combined = "\n\n--- stage ---\n\n".join(raw_parts)
+        return DrawingGraphReadAttempt(
+            raw_text=combined,
+            raw_sha256=hashlib.sha256(combined.encode()).hexdigest(),
+            validation_errors=errors,
+            stage_attempts=stage_attempts,
+        )
+
+    view_contract = [
+        {
+            "id": view.id,
+            "kind": view.kind,
+            "region": view.region.model_dump(mode="json"),
+            "label": view.label,
+        }
+        for view in layout.views
+    ]
+    fragments: list[DrawingGraphFragment] = []
+    for tile in tiles:
+        prompt = (
+            _FRAGMENT_PROMPT
+            + "\nTILE_ID: "
+            + tile.tile_id
+            + "\nSOURCE_REGION: "
+            + json.dumps(tile.source_region.model_dump(mode="json"))
+            + "\nOWNERSHIP_REGION: "
+            + json.dumps(tile.ownership_region.model_dump(mode="json"))
+            + "\nKNOWN_VIEWS: "
+            + json.dumps(view_contract, ensure_ascii=False)
+        )
+        request = AIRequest(
+            task=AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ,
+            messages=[ChatMessage(role="user", content=prompt)],
+            images=[base64.b64encode(tile.image_bytes).decode()],
+            confidential=confidential,
+            allow_cloud=False,
+            thinking=False,
+            metadata={
+                "contract": "drawing-graph-fragment-v1",
+                "num_predict": 6144,
+                "tile_id": tile.tile_id,
+                "source_region": tile.source_region.model_dump(mode="json"),
+                "ownership_region": tile.ownership_region.model_dump(mode="json"),
+            },
+        )
+        fragment_raw = ""
+        try:
+            response = await router.run(request)
+            fragment_raw = response.text or ""
+            raw_parts.append(fragment_raw)
+            parsed = _parse_graph_json(fragment_raw)
+            if not parsed:
+                raise ValueError("fragment output does not contain valid JSON")
+            parsed["tile_id"] = tile.tile_id
+            parsed["source_region"] = tile.source_region.model_dump(mode="json")
+            parsed["ownership_region"] = tile.ownership_region.model_dump(mode="json")
+            fragment = DrawingGraphFragment.model_validate(parsed)
+            for evidence in fragment.evidence:
+                if not (
+                    tile.source_region.x0 <= evidence.region.x0 < evidence.region.x1 <= tile.source_region.x1
+                    and tile.source_region.y0 <= evidence.region.y0 < evidence.region.y1 <= tile.source_region.y1
+                ):
+                    raise ValueError(
+                        f"evidence {evidence.id} lies outside tile source region"
+                    )
+            fragments.append(fragment)
+            if response.model not in reader_models:
+                reader_models.append(response.model)
+            stage_attempts.append({
+                "stage": "fragment",
+                "tile_id": tile.tile_id,
+                "task": AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value,
+                "model": response.model,
+                "provider": response.provider.value,
+                "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
+                "parsed_payload": parsed,
+                "validation_errors": [],
+            })
+        except Exception as exc:  # noqa: BLE001
+            errors = _validation_errors(exc, stage=f"fragment:{tile.tile_id}")
+            stage_attempts.append({
+                "stage": "fragment",
+                "tile_id": tile.tile_id,
+                "raw_sha256": hashlib.sha256(fragment_raw.encode()).hexdigest(),
+                "validation_errors": errors,
+            })
+            combined = "\n\n--- stage ---\n\n".join(raw_parts)
+            return DrawingGraphReadAttempt(
+                raw_text=combined,
+                raw_sha256=hashlib.sha256(combined.encode()).hexdigest(),
+                validation_errors=errors,
+                reader_manifest={"models": reader_models},
+                stage_attempts=stage_attempts,
+            )
+
+    source = DrawingGraphSource(
+        image_width=image.width,
+        image_height=image.height,
+        kind=source_kind,
+        page_index=page_index,
+        sha256=hashlib.sha256(image_bytes).hexdigest(),
+    )
+    reader_manifest = {
+        "task": "cad_drawing_graph_staged_read",
+        "model": " + ".join(reader_models),
+        "models": reader_models,
+        "contract": "engineering-drawing-graph-staged-v2",
+        "layout_task": AITask.CAD_DRAWING_GRAPH_LAYOUT.value,
+        "fragment_task": AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value,
+        "tiles": len(tiles),
+    }
+    combined = "\n\n--- stage ---\n\n".join(raw_parts)
+    try:
+        graph = assemble_drawing_graph_fragments(
+            source=source,
+            layout=layout,
+            fragments=fragments,
+            reader_manifest=reader_manifest,
+        )
+    except Exception as exc:  # noqa: BLE001
+        errors = _validation_errors(exc, stage="assembly")
+        return DrawingGraphReadAttempt(
+            raw_text=combined,
+            raw_sha256=hashlib.sha256(combined.encode()).hexdigest(),
+            validation_errors=errors,
+            reader_manifest=reader_manifest,
+            stage_attempts=stage_attempts,
+        )
+    return DrawingGraphReadAttempt(
+        graph=graph,
+        raw_text=combined,
+        raw_sha256=hashlib.sha256(combined.encode()).hexdigest(),
+        parsed_payload=graph.model_dump(mode="json"),
+        reader_manifest=reader_manifest,
+        stage_attempts=stage_attempts,
+    )
 
 
 async def read_drawing_graph(
