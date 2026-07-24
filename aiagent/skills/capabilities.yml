@@ -512,7 +512,20 @@ capabilities:
       документам, счетам, памяти агента, поставщикам. Используй когда
       нужно найти что-то по смыслу запроса, а не по точным фильтрам.
       Также преобразует естественный язык в SQL-запросы и выполняет
-      внешний web-поиск через настроенный backend provider.
+      web-поиск в интернете. action=web ищет через настроенный движок
+      (по умолчанию self-hosted SearXNG — агрегирует Google/Bing/DuckDuckGo/
+      Yandex, без ключей). action=browse открывает конкретный URL в headless-
+      браузере со stealth-режимом (рендерит JS, проходит базовую анти-бот
+      защиту) и возвращает читаемый текст страницы, при screenshot=true —
+      ещё и скриншот для VLM-анализа. Типовой поток web research: web (найти
+      ссылки) → browse (открыть и прочитать нужную страницу).
+      action=research — глубокое исследование ОДНИМ вызовом: ищет сразу по
+      нескольким формулировкам (queries), открывает и читает НЕСКОЛЬКО
+      источников (HTML и PDF-каталоги/даташиты), собирает их вместе и, при
+      publish=true, публикует отчёт на рабочий стол (workspace-блок). Используй
+      research вместо остановки на первом результате — когда нужен полный
+      анализ, сравнение поставщиков, подбор по каталогам. Затем сам напиши
+      вывод/сравнение по собранным источникам.
     path: /api/agent/cap/search
     method: POST
     gate_actions: []
@@ -521,10 +534,32 @@ capabilities:
       properties:
         action:
           type: string
-          description: "hybrid | nl | nl_to_query | web | explain | similar | saved_queries"
+          description: "hybrid | nl | nl_to_query | web | browse | research | explain | similar | saved_queries"
         query:
           type: string
           description: "Поисковый запрос на естественном языке или web-запрос"
+        queries:
+          type: array
+          items:
+            type: string
+          description: "Для action=research: несколько формулировок для широкого (вложенного) охвата"
+        max_sources:
+          type: integer
+          description: "Для action=research: сколько источников открыть и прочитать (1-12)"
+        publish:
+          type: boolean
+          description: "Для action=research: опубликовать собранный отчёт на рабочий стол"
+        urls:
+          type: array
+          items:
+            type: string
+          description: "Для action=research: заранее известные URL (напр. ссылка на PDF-каталог)"
+        url:
+          type: string
+          description: "Для action=browse: URL страницы, которую нужно открыть и прочитать"
+        screenshot:
+          type: boolean
+          description: "Для action=browse: вернуть скриншот отрендеренной страницы (base64 PNG)"
         limit:
           type: integer
           description: "Количество результатов для web/hybrid поиска"

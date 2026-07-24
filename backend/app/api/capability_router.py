@@ -179,6 +179,15 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "nl":            ("POST", "/api/search/nl",                                 []),
         "nl_to_query":   ("POST", "/api/search/nl-to-query",                        []),
         "web":           ("POST", "/api/web-search/query",                          []),
+        # Open a specific URL and read it like a human (headless Chromium +
+        # stealth): JS renders, basic bot walls clear. Returns readable text
+        # (and optionally a screenshot) for the agent to reason over.
+        "browse":        ("POST", "/api/web-search/fetch",                          []),
+        # Deep research in one call: search several angles, open and read many
+        # sources (HTML + PDF catalogs), collate them, and optionally publish a
+        # report to the workspace desktop. Use this instead of stopping at the
+        # first result.
+        "research":      ("POST", "/api/web-search/research",                       []),
         "explain":       ("POST", "/api/memory/explain",                            []),
         "similar":       ("GET",  "/api/search/similar/{entity_type}/{entity_id}",  ["entity_type", "entity_id"]),
         "saved_queries": ("GET",  "/api/search/saved-queries",                      []),

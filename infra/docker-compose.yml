@@ -24,6 +24,16 @@ x-backend-env: &backend-env
   # when unreachable (NEURAL_UNAVAILABLE).
   TECHNICAL_VECTORIZER_URL: ${TECHNICAL_VECTORIZER_URL:-http://technical-vectorizer:8091}
   CAD_KERNEL_URL: ${CAD_KERNEL_URL:-http://cad-kernel:8092}
+  # Self-hosted web search + human-like browsing. Default engine is the
+  # keyless SearXNG metasearch service; the browser sidecar renders pages
+  # like a real user. All overridable at runtime from /settings/web-search.
+  WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-searxng}
+  WEB_SEARCH_ENDPOINT: ${WEB_SEARCH_ENDPOINT:-http://searxng:8080/search}
+  WEB_SEARCH_API_KEY: ${WEB_SEARCH_API_KEY:-}
+  WEB_SEARCH_FALLBACK_PROVIDER: ${WEB_SEARCH_FALLBACK_PROVIDER:-}
+  WEB_SEARCH_FALLBACK_ENDPOINT: ${WEB_SEARCH_FALLBACK_ENDPOINT:-}
+  WEB_SEARCH_FALLBACK_API_KEY: ${WEB_SEARCH_FALLBACK_API_KEY:-}
+  WEB_BROWSER_URL: ${WEB_BROWSER_URL:-http://web-browser:8093}
   OLLAMA_MODEL_REASONING: ${OLLAMA_MODEL_REASONING:-qwen3.5:9b}
   OLLAMA_MODEL_OCR: ${OLLAMA_MODEL_OCR:-gemma4:e4b}
   APP_ENV: ${APP_ENV:-development}
@@ -344,6 +354,62 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
+    networks:
+      - app
+
+  # === Web Search (self-hosted metasearch) ===
+  # SearXNG aggregates public engines (Google/Bing/DuckDuckGo/Yandex/…) and
+  # returns JSON with no API keys and no third-party SaaS. Internal-only; the
+  # backend calls http://searxng:8080/search?format=json.
+  searxng:
+    image: searxng/searxng:latest
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-${APP_SECRET_KEY:-dev-secret-key}}
+      SEARXNG_BASE_URL: "http://searxng:8080/"
+      UWSGI_WORKERS: "2"
+      UWSGI_THREADS: "4"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null 'http://localhost:8080/healthz' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app
+
+  # === Web Browser (human-like page fetcher) ===
+  # Headless Chromium with stealth patches (patchright): renders JavaScript,
+  # hides automation fingerprints, clears basic bot walls. Returns readable
+  # text + optional screenshot. Internal-only; backend reads
+  # http://web-browser:8093/fetch. The ONLY browsing egress point.
+  web-browser:
+    build:
+      context: ./web-browser
+      dockerfile: Dockerfile
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 512
+    shm_size: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8093/health', timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
     networks:
       - app
 

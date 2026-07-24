@@ -1,0 +1,48 @@
+# SearXNG configuration for the self-hosted agent web-search backend.
+# Metasearch: aggregates public engines (Google/Bing/DuckDuckGo/Yandex/…) and
+# returns JSON. No API keys, no third-party SaaS. Internal-only service.
+use_default_settings: true
+
+general:
+  instance_name: "AI Workspace Search"
+  # Do not leak an admin contact / donation page in an internal instance.
+  donation_url: false
+  contact_url: false
+
+server:
+  # Overridden at runtime by SEARXNG_SECRET (see docker-compose). Must be set.
+  secret_key: "change-me-in-env"
+  # We only ever call it from the backend over the internal network.
+  bind_address: "0.0.0.0:8080"
+  base_url: false
+  image_proxy: false
+  # Allow the backend to call the JSON API.
+  limiter: false
+  public_instance: false
+  method: "GET"
+
+search:
+  # JSON is what the backend adapter consumes; keep html for manual debugging.
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "ru"
+
+ui:
+  static_use_hash: true
+
+# Trim the default engine set to fast, reliable, keyless general-web sources.
+# (Engines not listed here inherit SearXNG defaults via use_default_settings.)
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: yandex
+    disabled: false
+  - name: wikipedia
+    disabled: false

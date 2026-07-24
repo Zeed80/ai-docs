@@ -1,0 +1,10 @@
+fastapi==0.115.*
+uvicorn==0.34.*
+pydantic==2.*
+# patchright: drop-in Playwright with anti-detection patches (navigator.webdriver,
+# CDP leak fixes, realistic fingerprint) so pages load like a real browser.
+patchright==1.49.*
+# Readable text extraction from rendered HTML.
+trafilatura==1.12.*
+# PDF catalog / datasheet text extraction (supplier catalogs are often PDFs).
+pymupdf==1.24.*
