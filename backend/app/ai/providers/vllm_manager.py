@@ -191,7 +191,13 @@ async def _docker_find_container(service_name: str) -> str | None:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://localhost", timeout=5.0
         ) as client:
-            r = await client.get("/containers/json", params={"filters": filters})
+            # all=true is required: a profile-gated ML server is usually STOPPED
+            # between activations, and Docker's default /containers/json lists
+            # only running containers. Without it activate could not restart a
+            # stopped vllm-server — it would report the service as "not found".
+            r = await client.get(
+                "/containers/json", params={"filters": filters, "all": "true"}
+            )
             if r.status_code == 200:
                 containers = r.json()
                 if containers:
@@ -224,11 +230,90 @@ async def _wait_vllm_healthy(url: str, timeout: int = 180) -> bool:
     return False
 
 
+async def _is_healthy(base: str) -> bool:
+    """Single-shot /health probe (no polling)."""
+    if not base:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{base.rstrip('/')}/health")
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
+async def ensure_server_running() -> dict:
+    """Start the vLLM server (with its currently-configured model) if it isn't
+    already healthy. Used when a generic vLLM entry is assigned as a provider so
+    the server comes up automatically. No-op if already running."""
+    cfg = load_vllm_config()
+    base = str(cfg.get("url", "")).rstrip("/")
+    if await _is_healthy(base):
+        return {"status": "already_running"}
+    service_name = os.environ.get("VLLM_SERVICE_NAME", "vllm-server")
+    container_id = await _docker_find_container(service_name)
+    if not container_id:
+        return {"status": "not_found"}
+    await _docker_restart_container(container_id)
+    healthy = await _wait_vllm_healthy(base)
+    return {"status": "started" if healthy else "start_timeout"}
+
+
+async def ensure_model_active(model_path: str) -> dict:
+    """Idempotent auto-start used when a vLLM model is assigned as a provider.
+
+    Loads ``model_path`` and (re)starts the vLLM server ONLY when it isn't
+    already serving that exact model healthily — so re-applying an assignment
+    that didn't change the effective model never disrupts an in-flight server.
+    """
+    cfg = load_vllm_config()
+    base = str(cfg.get("url", "")).rstrip("/")
+    if cfg.get("model") == model_path and await _is_healthy(base):
+        return {"status": "already_active", "model": model_path}
+    return await activate_model(model_path)
+
+
+# Backend view of the vllm-server's /models/.active_model marker. The vllm_models
+# volume is mounted as /vllm-models in the backend and /models in vllm-server, so
+# a file written here is read by the container's entrypoint on (re)start — the
+# same pattern llama.cpp uses. This is what makes runtime model switching (incl.
+# switching to a vision HF repo) actually take effect, since the container reads
+# the model from this file in preference to the deploy-time VLLM_MODEL env.
+_VLLM_ACTIVE_MODEL_FILE = _VLLM_MODELS_DIR / ".active_model"
+
+
+def _vllm_backend_to_server_path(model: str) -> str:
+    """Translate a backend-visible local path to the vllm-server's mount view.
+
+    Local downloads live in /vllm-models (backend) == /models (server). A shared
+    llama.cpp GGUF (/llamacpp-models/...) is mounted at the same path in both, and
+    a HuggingFace repo id (no leading slash) is passed through untouched."""
+    try:
+        p = Path(model)
+        if str(p).startswith(str(_VLLM_MODELS_DIR)):
+            return "/models/" + str(p.relative_to(_VLLM_MODELS_DIR))
+    except Exception:  # noqa: BLE001
+        pass
+    return model
+
+
 async def activate_model(model_path: str) -> dict:
-    """Set a new model path and restart the vLLM container."""
+    """Set a new model and restart the vLLM container.
+
+    Writes the model to the /models/.active_model marker (read by the entrypoint
+    on start) so a restart actually loads it, and mirrors it into the config for
+    the UI. HuggingFace repo ids pass through; local paths are translated to the
+    server's mount view."""
     cfg = load_vllm_config()
     cfg["model"] = model_path
     save_vllm_config(cfg)
+    try:
+        _VLLM_ACTIVE_MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _VLLM_ACTIVE_MODEL_FILE.write_text(
+            _vllm_backend_to_server_path(model_path), encoding="utf-8"
+        )
+    except Exception as exc:  # noqa: BLE001 — fall back to env-configured model
+        logger.warning("vllm_active_model_write_failed", error=str(exc)[:120])
 
     service_name = os.environ.get("VLLM_SERVICE_NAME", "vllm-server")
     container_id = await _docker_find_container(service_name)
@@ -247,6 +332,163 @@ async def activate_model(model_path: str) -> dict:
         "model": model_path,
         "message": "vLLM restarted and healthy." if healthy else "vLLM restart timed out — check logs.",
     }
+
+
+# ---------------------------------------------------------------------------
+# vLLM engine version / image update (pull a new image + recreate the container)
+# ---------------------------------------------------------------------------
+
+_VLLM_IMAGE_REPO = "vllm/vllm-openai"
+
+
+def _normalize_image_ref(ref: str) -> str:
+    """Accept a bare tag ("v0.25.1") or a full "repo:tag" and return "repo:tag".
+
+    A bare tag is attached to the official vllm/vllm-openai repo. A value that
+    already names a repo (contains "/") is used as-is (custom mirrors allowed).
+    """
+    ref = (ref or "").strip().lstrip(":")
+    if not ref:
+        raise ValueError("empty image reference")
+    if any(c.isspace() for c in ref):
+        raise ValueError("image reference must not contain whitespace")
+    if "/" not in ref:  # bare tag → official repo
+        return f"{_VLLM_IMAGE_REPO}:{ref}"
+    return ref if ":" in ref.rsplit("/", 1)[-1] else f"{ref}:latest"
+
+
+async def _docker_get_json(path: str) -> dict:
+    transport = httpx.AsyncHTTPTransport(uds=_DOCKER_SOCK)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost", timeout=30.0) as client:
+        r = await client.get(path)
+        r.raise_for_status()
+        return r.json()
+
+
+async def get_vllm_image_status() -> dict:
+    """Current vLLM container image, persisted target, and running state."""
+    service_name = os.environ.get("VLLM_SERVICE_NAME", "vllm-server")
+    current_image = None
+    running = False
+    if Path(_DOCKER_SOCK).exists():
+        cid = await _docker_find_container(service_name)
+        if cid:
+            try:
+                info = await _docker_get_json(f"/containers/{cid}/json")
+                current_image = info.get("Config", {}).get("Image")
+                running = bool(info.get("State", {}).get("Running"))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("vllm_image_status_failed", error=str(exc)[:120])
+    return {
+        "current_image": current_image,
+        "configured_image": load_vllm_config().get("image"),
+        "default_image": os.environ.get("VLLM_IMAGE", f"{_VLLM_IMAGE_REPO}:v0.25.1"),
+        "repo": _VLLM_IMAGE_REPO,
+        "running": running,
+        "docker_available": Path(_DOCKER_SOCK).exists(),
+    }
+
+
+async def pull_image(image_ref: str) -> None:
+    """Pull an image via the Docker Engine API, draining the progress stream."""
+    repo, _, tag = image_ref.rpartition(":")
+    transport = httpx.AsyncHTTPTransport(uds=_DOCKER_SOCK)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost", timeout=None) as client:
+        async with client.stream(
+            "POST", "/images/create", params={"fromImage": repo, "tag": tag}
+        ) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                raise RuntimeError(f"image pull failed: HTTP {resp.status_code} {body[:200]!r}")
+            last = ""
+            async for line in resp.aiter_lines():
+                if line.strip():
+                    last = line
+            if '"error"' in last:
+                raise RuntimeError(f"image pull error: {last[:200]}")
+
+
+def _build_recreate_body(info: dict, image_ref: str, container_id: str) -> tuple[str, dict]:
+    """Build (container_name, create-payload) that clones an inspected container
+    onto a new image. Preserves compose labels + full runtime config so the
+    container stays compose-managed and GPU/mounts/networks are identical."""
+    name = (info.get("Name") or "").lstrip("/")
+    config = info.get("Config", {}) or {}
+    host_config = info.get("HostConfig", {}) or {}
+    networks = (info.get("NetworkSettings", {}) or {}).get("Networks", {}) or {}
+
+    # Endpoint aliases include auto-generated container-id aliases — keep only the
+    # stable ones (service name / user aliases) so the new container re-registers
+    # cleanly on the compose network.
+    endpoints: dict = {}
+    short_id = container_id[:12]
+    for net, ncfg in networks.items():
+        aliases = [a for a in ((ncfg or {}).get("Aliases") or []) if a and a != short_id]
+        endpoints[net] = {"Aliases": aliases} if aliases else {}
+
+    create_body = {
+        "Hostname": config.get("Hostname"),
+        "User": config.get("User"),
+        "Env": config.get("Env"),
+        "Cmd": config.get("Cmd"),
+        "Entrypoint": config.get("Entrypoint"),
+        "Labels": config.get("Labels"),  # compose labels preserved → still managed
+        "WorkingDir": config.get("WorkingDir"),
+        "ExposedPorts": config.get("ExposedPorts"),
+        "Volumes": config.get("Volumes"),
+        "Healthcheck": config.get("Healthcheck"),
+        "StopSignal": config.get("StopSignal"),
+        "Image": image_ref,
+        "HostConfig": host_config,
+        "NetworkingConfig": {"EndpointsConfig": endpoints},
+    }
+    return name, {k: v for k, v in create_body.items() if v is not None}
+
+
+async def recreate_with_image(image_ref: str, *, start: bool = True) -> dict:
+    """Recreate the vllm-server container on a new image, preserving its full
+    config (env, mounts, GPU device requests, networks) AND its compose labels
+    so `docker compose` keeps managing it. The image must already be pulled."""
+    service_name = os.environ.get("VLLM_SERVICE_NAME", "vllm-server")
+    cid = await _docker_find_container(service_name)
+    if not cid:
+        return {"status": "not_found", "message": f"container '{service_name}' not found"}
+    info = await _docker_get_json(f"/containers/{cid}/json")
+    name, create_body = _build_recreate_body(info, image_ref, cid)
+
+    transport = httpx.AsyncHTTPTransport(uds=_DOCKER_SOCK)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost", timeout=120.0) as client:
+        await client.post(f"/containers/{cid}/stop", params={"t": "10"})
+        rm = await client.delete(f"/containers/{cid}", params={"force": "true"})
+        if rm.status_code >= 400:
+            raise RuntimeError(f"remove old container failed: HTTP {rm.status_code}")
+        cr = await client.post("/containers/create", params={"name": name}, json=create_body)
+        if cr.status_code >= 400:
+            raise RuntimeError(f"create container failed: HTTP {cr.status_code} {cr.text[:300]}")
+        new_id = cr.json()["Id"]
+        if start:
+            st = await client.post(f"/containers/{new_id}/start")
+            if st.status_code >= 400:
+                raise RuntimeError(f"start container failed: HTTP {st.status_code} {st.text[:200]}")
+    return {"status": "recreated", "container": new_id[:12], "image": image_ref, "started": start}
+
+
+async def update_vllm_image(image_ref: str, *, start: bool = True) -> dict:
+    """Pull `image_ref`, recreate vllm-server on it, and persist the tag so the
+    autostart/activate flow keeps using it. Returns a status dict."""
+    if not Path(_DOCKER_SOCK).exists():
+        return {"status": "no_docker", "message": "Docker socket not available"}
+    image_ref = _normalize_image_ref(image_ref)
+    await pull_image(image_ref)
+    result = await recreate_with_image(image_ref, start=start)
+    if result.get("status") == "recreated":
+        cfg = load_vllm_config()
+        cfg["image"] = image_ref
+        save_vllm_config(cfg)
+        if start:
+            healthy = await _wait_vllm_healthy(str(cfg.get("url", "")).rstrip("/"))
+            result["healthy"] = healthy
+    return {**result, "image": image_ref}
 
 
 # ---------------------------------------------------------------------------

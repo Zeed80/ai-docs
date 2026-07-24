@@ -455,6 +455,64 @@ def _overlay_spec_annotations(ir, spec: dict) -> None:
     ir.source.image_height = int(y + height)
 
 
+def _verify_spec_dimensions(ir, spec: dict) -> dict:
+    """Advisory reuse of the graph verifier's dimension-vs-geometry idea.
+
+    A from-spec redraw builds its geometry FROM the stated numbers, so this is
+    a guard against drafter bugs (a dropped section, a wrong scale) rather than
+    a pixel gate: for every dimension the spec stated, does SOME drafted feature
+    actually measure that value? Kinds are pooled together deliberately — a
+    shaft diameter renders as a vertical step segment, not a circle, so keying
+    the check on entity type would cry wolf. Non-blocking; surfaced for review.
+    """
+    import math
+
+    from app.ai.cad_ir.schema import Arc, Circle, Segment
+
+    scale = ir.scale
+    if not scale or scale <= 0:
+        return {"status": "scale_unknown", "checked": 0, "matched": 0, "unmatched": []}
+
+    measured: list[float] = []
+    for entity in ir.entities:
+        if isinstance(entity, Segment):
+            measured.append(
+                math.hypot(entity.p2.x - entity.p1.x, entity.p2.y - entity.p1.y) * scale
+            )
+        elif isinstance(entity, (Circle, Arc)):
+            measured.append(2.0 * entity.radius * scale)
+
+    stated: list[float] = []
+    for body in [spec.get("main_view"), *(spec.get("parts") or [])]:
+        if not isinstance(body, dict):
+            continue
+        for group in ("outer", "bore"):
+            for section in body.get(group) or []:
+                for key in ("diameter_mm", "length_mm"):
+                    value = section.get(key) if isinstance(section, dict) else None
+                    if isinstance(value, (int, float)) and value > 0:
+                        stated.append(float(value))
+        profile = body.get("profile")
+        if isinstance(profile, dict):
+            for key in ("width_mm", "height_mm", "diameter_mm", "thickness_mm"):
+                value = profile.get(key)
+                if isinstance(value, (int, float)) and value > 0:
+                    stated.append(float(value))
+
+    def _match(value: float) -> bool:
+        tol = max(0.5, abs(value) * 0.02)
+        return any(abs(m - value) <= tol for m in measured)
+
+    unique = sorted({round(value, 2) for value in stated})
+    unmatched = [value for value in unique if not _match(value)]
+    return {
+        "status": "ok" if not unmatched else "mismatch",
+        "checked": len(unique),
+        "matched": len(unique) - len(unmatched),
+        "unmatched": [f"{value:g} мм" for value in unmatched[:12]],
+    }
+
+
 def _drop_in_glyph_segments(entities: list, text_entities: list) -> list:
     """Remove glyph-stroke segments that lie inside a text box.
 
@@ -791,11 +849,21 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 }
                 await db.commit()
 
-        # Explicitly separate the graph-first source-sheet workflow ("spec")
-        # from the auxiliary free-text parametric workflow ("text_spec").
+        # Three non-trace drafting workflows, kept explicitly separate:
+        #   "spec"      — the production «По описанию» path: Model 1 (VLM)
+        #                 READS the source image into a structured spec,
+        #                 Model 2 (deterministic-first) DRAFTS clean geometry.
+        #                 A redraw, not a pixel copy — no image-domain gap.
+        #   "graph"     — OPT-IN experiment: a whole-sheet VLM coordinate
+        #                 reader emits a full EngineeringDrawingGraph, gated
+        #                 fail-closed by independent verifiers. Not wired to
+        #                 the everyday user button: local VLMs do not yet emit
+        #                 accurate global pixel coordinates for a full sheet,
+        #                 so real sheets currently fail the gate by design.
+        #   "text_spec" — draft from a free-text ТЗ (no source image).
         # "trace" remains the established pixel path below.
-        if vectorize_method in ("spec", "text_spec"):
-            if vectorize_method == "spec":
+        if vectorize_method in ("spec", "graph", "text_spec"):
+            if vectorize_method == "graph":
                 from app.ai.cad_drawing_graph import (
                     DrawingGraphDraftError,
                     draft_drawing_graph,
@@ -892,7 +960,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     upload_file(content, normalized_path, "image/png")
                     gen.params = {
                         **(gen.params or {}),
-                        "vectorize_method": "spec",
+                        "vectorize_method": "graph",
                         "description_mode": False,
                         "drawing_graph": graph.model_dump(mode="json"),
                         "drawing_graph_read_attempt": graph_attempt.model_dump(
@@ -928,6 +996,91 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     "entities": len(graph_ir.entities),
                     "relations": len(graph_ir.relations),
                     "method": "drawing_graph",
+                }
+
+            # Production «По описанию»: Model 1 (VLM) reads the source IMAGE
+            # into a structured spec; Model 2 (deterministic-first) drafts
+            # clean parametric geometry from it. Understanding, not pixel
+            # localisation — this is the path that produced a clean redraw of
+            # detal_126 where raster tracing gave a mess. It is a redraw, so it
+            # is honestly a review_required draft, not a pixel-exact copy.
+            if vectorize_method == "spec":
+                from app.ai.cad_recognize.spec_vectorize import (
+                    draft_from_spec_async,
+                    read_drawing_spec,
+                )
+                from app.ai.schemas import AITask
+                from app.ai.task_routing import get_routing_for
+
+                if not content:
+                    return await _fail("Метод «по описанию»: нужен исходный скан/фото.")
+                spec = await read_drawing_spec(content)
+                if not spec:
+                    return await _fail(
+                        "Метод «по описанию»: модель чтения чертежа не вернула "
+                        "валидный спек. Проверьте назначение CAD reader (Настройки → "
+                        "Модели → Оцифровка) и исходный лист."
+                    )
+                unresolved = [str(i) for i in spec.get("unresolved", []) if str(i)]
+                if unresolved:
+                    return await _fail(
+                        "Метод «по описанию»: построение остановлено — не определены "
+                        "обязательные данные: " + ", ".join(unresolved[:8])
+                    )
+                draft_model = get_routing_for(AITask.CAD_SPEC_DRAFT).primary
+                spec_sheet = str(params.get("sheet_format") or "").upper() or None
+                spec_landscape = str(
+                    params.get("sheet_orientation") or "landscape"
+                ).lower() != "portrait"
+                spec_ir = await draft_from_spec_async(
+                    spec,
+                    draft_model=draft_model,
+                    sheet_format=spec_sheet,
+                    landscape=spec_landscape,
+                )
+                if spec_ir is None:
+                    return await _fail(
+                        "Метод «по описанию»: назначенный чертёжник не смог построить "
+                        "поддерживаемую геометрию для этого профиля. Попробуйте другую "
+                        "модель в Настройки → Модели → Оцифровка или трассировку."
+                    )
+                spec_ir.source.generation_id = generation_id
+                _overlay_spec_annotations(spec_ir, spec)
+                spec_ir.digitization_status = "review_required"
+                # Reuse the graph verifier's dimension-vs-geometry consistency
+                # check as an advisory layer: does the drafted geometry actually
+                # measure the numbers the spec stated? Non-blocking (a redraw is
+                # not held to the pixel gate); mismatches are surfaced for review.
+                spec_dim_check = _verify_spec_dimensions(spec_ir, spec)
+                validate_ir(spec_ir)
+                async with factory() as db:
+                    gen = await db.get(ImageGeneration, gen_uuid)
+                    if not gen or gen.status == ImageGenStatus.cancelled:
+                        return {"cancelled": True}
+                    normalized_path = (
+                        f"image-gen/{gen.owner_sub or 'shared'}/{gen.id}_normalized.png"
+                    )
+                    upload_file(content, normalized_path, "image/png")
+                    gen.params = {
+                        **(gen.params or {}),
+                        "vectorize_method": "spec",
+                        "description_mode": False,
+                        "spec": spec,
+                        "spec_dimension_check": spec_dim_check,
+                        "cad_pipeline_manifest": pipeline_manifest,
+                        "normalized_source_path": normalized_path,
+                    }
+                    await cad_ir_store.save_revision(
+                        db, gen, spec_ir, origin="auto", created_by=owner_sub,
+                        keep_raster=None, thin_px=2, thick_px=4,
+                    )
+                    gen.status = ImageGenStatus.done
+                    job = await studio_queue.job_for_generation(db, gen_uuid)
+                    await studio_queue.mark_job_done(db, job)
+                    await db.commit()
+                return {
+                    "ok": True, "generation_id": generation_id,
+                    "entities": len(spec_ir.entities), "method": "spec",
                 }
 
             from app.ai.cad_recognize.spec_vectorize import (

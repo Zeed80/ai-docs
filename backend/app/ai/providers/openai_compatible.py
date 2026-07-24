@@ -21,6 +21,17 @@ def _inference_params(request: AIRequest, default_temperature: float = 0.2) -> d
     """Extract inference parameters from request metadata."""
     params = (request.metadata or {}).get("inference_params") or {}
     result: dict[str, Any] = {"temperature": params.get("temperature", default_temperature)}
+    # Cap output length. Unlike Ollama (which generates freely by default), an
+    # OpenAI-compatible server left without max_tokens can truncate the response
+    # to a handful of tokens — a structured-JSON read (spec / graph) then comes
+    # back as an unparseable stub. Honor an explicit budget, else a generous
+    # default big enough for a full spec.
+    max_tokens = (
+        params.get("max_tokens")
+        or (request.metadata or {}).get("num_predict")
+        or 4096
+    )
+    result["max_tokens"] = int(max_tokens)
     if "top_p" in params:
         result["top_p"] = params["top_p"]
     if "top_k" in params:
@@ -113,7 +124,16 @@ class OpenAICompatibleProvider(AIProvider):
         started = time.perf_counter()
         content: list[dict[str, Any]] = []
         for image in request.images:
-            content.append({"type": "image_url", "image_url": {"url": image}})
+            # request.images carry raw base64 PNG (the Ollama convention, which is
+            # lenient). Strict OpenAI-compatible servers (vLLM, llama.cpp) require a
+            # real URL — reject raw base64 with "URL must be HTTP, data or file URL"
+            # — so wrap it in a data URI unless it already is one.
+            url = (
+                image
+                if image.startswith(("data:", "http://", "https://", "file://"))
+                else f"data:image/png;base64,{image}"
+            )
+            content.append({"type": "image_url", "image_url": {"url": url}})
         content.append({"type": "text", "text": request.prompt or request.input_text or ""})
         payload = {
             "model": model,

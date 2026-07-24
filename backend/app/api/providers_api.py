@@ -558,12 +558,19 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                         vram_gb_estimate=vram,
                     )
 
-    # 2) Catalog cloud models (selectable once a key is set; not "loaded").
+    # 2) Non-loaded catalog models that are still selectable:
+    #    • cloud models (local_only False) — usable once an API key is set; and
+    #    • enabled NON-ollama local single-server providers (vLLM / llama.cpp),
+    #      whose profile-gated server may simply be stopped right now — surfacing
+    #      them makes the provider assignable, and the assignment autostart then
+    #      brings the server up (the concrete downloaded model per such server is
+    #      chosen in the Library tab, since each serves one model at a time).
+    #    A non-loaded OLLAMA model, by contrast, just isn't pulled → keep hidden.
     for key, cap in registry.models.items():
         if key in seen_keys or cap.status == ModelStatus.DISABLED:
             continue
-        if cap.local_only:
-            continue  # local models that aren't loaded are hidden
+        if cap.local_only and cap.provider == ProviderKind.OLLAMA:
+            continue
         out[key] = LiveModelOut(
             key=key, provider=cap.provider.value, provider_model=cap.provider_model,
             status=cap.status.value, modalities=sorted(m.value for m in cap.modalities),
@@ -654,7 +661,9 @@ class SlotOut(BaseModel):
     hint: str
     model: str | None              # catalog key currently shown by this response (current or draft)
     current_model: str | None = None  # catalog key actually applied right now
-    local_only: bool               # cloud models forbidden for this slot
+    local_only: bool               # EFFECTIVE: cloud forbidden for this slot right now
+    cloud_optionable: bool = False  # a confidential slot that CAN be opened to cloud
+    cloud_allowed: bool = False     # admin opted this slot into cloud models
     required_modality: str | None = None  # capability the slot needs (UI ⚠ source)
     thinking_capable: bool = False        # compatibility alias: slot + selected model support reasoning
     thinking_enabled: bool | None = None  # compatibility alias: per-assignment override
@@ -690,15 +699,10 @@ _SLOTS = [
     ("rerank", "Поиск", "Реранкинг",
      "Переранжирование результатов поиска", True),
     ("cad_spec_read", "Оцифровка", "Чтение чертежа (VLM)",
-     "Вспомогательное чтение параметрического ТЗ; не основной graph-reader", True),
-    ("cad_drawing_graph_read", "Оцифровка", "Координатный reader листа",
-     "Legacy whole-sheet coordinator; не используется staged production pipeline", True),
-    ("cad_drawing_graph_layout", "Оцифровка", "VLM разметки листа",
-     "Overview-стадия: виды, разрезы, таблицы и основная надпись без геометрии", True),
-    ("cad_drawing_graph_fragment_read", "Оцифровка", "VLM фрагментов листа",
-     "Source-resolution tiles: элементы, размеры, текст и связи в ownership-зонах", True),
-    ("cad_drawing_graph_evidence_verify", "Оцифровка", "VLM-проверка надписей",
-     "Независимое чтение source-resolution crops: текст, размеры, допуски и обозначения; без Tesseract", True),
+     "Метод «по описанию»: модель читает исходное изображение в структурный спек", True),
+    # NB: the experimental whole-sheet graph pipeline (layout / fragment /
+    # evidence-verify / legacy read) is intentionally NOT surfaced as user
+    # slots — it runs opt-in on its model_registry.yaml fallback defaults.
     ("cad_spec_draft", "Оцифровка", "Чертёжник (по описанию)",
      "Генеративная модель строит геометрию из описания (можно LoRA). "
      "Не задано → детерминированный чертёжник тел вращения", True),
@@ -715,10 +719,6 @@ _SLOT_MODALITY = {
     "embedding": "embedding",
     "rerank": "rerank",
     "cad_spec_read": "vision",
-    "cad_drawing_graph_read": "vision",
-    "cad_drawing_graph_layout": "vision",
-    "cad_drawing_graph_fragment_read": "vision",
-    "cad_drawing_graph_evidence_verify": "vision",
     "cad_spec_draft": "text",
 }
 
@@ -731,10 +731,6 @@ _SLOT_THINKING_TASKS: dict[str, list[str]] = {
     "structured_extraction": ["structured_extraction", "long_context_summarization"],
     "agent_email": ["email_drafting"],
     "agent_large": ["code_generation"],
-    "cad_drawing_graph_read": ["cad_drawing_graph_read"],
-    "cad_drawing_graph_layout": ["cad_drawing_graph_layout"],
-    "cad_drawing_graph_fragment_read": ["cad_drawing_graph_fragment_read"],
-    "cad_drawing_graph_evidence_verify": ["cad_drawing_graph_evidence_verify"],
 }
 _SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_orchestrator": ["orchestrator_disable_thinking", "worker_disable_thinking"],
@@ -784,14 +780,6 @@ def _slot_current_model(slot: str, registry) -> str | None:
         return get_routing_for(AITask.EMAIL_DRAFTING).primary
     if slot == "cad_spec_read":
         return get_routing_for(AITask.CAD_SPEC_READ).primary
-    if slot == "cad_drawing_graph_read":
-        return get_routing_for(AITask.CAD_DRAWING_GRAPH_READ).primary
-    if slot == "cad_drawing_graph_layout":
-        return get_routing_for(AITask.CAD_DRAWING_GRAPH_LAYOUT).primary
-    if slot == "cad_drawing_graph_fragment_read":
-        return get_routing_for(AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ).primary
-    if slot == "cad_drawing_graph_evidence_verify":
-        return get_routing_for(AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY).primary
     if slot == "cad_spec_draft":
         return get_routing_for(AITask.CAD_SPEC_DRAFT).primary
     if slot == "ocr_large":
@@ -845,6 +833,49 @@ class AssignmentDraftOut(BaseModel):
 
 def _slot_meta(slot: str):
     return next((s for s in _SLOTS if s[0] == slot), None)
+
+
+# ── Per-slot cloud opt-in ────────────────────────────────────────────────────
+# Confidential slots (documents / digitize / search) default to local-only so
+# invoice and drawing content never leaves the machine. An admin may explicitly
+# opt a single slot into cloud models; the effective local_only below then flips
+# to False, which both unlocks cloud in the picker AND lets the AI router allow
+# cloud for that task (routing.local_only follows the assigned model).
+_SLOT_CLOUD_KEY = "providers:slot_allow_cloud"
+
+
+def _cloud_allowed_slots() -> set[str]:
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        raw = get_sync_redis().smembers(_SLOT_CLOUD_KEY)
+        return {m.decode() if isinstance(m, bytes) else str(m) for m in (raw or set())}
+    except Exception:  # noqa: BLE001 — absence of Redis just means "no opt-in"
+        return set()
+
+
+def _set_slot_cloud_allowed(slot: str, allowed: bool) -> None:
+    from app.utils.redis_client import get_sync_redis
+
+    client = get_sync_redis()
+    if allowed:
+        client.sadd(_SLOT_CLOUD_KEY, slot)
+    else:
+        client.srem(_SLOT_CLOUD_KEY, slot)
+
+
+def _slot_base_local_only(slot: str) -> bool:
+    meta = _slot_meta(slot)
+    return bool(meta[4]) if meta else False
+
+
+def _slot_effective_local_only(slot: str, cloud_slots: set[str] | None = None) -> bool:
+    """A slot is local-only unless it is a cloud-opt-in slot the admin enabled."""
+    if not _slot_base_local_only(slot):
+        return False
+    if cloud_slots is None:
+        cloud_slots = _cloud_allowed_slots()
+    return slot not in cloud_slots
 
 
 def _slot_supports_thinking(slot: str) -> bool:
@@ -923,15 +954,26 @@ def _build_slot_out(
     registry,
     *,
     current_model: str | None | object = ...,
+    cloud_slots: set[str] | None = None,
 ) -> SlotOut:
-    """SlotOut with single-source required_modality + effective reasoning state."""
+    """SlotOut with single-source required_modality + effective reasoning state.
+
+    ``local_only`` here is the slot's BASE policy; the response reports the
+    EFFECTIVE policy (base minus any admin cloud opt-in) so the picker filters
+    correctly and can show the opt-in toggle."""
     applied = _slot_current_model(slot, registry) if current_model is ... else current_model
     thinking = _slot_thinking_state(slot, registry, model)
+    cloud_allowed = bool(local_only) and slot in (
+        cloud_slots if cloud_slots is not None else _cloud_allowed_slots()
+    )
+    effective_local_only = bool(local_only) and not cloud_allowed
     return SlotOut(
         slot=slot, group=group, label=label, hint=hint,
         model=model,
         current_model=applied,
-        local_only=local_only,
+        local_only=effective_local_only,
+        cloud_optionable=bool(local_only),
+        cloud_allowed=cloud_allowed,
         required_modality=_SLOT_MODALITY.get(slot),
         **thinking,
     )
@@ -939,6 +981,7 @@ def _build_slot_out(
 
 def _all_slots_out(model_of, registry) -> list[SlotOut]:
     """Build every SlotOut; `model_of(slot)` returns the assigned model key."""
+    cloud_slots = _cloud_allowed_slots()
     return [
         _build_slot_out(
             slot,
@@ -949,6 +992,7 @@ def _all_slots_out(model_of, registry) -> list[SlotOut]:
             model_of(slot),
             registry,
             current_model=_slot_current_model(slot, registry),
+            cloud_slots=cloud_slots,
         )
         for slot, group, label, hint, local_only in _SLOTS
     ]
@@ -980,14 +1024,6 @@ def _slot_affected(slot: str) -> list[str]:
         return [AITask.EMAIL_DRAFTING.value]
     if slot == "cad_spec_read":
         return [AITask.CAD_SPEC_READ.value]
-    if slot == "cad_drawing_graph_read":
-        return [AITask.CAD_DRAWING_GRAPH_READ.value]
-    if slot == "cad_drawing_graph_layout":
-        return [AITask.CAD_DRAWING_GRAPH_LAYOUT.value]
-    if slot == "cad_drawing_graph_fragment_read":
-        return [AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ.value]
-    if slot == "cad_drawing_graph_evidence_verify":
-        return [AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY.value]
     if slot == "cad_spec_draft":
         return [AITask.CAD_SPEC_DRAFT.value]
     if slot == "agent_orchestrator":
@@ -1128,8 +1164,12 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
     meta = _slot_meta(slot)
     if meta is None:
         raise HTTPException(400, f"Unknown slot: {slot}")
-    if meta[4] and not cap.local_only:
-        raise HTTPException(400, "Этот слот допускает только локальные модели (конфиденциально)")
+    if _slot_effective_local_only(slot) and not cap.local_only:
+        raise HTTPException(
+            400,
+            "Этот слот сейчас только для локальных моделей (конфиденциально). "
+            "Разрешите облако для этого слота, если это осознанное решение.",
+        )
 
     from app.ai.agent_config import BuiltinAgentConfigUpdate, update_builtin_agent_config
     from app.ai.assignment_groups import DocumentGroup, _mirror_ai_config, _set_primary
@@ -1197,46 +1237,6 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
                 AITask.CAD_SPEC_READ,
                 key,
                 fallback_keys=list(cad_route.fallback_chain) if cad_route else [],
-            )
-        elif slot == "cad_drawing_graph_read":
-            graph_route = registry.routes.get(AITask.CAD_DRAWING_GRAPH_READ)
-            _assign_task(
-                AITask.CAD_DRAWING_GRAPH_READ,
-                key,
-                fallback_keys=(
-                    list(graph_route.fallback_chain) if graph_route else []
-                ),
-            )
-        elif slot == "cad_drawing_graph_layout":
-            layout_route = registry.routes.get(AITask.CAD_DRAWING_GRAPH_LAYOUT)
-            _assign_task(
-                AITask.CAD_DRAWING_GRAPH_LAYOUT,
-                key,
-                fallback_keys=(
-                    list(layout_route.fallback_chain) if layout_route else []
-                ),
-            )
-        elif slot == "cad_drawing_graph_fragment_read":
-            fragment_route = registry.routes.get(
-                AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ
-            )
-            _assign_task(
-                AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ,
-                key,
-                fallback_keys=(
-                    list(fragment_route.fallback_chain) if fragment_route else []
-                ),
-            )
-        elif slot == "cad_drawing_graph_evidence_verify":
-            evidence_route = registry.routes.get(
-                AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY
-            )
-            _assign_task(
-                AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY,
-                key,
-                fallback_keys=(
-                    list(evidence_route.fallback_chain) if evidence_route else []
-                ),
             )
         elif slot == "cad_spec_draft":
             _set_primary(AITask.CAD_SPEC_DRAFT, key)
@@ -1351,6 +1351,108 @@ async def _apply_draft_atomic(
         raise
 
 
+# Strong refs to fire-and-forget autostart tasks so they aren't GC'd mid-flight.
+_AUTOSTART_TASKS: set = set()
+
+
+async def _autostart_assigned_provider(model_key: str, registry) -> None:
+    """Bring a lazy single-model local server up for a newly assigned model.
+
+    vLLM and llama.cpp each serve ONE model from a profile-gated container that
+    is stopped between activations; assigning such a model as a provider should
+    make it usable without a separate manual "load model" step. Best-effort:
+    Ollama is always-on and cloud models are ignored (no-op), and any failure
+    only logs — the assignment itself has already been persisted.
+    """
+    from app.ai.schemas import ProviderKind
+
+    cap = registry.models.get(model_key)
+    if cap is None:
+        return
+    try:
+        # VRAM headroom first (auto-frees resident Ollama models). A generic
+        # vLLM/llama.cpp entry has vram_gb_estimate=0, but starting the server
+        # still claims most of the GPU (gpu-memory-utilization × total), so use a
+        # per-kind floor — otherwise the pre-check is a no-op and the server
+        # crashes on startup with "Free memory < desired GPU memory utilization"
+        # while a big Ollama model is still resident (observed live 2026-07-23).
+        _VRAM_FLOOR = {ProviderKind.VLLM: 18.0, ProviderKind.LLAMACPP: 8.0}
+        vram = float(getattr(cap, "vram_gb_estimate", 0) or 0.0)
+        vram = max(vram, _VRAM_FLOOR.get(cap.provider, 0.0))
+        if vram > 0:
+            try:
+                from app.ai import gpu_manager
+
+                await gpu_manager.ensure_vram_for(
+                    cap.provider.value, vram, auto_free=True
+                )
+            except Exception as exc:  # noqa: BLE001 — pre-check is advisory
+                logger.warning("assignment_autostart_vram_failed", error=str(exc)[:160])
+
+        if cap.provider == ProviderKind.VLLM:
+            from app.ai.providers import vllm_manager
+
+            pm = str(cap.provider_model or "")
+            # vLLM serves one model under a fixed served-name; a generic entry
+            # ("local"/"") just needs the server up, while a concrete HF-repo
+            # entry additionally sets that model before (re)starting.
+            if pm and pm != "local":
+                res = await vllm_manager.ensure_model_active(pm)
+            else:
+                res = await vllm_manager.ensure_server_running()
+            logger.info(
+                "assignment_autostart", provider="vllm",
+                model=pm, status=res.get("status"),
+            )
+        elif cap.provider == ProviderKind.LLAMACPP:
+            from app.ai.providers import llamacpp_manager
+
+            pm = str(cap.provider_model or "")
+            if pm.endswith(".gguf"):
+                # A concrete GGUF was assigned → load exactly that file + start.
+                res = await llamacpp_manager.activate_model({"path": pm})
+                status = getattr(res, "status", None)
+            else:
+                # Generic llama.cpp entry → just ensure the server is up with its
+                # currently-active GGUF (chosen via the model-management UI).
+                res = await llamacpp_manager.ensure_server_running()
+                status = res.get("status") if isinstance(res, dict) else None
+            logger.info("assignment_autostart", provider="llamacpp", status=status)
+
+        # Give the freshly (re)started server a full idle window so the on-demand
+        # idle reaper (server_lifecycle.stop_idle_servers) doesn't stop it before
+        # a request ever arrives — a start triggered by assignment records no use.
+        try:
+            from app.ai import server_lifecycle
+
+            server_lifecycle.mark_used(cap.provider.value)
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as exc:  # noqa: BLE001 — never fail an assignment on autostart
+        logger.warning("assignment_autostart_failed", model=model_key, error=str(exc)[:200])
+
+
+def _schedule_provider_autostart(model_keys, registry) -> None:
+    """Fire-and-forget autostart for assigned models. Bringing an ML server up
+    can take minutes, so it must never block the assignment response. At most one
+    model per lazy kind (vLLM/llama.cpp) is started — a single-model server can
+    only serve one, so the last assigned model of each kind wins without racing
+    container restarts."""
+    import asyncio
+
+    from app.ai.schemas import ProviderKind
+
+    per_kind: dict = {}
+    for model_key in model_keys:
+        cap = registry.models.get(model_key) if model_key else None
+        if cap is not None and cap.provider in (ProviderKind.VLLM, ProviderKind.LLAMACPP):
+            per_kind[cap.provider] = model_key
+    for model_key in per_kind.values():
+        task = asyncio.create_task(_autostart_assigned_provider(model_key, registry))
+        _AUTOSTART_TASKS.add(task)
+        task.add_done_callback(_AUTOSTART_TASKS.discard)
+
+
 @router.get("/assignment-draft", response_model=AssignmentDraftOut, dependencies=_admin)
 async def get_assignment_draft(db: AsyncSession = Depends(get_db)) -> AssignmentDraftOut:
     registry = _registry()
@@ -1403,6 +1505,7 @@ async def apply_assignment_draft(
     )
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
+    _schedule_provider_autostart([d.new_model for d in diff], after_registry)
     return AssignmentDraftOut(
         slots=_all_slots_out(lambda s: _slot_current_model(s, after_registry), after_registry),
         diff=diff,
@@ -1450,6 +1553,7 @@ async def rollback_assignment_revision(
     )
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
+    _schedule_provider_autostart([d.new_model for d in diff], after_registry)
     return AssignmentDraftOut(
         slots=_all_slots_out(lambda s: _slot_current_model(s, after_registry), after_registry),
         diff=diff,
@@ -1471,8 +1575,31 @@ async def set_slot(
     await _persist_slot_durable(db, slot)
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
+    _schedule_provider_autostart([payload.model], registry)
     key = payload.model
     return {"ok": True, "slot": slot, "model": key}
+
+
+class SlotCloudWrite(BaseModel):
+    allowed: bool
+
+
+@router.patch("/slots/{slot}/allow-cloud", dependencies=_admin)
+async def set_slot_allow_cloud(slot: str, payload: SlotCloudWrite) -> dict:
+    """Opt a confidential slot into (or out of) cloud models — protected setting.
+
+    Only meaningful for a base-local-only slot: enabling it lets the picker offer
+    cloud models for this slot and lets the AI router send this task's content to
+    a cloud provider once a cloud model is assigned. Non-confidential slots always
+    allow cloud, so this is a no-op there.
+    """
+    meta = _slot_meta(slot)
+    if meta is None:
+        raise HTTPException(404, f"Unknown slot: {slot}")
+    if not _slot_base_local_only(slot):
+        return {"ok": True, "slot": slot, "cloud_allowed": True, "note": "slot already allows cloud"}
+    _set_slot_cloud_allowed(slot, payload.allowed)
+    return {"ok": True, "slot": slot, "cloud_allowed": payload.allowed}
 
 
 class SlotThinkingWrite(BaseModel):

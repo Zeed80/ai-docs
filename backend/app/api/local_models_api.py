@@ -599,7 +599,9 @@ async def start_model_download(provider: ProviderName, body: DownloadRequest) ->
             "status": "pending", "progress_bytes": 0, "total_bytes": 0,
             "error": None, "repo_id": body.repo_id, "filename": body.filename,
         }
-        asyncio.create_task(lc_download_model(dl_id, url, body.filename, body.source))
+        asyncio.create_task(
+            lc_download_model(dl_id, url, body.filename, body.source, repo_id=body.repo_id)
+        )
         return {"download_id": dl_id, "message": "Download started"}
 
     if provider == "vllm":
@@ -608,6 +610,39 @@ async def start_model_download(provider: ProviderName, body: DownloadRequest) ->
         return {"download_id": did}
 
     raise HTTPException(status_code=400, detail=f"Download not supported for provider: {provider}")
+
+
+# ---------------------------------------------------------------------------
+# vLLM engine version / update
+# ---------------------------------------------------------------------------
+
+class VllmUpdateRequest(BaseModel):
+    image: str = Field(..., description="Bare tag ('v0.25.1') or full 'repo:tag'")
+    start: bool = True
+
+
+@router.get("/vllm/image-status")
+async def vllm_image_status() -> dict:
+    """Current vLLM container image + persisted target + running state."""
+    from app.ai.providers.vllm_manager import get_vllm_image_status
+
+    return await get_vllm_image_status()
+
+
+@router.post("/vllm/update")
+async def vllm_update(body: VllmUpdateRequest) -> dict:
+    """Pull a new vLLM image and recreate the vllm-server container on it.
+
+    Recreation preserves the compose labels + full config (env, GPU, volumes,
+    networks), so the container stays compose-managed. The chosen tag is
+    persisted. Heavy: pulling an image is multi-GB; with start=True the engine
+    reloads its model afterward (GPU)."""
+    from app.ai.providers.vllm_manager import update_vllm_image
+
+    try:
+        return await update_vllm_image(body.image, start=body.start)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Обновление vLLM не удалось: {exc}")
 
 
 @router.get("/{provider}/download/{download_id}/stream")

@@ -232,6 +232,24 @@ models:
     speed_score: 0.0
     notes: "Active llama.cpp model (GGUF). Model path and context size configured via llamacpp settings. Vision works only if the GGUF has an mmproj. Enable after loading a GGUF model."
 
+  vllm_active:
+    provider: "vllm"
+    provider_model: "local"
+    # vLLM serves one model under --served-model-name "local"; the actual model
+    # is set via VLLM_MODEL at deploy and the Library tab. Assigning this makes a
+    # slot use the vLLM server (and autostarts it); vision depends on the served
+    # model. Kept selectable even while the server is stopped.
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 16384
+    supports_structured_output: true
+    supports_tool_calling: false
+    local_only: true
+    vram_gb_estimate: 0.0
+    quality_score: 0.0
+    speed_score: 0.0
+    notes: "Active vLLM model. Served as 'local'; concrete model via VLLM_MODEL / Library. Enable after a vLLM model is configured."
+
   local_embedding_ollama:
     provider: "ollama"
     provider_model: "nomic-embed-text"

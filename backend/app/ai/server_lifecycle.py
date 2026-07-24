@@ -190,6 +190,19 @@ async def ensure_running(provider: str, *, wait: bool = True) -> bool:
     return ok
 
 
+async def _is_healthy(provider: str) -> bool:
+    """One-shot /health probe (no polling)."""
+    url = _health_url(provider)
+    if not url:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(url)
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
 async def stop_server(provider: str) -> bool:
     if provider not in MANAGED_PROVIDERS:
         return False
@@ -214,6 +227,14 @@ async def stop_idle_servers(threshold_seconds: float | None = None) -> list[str]
             mark_used(provider)
             continue
         if now - used >= threshold:
+            # A container in "running" state may still be LOADING its model (a big
+            # vision model takes minutes and bumps no last_used until it serves a
+            # request). Reaping it then SIGKILLs the load (exit 137). Only reap a
+            # server that is actually serving (healthy); a not-yet-healthy one is
+            # starting up, so reset its clock and leave it alone this round.
+            if not await _is_healthy(provider):
+                mark_used(provider)
+                continue
             if await stop_server(provider):
                 stopped.append(provider)
     if stopped:

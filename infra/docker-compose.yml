@@ -538,9 +538,13 @@ services:
   # Designed for RTX 3090 24 GB; adjust VLLM_GPU_MEMORY_UTILIZATION for other GPUs.
   # Compatible formats: Safetensors, AWQ, GPTQ (download via /settings/models).
   vllm-server:
-    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.22.0}
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.25.1}
     profiles:
       - embedded-vllm
+    # vLLM's API server and EngineCore worker exchange tensors over /dev/shm; the
+    # 64 MB Docker default is far too small and the worker is SIGKILLed (exit 137)
+    # during model load. Give it real shared memory (verified live 2026-07-23).
+    shm_size: "16gb"
     # Reachable internally as http://vllm-server:8000. Host port published only in
     # dev (docker-compose.dev.yml) — never exposed in production.
     volumes:
@@ -548,10 +552,21 @@ services:
       # Shared read-only access to llama.cpp GGUF models.
       # vLLM ≥0.6 can load GGUF directly: set VLLM_QUANTIZATION=gguf when activating.
       - llamacpp_models:/llamacpp-models:ro
+      # Persist HuggingFace downloads across container recreations so a vision
+      # model isn't re-downloaded (~16 GB) every time the engine is updated.
+      - vllm_hf_cache:/root/.cache/huggingface
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        MDL=$${VLLM_MODEL:-}
+        # .active_model (written by backend/activate_model to the shared vllm_models
+        # volume) takes priority over the env var, so the UI can switch the model —
+        # including to a self-contained vision HF repo — without recreating the container.
+        if [ -f /models/.active_model ]; then
+          MDL=$(cat /models/.active_model)
+          echo "Loading model from .active_model: $$MDL"
+        else
+          MDL=$${VLLM_MODEL:-}
+        fi
         # A model is "local" if it starts with /. HuggingFace IDs (e.g. Qwen/Qwen2.5-1.5B-Instruct)
         # do NOT start with / — vLLM downloads them automatically.
         IS_LOCAL=false
@@ -584,6 +599,23 @@ services:
           fi
           QFLAG=""
           [ -n "$$QUANT" ] && QFLAG="--quantization $$QUANT"
+          # KV-cache quantization → more tokens fit in VRAM (bigger context /
+          # more concurrency). Default fp8 = 2x KV capacity, negligible quality
+          # loss, no throughput hit (vLLM's recommended default). For MAX cache
+          # set VLLM_KV_CACHE_DTYPE=turboquant_4bit_nc (~4x) or turboquant_3bit_nc
+          # (~5x) — bigger cache but ~40-52% slower. Set "auto" to disable.
+          KVDT=$${VLLM_KV_CACHE_DTYPE:-fp8}
+          KVFLAG=""
+          [ -n "$$KVDT" ] && [ "$$KVDT" != "auto" ] && KVFLAG="--kv-cache-dtype $$KVDT"
+          # fp8/turboquant KV cache isn't reliably supported alongside GGUF
+          # weight quantization — drop it there so the server still boots.
+          if [ "$$QUANT" = "gguf" ] && [ -n "$$KVFLAG" ]; then
+            echo "GGUF weights: disabling KV-cache quantization ($$KVDT)"; KVFLAG=""
+          fi
+          # Prefix caching reuses KV across requests that share a prefix (system
+          # prompts, RAG context, few-shot) — a large win for document workloads.
+          PCFLAG=""
+          [ "$${VLLM_ENABLE_PREFIX_CACHING:-true}" = "true" ] && PCFLAG="--enable-prefix-caching"
           exec python3 -m vllm.entrypoints.openai.api_server \
             --model $$MDL \
             --host 0.0.0.0 \
@@ -593,6 +625,8 @@ services:
             --dtype $${VLLM_DTYPE:-bfloat16} \
             --tensor-parallel-size $${VLLM_TENSOR_PARALLEL:-1} \
             $$QFLAG \
+            $$KVFLAG \
+            $$PCFLAG \
             --served-model-name local
         fi
     healthcheck:
@@ -610,6 +644,10 @@ services:
       VLLM_DTYPE: ${VLLM_DTYPE:-bfloat16}
       VLLM_QUANTIZATION: ${VLLM_QUANTIZATION:-}
       VLLM_TENSOR_PARALLEL: ${VLLM_TENSOR_PARALLEL:-1}
+      # KV-cache quantization: fp8 (2x, default) | turboquant_4bit_nc (~4x) |
+      # turboquant_3bit_nc (~5x, slower) | auto (off). See entrypoint notes.
+      VLLM_KV_CACHE_DTYPE: ${VLLM_KV_CACHE_DTYPE:-fp8}
+      VLLM_ENABLE_PREFIX_CACHING: ${VLLM_ENABLE_PREFIX_CACHING:-true}
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
       # Required for CUDA 13.x host compatibility
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
@@ -969,6 +1007,7 @@ volumes:
   ollama_data:
   llamacpp_models:
   vllm_models:
+  vllm_hf_cache:
   comfyui_models:
   comfyui_output:
   cad_vectorizer_models:

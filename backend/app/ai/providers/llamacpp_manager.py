@@ -248,7 +248,13 @@ async def _docker_find_container(service_name: str) -> str | None:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://localhost", timeout=5.0
         ) as client:
-            r = await client.get("/containers/json", params={"filters": filters})
+            # all=true is required: a profile-gated ML server is usually STOPPED
+            # between activations, and Docker's default /containers/json lists
+            # only running containers. Without it activate could not restart a
+            # stopped llama-server — it would report the service as "not found".
+            r = await client.get(
+                "/containers/json", params={"filters": filters, "all": "true"}
+            )
             if r.status_code == 200:
                 containers = r.json()
                 if containers:
@@ -284,6 +290,32 @@ async def _wait_llama_healthy(url: str, timeout: int = 120) -> bool:
             pass
         await asyncio.sleep(2.0)
     return False
+
+
+async def ensure_server_running() -> dict:
+    """Idempotent auto-start used when a llama.cpp model is assigned as a provider.
+
+    Starts llama-server (with its currently-active GGUF, chosen via the model
+    management activate flow) only when it isn't already healthy. No-op if the
+    server is already up, so re-applying an assignment never interrupts it.
+    """
+    base = _get_llamacpp_base_url().rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{base}/health")
+            if r.status_code == 200:
+                return {"status": "already_running"}
+    except Exception:
+        pass
+    if not Path(_DOCKER_SOCK).exists():
+        return {"status": "no_docker"}
+    service_name = os.environ.get("LLAMACPP_SERVICE_NAME", "llama-server")
+    container_id = await _docker_find_container(service_name)
+    if not container_id:
+        return {"status": "not_found"}
+    await _docker_restart_container(container_id)
+    healthy = await _wait_llama_healthy(base)
+    return {"status": "started" if healthy else "start_timeout"}
 
 
 # ── Status & Config ───────────────────────────────────────────────────────────
@@ -838,7 +870,58 @@ async def stream_download(dl_id: str):
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
-async def _download_model(dl_id: str, url: str, dest_name: str, source: str = "huggingface") -> None:
+async def _list_repo_gguf_files(repo_id: str, source: str) -> list[str]:
+    """List the .gguf filenames in a HuggingFace / ModelScope repo (best-effort)."""
+    try:
+        if source == "huggingface":
+            async with httpx.AsyncClient(timeout=20, headers=_hf_headers()) as client:
+                r = await client.get(f"https://huggingface.co/api/models/{repo_id}")
+                r.raise_for_status()
+                return [s.get("rfilename", "") for s in r.json().get("siblings", [])]
+        async with httpx.AsyncClient(timeout=20, headers=_ms_headers()) as client:
+            r = await client.get(f"{MS_API}/models/{repo_id}/repo/files")
+            r.raise_for_status()
+            files = (r.json().get("Data") or {}).get("Files") or []
+            return [f.get("Path") or f.get("Name") or "" for f in files]
+    except Exception as exc:  # noqa: BLE001 — companion lookup is best-effort
+        logger.warning("repo_file_list_failed", repo=repo_id, error=str(exc)[:120])
+        return []
+
+
+async def _maybe_download_mmproj(repo_id: str | None, source: str, model_filename: str) -> None:
+    """Auto-fetch a vision model's mmproj projector alongside its main GGUF.
+
+    llama-server needs the mmproj-*.gguf companion to enable vision; its
+    entrypoint already auto-detects one lying next to the model, but the file
+    has to be present. When the same repo ships an mmproj, download it too so a
+    vision model works end-to-end from a single click. No-op for text models
+    (repo has no mmproj) and for the mmproj download itself."""
+    if not repo_id or "mmproj" in model_filename.lower():
+        return
+    files = await _list_repo_gguf_files(repo_id, source)
+    mmprojs = [f for f in files if "mmproj" in f.lower() and f.lower().endswith(".gguf")]
+    if not mmprojs:
+        return  # not a vision model / no projector shipped
+    # Prefer a higher-precision projector (f16) — projectors are small, quality
+    # matters more than size here.
+    mmprojs.sort(key=lambda f: (0 if "f16" in f.lower() else 1, f))
+    mmproj = mmprojs[0]
+    dest = _MODELS_DIR / Path(mmproj).name
+    if dest.exists():
+        return
+    if source == "huggingface":
+        url = f"https://huggingface.co/{repo_id}/resolve/main/{mmproj}"
+    else:
+        url = f"https://modelscope.cn/api/v1/models/{repo_id}/repo?FilePath={mmproj}"
+    dl_id = f"{repo_id}/{mmproj}".replace("/", "__")
+    logger.info("llamacpp_mmproj_autodownload", repo=repo_id, mmproj=mmproj)
+    await _download_model(dl_id, url, Path(mmproj).name, source)  # repo_id=None → no recursion
+
+
+async def _download_model(
+    dl_id: str, url: str, dest_name: str, source: str = "huggingface",
+    repo_id: str | None = None,
+) -> None:
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
     dest = _MODELS_DIR / dest_name
     tmp = _MODELS_DIR / f"{dest_name}.tmp"
@@ -878,6 +961,12 @@ async def _download_model(dl_id: str, url: str, dest_name: str, source: str = "h
         shutil.move(str(tmp), str(dest))
         _downloads[dl_id]["status"] = "done"
         logger.info("llamacpp_download_done", dl_id=dl_id, path=str(dest))
+        # Vision models need their mmproj projector next to the model — fetch it
+        # automatically so a single download yields a working vision model.
+        try:
+            await _maybe_download_mmproj(repo_id, source, dest_name)
+        except Exception as exc:  # noqa: BLE001 — never fail the main download
+            logger.warning("mmproj_autodownload_failed", dl_id=dl_id, error=str(exc)[:120])
     except Exception as e:
         tmp.unlink(missing_ok=True)
         _downloads[dl_id]["status"] = "error"

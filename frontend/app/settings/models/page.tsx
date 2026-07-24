@@ -529,12 +529,120 @@ function ServerConfigPanel({ provider }: { provider: "llamacpp" | "vllm" }) {
   );
 }
 
+function VllmVersionPanel() {
+  const [status, setStatus] = useState<Record<string, unknown> | null>(null);
+  const [tag, setTag] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    fetch(`${API}/api/local-models/vllm/image-status`, {
+      credentials: "include",
+    })
+      .then((r) => r.json())
+      .then(setStatus)
+      .catch(() => {});
+  }, []);
+  useEffect(() => load(), [load]);
+
+  const update = async () => {
+    const target = tag.trim();
+    if (!target) return;
+    if (
+      !confirm(
+        `Обновить vLLM до образа "${target}"?\n\nБудет скачан новый образ ` +
+          `(несколько ГБ) и пересоздан контейнер vllm-server с сохранением ` +
+          `конфигурации. Движок перезагрузит модель (GPU). Это может занять ` +
+          `несколько минут.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMsg(
+      "Скачивание образа и пересоздание контейнера — это может занять несколько минут…",
+    );
+    try {
+      const r = await fetch(`${API}/api/local-models/vllm/update`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await csrfHeaders()),
+        },
+        credentials: "include",
+        body: JSON.stringify({ image: target, start: true }),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        setMsg(
+          `Готово: ${d.image} · ${d.status}` +
+            (d.healthy === false ? " · health timeout — проверьте логи" : ""),
+        );
+        setTag("");
+        load();
+      } else {
+        setMsg(`Ошибка: ${d.detail ?? r.status}`);
+      }
+    } catch (e) {
+      setMsg(`Ошибка: ${e}`);
+    }
+    setBusy(false);
+  };
+
+  if (!status) return null;
+  const current =
+    (status.current_image as string) ||
+    (status.configured_image as string) ||
+    (status.default_image as string) ||
+    "—";
+  return (
+    <div className={card}>
+      <div className={cardH}>
+        <span className="text-sm font-medium text-slate-100">
+          vLLM — версия движка
+        </span>
+        <span className="text-xs text-slate-500">
+          pull + пересоздание контейнера
+        </span>
+      </div>
+      <div className="p-4 space-y-2 text-sm">
+        <div className="text-xs text-slate-400 font-mono break-all">
+          образ: {current} · {status.running ? "running" : "stopped"}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            className={input}
+            placeholder="напр. v0.25.1 или repo:tag"
+            value={tag}
+            onChange={(e) => setTag(e.target.value)}
+            disabled={busy}
+          />
+          <button
+            onClick={update}
+            disabled={busy || !tag.trim() || !status.docker_available}
+            className={btnPrimary}
+          >
+            {busy ? "..." : "Обновить"}
+          </button>
+        </div>
+        {msg && <div className="text-xs text-amber-300">{msg}</div>}
+        {!status.docker_available && (
+          <div className="text-xs text-red-400">
+            Docker socket недоступен — обновление невозможно.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ServersPanel() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <TokensPanel />
       <ServerConfigPanel provider="llamacpp" />
       <ServerConfigPanel provider="vllm" />
+      <VllmVersionPanel />
     </div>
   );
 }
@@ -2426,7 +2534,9 @@ interface SlotItem {
   hint: string;
   model: string | null;
   current_model?: string | null;
-  local_only: boolean;
+  local_only: boolean; // EFFECTIVE policy (base minus admin cloud opt-in)
+  cloud_optionable?: boolean; // confidential slot that can be opened to cloud
+  cloud_allowed?: boolean; // admin opted this slot into cloud models
   required_modality?: string | null; // capability the slot needs (backend = source)
   thinking_capable?: boolean; // slot supports a per-assignment reasoning toggle
   thinking_enabled?: boolean | null; // current override (null = model default)
@@ -2693,6 +2803,39 @@ function AssignmentTab() {
           : enabled
             ? "Рассуждение включено для слота"
             : "Рассуждение выключено для слота",
+      );
+      load();
+    } catch (e) {
+      alert(`Ошибка: ${e}`);
+    }
+  };
+
+  // Protected setting: opt a confidential slot into cloud models.
+  const setSlotCloud = async (slot: string, allowed: boolean) => {
+    if (
+      allowed &&
+      !confirm(
+        "Разрешить облачные модели для этого слота? Содержимое этой задачи " +
+          "(например, счета или чертежи) сможет уходить во внешний облачный " +
+          "провайдер. Это осознанное ослабление конфиденциальности.",
+      )
+    ) {
+      return;
+    }
+    try {
+      await fetch(`${API}/api/providers/slots/${slot}/allow-cloud`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await csrfHeaders()),
+        },
+        credentials: "include",
+        body: JSON.stringify({ allowed }),
+      });
+      flash(
+        allowed
+          ? "Облако разрешено для слота"
+          : "Слот снова только для локальных моделей",
       );
       load();
     } catch (e) {
@@ -2974,6 +3117,25 @@ function AssignmentTab() {
                         </div>
                       )}
                     </div>
+                    {s.cloud_optionable && (
+                      <label className="sm:col-span-2 mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                        <input
+                          type="checkbox"
+                          checked={!!s.cloud_allowed}
+                          onChange={(e) =>
+                            setSlotCloud(s.slot, e.target.checked)
+                          }
+                        />
+                        <span
+                          className={s.cloud_allowed ? "text-amber-300" : ""}
+                        >
+                          разрешить облачные модели для этого слота
+                        </span>
+                        <span className="text-slate-500">
+                          — по умолчанию только локально (конфиденциально)
+                        </span>
+                      </label>
+                    )}
                   </div>
                 );
               })}
