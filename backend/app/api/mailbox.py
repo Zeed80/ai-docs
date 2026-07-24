@@ -11,8 +11,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo
 from app.db.models import MailboxConfig
 from app.db.session import get_db
+from app.domain.admin import UserMailboxOut
 from app.utils.crypto import decrypt_password, encrypt_password
 
 router = APIRouter()
@@ -117,6 +120,41 @@ def _to_out(cfg: MailboxConfig) -> MailboxConfigOut:
         sync_error=cfg.sync_error,
         created_at=cfg.created_at,
         updated_at=cfg.updated_at,
+    )
+
+
+# ── Self-service: "my" personal mailbox ─────────────────────────────────────
+
+@router.get("/me", response_model=UserMailboxOut)
+async def get_my_mailbox(
+    current_user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserMailboxOut:
+    """The caller's own @<domain> mailbox, if an admin has provisioned one.
+
+    Personal mailboxes are provisioned by an admin (POST
+    /api/admin/users/{sub}/mailbox) — this endpoint is read-only self-service
+    for /settings to show the address, not a way to create one.
+    """
+    result = await db.execute(
+        select(MailboxConfig).where(
+            MailboxConfig.owner_sub == current_user.sub,
+            MailboxConfig.mailbox_type == "personal",
+        )
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg is None:
+        return UserMailboxOut()
+
+    from app.services.integration_config import get_mail_server_config
+
+    mail_cfg = await get_mail_server_config()
+    return UserMailboxOut(
+        address=cfg.name,
+        is_active=cfg.is_active,
+        webmail_url=mail_cfg.webmail_url,
+        last_sync_at=cfg.last_sync_at,
+        sync_error=cfg.sync_error,
     )
 
 

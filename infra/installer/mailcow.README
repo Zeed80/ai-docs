@@ -1,0 +1,112 @@
+# Почтовый сервер (Mailcow)
+
+Собственный self-hosted почтовый сервер для домена компании — не зависим от
+внешних провайдеров (Яндекс/Gmail/…). Работает **параллельно** с уже
+настроенными внешними IMAP-ящиками (`закупки`/`бухгалтерия`/`общий`,
+`frontend/components/email/mailbox-settings.tsx`) — ничего в них не трогает.
+
+Ядро — [Mailcow](https://mailcow.email/) (Postfix + Dovecot + Rspamd + ClamAV +
+SOGo webmail/календарь/контакты), развёрнутое отдельным docker-compose
+проектом рядом с основным стеком и подключённое к уже работающему Traefik
+(HTTPS/Let's Encrypt) через `Host(mail.<ваш-домен>)`.
+
+## 1. DNS (сделать ДО установки)
+
+Замените `ptsai.ru` на ваш домен, `<IP>` на публичный IP сервера:
+
+| Тип | Имя | Значение |
+|---|---|---|
+| A | `mail.ptsai.ru` | `<IP>` |
+| MX | `ptsai.ru` | `mail.ptsai.ru`, приоритет 10 |
+| PTR | (обратная зона у хостинг-провайдера) | `mail.ptsai.ru` для `<IP>` |
+| TXT (SPF) | `ptsai.ru` | `v=spf1 mx a:mail.ptsai.ru -all` |
+| TXT (DKIM) | `dkim._domainkey.ptsai.ru` | ключ из Mailcow admin UI (создаётся при добавлении домена) |
+| TXT (DMARC) | `_dmarc.ptsai.ru` | `v=DMARC1; p=quarantine; rua=mailto:postmaster@ptsai.ru` |
+| CNAME/A | `autoconfig.ptsai.ru` | `<IP>` (Thunderbird автонастройка) |
+| CNAME/A | `autodiscover.ptsai.ru` | `<IP>` (Outlook автонастройка) |
+
+**Порт 25**: убедитесь у хостинг-провайдера, что исходящий SMTP (порт 25) не
+заблокирован — иначе письма не будут доставляться внешним получателям
+(частое ограничение у облачных VPS-провайдеров).
+
+## 2. Установка
+
+```bash
+bash infra/installer/install-mailcow.sh --domain mail.ptsai.ru
+```
+
+Скрипт клонирует `mailcow-dockerized` на пинованный релиз-тег (не `master` —
+обновления только через `update-mailcow.sh`, осознанно), генерирует
+`infra/mailcow/mailcow.conf`, отключает встроенный Let's Encrypt Mailcow
+(TLS терминирует наш Traefik) и подключает вебмейл/admin/API к сети Traefik.
+
+После установки скрипт напомнит:
+
+1. Добавить `Host(mail.ptsai.ru)`-роут в `infra/traefik/prod/routes.yml.template`
+   (уже сделано в этом репозитории, шаблон `__MAIL_DOMAIN__`) — перерендерить
+   через `render_traefik_routes` (делает `install.sh`/`update.sh`
+   автоматически; либо задайте `MAIL_DOMAIN=mail.ptsai.ru` в `infra/.env`,
+   если он отличается от `mail.$TRAEFIK_DOMAIN`).
+2. Открыть на хосте порты **25/465/587/143/993/110/995** в фаерволе — они
+   публикуются Mailcow напрямую на хосте, Traefik их не проксирует (проксирует
+   только HTTPS для вебмейла/admin/autodiscover).
+3. Зайти на `https://mail.ptsai.ru`, создать домен `ptsai.ru` в admin UI,
+   опубликовать выданный DKIM TXT (см. таблицу выше), создать первые ящики.
+
+## 3. Подключение почтовых клиентов «из коробки»
+
+Любой обычный почтовый клиент — Outlook, Thunderbird, Apple Mail, K-9,
+FairEmail, стандартная почта iOS/Android — подключается вводом только
+e-mail + пароля: autodiscover/autoconfig-записи из шага 1 позволяют клиенту
+самому найти IMAP/SMTP хост, порты и TLS-режим. Ручная настройка портов не
+требуется.
+
+## 4. Обновления
+
+```bash
+infra/installer/update-mailcow.sh --check        # показать текущий/целевой тег
+infra/installer/update-mailcow.sh --yes           # обновить (бэкап → апдейт → health-check → авто-откат при сбое)
+infra/installer/update-mailcow.sh --to 2026-06a --yes
+```
+
+Тот же staged-паттерн, что и `upgrade-authentik.sh`: полный бэкап +
+целевой mysql-дамп перед шагом, `git checkout` на тег, `pull`+`up -d`,
+health-check по HTTP, автоматический откат (тег + БД) при неудаче.
+
+Опциональный systemd-таймер (только уведомляет о наличии обновлений раз в
+неделю, **не применяет** их автоматически — апгрейд инфраструктуры всегда
+осознанное действие, как и остальные protected-изменения в этом проекте):
+
+```bash
+sudo cp infra/installer/mailcow-update-check.service /etc/systemd/system/
+sudo cp infra/installer/mailcow-update-check.timer   /etc/systemd/system/
+# отредактируйте WorkingDirectory= в .service на путь к репозиторию
+sudo systemctl daemon-reload
+sudo systemctl enable --now mailcow-update-check.timer
+journalctl -u mailcow-update-check.service   # текущий/целевой тег
+```
+
+## 5. Бэкапы
+
+Уже интегрировано в общий контур: `infra/installer/backup.sh` архивирует
+данные Mailcow (mysql/vmail/crypt/redis/rspamd/postfix) вместе с остальным
+стеком, если `infra/mailcow` установлен; `infra/installer/restore.sh`
+восстанавливает их автоматически из того же архива.
+
+## 6. Интеграция с AI-агентом (опционально, без изменений кода)
+
+Чтобы AI-агент («Света») читал/писал новый `@ptsai.ru`-ящик, заведите его как
+обычный `MailboxConfig` через `/settings` в приложении (imap.host/smtp.host =
+`mail.ptsai.ru`, порты 993/465, TLS) — код уже использует только стандартные
+`imaplib`/`smtplib`, изменения бэкенда/фронтенда не нужны.
+
+## Чеклист верификации
+
+- [ ] `https://mail.ptsai.ru` открывается с валидным сертификатом (SOGo/admin UI)
+- [ ] Домен `ptsai.ru` создан в admin UI, DKIM TXT опубликован
+- [ ] Проверка доставляемости (mail-tester.com или аналог): SPF/DKIM/DMARC/PTR зелёные
+- [ ] Письмо с внешнего адреса доходит до `@ptsai.ru`-ящика и обратно
+- [ ] Thunderbird/Outlook настраиваются только по email+паролю (autodiscover)
+- [ ] Новый `MailboxConfig` в `/settings` подхватывается `run_triage`/`poll_imap_mailbox`
+- [ ] `update-mailcow.sh --to <тег> --yes` на тестовом апдейте — бэкап/health-check/откат работают
+- [ ] `backup.sh` + `restore.sh` на отдельном окружении — данные Mailcow восстанавливаются

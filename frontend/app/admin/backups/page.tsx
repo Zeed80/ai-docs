@@ -14,6 +14,27 @@ interface BackupInfo {
   created_utc: string;
 }
 
+interface JobStatus {
+  id: string;
+  kind: "backup" | "restore";
+  status: "running" | "done" | "error";
+  step: string | null;
+  target: string | null;
+  started_utc: string;
+  finished_utc: string | null;
+  error: string | null;
+  result: {
+    // backup
+    name?: string;
+    size_bytes?: number;
+    components?: string[];
+    // restore
+    restored?: string[];
+    skipped?: string[];
+    note?: string;
+  } | null;
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} Б`;
   const units = ["КБ", "МБ", "ГБ", "ТБ"];
@@ -54,10 +75,12 @@ function BackupsContent() {
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [job, setJob] = useState<JobStatus | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(
     null,
   );
   const fileRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -72,9 +95,68 @@ function BackupsContent() {
     }
   }, []);
 
+  // Poll a background job until it finishes, then surface the result. Backup and
+  // restore run server-side detached from the request, so this survives a page
+  // reload (see the mount effect that resumes an active job).
+  const pollJob = useCallback(
+    async (id: string) => {
+      try {
+        const r = await fetch(`${BASE}/jobs/${id}`, { credentials: "include" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j: JobStatus = await r.json();
+        setJob(j);
+        if (j.status === "running") {
+          pollRef.current = setTimeout(() => void pollJob(id), 2000);
+          return;
+        }
+        setJob(null);
+        setBusy(null);
+        if (j.status === "done" && j.result) {
+          const res = j.result;
+          if (j.kind === "backup") {
+            setMsg({
+              kind: "ok",
+              text: `Бэкап создан: ${res.name} (${formatBytes(res.size_bytes ?? 0)}, компоненты: ${(res.components ?? []).join(", ")})`,
+            });
+          } else {
+            setMsg({
+              kind: "ok",
+              text: `Восстановлено: ${(res.restored ?? []).join(", ") || "—"}${res.skipped?.length ? `; пропущено: ${res.skipped.join(", ")}` : ""}. ${res.note ?? ""}`,
+            });
+          }
+          await refresh();
+        } else {
+          setMsg({
+            kind: "err",
+            text: `Ошибка ${j.kind === "backup" ? "создания бэкапа" : "восстановления"}: ${j.error ?? "неизвестно"}`,
+          });
+        }
+      } catch (e) {
+        setJob(null);
+        setBusy(null);
+        setMsg({ kind: "err", text: `Потерян контакт с задачей: ${e}` });
+      }
+    },
+    [refresh],
+  );
+
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    // Resume an in-flight job after a page reload instead of showing nothing.
+    fetch(`${BASE}/jobs/active`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: JobStatus | null) => {
+        if (j && j.status === "running") {
+          setJob(j);
+          setBusy(j.kind === "backup" ? "create" : `restore:${j.target}`);
+          pollRef.current = setTimeout(() => void pollJob(j.id), 1500);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, [refresh, pollJob]);
 
   const createBackup = async () => {
     setBusy("create");
@@ -85,17 +167,16 @@ function BackupsContent() {
         credentials: "include",
         headers: csrfHeaders(),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const res = await r.json();
-      setMsg({
-        kind: "ok",
-        text: `Бэкап создан: ${res.name} (${formatBytes(res.size_bytes)}, компоненты: ${res.components.join(", ")})`,
-      });
-      await refresh();
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error(d?.detail || `HTTP ${r.status}`);
+      }
+      const j: JobStatus = await r.json();
+      setJob(j);
+      pollRef.current = setTimeout(() => void pollJob(j.id), 1500);
     } catch (e) {
-      setMsg({ kind: "err", text: `Ошибка создания бэкапа: ${e}` });
-    } finally {
       setBusy(null);
+      setMsg({ kind: "err", text: `Ошибка создания бэкапа: ${e}` });
     }
   };
 
@@ -123,16 +204,16 @@ function BackupsContent() {
         `${BASE}/backups/${encodeURIComponent(name)}/restore`,
         { method: "POST", credentials: "include", headers: csrfHeaders() },
       );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const res = await r.json();
-      setMsg({
-        kind: "ok",
-        text: `Восстановлено: ${res.restored.join(", ") || "—"}${res.skipped.length ? `; пропущено: ${res.skipped.join(", ")}` : ""}. ${res.note}`,
-      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error(d?.detail || `HTTP ${r.status}`);
+      }
+      const j: JobStatus = await r.json();
+      setJob(j);
+      pollRef.current = setTimeout(() => void pollJob(j.id), 1500);
     } catch (e) {
-      setMsg({ kind: "err", text: `Ошибка восстановления: ${e}` });
-    } finally {
       setBusy(null);
+      setMsg({ kind: "err", text: `Ошибка восстановления: ${e}` });
     }
   };
 
@@ -186,15 +267,17 @@ function BackupsContent() {
       <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={createBackup}
-          disabled={busy === "create"}
+          disabled={busy !== null}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
         >
-          {busy === "create" ? "Создаю…" : "Создать бэкап"}
+          {busy === "create"
+            ? `Создаю…${job?.step ? ` ${job.step}` : ""}`
+            : "Создать бэкап"}
         </button>
 
         <button
           onClick={() => fileRef.current?.click()}
-          disabled={busy === "upload"}
+          disabled={busy !== null}
           className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
         >
           {busy === "upload" ? "Загружаю…" : "Загрузить архив"}
@@ -223,6 +306,17 @@ function BackupsContent() {
         сервере; их можно скачать, восстановить или загрузить с другого сервера
         (перенос базы).
       </p>
+
+      {job && job.status === "running" && (
+        <Banner kind="ok">
+          <span className="inline-flex items-center gap-2">
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            {job.kind === "backup" ? "Создание бэкапа" : "Восстановление"}{" "}
+            выполняется…{job.step ? ` ${job.step}.` : ""} Операция идёт на
+            сервере — можно закрыть вкладку и вернуться позже.
+          </span>
+        </Banner>
+      )}
 
       {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
 
@@ -273,16 +367,16 @@ function BackupsContent() {
                       </button>
                       <button
                         onClick={() => restoreBackup(b.name)}
-                        disabled={busy === `restore:${b.name}`}
+                        disabled={busy !== null}
                         className="rounded border border-amber-500 px-2 py-1 text-xs text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950 disabled:opacity-50"
                       >
                         {busy === `restore:${b.name}`
-                          ? "Восстанавливаю…"
+                          ? `Восстанавливаю…${job?.step ? ` ${job.step}` : ""}`
                           : "Восстановить"}
                       </button>
                       <button
                         onClick={() => deleteBackup(b.name)}
-                        disabled={busy === `delete:${b.name}`}
+                        disabled={busy !== null}
                         className="rounded border border-destructive px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
                       >
                         Удалить

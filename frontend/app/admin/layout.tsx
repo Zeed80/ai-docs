@@ -16,6 +16,7 @@ const ADMIN_TABS = [
   { href: "/admin/api-keys", label: "API-ключи" },
   { href: "/admin/integrations", label: "Интеграции" },
   { href: "/admin/backups", label: "Бэкапы" },
+  { href: "/admin/updates", label: "Обновления" },
   { href: "/admin/system", label: "Система" },
 ] as const;
 

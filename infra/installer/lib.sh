@@ -235,11 +235,13 @@ render_traefik_routes() {
   local tpl="$root/infra/traefik/prod/routes.yml.template"
   local out="$root/infra/traefik/prod/routes.yml"
   [ -f "$tpl" ] || { warn "Шаблон роутов не найден: $tpl"; return 0; }
-  local domain push
+  local domain push mail
   domain="$(get_env_var "$env_file" TRAEFIK_DOMAIN)"
   domain="${domain:-localhost}"
   push="push.${domain}"
-  sed -e "s/__PUSH_DOMAIN__/${push}/g" -e "s/__DOMAIN__/${domain}/g" "$tpl" > "$out"
+  mail="$(get_env_var "$env_file" MAIL_DOMAIN)"
+  mail="${mail:-mail.${domain}}"
+  sed -e "s/__PUSH_DOMAIN__/${push}/g" -e "s/__MAIL_DOMAIN__/${mail}/g" -e "s/__DOMAIN__/${domain}/g" "$tpl" > "$out"
   ok "Traefik-роуты сгенерированы для домена: ${domain}"
 }
 

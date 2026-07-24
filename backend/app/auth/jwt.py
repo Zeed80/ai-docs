@@ -17,6 +17,7 @@ from starlette.requests import HTTPConnection
 
 from app.auth.models import UserInfo, UserRole
 from app.config import settings
+from app.domain.sections import visible_section_keys
 
 logger = structlog.get_logger()
 
@@ -58,6 +59,7 @@ _DEV_USER = UserInfo(
     preferred_username="dev",
     roles=[UserRole.admin],
     groups=["admins"],
+    sections=visible_section_keys([UserRole.admin], None),
 )
 
 
@@ -251,6 +253,8 @@ async def _verify_local_session(token: str) -> UserInfo:
         if db_role is not None and db_role not in roles:
             roles = [db_role, *roles]
 
+        section_access = await _db_section_access_for_sub(claims["sub"])
+
         return UserInfo(
             sub=claims["sub"],
             email=claims.get("email", ""),
@@ -258,6 +262,8 @@ async def _verify_local_session(token: str) -> UserInfo:
             preferred_username=claims.get("preferred_username", ""),
             roles=roles,
             groups=groups,
+            section_access=section_access,
+            sections=visible_section_keys(roles, section_access),
         )
     except HTTPException:
         raise
@@ -309,6 +315,8 @@ async def _verify_token(token: str) -> UserInfo:
         if db_role is not None and db_role not in roles:
             roles = [db_role, *roles]
 
+        section_access = await _db_section_access_for_sub(claims["sub"])
+
         return UserInfo(
             sub=claims["sub"],
             email=claims.get("email", ""),
@@ -316,6 +324,8 @@ async def _verify_token(token: str) -> UserInfo:
             preferred_username=claims.get("preferred_username", ""),
             roles=roles,
             groups=groups,
+            section_access=section_access,
+            sections=visible_section_keys(roles, section_access),
         )
 
     except Exception as e:
@@ -381,12 +391,14 @@ _ACTIVE_CACHE_TTL = 45  # seconds
 _ACTIVE_CACHE_PREFIX = "auth:active:"
 _ROLE_CACHE_TTL = 45  # seconds
 _ROLE_CACHE_PREFIX = "auth:role:"
+_SECTION_CACHE_TTL = 45  # seconds
+_SECTION_CACHE_PREFIX = "auth:sections:"
 
 
 async def invalidate_active_cache(sub: str) -> None:
-    """Drop the cached active-status and role for a user so a change takes effect
-    immediately. Call after activating/deactivating or changing a user's role.
-    Best-effort — ignores Redis errors.
+    """Drop the cached active-status, role and section grant for a user so a
+    change takes effect immediately. Call after activating/deactivating or
+    changing a user's role or section access. Best-effort — ignores Redis errors.
     """
     try:
         from app.utils.redis_client import get_async_redis
@@ -394,6 +406,7 @@ async def invalidate_active_cache(sub: str) -> None:
         redis = get_async_redis()
         await redis.delete(f"{_ACTIVE_CACHE_PREFIX}{sub}")
         await redis.delete(f"{_ROLE_CACHE_PREFIX}{sub}")
+        await redis.delete(f"{_SECTION_CACHE_PREFIX}{sub}")
     except Exception:  # pragma: no cover - cache invalidation is best-effort
         pass
 
@@ -447,6 +460,57 @@ async def _db_role_for_sub(sub: str) -> UserRole | None:
         except Exception:  # pragma: no cover
             pass
     return role
+
+
+async def _db_section_access_for_sub(sub: str) -> list[str] | None:
+    """Return the raw per-user section grant stored in DB (``users.section_access``).
+
+    ``None`` = not configured (regular users then see only base sections). A list
+    = explicit allowlist. Cached briefly; fail-open (None) on infra errors so a
+    transient outage never widens or narrows access unexpectedly for admins
+    (admins bypass this in :func:`visible_section_keys`).
+    """
+    import json
+
+    cache_key = f"{_SECTION_CACHE_PREFIX}{sub}"
+    redis = None
+    try:
+        from app.utils.redis_client import get_async_redis
+
+        redis = get_async_redis()
+        cached = await redis.get(cache_key)
+        if cached is not None:
+            try:
+                value = json.loads(cached)
+                return value if isinstance(value, list) else None
+            except Exception:
+                return None
+    except Exception:
+        redis = None
+
+    value: list[str] | None = None
+    try:
+        from sqlalchemy import select
+
+        from app.db.models import User
+        from app.db.session import _get_session_factory
+
+        async with _get_session_factory()() as db:
+            row = (
+                await db.execute(select(User.section_access).where(User.sub == sub))
+            ).scalar_one_or_none()
+        if isinstance(row, list):
+            value = [str(k) for k in row]
+    except Exception as e:
+        logger.warning("section_access_lookup_db_failed", error=str(e))
+        return None
+
+    if redis is not None:
+        try:
+            await redis.set(cache_key, json.dumps(value), ex=_SECTION_CACHE_TTL)
+        except Exception:  # pragma: no cover
+            pass
+    return value
 
 
 async def _assert_user_active(sub: str) -> None:

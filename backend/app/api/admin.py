@@ -14,8 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import get_current_user, require_role
 from app.auth.models import ROLE_PERMISSIONS, UserInfo, UserRole
-from app.db.models import ApiKey, AuditLog, Department, User
+from app.db.models import ApiKey, AuditLog, Department, MailboxConfig, User
 from app.db.session import get_db
+from app.utils.crypto import encrypt_password
 from app.domain.admin import (
     ApiKeyCreate,
     ApiKeyCreatedOut,
@@ -29,12 +30,17 @@ from app.domain.admin import (
     DepartmentUpdate,
     IntegrationAuthentikOut,
     IntegrationAuthentikUpdate,
+    IntegrationMailServerOut,
+    IntegrationMailServerUpdate,
     IntegrationTestResult,
     PermissionMatrixOut,
     SetPasswordRequest,
     SystemStatusOut,
     UserCreate,
     UserListResponse,
+    UserMailboxCreate,
+    UserMailboxOut,
+    UserMailboxProvisionedOut,
     UserOut,
     UserUpdate,
 )
@@ -172,6 +178,196 @@ async def set_user_password(
     db.add(log)
     await db.commit()
     logger.info("admin_set_password", admin=admin.sub, target=user_sub)
+
+
+# ── Personal mailbox provisioning ───────────────────────────────────────────
+# A personal @<domain> mailbox is a MailboxConfig row with owner_sub set and
+# mailbox_type="personal" (backend/app/db/models.py) — it's swept by the same
+# triage sweep as shared mailboxes (procurement/accounting/…) and works with
+# every existing email skill unmodified. Provisioning is admin-only, direct
+# (not agent-gated) — same trust level as set_user_password above.
+
+_TRANSLIT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "",
+    "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+}
+
+
+def _suggest_local_part(user: User) -> str:
+    import re
+
+    source = user.preferred_username or user.name or user.email.split("@")[0]
+    translit = "".join(_TRANSLIT.get(ch, ch) for ch in source.lower())
+    slug = re.sub(r"[^a-z0-9]+", ".", translit).strip(".")
+    return slug or "user"
+
+
+@router.get("/users/{user_sub}/mailbox", response_model=UserMailboxOut)
+async def get_user_mailbox(
+    user_sub: str,
+    _admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> UserMailboxOut:
+    result = await db.execute(
+        select(MailboxConfig).where(
+            MailboxConfig.owner_sub == user_sub, MailboxConfig.mailbox_type == "personal"
+        )
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg is None:
+        return UserMailboxOut()
+    from app.services.integration_config import get_mail_server_config
+
+    mail_cfg = await get_mail_server_config()
+    return UserMailboxOut(
+        address=cfg.name, is_active=cfg.is_active, webmail_url=mail_cfg.webmail_url,
+        last_sync_at=cfg.last_sync_at, sync_error=cfg.sync_error,
+    )
+
+
+@router.post("/users/{user_sub}/mailbox", response_model=UserMailboxProvisionedOut, status_code=201)
+async def provision_user_mailbox(
+    user_sub: str,
+    payload: UserMailboxCreate,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> UserMailboxProvisionedOut:
+    """Create a personal @<domain> mailbox for a user via the Mailcow API."""
+    from app.services import mailcow_api
+    from app.services.integration_config import get_mail_server_config
+
+    user = (await db.execute(select(User).where(User.sub == user_sub))).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    existing = await db.execute(
+        select(MailboxConfig).where(
+            MailboxConfig.owner_sub == user_sub, MailboxConfig.mailbox_type == "personal"
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="User already has a personal mailbox")
+
+    mail_cfg = await get_mail_server_config()
+    if not mail_cfg.configured:
+        raise HTTPException(status_code=503, detail="Mail server is not configured (см. /api/admin/integrations/mail-server)")
+
+    local_part = (payload.local_part or _suggest_local_part(user)).strip().lower()
+    if not local_part:
+        raise HTTPException(status_code=422, detail="local_part is required")
+
+    try:
+        available = await mailcow_api.check_local_part_available(local_part, mail_cfg.mail_domain)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Mail server API error: {exc}")
+    if not available:
+        raise HTTPException(status_code=409, detail=f"{local_part}@{mail_cfg.mail_domain} уже занят")
+
+    full_address = f"{local_part}@{mail_cfg.mail_domain}"
+    password = secrets.token_urlsafe(18)
+
+    try:
+        await mailcow_api.create_mailbox(
+            local_part=local_part, domain=mail_cfg.mail_domain, password=password,
+            full_name=user.name or user.preferred_username,
+        )
+    except Exception as exc:
+        logger.error("mailcow_provision_failed", error=str(exc), user_sub=user_sub)
+        raise HTTPException(status_code=502, detail=f"Mail server API error: {exc}")
+
+    cfg = MailboxConfig(
+        name=full_address,
+        display_name=f"{user.name} — личная почта",
+        owner_sub=user_sub,
+        mailbox_type="personal",
+        imap_host=mail_cfg.imap_host,
+        imap_port=mail_cfg.imap_port,
+        imap_user=full_address,
+        imap_password_encrypted=encrypt_password(password),
+        imap_ssl=True,
+        smtp_host=mail_cfg.smtp_host,
+        smtp_port=mail_cfg.smtp_port,
+        smtp_user=full_address,
+        smtp_password_encrypted=encrypt_password(password),
+        smtp_use_tls=True,
+        smtp_from_address=full_address,
+        smtp_from_name=user.name,
+        is_active=True,
+    )
+    db.add(cfg)
+    db.add(AuditLog(
+        user_id=admin.sub, action="admin.provision_mailbox", entity_type="user",
+        details={"target_sub": user_sub, "address": full_address},
+    ))
+    await db.commit()
+    logger.info("admin_provision_mailbox", admin=admin.sub, target=user_sub, address=full_address)
+    return UserMailboxProvisionedOut(address=full_address, generated_password=password)
+
+
+@router.post("/users/{user_sub}/mailbox/reset-password", response_model=UserMailboxProvisionedOut)
+async def reset_user_mailbox_password(
+    user_sub: str,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> UserMailboxProvisionedOut:
+    from app.services import mailcow_api
+
+    cfg = (await db.execute(
+        select(MailboxConfig).where(
+            MailboxConfig.owner_sub == user_sub, MailboxConfig.mailbox_type == "personal"
+        )
+    )).scalar_one_or_none()
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="User has no personal mailbox")
+
+    password = secrets.token_urlsafe(18)
+    try:
+        await mailcow_api.edit_mailbox_password(cfg.name, password)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Mail server API error: {exc}")
+
+    cfg.imap_password_encrypted = encrypt_password(password)
+    cfg.smtp_password_encrypted = encrypt_password(password)
+    db.add(AuditLog(
+        user_id=admin.sub, action="admin.reset_mailbox_password", entity_type="user",
+        details={"target_sub": user_sub, "address": cfg.name},
+    ))
+    await db.commit()
+    logger.info("admin_reset_mailbox_password", admin=admin.sub, target=user_sub)
+    return UserMailboxProvisionedOut(address=cfg.name, generated_password=password)
+
+
+@router.delete("/users/{user_sub}/mailbox", status_code=204)
+async def revoke_user_mailbox(
+    user_sub: str,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    from app.services import mailcow_api
+
+    cfg = (await db.execute(
+        select(MailboxConfig).where(
+            MailboxConfig.owner_sub == user_sub, MailboxConfig.mailbox_type == "personal"
+        )
+    )).scalar_one_or_none()
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="User has no personal mailbox")
+
+    try:
+        await mailcow_api.delete_mailbox(cfg.name)
+    except Exception as exc:
+        logger.warning("mailcow_delete_failed", error=str(exc), address=cfg.name)
+
+    cfg.is_active = False
+    db.add(AuditLog(
+        user_id=admin.sub, action="admin.revoke_mailbox", entity_type="user",
+        details={"target_sub": user_sub, "address": cfg.name},
+    ))
+    await db.commit()
+    logger.info("admin_revoke_mailbox", admin=admin.sub, target=user_sub, address=cfg.name)
 
 
 @router.get("/users", response_model=UserListResponse)
@@ -350,6 +546,17 @@ async def update_user(
         user.is_active = payload.is_active
     if payload.preferences is not None:
         user.preferences = payload.preferences
+    if "section_access" in payload.model_fields_set:
+        # Explicit null clears the grant (→ base sections only); a list replaces
+        # it. Unknown/non-assignable keys are dropped so we never persist stray
+        # values (admin-only, base, or renamed sections).
+        from app.domain.sections import validate_section_keys
+
+        user.section_access = (
+            validate_section_keys(payload.section_access)
+            if payload.section_access is not None
+            else None
+        )
 
     # Org fields: applied only when explicitly present in the request body, so an
     # explicit null clears the field while an absent field is left untouched.
@@ -628,6 +835,96 @@ async def test_authentik_integration(
         return IntegrationTestResult(ok=False, detail=f"Ошибка соединения: {exc}")
 
 
+# ── Mail server (Mailcow) integration ───────────────────────────────────────
+# Connection settings for the self-hosted mail server (see infra/installer/
+# install-mailcow.sh). Stored in mail_server_config (Postgres, singleton row);
+# api_key encrypted at rest with app.ai.secret_box, same pattern as
+# provider_instances API keys — never returned to clients, only masked.
+
+
+async def _get_mail_server_row(db: AsyncSession):
+    from app.db.models import MailServerConfig
+
+    return (
+        await db.execute(select(MailServerConfig).where(MailServerConfig.singleton_key == "default"))
+    ).scalar_one_or_none()
+
+
+@router.get("/integrations/mail-server", response_model=IntegrationMailServerOut)
+async def get_mail_server_integration(
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> IntegrationMailServerOut:
+    from app.ai.secret_box import decrypt, mask
+
+    row = await _get_mail_server_row(db)
+    if row is None:
+        return IntegrationMailServerOut(
+            configured=False, api_key_set=False, api_key_hint="", imap_port=993, smtp_port=465,
+        )
+    api_key = decrypt(row.api_key_encrypted)
+    return IntegrationMailServerOut(
+        configured=bool(row.api_url and api_key and row.mail_domain),
+        api_url=row.api_url,
+        api_key_set=bool(api_key),
+        api_key_hint=mask(api_key),
+        mail_domain=row.mail_domain,
+        webmail_url=row.webmail_url,
+        imap_host=row.imap_host,
+        imap_port=row.imap_port,
+        smtp_host=row.smtp_host,
+        smtp_port=row.smtp_port,
+    )
+
+
+@router.put("/integrations/mail-server", response_model=IntegrationMailServerOut)
+async def update_mail_server_integration(
+    payload: IntegrationMailServerUpdate,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> IntegrationMailServerOut:
+    from app.ai.secret_box import encrypt
+    from app.db.models import MailServerConfig
+
+    row = await _get_mail_server_row(db)
+    if row is None:
+        row = MailServerConfig(singleton_key="default")
+        db.add(row)
+
+    fields = payload.model_fields_set
+    if "api_url" in fields:
+        row.api_url = (payload.api_url or "").strip() or None
+    if "api_key" in fields:
+        row.api_key_encrypted = encrypt((payload.api_key or "").strip()) if payload.api_key else None
+    if "mail_domain" in fields:
+        row.mail_domain = (payload.mail_domain or "").strip().lower() or None
+    if "webmail_url" in fields:
+        row.webmail_url = (payload.webmail_url or "").strip() or None
+    if "imap_host" in fields:
+        row.imap_host = (payload.imap_host or "").strip() or None
+    if "imap_port" in fields and payload.imap_port:
+        row.imap_port = payload.imap_port
+    if "smtp_host" in fields:
+        row.smtp_host = (payload.smtp_host or "").strip() or None
+    if "smtp_port" in fields and payload.smtp_port:
+        row.smtp_port = payload.smtp_port
+    row.updated_by = admin.sub
+
+    await db.commit()
+    logger.info("admin_update_mail_server_integration", admin=admin.sub)
+    return await get_mail_server_integration(admin=admin, db=db)
+
+
+@router.post("/integrations/mail-server/test", response_model=IntegrationTestResult)
+async def test_mail_server_integration(
+    admin: UserInfo = _admin_dep,
+) -> IntegrationTestResult:
+    from app.services import mailcow_api
+
+    ok, detail = await mailcow_api.test_connection()
+    return IntegrationTestResult(ok=ok, detail=detail)
+
+
 # ── Permission matrix ─────────────────────────────────────────────────────────
 
 
@@ -639,6 +936,30 @@ async def get_permission_matrix(
         role.value: sorted(perms) for role, perms in ROLE_PERMISSIONS.items()
     }
     return PermissionMatrixOut(matrix=matrix)
+
+
+# ── Section access catalog ────────────────────────────────────────────────────
+
+
+@router.get("/sections/catalog")
+async def get_sections_catalog(_user: UserInfo = _admin_dep) -> dict:
+    """Return the workspace section tree an admin can grant per user.
+
+    Admin-only entries (e.g. Администрирование) are excluded — those stay gated
+    by role, not by the section allowlist.
+    """
+    from app.domain.sections import SECTION_CATALOG
+
+    groups = []
+    for group in SECTION_CATALOG:
+        items = [
+            {"key": item.key, "label": item.label, "href": item.href}
+            for item in group.items
+            if not item.admin_only
+        ]
+        if items:
+            groups.append({"key": group.key, "label": group.label, "items": items})
+    return {"groups": groups}
 
 
 # ── Audit log viewer ──────────────────────────────────────────────────────────

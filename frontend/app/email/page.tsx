@@ -2,8 +2,8 @@
 
 import { getApiBaseUrl } from "@/lib/api-base";
 
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { mutFetch } from "@/lib/auth";
 
 const API_BASE = getApiBaseUrl();
@@ -38,12 +38,25 @@ interface EmailDraft {
 type PanelMode = "threads" | "draft";
 
 export default function EmailPage() {
+  return (
+    <Suspense fallback={null}>
+      <EmailPageInner />
+    </Suspense>
+  );
+}
+
+function EmailPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [threads, setThreads] = useState<EmailThread[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [mailboxFilter, setMailboxFilter] = useState("");
+  // Deep-link from "Моя почта" (frontend/components/email/personal-mailbox-card.tsx)
+  // pre-selects the personal mailbox via ?mailbox=<address>.
+  const [mailboxFilter, setMailboxFilter] = useState(
+    () => searchParams.get("mailbox") ?? "",
+  );
   const [panelMode, setPanelMode] = useState<PanelMode>("threads");
   const [drafts, setDrafts] = useState<EmailDraft[]>([]);
   const [composing, setComposing] = useState(false);

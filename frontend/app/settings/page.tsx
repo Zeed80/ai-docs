@@ -6,6 +6,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders, mutFetch } from "@/lib/auth";
 import { MailboxSection } from "@/components/email/mailbox-settings";
 import { EmailTemplatesSection } from "@/components/email/email-templates";
+import { PersonalMailboxCard } from "@/components/email/personal-mailbox-card";
 import { isGpuBarEnabled, setGpuBarEnabled } from "@/components/gpu-status-bar";
 import { useAgentName, broadcastAgentName } from "@/lib/agent-name";
 
@@ -843,8 +844,7 @@ export default function SettingsPage() {
         promotionsR,
         sourcesR,
         learningRulesR,
-      ] =
-        await Promise.all([
+      ] = await Promise.all([
         fetch(`${API}/api/agent/tasks`),
         fetch(`${API}/api/agent/teams`),
         fetch(`${API}/api/agent/cron`),
@@ -890,11 +890,14 @@ export default function SettingsPage() {
     setAgentSaving(true);
     setAgentError(null);
     try {
-      const response = await mutFetch(`${API}/api/agent/tasks/${taskId}/decide`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved, decided_by: "user" }),
-      });
+      const response = await mutFetch(
+        `${API}/api/agent/tasks/${taskId}/decide`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved, decided_by: "user" }),
+        },
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       await loadAgentControlPlane();
       await loadAgentWorkRegistry();
@@ -1014,16 +1017,22 @@ export default function SettingsPage() {
     setAgentError(null);
     try {
       const response = approved
-        ? await mutFetch(`${API}/api/technology/learning-rules/${ruleId}/activate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ activated_by: "user" }),
-          })
-        : await mutFetch(`${API}/api/technology/learning-rules/${ruleId}/reject`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rejected_by: "user" }),
-          });
+        ? await mutFetch(
+            `${API}/api/technology/learning-rules/${ruleId}/activate`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ activated_by: "user" }),
+            },
+          )
+        : await mutFetch(
+            `${API}/api/technology/learning-rules/${ruleId}/reject`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ rejected_by: "user" }),
+            },
+          );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       await loadAgentControlPlane();
       await loadAgentRuntime();
@@ -1754,7 +1763,8 @@ export default function SettingsPage() {
                             {agentControlPlane.tasks_proposed ?? 0}
                           </div>
                           <div>
-                            Running tasks: {agentControlPlane.tasks_running ?? 0}
+                            Running tasks:{" "}
+                            {agentControlPlane.tasks_running ?? 0}
                           </div>
                           <div>
                             Plugins: {agentControlPlane.plugins_enabled}/
@@ -3832,6 +3842,7 @@ export default function SettingsPage() {
       {/* ── TAB: Почта ──────────────────────────────────────────────────────── */}
       {activeTab === "email" && (
         <div className="space-y-6">
+          <PersonalMailboxCard />
           <MailboxSection />
           <EmailTemplatesSection />
         </div>

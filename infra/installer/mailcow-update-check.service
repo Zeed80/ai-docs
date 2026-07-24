@@ -1,0 +1,16 @@
+[Unit]
+Description=AI Workspace — weekly check for available Mailcow updates (no auto-apply)
+Documentation=file:%h/infra/installer/mailcow.README
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Set WorkingDirectory to your repo root (the folder containing install.sh).
+WorkingDirectory=/opt/ai-workspace
+# --check only prints current vs. DEFAULT_TAG and exits — it never applies an
+# update by itself. Mail infra upgrades are deliberate, run by hand or via the
+# GUI-confirmed flow once one exists (see mailcow.README), consistent with this
+# project's "protected settings require explicit confirmation" rule.
+ExecStart=/usr/bin/env bash infra/installer/update-mailcow.sh --check
+TimeoutStartSec=120

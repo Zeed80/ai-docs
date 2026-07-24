@@ -1,0 +1,13 @@
+[Unit]
+Description=AI Workspace — admin-confirmed update agent (Authentik staged upgrades)
+Documentation=file:%h/infra/installer/update-agent.README
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Set WorkingDirectory to your repo root (the folder containing install.sh).
+WorkingDirectory=/opt/ai-workspace
+ExecStart=/usr/bin/env bash infra/installer/update-agent.sh
+# The staged upgrade can take a while (pull + migrations per major).
+TimeoutStartSec=3600

@@ -8,6 +8,12 @@ import { mutFetch } from "@/lib/auth";
 
 const API = getApiBaseUrl();
 
+interface AttachmentMeta {
+  filename: string;
+  size: number;
+  content_type: string;
+}
+
 interface EmailMessage {
   id: string;
   from_address: string;
@@ -19,6 +25,7 @@ interface EmailMessage {
   is_inbound: boolean;
   has_attachments: boolean;
   attachment_count: number;
+  attachments_meta: AttachmentMeta[] | null;
 }
 
 interface EmailThread {
@@ -275,7 +282,47 @@ export default function EmailThreadPage() {
 
 function MessageCard({ msg, index }: { msg: EmailMessage; index: number }) {
   const [expanded, setExpanded] = useState(index === 0 || index === -1);
+  const [processing, setProcessing] = useState<string | null>(null);
+  const [processStatus, setProcessStatus] = useState<Record<string, string>>(
+    {},
+  );
   const date = msg.sent_at ?? msg.received_at;
+
+  async function processAttachment(
+    filename: string,
+    target: "document" | "drawing",
+  ) {
+    setProcessing(filename);
+    setProcessStatus((s) => ({ ...s, [filename]: "" }));
+    try {
+      const res = await mutFetch(
+        `${API}/api/email/messages/${msg.id}/attachments/process`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename, target }),
+        },
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail ?? `HTTP ${res.status}`);
+      }
+      setProcessStatus((s) => ({
+        ...s,
+        [filename]:
+          target === "document"
+            ? "Отправлено на распознавание"
+            : "Отправлено в оцифровку чертежа",
+      }));
+    } catch (e: unknown) {
+      setProcessStatus((s) => ({
+        ...s,
+        [filename]: `Ошибка: ${e instanceof Error ? e.message : String(e)}`,
+      }));
+    } finally {
+      setProcessing(null);
+    }
+  }
 
   return (
     <div
@@ -365,6 +412,51 @@ function MessageCard({ msg, index }: { msg: EmailMessage; index: number }) {
               </span>
             )}
           </div>
+
+          {msg.attachments_meta && msg.attachments_meta.length > 0 && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs font-medium text-slate-500">Вложения</p>
+              {msg.attachments_meta.map((att) => (
+                <div
+                  key={att.filename}
+                  className="flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-2"
+                >
+                  <span className="text-xs font-mono text-slate-600 truncate">
+                    {att.filename}
+                  </span>
+                  <button
+                    onClick={() => processAttachment(att.filename, "document")}
+                    disabled={processing === att.filename}
+                    className="ml-auto text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-200 disabled:opacity-50"
+                  >
+                    {processing === att.filename
+                      ? "Отправка..."
+                      : "В документы"}
+                  </button>
+                  <button
+                    onClick={() => processAttachment(att.filename, "drawing")}
+                    disabled={processing === att.filename}
+                    className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-200 disabled:opacity-50"
+                  >
+                    {processing === att.filename
+                      ? "Отправка..."
+                      : "В чертёж (оцифровка)"}
+                  </button>
+                  {processStatus[att.filename] && (
+                    <span
+                      className={`w-full text-xs ${
+                        processStatus[att.filename].startsWith("Ошибка")
+                          ? "text-red-500"
+                          : "text-green-600"
+                      }`}
+                    >
+                      {processStatus[att.filename]}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

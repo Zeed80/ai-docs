@@ -1,6 +1,7 @@
 """Email API — skills: email.fetch_new, email.read, email.search,
 email.draft, email.style_match, email.risk_check, email.send, email.suggest_template"""
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
@@ -11,9 +12,13 @@ from sqlalchemy import delete as sa_delete, select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo
 from app.db.session import get_db
 from app.db.models import EmailMessage, EmailThread, Party, DraftAction
 from app.domain.email import (
+    AttachmentProcessRequest,
+    AttachmentProcessResponse,
     EmailDraftCreate,
     EmailDraftOut,
     EmailFetchRequest,
@@ -580,6 +585,77 @@ async def _delete_message_cascade(msg: EmailMessage, db) -> None:
     """
     await db.delete(msg)
     await db.flush()
+
+
+@router.post("/messages/{message_id}/attachments/process", response_model=AttachmentProcessResponse)
+async def process_email_attachment(
+    message_id: uuid.UUID,
+    payload: AttachmentProcessRequest,
+    current_user: UserInfo = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AttachmentProcessResponse:
+    """Skill: email.process_attachment — manually (re)send an already-ingested
+    attachment through document extraction or CAD vectorization.
+
+    Every attachment already becomes a Document at IMAP ingest time
+    (app.tasks.ingest._store_attachment, content-based classification runs
+    automatically). This is for the cases automatic triage doesn't cover: a
+    quarantined extension, a failed/low-confidence classification the user
+    wants re-run, or turning a drawing attachment into a CAD Drawing record
+    (a separate pipeline from Document/invoice extraction).
+    """
+    from app.db.models import Document, DocumentLink
+
+    msg = (await db.execute(select(EmailMessage).where(EmailMessage.id == message_id))).scalar_one_or_none()
+    if msg is None:
+        raise HTTPException(status_code=404, detail="Email message not found")
+
+    links = (
+        await db.execute(
+            select(DocumentLink).where(
+                DocumentLink.linked_entity_type == "email_message",
+                DocumentLink.linked_entity_id == message_id,
+                DocumentLink.link_type == "attachment",
+            )
+        )
+    ).scalars().all()
+    doc: Document | None = None
+    for link in links:
+        candidate = await db.get(Document, link.document_id)
+        if candidate and candidate.file_name == payload.filename:
+            doc = candidate
+            break
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Attachment '{payload.filename}' not found on this message")
+
+    if payload.target == "document":
+        from app.tasks.extraction import process_document
+
+        task = process_document.delay(str(doc.id), force=True)
+        logger.info("email_attachment_reprocess_document", document_id=str(doc.id), user=current_user.sub)
+        return AttachmentProcessResponse(document_id=doc.id, target="document", task_id=task.id)
+
+    if payload.target == "drawing":
+        from app.services.drawing_service import create_and_analyze_drawing
+        from app.storage import download_file
+
+        fmt = doc.file_name.rsplit(".", 1)[-1].lower() if "." in doc.file_name else ""
+        try:
+            file_bytes = await asyncio.to_thread(download_file, doc.storage_path)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Storage unavailable: {exc}")
+        drawing, task_id = await create_and_analyze_drawing(
+            file_bytes=file_bytes,
+            filename=doc.file_name,
+            fmt=fmt,
+            db=db,
+            document_id=doc.id,
+            created_by=current_user.sub,
+        )
+        logger.info("email_attachment_to_drawing", document_id=str(doc.id), drawing_id=str(drawing.id))
+        return AttachmentProcessResponse(document_id=doc.id, target="drawing", drawing_id=drawing.id, task_id=task_id)
+
+    raise HTTPException(status_code=422, detail="target must be 'document' or 'drawing'")
 
 
 # ── email.read (must be last — catch-all path) ────────────────────────────

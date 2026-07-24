@@ -1,0 +1,52 @@
+# Admin-confirmed update agent
+
+The web GUI (Администрирование → Обновления) lets an admin **confirm** an
+Authentik upgrade. The backend can't run `docker compose` or edit `.env`, so it
+writes a request into the shared backups volume and this **host-side agent**
+executes it: full backup → staged, one-major-at-a-time upgrade → health check →
+automatic rollback on failure. Progress streams back to the GUI.
+
+Without the agent installed, the GUI still shows versions and lets you queue a
+request, but nothing runs it — install the agent, or run the upgrade by hand:
+
+    sudo bash infra/installer/upgrade-authentik.sh --check      # show the ladder
+    sudo bash infra/installer/upgrade-authentik.sh --next --yes # one major
+    sudo bash infra/installer/upgrade-authentik.sh --yes        # all the way to latest
+
+## Install the agent (systemd timer, polls every minute)
+
+1. Edit `WorkingDirectory=` in `update-agent.service` to your repo root
+   (the directory containing `install.sh`; e.g. `/opt/ai-workspace`).
+
+2. Install and enable:
+
+       sudo cp infra/installer/update-agent.service /etc/systemd/system/
+       sudo cp infra/installer/update-agent.timer   /etc/systemd/system/
+       sudo systemctl daemon-reload
+       sudo systemctl enable --now update-agent.timer
+
+3. Verify:
+
+       systemctl status update-agent.timer
+       # after queuing an update in the GUI, watch it run:
+       journalctl -u update-agent.service -f
+
+## Requirements
+
+- Runs as **root** (needs the Docker socket and to edit `infra/.env`).
+- `python3`, `docker`, `flock`, and Docker Compose available on the host.
+- Only acts on a request whose status is `requested`; a `flock` prevents
+  overlapping runs. Cancelling is possible only before it starts running.
+
+## What it does per major hop (see upgrade-authentik.sh)
+
+1. `backup.sh --label pre-ak-<ver>` (app DB + **Authentik DB** + volumes + env).
+2. Fast dedicated Authentik-DB dump for a quick rollback.
+3. Bump `AUTHENTIK_TAG` in `infra/.env`, pull, recreate authentik-server/worker.
+4. Wait for `/-/health/ready/` (204 = migrations done).
+5. On failure: restore the Authentik DB, revert the tag, restart, and stop with
+   a pointer to that major's release notes (breaking changes).
+
+## Cron alternative (if you don't use systemd)
+
+    * * * * * root cd /opt/ai-workspace && bash infra/installer/update-agent.sh >> /var/log/aiw-update-agent.log 2>&1

@@ -2899,6 +2899,35 @@ class MailboxConfig(UUIDPrimaryKey, TimestampMixin, Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sync_error: Mapped[str | None] = mapped_column(Text)
 
+    # Personal mailboxes (owner_sub set, mailbox_type="personal") are provisioned
+    # by an admin for one user (backend/app/api/admin.py) and swept by the same
+    # triage sweep as shared/integration mailboxes (procurement/accounting/…).
+    owner_sub: Mapped[str | None] = mapped_column(String(255), index=True)
+    mailbox_type: Mapped[str] = mapped_column(String(20), default="shared", nullable=False)
+
+
+class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
+    """Singleton connection config for the self-hosted mail server (Mailcow admin API).
+
+    Read/written by backend/app/api/admin.py (mail-server settings) and
+    backend/app/services/mailcow_api.py (mailbox provisioning). ``api_key_encrypted``
+    uses app.ai.secret_box (same pattern as provider_instances) — never exposed
+    to clients except as a masked hint.
+    """
+
+    __tablename__ = "mail_server_config"
+
+    singleton_key: Mapped[str] = mapped_column(String(50), default="default", unique=True, nullable=False)
+    api_url: Mapped[str | None] = mapped_column(String(500))
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    mail_domain: Mapped[str | None] = mapped_column(String(255))
+    webmail_url: Mapped[str | None] = mapped_column(String(500))
+    imap_host: Mapped[str | None] = mapped_column(String(255))
+    imap_port: Mapped[int] = mapped_column(Integer, default=993, nullable=False)
+    smtp_host: Mapped[str | None] = mapped_column(String(255))
+    smtp_port: Mapped[int] = mapped_column(Integer, default=465, nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(100))
+
 
 class EmailTemplateCategory(str, enum.Enum):
     payment = "payment"
@@ -2974,6 +3003,11 @@ class User(UUIDPrimaryKey, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     preferences: Mapped[dict | None] = mapped_column(JSON)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Per-user section access: explicit allowlist of workspace section keys
+    # (see app.domain.sections). NULL/absent → the user sees only base sections.
+    # Admins bypass this entirely. Managed by admins via /api/admin/users/*.
+    section_access: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     # Organization placement (all nullable for backward compatibility).
     department_id: Mapped[uuid.UUID | None] = mapped_column(

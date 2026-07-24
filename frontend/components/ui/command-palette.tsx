@@ -5,6 +5,8 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { mutFetch } from "@/lib/auth";
+import { useCurrentUser } from "@/lib/auth-context";
+import { canUseSection, pathToSectionKey } from "@/lib/nav-catalog";
 
 const API_BASE = getApiBaseUrl();
 
@@ -179,6 +181,7 @@ interface CommandPaletteProps {
 
 export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const router = useRouter();
+  const user = useCurrentUser();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<Mode>("nav");
@@ -259,16 +262,23 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
   }, [query]);
 
+  // Only surface nav targets the user may actually reach — routes not tied to a
+  // section (null key) stay visible; forbidden sections are dropped.
+  const visibleNavItems = NAV_ITEMS.filter((n) => {
+    const key = pathToSectionKey(n.href);
+    return !key || canUseSection(user?.sections, user?.roles, key);
+  });
+
   // Nav items: history-first when query="", fuzzy-filtered otherwise
   const filteredNav: NavItem[] =
     query === ""
       ? [
           ...(history
-            .map((id) => NAV_ITEMS.find((n) => n.id === id))
+            .map((id) => visibleNavItems.find((n) => n.id === id))
             .filter(Boolean) as NavItem[]),
-          ...NAV_ITEMS.filter((n) => !history.includes(n.id)),
+          ...visibleNavItems.filter((n) => !history.includes(n.id)),
         ]
-      : NAV_ITEMS.filter((n) => fuzzyMatch(n.label, query));
+      : visibleNavItems.filter((n) => fuzzyMatch(n.label, query));
 
   const currentItems =
     mode === "nav"

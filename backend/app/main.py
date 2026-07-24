@@ -92,6 +92,7 @@ from app.api import comfyui_admin as comfyui_admin_api
 from app.api import comfyui_proxy as comfyui_proxy_api
 from app.api import admin_graph as admin_graph_api
 from app.api import maintenance as maintenance_api
+from app.api import updates as updates_api
 from app.api import dynamic_skill_runner
 from app.api import handovers, notifications, rooms
 from app.api import setup as setup_api
@@ -393,6 +394,7 @@ def create_app() -> FastAPI:
     app.include_router(capability_router, prefix="/api/agent", tags=["capabilities"], dependencies=_auth)
     app.include_router(admin_api.router, dependencies=_auth)
     app.include_router(maintenance_api.router, dependencies=_auth)
+    app.include_router(updates_api.router, dependencies=_auth)
     app.include_router(admin_graph_api.router, dependencies=_auth)
     app.include_router(rooms.router, prefix="/api/rooms", tags=["rooms"], dependencies=_auth)
     app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"], dependencies=_auth)

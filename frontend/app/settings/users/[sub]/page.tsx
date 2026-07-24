@@ -7,7 +7,15 @@ export default function SettingsUserDetailPage() {
   const { sub } = useParams<{ sub: string }>();
   const router = useRouter();
   useEffect(() => {
-    router.replace(`/admin/users/${encodeURIComponent(sub)}`);
+    // useParams() may hand back an already percent-encoded segment (subs contain
+    // ":"). Decode before re-encoding so we don't build a double-encoded URL.
+    let decoded = sub;
+    try {
+      decoded = decodeURIComponent(sub);
+    } catch {
+      /* keep raw */
+    }
+    router.replace(`/admin/users/${encodeURIComponent(decoded)}`);
   }, [sub, router]);
   return null;
 }

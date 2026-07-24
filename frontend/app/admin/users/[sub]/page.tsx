@@ -30,12 +30,380 @@ interface UserOut {
   department_id: string | null;
   manager_sub: string | null;
   title: string | null;
+  section_access: string[] | null;
 }
 
 interface DepartmentOut {
   id: string;
   name: string;
   code: string;
+}
+
+interface SectionCatalogItem {
+  key: string;
+  label: string;
+  href: string;
+}
+interface SectionCatalogGroup {
+  key: string;
+  label: string;
+  items: SectionCatalogItem[];
+}
+
+function SectionAccessSection({
+  userSub,
+  initial,
+  isAdminUser,
+}: {
+  userSub: string;
+  initial: string[] | null;
+  isAdminUser: boolean;
+}) {
+  const [catalog, setCatalog] = useState<SectionCatalogGroup[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set(initial ?? []));
+  const [baseline, setBaseline] = useState<Set<string>>(new Set(initial ?? []));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/api/admin/sections/catalog`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { groups: [] }))
+      .then((d) => setCatalog(d.groups ?? []))
+      .catch(() => setCatalog([]));
+  }, []);
+
+  function toggle(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleGroup(group: SectionCatalogGroup, checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const it of group.items) {
+        if (checked) next.add(it.key);
+        else next.delete(it.key);
+      }
+      return next;
+    });
+  }
+
+  const isDirty =
+    selected.size !== baseline.size ||
+    [...selected].some((k) => !baseline.has(k));
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      const res = await fetch(
+        `${API}/api/admin/users/${encodeURIComponent(userSub)}`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", ...csrfHeaders() },
+          body: JSON.stringify({ section_access: [...selected] }),
+        },
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail ?? `HTTP ${res.status}`);
+      }
+      const updated: UserOut = await res.json();
+      setBaseline(new Set(updated.section_access ?? []));
+      setSelected(new Set(updated.section_access ?? []));
+      setSuccess(true);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-medium">Доступ к разделам</h3>
+        <p className="text-[10px] text-muted-foreground mt-0.5">
+          Отмеченные разделы видны и доступны пользователю. Неотмеченные скрыты
+          из меню и заблокированы.
+        </p>
+      </div>
+
+      {isAdminUser && (
+        <p className="text-xs text-amber-600">
+          Администратор видит все разделы независимо от этих настроек.
+        </p>
+      )}
+
+      <div className="space-y-3">
+        {catalog.map((group) => {
+          const checkedCount = group.items.filter((it) =>
+            selected.has(it.key),
+          ).length;
+          const allChecked = checkedCount === group.items.length;
+          return (
+            <div key={group.key} className="space-y-1">
+              <label className="flex items-center gap-2 text-xs font-semibold">
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  ref={(el) => {
+                    if (el) el.indeterminate = checkedCount > 0 && !allChecked;
+                  }}
+                  onChange={(e) => toggleGroup(group, e.target.checked)}
+                />
+                {group.label}
+              </label>
+              <div className="pl-5 grid grid-cols-2 gap-x-3 gap-y-1">
+                {group.items.map((it) => (
+                  <label
+                    key={it.key}
+                    className="flex items-center gap-2 text-xs text-muted-foreground"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(it.key)}
+                      onChange={() => toggle(it.key)}
+                    />
+                    {it.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      {success && (
+        <p className="text-xs text-green-600">Доступ к разделам сохранён</p>
+      )}
+
+      <button
+        onClick={save}
+        disabled={saving || !isDirty}
+        className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm disabled:opacity-50"
+      >
+        {saving ? "Сохранение..." : "Сохранить разделы"}
+      </button>
+    </div>
+  );
+}
+
+interface UserMailboxOut {
+  address: string | null;
+  is_active: boolean | null;
+  webmail_url: string | null;
+  last_sync_at: string | null;
+  sync_error: string | null;
+}
+
+interface UserMailboxProvisionedOut {
+  address: string;
+  generated_password: string;
+}
+
+function MailboxSection({ userSub }: { userSub: string }) {
+  const [mailbox, setMailbox] = useState<UserMailboxOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [localPart, setLocalPart] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<UserMailboxProvisionedOut | null>(
+    null,
+  );
+
+  function load() {
+    setLoading(true);
+    fetch(`${API}/api/admin/users/${encodeURIComponent(userSub)}/mailbox`, {
+      credentials: "include",
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: UserMailboxOut | null) => setMailbox(d))
+      .catch(() => setMailbox(null))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userSub]);
+
+  async function provision() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `${API}/api/admin/users/${encodeURIComponent(userSub)}/mailbox`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", ...csrfHeaders() },
+          body: JSON.stringify({ local_part: localPart.trim() || null }),
+        },
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail ?? `HTTP ${res.status}`);
+      }
+      const d: UserMailboxProvisionedOut = await res.json();
+      setRevealed(d);
+      setLocalPart("");
+      load();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetPassword() {
+    if (!window.confirm("Сбросить пароль почтового ящика?")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `${API}/api/admin/users/${encodeURIComponent(userSub)}/mailbox/reset-password`,
+        { method: "POST", credentials: "include", headers: csrfHeaders() },
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail ?? `HTTP ${res.status}`);
+      }
+      const d: UserMailboxProvisionedOut = await res.json();
+      setRevealed(d);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke() {
+    if (
+      !window.confirm(
+        `Отозвать почтовый ящик ${mailbox?.address}? Ящик будет удалён на почтовом сервере.`,
+      )
+    )
+      return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `${API}/api/admin/users/${encodeURIComponent(userSub)}/mailbox`,
+        { method: "DELETE", credentials: "include", headers: csrfHeaders() },
+      );
+      if (!res.ok && res.status !== 204) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail ?? `HTTP ${res.status}`);
+      }
+      setRevealed(null);
+      load();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <h3 className="text-sm font-medium">Корпоративная почта</h3>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Загрузка...</p>
+      ) : mailbox?.address ? (
+        <div className="space-y-2">
+          <p className="text-sm">
+            <span className="font-mono">{mailbox.address}</span>{" "}
+            {mailbox.is_active === false && (
+              <span className="text-amber-600 text-xs">(отозван)</span>
+            )}
+          </p>
+          {mailbox.webmail_url && (
+            <a
+              href={mailbox.webmail_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-primary hover:underline"
+            >
+              Открыть вебмейл ↗
+            </a>
+          )}
+          {mailbox.sync_error && (
+            <p className="text-xs text-destructive">
+              Ошибка синхронизации: {mailbox.sync_error}
+            </p>
+          )}
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={resetPassword}
+              disabled={busy}
+              className="px-3 py-1.5 rounded border border-border text-sm hover:bg-muted disabled:opacity-50"
+            >
+              Сбросить пароль
+            </button>
+            <button
+              onClick={revoke}
+              disabled={busy}
+              className="px-3 py-1.5 rounded border border-destructive text-destructive text-sm hover:bg-destructive/10 disabled:opacity-50"
+            >
+              Отозвать ящик
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            У пользователя нет личного почтового ящика.
+          </p>
+          <input
+            type="text"
+            value={localPart}
+            onChange={(e) => setLocalPart(e.target.value)}
+            placeholder="Локальная часть адреса (не заполните — предложим сами)"
+            className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background font-mono"
+          />
+          <button
+            onClick={provision}
+            disabled={busy}
+            className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm disabled:opacity-50"
+          >
+            {busy ? "Создание..." : "Создать почтовый ящик"}
+          </button>
+        </div>
+      )}
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      {revealed && (
+        <div className="rounded border border-amber-500 bg-amber-50 dark:bg-amber-950 p-3 space-y-1">
+          <p className="text-xs font-medium text-amber-800 dark:text-amber-200">
+            Пароль показывается один раз — скопируйте и передайте сотруднику:
+          </p>
+          <p className="text-sm">
+            <span className="font-mono">{revealed.address}</span>
+          </p>
+          <p className="font-mono text-sm select-all bg-background rounded px-2 py-1 border border-border">
+            {revealed.generated_password}
+          </p>
+          <button
+            onClick={() => setRevealed(null)}
+            className="text-xs text-muted-foreground hover:underline"
+          >
+            Скрыть
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SetPasswordSection({ userSub }: { userSub: string }) {
@@ -119,8 +487,26 @@ function SetPasswordSection({ userSub }: { userSub: string }) {
   );
 }
 
+/**
+ * useParams() returns the raw URL segment, which for subs containing ":" (all
+ * SSO `authentik:N` and pre-provisioned `local:uuid` users) is still
+ * percent-encoded (e.g. "local%3A…"). Encoding it again when building the API
+ * URL produced a double-encoded "%253A", so the backend never found the user
+ * (404/403). Decode once here so every downstream `encodeURIComponent(sub)`
+ * yields a single, correct encoding. Safe for already-decoded values — our subs
+ * never contain a literal "%".
+ */
+function decodeSub(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 function UserEditContent() {
-  const { sub } = useParams<{ sub: string }>();
+  const { sub: rawSub } = useParams<{ sub: string }>();
+  const sub = decodeSub(rawSub);
   const router = useRouter();
   const [user, setUser] = useState<UserOut | null>(null);
   const [name, setName] = useState("");
@@ -386,6 +772,16 @@ function UserEditContent() {
           {saving ? "Сохранение..." : "Сохранить"}
         </button>
       </div>
+
+      {/* Section access */}
+      <SectionAccessSection
+        userSub={sub}
+        initial={user.section_access}
+        isAdminUser={user.role === "admin"}
+      />
+
+      {/* Personal mailbox */}
+      <MailboxSection userSub={sub} />
 
       {/* Password */}
       <SetPasswordSection userSub={sub} />

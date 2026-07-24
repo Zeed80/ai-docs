@@ -84,6 +84,29 @@ tar_volume "${PROJECT}_minio_data"  minio_data.tar.gz
 tar_volume "${PROJECT}_qdrant_data" qdrant_data.tar.gz
 tar_volume "${PROJECT}_redis_data"  redis_data.tar.gz
 
+# ── Mailcow (self-hosted mail server) — optional, separate compose project ──
+MAILCOW_DIR="infra/mailcow"
+MAILCOW_COMPONENT=""
+if [ -d "$MAILCOW_DIR/.git" ] && [ -f "$MAILCOW_DIR/mailcow.conf" ]; then
+  step "Mailcow (почтовый сервер)"
+  MAILCOW_STAGE="$STAGE/mailcow"
+  mkdir -p "$MAILCOW_STAGE"
+  # Uses Mailcow's own helper script — matches its supported backup format so
+  # infra/installer/update-mailcow.sh / a stock `restore.sh` from mailcow docs
+  # can consume it directly. `yes ""` answers the interactive "keep how many
+  # days" prompt with the default (keep everything in this one-shot dir).
+  if ( cd "$MAILCOW_DIR" && MAILCOW_BACKUP_LOCATION="$MAILCOW_STAGE" \
+        yes "" | ./helper-scripts/backup_and_restore.sh backup all >/dev/null 2>&1 ); then
+    ok "Mailcow (mysql/vmail/crypt/redis/rspamd/postfix) заархивирован."
+    MAILCOW_COMPONENT="mailcow"
+  else
+    warn "Бэкап Mailcow не удался — пропускаю (проверьте infra/mailcow вручную)."
+    rm -rf "$MAILCOW_STAGE"
+  fi
+else
+  log "Mailcow не установлен (infra/mailcow отсутствует) — пропускаю."
+fi
+
 # ── Config ───────────────────────────────────────────────────────────────────
 cp "$ENV_FILE" "$STAGE/env"
 cat > "$STAGE/manifest.json" <<JSON
@@ -93,7 +116,7 @@ cat > "$STAGE/manifest.json" <<JSON
   "label": "${LABEL:-}",
   "project": "$PROJECT",
   "git_commit": "$(git rev-parse HEAD 2>/dev/null || echo unknown)",
-  "components": ["postgres_app", "postgres_authentik", "minio", "qdrant", "redis", "env"]
+  "components": ["postgres_app", "postgres_authentik", "minio", "qdrant", "redis", "env"${MAILCOW_COMPONENT:+, \"$MAILCOW_COMPONENT\"}]
 }
 JSON
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=AI Workspace — weekly Mailcow update check
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=7d
+AccuracySec=1h
+Unit=mailcow-update-check.service
+
+[Install]
+WantedBy=timers.target

@@ -112,6 +112,25 @@ http:
         - security-headers
       priority: 200
 
+    # ── Self-hosted mail server (Mailcow) webmail/admin/API ──────────────────────
+    # Requires a DNS A record for __MAIL_DOMAIN__ (+ MX/SPF/DKIM/DMARC — see
+    # infra/installer/mailcow.README) and infra/installer/install-mailcow.sh run
+    # first, which joins nginx-mailcow to this Traefik's network. SMTP/IMAP/POP3
+    # ports (25/465/587/143/993/110/995) are published by Mailcow directly on the
+    # host — they bypass Traefik entirely (Traefik does not proxy raw mail protocols
+    # here), so open them in the host firewall separately.
+    mailcow:
+      rule: "Host(`__MAIL_DOMAIN__`)"
+      service: mailcow
+      entryPoints: [web, websecure]
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: __MAIL_DOMAIN__
+      middlewares:
+        - security-headers
+      priority: 200
+
     # Authentik live-UI WebSocket (/ws/client/, /ws/outpost/). Must outrank
     # backend-ws (PathPrefix(`/ws`), prio 100) which otherwise swallows it and breaks
     # the Authentik admin UI ("connection error, reconnecting"). Our app WS is /ws/chat,
@@ -180,6 +199,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://ntfy:80"
+
+    mailcow:
+      loadBalancer:
+        servers:
+          - url: "http://nginx-mailcow:80"
 
     # minio-console:
     #   loadBalancer:

@@ -6,6 +6,7 @@ import { AgentNameProvider } from "@/lib/agent-name";
 import { Sidebar } from "@/components/ui/sidebar";
 import { ResizableLayout } from "@/components/ui/resizable-layout";
 import { CommandPalette } from "@/components/ui/command-palette";
+import { SectionGuard } from "@/components/auth/section-guard";
 import { useEffect, useState } from "react";
 
 // AssistantPanel uses WebSocket, localStorage, and client-only state — never SSR it.
@@ -39,7 +40,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   return (
     <>
       <ResizableLayout sidebar={<Sidebar />} chat={<AssistantPanel />}>
-        {children}
+        <SectionGuard>{children}</SectionGuard>
       </ResizableLayout>
       <CommandPalette
         open={paletteOpen}

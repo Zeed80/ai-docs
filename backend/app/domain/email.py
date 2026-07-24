@@ -27,6 +27,18 @@ class EmailMessageOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AttachmentProcessRequest(BaseModel):
+    filename: str
+    target: str  # "document" | "drawing"
+
+
+class AttachmentProcessResponse(BaseModel):
+    document_id: uuid.UUID
+    target: str
+    drawing_id: uuid.UUID | None = None
+    task_id: str | None = None
+
+
 class EmailFetchRequest(BaseModel):
     mailbox: str | None = None  # None = all configured mailboxes
 

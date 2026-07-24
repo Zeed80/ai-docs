@@ -20,6 +20,8 @@ class UserOut(BaseModel):
     department_id: uuid.UUID | None = None
     manager_sub: str | None = None
     title: str | None = None
+    # Per-user section allowlist (None = base sections only for non-admins).
+    section_access: list[str] | None = None
 
     model_config = {"from_attributes": True}
 
@@ -42,6 +44,10 @@ class UserUpdate(BaseModel):
     department_id: uuid.UUID | None = None
     manager_sub: str | None = None
     title: str | None = None
+    # Per-user section allowlist. Absent = leave unchanged; a list = replace the
+    # grant (unknown/non-assignable keys are dropped server-side). Admins bypass
+    # section access, so setting it on an admin has no effect on what they see.
+    section_access: list[str] | None = None
 
 
 class DepartmentCreate(BaseModel):
@@ -92,6 +98,51 @@ class IntegrationTestResult(BaseModel):
 
 class SetPasswordRequest(BaseModel):
     password: str
+
+
+# ── Mail server (Mailcow) integration ───────────────────────────────────────
+
+
+class IntegrationMailServerOut(BaseModel):
+    configured: bool
+    api_url: str | None = None
+    api_key_set: bool
+    api_key_hint: str  # masked — never the full key
+    mail_domain: str | None = None
+    webmail_url: str | None = None
+    imap_host: str | None = None
+    imap_port: int
+    smtp_host: str | None = None
+    smtp_port: int
+
+
+class IntegrationMailServerUpdate(BaseModel):
+    # Provide api_key to set it; empty string clears. Omit to leave unchanged.
+    api_url: str | None = None
+    api_key: str | None = None
+    mail_domain: str | None = None
+    webmail_url: str | None = None
+    imap_host: str | None = None
+    imap_port: int | None = None
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+
+
+class UserMailboxOut(BaseModel):
+    address: str | None = None
+    is_active: bool | None = None
+    webmail_url: str | None = None
+    last_sync_at: datetime | None = None
+    sync_error: str | None = None
+
+
+class UserMailboxCreate(BaseModel):
+    local_part: str | None = None  # omit to auto-suggest from the user's name/username
+
+
+class UserMailboxProvisionedOut(BaseModel):
+    address: str
+    generated_password: str  # shown once; never retrievable again
 
 
 class UserListResponse(BaseModel):

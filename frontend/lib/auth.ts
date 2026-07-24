@@ -48,6 +48,8 @@ export interface UserInfo {
   preferred_username: string;
   roles: string[];
   groups: string[];
+  /** Resolved section keys the user may see/use (see lib/nav-catalog). */
+  sections?: string[];
 }
 
 export async function fetchMe(): Promise<UserInfo | null> {

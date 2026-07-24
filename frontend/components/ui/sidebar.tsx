@@ -12,6 +12,7 @@ import { logout } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/auth-context";
 import { useAgentName } from "@/lib/agent-name";
 import { useHasRole } from "@/lib/rbac";
+import { NAV_GROUPS, canUseSection } from "@/lib/nav-catalog";
 
 const API = getApiBaseUrl();
 
@@ -46,61 +47,6 @@ function useQuarantineCount() {
   }, []);
   return count;
 }
-
-// ── Nav structure ─────────────────────────────────────────────────────────────
-
-const NAV_PRIMARY = [
-  { href: "/", icon: "home", key: "feed", exact: true },
-] as const;
-
-const NAV_DOCS = [
-  { href: "/inbox", icon: "inbox", key: "inbox" },
-  { href: "/documents", icon: "file-text", key: "documents" },
-  { href: "/invoices", icon: "receipt", key: "invoices" },
-  { href: "/handovers", icon: "arrow-right-circle", key: "handovers" },
-  { href: "/email", icon: "mail", key: "email" },
-] as const;
-
-const NAV_REF = [
-  { href: "/boms", icon: "list", key: "boms" },
-  { href: "/anomalies", icon: "alert-triangle", key: "anomalies" },
-  { href: "/canonical", icon: "tag", key: "canonical" },
-  { href: "/search", icon: "search", key: "search" },
-  { href: "/settings/ntd", icon: "file-text", key: "ntd" },
-  { href: "/settings/norm-cards", icon: "sliders", key: "normalization" },
-] as const;
-
-const NAV_ENGINEERING = [
-  { href: "/cad", icon: "drafting-compass", key: "cad" },
-  { href: "/engineering", icon: "drafting-compass", key: "engineering" },
-  { href: "/drawings", icon: "drafting-compass", key: "drawings" },
-  { href: "/studio", icon: "image-studio", key: "studio" },
-  { href: "/technology", icon: "cpu", key: "technology" },
-  { href: "/catalogs", icon: "tool-catalog", key: "catalogs" },
-] as const;
-
-const NAV_WAREHOUSE = [
-  { href: "/warehouse", icon: "box", key: "warehouse" },
-] as const;
-
-const NAV_PROCUREMENT = [
-  { href: "/procurement", icon: "shopping-cart", key: "procurement" },
-  { href: "/suppliers", icon: "users", key: "suppliers" },
-  { href: "/compare", icon: "scale", key: "compare" },
-  { href: "/cases", icon: "folder", key: "cases" },
-] as const;
-
-const NAV_FINANCE = [
-  { href: "/payments", icon: "credit-card", key: "payments" },
-  { href: "/calendar", icon: "calendar", key: "calendar" },
-  { href: "/approvals", icon: "check-circle", key: "approvals" },
-] as const;
-
-const NAV_SYSTEM = [
-  { href: "/quarantine", icon: "shield", key: "quarantine" },
-  { href: "/settings", icon: "settings", key: "settings" },
-  { href: "/admin", icon: "admin", key: "admin", adminOnly: true },
-] as const;
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
@@ -574,140 +520,41 @@ export function Sidebar() {
         </p>
       </div>
 
-      {/* Navigation */}
+      {/* Navigation — groups/items filtered by the user's granted sections.
+          Admins see everything; base sections (feed) are always visible. */}
       <nav className="flex-1 p-2 space-y-4 overflow-y-auto">
-        {/* Primary */}
-        <div>
-          {NAV_PRIMARY.map((item) => (
-            <NavItem
-              key={item.key}
-              href={item.href}
-              icon={item.icon}
-              label={t(item.key)}
-              badge={feedCount || null}
-              exact={item.exact}
-            />
-          ))}
-        </div>
-
-        {/* Документооборот */}
-        <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
-            Документы
-          </p>
-          {NAV_DOCS.map((item) => (
-            <NavItem
-              key={item.key}
-              href={item.href}
-              icon={item.icon}
-              label={t(item.key)}
-            />
-          ))}
-        </div>
-
-        {/* Производство */}
-        <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
-            Производство
-          </p>
-          {NAV_ENGINEERING.map((item) => (
-            <NavItem
-              key={item.key}
-              href={item.href}
-              icon={item.icon}
-              label={t(item.key)}
-            />
-          ))}
-        </div>
-
-        {/* Склад */}
-        <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
-            Склад
-          </p>
-          {NAV_WAREHOUSE.map((item) => (
-            <NavItem
-              key={item.key}
-              href={item.href}
-              icon={item.icon}
-              label={t(item.key)}
-            />
-          ))}
-        </div>
-
-        {/* Закупки */}
-        <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
-            Закупки
-          </p>
-          {NAV_PROCUREMENT.map((item) => (
-            <NavItem
-              key={item.key}
-              href={item.href}
-              icon={item.icon}
-              label={t(item.key)}
-            />
-          ))}
-        </div>
-
-        {/* Финансы */}
-        <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
-            Финансы
-          </p>
-          {NAV_FINANCE.map((item) => (
-            <NavItem
-              key={item.key}
-              href={item.href}
-              icon={item.icon}
-              label={t(item.key)}
-            />
-          ))}
-        </div>
-
-        {/* Данные */}
-        <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
-            Данные
-          </p>
-          {NAV_REF.map((item) => (
-            <NavItem
-              key={item.key}
-              href={item.href}
-              icon={item.icon}
-              label={t(item.key)}
-            />
-          ))}
-        </div>
-
-        {/* Система */}
-        <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
-            Система
-          </p>
-          {NAV_SYSTEM.map((item) => {
-            if ("adminOnly" in item && item.adminOnly && !isAdmin) return null;
-            return (
-              <NavItem
-                key={item.key}
-                href={item.href}
-                icon={item.icon}
-                label={t(item.key)}
-                badge={
-                  item.key === "quarantine" ? quarantineCount || null : null
-                }
-              />
-            );
-          })}
-        </div>
-
-        {/* Коммуникации */}
-        <div>
-          <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
-            Общение
-          </p>
-          <NavItem href="/chat" icon="chat" label={t("chat")} />
-        </div>
+        {NAV_GROUPS.map((group) => {
+          const visible = group.items.filter((item) => {
+            if (item.adminOnly && !isAdmin) return false;
+            return canUseSection(user?.sections, user?.roles, item.key);
+          });
+          if (visible.length === 0) return null;
+          return (
+            <div key={group.key}>
+              {group.title && (
+                <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
+                  {group.title}
+                </p>
+              )}
+              {visible.map((item) => (
+                <NavItem
+                  key={item.key}
+                  href={item.href}
+                  icon={item.icon}
+                  label={t(item.key)}
+                  exact={item.exact}
+                  badge={
+                    item.key === "feed"
+                      ? feedCount || null
+                      : item.key === "quarantine"
+                        ? quarantineCount || null
+                        : null
+                  }
+                />
+              ))}
+            </div>
+          );
+        })}
       </nav>
 
       {/* User panel */}

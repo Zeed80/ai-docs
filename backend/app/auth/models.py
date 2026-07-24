@@ -25,6 +25,11 @@ class UserInfo(BaseModel):
     preferred_username: str
     roles: list[UserRole] = []
     groups: list[str] = []
+    # Raw per-user section grant from DB (None = not configured). Admin-managed.
+    section_access: list[str] | None = None
+    # Resolved section keys the user may see/use (base + grant, or all for admin).
+    # Populated at token-verification time; consumed by the frontend nav/guard.
+    sections: list[str] = []
 
 
 # Role → allowed actions map (used by permission checks)

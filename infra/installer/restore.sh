@@ -104,6 +104,22 @@ if [ -f "$STAGE/postgres_authentik.sql" ]; then
     && ok "БД Authentik восстановлена." || warn "Authentik DB не восстановлена."
 fi
 
+# ── 3b. Mailcow (optional, separate compose project) ────────────────────────
+MAILCOW_DIR="infra/mailcow"
+if [ -d "$STAGE/mailcow" ]; then
+  if [ -d "$MAILCOW_DIR/.git" ] && [ -f "$MAILCOW_DIR/mailcow.conf" ]; then
+    step "Восстановление Mailcow (почтовый сервер)"
+    if ( cd "$MAILCOW_DIR" && MAILCOW_BACKUP_LOCATION="$REPO_DIR/$STAGE/mailcow" \
+          yes "" | ./helper-scripts/backup_and_restore.sh restore all >/dev/null 2>&1 ); then
+      ok "Mailcow восстановлен из архива."
+    else
+      warn "Не удалось восстановить Mailcow автоматически — восстановите вручную: (cd $MAILCOW_DIR && MAILCOW_BACKUP_LOCATION=$STAGE/mailcow ./helper-scripts/backup_and_restore.sh restore all)"
+    fi
+  else
+    warn "В архиве есть данные Mailcow, но infra/mailcow не установлен — пропускаю (запустите install-mailcow.sh, затем восстановите вручную)."
+  fi
+fi
+
 # ── 4. Bring the stack back up ──────────────────────────────────────────────
 step "Запуск стека"
 run_compose up -d
