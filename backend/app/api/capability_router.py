@@ -435,8 +435,12 @@ async def _proxy(
 
     url = base_url.rstrip("/") + path
     headers = _service_headers()
+    # Web research/browse read many live pages (+ PDF OCR) and legitimately take
+    # minutes — the default 30s would time out and trigger wasteful retries that
+    # re-run the whole search. Give these paths a generous budget.
+    timeout = 300.0 if "/api/web-search/" in path else 30.0
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             if method == "GET":
                 resp = await client.get(url, params=query, headers=headers)
             elif method == "POST":

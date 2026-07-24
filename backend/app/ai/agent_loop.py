@@ -574,6 +574,14 @@ async def _execute_skill(
     path = skill["path"]
     base_url = config.backend_url.rstrip("/")
     timeout = config.backend_timeout_seconds
+    # Web research/browse open many live pages (+ PDF OCR) and legitimately run
+    # for minutes. The default 30s would time out and trigger retries that
+    # re-run the whole search. Give these calls a generous budget.
+    _action = str(args.get("action") or "").lower()
+    if path.endswith("/cap/search") and _action in {"research", "browse", "web"}:
+        timeout = max(float(timeout), 300.0)
+    elif "/web-search/" in path:
+        timeout = max(float(timeout), 300.0)
 
     path_params = set(re.findall(r"\{(\w+)\}", path))
     body_args: dict = {}
