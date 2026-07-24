@@ -12,18 +12,18 @@ SOGo webmail/календарь/контакты), развёрнутое отд
 
 ## 1. DNS (сделать ДО установки)
 
-Замените `ptsai.ru` на ваш домен, `<IP>` на публичный IP сервера:
+Замените `example.com` на ваш домен, `<IP>` на публичный IP сервера:
 
 | Тип | Имя | Значение |
 |---|---|---|
-| A | `mail.ptsai.ru` | `<IP>` |
-| MX | `ptsai.ru` | `mail.ptsai.ru`, приоритет 10 |
-| PTR | (обратная зона у хостинг-провайдера) | `mail.ptsai.ru` для `<IP>` |
-| TXT (SPF) | `ptsai.ru` | `v=spf1 mx a:mail.ptsai.ru -all` |
-| TXT (DKIM) | `dkim._domainkey.ptsai.ru` | ключ из Mailcow admin UI (создаётся при добавлении домена) |
-| TXT (DMARC) | `_dmarc.ptsai.ru` | `v=DMARC1; p=quarantine; rua=mailto:postmaster@ptsai.ru` |
-| CNAME/A | `autoconfig.ptsai.ru` | `<IP>` (Thunderbird автонастройка) |
-| CNAME/A | `autodiscover.ptsai.ru` | `<IP>` (Outlook автонастройка) |
+| A | `mail.example.com` | `<IP>` |
+| MX | `example.com` | `mail.example.com`, приоритет 10 |
+| PTR | (обратная зона у хостинг-провайдера) | `mail.example.com` для `<IP>` |
+| TXT (SPF) | `example.com` | `v=spf1 mx a:mail.example.com -all` |
+| TXT (DKIM) | `dkim._domainkey.example.com` | ключ из Mailcow admin UI (создаётся при добавлении домена) |
+| TXT (DMARC) | `_dmarc.example.com` | `v=DMARC1; p=quarantine; rua=mailto:postmaster@example.com` |
+| CNAME/A | `autoconfig.example.com` | `<IP>` (Thunderbird автонастройка) |
+| CNAME/A | `autodiscover.example.com` | `<IP>` (Outlook автонастройка) |
 
 **Порт 25**: убедитесь у хостинг-провайдера, что исходящий SMTP (порт 25) не
 заблокирован — иначе письма не будут доставляться внешним получателям
@@ -32,7 +32,7 @@ SOGo webmail/календарь/контакты), развёрнутое отд
 ## 2. Установка
 
 ```bash
-bash infra/installer/install-mailcow.sh --domain mail.ptsai.ru
+bash infra/installer/install-mailcow.sh --domain mail.example.com
 ```
 
 Скрипт клонирует `mailcow-dockerized` на пинованный релиз-тег (не `master` —
@@ -42,15 +42,15 @@ bash infra/installer/install-mailcow.sh --domain mail.ptsai.ru
 
 После установки скрипт напомнит:
 
-1. Добавить `Host(mail.ptsai.ru)`-роут в `infra/traefik/prod/routes.yml.template`
+1. Добавить `Host(mail.example.com)`-роут в `infra/traefik/prod/routes.yml.template`
    (уже сделано в этом репозитории, шаблон `__MAIL_DOMAIN__`) — перерендерить
    через `render_traefik_routes` (делает `install.sh`/`update.sh`
-   автоматически; либо задайте `MAIL_DOMAIN=mail.ptsai.ru` в `infra/.env`,
+   автоматически; либо задайте `MAIL_DOMAIN=mail.example.com` в `infra/.env`,
    если он отличается от `mail.$TRAEFIK_DOMAIN`).
 2. Открыть на хосте порты **25/465/587/143/993/110/995** в фаерволе — они
    публикуются Mailcow напрямую на хосте, Traefik их не проксирует (проксирует
    только HTTPS для вебмейла/admin/autodiscover).
-3. Зайти на `https://mail.ptsai.ru`, создать домен `ptsai.ru` в admin UI,
+3. Зайти на `https://mail.example.com`, создать домен `example.com` в admin UI,
    опубликовать выданный DKIM TXT (см. таблицу выше), создать первые ящики.
 
 ## 3. Подключение почтовых клиентов «из коробки»
@@ -95,17 +95,17 @@ journalctl -u mailcow-update-check.service   # текущий/целевой т�
 
 ## 6. Интеграция с AI-агентом (опционально, без изменений кода)
 
-Чтобы AI-агент («Света») читал/писал новый `@ptsai.ru`-ящик, заведите его как
+Чтобы AI-агент («Света») читал/писал новый `@example.com`-ящик, заведите его как
 обычный `MailboxConfig` через `/settings` в приложении (imap.host/smtp.host =
-`mail.ptsai.ru`, порты 993/465, TLS) — код уже использует только стандартные
+`mail.example.com`, порты 993/465, TLS) — код уже использует только стандартные
 `imaplib`/`smtplib`, изменения бэкенда/фронтенда не нужны.
 
 ## Чеклист верификации
 
-- [ ] `https://mail.ptsai.ru` открывается с валидным сертификатом (SOGo/admin UI)
-- [ ] Домен `ptsai.ru` создан в admin UI, DKIM TXT опубликован
+- [ ] `https://mail.example.com` открывается с валидным сертификатом (SOGo/admin UI)
+- [ ] Домен `example.com` создан в admin UI, DKIM TXT опубликован
 - [ ] Проверка доставляемости (mail-tester.com или аналог): SPF/DKIM/DMARC/PTR зелёные
-- [ ] Письмо с внешнего адреса доходит до `@ptsai.ru`-ящика и обратно
+- [ ] Письмо с внешнего адреса доходит до `@example.com`-ящика и обратно
 - [ ] Thunderbird/Outlook настраиваются только по email+паролю (autodiscover)
 - [ ] Новый `MailboxConfig` в `/settings` подхватывается `run_triage`/`poll_imap_mailbox`
 - [ ] `update-mailcow.sh --to <тег> --yes` на тестовом апдейте — бэкап/health-check/откат работают

@@ -12,7 +12,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
  *    push, share) DO NOT work on the live site. `allowNavigation: ["*"]` only
  *    permits the navigation; it does not enable plugins.
  *
- * 2. Baked server (CAP_SERVER_URL set at build time, e.g. https://ptsai.ru):
+ * 2. Baked server (CAP_SERVER_URL set at build time, e.g. https://example.com):
  *    the site is loaded AS the Capacitor server via `server.url`, so the bridge
  *    IS injected and native plugins work. The app is then tied to that one
  *    server (the runtime picker is bypassed). This is the standard Capacitor

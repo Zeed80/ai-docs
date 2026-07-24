@@ -386,17 +386,17 @@ OAUTH_REDIRECT_URI_2=http://192.168.1.10:8000/api/auth/callback
 
 ### Установка
 
-1. DNS-записи (замените `ptsai.ru`/`mail.ptsai.ru` на свой домен):
+1. DNS-записи (замените `example.com`/`mail.example.com` на свой домен):
 
    | Тип | Имя | Значение |
    |---|---|---|
-   | A | `mail.ptsai.ru` | IP сервера |
-   | MX | `ptsai.ru` | `mail.ptsai.ru`, приоритет 10 |
-   | PTR | (обратная зона у хостинга) | `mail.ptsai.ru` для IP сервера |
-   | TXT (SPF) | `ptsai.ru` | `v=spf1 mx a:mail.ptsai.ru -all` |
-   | TXT (DKIM) | `dkim._domainkey.ptsai.ru` | ключ из Mailcow admin UI (после создания домена) |
-   | TXT (DMARC) | `_dmarc.ptsai.ru` | `v=DMARC1; p=quarantine; rua=mailto:postmaster@ptsai.ru` |
-   | A/CNAME | `autoconfig.ptsai.ru`, `autodiscover.ptsai.ru` | IP сервера (авто-настройка Thunderbird/Outlook) |
+   | A | `mail.example.com` | IP сервера |
+   | MX | `example.com` | `mail.example.com`, приоритет 10 |
+   | PTR | (обратная зона у хостинга) | `mail.example.com` для IP сервера |
+   | TXT (SPF) | `example.com` | `v=spf1 mx a:mail.example.com -all` |
+   | TXT (DKIM) | `dkim._domainkey.example.com` | ключ из Mailcow admin UI (после создания домена) |
+   | TXT (DMARC) | `_dmarc.example.com` | `v=DMARC1; p=quarantine; rua=mailto:postmaster@example.com` |
+   | A/CNAME | `autoconfig.example.com`, `autodiscover.example.com` | IP сервера (авто-настройка Thunderbird/Outlook) |
 
    Проверьте у хостинг-провайдера, что исходящий порт 25 не заблокирован —
    иначе почта не будет доставляться внешним получателям.
@@ -404,7 +404,7 @@ OAUTH_REDIRECT_URI_2=http://192.168.1.10:8000/api/auth/callback
 2. Установка:
 
    ```bash
-   bash infra/installer/install-mailcow.sh --domain mail.ptsai.ru
+   bash infra/installer/install-mailcow.sh --domain mail.example.com
    ```
 
    Скрипт клонирует `mailcow-dockerized` на пинованный релиз-тег, генерирует
@@ -412,7 +412,7 @@ OAUTH_REDIRECT_URI_2=http://192.168.1.10:8000/api/auth/callback
    подключает вебмейл/admin/API к сети Traefik. После установки откройте
    фаервол для почтовых портов `25/465/587/143/993/110/995` (публикуются
    Mailcow напрямую на хосте, Traefik их не проксирует) и создайте домен + API-
-   ключ в Mailcow admin UI (`https://mail.ptsai.ru`, `Configuration → Access →
+   ключ в Mailcow admin UI (`https://mail.example.com`, `Configuration → Access →
    Edit administrator details → API`, Read-Write).
 
    Подробный чеклист и troubleshooting — `infra/installer/mailcow.README`.
