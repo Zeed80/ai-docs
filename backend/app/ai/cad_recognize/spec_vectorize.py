@@ -13,6 +13,7 @@ spec) lives alongside the existing VLM text reader.
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any, Literal
 
@@ -23,6 +24,7 @@ from app.ai.cad_ir.schema import (
     CadIR,
     Circle,
     DimensionEntity,
+    HatchRegion,
     Point,
     Segment,
     SourceInfo,
@@ -115,6 +117,21 @@ class SpecBody(BaseModel):
     features: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class SpecView(BaseModel):
+    """One projection the source sheet shows for one body (ГОСТ 2.305).
+
+    A view is a READ observation ("the sheet also carries a left view of body
+    0"), never a drafting instruction the model invents: the drafter builds
+    each requested projection from the SAME validated dimensions as the front
+    view, so projection alignment is exact by construction.
+    """
+
+    kind: Literal["front", "top", "side", "section"]
+    body_index: int = Field(default=0, ge=0)
+    label: str | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
 class SpecDimension(BaseModel):
     value: str = Field(min_length=1)
     applies_to: str = ""
@@ -127,6 +144,17 @@ class SpecAnnotation(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
+def prismatic_profile_is_complete(profile: "SpecPrismaticProfile | None") -> bool:
+    """Is this outline sufficient to build a plate/flange on its own?
+
+    Shape dimensions come from the model validator, so only the thickness — the
+    one value that needs a side view — has to be checked here.
+    """
+    if profile is None:
+        return False
+    return bool(profile.thickness_mm and profile.thickness_mm > 0)
+
+
 class EngineeringDrawingSpec(BaseModel):
     """Fail-closed contract between drawing recognition and CAD drafting."""
 
@@ -134,6 +162,9 @@ class EngineeringDrawingSpec(BaseModel):
     part: str = ""
     main_view: SpecBody
     parts: list[SpecBody] = Field(default_factory=list)
+    # Extra projections the sheet carries. Empty = front view only, which is
+    # what every spec produced before views existed — so old specs still draft.
+    views: list[SpecView] = Field(default_factory=list)
     dimensions: list[SpecDimension] = Field(default_factory=list)
     annotations: list[SpecAnnotation] = Field(default_factory=list)
     title_block: dict[str, Any] = Field(default_factory=dict)
@@ -153,6 +184,13 @@ class EngineeringDrawingSpec(BaseModel):
             rotation = any(word in body.type.lower() for word in ("вращ", "вал", "shaft"))
             if not rotation:
                 continue
+            # The TYPE is the model's classification and it is unreliable: a
+            # flange read perfectly as {circle, Ø560, thickness 20, bolt circle}
+            # was rejected live because the reader had also labelled it "тело
+            # вращения" and the rotation checks demand stepped sections. What
+            # can be built is decided by the DATA, not by the label.
+            if prismatic_profile_is_complete(body.profile):
+                continue
             if len(body.outer) < 2:
                 self.unresolved.append(f"body:{body_index}:outer-profile-incomplete")
             for section_index, section in enumerate(body.outer):
@@ -165,6 +203,11 @@ class EngineeringDrawingSpec(BaseModel):
                     self.unresolved.append(
                         f"body:{body_index}:bore:{section_index}:length-missing"
                     )
+        for view_index, view in enumerate(self.views):
+            if view.body_index >= len(bodies):
+                self.unresolved.append(
+                    f"view:{view_index}:body-index-out-of-range"
+                )
         optional_markers = (
             "масштаб", "материал", "обозначен", "штамп", "основн", "масса",
             "scale", "material", "designation", "title block", "mass",
@@ -200,6 +243,7 @@ _SPEC_PROMPT = (
     '"slots":[{"center_x_mm":0,"center_y_mm":0,"length_mm":40,'
     '"width_mm":12,"rotation_deg":0,"tolerance":null}]}},'
     '"parts":[{"name":"..","type":"..","outer":[...],"bore":[...]}],'
+    '"views":[{"kind":"front|top|side","body_index":0,"label":"Вид слева"}],'
     '"dimensions":[{"value":"Ø80js6","applies_to":".."}],'
     '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":".."}],'
     '"title_block":{"material":"..","scale":".."},'
@@ -226,9 +270,34 @@ _SPEC_PROMPT = (
     "5) Продолговатый паз задавай в slots: центр, габаритные length_mm и width_mm, "
     "rotation_deg; 0° — горизонтальный паз, углы растут против часовой.\n"
     "Если деталей несколько — каждую в parts[], главную продублируй в main_view.\n"
+    "ПРАВИЛА для views[]: перечисли ТОЛЬКО те проекции, которые РЕАЛЬНО есть на "
+    "листе, кроме главного вида (он подразумевается всегда). Для тела вращения "
+    "вид слева — это концентрические окружности справа от главного вида. "
+    "body_index нумерует тела как [main_view, parts[0], parts[1], ...]: 0 — "
+    "главное тело. Не заказывай вид, которого на листе нет: чертёжник строит "
+    "каждую проекцию из ТЕХ ЖЕ размеров, и лишний вид будет ложью об исходном "
+    "листе.\n"
     "Читай только реально видимые значения. ЗАПРЕЩЕНО угадывать, усреднять или "
     "достраивать отсутствующие размеры. Неизвестное оставь null и добавь причину "
-    "в unresolved. Для каждого прочитанного размера приложи evidence. Только JSON."
+    "в unresolved.\n"
+    # Output budget, not style. Measured on real answers: whitespace was 27-52%
+    # of the response and \uXXXX escaping of Cyrillic another 30% — together
+    # more than half the output. Two readers ran past the token limit and were
+    # cut off mid-JSON, losing a correct reading entirely, so the contract is
+    # deliberately terse.
+    "ФОРМАТ ОТВЕТА (обязательно):\n"
+    "1) Верни JSON ОДНОЙ строкой: без переносов строк, без отступов, без "
+    "лишних пробелов.\n"
+    "2) Кириллицу пиши буквами как есть. НЕ экранируй её как \\uXXXX — это "
+    "впятеро раздувает ответ.\n"
+    "3) note и applies_to — не длиннее 40 символов; если сказать нечего, ставь "
+    "null, а не пустую строку или «..».\n"
+    "4) evidence прикладывай ТОЛЬКО к значениям, которые трудно прочитать или "
+    "в которых ты не уверен. Для очевидных размеров evidence не нужен.\n"
+    "5) Никаких пояснений до или после JSON. Только JSON.\n"
+    "6) views, dimensions, annotations, title_block, unresolved — поля ВЕРХНЕГО "
+    "уровня, рядом с main_view и parts. НЕ вкладывай их внутрь main_view и НЕ "
+    "открывай перед ними новый объект «{»: весь ответ — ОДИН объект."
 )
 
 _DESCRIPTION_SPEC_PROMPT = (
@@ -284,11 +353,12 @@ async def read_description_spec(
     text = description.strip()
     if not text:
         return {}
-    parsed = _parse_spec_json(text)
+    parsed = _coerce_spec_containers(_parse_spec_json(text))
     if parsed:
         try:
             return EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
-        except ValidationError:
+        except ValidationError as exc:
+            _log_spec_rejected("description_json", exc)
             return {}
 
     from app.ai.schemas import AIRequest, AITask, ChatMessage
@@ -310,13 +380,14 @@ async def read_description_spec(
         response = await router.run(request)
     except Exception:  # noqa: BLE001
         return {}
-    parsed = _parse_spec_json(response.text or "")
+    parsed = _coerce_spec_containers(_parse_spec_json(response.text or ""))
     if not parsed:
         return {}
     try:
         validated = EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
         return _normalize_model_unresolved(validated, text)
-    except ValidationError:
+    except ValidationError as exc:
+        _log_spec_rejected("description_model", exc)
         return {}
 
 
@@ -388,6 +459,17 @@ async def read_drawing_spec(
         if get_routing_for(AITask.CAD_SPEC_READ).primary
         else AITask.DRAWING_ANALYSIS_VLM
     )
+    # A text-only model in a vision slot burns minutes of GPU and answers with
+    # an empty string, which reads as "unreadable drawing" rather than
+    # "misassigned slot". Pin the first SEEING candidate; refuse outright when
+    # the whole chain is blind.
+    seeing_model, chain_can_see = _first_vision_model(read_task)
+    if not chain_can_see:
+        raise SpecReaderNotVisionError(
+            "слот «Чтение чертежа (VLM)» назначен на модель без зрения "
+            f"({get_routing_for(read_task).primary}). Назначьте vision-модель "
+            "в Настройки → Модели → Оцифровка."
+        )
     request = AIRequest(
         task=read_task,
         messages=[ChatMessage(
@@ -397,21 +479,136 @@ async def read_drawing_spec(
         images=[base64.b64encode(value).decode() for value in images],
         confidential=confidential,
         allow_cloud=False,
+        preferred_model=seeing_model,
+        # A whole-sheet spec is long, and Cyrillic costs ~6 output chars per
+        # letter once Ollama escapes it. The default 8192 truncated real sheets
+        # mid-JSON.
+        metadata={"num_predict": 24000},
     )
     try:
         response = await router.run(request)
     except Exception:  # noqa: BLE001 — never sink the pipeline on a VLM error
         return {}
-    parsed = _parse_spec_json(response.text or "")
+    parsed = _coerce_spec_containers(
+        _parse_spec_json(response.text or "", strict=True)
+    )
     if not parsed:
         return {}
     try:
         return EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
-    except ValidationError:
+    except ValidationError as exc:
+        _log_spec_rejected("drawing_image", exc)
         return {}
 
 
-def _parse_spec_json(raw: str) -> dict:
+_LIST_FIELDS_TOP = (
+    "parts", "views", "dimensions", "annotations", "unresolved",
+    "optional_unresolved",
+)
+_LIST_FIELDS_BODY = ("outer", "bore", "features")
+_LIST_FIELDS_PROFILE = ("holes", "hole_patterns", "slots")
+
+
+def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
+    """Normalise list-shaped fields the reader got structurally wrong.
+
+    Models routinely return ``null`` or a bare object where the contract asks
+    for a list — a live read of a real sheet was discarded whole because
+    ``hole_patterns`` came back as one object instead of a one-element list.
+    Only CONTAINER SHAPE is repaired here: no value is invented, converted or
+    defaulted, so a missing dimension still blocks drafting exactly as before.
+    """
+
+    def as_list(value: Any) -> list:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    def clean_evidence(value: Any) -> list:
+        """Evidence is provenance ABOUT a value, never the value itself.
+
+        A malformed citation must not discard the dimension it annotates: a
+        live read lost five perfectly good shaft sections because the model
+        wrote its evidence entries in the wrong shape. Unusable entries are
+        dropped; a plain string is kept as ``raw_text`` on the overview image,
+        which is where the reader looks by default.
+        """
+        cleaned: list = []
+        for item in as_list(value):
+            if isinstance(item, dict):
+                if isinstance(item.get("image_index"), bool) or not isinstance(
+                    item.get("image_index"), int
+                ):
+                    item = {**item, "image_index": 0}
+                bbox = item.get("bbox")
+                if bbox is not None and (
+                    not isinstance(bbox, list) or len(bbox) != 4
+                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in bbox)
+                ):
+                    item = {**item, "bbox": None}
+                cleaned.append(item)
+            elif isinstance(item, str) and item.strip():
+                cleaned.append({"image_index": 0, "raw_text": item.strip()[:200]})
+        return cleaned
+
+    if not isinstance(spec, dict):
+        return spec
+    for field in _LIST_FIELDS_TOP:
+        if field in spec:
+            spec[field] = as_list(spec[field])
+    # ``unresolved``/``optional_unresolved`` are free-text REASONS. A reader that
+    # writes one of them as an object (live: {"field": ..., "why": ...}) used to
+    # discard the whole sheet — a note about what is missing must never delete
+    # what was found.
+    for field in ("unresolved", "optional_unresolved"):
+        items = spec.get(field)
+        if isinstance(items, list):
+            spec[field] = [
+                item if isinstance(item, str)
+                else json.dumps(item, ensure_ascii=False)[:300]
+                for item in items
+                if item is not None
+            ]
+    bodies = [spec.get("main_view"), *(spec.get("parts") or [])]
+    for body in bodies:
+        if not isinstance(body, dict):
+            continue
+        for field in _LIST_FIELDS_BODY:
+            if field in body:
+                body[field] = as_list(body[field])
+        profile = body.get("profile")
+        if isinstance(profile, dict):
+            for field in _LIST_FIELDS_PROFILE:
+                if field in profile:
+                    profile[field] = as_list(profile[field])
+        for field in _LIST_FIELDS_BODY:
+            for item in body.get(field) or []:
+                if isinstance(item, dict) and "evidence" in item:
+                    item["evidence"] = clean_evidence(item["evidence"])
+    for field in ("dimensions", "annotations", "views"):
+        for item in spec.get(field) or []:
+            if isinstance(item, dict) and "evidence" in item:
+                item["evidence"] = clean_evidence(item["evidence"])
+    return spec
+
+
+class SpecReadTruncatedError(RuntimeError):
+    """The reader ran out of output room and cut its JSON mid-object."""
+
+
+class SpecReadMalformedError(RuntimeError):
+    """The reader finished, but mis-nested the structure it was asked for."""
+
+
+def _parse_spec_json(raw: str, *, strict: bool = False) -> dict:
+    """Parse the reader's JSON. With ``strict``, a truncated answer RAISES.
+
+    Truncation must never be salvaged by closing the open braces: the missing
+    tail is usually the rest of ``outer[]``, so a "repaired" spec would draft a
+    shorter part that looks perfectly valid. Better to fail loudly.
+    """
     import json
     import re
 
@@ -420,11 +617,100 @@ def _parse_spec_json(raw: str) -> dict:
     start, end = text.find("{"), text.rfind("}")
     if not (0 <= start < end):
         return {}
+    body = text[start : end + 1]
     try:
-        value = json.loads(text[start : end + 1])
+        value = json.loads(body)
         return value if isinstance(value, dict) else {}
-    except (ValueError, TypeError):
+    except ValueError as first_error:
+        repaired = _repair_early_close(body, first_error)
+        if repaired is not None:
+            return repaired
+        exc = first_error
+        if strict:
+            # Truncation and a structural slip need different answers: one is
+            # "the model ran out of room", the other is "the model mis-nested a
+            # field". Reporting the wrong one sends the reader hunting for a
+            # limit that was never hit. The discriminator is real nesting depth
+            # — a cut-off answer often ends right after an inner "}", so
+            # looking at the last character alone is not enough.
+            if _unclosed_depth(body) > 0:
+                raise SpecReadTruncatedError(
+                    "модель чтения оборвала ответ на середине JSON (не хватило "
+                    "лимита вывода). Попробуйте ещё раз или назначьте другую "
+                    "модель в Настройки → Модели → Оцифровка."
+                ) from None
+            raise SpecReadMalformedError(
+                f"модель чтения вернула структурно некорректный JSON: {exc}"
+            ) from None
         return {}
+    except TypeError:
+        return {}
+
+
+def _unclosed_depth(text: str) -> int:
+    """How many containers are still open at the end, ignoring string literals.
+
+    Braces and brackets inside quoted values (a note like "паз {2}") must not
+    count, or every such reading would look truncated.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+    return max(depth, 0)
+
+
+def _repair_early_close(body: str, error: ValueError) -> dict | None:
+    """Re-join a top-level object the reader closed one brace too early.
+
+    Observed live: a reader emitted ``...}]}},"parts":[],"views":[...]`` — the
+    document was complete, but one stray ``}`` split it, and json.loads
+    reported "Extra data". The continuation is the model's own output, so
+    re-attaching it invents nothing; only the spurious brace is removed. If the
+    result still does not parse, or the tail is not a continuation of the same
+    object, nothing is repaired and the caller reports the malformation.
+
+    Deliberately NOT applied to truncation: there the tail does not exist, so
+    "repair" would mean fabricating the missing part of the drawing.
+    """
+    import json
+
+    if "Extra data" not in str(error):
+        return None
+    position = getattr(error, "pos", None)
+    if not isinstance(position, int) or position <= 0 or position >= len(body):
+        return None
+    head, tail = body[:position], body[position:]
+    if not head.rstrip().endswith("}") or not tail.lstrip().startswith(","):
+        return None
+    candidate = head.rstrip()[:-1] + tail
+    try:
+        value = json.loads(candidate)
+    except ValueError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    import structlog
+
+    structlog.get_logger(__name__).info(
+        "cad_spec_json_repaired", reason="early_close", position=position
+    )
+    return value
 
 
 def _num(value: Any) -> float | None:
@@ -504,19 +790,28 @@ def _rotation_parts(spec: dict) -> list[dict]:
     Uses ``parts[]`` when the reader found several bodies, else ``main_view``.
     Only bodies with ≥2 outer sections qualify (a real stepped profile), so
     prismatic parts fall through to the generative model.
+
+    ``body_index`` is carried through so ``views[]`` can name a body: it indexes
+    ``[main_view, *parts]``, exactly like the spec validator's numbering.
     """
     result: list[dict] = []
-    for part in spec.get("parts") or []:
+    for offset, part in enumerate(spec.get("parts") or []):
         if not isinstance(part, dict):
             continue
         outer = _outer_sections(part)
         if len(outer) >= 2:
-            result.append({"outer": outer, "bore": _bore_sections(part)})
+            result.append({
+                "outer": outer,
+                "bore": _bore_sections(part),
+                "body_index": offset + 1,
+            })
     if not result:
         main = spec.get("main_view") or {}
         outer = _outer_sections(main)
         if len(outer) >= 2:
-            result.append({"outer": outer, "bore": _bore_sections(main)})
+            result.append({
+                "outer": outer, "bore": _bore_sections(main), "body_index": 0,
+            })
     return result
 
 
@@ -527,7 +822,7 @@ def _sections_are_complete(sections: list[dict]) -> bool:
 
 def _emit_profile(
     sections: list[dict], px_per_mm: float, x_left: float, axis_y: float, seg,
-    bore: list[dict] | None = None,
+    bore: list[dict] | None = None, sectioned: bool = False,
 ) -> float:
     """Emit one stepped rotation profile (both generatrices + its OWN axis).
 
@@ -555,25 +850,265 @@ def _emit_profile(
 
     if bore:
         # Inner bore contour (hollow part), symmetric about the same axis.
+        # An unsectioned view hides the bore behind material: per ГОСТ 2.303
+        # that is a dashed thin line. In a longitudinal section the same edges
+        # are cut and become solid contour lines.
+        bore_cls, bore_w = ("contour", "main") if sectioned else ("hidden", "thin")
         bx = x_left
         prev_br = None
         for s in bore:
             length_px = s["l"] * px_per_mm
             br = s["d"] * px_per_mm / 2.0
             if prev_br is None:
-                seg(bx, axis_y - br, bx, axis_y + br)  # bore mouth
+                seg(bx, axis_y - br, bx, axis_y + br, bore_cls, bore_w)  # mouth
             elif abs(br - prev_br) > 0.5:
-                seg(bx, axis_y - prev_br, bx, axis_y - br)
-                seg(bx, axis_y + prev_br, bx, axis_y + br)
-            seg(bx, axis_y - br, bx + length_px, axis_y - br)
-            seg(bx, axis_y + br, bx + length_px, axis_y + br)
+                seg(bx, axis_y - prev_br, bx, axis_y - br, bore_cls, bore_w)
+                seg(bx, axis_y + prev_br, bx, axis_y + br, bore_cls, bore_w)
+            seg(bx, axis_y - br, bx + length_px, axis_y - br, bore_cls, bore_w)
+            seg(bx, axis_y + br, bx + length_px, axis_y + br, bore_cls, bore_w)
             bx += length_px
             prev_br = br
         if prev_br is not None and bx < right:
-            seg(bx, axis_y - prev_br, bx, axis_y + prev_br)  # bore bottom
+            seg(bx, axis_y - prev_br, bx, axis_y + prev_br, bore_cls, bore_w)
 
     seg(x_left - 20, axis_y, right + 20, axis_y, cls="axis", width="thin")  # centreline
     return right
+
+
+def _requested_view_kinds(spec: dict, body_indices: set[int]) -> set[str]:
+    """Which extra projections the reader saw for this body.
+
+    "front" is implicit (the drafter always builds it), so it is filtered out
+    here — the caller only needs to know what to ADD. ``body_indices`` is a set
+    because ``main_view`` duplicates the first entry of ``parts[]``: a view
+    naming either index means the same body.
+    """
+    kinds: set[str] = set()
+    for view in spec.get("views") or []:
+        if not isinstance(view, dict):
+            continue
+        try:
+            index = int(view.get("body_index", 0))
+        except (TypeError, ValueError):
+            continue
+        kind = str(view.get("kind") or "")
+        if index in body_indices and kind in ("top", "side", "section"):
+            kinds.add(kind)
+    return kinds
+
+
+def _section_wall_loops(
+    sections: list[dict], bore: list[dict], px_per_mm: float, x_left: float, axis_y: float
+) -> list[list[Point]]:
+    """Wall polygons of a longitudinal section, above and below the axis.
+
+    A hollow rotation body is normally SHOWN in section, not with dashed bore
+    lines: the material between the outer contour and the bore is what gets
+    hatched. Both loops are built from the same stepped profiles the front view
+    uses, sampled column by column, so the section can never disagree with the
+    view it cuts.
+    """
+
+    def _profile_edges(steps: list[dict]) -> list[tuple[float, float, float]]:
+        edges: list[tuple[float, float, float]] = []
+        x = x_left
+        for step in steps:
+            length_px = float(step["l"]) * px_per_mm
+            edges.append((x, x + length_px, float(step["d"]) * px_per_mm / 2.0))
+            x += length_px
+        return edges
+
+    outer_edges = _profile_edges(sections)
+    bore_edges = _profile_edges(bore)
+    if not outer_edges or not bore_edges:
+        return []
+    # Every x where either contour changes radius — the exact column breaks.
+    breaks = sorted({e[0] for e in outer_edges} | {e[1] for e in outer_edges}
+                    | {e[0] for e in bore_edges} | {e[1] for e in bore_edges})
+
+    def _radius_at(edges: list[tuple[float, float, float]], x: float) -> float:
+        for x0, x1, radius in edges:
+            if x0 - 1e-9 <= x < x1 - 1e-9:
+                return radius
+        return 0.0
+
+    loops: list[list[Point]] = []
+    for sign in (-1.0, 1.0):
+        upper: list[Point] = []
+        lower: list[Point] = []
+        for x0, x1 in zip(breaks, breaks[1:], strict=False):
+            outer_r = _radius_at(outer_edges, x0)
+            bore_r = _radius_at(bore_edges, x0)
+            if outer_r <= 0.0 or outer_r - bore_r <= 1e-6:
+                continue
+            outer_y = axis_y + sign * outer_r
+            bore_y = axis_y + sign * bore_r
+            upper += [Point(x=x0, y=outer_y), Point(x=x1, y=outer_y)]
+            # The return path must run right-to-left WITHIN each column too,
+            # otherwise the loop self-intersects and hatches as a bowtie.
+            lower = [Point(x=x1, y=bore_y), Point(x=x0, y=bore_y)] + lower
+        if len(upper) >= 2 and len(lower) >= 2:
+            loops.append(upper + lower)
+    return [loop for loop in loops if len(loop) >= 3]
+
+
+# Gap between projections, in millimetres of the part (scaled with it).
+_VIEW_GAP_MM = 15.0
+
+
+def _log_spec_rejected(source: str, exc: ValidationError) -> None:
+    """Record WHICH field killed a spec — a silent {} is undiagnosable.
+
+    A whole live read of a real sheet was once discarded because one optional
+    container came back as an object instead of a list, and nothing anywhere
+    said so.
+    """
+    import structlog
+
+    structlog.get_logger(__name__).warning(
+        "cad_spec_rejected",
+        source=source,
+        fields=[
+            ".".join(str(part) for part in err["loc"]) for err in exc.errors()[:8]
+        ],
+        messages=[err["msg"] for err in exc.errors()[:8]],
+    )
+
+
+class SpecReaderNotVisionError(RuntimeError):
+    """The CAD reader slot points at a model that cannot see images."""
+
+
+def _first_vision_model(task: Any) -> tuple[str | None, bool]:
+    """First vision-capable model in this task's chain, and whether one exists.
+
+    A text-only model answers an image request with an empty string and HTTP
+    200, so the router never falls through to the next candidate — it looks
+    like an unreadable drawing instead of a misassigned slot. Resolving the
+    first SEEING model here and pinning it as ``preferred_model`` skips blind
+    candidates without disabling the rest of the fallback chain.
+
+    Unknown models are treated as capable: the catalog is not exhaustive, and
+    refusing on a missing entry would be worse than trying.
+    """
+    from app.ai.model_registry import ModelRegistry
+    from app.ai.task_routing import get_routing_for
+
+    try:
+        registry = ModelRegistry.from_yaml(
+            "backend/app/ai/config/model_registry.yaml"
+        )
+    except Exception:  # noqa: BLE001 — never block drafting on a config read
+        return None, True
+    chain = list(get_routing_for(task).models or [])
+    if not chain:
+        return None, True
+    for key in chain:
+        capability = registry.models.get(key)
+        if capability is None or "vision" in {m.value for m in capability.modalities}:
+            return key, True
+    return None, False
+
+
+def _read_dimension_index(spec: dict) -> list[tuple[float, str, bool]]:
+    """Index the dimensions the reader actually saw: (value, text, is_diameter).
+
+    The drafter builds geometry from the nominal numbers, but a drawing is not
+    its nominals: ``Ø80js6`` and ``80`` are different instructions to the shop.
+    This index lets an emitted dimension carry the ORIGINAL string — tolerance,
+    fit, prefix and all — instead of a re-formatted number.
+    """
+    index: list[tuple[float, str, bool]] = []
+    for dim in spec.get("dimensions") or []:
+        if not isinstance(dim, dict):
+            continue
+        text = str(dim.get("value") or "").strip()
+        if not text:
+            continue
+        value = _num(text)
+        if value is None or value <= 0:
+            continue
+        index.append((value, text, text.lstrip()[:1] in ("Ø", "⌀", "D", "d")))
+    return index
+
+
+def _dimension_text(
+    index: list[tuple[float, str, bool]], value_mm: float, *, diameter: bool
+) -> str:
+    """The read text for this nominal, or a plain formatted number.
+
+    Matching is exact-by-nominal (0.5% window for reading noise) and honours
+    the Ø prefix, so a Ø40 diameter never steals a 40 mm length's tolerance.
+    A nominal the reader never wrote down falls back to the bare number — the
+    drafter states what it built and claims nothing more.
+    """
+    fallback = f"Ø{value_mm:g}" if diameter else f"{value_mm:g}"
+    best: str | None = None
+    for read_value, text, is_diameter in index:
+        if is_diameter != diameter:
+            continue
+        if abs(read_value - value_mm) > max(0.05, abs(value_mm) * 0.005):
+            continue
+        # Prefer the richest reading (a tolerance/fit suffix beats a bare number).
+        if best is None or len(text) > len(best):
+            best = text
+    return best or fallback
+
+
+def _emit_rotation_side_view(
+    sections: list[dict],
+    bore: list[dict] | None,
+    px_per_mm: float,
+    center_x: float,
+    center_y: float,
+    entities: list[Any],
+) -> None:
+    """Draft the left view of a rotation body: concentric circles.
+
+    Placed by the caller at the SAME ``center_y`` as the front view's axis, so
+    ГОСТ 2.305 projection alignment holds exactly — it is constructed, not
+    eyeballed. Every circle comes from a diameter the front view already used,
+    so the two views can never disagree.
+    """
+    common = {"origin": "spec", "assurance": "inferred"}
+    diameters = sorted({float(s["d"]) for s in sections}, reverse=True)
+    for diameter in diameters:
+        entities.append(
+            Circle(
+                center=Point(x=center_x, y=center_y),
+                radius=diameter * px_per_mm / 2.0,
+                line_class="contour",
+                width_class="main",
+                **common,
+            )
+        )
+    for section in bore or []:
+        entities.append(
+            Circle(
+                center=Point(x=center_x, y=center_y),
+                radius=float(section["d"]) * px_per_mm / 2.0,
+                line_class="hidden",
+                width_class="thin",
+                **common,
+            )
+        )
+    # Both centrelines of the left view (ГОСТ 2.305 requires the axes shown).
+    outer_r = diameters[0] * px_per_mm / 2.0 if diameters else 0.0
+    over = outer_r + 4.0 * px_per_mm
+    entities.append(
+        Segment(
+            p1=Point(x=center_x - over, y=center_y),
+            p2=Point(x=center_x + over, y=center_y),
+            line_class="axis", width_class="thin", **common,
+        )
+    )
+    entities.append(
+        Segment(
+            p1=Point(x=center_x, y=center_y - over),
+            p2=Point(x=center_x, y=center_y + over),
+            line_class="axis", width_class="thin", **common,
+        )
+    )
 
 
 # ГОСТ 2.301 sheet sizes (short, long) mm; ГОСТ 2.302 standard scale series.
@@ -595,27 +1130,176 @@ _STD_SCALES: list[tuple[float, str]] = [
     (1 / 200, "1:200"), (1 / 400, "1:400"), (1 / 500, "1:500"), (1 / 1000, "1:1000"),
 ]
 _FRAME_LEFT_MM, _FRAME_OTHER_MM = 20.0, 5.0
+# Below this share of the usable area a 1:1 drawing is too small to read, so an
+# enlargement is justified; at or above it, 1:1 is kept (ГОСТ 2.302 preference).
+_MIN_1TO1_FILL = 0.25
+# ГОСТ 2.104 form-1 stamp height (mirrors blank_sheet/techdraw_reference).
+_TITLE_BLOCK_H_MM = 55.0
+# Evidence tag marking sheet furniture (frame + stamp) rather than part geometry.
+SHEET_FRAME_EVIDENCE = "sheet_frame"
+# Paper-space resolution of the drafted sheet canvas, px per sheet millimetre.
+_PAPER_PX_PER_MM = 4.0
+
+
+def _drawing_area_mm(
+    sheet_format: str, landscape: bool, *, reserve_title_block: bool
+) -> tuple[float, float, float, float, float, float]:
+    """Paper size and the usable drawing area inside the ГОСТ frame, in mm.
+
+    Returns ``(paper_w, paper_h, area_x0, area_y0, area_w, area_h)``. When the
+    title block is drawn, the bottom-right stamp band is excluded from the
+    usable area — on A4 portrait the stamp spans the whole frame width, so
+    centring in the raw frame would put the part on top of it.
+    """
+    short, long = _GOST_SHEETS.get(sheet_format.upper(), _GOST_SHEETS["A4"])
+    paper_w, paper_h = (long, short) if landscape else (short, long)
+    area_x0, area_y0 = _FRAME_LEFT_MM, _FRAME_OTHER_MM
+    area_w = paper_w - _FRAME_LEFT_MM - _FRAME_OTHER_MM
+    area_h = paper_h - 2 * _FRAME_OTHER_MM
+    if reserve_title_block:
+        # Stamp band + a breathing gap; the drawing keeps everything above it.
+        area_h -= _TITLE_BLOCK_H_MM + 5.0
+    return paper_w, paper_h, area_x0, area_y0, area_w, max(area_h, 1.0)
 
 
 def choose_standard_scale(
     obj_w_mm: float, obj_h_mm: float, sheet_format: str, *, landscape: bool = True,
-    fill: float = 0.8,
+    fill: float = 0.8, reserve_title_block: bool = False,
 ) -> tuple[float, str]:
     """Pick the LARGEST ГОСТ 2.302 scale at which the object fits the sheet.
 
-    Fits within ``fill`` of the inner ГОСТ drawing frame (leaving room for
-    dimensions/title block). Returns ``(ratio, label)`` e.g. ``(0.5, "1:2")``.
+    Fits within ``fill`` of the usable drawing area (leaving room for
+    dimensions, and for the stamp when it is drawn). Returns ``(ratio, label)``
+    e.g. ``(0.5, "1:2")``.
     """
-    short, long = _GOST_SHEETS.get(sheet_format.upper(), _GOST_SHEETS["A4"])
-    pw, ph = (long, short) if landscape else (short, long)
-    avail_w = (pw - _FRAME_LEFT_MM - _FRAME_OTHER_MM) * fill
-    avail_h = (ph - 2 * _FRAME_OTHER_MM) * fill
+    _pw, _ph, _x0, _y0, area_w, area_h = _drawing_area_mm(
+        sheet_format, landscape, reserve_title_block=reserve_title_block
+    )
+    avail_w = area_w * fill
+    avail_h = area_h * fill
     if obj_w_mm <= 0 or obj_h_mm <= 0:
+        return 1.0, "1:1"
+    # ГОСТ 2.302 prefers 1:1: enlarge only when the part would be too small to
+    # read, never merely because the sheet has room. Taking the largest fitting
+    # scale unconditionally would redraw a 100 mm shaft at 2.5:1 and silently
+    # change the character of the sheet being reproduced.
+    fills_sheet = (
+        obj_w_mm >= avail_w * _MIN_1TO1_FILL or obj_h_mm >= avail_h * _MIN_1TO1_FILL
+    )
+    if obj_w_mm <= avail_w and obj_h_mm <= avail_h and fills_sheet:
         return 1.0, "1:1"
     for ratio, label in _STD_SCALES:
         if obj_w_mm * ratio <= avail_w and obj_h_mm * ratio <= avail_h:
             return ratio, label
     return _STD_SCALES[-1]
+
+
+def _read_scale_ratio(spec: dict | None) -> tuple[float, str] | None:
+    """The scale the reader saw in the source stamp, if it is a ГОСТ 2.302 one.
+
+    Reproducing a sheet means reproducing its scale: an original drawn 1:2 must
+    not come back 1:1 just because it would fit. Anything unparsable is ignored
+    rather than guessed at.
+    """
+    if not spec:
+        return None
+    label = str((spec.get("title_block") or {}).get("scale") or "").strip()
+    if not label:
+        return None
+    normalised = label.replace(" ", "").replace(",", ".")
+    for ratio, known in _STD_SCALES:
+        if normalised == known:
+            return ratio, known
+    return None
+
+
+def _place_on_sheet(
+    layout_w_mm: float, layout_h_mm: float, sheet_format: str, landscape: bool,
+    spec: dict | None = None,
+) -> tuple[float, str, float, float, float, float, float]:
+    """Pick the ГОСТ 2.302 scale and centre the drawing in the usable area.
+
+    Shared by both drafters so a sheet always composes the same way. Returns
+    ``(ratio, scale_label, paper_px_per_mm, paper_w_mm, paper_h_mm, x_left_px,
+    y_top_px)``. The usable area excludes the stamp band, so the drawing never
+    lands on top of the title block.
+    """
+    ratio, scale_label = choose_standard_scale(
+        layout_w_mm, layout_h_mm, sheet_format,
+        landscape=landscape, reserve_title_block=True,
+    )
+    read_scale = _read_scale_ratio(spec)
+    if read_scale is not None:
+        _pw, _ph, _ax, _ay, fit_w, fit_h = _drawing_area_mm(
+            sheet_format, landscape, reserve_title_block=True
+        )
+        read_ratio, read_label = read_scale
+        # Honour the source scale only if the drawing still fits the sheet;
+        # otherwise the auto choice wins and the difference is visible in the
+        # stamp, not hidden.
+        if (
+            layout_w_mm * read_ratio <= fit_w * 0.8
+            and layout_h_mm * read_ratio <= fit_h * 0.8
+        ):
+            ratio, scale_label = read_ratio, read_label
+    ppp = _PAPER_PX_PER_MM
+    paper_w, paper_h, area_x0, area_y0, area_w, area_h = _drawing_area_mm(
+        sheet_format, landscape, reserve_title_block=True
+    )
+    drawn_w = layout_w_mm * ratio
+    drawn_h = layout_h_mm * ratio
+    x_left = (area_x0 + max((area_w - drawn_w) / 2.0, 0.0)) * ppp
+    y_top = (area_y0 + max((area_h - drawn_h) / 2.0, 0.0)) * ppp
+    return ratio, scale_label, ppp, paper_w, paper_h, x_left, y_top
+
+
+def _sheet_frame_entities(
+    paper_w_mm: float, paper_h_mm: float, ppp: float, spec: dict, scale_label: str | None
+) -> list[Any]:
+    """ГОСТ 2.301 frame + ГОСТ 2.104 stamp, filled from the read title block.
+
+    The stamp fields come from what the reader actually saw on the source
+    sheet; nothing is invented, so an unread field stays blank rather than
+    being guessed.
+    """
+    from app.ai.cad_ir.blank_sheet import frame_and_title_block_entities
+
+    title = spec.get("title_block") or {}
+    entities = list(
+        frame_and_title_block_entities(
+            paper_w_mm,
+            paper_h_mm,
+            ppp,
+            name=str(spec.get("part") or title.get("name") or ""),
+            designation=str(title.get("designation") or ""),
+            company=str(title.get("company") or ""),
+        )
+    )
+    for entity in entities:
+        # These are drafted, not human-approved: keep provenance honest, and
+        # tag them so part geometry can be told from sheet furniture.
+        entity.origin = "spec"
+        entity.assurance = "inferred"
+        entity.evidence = [SHEET_FRAME_EVIDENCE]
+    return entities
+
+
+def _sheet_info(sheet_format: str, spec: dict, scale_label: str | None) -> Any:
+    """SheetInfo declaring the frame the drafter actually drew, plus the stamp
+    fields it filled — so the editor and DXF export agree with the geometry."""
+    from app.ai.cad_ir.schema import SheetInfo
+
+    title = spec.get("title_block") or {}
+    fields = {
+        key: str(title[key])
+        for key in ("designation", "material", "company", "mass")
+        if title.get(key)
+    }
+    if spec.get("part"):
+        fields["name"] = str(spec["part"])
+    if scale_label:
+        fields["scale"] = scale_label
+    return SheetInfo(format=sheet_format.upper(), frame=True, title_block=fields)
 
 
 def draft_rotation_body(
@@ -651,7 +1335,27 @@ def draft_rotation_body(
         (sum(s["l"] for s in body["outer"]), max(s["d"] for s in body["outer"]))
         for body in parts
     ]
-    layout_w = max(w for w, _ in part_dims)
+    # A requested left view sits to the right of its front view, on the same
+    # axis. Its footprint must enter the scale decision BEFORE a ГОСТ 2.302
+    # scale is picked, or the extra projection would overflow the frame.
+    part_view_kinds = [
+        _requested_view_kinds(
+            spec,
+            {body.get("body_index", index)} | ({0} if index == 0 else set()),
+        )
+        for index, body in enumerate(parts)
+    ]
+    part_side_view = ["side" in kinds for kinds in part_view_kinds]
+    # A section is only meaningful where there is a bore to cut through.
+    part_section = [
+        "section" in kinds and bool(body.get("bore"))
+        for kinds, body in zip(part_view_kinds, parts, strict=True)
+    ]
+    part_block_w = [
+        (w + _VIEW_GAP_MM + d) if has_side else w
+        for (w, d), has_side in zip(part_dims, part_side_view, strict=True)
+    ]
+    layout_w = max(part_block_w)
     gap_mm = 0.2 * max(h for _, h in part_dims)  # vertical gap between bodies
     layout_h = sum(h for _, h in part_dims) + gap_mm * (len(parts) - 1)
 
@@ -659,21 +1363,12 @@ def draft_rotation_body(
     scale_source: str | None = None
     sheet_info = None
     if sheet_format:
-        ratio, scale_label = choose_standard_scale(
-            layout_w, layout_h, sheet_format, landscape=landscape
+        ratio, scale_label, ppp, pw_mm, ph_mm, x_left, y_top = _place_on_sheet(
+            layout_w, layout_h, sheet_format, landscape, spec
         )
-        ppp = 4.0  # paper resolution for the sheet canvas
         px_per_mm = ratio * ppp
-        short, long = _GOST_SHEETS.get(sheet_format.upper(), _GOST_SHEETS["A4"])
-        pw_mm, ph_mm = (long, short) if landscape else (short, long)
         width_px = pw_mm * ppp
         height_px = ph_mm * ppp
-        frame_x0 = _FRAME_LEFT_MM * ppp
-        frame_y0 = _FRAME_OTHER_MM * ppp
-        frame_w = (pw_mm - _FRAME_LEFT_MM - _FRAME_OTHER_MM) * ppp
-        frame_h = (ph_mm - 2 * _FRAME_OTHER_MM) * ppp
-        x_left = frame_x0 + max((frame_w - layout_w * px_per_mm) / 2.0, 0.0)
-        y_top = frame_y0 + max((frame_h - layout_h * px_per_mm) / 2.0, 0.0)
         scale_source = "sheet_format"
     else:
         if px_per_mm is None:
@@ -692,13 +1387,34 @@ def draft_rotation_body(
             )
         )
 
+    dim_index = _read_dimension_index(spec)
     cursor_y = y_top
     right_edge = x_left
-    for body, (_w, h) in zip(parts, part_dims):
+    for body, (_w, h), has_side, sectioned in zip(
+        parts, part_dims, part_side_view, part_section, strict=True
+    ):
         axis_y = cursor_y + h * px_per_mm / 2.0
-        right_edge = max(right_edge, _emit_profile(
-            body["outer"], px_per_mm, x_left, axis_y, seg, bore=body.get("bore"),
-        ))
+        front_right = _emit_profile(
+            body["outer"], px_per_mm, x_left, axis_y, seg,
+            bore=body.get("bore"), sectioned=sectioned,
+        )
+        right_edge = max(right_edge, front_right)
+        if sectioned:
+            for loop in _section_wall_loops(
+                body["outer"], body["bore"], px_per_mm, x_left, axis_y
+            ):
+                entities.append(HatchRegion(
+                    boundary=loop, pattern="ansi31",
+                    origin="spec", assurance="inferred",
+                ))
+        if has_side:
+            # Same axis_y = exact ГОСТ 2.305 projection alignment.
+            side_center_x = front_right + (_VIEW_GAP_MM + h / 2.0) * px_per_mm
+            _emit_rotation_side_view(
+                body["outer"], body.get("bore"), px_per_mm,
+                side_center_x, axis_y, entities,
+            )
+            right_edge = max(right_edge, side_center_x + h * px_per_mm / 2.0)
         section_x = x_left
         dim_y = axis_y + h * px_per_mm / 2.0 + 10.0 * px_per_mm
         for section in body["outer"]:
@@ -708,7 +1424,7 @@ def draft_rotation_body(
                 kind="linear",
                 p1=Point(x=section_x, y=dim_y),
                 p2=Point(x=section_x + length_px, y=dim_y),
-                text=f"{section['l']:g}",
+                text=_dimension_text(dim_index, section["l"], diameter=False),
                 value_mm=section["l"],
                 origin="spec",
                 assurance="inferred",
@@ -718,7 +1434,7 @@ def draft_rotation_body(
                 kind="diameter",
                 p1=Point(x=mid_x, y=axis_y - diameter_px / 2.0),
                 p2=Point(x=mid_x, y=axis_y + diameter_px / 2.0),
-                text=f"Ø{section['d']:g}",
+                text=_dimension_text(dim_index, section["d"], diameter=True),
                 value_mm=section["d"],
                 origin="spec",
                 assurance="inferred",
@@ -728,7 +1444,7 @@ def draft_rotation_body(
             kind="linear",
             p1=Point(x=x_left, y=dim_y + 8.0 * px_per_mm),
             p2=Point(x=section_x, y=dim_y + 8.0 * px_per_mm),
-            text=f"{_w:g}",
+            text=_dimension_text(dim_index, _w, diameter=False),
             value_mm=_w,
             origin="spec",
             assurance="inferred",
@@ -736,13 +1452,8 @@ def draft_rotation_body(
         cursor_y += (h + gap_mm) * px_per_mm
 
     if sheet_format:
-        from app.ai.cad_ir.schema import SheetInfo
-
-        sheet_info = SheetInfo(
-            format=sheet_format.upper(),
-            frame=False,
-            title_block={"scale": scale_label} if scale_label else {},
-        )
+        entities += _sheet_frame_entities(pw_mm, ph_mm, ppp, spec, scale_label)
+        sheet_info = _sheet_info(sheet_format, spec, scale_label)
     else:
         width_px = right_edge + 60.0
         height_px = cursor_y + 60.0
@@ -877,28 +1588,13 @@ def draft_prismatic_body(
     scale_label = None
     sheet_info = None
     if sheet_format:
-        ratio, scale_label = choose_standard_scale(
-            layout_w, layout_h, sheet_format, landscape=landscape
-        )
-        paper_px_per_mm = 4.0
+        (
+            ratio, scale_label, paper_px_per_mm, paper_w, paper_h, x_left, y_top,
+        ) = _place_on_sheet(layout_w, layout_h, sheet_format, landscape, spec)
         px_per_mm = ratio * paper_px_per_mm
-        short, long = _GOST_SHEETS.get(sheet_format.upper(), _GOST_SHEETS["A4"])
-        paper_w, paper_h = (long, short) if landscape else (short, long)
         width_px, height_px = paper_w * paper_px_per_mm, paper_h * paper_px_per_mm
-        frame_x0 = _FRAME_LEFT_MM * paper_px_per_mm
-        frame_y0 = _FRAME_OTHER_MM * paper_px_per_mm
-        frame_w = (paper_w - _FRAME_LEFT_MM - _FRAME_OTHER_MM) * paper_px_per_mm
-        frame_h = (paper_h - 2 * _FRAME_OTHER_MM) * paper_px_per_mm
-        x_left = frame_x0 + max((frame_w - layout_w * px_per_mm) / 2.0, 0.0)
-        y_top = frame_y0 + max((frame_h - layout_h * px_per_mm) / 2.0, 0.0)
         scale_source = "sheet_format"
-        from app.ai.cad_ir.schema import SheetInfo
-
-        sheet_info = SheetInfo(
-            format=sheet_format.upper(),
-            frame=False,
-            title_block={"scale": scale_label} if scale_label else {},
-        )
+        sheet_info = _sheet_info(sheet_format, spec, scale_label)
     else:
         px_per_mm = px_per_mm or 4.0
         x_left = y_top = 60.0
@@ -910,6 +1606,7 @@ def draft_prismatic_body(
         "origin": "spec",
         "assurance": "constraint_validated",
     }
+    dim_index = _read_dimension_index(spec)
     entities: list[Any] = []
     cursor_y = y_top
     for profile, (width_mm, height_mm), profile_holes in zip(
@@ -933,14 +1630,16 @@ def draft_prismatic_body(
                 kind="linear",
                 p1=Point(x=local_x, y=dim_y),
                 p2=Point(x=local_x + width_mm * px_per_mm, y=dim_y),
-                text=f"{width_mm:g}", value_mm=width_mm, **common,
+                text=_dimension_text(dim_index, width_mm, diameter=False),
+                value_mm=width_mm, **common,
             ))
             dim_x = local_x + width_mm * px_per_mm + 10.0 * px_per_mm
             entities.append(DimensionEntity(
                 kind="linear",
                 p1=Point(x=dim_x, y=local_y),
                 p2=Point(x=dim_x, y=local_y + height_mm * px_per_mm),
-                text=f"{height_mm:g}", value_mm=height_mm, **common,
+                text=_dimension_text(dim_index, height_mm, diameter=False),
+                value_mm=height_mm, **common,
             ))
         else:
             radius = width_mm * px_per_mm / 2.0
@@ -949,7 +1648,8 @@ def draft_prismatic_body(
                 kind="diameter",
                 p1=Point(x=center_x - radius, y=center_y),
                 p2=Point(x=center_x + radius, y=center_y),
-                text=f"Ø{width_mm:g}", value_mm=width_mm, **common,
+                text=_dimension_text(dim_index, width_mm, diameter=True),
+                value_mm=width_mm, **common,
             ))
 
         axis_common = {**common, "line_class": "axis", "width_class": "thin"}
@@ -1059,6 +1759,10 @@ def draft_prismatic_body(
             ])
         cursor_y += (height_mm + gap_mm) * px_per_mm
 
+    if sheet_format:
+        entities += _sheet_frame_entities(
+            paper_w, paper_h, paper_px_per_mm, spec, scale_label
+        )
     extra = {"sheet": sheet_info} if sheet_info is not None else {}
     return CadIR(
         source=SourceInfo(

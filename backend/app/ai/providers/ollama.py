@@ -5,9 +5,12 @@ import time
 from typing import Any
 
 import httpx
+import structlog
 
 from app.ai.providers.base import AIProvider
 from app.ai.schemas import AIRequest, AIResponse, AIUsage, ProviderKind
+
+logger = structlog.get_logger(__name__)
 
 
 def _inference_options(request: AIRequest, default_temperature: float = 0.2) -> dict[str, Any]:
@@ -150,8 +153,13 @@ class OllamaProvider(AIProvider):
 
         opts = _inference_options(request, default_temperature=0.0)
         requested_num_predict = (request.metadata or {}).get("num_predict")
+        # Ceiling raised from 8192 on 2026-07-25: a full EngineeringDrawingSpec
+        # for a real A3 sheet does not fit — Ollama escapes Cyrillic as \uXXXX,
+        # so the JSON ran out of output room and came back truncated mid-object,
+        # which the caller could only report as "unreadable drawing". The
+        # DEFAULT is unchanged; only an explicit request can go higher.
         opts["num_predict"] = (
-            max(1, min(int(requested_num_predict), 8192))
+            max(1, min(int(requested_num_predict), 32768))
             if requested_num_predict is not None
             else 8192
         )
@@ -169,8 +177,12 @@ class OllamaProvider(AIProvider):
         # (qwen3.x, llava) return empty response when format is forced. JSON output
         # is controlled via the system prompt instruction instead.
 
-        # Vision inference needs much more time than text tasks (4-11 min for large models)
-        vision_timeout = max(self.config.timeout_seconds, 660.0)
+        # Vision inference needs much more time than text tasks. Raised from
+        # 660 s on 2026-07-25: reading a full A3 sheet with qwen3-vl:32b timed
+        # out at exactly 660 s, and httpx.ReadTimeout stringifies to "", so the
+        # router logged an EMPTY error and silently fell back to the next
+        # candidate — the failure looked like a broken model, not a deadline.
+        vision_timeout = max(self.config.timeout_seconds, 1800.0)
         async with httpx.AsyncClient(timeout=vision_timeout) as client:
             response = await client.post(
                 f"{str(self.config.base_url).rstrip('/')}/api/generate",
@@ -178,11 +190,32 @@ class OllamaProvider(AIProvider):
             )
             response.raise_for_status()
             body = response.json()
+        text = body.get("response")
+        if not (text or "").strip():
+            # An empty answer has two very different causes and they used to be
+            # indistinguishable from the outside. Verified 2026-07-25 on a real
+            # sheet: with think=true a model puts everything in "thinking" and
+            # leaves "response" empty, and reading only "response" then looks
+            # exactly like "the model failed". Say which it was.
+            thinking = (body.get("thinking") or "").strip()
+            logger.warning(
+                "ollama_vision_empty_response",
+                model=model,
+                task=getattr(request.task, "value", str(request.task)),
+                images=len(request.images or []),
+                thinking_chars=len(thinking),
+                reason=(
+                    "answer_went_to_thinking_field" if thinking
+                    else "model_returned_nothing"
+                ),
+                eval_count=body.get("eval_count"),
+                prompt_eval_count=body.get("prompt_eval_count"),
+            )
         return AIResponse(
             task=request.task,
             provider=self.kind,
             model=model,
-            text=body.get("response"),
+            text=text,
             usage=AIUsage(
                 input_tokens=body.get("prompt_eval_count"),
                 output_tokens=body.get("eval_count"),

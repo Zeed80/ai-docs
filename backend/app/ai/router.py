@@ -306,12 +306,18 @@ class AIRouter:
                 return response
             except Exception as exc:
                 last_error = exc
-                self._record_telemetry(request, model, started, ok=False, error=str(exc))
+                # Several exceptions that matter here stringify to "" —
+                # httpx.ReadTimeout most of all — which turned a deadline into
+                # an empty log line and an unexplained fallback. Always carry
+                # the type so the reason survives.
+                error_text = str(exc) or exc.__class__.__name__
+                self._record_telemetry(request, model, started, ok=False, error=error_text)
                 logger.warning(
                     "ai_route_model_failed",
                     task=request.task.value,
                     model=model_name,
-                    error=str(exc),
+                    error=error_text,
+                    error_type=exc.__class__.__name__,
                 )
 
         if last_error:

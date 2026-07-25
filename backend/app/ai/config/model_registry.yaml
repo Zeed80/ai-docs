@@ -426,7 +426,18 @@ models:
     provider: "ollama"
     provider_model: "fredrezones55/Qwen3.6-35B-A3B-APEX:Compact"
     status: "production"
-    modalities: ["text", "tool_calling"]
+    # Verified 2026-07-25 against Ollama /api/show: capabilities are
+    # completion,vision,tools,thinking and model_info carries a full
+    # qwen35moe.vision.* tower. The previous "text only" entry here was wrong
+    # and silently kept this model out of every vision slot.
+    #
+    # It genuinely sees — asked "what is in this picture?" it answered
+    # "технический чертеж шпинделя с размерами и допусками". It is still NOT a
+    # sheet reader: 32K context cannot hold an overview plus source-resolution
+    # tiles, so a full read returns empty (305 s) and a single-image read
+    # truncates (73 s). Its measured strength is the DRAFTER slot
+    # (spec -> geometry, IoU 0.667), where the input is text.
+    modalities: ["text", "vision", "tool_calling"]
     max_context_tokens: 32768
     supports_structured_output: true
     supports_tool_calling: true
@@ -446,7 +457,12 @@ models:
     provider: "ollama"
     provider_model: "fredrezones55/Qwopus3.6:27b"
     status: "production"
-    modalities: ["text", "tool_calling"]
+    # Verified 2026-07-25 against Ollama /api/show: this build DOES declare
+    # `vision` and ships a vision tower. An earlier audit recorded it as
+    # text-only and that entry was used to exclude it from CAD VLM routing —
+    # the exclusion was right for other reasons (measured reader quality), the
+    # stated reason was not.
+    modalities: ["text", "vision", "tool_calling"]
     max_context_tokens: 32768
     supports_structured_output: true
     supports_tool_calling: true
@@ -509,7 +525,7 @@ models:
   qwen3_vl_8b_ollama:
     provider: "ollama"
     provider_model: "qwen3-vl:8b"
-    status: "disabled"
+    status: "candidate"
     modalities: ["text", "vision"]
     max_context_tokens: 256000
     supports_structured_output: false
@@ -519,7 +535,81 @@ models:
     vram_gb_estimate: 5.0
     quality_score: 0.87
     speed_score: 0.72
-    notes: "Qwen3-VL 8B. Fast dedicated VLM, officially on Ollama. ollama pull qwen3-vl:8b"
+    notes: >
+      Qwen3-VL 8B. On TriViewBench (multi-view structural reasoning, the task
+      shape a drawing reader actually faces) it scores 60.32 overall against
+      61.38 for the dense 32B, and BEATS it at the two hardest levels — at a
+      quarter of the VRAM. Enabled 2026-07-25 as a CAD reader candidate.
+      ollama pull qwen3-vl:8b
+
+  qwen3_vl_30b_a3b_ollama:
+    provider: "ollama"
+    provider_model: "qwen3-vl:30b-a3b-instruct-q4_K_M"
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 256000
+    supports_structured_output: false
+    supports_tool_calling: false
+    supports_multi_image: true
+    local_only: true
+    vram_gb_estimate: 20.0
+    quality_score: 0.90
+    speed_score: 0.70
+    notes: >
+      Qwen3-VL 30B-A3B MoE (q4_K_M). Only ~3B parameters active per token, so
+      it targets 32B-class quality at a fraction of the latency — the dense 32B
+      needs 11+ minutes per A3 sheet. ollama pull qwen3-vl:30b-a3b-instruct-q4_K_M
+
+  bonsai_27b_q1_ollama:
+    provider: "ollama"
+    provider_model: "MobiusDevelopment/Bonsai-27B-Q1_0-gguf:latest"
+    status: "candidate"
+    modalities: ["text", "vision"]
+    max_context_tokens: 262144
+    supports_structured_output: false
+    supports_tool_calling: false
+    supports_multi_image: true
+    local_only: true
+    vram_gb_estimate: 5.0
+    quality_score: 0.75
+    speed_score: 0.85
+    notes: >
+      Bonsai 27B, 1-bit (Q1_0_g128, ~1.125 bits/weight) quantization of
+      Qwen3.6-27B with a 4-bit vision tower — 4.4 GB instead of ~54 GB FP16,
+      Apache 2.0, 262K context. Vendor reports ~90% of FP16 on a 15-benchmark
+      aggregate. Treated as a CANDIDATE only: that aggregate is weighted
+      towards reasoning/math/code, while a drawing reader needs exact
+      character-level perception (Ø80js6, HRC 58...62), which is where extreme
+      quantization degrades first. Its FP16 base failed this project's own
+      reader benchmark by overrunning the output limit.
+
+      MEASURED 2026-07-25 and REJECTED as a reader: it declares `vision`, but
+      given an image it answers as if none arrived — its own reasoning says
+      "the user provided an image (described in text form)" — so the vision
+      tower is not actually wired in this Ollama package. Full sheet read:
+      1040 s, empty. It also leaks raw <think> blocks into the response.
+      ollama pull MobiusDevelopment/Bonsai-27B-Q1_0-gguf
+
+  qwen3_6_27b_ollama:
+    provider: "ollama"
+    provider_model: "qwen3.6:27b"
+    status: "candidate"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 262144
+    supports_structured_output: true
+    supports_tool_calling: true
+    supports_multi_image: true
+    local_only: true
+    vram_gb_estimate: 17.0
+    quality_score: 0.90
+    speed_score: 0.60
+    notes: >
+      Qwen3.6 27B dense, OFFICIAL weights (April 2026), natively multimodal via
+      early text+image fusion rather than a bolted-on vision encoder — reported
+      to match or beat the Qwen3-VL line on visual understanding. Not to be
+      confused with the community fredrezones55/Qwopus3.6:27b build, which is
+      catalogued text-only and answers image prompts with an empty string.
+      ollama pull qwen3.6:27b
 
   qwen35_27b_ollama:
     provider: "ollama"
@@ -614,14 +704,30 @@ routes:
     required_modalities: ["vision"]
     local_only: true
     fallback_chain:
-      - "qwen3_6_35b_apex_ollama"
+      - "qwen3_vl_30b_a3b_ollama"
       - "gemma4_e4b_ollama"
     manual_review_fallback: true
     notes: >
       Drawing-to-specification reader for the description method. It is not an
       authoritative geometry source: deterministic verification and two-person
-      certification remain mandatory. Qwen3-VL is deliberately excluded after
-      failing the real-drawing digitization evaluation.
+      certification remain mandatory.
+
+      Chain set 2026-07-25 from a measured benchmark on a real A3 spindle
+      (backend/scripts/eval_cad_readers.py, ground truth read off the sheet by
+      a human): qwen3-vl:30b-a3b scored 7/9 facts in 268 s and drafted 87
+      entities — name, material, scale 1:2, hollowness, the Ø80js6 fit, the
+      hardness note and the sheet's views all correct; gemma4:e4b is the fast
+      fallback that always answers (4/9). Everything else failed outright:
+      qwen3.6:27b and 35b overran the output limit mid-JSON, qwen3-vl:8b and
+      qwen3.5:9b returned empty strings, the dense qwen3-vl:32b needed 56
+      minutes and still truncated.
+
+      The previous chain pointed at fredrezones55/Qwopus3.6:27b and the APEX
+      build — COMMUNITY text-only models catalogued without vision, which
+      answered every image prompt with an empty string after minutes of GPU.
+      The earlier note here excluded Qwen3-VL over a failure of the whole-sheet
+      COORDINATE reader (CAD_DRAWING_GRAPH_PLAN.md), which is a different task
+      from reading a specification.
   cad_drawing_graph_read:
     required_modalities: ["vision"]
     local_only: true
