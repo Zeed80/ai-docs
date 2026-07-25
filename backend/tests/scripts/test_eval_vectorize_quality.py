@@ -95,34 +95,3 @@ def test_broken_insert_excludes_sheet_from_ground_truth() -> None:
     assert issues == ["broken_insert:MISSING_BLOCK"]
 
 
-def test_neural_mode_calls_seq2seq_candidate(monkeypatch) -> None:
-    """Candidate evaluation must not be routed to technical-vectorizer."""
-    import cv2
-    import numpy as np
-
-    from app.ai.cad_recognize.base import RecognizeOutput
-    from app.ai.cad_recognize.neural import NeuralRecognizer
-
-    called = []
-
-    def fake_recognize(self, ink, exclusion_boxes=None):
-        called.append((ink.shape, exclusion_boxes))
-        return RecognizeOutput(
-            entities=[_seg(2, 2, 20, 2)],
-            keep_raster=None,
-            thin_px=2,
-            thick_px=3,
-        )
-
-    monkeypatch.setattr(NeuralRecognizer, "recognize", fake_recognize)
-    image = np.full((32, 32), 255, dtype=np.uint8)
-    cv2.line(image, (2, 2), (20, 2), 0, 1)
-    ok, encoded = cv2.imencode(".png", image)
-    assert ok
-
-    result = _recognize(encoded.tobytes(), enhance=False, recognizer="neural")
-
-    assert called
-    assert result is not None
-    assert result["recognizer_used"] == "neural"
-    assert result["declined"] is False

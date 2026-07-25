@@ -52,7 +52,7 @@ type StudioComposerPrefs = {
   mode?: "image" | "tech" | "vector";
   vectorScale?: string;
   vectorSheetFormat?: "" | "A4" | "A3" | "A2" | "A1" | "A0";
-  vectorMethod?: "trace" | "spec" | "graph" | "text_spec";
+  vectorMethod?: "trace" | "spec";
   vectorDescription?: string;
   vectorLandscape?: boolean;
   blankFormat?: "A4" | "A3" | "A2" | "A1";
@@ -146,13 +146,15 @@ export default function StudioComposer({
   const [vectorSheetFormat, setVectorSheetFormat] = useState<
     "" | "A4" | "A3" | "A2" | "A1" | "A0"
   >(prefs.vectorSheetFormat ?? "");
-  // "spec" reads the source image into a structured spec and drafts clean
-  // geometry from it (production «По описанию»); "graph" is the opt-in
-  // whole-sheet coordinate-reader experiment; "text_spec" drafts from a free
-  // text ТЗ with no source image.
-  const [vectorMethod, setVectorMethod] = useState<
-    "trace" | "spec" | "graph" | "text_spec"
-  >(prefs.vectorMethod ?? "trace");
+  // Digitizing a sheet has exactly two methods now. "spec" (default) reads the
+  // source image into a structured spec and REDRAWS clean geometry from it —
+  // the only path whose output is CAD-correct by construction. "trace" is the
+  // auxiliary pixel path, kept for classes the drafter cannot yet express.
+  // Drafting from a free-text ТЗ is not a digitizing method and lives in its
+  // own section below (it needs no source sheet).
+  const [vectorMethod, setVectorMethod] = useState<"trace" | "spec">(
+    prefs.vectorMethod ?? "spec",
+  );
   const [vectorDescription, setVectorDescription] = useState(
     prefs.vectorDescription ?? "",
   );
@@ -590,12 +592,14 @@ export default function StudioComposer({
   }
 
   async function submitVector() {
-    const directDescription =
-      vectorMethod === "text_spec" ? vectorDescription.trim() : "";
-    if (!sourceFile && !sourceGenerationId && !directDescription) {
+    // No source sheet + a filled ТЗ = the separate "draft from text" workflow.
+    const hasSource = Boolean(sourceFile || sourceGenerationId);
+    const directDescription = hasSource ? "" : vectorDescription.trim();
+    if (!hasSource && !directDescription) {
       setErr(t("error_need_source"));
       return;
     }
+    const method = directDescription ? "text_spec" : vectorMethod;
     setBusy(true);
     setErr(null);
     try {
@@ -606,16 +610,16 @@ export default function StudioComposer({
         source_image_paths: [],
         ...link,
       };
-      (input.params as Record<string, unknown>).vectorize_method = vectorMethod;
+      (input.params as Record<string, unknown>).vectorize_method = method;
       const s = Number(vectorScale.replace(",", "."));
       // The "spec" method auto-picks a ГОСТ 2.302 scale from the sheet +
       // orientation, so a manual scale is ignored there (but the sheet is used).
-      if (vectorMethod === "trace" && Number.isFinite(s) && s > 0) {
+      if (method === "trace" && Number.isFinite(s) && s > 0) {
         (input.params as Record<string, unknown>).scale_mm_per_px = s;
       } else if (vectorSheetFormat) {
         (input.params as Record<string, unknown>).sheet_format =
           vectorSheetFormat;
-        if (vectorMethod !== "trace") {
+        if (method !== "trace") {
           (input.params as Record<string, unknown>).sheet_orientation =
             vectorLandscape ? "landscape" : "portrait";
         }
@@ -1272,26 +1276,25 @@ export default function StudioComposer({
           )}
           <p className="text-[11px] text-zinc-600">{t("vector_cleanup_tip")}</p>
 
-          {/* Method: pixel tracing vs understanding→drafting (β). */}
-          <label className="block">
-            <span className="text-xs text-zinc-500">
-              {t("vectorize_method")}
-            </span>
-            <select
-              value={vectorMethod}
-              onChange={(e) =>
-                setVectorMethod(
-                  e.target.value as "trace" | "spec" | "graph" | "text_spec",
-                )
-              }
-              className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
-            >
-              <option value="trace">{t("method_trace")}</option>
-              <option value="spec">{t("method_spec")}</option>
-              <option value="graph">{t("method_graph")}</option>
-              <option value="text_spec">{t("method_text_spec")}</option>
-            </select>
-          </label>
+          {/* Method: understanding→redraw (default) vs auxiliary pixel trace.
+              Only meaningful with a source sheet attached. */}
+          {(sourceFile || sourceGenerationId) && (
+            <label className="block">
+              <span className="text-xs text-zinc-500">
+                {t("vectorize_method")}
+              </span>
+              <select
+                value={vectorMethod}
+                onChange={(e) =>
+                  setVectorMethod(e.target.value as "trace" | "spec")
+                }
+                className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+              >
+                <option value="spec">{t("method_spec")}</option>
+                <option value="trace">{t("method_trace")}</option>
+              </select>
+            </label>
+          )}
 
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="block">
@@ -1336,20 +1339,16 @@ export default function StudioComposer({
             </label>
           </div>
 
-          {vectorMethod === "spec" && (
+          {vectorMethod === "spec" && (sourceFile || sourceGenerationId) && (
             <p className="rounded border border-sky-400/20 bg-sky-950/20 px-3 py-2 text-[11px] text-sky-100">
               {t("vector_spec_hint")}
             </p>
           )}
 
-          {vectorMethod === "graph" && (
-            <p className="rounded border border-amber-400/20 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-100">
-              {t("vector_graph_hint")}
-            </p>
-          )}
-
-          {/* Free text is a separate auxiliary workflow, not graph recognition. */}
-          {vectorMethod === "text_spec" && (
+          {/* Drafting from a free-text ТЗ — a separate workflow, not
+              digitizing: it needs no source sheet and proves nothing about
+              recognition quality. Shown only when no sheet is attached. */}
+          {!sourceFile && !sourceGenerationId && (
             <div className="space-y-1">
               <label className="block">
                 <span className="text-xs text-zinc-500">
@@ -1428,9 +1427,7 @@ export default function StudioComposer({
             onClick={submitVector}
             disabled={
               busy ||
-              (!sourceFile &&
-                !sourceGenerationId &&
-                !(vectorMethod === "text_spec" && vectorDescription.trim()))
+              (!sourceFile && !sourceGenerationId && !vectorDescription.trim())
             }
             className="w-full px-4 py-2.5 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium disabled:opacity-50"
           >

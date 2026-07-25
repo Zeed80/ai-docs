@@ -1,30 +1,26 @@
-"""Pluggable recognition backends that fill the CAD IR.
+"""Recognition backends that fill the CAD IR.
 
-Backends (CV skeleton fit today; neural seq2seq and VLM crops later) only
-*propose* entities with per-entity confidence. The independent verifier
-(``verify.py``) rasterizes proposals and scores them against the source ink —
-generation never grades itself.
+Two production backends remain, and both are auxiliary to the spec drafter:
+``CvRecognizer`` (classical trace) and ``TechnicalVectorizerRecognizer``
+(pretrained line model). They only *propose* entities with per-entity
+confidence; the independent verifier (``verify.py``) rasterizes proposals and
+scores them against the source ink — generation never grades itself.
+
+Seven from-scratch neural proposers (primitive-set, hybrid-engineering,
+hierarchical-sheet, evidence-heatmap, directional-fields, edge-graph,
+multi-type) were removed on 2026-07-25: every one of them was rejected by the
+fail-closed promotion gate (best entity F1 0.066 against a 0.995 bar) and none
+was ever reachable from the production path. The lesson they encode is in
+``DXF_CAD_DEVELOPMENT_PLAN.md``: line-level pixel proposers cannot recover the
+semantics (views, dimensions, tolerances) an ЕСКД redraw needs.
 """
 
 from app.ai.cad_recognize.base import RecognizeOutput
 from app.ai.cad_recognize.cv import CvRecognizer
-from app.ai.cad_recognize.directional_fields import DirectionalFieldRecognizer
-from app.ai.cad_recognize.edge_graph import EdgeGraphRecognizer, SourceSnappedEdgeGraphRecognizer
-from app.ai.cad_recognize.evidence_heatmap import EvidenceHeatmapRecognizer
-from app.ai.cad_recognize.hybrid_engineering import HybridEngineeringRecognizer
-from app.ai.cad_recognize.hierarchical_sheet import HierarchicalSheetRecognizer
-from app.ai.cad_recognize.multi_type import MultiTypeProposalRecognizer
-from app.ai.cad_recognize.primitive_set import PrimitiveSetRecognizer
+from app.ai.cad_recognize.technical_vectorizer import TechnicalVectorizerRecognizer
 
 __all__ = [
     "CvRecognizer",
-    "DirectionalFieldRecognizer",
-    "EdgeGraphRecognizer",
-    "SourceSnappedEdgeGraphRecognizer",
-    "EvidenceHeatmapRecognizer",
-    "HybridEngineeringRecognizer",
-    "HierarchicalSheetRecognizer",
-    "PrimitiveSetRecognizer",
-    "MultiTypeProposalRecognizer",
+    "TechnicalVectorizerRecognizer",
     "RecognizeOutput",
 ]

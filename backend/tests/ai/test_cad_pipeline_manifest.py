@@ -29,10 +29,9 @@ def test_pipeline_manifest_is_reproducible_and_exposes_assignments():
     assert first["components"]["drawing_graph_drafter"]["preserves_entity_ids"] is True
     assert first["components"]["spec_drafter"]["task"] == "cad_spec_draft"
     assert first["promotion_gate"]["false_exact_rate"] == 0.0
-    candidate = first["components"]["geometry"]["available_candidates"][0]
-    assert candidate["endpoint"] == "/detect-multi-type"
-    assert candidate["runtime_mode"] == "opt_in_only"
-    assert candidate["promotion_passed"] is False
+    # No neural candidate is declared any more: every from-scratch proposer
+    # was rejected by the gate and removed with its service (2026-07-25).
+    assert first["components"]["geometry"]["available_candidates"] == []
     drafter = first["components"]["spec_drafter"]
     assert "rectangular_plate_with_through_holes" in drafter["supported_geometry"]
     assert "equally_spaced_holes_on_bolt_circle" in drafter["supported_geometry"]

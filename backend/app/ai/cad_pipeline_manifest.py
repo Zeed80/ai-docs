@@ -13,15 +13,11 @@ from app.ai.task_routing import get_routing_for
 MANIFEST_VERSION = "1.0"
 PIPELINE_REVISION = "drawing-graph-staged-reader-v3"
 
-MULTI_TYPE_CANDIDATE = {
-    "key": "multi-type-proposal-v2",
-    "service": "cad-vectorizer",
-    "endpoint": "/detect-multi-type",
-    "checkpoint_step": 1059,
-    "checkpoint_sha256": "166bb77a893c0a3de9a9d32d3346a40c0a090bddaf99dbb101b6d9ab07bbece8",
-    "runtime_mode": "opt_in_only",
-    "promotion_passed": False,
-}
+# The opt-in multi-type candidate that used to be listed here was removed on
+# 2026-07-25 together with the ``cad-vectorizer`` service: it never passed the
+# promotion gate and its service no longer exists. The list stays in the
+# manifest so a future candidate is declared explicitly, not silently.
+NEURAL_CANDIDATES: list[dict[str, object]] = []
 
 PROFILE_GATES: dict[str, dict[str, float]] = {
     profile: {
@@ -79,7 +75,7 @@ def build_cad_pipeline_manifest(
             "assignment": "technical-vectorizer + CV fail-closed arbitration",
             "version": "technical-vectorizer-line-candidate",
             "authoritative": False,
-            "available_candidates": [dict(MULTI_TYPE_CANDIDATE)],
+            "available_candidates": [dict(c) for c in NEURAL_CANDIDATES],
         },
         "spec_reader": _route(AITask.CAD_SPEC_READ),
         "drawing_graph_reader": {
