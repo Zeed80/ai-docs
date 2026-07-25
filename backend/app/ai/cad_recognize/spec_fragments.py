@@ -275,6 +275,87 @@ async def _ask(
     return _coerce_spec_containers(parsed) if parsed else {}
 
 
+# A purpose-built document model rather than a bigger general one. Measured on
+# the labelled sheets: at 1.1B parameters it reads the callouts a 30B generalist
+# misses — the flange's Ø80H7 bore and its 20±0.1 thickness, the shaft's HRC
+# 42...48 and "Остальные Ra 6.3" out of the notes column, GD&T frames and the
+# full stamp. This matches what the literature reports for drawings (a 0.23B
+# fine-tuned extractor beating frontier models on GD&T): the win on a technical
+# sheet is specialisation, not scale.
+_OCR_MODEL = "glm-ocr:latest"
+# It repeats its answer when given room, so the budget is small and repeated
+# blocks are collapsed.
+_OCR_NUM_PREDICT = 700
+
+
+async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
+    """Dimensions and annotations transcribed by the document model.
+
+    Returns the same shape as the callout question so the two can be merged.
+    Lines are deduplicated because the model loops, and nothing is invented:
+    a line becomes a dimension only if it carries a number, an annotation only
+    if it names a known kind.
+    """
+    import base64
+    import io as _io
+    import re
+
+    import httpx
+
+    from app.config import settings
+
+    buffer = _io.BytesIO()
+    image.save(buffer, format="PNG")
+    payload = {
+        "model": _OCR_MODEL,
+        "prompt": "Прочитай все надписи и размеры с этого чертежа.",
+        "images": [base64.b64encode(buffer.getvalue()).decode()],
+        "stream": False,
+        "think": False,
+        "options": {"num_predict": _OCR_NUM_PREDICT, "temperature": 0},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=5.0)) as client:
+            response = await client.post(
+                f"{str(settings.ollama_url).rstrip('/')}/api/generate", json=payload
+            )
+            response.raise_for_status()
+            text = (response.json().get("response") or "")
+    except Exception as exc:  # noqa: BLE001 — one lost layer, not the sheet
+        logger.warning("cad_ocr_layer_failed", error=str(exc)[:200])
+        return {}
+
+    seen: set[str] = set()
+    lines: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip().strip("`").strip()
+        if not line or line.lower() in seen:
+            continue
+        seen.add(line.lower())
+        lines.append(line)
+
+    kinds = (
+        ("roughness", re.compile(r"\bR[az]\s*\d", re.IGNORECASE)),
+        ("hardness", re.compile(r"\bHRC|\bHB\b|твёрд|тверд", re.IGNORECASE)),
+        ("thread", re.compile(r"\bM\d+\s*[x×]", re.IGNORECASE)),
+        ("material", re.compile(r"сталь|чугун|бронз|латун|алюмин", re.IGNORECASE)),
+    )
+    dimensions: list[dict] = []
+    annotations: list[dict] = []
+    for line in lines:
+        matched = None
+        for kind, pattern in kinds:
+            if pattern.search(line):
+                matched = kind
+                break
+        if matched:
+            annotations.append({"kind": matched, "text": line[:200]})
+            continue
+        if re.search(r"\d", line) and len(line) <= 60:
+            dimensions.append({"value": line[:60], "applies_to": None})
+    return {"dimensions": dimensions, "annotations": annotations}
+
+
 async def read_spec_by_fragments(
     image_bytes: bytes, *, router: Any | None = None, confidential: bool = True
 ) -> dict:
@@ -350,6 +431,23 @@ async def read_spec_by_fragments(
         )
 
     callouts = await _ask(_CALLOUT_PROMPT, overview, num_predict=3000, schema=_CALLOUT_SCHEMA, **ask)
+    # The document model reads the sheet's text better than the general reader;
+    # its lines are ADDED to what the general reader found rather than replacing
+    # it, since the two miss different things.
+    ocr = await read_callouts_with_ocr(overview, router=router)
+    if ocr:
+        known = {str((d or {}).get("value") or "").strip().lower()
+                 for d in (callouts.get("dimensions") or [])}
+        callouts.setdefault("dimensions", []).extend(
+            d for d in ocr.get("dimensions") or []
+            if str(d.get("value") or "").strip().lower() not in known
+        )
+        known_notes = {str((a or {}).get("text") or "").strip().lower()
+                       for a in (callouts.get("annotations") or [])}
+        callouts.setdefault("annotations", []).extend(
+            a for a in ocr.get("annotations") or []
+            if str(a.get("text") or "").strip().lower() not in known_notes
+        )
 
     assembled: dict[str, Any] = {
         "schema_version": 1,

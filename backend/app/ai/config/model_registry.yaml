@@ -542,6 +542,35 @@ models:
       quarter of the VRAM. Enabled 2026-07-25 as a CAD reader candidate.
       ollama pull qwen3-vl:8b
 
+  glm_ocr_ollama:
+    provider: "ollama"
+    provider_model: "glm-ocr:latest"
+    status: "production"
+    modalities: ["text", "vision"]
+    max_context_tokens: 32768
+    supports_structured_output: false
+    supports_tool_calling: false
+    supports_multi_image: false
+    local_only: true
+    vram_gb_estimate: 3.0
+    quality_score: 0.85
+    speed_score: 0.80
+    notes: >
+      GLM-OCR, 1.1B, purpose-built for document understanding. Used as the TEXT
+      LAYER of the CAD reader, not as a spec reader: it transcribes a sheet, it
+      does not produce the drafting contract.
+
+      Measured on the labelled sheets 2026-07-26 — adding it took fit recall
+      from 0.800 to 1.000 and roughness from 0.875 to 1.000, because it reads
+      what the 30B generalist misses: the flange's Ø80H7 bore and 20±0.1
+      thickness, the shaft's "Остальные Ra 6.3" out of the notes column, GD&T
+      frames and the full stamp. On a technical sheet the win is specialisation,
+      not scale — a 1.1B model beating a 30B one at its own job.
+
+      It repeats its answer when given output room, so the caller caps
+      num_predict and collapses duplicate lines.
+      ollama pull glm-ocr
+
   qwen3_vl_30b_a3b_ollama:
     provider: "ollama"
     provider_model: "qwen3-vl:30b-a3b-instruct-q4_K_M"
