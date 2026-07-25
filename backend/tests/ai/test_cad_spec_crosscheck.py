@@ -203,3 +203,27 @@ def test_a_real_part_passes_the_plausibility_gates():
         "title_block": {"material": "Сталь 45 ГОСТ 1050-2013", "scale": "1:2"},
     }
     assert check_spec_arithmetic(spec) == []
+
+
+def test_the_measured_outline_rejects_an_impossible_hole():
+    """Calibrated from the image: a hole cannot exceed the outline drawn."""
+    from app.ai.cad_recognize.spec_crosscheck import check_outline_against_image
+
+    def flange(bore: float) -> dict:
+        return {"main_view": {"type": "фланец", "profile": {
+            "shape": "circle", "diameter_mm": 560, "thickness_mm": 20,
+            "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": bore}],
+        }}}
+
+    measured_px = 277.4  # the flange outline as the detector measures it
+    assert check_outline_against_image(flange(80), measured_px) == []
+    codes = _codes(check_outline_against_image(flange(600), measured_px))
+    assert "hole_larger_than_measured_outline" in codes
+
+
+def test_no_measurement_means_no_verdict_from_the_image():
+    from app.ai.cad_recognize.spec_crosscheck import check_outline_against_image
+
+    spec = {"main_view": {"profile": {"shape": "circle", "diameter_mm": 560}}}
+    assert check_outline_against_image(spec, None) == []
+    assert check_outline_against_image(spec, 0) == []
