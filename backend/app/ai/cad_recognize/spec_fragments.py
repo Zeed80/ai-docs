@@ -236,6 +236,7 @@ async def read_spec_by_fragments(
     from app.ai.cad_recognize.spec_vectorize import (
         EngineeringDrawingSpec,
         SpecReaderNotVisionError,
+        _coerce_spec_containers,
         _first_vision_model,
     )
     from app.ai.schemas import AITask
@@ -329,6 +330,11 @@ async def read_spec_by_fragments(
         },
     }
     fragments = assembled.pop("fragments")
+    # The per-question coercion runs on FRAGMENT answers, where a profile is the
+    # top-level object; the assembled spec nests it under main_view, so the
+    # cleanup has to run once more here or unusable entries reach validation and
+    # take the sheet with them.
+    assembled = _coerce_spec_containers(assembled)
     try:
         validated = EngineeringDrawingSpec.model_validate(assembled).model_dump(
             mode="json"

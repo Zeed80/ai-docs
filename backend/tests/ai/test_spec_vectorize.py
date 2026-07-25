@@ -913,3 +913,31 @@ def test_an_object_in_unresolved_does_not_delete_the_geometry():
     assert len(spec.main_view.outer) == 2
     assert any("масштаб" in item for item in spec.optional_unresolved)
     assert "габарит не найден" in spec.unresolved
+
+
+def test_an_unusable_hole_pattern_is_dropped_not_the_whole_sheet():
+    """A bearing-housing sheet scored 0/2, 0/1, 0/3 over one null diameter."""
+    from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
+
+    parsed = {
+        "main_view": {
+            "type": "фланец",
+            "profile": {
+                "shape": "circle", "diameter_mm": 140, "thickness_mm": 20,
+                "holes": [
+                    {"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 40},
+                    {"center_x_mm": 10, "center_y_mm": 0, "diameter_mm": None},
+                ],
+                "hole_patterns": [{
+                    "kind": "bolt_circle", "count": 6,
+                    "bolt_circle_diameter_mm": 110, "hole_diameter_mm": None,
+                }],
+            },
+        },
+    }
+    spec = EngineeringDrawingSpec.model_validate(_coerce_spec_containers(parsed))
+    profile = spec.main_view.profile
+    assert profile is not None
+    assert len(profile.holes) == 1
+    assert profile.holes[0].diameter_mm == 40
+    assert profile.hole_patterns == []

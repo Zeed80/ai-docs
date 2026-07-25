@@ -626,6 +626,25 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
             for field in _LIST_FIELDS_PROFILE:
                 if field in profile:
                     profile[field] = as_list(profile[field])
+            # A hole or a pattern without a positive diameter describes nothing.
+            # It used to invalidate the WHOLE sheet: a bearing-housing drawing
+            # scored 0/2 diameters, 0/1 fits and 0/3 roughness purely because
+            # one pattern came back with a null hole_diameter_mm. Drop the
+            # unusable entry, keep the sheet.
+            for field, size_key in (
+                ("holes", "diameter_mm"),
+                ("hole_patterns", "hole_diameter_mm"),
+                ("slots", "width_mm"),
+            ):
+                items = profile.get(field)
+                if isinstance(items, list):
+                    profile[field] = [
+                        item for item in items
+                        if isinstance(item, dict)
+                        and isinstance(item.get(size_key), (int, float))
+                        and not isinstance(item.get(size_key), bool)
+                        and item[size_key] > 0
+                    ]
         for field in _LIST_FIELDS_BODY:
             for item in body.get(field) or []:
                 if isinstance(item, dict) and "evidence" in item:
