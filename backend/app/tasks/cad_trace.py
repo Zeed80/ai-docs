@@ -1171,7 +1171,23 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "валидный спек. Проверьте назначение CAD reader (Настройки → "
                         "Модели → Оцифровка) и исходный лист."
                     )
+                # Cross-check before anything is built: the sheet's own
+                # arithmetic and the proportions of the traced ink can
+                # contradict a read that all passes agreed on.
+                from app.ai.cad_recognize.spec_crosscheck import cross_check_spec
+
+                try:
+                    check_ink, _cw, _ch = _binarize(content)
+                except Exception:  # noqa: BLE001 — a check must not break the run
+                    check_ink = None
+                crosscheck = cross_check_spec(spec, check_ink)
+                blocking_checks = [
+                    finding["message"] for finding in crosscheck["findings"]
+                    if finding["severity"] == "error"
+                ]
+
                 unresolved = [str(i) for i in spec.get("unresolved", []) if str(i)]
+                unresolved.extend(blocking_checks)
                 if unresolved:
                     # Persist WHAT WAS READ even though nothing is drafted: a
                     # fail-closed stop the user cannot inspect is unactionable —
@@ -1182,6 +1198,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             stopped.params = {
                                 **(stopped.params or {}),
                                 "spec": spec,
+                                "spec_crosscheck": crosscheck,
                                 "cad_pipeline_manifest": pipeline_manifest,
                             }
                             await db.commit()
@@ -1236,6 +1253,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "description_mode": False,
                         "spec": spec,
                         "spec_dimension_check": spec_dim_check,
+                        "spec_crosscheck": crosscheck,
                         "cad_pipeline_manifest": pipeline_manifest,
                         "normalized_source_path": normalized_path,
                         **({"solid_3d": solid_result} if solid_result else {}),
