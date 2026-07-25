@@ -105,6 +105,55 @@ openssl s_client -connect mail.example.com:993 -servername mail.example.com </de
 `backend`, иначе валидный ключ будет отвечать 401/403 (самая частая причина
 ошибки на кнопке «Сохранить и проверить»).
 
+## 2.3. Исходящий DNS (частая причина падения установки)
+
+Mailcow резолвит рекурсивно сам (unbound): ходит от корневых серверов к
+авторитетным. На этом держатся DNSBL-проверки, DANE/DNSSEC и резолв MX
+контрагентов. Часть провайдеров (особенно на PPPoE/бытовых каналах)
+перехватывает весь исходящий трафик на порт 53 и отвечает своим резолвером —
+тот обслуживает только рекурсивные запросы, а итеративные отбивает REFUSED.
+Установка тогда падает так:
+
+```
+dependency failed to start: container mailcowdockerized-unbound-mailcow-1 is unhealthy
+```
+
+Проверка вручную:
+
+```bash
+dig +norecurse @198.41.0.4 ru. NS | grep -E "flags|status"
+# норма:    flags: qr aa      (авторитетный ответ настоящего корня)
+# перехват: status: REFUSED   или flags: qr ra (отвечает чужой резолвер)
+```
+
+`install-mailcow.sh` делает эту проверку сам (до первого `up`) и при перехвате
+переводит unbound на зашифрованный форвардинг: DNS-over-TLS напрямую, а если 853
+тоже закрыт — через локальный DoH-прокси в docker-сети mailcow. Отдельно:
+
+```bash
+infra/installer/mailcow-dns-forward.sh --check    # только диагностика
+infra/installer/mailcow-dns-forward.sh            # применить
+infra/installer/mailcow-dns-forward.sh --revert   # вернуть штатную рекурсию
+```
+
+Конфигурация кладётся в `infra/mailcow/aiw-dns/` (вне git-дерева mailcow, чтобы
+обновление тега не конфликтовало) и подключается через
+`docker-compose.override.yml`. Плата за обход: DNSBL-списки не отвечают на
+запросы с публичных резолверов, поэтому антиспам теряет часть сигналов.
+
+## 2.4. PTR и репутация IP
+
+`dig -x <ваш-IP> +short` должен вернуть `mail.example.com`. Если возвращается
+имя провайдера — письма будут хуже доставляться; если в имени есть `pppoe`,
+`dynamic`, `dsl`, `dhcp`, `pool` — диапазон почти наверняка в Spamhaus PBL, и
+приём с него отклоняется до всякой проверки SPF/DKIM.
+
+На приём почты PTR не влияет. Порядок действий: проверить IP на
+check.spamhaus.org → запросить rDNS у провайдера → если отказ, отправлять через
+smarthost (`Configuration → Routing → Sender-Dependent Transports` в Mailcow),
+добавив релей в SPF: `v=spf1 mx a:mail.example.com include:<spf-релея> -all`.
+DKIM при этом подписывается локально, выравнивание DMARC сохраняется.
+
 ## 3. Подключение почтовых клиентов «из коробки»
 
 Любой обычный почтовый клиент — Outlook, Thunderbird, Apple Mail, K-9,
@@ -182,7 +231,9 @@ journalctl -u mailcow-update-check.service   # текущий/целевой т�
 
 ## Чеклист верификации
 
+- [ ] `unbound-mailcow` в состоянии healthy (иначе см. 2.3)
 - [ ] `https://mail.example.com` открывается с валидным сертификатом (SOGo/admin UI)
+- [ ] Порты 25/587/993 доступны СНАРУЖИ, а не только с самого сервера
 - [ ] `openssl s_client` на 587/993 показывает сертификат Let's Encrypt (не snakeoil)
 - [ ] Выдать → отключить → выдать ящик тому же пользователю (409 не возникает)
 - [ ] Домен `example.com` создан в admin UI, DKIM TXT опубликован

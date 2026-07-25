@@ -175,7 +175,112 @@ function GuideContent() {
         </p>
       </Section>
 
-      <Section n={2} title="Порты в фаерволе хоста">
+      <Section n={2} title="PTR и репутация IP — от этого зависит, дойдут ли письма">
+        <p>
+          Проверьте, что отдаёт обратная зона вашего адреса:
+        </p>
+        <Code>{`dig -x ВАШ_IP +short`}</Code>
+        <p>
+          <strong>Хорошо</strong>, если в ответе <span className="font-mono">{mailDomain}</span>.
+          <strong> Плохо</strong>, если это имя провайдера — и особенно плохо,
+          если в нём встречается <span className="font-mono">pppoe</span>,{" "}
+          <span className="font-mono">dynamic</span>,{" "}
+          <span className="font-mono">dsl</span>,{" "}
+          <span className="font-mono">dhcp</span>,{" "}
+          <span className="font-mono">pool</span>: такие имена фильтры считают
+          признаком клиентского пула, а подобные диапазоны массово внесены в
+          Spamhaus PBL. Приём с них часто отклоняется ещё на этапе соединения,
+          до того как кто-то посмотрит на SPF и DKIM.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          На <em>приём</em> почты PTR не влияет: счета от поставщиков будут
+          доходить в любом случае. Проблема только с отправкой.
+        </p>
+        <p>Что делать, по порядку:</p>
+        <ol className="list-decimal pl-5 space-y-1">
+          <li>
+            Проверьте IP в блок-листах:{" "}
+            <a
+              href="https://check.spamhaus.org/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              check.spamhaus.org
+            </a>{" "}
+            (интересуют PBL и SBL). Если адрес в PBL — отправлять напрямую
+            бессмысленно, сразу переходите к пункту 3.
+          </li>
+          <li>
+            Запросите rDNS у провайдера: «прошу настроить обратную зону для IP X
+            на имя {mailDomain}». На статических тарифах это часто делают по
+            заявке.
+          </li>
+          <li>
+            Если отказали — отправляйте через <strong>smarthost (релей)</strong>.
+            Приём остаётся у вас (свой сервер, свои ящики, свои данные), а
+            исходящие уходят через SMTP-релей с чистым IP и корректным PTR.
+          </li>
+        </ol>
+        <p className="font-medium mt-2">Настройка релея в Mailcow</p>
+        <p>
+          <em>Configuration → Routing → Sender-Dependent Transports</em>: хост
+          релея, порт 587, логин и пароль. Затем:
+        </p>
+        <ul className="list-disc pl-5 space-y-1">
+          <li>
+            <strong>SPF</strong> — добавьте релей в запись:{" "}
+            <span className="font-mono">
+              v=spf1 mx a:{mailDomain} include:&lt;spf-релея&gt; -all
+            </span>{" "}
+            (точное значение <span className="font-mono">include:</span> даёт
+            провайдер релея).
+          </li>
+          <li>
+            <strong>DKIM</strong> подписывает ваш Mailcow до передачи в релей —
+            ключ остаётся у вас, выравнивание DMARC сохраняется.
+          </li>
+          <li>
+            <strong>PTR</strong> становится заботой релея.
+          </li>
+        </ul>
+        <p className="text-xs text-muted-foreground">
+          Подойдёт корпоративный тариф Яндекс 360 / Mail.ru для бизнеса, любой
+          транзакционный SMTP или второй VPS с чистым адресом. Проверьте лимиты
+          на объём — для документооборота предприятия их обычно с запасом.
+        </p>
+      </Section>
+
+      <Section n={3} title="Если провайдер перехватывает DNS">
+        <p>
+          Mailcow резолвит рекурсивно сам (unbound) — на этом держатся проверки
+          DNSBL, DANE/DNSSEC и резолв MX ваших контрагентов. Часть провайдеров
+          заворачивает весь исходящий трафик на порт 53 к своему резолверу; тот
+          отвечает только на рекурсивные запросы, а итеративные — те самые, что
+          шлёт unbound — отбивает. Развёртывание тогда падает так:
+        </p>
+        <Code>{`dependency failed to start: container mailcowdockerized-unbound-mailcow-1 is unhealthy`}</Code>
+        <p>Проверить, ваш ли это случай:</p>
+        <Code>{`dig +norecurse @198.41.0.4 ru. NS | grep -E "flags|status"
+# норма:     flags: qr aa  (ответ авторитетный, от настоящего корня)
+# перехват:  status: REFUSED  либо  flags: qr ra  (отвечает чужой резолвер)`}</Code>
+        <p>
+          Установщик выполняет эту проверку сам и, найдя перехват, переводит
+          unbound на зашифрованный форвардинг: DNS-over-TLS напрямую, а если 853
+          тоже закрыт — через локальный DoH-прокси в docker-сети (порт 443
+          закрыть нельзя, не сломав HTTPS). Запустить вручную:
+        </p>
+        <Code>{`infra/installer/mailcow-dns-forward.sh --check   # только диагностика
+infra/installer/mailcow-dns-forward.sh            # применить
+infra/installer/mailcow-dns-forward.sh --revert   # вернуть штатную рекурсию`}</Code>
+        <p className="text-xs text-amber-600">
+          Плата за обход: DNSBL-списки (Spamhaus и подобные) не отвечают на
+          запросы, приходящие с публичных резолверов, поэтому антиспам потеряет
+          часть сигналов. Радикальное решение — канал без перехвата DNS.
+        </p>
+      </Section>
+
+      <Section n={4} title="Порты в фаерволе хоста">
         <p>
           Traefik проксирует только HTTPS для вебмейла. Почтовые протоколы
           Mailcow публикует на хосте сам, поэтому их нужно открыть:
@@ -187,9 +292,21 @@ sudo ufw allow 993/tcp   # IMAPS
 sudo ufw allow 143/tcp   # IMAP STARTTLS
 sudo ufw allow 110/tcp   # POP3   (можно не открывать, если не нужен)
 sudo ufw allow 995/tcp   # POP3S  (можно не открывать, если не нужен)`}</Code>
+        <p className="text-xs text-amber-600">
+          Открыть порты на хосте мало: на бытовых и PPPoE-каналах провайдер
+          часто блокирует входящие соединения, а на роутере нужен проброс.
+          Проверьте снаружи (например, с телефона по мобильному интернету):
+        </p>
+        <Code>{`nc -z ${mailDomain} 25 && echo открыт || echo закрыт
+nc -z ${mailDomain} 587 && echo открыт || echo закрыт
+nc -z ${mailDomain} 993 && echo открыт || echo закрыт`}</Code>
+        <p className="text-xs text-muted-foreground">
+          Отдельно уточните исходящий порт 25 — если он закрыт, письма наружу не
+          уйдут и понадобится релей из раздела 2.
+        </p>
       </Section>
 
-      <Section n={3} title="Домен и первый ящик в Mailcow">
+      <Section n={5} title="Домен и первый ящик в Mailcow">
         <p>
           Откройте{" "}
           <a
@@ -213,7 +330,7 @@ sudo ufw allow 995/tcp   # POP3S  (можно не открывать, если 
         </p>
       </Section>
 
-      <Section n={4} title="DKIM — опубликовать выданный ключ">
+      <Section n={6} title="DKIM — опубликовать выданный ключ">
         <p>
           Ключ генерируется только после создания домена, поэтому этот шаг —
           после шага 3. В Mailcow: <em>Configuration → ARC/DKIM keys</em> →
@@ -227,7 +344,7 @@ sudo ufw allow 995/tcp   # POP3S  (можно не открывать, если 
         </p>
       </Section>
 
-      <Section n={5} title="API-ключ для нашей админки">
+      <Section n={7} title="API-ключ для нашей админки">
         <p>
           <em>Configuration → Access → Edit administrator details → API</em>:
           создайте ключ с правами <strong>Read-Write</strong>.
@@ -253,7 +370,7 @@ sudo ufw allow 995/tcp   # POP3S  (можно не открывать, если 
         </p>
       </Section>
 
-      <Section n={6} title="Автообновление сертификата и проверка обновлений">
+      <Section n={8} title="Автообновление сертификата и проверка обновлений">
         <p>
           Сертификат Let&apos;s Encrypt продлевает Traefik, но Postfix/Dovecot
           читают его из своей папки — копирование выполняет отдельный таймер.
@@ -273,7 +390,7 @@ sudo systemctl enable --now mailcow-certdump.timer mailcow-update-check.timer`}<
         </p>
       </Section>
 
-      <Section n={7} title="Проверка">
+      <Section n={9} title="Проверка">
         <Code>{`# сертификат на почтовых портах должен быть от Let's Encrypt, не самоподписанный
 openssl s_client -starttls smtp -connect ${mailDomain}:587 -servername ${mailDomain} </dev/null 2>/dev/null | openssl x509 -noout -issuer
 openssl s_client -connect ${mailDomain}:993 -servername ${mailDomain} </dev/null 2>/dev/null | openssl x509 -noout -issuer`}</Code>
@@ -284,7 +401,15 @@ openssl s_client -connect ${mailDomain}:993 -servername ${mailDomain} </dev/null
             Почтовый клиент настраивается вводом только адреса и пароля
             (autodiscover).
           </li>
-          <li>mail-tester.com: SPF, DKIM, DMARC, PTR — зелёные.</li>
+          <li>
+            mail-tester.com: SPF, DKIM, DMARC — зелёные. PTR зелёный, только
+            если провайдер настроил обратную зону; при отправке через релей эта
+            проверка относится уже к его адресу.
+          </li>
+          <li>
+            Порты 25/587/993 доступны <em>снаружи</em>, а не только с самого
+            сервера.
+          </li>
           <li>
             «Сохранить и проверить» в Интеграциях отвечает «подключение
             работает».
@@ -292,7 +417,7 @@ openssl s_client -connect ${mailDomain}:993 -servername ${mailDomain} </dev/null
         </ul>
       </Section>
 
-      <Section n={8} title="Обновление и резервные копии">
+      <Section n={10} title="Обновление и резервные копии">
         <p>
           Обновление Mailcow запускается из консоли, где под рукой откат: бэкап
           → переключение тега → health-check → автоматический откат при неудаче.

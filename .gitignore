@@ -130,3 +130,9 @@ infra/traefik/prod/routes.yml
 /sveta-debug.apk
 *.apk
 infra/monitoring/backend-token
+
+# Self-hosted mail server: клонируется установщиком (install-mailcow.sh) и
+# содержит собственный git-репозиторий mailcow, mailcow.conf с паролями БД и
+# API, TLS-сертификаты и почтовые данные. В наш репозиторий это попадать не
+# должно ни при каких обстоятельствах.
+infra/mailcow/

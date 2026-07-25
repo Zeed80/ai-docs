@@ -153,6 +153,14 @@ YAML
   ok "docker-compose.override.yml записан (сеть: $TRAEFIK_NET)."
 fi
 
+# ── 3b. Исходящий DNS ───────────────────────────────────────────────────────
+# Mailcow резолвит рекурсивно сам (unbound). Если провайдер перехватывает порт
+# 53 — а на PPPoE/бытовых каналах это обычное дело — unbound не поднимется и
+# ВЕСЬ стек встанет с «dependency failed to start: unbound-mailcow is
+# unhealthy». Проверяем это до первого up и при необходимости переводим unbound
+# на зашифрованный форвардинг.
+bash "$SELF_DIR/mailcow-dns-forward.sh" || warn "Проверка DNS не завершилась — см. вывод выше."
+
 # ── 4. Поднять стек ──────────────────────────────────────────────────────────
 COMPOSE="$(compose_cmd)"
 if [ "$NONINTERACTIVE" = 1 ] || ask_yesno "Поднять Mailcow сейчас ($COMPOSE up -d в $MAILCOW_DIR)?" yes; then
@@ -187,3 +195,5 @@ log "  1. Включить ежедневную синхронизацию се�
 log "  2. Прописать DNS/SPF/DKIM/DMARC/PTR/autoconfig — см. infra/installer/mailcow.README."
 log "  3. Открыть на хосте порты 25/465/587/143/993/110/995 в фаерволе (публикуются Mailcow напрямую, не через Traefik)."
 log "  4. Создать домен и первый ящик в Mailcow admin UI (https://$MAIL_DOMAIN)."
+log "  5. Проверить, что провайдер пропускает входящие 25/465/587/993 — на бытовых"
+log "     каналах их часто нужно открывать/пробрасывать отдельно."
