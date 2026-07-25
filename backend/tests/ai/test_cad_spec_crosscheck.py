@@ -162,3 +162,44 @@ def test_silence_from_the_raster_check_is_not_reported_as_agreement():
 
 def test_no_image_says_the_check_was_not_attempted():
     assert cross_check_spec({"main_view": {}})["raster_check"] == "not_attempted"
+
+
+# --- is this a machined part at all -----------------------------------------
+
+
+def test_a_building_plan_read_as_a_shaft_is_refused():
+    """Live: a floor plan produced a 3-metre shaft with zero unresolved."""
+    plan = {
+        "part": "наименование",
+        "main_view": {"type": "тело вращения (вал)", "outer": [
+            {"diameter_mm": 3000, "length_mm": 4500},
+            {"diameter_mm": 2000, "length_mm": 7500},
+        ]},
+        "title_block": {"material": "материал", "scale": "масштаб"},
+    }
+    codes = _codes(check_spec_arithmetic(plan))
+    assert "stamp_placeholders_read_as_values" in codes
+    assert "implausible_turned_diameter" in codes
+    assert "implausible_part_length" in codes
+
+
+def test_a_stamp_echoing_its_own_captions_is_an_error_on_its_own():
+    spec = {
+        "main_view": {"outer": [
+            {"diameter_mm": 30, "length_mm": 40},
+            {"diameter_mm": 50, "length_mm": 60},
+        ]},
+        "title_block": {"material": "материал"},
+    }
+    assert "stamp_placeholders_read_as_values" in _codes(check_spec_arithmetic(spec))
+
+
+def test_a_real_part_passes_the_plausibility_gates():
+    spec = {
+        "main_view": {"outer": [
+            {"diameter_mm": 102, "length_mm": 150},
+            {"diameter_mm": 80, "length_mm": 240},
+        ]},
+        "title_block": {"material": "Сталь 45 ГОСТ 1050-2013", "scale": "1:2"},
+    }
+    assert check_spec_arithmetic(spec) == []

@@ -68,9 +68,75 @@ def _stated_overall_length(spec: dict) -> float | None:
     return max(values) if values else None
 
 
+# A stamp value that IS the field's own caption means the reader transcribed an
+# empty form instead of reading it. Measured live: a building floor plan came
+# back with material="материал", scale="масштаб", name="наименование" — and the
+# pipeline went on to build a 3-metre shaft from the building's grid spacings.
+_STAMP_PLACEHOLDERS = {
+    "материал", "масштаб", "наименование", "масса", "обозначение", "лист",
+    "листов", "material", "scale", "name", "mass", "designation", "sheet",
+}
+
+# A turned part this pipeline can plan work for. Anything past these is not a
+# machined component — it is the sheet being misread as one.
+_MAX_TURNED_DIAMETER_MM = 2000.0
+_MAX_PART_LENGTH_MM = 6000.0
+
+
+def check_spec_plausibility(spec: dict) -> list[CrossCheckFinding]:
+    """Is this a machined part at all, or a sheet mistaken for one?
+
+    Both checks are exact rather than heuristic: a caption is a caption, and a
+    three-metre-diameter turned section is not a part this pipeline builds.
+    """
+    findings: list[CrossCheckFinding] = []
+    title = spec.get("title_block") or {}
+    echoed = sorted(
+        field for field, value in title.items()
+        if str(value or "").strip().lower() in _STAMP_PLACEHOLDERS
+    )
+    if echoed:
+        findings.append(CrossCheckFinding(
+            code="stamp_placeholders_read_as_values",
+            message=(
+                "в штампе вместо значений прочитаны названия полей ("
+                + ", ".join(echoed)
+                + ") — лист прочитан неверно целиком"
+            ),
+            details={"fields": echoed},
+        ))
+
+    for index, body in enumerate([spec.get("main_view") or {}, *(spec.get("parts") or [])]):
+        if not isinstance(body, dict):
+            continue
+        sections = [s for s in (body.get("outer") or []) if isinstance(s, dict)]
+        diameters = [_num(s.get("diameter_mm")) for s in sections]
+        biggest = max((d for d in diameters if d), default=0.0)
+        if biggest > _MAX_TURNED_DIAMETER_MM:
+            findings.append(CrossCheckFinding(
+                code="implausible_turned_diameter",
+                message=(
+                    f"тело {index}: диаметр {biggest:g} мм не бывает у точёной "
+                    "детали — вероятно, прочитаны размеры не той сущности"
+                ),
+                details={"body": index, "diameter_mm": biggest},
+            ))
+        total = sum(v for v in (_num(s.get("length_mm")) for s in sections) if v)
+        if total > _MAX_PART_LENGTH_MM:
+            findings.append(CrossCheckFinding(
+                code="implausible_part_length",
+                message=(
+                    f"тело {index}: суммарная длина {total:g} мм слишком велика "
+                    "для детали этого конвейера"
+                ),
+                details={"body": index, "length_mm": total},
+            ))
+    return findings
+
+
 def check_spec_arithmetic(spec: dict) -> list[CrossCheckFinding]:
     """Contradictions the sheet's own numbers reveal, with no image involved."""
-    findings: list[CrossCheckFinding] = []
+    findings: list[CrossCheckFinding] = check_spec_plausibility(spec)
     bodies = [spec.get("main_view") or {}, *(spec.get("parts") or [])]
 
     for index, body in enumerate(bodies):
