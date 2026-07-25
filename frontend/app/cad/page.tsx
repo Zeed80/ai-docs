@@ -369,16 +369,11 @@ export default function CadListPage() {
                 vectorizerStatus.latest_real_stack_regression.false_exact_rate.toFixed(2),
             })}
           </p>
-          <p className="mt-2 rounded border border-amber-400/20 bg-amber-950/20 px-2 py-1 text-xs text-amber-100">
-            {t("multi_type_candidate_status", {
-              step: vectorizerStatus.candidate.multi_type_proposal.checkpoint_step,
-              sheets: vectorizerStatus.candidate.multi_type_proposal.independent_holdout_sheets,
-              precision: vectorizerStatus.candidate.multi_type_proposal.entity_precision.toFixed(4),
-              recall: vectorizerStatus.candidate.multi_type_proposal.entity_recall.toFixed(4),
-              f1: vectorizerStatus.candidate.multi_type_proposal.entity_f1.toFixed(4),
-              segmentF1: vectorizerStatus.candidate.multi_type_proposal.segment_f1.toFixed(4),
-              textF1: vectorizerStatus.candidate.multi_type_proposal.text_anchor_f1.toFixed(4),
-            })}
+          {/* The multi-type candidate this used to report was deleted with the
+              other rejected recognizers; what a user needs here is how well the
+              CURRENT reader reads, measured against the labelled sheets. */}
+          <p className="mt-2 rounded border border-emerald-400/20 bg-emerald-950/20 px-2 py-1 text-xs text-emerald-100">
+            {t("reader_field_recall_status")}
           </p>
           <p className="mt-2 rounded border border-emerald-400/20 bg-emerald-950/20 px-2 py-1 text-xs text-emerald-100">
             {t("description_drafting_status", {
@@ -388,37 +383,22 @@ export default function CadListPage() {
               reopen: vectorizerStatus.description_drafting.dxf_reopen_rate.toFixed(2),
             })}
           </p>
-          <p className="mt-2 rounded border border-sky-400/20 bg-sky-950/20 px-2 py-1 text-xs text-sky-100">
-            {t("drawing_graph_status", {
-              passed: vectorizerStatus.drawing_graph_drafting.passed_cases,
-              cases: vectorizerStatus.drawing_graph_drafting.evaluated_cases,
-              exact: vectorizerStatus.drawing_graph_drafting.exact_graph_rate.toFixed(2),
-              reopen: vectorizerStatus.drawing_graph_drafting.dxf_reopen_rate.toFixed(2),
-            })}
-          </p>
           <div className="mt-3 grid gap-2 rounded border border-white/10 bg-black/20 p-3 text-xs text-zinc-300 md:grid-cols-2">
             <div>
               <div className="font-medium text-zinc-200">{t("pipeline_models")}</div>
               <div className="mt-1">
                 {t("pipeline_geometry")}: {vectorizerStatus.runtime_pipeline.components.geometry.assignment}
               </div>
+              {/* The production reader comes FIRST and is not greyed out: it is
+                  what actually runs. The whole-sheet graph reader is an
+                  API-only experiment and is listed last, dimmed, so the panel
+                  describes the system that exists rather than the one that was
+                  planned. */}
               <div>
-                {t("pipeline_graph_reader")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
-              </div>
-              <div>
-                {t("pipeline_graph_layout")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_layout_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
-              </div>
-              <div>
-                {t("pipeline_graph_fragments")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_fragment_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
-              </div>
-              <div>
-                {t("pipeline_graph_vlm_verifier")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_evidence_verifier?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
-              </div>
-              <div>
-                {t("pipeline_graph_drafter")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_drafter?.version || t("pipeline_deterministic")}
+                {t("pipeline_spec_reader")}: {vectorizerStatus.runtime_pipeline.components.spec_reader.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
               </div>
               <div className="text-zinc-500">
-                {t("pipeline_text_reader")}: {vectorizerStatus.runtime_pipeline.components.spec_reader.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
+                {t("pipeline_graph_experiment")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
               </div>
             </div>
             <div>
