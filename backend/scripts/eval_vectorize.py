@@ -428,14 +428,13 @@ def _recognize(
     stem: str = "",
     truth_ir=None,
 ) -> dict | None:
-    """``recognizer``: "cv" (baseline), "neural" (the seq2seq
-    ``cad-vectorizer`` model only, no CV fallback — a clean read of what the
-    candidate network alone achieves), or "arbitrate" (the production
-    technical-vectorizer vs CV path, independently scored).
+    """``recognizer``: "cv" (raw CV baseline, without ``consolidate_entities``
+    — deliberately understates the production path) or "arbitrate" (the
+    production technical-vectorizer vs CV decision, independently scored).
 
-    Keep the two remote recognizers explicit here: evaluating a candidate
-    checkpoint through ``TechnicalVectorizerRecognizer`` silently measures a
-    different service and makes the candidate report meaningless.
+    The seven from-scratch candidate networks this switch used to reach were
+    removed on 2026-07-25: all were rejected by the promotion gate and none
+    was ever on the production path.
     """
     from app.ai.cad_recognize import CvRecognizer
     from app.ai.cad_recognize.verify import score_coverage
@@ -459,80 +458,6 @@ def _recognize(
     used = recognizer
     if recognizer == "cv":
         out = CvRecognizer().recognize(ink, exclusion_boxes=text_boxes)
-        score = (
-            score_coverage(
-                out.entities,
-                ink,
-                out.keep_raster,
-                thin_px=out.thin_px,
-                thick_px=out.thick_px,
-            )
-            if out is not None else None
-        )
-    elif recognizer in (
-        "neural",
-        "neural-tiled",
-        "primitive-set",
-        "multi-type-proposal",
-        "directional-fields",
-        "edge-graph",
-        "edge-graph-snapped",
-        "evidence-heatmap",
-        "hierarchical-sheet",
-        "hybrid-engineering",
-        "hybrid-hierarchical",
-    ):
-        if recognizer in ("hybrid-engineering", "hybrid-hierarchical"):
-            from app.ai.cad_recognize.hybrid_engineering import HybridEngineeringRecognizer
-
-            if recognizer == "hybrid-hierarchical":
-                from app.ai.cad_recognize.hierarchical_sheet import (
-                    HierarchicalSheetRecognizer,
-                )
-
-                candidate = HybridEngineeringRecognizer(
-                    primitive=HierarchicalSheetRecognizer()
-                )
-            else:
-                candidate = HybridEngineeringRecognizer()
-        elif recognizer == "hierarchical-sheet":
-            from app.ai.cad_recognize.hierarchical_sheet import HierarchicalSheetRecognizer
-
-            candidate = HierarchicalSheetRecognizer()
-        elif recognizer == "evidence-heatmap":
-            from app.ai.cad_recognize.evidence_heatmap import EvidenceHeatmapRecognizer
-
-            candidate = EvidenceHeatmapRecognizer()
-        elif recognizer == "directional-fields":
-            from app.ai.cad_recognize.directional_fields import (
-                DirectionalFieldRecognizer,
-            )
-
-            candidate = DirectionalFieldRecognizer()
-        elif recognizer == "edge-graph":
-            from app.ai.cad_recognize.edge_graph import EdgeGraphRecognizer
-
-            candidate = EdgeGraphRecognizer()
-        elif recognizer == "edge-graph-snapped":
-            from app.ai.cad_recognize.edge_graph import SourceSnappedEdgeGraphRecognizer
-
-            candidate = SourceSnappedEdgeGraphRecognizer()
-        elif recognizer == "primitive-set":
-            from app.ai.cad_recognize.primitive_set import PrimitiveSetRecognizer
-
-            candidate = PrimitiveSetRecognizer()
-        elif recognizer == "multi-type-proposal":
-            from app.ai.cad_recognize.multi_type import MultiTypeProposalRecognizer
-
-            candidate = MultiTypeProposalRecognizer()
-        else:
-            from app.ai.cad_recognize.neural import NeuralRecognizer
-
-            candidate = NeuralRecognizer(
-                tile_size=640 if recognizer == "neural-tiled" else None,
-                tile_overlap=160,
-            )
-        out = candidate.recognize(ink, exclusion_boxes=text_boxes)
         score = (
             score_coverage(
                 out.entities,
@@ -621,37 +546,11 @@ def main() -> int:
     parser.add_argument("--out", default="test-results/eval_vectorize.json")
     parser.add_argument(
         "--recognizer",
-        choices=[
-            "cv",
-            "neural",
-            "neural-tiled",
-            "primitive-set",
-            "multi-type-proposal",
-            "directional-fields",
-            "edge-graph",
-            "edge-graph-snapped",
-            "evidence-heatmap",
-            "hierarchical-sheet",
-            "hybrid-engineering",
-            "hybrid-hierarchical",
-            "arbitrate",
-        ],
+        choices=["cv", "arbitrate"],
         default="cv",
-        help="cv=CV-baseline (default); neural=cad-vectorizer seq2seq candidate "
-             "alone (no CV fallback); neural-tiled=overlapping 640px candidate "
-             "tiles; primitive-set=unordered multi-type detector candidate; "
-             "multi-type-proposal=full CadIR geometry and semantic-anchor proposals; "
-             "directional-fields=direct endpoint/direction line proposals; "
-             "edge-graph=learned line-of-interest adjacency over dense nodes; "
-             "edge-graph-snapped=the same graph snapped to source skeleton nodes; "
-             "evidence-heatmap=learned geometry evidence plus deterministic fitter; "
-             "hierarchical-sheet=global view regions then local primitives; "
-             "hybrid-engineering=CV global geometry plus independently "
-             "ink-verified learned circles/arcs; "
-             "hybrid-hierarchical=the same conservative fusion using the "
-             "sheet-level candidate; "
-             "arbitrate=production technical-vectorizer "
-             "vs CV path, independently scored",
+        help="cv=raw CV baseline (no consolidate_entities — understates the "
+             "production path); arbitrate=production technical-vectorizer vs "
+             "CV decision, independently scored",
     )
     parser.add_argument(
         "--report-dir", default="",

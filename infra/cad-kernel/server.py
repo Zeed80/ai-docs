@@ -76,6 +76,39 @@ def _number(params: dict[str, Any], name: str, *, maximum: float = 100_000) -> f
     return result
 
 
+def _coordinate(params: dict[str, Any], name: str, *, limit: float = 100_000) -> float:
+    """A feature CENTRE, which may legitimately be zero or negative.
+
+    ``_number`` rejects anything <= 0 because it reads sizes; a hole on the axis
+    of a flange sits at exactly (0, 0), and holes on a bolt circle sit at
+    negative coordinates for half the pattern.
+    """
+    value = params.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(422, f"Feature parameter {name!r} must be numeric")
+    result = float(value)
+    if not math.isfinite(result) or abs(result) > limit:
+        raise HTTPException(422, f"Feature parameter {name!r} is outside supported bounds")
+    return result
+
+
+def _check_footprint(
+    kind: str, x: float, y: float, radius: float,
+    *, axis_centred: bool, outer_radius: float, width: float, height: float,
+) -> None:
+    """Does this cut/boss stay inside the material it is applied to?"""
+    if axis_centred:
+        if math.hypot(x, y) + radius > outer_radius + 1e-6:
+            raise HTTPException(
+                422,
+                f"{kind} at ({x:g}, {y:g}) reaches past the turned outer radius "
+                f"{outer_radius:g} mm",
+            )
+        return
+    if x - radius < -1e-6 or y - radius < -1e-6 or x + radius > width + 1e-6 or y + radius > height + 1e-6:
+        raise HTTPException(422, f"{kind} lies outside the base footprint")
+
+
 def _top_z_at(shape: Part.Shape, x: float, y: float) -> float:
     probe = Part.makeLine(
         App.Vector(x, y, shape.BoundBox.ZMin - 1.0),
@@ -129,26 +162,27 @@ def _find_edge(shape: Part.Shape, key: str) -> Part.Edge:
     return matches[0]
 
 
-def _revolve_base(feature: Feature) -> Part.Shape:
-    """D3: a lathe part — the (r, z) profile polyline spun 360° about Z.
-    The profile is auto-closed onto the axis, so a simple stepped-shaft
-    outline (what a front view of a spindle gives you) is enough."""
-    raw = feature.params.get("profile_points")
+def _revolve_points(raw: Any, label: str) -> list[App.Vector]:
+    """Validate and convert an (r, z) profile polyline into kernel vectors."""
     if not isinstance(raw, list) or len(raw) < 2 or len(raw) > 200:
-        raise HTTPException(422, "revolve requires profile_points: 2..200 points of {r, z}")
+        raise HTTPException(422, f"{label} must be a list of 2..200 points of {{r, z}}")
     points: list[App.Vector] = []
     for item in raw:
         if not isinstance(item, dict):
-            raise HTTPException(422, "revolve profile point must be an object {r, z}")
+            raise HTTPException(422, f"{label} point must be an object {{r, z}}")
         r, z = item.get("r"), item.get("z")
         for name, value in (("r", r), ("z", z)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
-                raise HTTPException(422, f"revolve profile point {name!r} must be a finite number")
+                raise HTTPException(422, f"{label} point {name!r} must be a finite number")
         if float(r) < 0 or float(r) > 100_000 or abs(float(z)) > 100_000:
-            raise HTTPException(422, "revolve profile point is outside supported bounds")
+            raise HTTPException(422, f"{label} point is outside supported bounds")
         points.append(App.Vector(float(r), 0.0, float(z)))
     if max(p.x for p in points) <= 0:
-        raise HTTPException(422, "revolve profile never leaves the axis — nothing to spin")
+        raise HTTPException(422, f"{label} never leaves the axis — nothing to spin")
+    return points
+
+
+def _revolve_solid(points: list[App.Vector], label: str) -> Part.Shape:
     # close the loop onto the axis (r=0) at both ends unless already there
     closed = list(points)
     if closed[0].x > 1e-9:
@@ -158,10 +192,44 @@ def _revolve_base(feature: Feature) -> Part.Shape:
     closed.append(closed[0])
     try:
         face = Part.Face(Part.makePolygon(closed))
-        solid = face.revolve(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360)
+        return face.revolve(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360)
     except Exception as exc:
-        raise HTTPException(422, f"OpenCascade rejected the revolve profile: {exc}") from exc
-    return solid
+        raise HTTPException(422, f"OpenCascade rejected the {label}: {exc}") from exc
+
+
+def _revolve_base(feature: Feature) -> Part.Shape:
+    """D3: a lathe part — the (r, z) profile polyline spun 360° about Z.
+    The profile is auto-closed onto the axis, so a simple stepped-shaft
+    outline (what a front view of a spindle gives you) is enough.
+
+    Optional ``bore_points`` spin a SECOND coaxial profile and cut it out, so a
+    hollow lathe part (a spindle, a sleeve, a stepped bore) is one feature
+    rather than a stack of holes. Holes are refused on a revolve base — they
+    are positioned against an extrude footprint a lathe part does not have —
+    so without this a bored part could not be built at all.
+    """
+    points = _revolve_points(feature.params.get("profile_points"), "revolve profile_points")
+    solid = _revolve_solid(points, "revolve profile")
+
+    raw_bore = feature.params.get("bore_points")
+    if raw_bore is None:
+        return solid
+    bore_points = _revolve_points(raw_bore, "revolve bore_points")
+    # The bore must stay inside the material at every z it spans, or the "part"
+    # is a contradiction the sheet cannot have meant.
+    outer_max = max(p.x for p in points)
+    if max(p.x for p in bore_points) >= outer_max - 1e-9:
+        raise HTTPException(
+            422, "bore radius reaches or exceeds the outer radius — not a hollow part"
+        )
+    bore = _revolve_solid(bore_points, "revolve bore profile")
+    try:
+        result = solid.cut(bore)
+    except Exception as exc:
+        raise HTTPException(422, f"OpenCascade rejected the bore cut: {exc}") from exc
+    if result.isNull() or not result.isValid() or result.Volume <= 0:
+        raise HTTPException(422, "OpenCascade produced invalid geometry after the bore cut")
+    return result
 
 
 def _loft_base(feature: Feature) -> Part.Shape:
@@ -219,34 +287,22 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
 
     base = bases[0]
     warnings: list[str] = []
+    # An extrude base is a box anchored at the origin, so cut/add features are
+    # addressed from its corner. A turned base is symmetric about the axis, so
+    # ITS features are addressed from the axis (x=y=0 is the centre) and bounded
+    # by the material radius — the convention a flange drawing already uses when
+    # it gives hole coordinates from the centre.
+    axis_centred = base.kind in ("revolve", "loft")
+    outer_radius = 0.0
     if base.kind == "revolve":
         shape = _revolve_base(base)
-        # boss/pocket/hole are positioned against the extrude box footprint;
-        # a lathe base has no such footprint, so only edge ops/shell apply.
-        unsupported = [
-            f.kind for f in request.candidate.features
-            if f.kind in ("boss", "pocket", "hole")
-        ]
-        if unsupported:
-            raise HTTPException(
-                422, f"{', '.join(sorted(set(unsupported)))} on a revolve base is not supported yet"
-            )
-        width = height = depth = max(
-            shape.BoundBox.XLength, shape.BoundBox.YLength, shape.BoundBox.ZLength
-        )
     elif base.kind == "loft":
         shape = _loft_base(base)
-        unsupported = [
-            f.kind for f in request.candidate.features
-            if f.kind in ("boss", "pocket", "hole")
-        ]
-        if unsupported:
-            raise HTTPException(
-                422, f"{', '.join(sorted(set(unsupported)))} on a loft base is not supported yet"
-            )
+    if axis_centred:
         width = height = depth = max(
             shape.BoundBox.XLength, shape.BoundBox.YLength, shape.BoundBox.ZLength
         )
+        outer_radius = max(shape.BoundBox.XLength, shape.BoundBox.YLength) / 2.0
     else:
         width = _number(base.params, "width_mm")
         height = _number(base.params, "height_mm")
@@ -257,18 +313,28 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
         if feature.kind not in ("boss", "pocket"):
             continue
         profile = feature.params.get("profile")
-        x = _number(feature.params, "center_x_mm")
-        y = _number(feature.params, "center_y_mm")
+        x = _coordinate(feature.params, "center_x_mm")
+        y = _coordinate(feature.params, "center_y_mm")
         operation_depth = _number(feature.params, "depth_mm")
-        if feature.kind == "pocket" and operation_depth > depth + 1e-6:
+        # For an extrude box the top face is at z == depth; for a turned base it
+        # is wherever the solid actually ends, and using the box convention
+        # there would cut in mid-air above the part.
+        top_z = shape.BoundBox.ZMax if axis_centred else depth
+        material_depth = (
+            shape.BoundBox.ZMax - shape.BoundBox.ZMin if axis_centred else depth
+        )
+        if feature.kind == "pocket" and operation_depth > material_depth + 1e-6:
             raise HTTPException(422, "Pocket depth exceeds base depth")
-        z = depth if feature.kind == "boss" else depth - operation_depth
+        z = top_z if feature.kind == "boss" else top_z - operation_depth
         solid_height = operation_depth if feature.kind == "boss" else operation_depth + 1.0
         if profile == "circle":
             diameter = _number(feature.params, "diameter_mm", maximum=min(width, height) * 2)
             radius = diameter / 2
-            if x - radius < -1e-6 or y - radius < -1e-6 or x + radius > width + 1e-6 or y + radius > height + 1e-6:
-                raise HTTPException(422, f"{feature.kind} lies outside the base footprint")
+            _check_footprint(
+                feature.kind, x, y, radius,
+                axis_centred=axis_centred, outer_radius=outer_radius,
+                width=width, height=height,
+            )
             tool = Part.makeCylinder(radius, solid_height, App.Vector(x, y, z))
         elif profile == "rectangle":
             profile_width = _number(feature.params, "width_mm", maximum=width)
@@ -305,11 +371,14 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
         if feature.kind != "hole":
             continue
         diameter = _number(feature.params, "diameter_mm", maximum=min(width, height) * 2)
-        x = _number(feature.params, "center_x_mm")
-        y = _number(feature.params, "center_y_mm")
+        x = _coordinate(feature.params, "center_x_mm")
+        y = _coordinate(feature.params, "center_y_mm")
         radius = diameter / 2
-        if x - radius < -1e-6 or y - radius < -1e-6 or x + radius > width + 1e-6 or y + radius > height + 1e-6:
-            raise HTTPException(422, "Hole lies outside the base footprint")
+        _check_footprint(
+            "Hole", x, y, radius,
+            axis_centred=axis_centred, outer_radius=outer_radius,
+            width=width, height=height,
+        )
         through = feature.params.get("through")
         if through is True:
             cutter = Part.makeCylinder(
@@ -444,6 +513,182 @@ def check_interference(request: InterferenceRequest) -> dict[str, Any]:
                     {"first": first_key, "second": second_key, "volume_mm3": volume}
                 )
     return {"collisions": collisions, "checked_pairs": len(solids) * (len(solids) - 1) // 2}
+
+
+# --- Orthographic projection (ГОСТ 2.305) -----------------------------------
+#
+# Views are DERIVED from the solid, never drawn independently: once the model
+# is right, projection alignment is arithmetic rather than something a drafter
+# (human or model) has to keep consistent by hand.
+#
+# Sheet mapping. The solid is built with its axis of revolution along +Z, but a
+# shaft lies horizontally on a drawing, so each view names which model axes
+# become sheet (u, v):
+#   front — look along -Y: u = +Z (axis runs left→right), v = +X
+#   side  — look along -Z (down the axis): u = +X, v = +Y  → concentric circles
+#   top   — look along -X: u = +Z, v = +Y
+# ``Drawing.project`` returns geometry ALREADY FLATTENED into the XY plane
+# (z == 0), not in model coordinates, so each view only needs a 2D mapping from
+# that plane to sheet (u, v). Verified against a stepped shaft: projecting a
+# Z-axis part along -Y puts the length on -x and the radius on y.
+_VIEW_FRAMES: dict[str, tuple[tuple[float, float, float], float, float]] = {
+    # name: (direction, u = u_sign * x, v = v_sign * y)
+    "front": ((0.0, -1.0, 0.0), -1.0, 1.0),
+    "side": ((0.0, 0.0, -1.0), 1.0, 1.0),
+    "top": ((-1.0, 0.0, 0.0), -1.0, 1.0),
+}
+
+
+class ProjectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate: Candidate
+    views: list[Literal["front", "side", "top"]] = Field(min_length=1, max_length=3)
+    confirm_assumptions: bool = False
+    # Curves the projector cannot express exactly (a projected ellipse, a spline
+    # silhouette) are sampled; straight and circular edges stay exact.
+    curve_samples: int = Field(default=24, ge=4, le=200)
+
+
+def _collinear(points: list[tuple[float, float]], tolerance: float = 1e-6) -> bool:
+    """Do these sampled points all lie on one straight line?
+
+    A revolved end face projects edge-on as a BSpline that is geometrically a
+    straight segment. Exporting it as a 25-point polyline would put a fake
+    curve on a technical drawing, so collinear samples collapse back to a line.
+    """
+    if len(points) < 3:
+        return True
+    (x0, y0), (x1, y1) = points[0], points[-1]
+    dx, dy = x1 - x0, y1 - y0
+    span = math.hypot(dx, dy)
+    if span < tolerance:
+        return False
+    return all(
+        abs(dx * (y - y0) - dy * (x - x0)) / span <= max(tolerance, span * 1e-6)
+        for x, y in points[1:-1]
+    )
+
+
+def _project_edge(
+    edge: Part.Edge, u_sign: float, v_sign: float, samples: int
+) -> dict[str, Any] | None:
+    """One projected edge as an EXACT primitive where the geometry allows it."""
+
+    def uv(point: App.Vector) -> tuple[float, float]:
+        return (round(u_sign * point.x, 6), round(v_sign * point.y, 6))
+
+    curve = edge.Curve.__class__.__name__
+    points = [uv(vertex.Point) for vertex in edge.Vertexes]
+    if curve == "Line" and len(points) == 2:
+        if points[0] == points[1]:
+            return None
+        return {"type": "line", "points": points}
+    if curve == "Circle":
+        circle = edge.Curve
+        centre = uv(circle.Center)
+        closed = len(edge.Vertexes) <= 1 or points[0] == points[-1]
+        if closed:
+            return {"type": "circle", "center": centre, "radius": round(circle.Radius, 6)}
+        return {
+            "type": "arc",
+            "center": centre,
+            "radius": round(circle.Radius, 6),
+            "points": points,
+        }
+    # Anything else (spline silhouette, edge-on circle) is sampled along the edge.
+    try:
+        first, last = edge.FirstParameter, edge.LastParameter
+        sampled = [
+            uv(edge.valueAt(first + (last - first) * index / samples))
+            for index in range(samples + 1)
+        ]
+    except Exception:  # noqa: BLE001 — an unsamplable edge is simply skipped
+        return None
+    deduped = [sampled[0]]
+    for point in sampled[1:]:
+        if point != deduped[-1]:
+            deduped.append(point)
+    if len(deduped) < 2:
+        return None
+    if _collinear(deduped):
+        return {"type": "line", "points": [deduped[0], deduped[-1]]}
+    return {"type": "polyline", "points": deduped}
+
+
+@app.post("/project")
+def project_views(request: ProjectRequest) -> dict[str, Any]:
+    """Orthographic views of the compiled solid, as exact 2D primitives.
+
+    Returns visible and hidden geometry separately so the caller can honour
+    ГОСТ 2.303 line types, and the bounding box of each view so it can place
+    them in projection alignment without re-measuring the model.
+    """
+    shape, warnings = _build_shape(
+        CompileRequest(
+            candidate=request.candidate,
+            confirm_assumptions=request.confirm_assumptions,
+            metadata={},
+        )
+    )
+    # Imported lazily: importing the Drawing module at process start crashes
+    # this FreeCAD build (SIGSEGV), so it is only touched when a projection is
+    # actually requested.
+    import Drawing
+
+    views: dict[str, Any] = {}
+    for name in request.views:
+        direction, u_sign, v_sign = _VIEW_FRAMES[name]
+        try:
+            projected = Drawing.projectEx(shape, App.Vector(*direction))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(422, f"projection of view {name!r} failed: {exc}") from exc
+        # projectEx returns (V, V1, VN, VO, VI, H, H1, HN, HO, HI). The plain
+        # `project` call returns only some of these, and on a revolved solid the
+        # BOTTOM generatrices live in VO (visible OUTLINE) — dropping that group
+        # silently produced a shaft drawn with only half its contour.
+        def _merge(indices: tuple[int, ...]) -> list[Part.Edge]:
+            edges: list[Part.Edge] = []
+            for index in indices:
+                if index < len(projected) and projected[index] is not None:
+                    edges.extend(projected[index].Edges)
+            return edges
+
+        groups = {
+            "visible": _merge((0, 1, 3)),   # sharp + smooth + silhouette
+            "hidden": _merge((5, 6, 8)),
+        }
+        entities: dict[str, list[dict[str, Any]]] = {"visible": [], "hidden": []}
+        for kind, edges in groups.items():
+            for edge in edges:
+                item = _project_edge(edge, u_sign, v_sign, request.curve_samples)
+                if item is not None:
+                    entities[kind].append(item)
+        all_points: list[tuple[float, float]] = []
+        for items in entities.values():
+            for item in items:
+                if "points" in item:
+                    all_points.extend(item["points"])
+                elif item["type"] == "circle":
+                    cu, cv = item["center"]
+                    radius = item["radius"]
+                    all_points.extend(
+                        [(cu - radius, cv - radius), (cu + radius, cv + radius)]
+                    )
+        bounds = None
+        if all_points:
+            bounds = {
+                "u_min": min(p[0] for p in all_points),
+                "u_max": max(p[0] for p in all_points),
+                "v_min": min(p[1] for p in all_points),
+                "v_max": max(p[1] for p in all_points),
+            }
+        views[name] = {
+            "bounds_mm": bounds,
+            "visible": entities["visible"],
+            "hidden": entities["hidden"],
+        }
+    return {"views": views, "warnings": warnings, "kernel": "FreeCAD/OpenCascade"}
 
 
 @app.get("/health")

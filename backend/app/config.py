@@ -148,14 +148,6 @@ class Settings(BaseSettings):
     # ComfyUI (image generation / editing — drawings studio). On-prem only.
     # Default targets the optional compose service; override: COMFYUI_URL=http://host:8188
     comfyui_url: str = "http://comfyui:8188"
-    # Neural CAD vectorizer (Ф3, infra/cad-vectorizer) — on-prem only, same
-    # confidentiality posture as ComfyUI. Optional: cad_recognize/neural.py
-    # degrades to CV-only when unreachable (NEURAL_UNAVAILABLE).
-    # NOTE: superseded in arbitration by technical_vectorizer_url below (see
-    # cad_recognize/technical_vectorizer.py) — the from-scratch model here
-    # never beat CV on real photos (recall ~0, trained on synthetic data
-    # only). Kept running/configurable for now, not removed from the code.
-    cad_vectorizer_url: str = "http://cad-vectorizer:8090"
     # Technical-drawing line vectorizer (infra/technical-vectorizer) —
     # vendored, openly-licensed (MPL-2.0), pretrained Deep Vectorization of
     # Technical Drawings model. Validated live (2026-07-11): zero-shot

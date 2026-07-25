@@ -63,8 +63,10 @@ export default function CadListPage() {
   const [digitizeSheetFormat, setDigitizeSheetFormat] = useState<
     "" | SheetFormat
   >("");
+  // Default = redraw-from-understanding; tracing stays as the auxiliary
+  // fallback (see StudioComposer for the same two-method contract).
   const [vectorizeMethod, setVectorizeMethod] = useState<"trace" | "spec">(
-    "trace",
+    "spec",
   );
   const fileRef = useRef<HTMLInputElement | null>(null);
   const scanRef = useRef<HTMLInputElement | null>(null);
@@ -214,8 +216,8 @@ export default function CadListPage() {
             className="rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
             title={t("vectorize_method")}
           >
-            <option value="trace">{t("method_trace")}</option>
             <option value="spec">{t("method_spec")}</option>
+            <option value="trace">{t("method_trace")}</option>
           </select>
           <select
             value={digitizationProfile}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.ai.cad_recognize.spec_vectorize import (
+    SHEET_FRAME_EVIDENCE,
     EngineeringDrawingSpec,
     _dsl_to_ir,
     _num,
@@ -194,7 +195,18 @@ def test_prismatic_plate_drafter_emits_exact_geometry_dimensions_and_holes():
     ]
     assert sorted(values) == [10, 10, 80, 120]
     assert all(entity.origin == "spec" for entity in ir.entities)
-    assert all(entity.assurance == "constraint_validated" for entity in ir.entities)
+    # Part geometry is constraint-validated; the ГОСТ frame/stamp around it is
+    # sheet furniture and is tagged as such, not claimed as validated geometry.
+    part = [
+        entity for entity in ir.entities
+        if SHEET_FRAME_EVIDENCE not in entity.evidence
+    ]
+    assert all(entity.assurance == "constraint_validated" for entity in part)
+    frame = [
+        entity for entity in ir.entities
+        if SHEET_FRAME_EVIDENCE in entity.evidence
+    ]
+    assert frame and all(entity.assurance == "inferred" for entity in frame)
 
 
 def test_prismatic_drafter_declines_incomplete_profile():
@@ -447,3 +459,457 @@ def test_layout_on_sheet_scales_generative_geometry():
     # geometry moved into the sheet frame (positive, within canvas)
     xs = [e.p1.x for e in ir.entities if e.type == "segment"]
     assert all(0 < x < 1680 for x in xs)
+
+
+# --- Views (ГОСТ 2.305 projection alignment) --------------------------------
+
+
+def _shaft_spec_with_side_view() -> dict:
+    return {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": 60},
+            ],
+        },
+        "views": [{"kind": "side", "body_index": 0, "label": "Вид слева"}],
+    }
+
+
+def test_requested_side_view_is_drafted_as_concentric_circles():
+    from app.ai.cad_ir.schema import Circle
+
+    ir = draft_rotation_body(_shaft_spec_with_side_view(), px_per_mm=4.0)
+    assert ir is not None
+    circles = [e for e in ir.entities if isinstance(e, Circle)]
+    # One circle per distinct outer diameter, and nothing invented.
+    assert len(circles) == 2
+    radii = sorted(round(c.radius, 3) for c in circles)
+    assert radii == [30 * 4.0 / 2, 50 * 4.0 / 2]
+
+
+def test_side_view_shares_the_front_view_axis_exactly():
+    """Projection alignment must be constructed, not approximated."""
+    from app.ai.cad_ir.schema import Circle, Segment
+
+    ir = draft_rotation_body(_shaft_spec_with_side_view(), px_per_mm=4.0)
+    assert ir is not None
+    circles = [e for e in ir.entities if isinstance(e, Circle)]
+    axes = [
+        e for e in ir.entities
+        if isinstance(e, Segment) and e.line_class == "axis"
+        and abs(e.p1.y - e.p2.y) < 1e-9
+    ]
+    assert axes, "front view must carry a centreline"
+    front_axis_y = axes[0].p1.y
+    assert all(abs(c.center.y - front_axis_y) < 1e-9 for c in circles)
+    # And the left view is to the RIGHT of the front view (ГОСТ 2.305).
+    front_right = max(
+        max(e.p1.x, e.p2.x)
+        for e in ir.entities
+        if isinstance(e, Segment) and e.line_class == "contour"
+    )
+    assert all(c.center.x > front_right for c in circles)
+
+
+def test_no_views_declared_keeps_the_front_view_only():
+    from app.ai.cad_ir.schema import Circle
+
+    spec = _shaft_spec_with_side_view()
+    spec.pop("views")
+    ir = draft_rotation_body(spec, px_per_mm=4.0)
+    assert ir is not None
+    assert not [e for e in ir.entities if isinstance(e, Circle)]
+
+
+def test_side_view_enters_the_sheet_scale_decision():
+    """A part that fits A4 alone must scale down once a left view is added."""
+    wide = {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 60, "length_mm": 120},
+                {"diameter_mm": 45, "length_mm": 30},
+            ],
+        },
+    }
+    without = draft_rotation_body(dict(wide), sheet_format="A4", landscape=True)
+    with_side = draft_rotation_body(
+        {**wide, "views": [{"kind": "side", "body_index": 0}]},
+        sheet_format="A4",
+        landscape=True,
+    )
+    assert without is not None and with_side is not None
+    # Same sheet, smaller drawn size: mm-per-px grows when the scale shrinks.
+    assert with_side.scale > without.scale
+    assert with_side.source.image_width == without.source.image_width
+
+
+def test_view_naming_a_missing_body_blocks_the_spec():
+    spec = EngineeringDrawingSpec.model_validate({
+        "main_view": {"type": "тело вращения (вал)", "outer": [
+            {"diameter_mm": 30, "length_mm": 40},
+            {"diameter_mm": 50, "length_mm": 60},
+        ]},
+        "views": [{"kind": "side", "body_index": 7}],
+    })
+    assert "view:0:body-index-out-of-range" in spec.unresolved
+
+
+def test_unsectioned_bore_is_dashed_in_both_views():
+    """ГОСТ 2.303: an invisible bore is a hidden line, never a contour."""
+    from app.ai.cad_ir.schema import Circle, Segment
+
+    spec = _shaft_spec_with_side_view()
+    spec["main_view"]["bore"] = [{"diameter_mm": 16, "length_mm": 100}]
+    ir = draft_rotation_body(spec, px_per_mm=4.0)
+    assert ir is not None
+    hidden_segments = [
+        e for e in ir.entities
+        if isinstance(e, Segment) and e.line_class == "hidden"
+    ]
+    assert hidden_segments, "front view must draw the bore as hidden lines"
+    bore_circles = [
+        e for e in ir.entities
+        if isinstance(e, Circle) and e.line_class == "hidden"
+    ]
+    assert len(bore_circles) == 1
+    assert bore_circles[0].radius == pytest.approx(16 * 4.0 / 2)
+
+
+# --- Section, sheet frame, and honest dimension text ------------------------
+
+
+def _hollow_spec(views: list[dict]) -> dict:
+    return {
+        "part": "Втулка",
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": 60},
+            ],
+            "bore": [{"diameter_mm": 16, "length_mm": 100}],
+        },
+        "views": views,
+    }
+
+
+def test_section_hatches_the_wall_and_makes_bore_edges_solid():
+    from app.ai.cad_ir.schema import HatchRegion, Segment
+
+    ir = draft_rotation_body(
+        _hollow_spec([{"kind": "section", "body_index": 0}]), px_per_mm=4.0
+    )
+    assert ir is not None
+    hatches = [e for e in ir.entities if isinstance(e, HatchRegion)]
+    # One wall band each side of the axis.
+    assert len(hatches) == 2
+    assert all(len(h.boundary) >= 4 for h in hatches)
+    # A cut edge is a contour, never a hidden line.
+    assert not [
+        e for e in ir.entities
+        if isinstance(e, Segment) and e.line_class == "hidden"
+    ]
+
+
+def test_section_boundary_is_a_simple_loop_not_a_bowtie():
+    """The return path must run right-to-left, or the fill self-intersects."""
+    from app.ai.cad_ir.schema import HatchRegion
+
+    ir = draft_rotation_body(
+        _hollow_spec([{"kind": "section", "body_index": 0}]), px_per_mm=4.0
+    )
+    assert ir is not None
+    loop = [e for e in ir.entities if isinstance(e, HatchRegion)][0].boundary
+    xs = [p.x for p in loop]
+    # Outward leg is non-decreasing in x, return leg non-increasing.
+    turn = xs.index(max(xs))
+    assert all(a <= b + 1e-9 for a, b in zip(xs[:turn], xs[1 : turn + 1]))
+    assert all(a >= b - 1e-9 for a, b in zip(xs[turn:], xs[turn + 1 :]))
+
+
+def test_section_without_a_bore_is_ignored():
+    spec = _hollow_spec([{"kind": "section", "body_index": 0}])
+    spec["main_view"].pop("bore")
+    ir = draft_rotation_body(spec, px_per_mm=4.0)
+    assert ir is not None
+    assert not [e for e in ir.entities if e.type == "hatch"]
+
+
+def test_sheet_gets_a_gost_frame_and_a_filled_stamp():
+    spec = _hollow_spec([])
+    spec["title_block"] = {"material": "Сталь 45", "designation": "АБВГ.001"}
+    ir = draft_rotation_body(spec, sheet_format="A3", landscape=True)
+    assert ir is not None
+    assert ir.sheet.frame is True
+    assert ir.sheet.title_block["designation"] == "АБВГ.001"
+    assert ir.sheet.title_block["material"] == "Сталь 45"
+    assert ir.sheet.title_block["name"] == "Втулка"
+    # ГОСТ 2.302 prefers 1:1 — the drafter must not enlarge just because the
+    # sheet has spare room.
+    assert ir.sheet.title_block["scale"] == "1:1"
+    frame = [
+        e for e in ir.entities if SHEET_FRAME_EVIDENCE in e.evidence
+    ]
+    assert frame, "the frame must exist as real entities, not just a flag"
+
+
+def test_drawing_never_overlaps_the_title_block_band():
+    """The stamp band is reserved: nothing drafted may reach into it."""
+    spec = _hollow_spec([])
+    ir = draft_rotation_body(spec, sheet_format="A4", landscape=False)
+    assert ir is not None
+    sheet_h = ir.source.image_height
+    stamp_top = sheet_h - 55.0 * 4.0
+    part = [
+        e for e in ir.entities
+        if SHEET_FRAME_EVIDENCE not in e.evidence and e.type == "segment"
+    ]
+    assert part
+    assert all(max(e.p1.y, e.p2.y) < stamp_top for e in part)
+
+
+def test_dimension_text_reproduces_the_read_tolerance():
+    spec = _hollow_spec([])
+    spec["dimensions"] = [{"value": "Ø50js6"}, {"value": "40h11"}]
+    ir = draft_rotation_body(spec, px_per_mm=4.0)
+    assert ir is not None
+    texts = [e.text for e in ir.entities if e.type == "dimension"]
+    assert "Ø50js6" in texts, "a read fit must survive into the drawing"
+    assert "40h11" in texts
+    # A nominal the reader never wrote down stays a plain number, not a guess.
+    assert "Ø30" in texts
+
+
+def test_diameter_tolerance_never_leaks_onto_a_length():
+    spec = _hollow_spec([])
+    # Same nominal 40 as the first section's LENGTH, but read as a diameter.
+    spec["dimensions"] = [{"value": "Ø40k6"}]
+    ir = draft_rotation_body(spec, px_per_mm=4.0)
+    assert ir is not None
+    lengths = [
+        e.text for e in ir.entities
+        if e.type == "dimension" and e.kind == "linear" and e.value_mm == 40
+    ]
+    assert lengths == ["40"]
+
+
+def test_source_sheet_scale_is_reproduced_when_it_fits():
+    """Redrawing a 1:2 sheet must not silently return it as 1:1."""
+    spec = _hollow_spec([])
+    spec["title_block"] = {"scale": "1:2"}
+    ir = draft_rotation_body(spec, sheet_format="A3", landscape=True)
+    assert ir is not None
+    assert ir.sheet.title_block["scale"] == "1:2"
+    assert ir.scale == pytest.approx(1.0 / (0.5 * 4.0))
+
+
+def test_unreadable_source_scale_falls_back_to_the_auto_choice():
+    spec = _hollow_spec([])
+    spec["title_block"] = {"scale": "приблизительно"}
+    ir = draft_rotation_body(spec, sheet_format="A3", landscape=True)
+    assert ir is not None
+    assert ir.sheet.title_block["scale"] == "1:1"
+
+
+# --- Reader robustness ------------------------------------------------------
+
+
+def test_single_object_where_a_list_is_expected_is_not_discarded():
+    """A live read of a real sheet was thrown away over this exact shape."""
+    from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
+
+    parsed = {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": 60},
+            ],
+            "bore": None,
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 80,
+                "holes": None,
+                # The model emitted ONE object instead of a one-item list.
+                "hole_patterns": {
+                    "count": 6,
+                    "bolt_circle_diameter_mm": 140,
+                    "hole_diameter_mm": 14,
+                },
+            },
+        },
+        "views": {"kind": "side", "body_index": 0},
+        "dimensions": None,
+    }
+    spec = EngineeringDrawingSpec.model_validate(_coerce_spec_containers(parsed))
+    assert len(spec.main_view.outer) == 2
+    assert spec.main_view.profile is not None
+    assert len(spec.main_view.profile.hole_patterns) == 1
+    assert [v.kind for v in spec.views] == ["side"]
+
+
+def test_shape_repair_never_invents_a_missing_dimension():
+    """Container repair must not weaken the fail-closed geometry contract."""
+    from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
+
+    parsed = {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50},  # length never read
+            ],
+        },
+    }
+    spec = EngineeringDrawingSpec.model_validate(_coerce_spec_containers(parsed))
+    assert any("length-missing" in item for item in spec.unresolved)
+    assert draft_rotation_body(spec.model_dump(mode="json"), px_per_mm=4.0) is None
+
+
+def test_truncated_reader_json_is_reported_not_salvaged():
+    """Closing the open braces would draft a silently shorter part."""
+    from app.ai.cad_recognize.spec_vectorize import (
+        SpecReadTruncatedError,
+        _parse_spec_json,
+    )
+
+    # A real cut-off answer: inner objects closed, outer ones still open.
+    cut = (
+        '{"part": "Вал", "main_view": {"outer": ['
+        '{"diameter_mm": 30, "length_mm": 40}, {"diameter_mm": 50, "leng'
+    )
+    # Lenient parsing (free-text path) keeps the old best-effort behaviour...
+    assert _parse_spec_json(cut) == {}
+    # ...but reading a real sheet must say the answer was cut off.
+    with pytest.raises(SpecReadTruncatedError):
+        _parse_spec_json(cut, strict=True)
+
+
+def test_plain_garbage_is_not_reported_as_truncation():
+    from app.ai.cad_recognize.spec_vectorize import (
+        SpecReadMalformedError,
+        _parse_spec_json,
+    )
+
+    # Nothing JSON-shaped at all is simply "no spec", not a cut-off answer.
+    assert _parse_spec_json("no json here", strict=True) == {}
+    # A complete-looking but broken object is a malformed answer, and saying so
+    # beats a silent empty result the user cannot act on.
+    with pytest.raises(SpecReadMalformedError):
+        _parse_spec_json('{"a": [1, 2,]}', strict=True)
+
+
+def test_malformed_evidence_never_discards_the_dimension_it_annotates():
+    """Five real shaft sections were lost to a badly shaped citation."""
+    from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
+
+    parsed = {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40, "evidence": "Ø30 слева"},
+                {
+                    "diameter_mm": 50, "length_mm": 60,
+                    "evidence": [{"image_index": "1", "bbox": [1, 2], "raw_text": "Ø50"}],
+                },
+            ],
+        },
+    }
+    spec = EngineeringDrawingSpec.model_validate(_coerce_spec_containers(parsed))
+    assert len(spec.main_view.outer) == 2
+    assert spec.main_view.outer[0].evidence[0].raw_text == "Ø30 слева"
+    # A bbox that is not four numbers is dropped, the reading is kept.
+    assert spec.main_view.outer[1].evidence[0].bbox is None
+    assert spec.main_view.outer[1].evidence[0].raw_text == "Ø50"
+
+
+def test_mis_nested_json_is_not_reported_as_truncation():
+    """A finished-but-mis-nested answer needs a different answer than a cut-off one."""
+    from app.ai.cad_recognize.spec_vectorize import (
+        SpecReadMalformedError,
+        _parse_spec_json,
+    )
+
+    # Observed live: the reader opened a new object before a top-level field.
+    mis_nested = '{"part":"Вал","main_view":{"outer":[]},{"views":[]}}'
+    with pytest.raises(SpecReadMalformedError):
+        _parse_spec_json(mis_nested, strict=True)
+
+
+def test_object_closed_one_brace_early_is_rejoined_not_lost():
+    """Observed live: '...}},"parts":[]...' — complete output split by a stray brace."""
+    from app.ai.cad_recognize.spec_vectorize import _parse_spec_json
+
+    body = (
+        '{"part":"Вал","main_view":{"type":"вал","outer":['
+        '{"diameter_mm":30,"length_mm":40},{"diameter_mm":50,"length_mm":60}]}}'
+        ',"parts":[],"views":[{"kind":"side","body_index":0}]}'
+    )
+    parsed = _parse_spec_json(body, strict=True)
+    assert parsed["part"] == "Вал"
+    assert len(parsed["main_view"]["outer"]) == 2
+    # The continuation the model actually wrote survives the repair.
+    assert parsed["views"][0]["kind"] == "side"
+
+
+def test_repair_never_invents_a_missing_tail():
+    """A cut-off answer must still fail: there is nothing to re-join."""
+    from app.ai.cad_recognize.spec_vectorize import (
+        SpecReadTruncatedError,
+        _parse_spec_json,
+    )
+
+    cut = '{"part":"Вал","main_view":{"outer":[{"diameter_mm":30,"length_mm":40}'
+    with pytest.raises(SpecReadTruncatedError):
+        _parse_spec_json(cut, strict=True)
+
+
+def test_a_complete_flange_profile_is_not_blocked_by_a_wrong_type_label():
+    """Live: a correctly read flange was rejected for being labelled a shaft."""
+    spec = EngineeringDrawingSpec.model_validate({
+        "part": "Фланец",
+        "main_view": {
+            # The reader's own (wrong) classification.
+            "type": "тело вращения (вал)",
+            "outer": [{"diameter_mm": 560, "length_mm": 20}],
+            "profile": {
+                "shape": "circle", "diameter_mm": 560, "thickness_mm": 20,
+                "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 80}],
+            },
+        },
+    })
+    assert spec.unresolved == []
+
+
+def test_a_shaft_with_one_section_and_no_profile_still_blocks():
+    spec = EngineeringDrawingSpec.model_validate({
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [{"diameter_mm": 50, "length_mm": 60}],
+        },
+    })
+    assert any("outer-profile-incomplete" in item for item in spec.unresolved)
+
+
+def test_an_object_in_unresolved_does_not_delete_the_geometry():
+    """Live: a reason written as an object discarded a correctly read flange."""
+    from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
+
+    parsed = {
+        "main_view": {
+            "type": "вал",
+            "outer": [
+                {"diameter_mm": 30, "length_mm": 40},
+                {"diameter_mm": 50, "length_mm": 60},
+            ],
+        },
+        "optional_unresolved": [{"field": "масштаб", "why": "не читается"}],
+        "unresolved": [None, "габарит не найден"],
+    }
+    spec = EngineeringDrawingSpec.model_validate(_coerce_spec_containers(parsed))
+    assert len(spec.main_view.outer) == 2
+    assert any("масштаб" in item for item in spec.optional_unresolved)
+    assert "габарит не найден" in spec.unresolved

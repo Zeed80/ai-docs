@@ -6,7 +6,7 @@
         migrate migrate-new seed \
         test test-cov e2e regression agent-regression agent-test agent-ws-smoke \
         studio-queue-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval \
-        cad-corpus-acquire cad-corpus-generate cad-corpus-tile cad-corpus-pack \
+        cad-corpus-acquire cad-corpus-generate \
         turboquant-benchmark turboquant-quality \
         lint lint-fix \
         skills aiagent-contract \
@@ -69,8 +69,6 @@ help:
 	@echo "    make cad-drawing-graph-eval — exact EngineeringDrawingGraph → DXF contract benchmark"
 	@echo "    make cad-corpus-acquire — лицензированный внешний CAD-корпус"
 	@echo "    make cad-corpus-generate — 300 mechanical + 300 construction эталонов"
-	@echo "    make cad-corpus-tile — exact local tiles без source-group leakage"
-	@echo "    make cad-corpus-pack — train/val + real-only holdout manifests"
 	@echo "    make agent-test       — AiAgent scenario tests"
 	@echo "    make studio-queue-smoke — read-only concurrent studio queue API smoke"
 	@echo "    make lint             — ruff + eslint"
@@ -240,38 +238,6 @@ cad-candidate-gate:
 		--baseline tools/cad-dataset/baselines/entity_baseline_20260719.json \
 		--candidate test-results/eval_vectorize_candidate.json
 
-cad-primitive-train:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_primitives.py \
-		--data cad-dataset-out/profile-tiles-packed \
-		--out cad-dataset-out/primitive-set-checkpoints \
-		--epochs 10 --batch-size 32 --num-workers 0
-
-cad-multi-type-train:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_multi_type.py \
-		--manifest cad-dataset-out/profile-corpus-xl/manifest.jsonl \
-		--out cad-dataset-out/multi-type-checkpoints \
-		--epochs 10 --batch-size 4 --num-workers 0
-
-cad-multi-type-finetune:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_multi_type.py \
-		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
-		--out cad-dataset-out/multi-type-web-checkpoints \
-		--resume cad-dataset-out/multi-type-checkpoints/best.pt \
-		--epochs 25 --batch-size 8 --lr 5e-5 --num-workers 4
-
-cad-multi-type-refine:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_multi_type.py \
-		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
-		--out cad-dataset-out/multi-type-web-equivalent-checkpoints \
-		--resume cad-dataset-out/multi-type-web-checkpoints/best.pt \
-		--epochs 30 --batch-size 8 --lr 3e-5 --num-workers 4
-
-cad-multi-type-holdout:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/eval_multi_type.py \
-		--checkpoint cad-dataset-out/multi-type-web-equivalent-checkpoints/best.pt \
-		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
-		--split holdout --out test-results/multi-type-web-holdout.json
-
 cad-description-eval:
 	PYTHONPATH=backend python3 backend/scripts/eval_cad_descriptions.py \
 		--cases tools/cad-dataset/description_cases.json \
@@ -282,100 +248,21 @@ cad-drawing-graph-eval:
 		--cases tools/cad-dataset/drawing_graph_cases.json \
 		--out test-results/eval_cad_drawing_graphs.json
 
-cad-web-primitive-train:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_primitives.py \
-		--data cad-dataset-out/web-step-packed \
-		--out cad-dataset-out/web-step-primitive-checkpoints \
-		--resume cad-dataset-out/primitive-set-checkpoints/best.pt \
-		--dataset-kind freecad_library_step_projections_cc_by_3 \
-		--epochs 10 --batch-size 8 --lr 5e-5 --eval-every 200 --num-workers 0
-
-cad-web-sheet-layout-build:
-	python3 tools/cad-dataset/build_sheet_layout_corpus.py \
-		--source cad-dataset-out/web-step-corpus \
-		--out cad-dataset-out/web-sheet-layout \
-		--train-variants 9 --eval-variants 3
-
-cad-web-sheet-layout-train:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_sheet_layout.py \
-		--data cad-dataset-out/web-sheet-layout \
-		--out cad-dataset-out/web-sheet-layout-checkpoints-v2 \
-		--epochs 15 --batch-size 24 --lr 2e-4 --eval-every 100 --num-workers 0
-
-cad-web-evidence-train:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_evidence.py \
-		--data cad-dataset-out/web-step-packed \
-		--out cad-dataset-out/web-evidence-checkpoints \
-		--epochs 15 --batch-size 12 --lr 2e-4 --eval-every 200 --num-workers 0
-
-cad-web-directional-train:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_directional.py \
-		--data cad-dataset-out/web-step-packed \
-		--out cad-dataset-out/web-directional-checkpoints \
-		--warm-start cad-dataset-out/web-evidence-checkpoints/best.pt \
-		--epochs 18 --batch-size 10 --lr 2e-4 --eval-every 200 --num-workers 0
-
-cad-web-graph-train:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_graph.py \
-		--data cad-dataset-out/web-step-packed \
-		--out cad-dataset-out/web-graph-checkpoints-v1-1 \
-		--warm-start cad-dataset-out/web-step-primitive-checkpoints/best.pt \
-		--epochs 20 --batch-size 8 --lr 1e-4 --eval-every 250 --num-workers 0
-
-cad-web-edge-verifier-train:
-	cad-dataset-out/venv/bin/python infra/cad-vectorizer/train_edge_verifier.py \
-		--data cad-dataset-out/web-step-packed \
-		--directional-checkpoint cad-dataset-out/web-directional-checkpoints/best.pt \
-		--out cad-dataset-out/web-edge-verifier-checkpoints \
-		--epochs 30 --batch-size 512 --lr 3e-4
-
 cad-corpus-acquire:
 	python3 tools/cad-dataset/acquire_open_sources.py \
 		--registry tools/cad-dataset/source_registry.json \
 		--out cad-dataset-out/open-sources
 
-# Generative-vectorization stage 1: reshape (image, CadIR) corpus pairs into
-# Qwen3-VL SFT records (image -> isotropic 0..1000 primitive DSL).
-cad-vlm-sft:
-	python3 tools/cad-dataset/build_vlm_sft.py \
-		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
-		--manifest cad-dataset-out/profile-corpus-large/manifest.jsonl \
-		--manifest cad-dataset-out/profile-corpus-xl/manifest.jsonl \
-		--manifest cad-dataset-out/web-step-corpus/manifest.jsonl \
-		--out cad-dataset-out/vlm-sft --backend backend
-
-# --- B5 active-learning flywheel: production accepted edits -> generative retrain ---
-# 1. Export accepted (image, human-corrected IR) pairs from the prod DB (needs
-#    DB access -> runs inside infra-backend-1). Empty until the system has usage.
+# --- B5 active-learning flywheel: production accepted edits ---
+# Export accepted (image, human-corrected IR) pairs from the prod DB (needs DB
+# access -> runs inside infra-backend-1). Empty until the system has usage.
+# The image->DSL generative consumer of these pairs was removed (two LoRA runs
+# scored entity F1 0.000 on real sheets); the pairs now feed spec-reader
+# evaluation instead.
 cad-flywheel-export:
 	docker exec infra-backend-1 sh -c 'cd /app && python scripts/export_self_learning_pairs.py \
 		--out /app/data/self-learning'
 	docker cp infra-backend-1:/app/data/self-learning cad-dataset-out/self-learning
-
-# 2. Rebuild the SFT set = synthetic corpora + the real accepted pairs (gold).
-cad-flywheel-sft:
-	python3 tools/cad-dataset/build_vlm_sft.py \
-		--manifest cad-dataset-out/self-learning/self_learning.jsonl \
-		--manifest cad-dataset-out/web-dxf-corpus-floor/manifest.jsonl \
-		--manifest cad-dataset-out/profile-corpus-large/manifest.jsonl \
-		--manifest cad-dataset-out/profile-corpus-xl/manifest.jsonl \
-		--manifest cad-dataset-out/web-step-corpus/manifest.jsonl \
-		--out cad-dataset-out/vlm-sft --backend backend
-	# 3. then `make cad-vlm-train` (ADSK base) and score on the flywheel holdout.
-
-# Stage 2: LoRA fine-tune Qwen3-VL on the SFT set. Needs the GPU free — stop
-# the production qwen3-vl:32b in ollama first (see infra/vlm-finetune/README).
-cad-vlm-train-image:
-	docker build -t vlm-finetune infra/vlm-finetune
-
-cad-vlm-train:
-	cp infra/vlm-finetune/dataset_info.json infra/vlm-finetune/qwen3vl_lora_sft.yaml cad-dataset-out/vlm-sft/
-	docker run --rm --gpus all \
-		-v $(CURDIR)/cad-dataset-out:$(CURDIR)/cad-dataset-out \
-		-v $(CURDIR)/cad-dataset-out/vlm-sft:/data \
-		-v $(CURDIR)/cad-dataset-out/vlm-sft/out:/out \
-		-v $(HOME)/.cache/huggingface:/root/.cache/huggingface \
-		vlm-finetune
 
 cad-web-dxf-corpus:
 	python3 tools/cad-dataset/build_dxf_raster_corpus.py \
@@ -389,49 +276,10 @@ cad-web-dxf-eval:
 		--split holdout --recognizer cv \
 		--out test-results/eval_web_dxf_cv.json
 
-cad-web-step-project:
-	python3 tools/cad-dataset/project_step_corpus.py \
-		--source cad-dataset-out/open-sources/step/freecad_parts_library \
-		--out cad-dataset-out/step-projections \
-		--image infra-cad-kernel
-
-cad-web-step-build:
-	python3 tools/cad-dataset/build_web_step_corpus.py \
-		--assets cad-dataset-out/open-sources/assets.jsonl \
-		--projections cad-dataset-out/step-projections \
-		--out cad-dataset-out/web-step-corpus
-
-cad-web-step-tile:
-	python3 tools/cad-dataset/tile_ir_dataset.py \
-		--source cad-dataset-out/web-step-corpus \
-		--out cad-dataset-out/web-step-tiles-q90 \
-		--tile-size 640 --overlap 160 --max-commands 90
-
-cad-web-step-pack:
-	python3 tools/cad-dataset/build_dataset.py \
-		--synth cad-dataset-out/web-step-tiles-q90 \
-		--holdout cad-dataset-out/holdout \
-		--out cad-dataset-out/web-step-packed \
-		--split-manifest cad-dataset-out/web-step-tiles-q90/manifest.jsonl \
-		--image-source clean
-
 cad-corpus-generate:
 	python3 tools/cad-dataset/generate_profile_corpus.py \
 		--out cad-dataset-out/profile-corpus \
 		--count 300 --profiles mechanical construction --variants 1
-
-cad-corpus-tile:
-	python3 tools/cad-dataset/tile_ir_dataset.py \
-		--source cad-dataset-out/profile-corpus \
-		--out cad-dataset-out/profile-tiles \
-		--tile-size 640 --overlap 160 --max-commands 180
-
-cad-corpus-pack:
-	python3 tools/cad-dataset/build_dataset.py \
-		--synth cad-dataset-out/profile-tiles \
-		--holdout cad-dataset-out/holdout \
-		--out cad-dataset-out/profile-tiles-packed \
-		--split-manifest cad-dataset-out/profile-tiles/manifest.jsonl
 
 agent-test:
 	cd infra/scripts && python3 run-agent-tests.py
