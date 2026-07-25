@@ -729,6 +729,79 @@ async def accept_techdraw_generation(
     return _gen_out(gen)
 
 
+class SpecCorrectionRequest(BaseModel):
+    """Field-level corrections to what the CAD reader extracted.
+
+    Only the fields a person actually supplies are applied; the rest keeps what
+    the reader produced. Every correction becomes a training example for the
+    reader — the corpus that item 6 of the digitize plan needs and that the
+    existing geometry-only exporter does not collect.
+    """
+
+    part: str | None = None
+    material: str | None = None
+    designation: str | None = None
+    scale: str | None = None
+    mass: str | None = None
+    body_type: str | None = None
+    outer: list[dict[str, Any]] | None = None
+    bore: list[dict[str, Any]] | None = None
+    profile: dict[str, Any] | None = None
+    dimensions: list[dict[str, Any]] | None = None
+    annotations: list[dict[str, Any]] | None = None
+    views: list[dict[str, Any]] | None = None
+
+
+@router.post("/{generation_id}/spec-correction")
+async def correct_vectorize_spec(
+    generation_id: uuid.UUID,
+    body: SpecCorrectionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Record what the reader got wrong on this sheet.
+
+    The corrected spec is stored beside the original read, never replacing it:
+    the pair IS the training signal, and keeping only the corrected version
+    would throw away the half that says what to learn.
+    """
+    from app.ai.cad_reader_feedback import build_correction_record, merge_correction
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    params = dict(gen.params or {})
+    read_spec = params.get("spec")
+    if not read_spec:
+        raise HTTPException(400, "У этой оцифровки нет прочитанного спека")
+
+    supplied = {
+        key: value for key, value in body.model_dump().items() if value is not None
+    }
+    if not supplied:
+        raise HTTPException(400, "Не передано ни одного исправления")
+
+    corrected = merge_correction(read_spec, supplied)
+    record = build_correction_record(
+        generation_id=str(generation_id),
+        source_path=params.get("normalized_source_path"),
+        read_spec=read_spec,
+        corrected_spec=corrected,
+        corrected_by=getattr(user, "sub", None),
+        reader_models=(
+            (params.get("cad_pipeline_manifest") or {})
+            .get("components", {})
+            .get("spec_reader", {})
+            .get("models", [])
+        ),
+    )
+    params["spec_corrected"] = corrected
+    params["spec_correction_record"] = record
+    gen.params = params
+    await db.commit()
+    return {"ok": True, "diff": record["diff"]}
+
+
 @router.post("/{generation_id}/accept-vectorize")
 async def accept_vectorize_generation(
     generation_id: uuid.UUID,
