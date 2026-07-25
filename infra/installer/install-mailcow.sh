@@ -101,7 +101,9 @@ if [ -f "$MAILCOW_DIR/mailcow.conf" ]; then
   ok "mailcow.conf уже существует — не перезаписываю (отредактируйте вручную при необходимости)."
 else
   info "Генерирую mailcow.conf (MAILCOW_HOSTNAME=$MAIL_DOMAIN)…"
-  MAILCOW_TZ="$(ask_input "Часовой пояс контейнеров" "Europe/Moscow" "Mailcow")"
+  # MAILCOW_TZ может прийти из окружения (GUI-развёртывание через update-agent) —
+  # тогда ничего не спрашиваем.
+  MAILCOW_TZ="${MAILCOW_TZ:-$(ask_input "Часовой пояс контейнеров" "Europe/Moscow" "Mailcow")}"
   # generate_config.sh пропускает интерактивные вопросы, если переменные уже
   # экспортированы в окружении (актуально для пинованного тега выше; если
   # апстрим это поведение уберёт — впишите mailcow.conf вручную один раз).

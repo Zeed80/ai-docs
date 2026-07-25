@@ -1,17 +1,25 @@
-# Admin-confirmed update agent
+# Admin-confirmed operations agent
 
-The web GUI (Администрирование → Обновления) lets an admin **confirm** an
-Authentik upgrade. The backend can't run `docker compose` or edit `.env`, so it
-writes a request into the shared backups volume and this **host-side agent**
-executes it: full backup → staged, one-major-at-a-time upgrade → health check →
-automatic rollback on failure. Progress streams back to the GUI.
+The web GUI lets an admin **confirm** operations the backend cannot perform
+itself (it has no compose CLI, no repo mount, and no business editing `.env`):
 
-Without the agent installed, the GUI still shows versions and lets you queue a
-request, but nothing runs it — install the agent, or run the upgrade by hand:
+| GUI | Request file | Executes |
+|---|---|---|
+| Администрирование → Обновления | `authentik-update.json` | `upgrade-authentik.sh` — staged, one major at a time |
+| Администрирование → Интеграции → «Развернуть Mailcow» | `mailcow-install.json` | `install-mailcow.sh` — deploy the mail server |
+
+The backend writes the request into the shared backups volume; this **host-side
+agent** picks it up, runs the job and streams progress back to the GUI. It also
+touches `_control/agent.heartbeat` on every fire, which is how the GUI can say
+"agent not installed" instead of silently queueing a request forever.
+
+Without the agent installed, the GUI still shows status and lets you queue a
+request, but nothing runs it — install the agent, or do it by hand:
 
     sudo bash infra/installer/upgrade-authentik.sh --check      # show the ladder
     sudo bash infra/installer/upgrade-authentik.sh --next --yes # one major
     sudo bash infra/installer/upgrade-authentik.sh --yes        # all the way to latest
+    sudo bash infra/installer/install-mailcow.sh --domain mail.example.com --yes
 
 ## Install the agent (systemd timer, polls every minute)
 
@@ -37,6 +45,20 @@ request, but nothing runs it — install the agent, or run the upgrade by hand:
 - `python3`, `docker`, `flock`, and Docker Compose available on the host.
 - Only acts on a request whose status is `requested`; a `flock` prevents
   overlapping runs. Cancelling is possible only before it starts running.
+
+## Mailcow deployment job (see install-mailcow.sh)
+
+1. Clone `mailcow-dockerized` at the pinned tag, generate `mailcow.conf`
+   (external Traefik terminates web TLS, ClamAV/Solr off).
+2. Write `MAIL_DOMAIN`/`MAILCOW_TAG`/ports into `infra/.env`, join
+   `nginx-mailcow` to the Traefik network, bring the project up.
+3. Re-render the Traefik routes, restart Traefik, copy the Let's Encrypt
+   certificate into Mailcow (`mailcow-certdump.sh`) so SMTP/IMAP get a valid one.
+4. Recreate the `backend` container so it picks up the new `MAILCOW_TAG`.
+
+DNS records, firewall ports, DKIM publication and the Mailcow API key (plus its
+IP allow-list) stay manual — the GUI guide at
+`/admin/integrations/mailcow-guide` lists them, as does `mailcow.README`.
 
 ## What it does per major hop (see upgrade-authentik.sh)
 

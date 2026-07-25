@@ -31,6 +31,10 @@ SOGo webmail/календарь/контакты), развёрнутое отд
 
 ## 2. Установка
 
+Из админки: **Администрирование → Интеграции → «Развернуть Mailcow»** (заявку
+исполняет host-агент, см. `update-agent.README`; ручные шаги расписаны в GUI по
+адресу `/admin/integrations/mailcow-guide`). Из консоли — то же самое:
+
 ```bash
 bash infra/installer/install-mailcow.sh --domain mail.example.com
 ```

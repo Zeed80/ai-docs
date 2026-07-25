@@ -140,12 +140,17 @@ def _write_control(state: dict[str, Any]) -> None:
 
 
 def _mailcow_current_tag() -> str | None:
-    """Tag checked out in infra/mailcow, read through the pinned MAILCOW_TAG.
+    """Deployed Mailcow release.
 
     The backend has no access to the repo checkout, so the value comes from the
-    environment the stack was started with (compose passes infra/.env through).
+    environment the stack was started with (compose passes infra/.env through) —
+    with a just-finished GUI deployment as a fallback, since that writes
+    MAILCOW_TAG into infra/.env but the running container still has the old env
+    (see app.api.mail_deploy.installed_tag).
     """
-    return os.getenv("MAILCOW_TAG") or None
+    from app.api.mail_deploy import installed_tag
+
+    return installed_tag()
 
 
 async def _mailcow_latest_tag() -> str | None:
@@ -168,7 +173,7 @@ async def mailcow_info(_user: UserInfo = _admin_dep) -> MailcowUpdateInfo:
     if not current:
         return MailcowUpdateInfo(
             installed=False, status="not_installed",
-            detail="Почтовый сервер не установлен (infra/installer/install-mailcow.sh).",
+            detail="Почтовый сервер не развёрнут — Администрирование → Интеграции → «Развернуть Mailcow».",
         )
     latest = await _mailcow_latest_tag()
     if latest is None:

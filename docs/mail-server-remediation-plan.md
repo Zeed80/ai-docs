@@ -215,6 +215,25 @@ Authentik → Mailcow убирает раздачу паролей и делае
 | 4.3 | `mail_server_config.default_quota_mb`, `mailbox_configs.quota_mb`, поля в UI |
 | 4.4 | деактивация пользователя гасит его ящик (`update_user` в `admin.py`) |
 
+## 4ter. Развёртывание из админки (2026-07-25)
+
+Кнопка **Администрирование → Интеграции → «Развернуть Mailcow»**. Бэкенд не
+может запускать `docker compose` (нет CLI, репозиторий не смонтирован), поэтому
+используется тот же хенд-офф, что и для апгрейда Authentik: заявка кладётся в
+`_control/mailcow-install.json` в томе бэкапов, host-агент
+(`infra/installer/update-agent.sh`, systemd-таймер) исполняет
+`install-mailcow.sh --domain … --yes` и стримит прогресс/лог обратно в ту же
+карточку.
+
+* API: `backend/app/api/mail_deploy.py` — `GET /api/admin/mail-server/deploy/status`,
+  `POST /deploy` (только человек, не агент), `/deploy/cancel`, `/deploy/dismiss`.
+* Агент умеет два типа заявок и пишет `_control/agent.heartbeat`, поэтому GUI
+  отличает «агент не установлен» от «агент простаивает» и не копит заявки,
+  которые некому исполнить.
+* Ручная часть вынесена в GUI-руководство `/admin/integrations/mailcow-guide`
+  (DNS с подстановкой реального домена, порты фаервола, домен и DKIM, API-ключ
+  и его белый список IP, таймеры certdump/update-check, чеклист проверки).
+
 ## 5. Что осталось
 
 **4.5 — единый вход (Authentik → Mailcow SSO).** Сознательно не делалось в этом

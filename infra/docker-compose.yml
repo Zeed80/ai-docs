@@ -52,6 +52,9 @@ x-backend-env: &backend-env
   # Pinned Mailcow release (empty when the mail server is not installed) — used by
   # /api/admin/updates/mailcow to report the current vs. latest upstream tag.
   MAILCOW_TAG: ${MAILCOW_TAG:-}
+  # Deployment domain: lets the mail-server deploy form and its setup guide
+  # prefill mail.<домен> instead of making the admin retype it.
+  TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN:-localhost}
   SKILL_RUNNER_URL: http://skill-runner:8077
   GPU_TEMP_HELPER_URL: http://gpu-temp-helper:9966
   TRUSTED_PROXY: ${TRUSTED_PROXY:-true}

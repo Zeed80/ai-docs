@@ -1,5 +1,5 @@
 [Unit]
-Description=AI Workspace — admin-confirmed update agent (Authentik staged upgrades)
+Description=AI Workspace — admin-confirmed operations agent (Authentik upgrades, Mailcow deployment)
 Documentation=file:%h/infra/installer/update-agent.README
 After=docker.service
 Requires=docker.service

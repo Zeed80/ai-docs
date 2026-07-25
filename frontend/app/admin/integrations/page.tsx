@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
@@ -29,6 +29,244 @@ interface MailServerIntegration {
   default_quota_mb: number;
   verified?: boolean | null;
   verify_detail?: string | null;
+}
+
+interface DeployJob {
+  status: "idle" | "requested" | "running" | "done" | "error";
+  mail_domain: string | null;
+  tag: string | null;
+  current_step: string | null;
+  log_tail: string;
+  error: string | null;
+  requested_by?: string | null;
+}
+
+interface DeployStatus {
+  installed: boolean;
+  agent_available: boolean;
+  job: DeployJob | null;
+  default_tag: string;
+  suggested_domain: string | null;
+  note: string | null;
+}
+
+/** Deployment of the mail server itself (a separate compose project).
+ *
+ * The backend cannot run docker compose, so the button only files a request; a
+ * host agent executes infra/installer/install-mailcow.sh and streams progress
+ * back. Everything it cannot do — DNS, firewall, DKIM, API key — is listed in
+ * the linked guide, so the operator is never left guessing what is still manual.
+ */
+function MailcowDeploySection({ onDeployed }: { onDeployed: () => void }) {
+  const [state, setState] = useState<DeployStatus | null>(null);
+  const [domain, setDomain] = useState("");
+  const [tz, setTz] = useState("Europe/Moscow");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wasRunning = useRef(false);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/admin/mail-server/deploy/status`, {
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const d: DeployStatus = await res.json();
+      setState(d);
+      setDomain((v) => v || d.suggested_domain || "");
+      const active =
+        d.job?.status === "requested" || d.job?.status === "running";
+      if (wasRunning.current && !active) {
+        wasRunning.current = false;
+        onDeployed(); // installation finished — refresh the connection form
+      }
+      if (active) wasRunning.current = true;
+    } catch {
+      /* сеть моргнула — следующий опрос покажет актуальное состояние */
+    }
+  }, [onDeployed]);
+
+  useEffect(() => {
+    load();
+    timer.current = setInterval(load, 5000);
+    return () => {
+      if (timer.current) clearInterval(timer.current);
+    };
+  }, [load]);
+
+  async function deploy() {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const res = await fetch(`${API}/api/admin/mail-server/deploy`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...csrfHeaders() },
+        body: JSON.stringify({ mail_domain: domain.trim(), timezone: tz.trim() }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.detail ?? `HTTP ${res.status}`);
+      setNote(d.note ?? null);
+      await load();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function post(path: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API}/api/admin/mail-server/deploy/${path}`, {
+        method: "POST",
+        credentials: "include",
+        headers: csrfHeaders(),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail ?? `HTTP ${res.status}`);
+      }
+      await load();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!state) return null;
+
+  const job = state.job;
+  const active = job?.status === "requested" || job?.status === "running";
+  const guide = (
+    <a
+      href="/admin/integrations/mailcow-guide"
+      className="text-primary hover:underline"
+    >
+      руководство по ручным шагам
+    </a>
+  );
+
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <h2 className="text-base font-semibold">Развёртывание почтового сервера</h2>
+
+      {state.installed && !active ? (
+        <p className="text-xs text-green-600">
+          Mailcow развёрнут{job?.mail_domain ? ` (${job.mail_domain})` : ""}.
+          Обновления — раздел «Обновления»; что настраивается вручную — {guide}.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Разворачивает Mailcow (Postfix + Dovecot + Rspamd + SOGo) отдельным
+          compose-проектом, подключает его к нашему Traefik и копирует TLS-сертификат
+          на почтовые порты. DNS-записи, порты фаервола, DKIM и API-ключ придётся
+          настроить руками — см. {guide}.
+        </p>
+      )}
+
+      {!state.agent_available && state.note && (
+        <p className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-950 rounded px-2 py-1">
+          {state.note}
+        </p>
+      )}
+
+      {!state.installed && !active && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">
+                Хост почтового сервера
+              </label>
+              <input
+                type="text"
+                value={domain}
+                onChange={(e) => setDomain(e.target.value)}
+                placeholder="mail.example.com"
+                className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background font-mono"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">
+                Часовой пояс
+              </label>
+              <input
+                type="text"
+                value={tz}
+                onChange={(e) => setTz(e.target.value)}
+                className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-amber-600">
+            Перед запуском заведите A-запись для этого хоста — без неё Traefik не
+            получит сертификат, и почтовые клиенты не подключатся.
+          </p>
+          <button
+            onClick={deploy}
+            disabled={busy || !domain.trim()}
+            className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm disabled:opacity-50"
+          >
+            {busy ? "Отправка заявки..." : "Развернуть Mailcow"}
+          </button>
+        </div>
+      )}
+
+      {job && job.status !== "idle" && (
+        <div className="rounded border border-border p-3 space-y-2">
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">Состояние</span>
+            <span className="font-mono">
+              {job.status === "requested" && "заявка принята, ждём агента"}
+              {job.status === "running" && `выполняется: ${job.current_step ?? "…"}`}
+              {job.status === "done" && "развёрнуто"}
+              {job.status === "error" && "ошибка"}
+            </span>
+          </div>
+          {job.error && <p className="text-xs text-destructive">{job.error}</p>}
+          {job.log_tail && (
+            <pre className="text-[11px] leading-tight bg-muted rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
+              {job.log_tail}
+            </pre>
+          )}
+          <div className="flex gap-2">
+            {job.status === "requested" && (
+              <button
+                onClick={() => post("cancel")}
+                disabled={busy}
+                className="px-3 py-1.5 rounded border border-border text-sm hover:bg-muted disabled:opacity-50"
+              >
+                Отменить заявку
+              </button>
+            )}
+            {(job.status === "done" || job.status === "error") && (
+              <button
+                onClick={() => post("dismiss")}
+                disabled={busy}
+                className="px-3 py-1.5 rounded border border-border text-sm hover:bg-muted disabled:opacity-50"
+              >
+                Скрыть результат
+              </button>
+            )}
+          </div>
+          {job.status === "done" && (
+            <p className="text-xs text-muted-foreground">
+              Дальше вручную: DKIM-запись, порты фаервола, API-ключ и его белый
+              список IP — {guide}. Затем заполните подключение ниже.
+            </p>
+          )}
+        </div>
+      )}
+
+      {note && <p className="text-xs text-muted-foreground">{note}</p>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
 }
 
 function MailServerSection() {
@@ -195,7 +433,14 @@ function MailServerSection() {
         <em>Configuration → Access → Edit administrator details → API</em>{" "}
         (Read-Write). Там же в Mailcow нужно внести IP/подсеть контейнера
         backend в белый список ключа — иначе валидный ключ отвечает 401/403.
-        После сохранения на странице пользователя (
+        Пошаговое руководство по ручной части настройки —{" "}
+        <a
+          href="/admin/integrations/mailcow-guide"
+          className="text-primary hover:underline"
+        >
+          Настройка Mailcow
+        </a>
+        . После сохранения на странице пользователя (
         <em>Пользователи → карточка → Корпоративная почта</em>) можно выдавать
         личные @{form.mail_domain || "домен"}-адреса.
       </p>
@@ -377,6 +622,7 @@ function IntegrationsContent() {
 
   return (
     <div className="max-w-xl space-y-5">
+      <MailcowDeploySection onDeployed={() => window.location.reload()} />
       <MailServerSection />
 
       <div className="rounded-lg border border-border p-4 space-y-3">
