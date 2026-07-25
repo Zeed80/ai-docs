@@ -1,0 +1,14 @@
+[Unit]
+Description=AI Workspace — daily Mailcow certificate sync from Traefik
+
+[Timer]
+# Let's Encrypt renews ~30 days before expiry, so a daily check is plenty; the
+# script is a no-op when the certificate has not changed.
+OnBootSec=15min
+OnUnitActiveSec=1d
+AccuracySec=1h
+Persistent=true
+Unit=mailcow-certdump.service
+
+[Install]
+WantedBy=timers.target

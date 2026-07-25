@@ -31,6 +31,7 @@ from app.domain.admin import (
     IntegrationAuthentikOut,
     IntegrationAuthentikUpdate,
     IntegrationMailServerOut,
+    IntegrationMailServerSaved,
     IntegrationMailServerUpdate,
     IntegrationTestResult,
     PermissionMatrixOut,
@@ -41,6 +42,8 @@ from app.domain.admin import (
     UserMailboxCreate,
     UserMailboxOut,
     UserMailboxProvisionedOut,
+    UserMailboxRevoke,
+    UserMailboxSweepUpdate,
     UserOut,
     UserUpdate,
 )
@@ -205,18 +208,30 @@ def _suggest_local_part(user: User) -> str:
     return slug or "user"
 
 
+async def _personal_mailbox(db: AsyncSession, user_sub: str, *, active_only: bool = True):
+    """The user's personal mailbox row.
+
+    ``active_only`` matters: a revoked mailbox stays in the table (audit trail,
+    and a deactivated Mailcow mailbox still exists server-side). Provisioning
+    must not be blocked by such a row — it reuses or replaces it — while
+    password reset and the self-service view must only ever see a live one.
+    """
+    conditions = [
+        MailboxConfig.owner_sub == user_sub,
+        MailboxConfig.mailbox_type == "personal",
+    ]
+    if active_only:
+        conditions.append(MailboxConfig.is_active == True)  # noqa: E712
+    return (await db.execute(select(MailboxConfig).where(*conditions))).scalar_one_or_none()
+
+
 @router.get("/users/{user_sub}/mailbox", response_model=UserMailboxOut)
 async def get_user_mailbox(
     user_sub: str,
     _admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> UserMailboxOut:
-    result = await db.execute(
-        select(MailboxConfig).where(
-            MailboxConfig.owner_sub == user_sub, MailboxConfig.mailbox_type == "personal"
-        )
-    )
-    cfg = result.scalar_one_or_none()
+    cfg = await _personal_mailbox(db, user_sub)
     if cfg is None:
         return UserMailboxOut()
     from app.services.integration_config import get_mail_server_config
@@ -225,6 +240,7 @@ async def get_user_mailbox(
     return UserMailboxOut(
         address=cfg.name, is_active=cfg.is_active, webmail_url=mail_cfg.webmail_url,
         last_sync_at=cfg.last_sync_at, sync_error=cfg.sync_error,
+        sweep_enabled=cfg.sweep_enabled, quota_mb=cfg.quota_mb,
     )
 
 
@@ -243,13 +259,15 @@ async def provision_user_mailbox(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
-    existing = await db.execute(
-        select(MailboxConfig).where(
-            MailboxConfig.owner_sub == user_sub, MailboxConfig.mailbox_type == "personal"
-        )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="User already has a personal mailbox")
+    if await _personal_mailbox(db, user_sub) is not None:
+        raise HTTPException(status_code=409, detail="У пользователя уже есть личный ящик")
+
+    # A previously revoked mailbox leaves an inactive row behind; drop it so the
+    # user can be issued a mailbox again (otherwise revocation was a one-way door).
+    stale = await _personal_mailbox(db, user_sub, active_only=False)
+    if stale is not None:
+        await db.delete(stale)
+        await db.flush()
 
     mail_cfg = await get_mail_server_config()
     if not mail_cfg.configured:
@@ -262,21 +280,22 @@ async def provision_user_mailbox(
     try:
         available = await mailcow_api.check_local_part_available(local_part, mail_cfg.mail_domain)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Mail server API error: {exc}")
+        raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
     if not available:
         raise HTTPException(status_code=409, detail=f"{local_part}@{mail_cfg.mail_domain} уже занят")
 
     full_address = f"{local_part}@{mail_cfg.mail_domain}"
     password = secrets.token_urlsafe(18)
+    quota_mb = payload.quota_mb or mail_cfg.default_quota_mb
 
     try:
         await mailcow_api.create_mailbox(
             local_part=local_part, domain=mail_cfg.mail_domain, password=password,
-            full_name=user.name or user.preferred_username,
+            full_name=user.name or user.preferred_username, quota_mb=quota_mb,
         )
     except Exception as exc:
         logger.error("mailcow_provision_failed", error=str(exc), user_sub=user_sub)
-        raise HTTPException(status_code=502, detail=f"Mail server API error: {exc}")
+        raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
 
     cfg = MailboxConfig(
         name=full_address,
@@ -296,11 +315,15 @@ async def provision_user_mailbox(
         smtp_from_address=full_address,
         smtp_from_name=user.name,
         is_active=True,
+        quota_mb=quota_mb,
+        # Consent, not a side effect: the AI does not read this mailbox until its
+        # owner turns the sweep on in /settings (app/tasks/email_triage.py).
+        sweep_enabled=False,
     )
     db.add(cfg)
     db.add(AuditLog(
         user_id=admin.sub, action="admin.provision_mailbox", entity_type="user",
-        details={"target_sub": user_sub, "address": full_address},
+        details={"target_sub": user_sub, "address": full_address, "quota_mb": quota_mb},
     ))
     await db.commit()
     logger.info("admin_provision_mailbox", admin=admin.sub, target=user_sub, address=full_address)
@@ -315,19 +338,15 @@ async def reset_user_mailbox_password(
 ) -> UserMailboxProvisionedOut:
     from app.services import mailcow_api
 
-    cfg = (await db.execute(
-        select(MailboxConfig).where(
-            MailboxConfig.owner_sub == user_sub, MailboxConfig.mailbox_type == "personal"
-        )
-    )).scalar_one_or_none()
+    cfg = await _personal_mailbox(db, user_sub)
     if cfg is None:
-        raise HTTPException(status_code=404, detail="User has no personal mailbox")
+        raise HTTPException(status_code=404, detail="У пользователя нет активного личного ящика")
 
     password = secrets.token_urlsafe(18)
     try:
         await mailcow_api.edit_mailbox_password(cfg.name, password)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Mail server API error: {exc}")
+        raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
 
     cfg.imap_password_encrypted = encrypt_password(password)
     cfg.smtp_password_encrypted = encrypt_password(password)
@@ -340,34 +359,97 @@ async def reset_user_mailbox_password(
     return UserMailboxProvisionedOut(address=cfg.name, generated_password=password)
 
 
-@router.delete("/users/{user_sub}/mailbox", status_code=204)
+@router.post("/users/{user_sub}/mailbox/revoke", status_code=204)
 async def revoke_user_mailbox(
     user_sub: str,
+    payload: UserMailboxRevoke,
     admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    """Revoke a personal mailbox.
+
+    Two very different operations behind one word, so they are separated:
+      * default — deactivate (Mailcow `active=0`, sweep off, our row inactive).
+        Nothing is lost; the right move when someone leaves and their mail may
+        still be needed.
+      * delete_on_server=True — destroy the mailbox and every message in it.
+        Irreversible, so the caller must echo the exact address.
+    """
     from app.services import mailcow_api
 
-    cfg = (await db.execute(
-        select(MailboxConfig).where(
-            MailboxConfig.owner_sub == user_sub, MailboxConfig.mailbox_type == "personal"
-        )
-    )).scalar_one_or_none()
+    cfg = await _personal_mailbox(db, user_sub)
     if cfg is None:
-        raise HTTPException(status_code=404, detail="User has no personal mailbox")
+        raise HTTPException(status_code=404, detail="У пользователя нет активного личного ящика")
 
-    try:
-        await mailcow_api.delete_mailbox(cfg.name)
-    except Exception as exc:
-        logger.warning("mailcow_delete_failed", error=str(exc), address=cfg.name)
+    if payload.delete_on_server:
+        if (payload.confirm_address or "").strip().lower() != cfg.name.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Для безвозвратного удаления повторите адрес ящика в confirm_address. "
+                    "Вся переписка будет уничтожена."
+                ),
+            )
+        try:
+            await mailcow_api.delete_mailbox(cfg.name)
+        except Exception as exc:
+            logger.warning("mailcow_delete_failed", error=str(exc), address=cfg.name)
+            raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
+        action = "admin.delete_mailbox"
+    else:
+        try:
+            await mailcow_api.set_mailbox_active(cfg.name, active=False)
+        except Exception as exc:
+            logger.warning("mailcow_deactivate_failed", error=str(exc), address=cfg.name)
+            raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
+        action = "admin.deactivate_mailbox"
 
     cfg.is_active = False
+    cfg.sweep_enabled = False
     db.add(AuditLog(
-        user_id=admin.sub, action="admin.revoke_mailbox", entity_type="user",
-        details={"target_sub": user_sub, "address": cfg.name},
+        user_id=admin.sub, action=action, entity_type="user",
+        details={
+            "target_sub": user_sub,
+            "address": cfg.name,
+            "deleted_on_server": payload.delete_on_server,
+        },
     ))
     await db.commit()
-    logger.info("admin_revoke_mailbox", admin=admin.sub, target=user_sub, address=cfg.name)
+    logger.info(
+        "admin_revoke_mailbox", admin=admin.sub, target=user_sub,
+        address=cfg.name, deleted=payload.delete_on_server,
+    )
+
+
+@router.patch("/users/{user_sub}/mailbox/sweep", response_model=UserMailboxOut)
+async def set_user_mailbox_sweep(
+    user_sub: str,
+    payload: UserMailboxSweepUpdate,
+    admin: UserInfo = _admin_dep,
+    db: AsyncSession = Depends(get_db),
+) -> UserMailboxOut:
+    """Turn AI triage of a personal mailbox on/off (admin side of the consent)."""
+    cfg = await _personal_mailbox(db, user_sub)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="У пользователя нет активного личного ящика")
+
+    cfg.sweep_enabled = payload.sweep_enabled
+    db.add(AuditLog(
+        user_id=admin.sub, action="admin.mailbox_sweep", entity_type="user",
+        details={"target_sub": user_sub, "address": cfg.name, "sweep_enabled": payload.sweep_enabled},
+    ))
+    await db.commit()
+    logger.info(
+        "admin_mailbox_sweep", admin=admin.sub, target=user_sub, enabled=payload.sweep_enabled
+    )
+    from app.services.integration_config import get_mail_server_config
+
+    mail_cfg = await get_mail_server_config()
+    return UserMailboxOut(
+        address=cfg.name, is_active=cfg.is_active, webmail_url=mail_cfg.webmail_url,
+        last_sync_at=cfg.last_sync_at, sync_error=cfg.sync_error,
+        sweep_enabled=cfg.sweep_enabled, quota_mb=cfg.quota_mb,
+    )
 
 
 @router.get("/users", response_model=UserListResponse)
@@ -544,6 +626,30 @@ async def update_user(
             if admin_count <= settings.min_admin_count:
                 raise HTTPException(status_code=400, detail="Cannot deactivate the last admin")
         user.is_active = payload.is_active
+        if not payload.is_active:
+            # A deactivated employee must stop receiving mail and stop being read
+            # by the agent. Nothing is deleted — a full revoke stays a separate,
+            # explicit action (POST .../mailbox/revoke).
+            mailbox = await _personal_mailbox(db, user_sub)
+            if mailbox is not None:
+                from app.services import mailcow_api
+
+                try:
+                    await mailcow_api.set_mailbox_active(mailbox.name, active=False)
+                except Exception as exc:  # noqa: BLE001
+                    # The user record still gets deactivated — but say so loudly,
+                    # a silently live mailbox is a real security gap.
+                    logger.error(
+                        "mailbox_deactivate_failed_on_user_deactivate",
+                        address=mailbox.name, error=str(exc),
+                    )
+                mailbox.sweep_enabled = False
+                mailbox.is_active = False
+                db.add(AuditLog(
+                    user_id=admin.sub, action="admin.deactivate_mailbox", entity_type="user",
+                    details={"target_sub": user_sub, "address": mailbox.name,
+                             "reason": "user deactivated"},
+                ))
     if payload.preferences is not None:
         user.preferences = payload.preferences
     if "section_access" in payload.model_fields_set:
@@ -861,6 +967,7 @@ async def get_mail_server_integration(
     if row is None:
         return IntegrationMailServerOut(
             configured=False, api_key_set=False, api_key_hint="", imap_port=993, smtp_port=465,
+            default_quota_mb=1024,
         )
     api_key = decrypt(row.api_key_encrypted)
     return IntegrationMailServerOut(
@@ -874,10 +981,37 @@ async def get_mail_server_integration(
         imap_port=row.imap_port,
         smtp_host=row.smtp_host,
         smtp_port=row.smtp_port,
+        default_quota_mb=row.default_quota_mb,
     )
 
 
-@router.put("/integrations/mail-server", response_model=IntegrationMailServerOut)
+def _normalize_api_url(raw: str) -> str:
+    """Validate + normalise the Mailcow base URL.
+
+    Typos here surface much later as an opaque connection error during
+    provisioning, so reject them at save time: scheme required, no path, no
+    trailing slash (the client appends /api/v1/...).
+    """
+    from urllib.parse import urlparse
+
+    value = (raw or "").strip().rstrip("/")
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(
+            status_code=422,
+            detail="API URL должен начинаться с http:// или https:// и содержать хост, например https://mail.example.com",
+        )
+    if parsed.path not in ("", "/"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Уберите путь из API URL — нужен только адрес сервера: {parsed.scheme}://{parsed.netloc}",
+        )
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+@router.put("/integrations/mail-server", response_model=IntegrationMailServerSaved)
 async def update_mail_server_integration(
     payload: IntegrationMailServerUpdate,
     admin: UserInfo = _admin_dep,
@@ -893,7 +1027,7 @@ async def update_mail_server_integration(
 
     fields = payload.model_fields_set
     if "api_url" in fields:
-        row.api_url = (payload.api_url or "").strip() or None
+        row.api_url = _normalize_api_url(payload.api_url or "") or None
     if "api_key" in fields:
         row.api_key_encrypted = encrypt((payload.api_key or "").strip()) if payload.api_key else None
     if "mail_domain" in fields:
@@ -908,11 +1042,22 @@ async def update_mail_server_integration(
         row.smtp_host = (payload.smtp_host or "").strip() or None
     if "smtp_port" in fields and payload.smtp_port:
         row.smtp_port = payload.smtp_port
+    if "default_quota_mb" in fields and payload.default_quota_mb is not None:
+        row.default_quota_mb = payload.default_quota_mb
     row.updated_by = admin.sub
 
     await db.commit()
     logger.info("admin_update_mail_server_integration", admin=admin.sub)
-    return await get_mail_server_integration(admin=admin, db=db)
+
+    saved = await get_mail_server_integration(admin=admin, db=db)
+    result = IntegrationMailServerSaved(**saved.model_dump())
+    if payload.verify:
+        from app.services import mailcow_api
+
+        ok, detail = await mailcow_api.test_connection()
+        result.verified = ok
+        result.verify_detail = detail
+    return result
 
 
 @router.post("/integrations/mail-server/test", response_model=IntegrationTestResult)

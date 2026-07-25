@@ -136,10 +136,16 @@ capabilities:
     description: >
       Работа с электронной почтой: входящие письма, поиск переписки,
       просмотр треда, создание черновика, отправка письма [GATE],
-      шаблоны, стилизация, подбор шаблона.
+      шаблоны, стилизация, подбор шаблона, отправка вложения в обработку.
       Для отправки письма: сначала action=draft (создаёт черновик, возвращает draft_id),
       затем action=send с draft_id [GATE требует подтверждения].
       Пример создания черновика: action="draft", body={"to":"email@example.com","subject":"Тема","body":"Текст"}.
+      Видимость: общие ящики (закупки/бухгалтерия/общий) доступны всегда;
+      личные ящики сотрудников — только тому, от чьего имени идёт диалог
+      (action=my_mailbox возвращает его адрес). Чужие личные ящики не видны
+      и в выдачу list/search не попадают — не обещай пользователю доступ к ним.
+      action=process_attachment отправляет уже полученное вложение письма на
+      распознавание (target="document") или в оцифровку чертежа (target="drawing").
     path: /api/agent/cap/email
     method: POST
     gate_actions: [send, delete_template]
@@ -148,10 +154,13 @@ capabilities:
       properties:
         action:
           type: string
-          description: "list | search | get | draft | send | fetch_new | risk_check | list_templates | suggest_template | style_match"
+          description: "list | search | get | draft | send | fetch_new | risk_check | list_templates | get_template | render_template | suggest_template | style_match | my_mailbox | process_attachment"
         thread_id:
           type: string
           description: "ID треда/письма (для get)"
+        message_id:
+          type: string
+          description: "ID письма (для process_attachment)"
         draft_id:
           type: string
           description: "ID черновика (для send, risk_check) — получить из результата action=draft"
@@ -160,10 +169,10 @@ capabilities:
           description: "Поисковый запрос (для search)"
         filters:
           type: object
-          description: "Фильтры для list: mailbox_id, supplier_id, date_from, unread, limit"
+          description: "Фильтры для list: mailbox (имя/адрес ящика), limit. Для search: query, email_address, supplier_id, mailbox, limit"
         body:
           type: object
-          description: "Для draft: {to_addresses: ['email@domain.com'], subject: 'тема', body_html: '<p>Текст</p>', supplier_id?: 'uuid'}"
+          description: "Для draft: {to_addresses: ['email@domain.com'], subject: 'тема', body_html: '<p>Текст</p>', supplier_id?: 'uuid'}. Для process_attachment: {filename: 'счёт.pdf', target: 'document'|'drawing'}"
       required: [action]
 
   - name: procurement

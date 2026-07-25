@@ -19,6 +19,7 @@ from app.chat.store import (
     list_chat_messages,
     update_chat_session_title,
 )
+from app.ai.actor_context import set_acting_user
 from app.chat.user_key import get_ws_user_key
 from app.core.chat_bus import chat_bus
 from app.db.session import _get_session_factory
@@ -49,6 +50,9 @@ async def chat_ws(ws: WebSocket) -> None:
         # Auth is enabled but no valid token — reject with 4001 (Unauthorized)
         await ws.close(code=4001, reason="Unauthorized")
         return
+    # Bind this connection's human to the agent's outgoing service calls, so
+    # per-user scoping (personal mailboxes) applies to what the agent may read.
+    set_acting_user(user_key)
     db_factory = _get_session_factory()
     active_session_id: uuid.UUID | None = None
     assistant_buffer: list[str] = []

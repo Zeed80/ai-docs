@@ -550,6 +550,33 @@ routes:
     workspace_required: false
     skills: ["search.research", "search.browse"]
 
+  # Почта: общие ящики (закупки/бухгалтерия/общий) и личный ящик сотрудника
+  # (mailbox_type="personal", выдаётся админом). procurement — единственная
+  # роль с capability `email` в gateway.yml; без этого маршрута вопросы о почте
+  # уходят в роль без доступа к письмам и агент отвечает «не могу».
+  # Чужие личные ящики не видны на уровне API (app/domain/email_access.py) —
+  # маршрут ничего не расширяет, только приводит запрос к нужной роли.
+  - intent: email_triage
+    role: procurement
+    keywords:
+      - "моя почта"
+      - "мою почту"
+      - "мой ящик"
+      - "моем ящике"
+      - "мой почтовый ящик"
+      - "личная почта"
+      - "личную почту"
+      - "личный ящик"
+      - "мои письма"
+      - "моих письм"
+      - "проверь почту"
+      - "новые письма"
+      - "входящие письма"
+      - "вложение из письма"
+      - "вложения из письма"
+    workspace_required: false
+    skills: ["email.list_threads", "email.search", "email.read"]
+
 # ── Fallback-правила выбора canvas (когда маршрут не дал canvas_id) ──────────
 
 fallback_canvas_rules:

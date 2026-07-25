@@ -26,10 +26,20 @@ logger = structlog.get_logger()
 
 
 def _internal_headers() -> dict:
-    """Headers for agent → backend service calls (auth + internal marker)."""
+    """Headers for agent → backend service calls (auth + internal marker).
+
+    Carries the acting user (app.ai.actor_context) so endpoints can scope
+    per-user data instead of seeing the full-admin service account. Absent on
+    headless turns — endpoints must then fail closed.
+    """
+    from app.ai.actor_context import get_acting_user
+
     h: dict = {"X-Internal-Agent": "1"}
     if _settings.agent_service_key:
         h["X-API-Key"] = _settings.agent_service_key
+    actor = get_acting_user()
+    if actor:
+        h["X-Acting-User"] = actor
     return h
 
 

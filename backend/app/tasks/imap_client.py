@@ -32,6 +32,16 @@ class MailboxConfig:
     # Routing: what doc types / roles this mailbox serves
     default_doc_type: str | None = None
     assigned_role: str | None = None
+    # Personal mailboxes belong to one employee: we must not touch their \Seen
+    # flags (the owner reads this mailbox in a normal mail client), so they are
+    # polled with BODY.PEEK from a stored UID watermark instead of IMAP UNSEEN.
+    mailbox_type: str = "shared"
+    owner_sub: str | None = None
+    last_seen_uid: int | None = None
+
+    @property
+    def is_personal(self) -> bool:
+        return self.mailbox_type == "personal"
 
 
 @dataclass
@@ -60,16 +70,14 @@ class ParsedEmail:
 
 def get_mailbox_configs() -> list[MailboxConfig]:
     """Load active mailbox configs from the database."""
-    from sqlalchemy import create_engine, select
-    from sqlalchemy.orm import Session
+    from sqlalchemy import select
 
-    from app.config import settings as _settings
     from app.db.models import MailboxConfig as MailboxConfigDB
+    from app.db.sync_session import sync_session
     from app.utils.crypto import decrypt_password
 
     try:
-        engine = create_engine(_settings.database_url_sync, pool_pre_ping=True)
-        with Session(engine) as db:
+        with sync_session() as db:
             rows = db.execute(
                 select(MailboxConfigDB).where(MailboxConfigDB.is_active == True)  # noqa: E712
             ).scalars().all()
@@ -84,10 +92,12 @@ def get_mailbox_configs() -> list[MailboxConfig]:
                     folder=row.imap_folder,
                     default_doc_type=row.default_doc_type,
                     assigned_role=row.assigned_role,
+                    mailbox_type=row.mailbox_type or "shared",
+                    owner_sub=row.owner_sub,
+                    last_seen_uid=row.last_seen_uid,
                 )
                 for row in rows
             ]
-        engine.dispose()
         return configs
     except Exception as e:
         logger.warning("mailbox_configs_load_failed", error=str(e))
@@ -186,9 +196,41 @@ def parse_email_message(raw_bytes: bytes) -> ParsedEmail:
     )
 
 
+def _save_last_seen_uid(mailbox_name: str, uid: int) -> None:
+    """Persist the UID watermark for a PEEK-polled (personal) mailbox."""
+    from sqlalchemy import select
+
+    from app.db.models import MailboxConfig as MailboxConfigDB
+    from app.db.sync_session import sync_session
+
+    try:
+        with sync_session() as db:
+            row = db.execute(
+                select(MailboxConfigDB).where(MailboxConfigDB.name == mailbox_name)
+            ).scalar_one_or_none()
+            if row is not None and (row.last_seen_uid or 0) < uid:
+                row.last_seen_uid = uid
+                db.commit()
+    except Exception as e:  # noqa: BLE001
+        # Losing the watermark only means re-reading messages next run (dedup
+        # happens downstream by Message-ID/hash) — never fail the fetch for it.
+        logger.warning("imap_uid_watermark_save_failed", mailbox=mailbox_name, error=str(e))
+
+
 def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
-    """Connect to IMAP and fetch unseen messages."""
-    logger.info("imap_connecting", mailbox=config.name, host=config.host)
+    """Fetch new messages from a mailbox.
+
+    Shared mailboxes: IMAP UNSEEN + mark \\Seen — they are an integration inbox,
+    the flag is our processing state and nobody reads them by hand.
+
+    Personal mailboxes: UID > last_seen_uid + BODY.PEEK — a human reads this
+    mailbox in their own client, so the agent must leave \\Seen untouched.
+    Progress is tracked by the UID watermark instead of the flag.
+    """
+    logger.info(
+        "imap_connecting", mailbox=config.name, host=config.host,
+        mode="peek" if config.is_personal else "unseen",
+    )
 
     try:
         if config.ssl:
@@ -199,9 +241,14 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
         conn.login(config.user, config.password)
         conn.select(config.folder)
 
-        # Search for unseen messages
-        status, message_ids = conn.search(None, "UNSEEN")
-        if status != "OK" or not message_ids[0]:
+        personal = config.is_personal
+        if personal:
+            since_uid = int(config.last_seen_uid or 0) + 1
+            status, message_ids = conn.uid("search", None, f"UID {since_uid}:*")
+        else:
+            status, message_ids = conn.search(None, "UNSEEN")
+
+        if status != "OK" or not message_ids or not message_ids[0]:
             logger.info("imap_no_new_messages", mailbox=config.name)
             conn.logout()
             return []
@@ -210,9 +257,22 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
         logger.info("imap_found_messages", mailbox=config.name, count=len(ids))
 
         emails: list[ParsedEmail] = []
+        max_uid = int(config.last_seen_uid or 0)
         for msg_id in ids:
-            status, data = conn.fetch(msg_id, "(RFC822)")
-            if status != "OK" or not data[0]:
+            if personal:
+                # "UID n:*" always returns at least one message even when n is
+                # past the end — skip anything at or below the watermark.
+                try:
+                    uid_value = int(msg_id)
+                except (TypeError, ValueError):
+                    continue
+                if uid_value <= (config.last_seen_uid or 0):
+                    continue
+                status, data = conn.uid("fetch", msg_id, "(BODY.PEEK[])")
+            else:
+                status, data = conn.fetch(msg_id, "(RFC822)")
+
+            if status != "OK" or not data or not data[0]:
                 continue
 
             raw = data[0][1]
@@ -220,10 +280,16 @@ def fetch_unseen_from_mailbox(config: MailboxConfig) -> list[ParsedEmail]:
                 parsed = parse_email_message(raw)
                 emails.append(parsed)
 
-                # Mark as seen
-                conn.store(msg_id, "+FLAGS", "\\Seen")
+                if personal:
+                    max_uid = max(max_uid, uid_value)
+                else:
+                    conn.store(msg_id, "+FLAGS", "\\Seen")
 
         conn.logout()
+
+        if personal and max_uid > (config.last_seen_uid or 0):
+            _save_last_seen_uid(config.name, max_uid)
+
         logger.info("imap_fetched", mailbox=config.name, count=len(emails))
         return emails
 

@@ -49,6 +49,9 @@ x-backend-env: &backend-env
   # the first SSO user lands as viewer → 403 on all admin endpoints.
   INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
   AGENT_SERVICE_KEY: ${AGENT_SERVICE_KEY:-agent-internal-key-2026}
+  # Pinned Mailcow release (empty when the mail server is not installed) — used by
+  # /api/admin/updates/mailcow to report the current vs. latest upstream tag.
+  MAILCOW_TAG: ${MAILCOW_TAG:-}
   SKILL_RUNNER_URL: http://skill-runner:8077
   GPU_TEMP_HELPER_URL: http://gpu-temp-helper:9966
   TRUSTED_PROXY: ${TRUSTED_PROXY:-true}

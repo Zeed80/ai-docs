@@ -2904,6 +2904,13 @@ class MailboxConfig(UUIDPrimaryKey, TimestampMixin, Base):
     # triage sweep as shared/integration mailboxes (procurement/accounting/…).
     owner_sub: Mapped[str | None] = mapped_column(String(255), index=True)
     mailbox_type: Mapped[str] = mapped_column(String(20), default="shared", nullable=False)
+    # Consent switch: may the agent read this mailbox? Shared mailboxes are swept
+    # by definition; a personal one only after its owner opts in (/settings).
+    sweep_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # IMAP UID watermark for mailboxes polled with BODY.PEEK (personal ones),
+    # where marking \Seen would steal the owner's unread state.
+    last_seen_uid: Mapped[int | None] = mapped_column(Integer)
+    quota_mb: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
 
 
 class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
@@ -2926,6 +2933,9 @@ class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
     imap_port: Mapped[int] = mapped_column(Integer, default=993, nullable=False)
     smtp_host: Mapped[str | None] = mapped_column(String(255))
     smtp_port: Mapped[int] = mapped_column(Integer, default=465, nullable=False)
+    # Default quota for newly provisioned personal mailboxes (admin-editable,
+    # per-mailbox override at provisioning time).
+    default_quota_mb: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(100))
 
 

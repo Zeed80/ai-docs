@@ -57,8 +57,12 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
 
     errors: list[str] = []
     created_docs = 0
+    mailbox_owner: str | None = None
 
     with _get_sync_session() as db:
+        # Resolved once per poll: attachments of a personal mailbox inherit its
+        # owner (see _store_attachment).
+        mailbox_owner = _mailbox_owner_sub(db, mailbox)
         for parsed in emails:
             try:
                 # Check for duplicate by Message-ID
@@ -104,7 +108,7 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
 
                 # Process attachments → Documents
                 for att in parsed.attachments:
-                    doc = _store_attachment(db, att, email_msg.id, mailbox)
+                    doc = _store_attachment(db, att, email_msg.id, mailbox, owner_sub=mailbox_owner)
                     if doc:
                         created_docs += 1
 
@@ -130,14 +134,22 @@ def poll_imap_mailbox(self, mailbox: str) -> dict:
 def _mailbox_recipients(db: Session, mailbox: str) -> list[str]:
     """Resolve which users to notify about a new email in `mailbox`.
 
-    Routing: users whose role matches the mailbox's `assigned_role`; if none is
+    Personal mailbox → its owner, and nobody else. The admin fallback below is
+    right for a company inbox nobody claimed, and completely wrong for private
+    mail: it would push every employee's personal correspondence to every admin.
+
+    Shared mailbox → users whose role matches `assigned_role`; if none is
     configured or matches, fall back to active admins.
     """
     from app.db.models import MailboxConfig, User
 
-    role = db.execute(
-        select(MailboxConfig.assigned_role).where(MailboxConfig.name == mailbox)
-    ).scalar_one_or_none()
+    cfg = db.execute(
+        select(MailboxConfig.assigned_role, MailboxConfig.mailbox_type, MailboxConfig.owner_sub)
+        .where(MailboxConfig.name == mailbox)
+    ).first()
+    role = cfg[0] if cfg else None
+    if cfg and cfg[1] == "personal":
+        return [cfg[2]] if cfg[2] else []
 
     subs: list[str] = []
     if role:
@@ -232,11 +244,23 @@ def _find_or_create_thread(
     return thread.id
 
 
+def _mailbox_owner_sub(db: Session, mailbox: str) -> str | None:
+    """Owner of a personal mailbox (None for shared/company inboxes)."""
+    from app.db.models import MailboxConfig
+
+    row = db.execute(
+        select(MailboxConfig.mailbox_type, MailboxConfig.owner_sub)
+        .where(MailboxConfig.name == mailbox)
+    ).first()
+    return row[1] if row and row[0] == "personal" else None
+
+
 def _store_attachment(
     db: Session,
     att,
     email_message_id: uuid.UUID,
     mailbox: str,
+    owner_sub: str | None = None,
 ) -> Document | None:
     """Store email attachment as Document.
 
@@ -249,10 +273,16 @@ def _store_attachment(
     storage_path = f"documents/{file_hash[:2]}/{file_hash[2:4]}/{file_hash}"
     is_allowed = _is_extension_allowed(db, att.filename)
 
-    # Dedup check
+    # Dedup check. Deliberately scoped: a private attachment must never be
+    # de-duplicated into a shared document (that would hand a colleague's file to
+    # everyone), and a shared document must not be narrowed to one owner. Only
+    # documents with the same ownership are reused.
     existing = db.execute(
-        select(Document).where(Document.file_hash == file_hash)
-    ).scalar_one_or_none()
+        select(Document).where(
+            Document.file_hash == file_hash,
+            Document.owner_sub.is_(None) if owner_sub is None else Document.owner_sub == owner_sub,
+        )
+    ).scalars().first()
     if existing:
         logger.info("attachment_duplicate", filename=att.filename, hash=file_hash)
         # Still link to this email
@@ -282,6 +312,10 @@ def _store_attachment(
         storage_path=storage_path,
         source_channel="email",
         source_email_id=email_message_id,
+        # Attachments from a personal mailbox stay owned by that employee, so the
+        # existing row-level visibility (app/domain/access.py) keeps them out of
+        # the company-wide document flow, search and RAG.
+        owner_sub=owner_sub,
         status=DocumentStatus.ingested if is_allowed else DocumentStatus.suspicious,
     )
     db.add(doc)

@@ -31,6 +31,70 @@ interface AuthentikInfo {
   job: Job | null;
 }
 
+interface MailcowInfo {
+  installed: boolean;
+  current_tag: string | null;
+  latest_tag: string | null;
+  status: "up_to_date" | "update_available" | "unknown" | "not_installed";
+  detail: string | null;
+  command: string;
+}
+
+function MailcowSection() {
+  const [info, setInfo] = useState<MailcowInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${BASE}/mailcow`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: MailcowInfo | null) => setInfo(d))
+      .catch(() => setInfo(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading || !info) return null;
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-base font-semibold">Почтовый сервер (Mailcow)</h2>
+      <div className="rounded-lg border border-border p-4 space-y-2 text-sm">
+        {info.installed ? (
+          <>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Установленный релиз</span>
+              <span className="font-mono">{info.current_tag}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Последний релиз</span>
+              <span className="font-mono">{info.latest_tag ?? "неизвестно"}</span>
+            </div>
+          </>
+        ) : null}
+
+        {info.status === "up_to_date" && (
+          <Banner kind="ok">{info.detail}</Banner>
+        )}
+        {info.status === "update_available" && (
+          <Banner kind="info">{info.detail}</Banner>
+        )}
+        {/* «Не смогли проверить» — это не «всё хорошо»: для публично доступного
+            почтового сервера пропущенный security-релиз стоит дорого. */}
+        {info.status === "unknown" && <Banner kind="err">{info.detail}</Banner>}
+        {info.status === "not_installed" && (
+          <p className="text-xs text-muted-foreground">{info.detail}</p>
+        )}
+
+        {info.installed && (
+          <p className="text-xs text-muted-foreground pt-1">
+            Обновление запускается из консоли — там доступен откат:{" "}
+            <code className="font-mono">{info.command}</code>
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function Banner({
   kind,
   children,
@@ -140,6 +204,7 @@ function UpdatesContent() {
 
   return (
     <div className="space-y-5 max-w-2xl">
+      <MailcowSection />
       <section className="space-y-3">
         <h2 className="text-base font-semibold">Authentik (SSO)</h2>
         <div className="rounded-lg border border-border p-4 space-y-2 text-sm">

@@ -12,9 +12,10 @@ from sqlalchemy import delete as sa_delete, select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.auth.jwt import get_current_user
+from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo
 from app.db.session import get_db
+from app.domain.email_access import hidden_mailbox_names, mailbox_filter, may_read_mailbox
 from app.db.models import EmailMessage, EmailThread, Party, DraftAction
 from app.domain.email import (
     AttachmentProcessRequest,
@@ -69,10 +70,15 @@ async def fetch_new_emails(
 @router.post("/search", response_model=EmailSearchResponse)
 async def search_emails(
     payload: EmailSearchRequest,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.search — Search emails by query, supplier, or address."""
     query = select(EmailMessage)
+
+    scope = await mailbox_filter(db, user, mailbox_col=EmailMessage.mailbox)
+    if scope is not None:
+        query = query.where(scope)
 
     if payload.query:
         query = query.where(
@@ -119,12 +125,19 @@ async def search_emails(
 async def list_threads(
     mailbox: str | None = None,
     limit: int = 20,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.list_threads — List email threads."""
     query = select(EmailThread).options(selectinload(EmailThread.messages))
     if mailbox:
+        if not await may_read_mailbox(db, user, mailbox):
+            raise HTTPException(status_code=403, detail="Личный почтовый ящик другого пользователя")
         query = query.where(EmailThread.mailbox == mailbox)
+    else:
+        scope = await mailbox_filter(db, user, mailbox_col=EmailThread.mailbox)
+        if scope is not None:
+            query = query.where(scope)
     query = query.order_by(EmailThread.last_message_at.desc()).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
@@ -133,6 +146,7 @@ async def list_threads(
 @router.get("/threads/{thread_id}", response_model=EmailThreadOut)
 async def get_thread(
     thread_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.get_thread — Get thread with all messages."""
@@ -143,6 +157,10 @@ async def get_thread(
     )
     thread = result.scalar_one_or_none()
     if not thread:
+        raise HTTPException(404, "Thread not found")
+    # 404 (not 403) for someone else's personal mailbox: the existence of a
+    # colleague's thread is itself private.
+    if not await may_read_mailbox(db, user, thread.mailbox):
         raise HTTPException(404, "Thread not found")
     return thread
 
@@ -516,13 +534,15 @@ class EmailBulkDeleteRequest(BaseModel):
 )
 async def bulk_delete_messages(
     payload: EmailBulkDeleteRequest,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Bulk delete email messages and their attached documents."""
     deleted = 0
+    hidden = set(await hidden_mailbox_names(db, user))
     for msg_id in payload.message_ids:
         msg = await db.get(EmailMessage, msg_id)
-        if not msg:
+        if not msg or msg.mailbox in hidden:
             continue
         await _delete_message_cascade(msg, db)
         deleted += 1
@@ -539,11 +559,12 @@ async def bulk_delete_messages(
 )
 async def delete_message(
     message_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete an email message and its attached documents."""
     msg = await db.get(EmailMessage, message_id)
-    if not msg:
+    if not msg or not await may_read_mailbox(db, user, msg.mailbox):
         raise HTTPException(status_code=404, detail="Сообщение не найдено")
     await _delete_message_cascade(msg, db)
     await db.commit()
@@ -556,11 +577,12 @@ async def delete_message(
 )
 async def delete_thread(
     thread_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a thread and all its messages including attached documents."""
     thread = await db.get(EmailThread, thread_id)
-    if not thread:
+    if not thread or not await may_read_mailbox(db, user, thread.mailbox):
         raise HTTPException(status_code=404, detail="Тред не найден")
 
     result = await db.execute(
@@ -591,7 +613,7 @@ async def _delete_message_cascade(msg: EmailMessage, db) -> None:
 async def process_email_attachment(
     message_id: uuid.UUID,
     payload: AttachmentProcessRequest,
-    current_user: UserInfo = Depends(get_current_user),
+    current_user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ) -> AttachmentProcessResponse:
     """Skill: email.process_attachment — manually (re)send an already-ingested
@@ -608,6 +630,8 @@ async def process_email_attachment(
 
     msg = (await db.execute(select(EmailMessage).where(EmailMessage.id == message_id))).scalar_one_or_none()
     if msg is None:
+        raise HTTPException(status_code=404, detail="Email message not found")
+    if not await may_read_mailbox(db, current_user, msg.mailbox):
         raise HTTPException(status_code=404, detail="Email message not found")
 
     links = (
@@ -664,11 +688,14 @@ async def process_email_attachment(
 @router.get("/{email_id}", response_model=EmailMessageOut)
 async def read_email(
     email_id: uuid.UUID,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: email.read — Read email message with attachments."""
     result = await db.execute(select(EmailMessage).where(EmailMessage.id == email_id))
     msg = result.scalar_one_or_none()
     if not msg:
+        raise HTTPException(status_code=404, detail="Email message not found")
+    if not await may_read_mailbox(db, user, msg.mailbox):
         raise HTTPException(status_code=404, detail="Email message not found")
     return msg

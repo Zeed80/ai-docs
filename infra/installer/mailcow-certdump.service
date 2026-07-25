@@ -1,0 +1,16 @@
+[Unit]
+Description=AI Workspace — copy the Traefik Let's Encrypt certificate into Mailcow (SMTP/IMAP TLS)
+Documentation=file:%h/infra/installer/mailcow.README
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Set WorkingDirectory to your repo root (the folder containing install.sh).
+WorkingDirectory=/opt/ai-workspace
+# Mailcow runs with SKIP_LETS_ENCRYPT=y (Traefik terminates TLS on 443), so the
+# mail daemons have no certificate of their own. This copies the one Traefik
+# already renewed and restarts postfix/dovecot/nginx only when it actually
+# changed — safe to run daily.
+ExecStart=/usr/bin/env bash infra/installer/mailcow-certdump.sh
+TimeoutStartSec=300

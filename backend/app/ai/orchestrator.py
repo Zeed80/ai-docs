@@ -24,11 +24,22 @@ logger = structlog.get_logger()
 
 
 def _agent_headers() -> dict:
-    """X-API-Key for internal orchestrator → backend service calls."""
+    """X-API-Key (+ acting user) for internal orchestrator → backend calls.
+
+    The deterministic fast-paths below (spec-table patches, flow status) bypass
+    the capability dispatcher, so they must carry the acting user themselves —
+    otherwise a 0-LLM path would see more than the person it answers.
+    """
+    from app.ai.actor_context import get_acting_user
     from app.config import settings
+
+    headers: dict = {}
     if settings.agent_service_key:
-        return {"X-API-Key": settings.agent_service_key}
-    return {}
+        headers["X-API-Key"] = settings.agent_service_key
+    actor = get_acting_user()
+    if actor:
+        headers["X-Acting-User"] = actor
+    return headers
 
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession

@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from pydantic import BaseModel, Field, field_validator
@@ -43,6 +43,9 @@ from app.db.models import (
     Project,
     SiteObject,
 )
+
+if TYPE_CHECKING:
+    from app.auth.models import UserInfo
 
 logger = structlog.get_logger()
 
@@ -1377,8 +1380,17 @@ async def _execute_grouped(
     )
 
 
-async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
-    """Compile the spec to one SQL query and return the FULL dataset."""
+async def execute_spec(
+    db: AsyncSession, spec: TableSpec, *, viewer: "UserInfo | None" = None
+) -> TableResult:
+    """Compile the spec to one SQL query and return the FULL dataset.
+
+    ``viewer`` is the human the query runs for (the agent passes the user it
+    acts for — app.auth.acting). It only ever *narrows* the result: the
+    ``emails`` source hides other people's personal mailboxes, which the API
+    layer cannot do here because a spec table talks to SQL directly. Omitting
+    it (headless/system callers) hides every personal mailbox.
+    """
     # Ground the spec in the catalog first — a near-miss source/field name is
     # healed (not 422'd), keeping the agent honest. validate_spec runs before the
     # SOURCES lookup so an unresolvable source returns a helpful error, not KeyError.
@@ -1443,6 +1455,15 @@ async def execute_spec(db: AsyncSession, spec: TableSpec) -> TableResult:
     where_conds: list[Any] = []
     for conds in field_conds.values():
         where_conds.append(conds[0] if len(conds) == 1 else or_(*conds))
+
+    # Row-level scope the LLM cannot spec away: personal mailboxes stay private
+    # (app.domain.email_access) whatever filters the model asked for.
+    if spec.source == "emails":
+        from app.domain.email_access import mailbox_filter
+
+        scope = await mailbox_filter(db, viewer, mailbox_col=EmailMessage.mailbox)
+        if scope is not None:
+            where_conds.append(scope)
 
     # Aggregating group_by: collapse to ONE row per group — the group key plus,
     # for each other column, a string_agg of distinct text values (e.g. all of a

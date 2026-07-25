@@ -26,6 +26,9 @@ interface MailServerIntegration {
   imap_port: number;
   smtp_host: string | null;
   smtp_port: number;
+  default_quota_mb: number;
+  verified?: boolean | null;
+  verify_detail?: string | null;
 }
 
 function MailServerSection() {
@@ -41,6 +44,7 @@ function MailServerSection() {
     imap_port: 993,
     smtp_host: "",
     smtp_port: 465,
+    default_quota_mb: 1024,
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -70,6 +74,7 @@ function MailServerSection() {
           imap_port: d.imap_port,
           smtp_host: d.smtp_host ?? "",
           smtp_port: d.smtp_port,
+          default_quota_mb: d.default_quota_mb ?? 1024,
         });
       })
       .catch((e) => setError(e.message))
@@ -80,13 +85,13 @@ function MailServerSection() {
     load();
   }, []);
 
-  async function save() {
+  async function save(verify = true) {
     setSaving(true);
     setSaved(false);
     setError(null);
     setTestResult(null);
     try {
-      const body: Record<string, string | number> = {
+      const body: Record<string, string | number | boolean> = {
         api_url: form.api_url,
         mail_domain: form.mail_domain,
         webmail_url: form.webmail_url,
@@ -94,6 +99,11 @@ function MailServerSection() {
         imap_port: form.imap_port,
         smtp_host: form.smtp_host,
         smtp_port: form.smtp_port,
+        default_quota_mb: form.default_quota_mb,
+        // Проверяем сразу после сохранения: раздельные кнопки означали, что
+        // «сохранил и ушёл» с нерабочим ключом — узнаёшь об этом при первой
+        // выдаче ящика.
+        verify,
       };
       if (form.api_key.trim()) body.api_key = form.api_key.trim();
       const res = await fetch(`${API}/api/admin/integrations/mail-server`, {
@@ -110,6 +120,9 @@ function MailServerSection() {
       setData(d);
       setForm((f) => ({ ...f, api_key: "" }));
       setSaved(true);
+      if (typeof d.verified === "boolean") {
+        setTestResult({ ok: d.verified, detail: d.verify_detail ?? "" });
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -180,7 +193,9 @@ function MailServerSection() {
         <code className="font-mono">infra/installer/install-mailcow.sh</code>
         ). API-ключ — Mailcow admin UI:{" "}
         <em>Configuration → Access → Edit administrator details → API</em>{" "}
-        (Read-Write). После сохранения на странице пользователя (
+        (Read-Write). Там же в Mailcow нужно внести IP/подсеть контейнера
+        backend в белый список ключа — иначе валидный ключ отвечает 401/403.
+        После сохранения на странице пользователя (
         <em>Пользователи → карточка → Корпоративная почта</em>) можно выдавать
         личные @{form.mail_domain || "домен"}-адреса.
       </p>
@@ -228,6 +243,9 @@ function MailServerSection() {
         {field("imap_port", "IMAP порт", { type: "number" })}
         {field("smtp_host", "SMTP host", { placeholder: "mail.example.com" })}
         {field("smtp_port", "SMTP порт", { type: "number" })}
+        {field("default_quota_mb", "Квота ящика по умолчанию, МБ", {
+          type: "number",
+        })}
       </div>
 
       {error && <p className="text-xs text-destructive">Ошибка: {error}</p>}
@@ -243,11 +261,11 @@ function MailServerSection() {
 
       <div className="flex gap-2 pt-1">
         <button
-          onClick={save}
+          onClick={() => save(true)}
           disabled={saving}
           className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm disabled:opacity-50"
         >
-          {saving ? "Сохранение..." : "Сохранить"}
+          {saving ? "Сохранение..." : "Сохранить и проверить"}
         </button>
         <button
           onClick={test}

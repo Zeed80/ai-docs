@@ -40,18 +40,66 @@ bash infra/installer/install-mailcow.sh --domain mail.example.com
 `infra/mailcow/mailcow.conf`, отключает встроенный Let's Encrypt Mailcow
 (TLS терминирует наш Traefik) и подключает вебмейл/admin/API к сети Traefik.
 
-После установки скрипт напомнит:
+Скрипт сам записывает `MAIL_DOMAIN`, `MAILCOW_TAG`, `MAILCOW_HTTP_PORT`,
+`MAILCOW_HTTPS_PORT` в `infra/.env` (единый источник правды для установщика,
+апдейтера и рендера Traefik-роутов), перерендеривает `routes.yml`, перезапускает
+Traefik и синхронизирует сертификат. ClamAV и Solr выключены по умолчанию
+(экономия ~4-6 ГБ RAM на хосте с GPU-стеком) — включаются в `mailcow.conf`
+через `SKIP_CLAMD=n` / `SKIP_SOLR=n`.
 
-1. Добавить `Host(mail.example.com)`-роут в `infra/traefik/prod/routes.yml.template`
-   (уже сделано в этом репозитории, шаблон `__MAIL_DOMAIN__`) — перерендерить
-   через `render_traefik_routes` (делает `install.sh`/`update.sh`
-   автоматически; либо задайте `MAIL_DOMAIN=mail.example.com` в `infra/.env`,
-   если он отличается от `mail.$TRAEFIK_DOMAIN`).
+После установки остаётся:
+
+1. Убедиться, что роут `Host(mail.example.com)` появился в
+   `infra/traefik/prod/routes.yml` (блок рендерится только когда каталог
+   `infra/mailcow` существует — до установки Traefik не должен просить
+   сертификат для несуществующего хоста).
 2. Открыть на хосте порты **25/465/587/143/993/110/995** в фаерволе — они
    публикуются Mailcow напрямую на хосте, Traefik их не проксирует (проксирует
    только HTTPS для вебмейла/admin/autodiscover).
 3. Зайти на `https://mail.example.com`, создать домен `example.com` в admin UI,
    опубликовать выданный DKIM TXT (см. таблицу выше), создать первые ящики.
+
+## 2.1. Сертификат для SMTP/IMAP (обязательно)
+
+`SKIP_LETS_ENCRYPT=y` отключает ACME **целиком**, а не только для веба: Traefik
+закрывает TLS на 443, но Postfix/Dovecot/SOGo слушают почтовые порты сами и без
+файлов в `data/assets/ssl/` отдают самоподписанный сертификат — почтовый клиент
+на 993/587 подключиться не даст.
+
+Поэтому сертификат Traefik копируется в Mailcow отдельным шагом:
+
+```bash
+infra/installer/mailcow-certdump.sh          # копирует + перезапускает postfix/dovecot/nginx
+infra/installer/mailcow-certdump.sh --check  # только показать, нужно ли обновление
+```
+
+`install-mailcow.sh` вызывает его сам, `update-mailcow.sh` — после успешного
+обновления (пересозданные контейнеры теряют сертификат). Для автообновления
+после продления Let's Encrypt включите таймер:
+
+```bash
+sudo cp infra/installer/mailcow-certdump.service /etc/systemd/system/
+sudo cp infra/installer/mailcow-certdump.timer   /etc/systemd/system/
+# отредактируйте WorkingDirectory= в .service на путь к репозиторию
+sudo systemctl daemon-reload
+sudo systemctl enable --now mailcow-certdump.timer
+```
+
+Проверка:
+
+```bash
+openssl s_client -starttls smtp -connect mail.example.com:587 -servername mail.example.com </dev/null 2>/dev/null | openssl x509 -noout -issuer
+openssl s_client -connect mail.example.com:993 -servername mail.example.com </dev/null 2>/dev/null | openssl x509 -noout -issuer
+```
+
+Должен быть issuer Let's Encrypt, а не самоподписанный `mailcow`.
+
+## 2.2. API-ключ Mailcow
+
+`Configuration → Access → Edit administrator details → API`, режим Read-Write.
+**Ключ привязан к белому списку IP** — внесите туда IP/подсеть контейнера
+`backend`, иначе валидный ключ будет отвечать 401/403 (самая частая причина
+ошибки на кнопке «Сохранить и проверить»).
 
 ## 3. Подключение почтовых клиентов «из коробки»
 
@@ -64,10 +112,15 @@ e-mail + пароля: autodiscover/autoconfig-записи из шага 1 по
 ## 4. Обновления
 
 ```bash
-infra/installer/update-mailcow.sh --check        # показать текущий/целевой тег
+infra/installer/update-mailcow.sh --check        # текущий тег vs. ПОСЛЕДНИЙ релиз на GitHub
 infra/installer/update-mailcow.sh --yes           # обновить (бэкап → апдейт → health-check → авто-откат при сбое)
 infra/installer/update-mailcow.sh --to 2026-06a --yes
 ```
+
+`--check` спрашивает `api.github.com/.../releases/latest`; если сеть недоступна,
+скрипт честно говорит «статус НЕИЗВЕСТЕН», а не «всё актуально». После успешного
+обновления новый тег записывается в `MAILCOW_TAG` (`infra/.env`) и заново
+копируется сертификат.
 
 Тот же staged-паттерн, что и `upgrade-authentik.sh`: полный бэкап +
 целевой mysql-дамп перед шагом, `git checkout` на тег, `pull`+`up -d`,
@@ -93,7 +146,30 @@ journalctl -u mailcow-update-check.service   # текущий/целевой т�
 стеком, если `infra/mailcow` установлен; `infra/installer/restore.sh`
 восстанавливает их автоматически из того же архива.
 
-## 6. Интеграция с AI-агентом (опционально, без изменений кода)
+**Размер.** В архив попадает `vmail` целиком — почта всех сотрудников, полным
+снимком в каждом бэкапе. Скрипт показывает объём перед стартом. Для ежедневного
+расписания разумно гонять общий бэкап с `--skip-mailcow`, а почту бэкапить реже
+отдельным запуском.
+
+## 6. Личные ящики и приватность
+
+Ящики `@<домен>` выдаёт администратор (`Администрирование → Пользователи →
+карточка → Корпоративная почта`). Правила, зашитые в код:
+
+* содержимое личного ящика видит **только владелец** — ни коллеги, ни
+  администраторы, ни агент в headless-режиме (`backend/app/domain/email_access.py`);
+* ИИ не читает личный ящик, пока сотрудник не включит это сам
+  (`Настройки → Почта → Моя корпоративная почта`) — `sweep_enabled`, по
+  умолчанию выключено;
+* при сборе личного ящика используется `BODY.PEEK` и UID-водяной знак, поэтому
+  отметки «прочитано» в клиенте сотрудника не сбиваются;
+* уведомления о новых письмах личного ящика уходят только владельцу;
+* вложения из личной почты становятся документами с владельцем = сотрудник и
+  не попадают в общий документооборот;
+* «Отключить ящик» — обратимо (Mailcow `active=0`, письма сохраняются),
+  «Удалить безвозвратно» требует ввести адрес полностью.
+
+## 7. Интеграция с AI-агентом (опционально, без изменений кода)
 
 Чтобы AI-агент («Света») читал/писал новый `@example.com`-ящик, заведите его как
 обычный `MailboxConfig` через `/settings` в приложении (imap.host/smtp.host =
@@ -103,6 +179,8 @@ journalctl -u mailcow-update-check.service   # текущий/целевой т�
 ## Чеклист верификации
 
 - [ ] `https://mail.example.com` открывается с валидным сертификатом (SOGo/admin UI)
+- [ ] `openssl s_client` на 587/993 показывает сертификат Let's Encrypt (не snakeoil)
+- [ ] Выдать → отключить → выдать ящик тому же пользователю (409 не возникает)
 - [ ] Домен `example.com` создан в admin UI, DKIM TXT опубликован
 - [ ] Проверка доставляемости (mail-tester.com или аналог): SPF/DKIM/DMARC/PTR зелёные
 - [ ] Письмо с внешнего адреса доходит до `@example.com`-ящика и обратно

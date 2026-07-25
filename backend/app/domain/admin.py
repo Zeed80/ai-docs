@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class UserOut(BaseModel):
@@ -114,6 +114,7 @@ class IntegrationMailServerOut(BaseModel):
     imap_port: int
     smtp_host: str | None = None
     smtp_port: int
+    default_quota_mb: int = 1024
 
 
 class IntegrationMailServerUpdate(BaseModel):
@@ -126,6 +127,17 @@ class IntegrationMailServerUpdate(BaseModel):
     imap_port: int | None = None
     smtp_host: str | None = None
     smtp_port: int | None = None
+    default_quota_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)
+    # Save-and-verify in one click: run the connection probe after storing and
+    # return its verdict, instead of making the admin press two buttons.
+    verify: bool = False
+
+
+class IntegrationMailServerSaved(IntegrationMailServerOut):
+    """PUT result: the stored config plus the optional verification verdict."""
+
+    verified: bool | None = None
+    verify_detail: str | None = None
 
 
 class UserMailboxOut(BaseModel):
@@ -134,10 +146,33 @@ class UserMailboxOut(BaseModel):
     webmail_url: str | None = None
     last_sync_at: datetime | None = None
     sync_error: str | None = None
+    # Consent switch for AI triage (mailbox_configs.sweep_enabled). Off by
+    # default for personal mailboxes — see app/tasks/email_triage.py.
+    sweep_enabled: bool | None = None
+    quota_mb: int | None = None
 
 
 class UserMailboxCreate(BaseModel):
     local_part: str | None = None  # omit to auto-suggest from the user's name/username
+    quota_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)
+
+
+class UserMailboxSweepUpdate(BaseModel):
+    """Owner-controlled consent: let the agent read this mailbox, or stop it."""
+
+    sweep_enabled: bool
+
+
+class UserMailboxRevoke(BaseModel):
+    """Revoke a personal mailbox.
+
+    ``delete_on_server=False`` (default) only deactivates it in Mailcow and in our
+    config — the mail is preserved. ``True`` destroys the mailbox with all of its
+    correspondence and therefore requires ``confirm_address`` to match exactly.
+    """
+
+    delete_on_server: bool = False
+    confirm_address: str | None = None
 
 
 class UserMailboxProvisionedOut(BaseModel):

@@ -113,6 +113,9 @@ http:
       priority: 200
 
     # ── Self-hosted mail server (Mailcow) webmail/admin/API ──────────────────────
+    # MAILCOW-BLOCK-START (render_traefik_routes drops this block when Mailcow is
+    # not installed — an unroutable Host() would make Traefik request a
+    # certificate for a hostname that has no DNS record).
     # Requires a DNS A record for __MAIL_DOMAIN__ (+ MX/SPF/DKIM/DMARC — see
     # infra/installer/mailcow.README) and infra/installer/install-mailcow.sh run
     # first, which joins nginx-mailcow to this Traefik's network. SMTP/IMAP/POP3
@@ -130,6 +133,7 @@ http:
       middlewares:
         - security-headers
       priority: 200
+    # MAILCOW-BLOCK-END
 
     # Authentik live-UI WebSocket (/ws/client/, /ws/outpost/). Must outrank
     # backend-ws (PathPrefix(`/ws`), prio 100) which otherwise swallows it and breaks
@@ -200,10 +204,15 @@ http:
         servers:
           - url: "http://ntfy:80"
 
+    # MAILCOW-SERVICE-START
+    # Port = HTTP_PORT from infra/mailcow/mailcow.conf: mailcow passes it into the
+    # container, so nginx-mailcow LISTENS on it (it is not just a host binding).
+    # install-mailcow.sh sets it from MAILCOW_HTTP_PORT (infra/.env, default 8080).
     mailcow:
       loadBalancer:
         servers:
-          - url: "http://nginx-mailcow:80"
+          - url: "http://nginx-mailcow:__MAILCOW_HTTP_PORT__"
+    # MAILCOW-SERVICE-END
 
     # minio-console:
     #   loadBalancer:

@@ -11,11 +11,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.jwt import get_current_user
+from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo
-from app.db.models import MailboxConfig
+from app.db.models import AuditLog, MailboxConfig
 from app.db.session import get_db
-from app.domain.admin import UserMailboxOut
+from app.domain.admin import UserMailboxOut, UserMailboxSweepUpdate
 from app.utils.crypto import decrypt_password, encrypt_password
 
 router = APIRouter()
@@ -127,7 +127,7 @@ def _to_out(cfg: MailboxConfig) -> MailboxConfigOut:
 
 @router.get("/me", response_model=UserMailboxOut)
 async def get_my_mailbox(
-    current_user: UserInfo = Depends(get_current_user),
+    current_user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ) -> UserMailboxOut:
     """The caller's own @<domain> mailbox, if an admin has provisioned one.
@@ -136,16 +136,55 @@ async def get_my_mailbox(
     /api/admin/users/{sub}/mailbox) — this endpoint is read-only self-service
     for /settings to show the address, not a way to create one.
     """
-    result = await db.execute(
-        select(MailboxConfig).where(
-            MailboxConfig.owner_sub == current_user.sub,
-            MailboxConfig.mailbox_type == "personal",
-        )
-    )
-    cfg = result.scalar_one_or_none()
+    cfg = await _my_personal_mailbox(db, current_user.sub)
     if cfg is None:
         return UserMailboxOut()
+    return await _mailbox_out(cfg)
 
+
+@router.patch("/me/sweep", response_model=UserMailboxOut)
+async def set_my_mailbox_sweep(
+    payload: UserMailboxSweepUpdate,
+    current_user: UserInfo = Depends(get_effective_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserMailboxOut:
+    """Owner's consent switch: let the AI read this mailbox, or stop it.
+
+    Deliberately self-service and revocable at any moment — the person whose
+    private correspondence it is decides, not only the admin who issued the
+    mailbox. Off by default (see the provisioning endpoint).
+    """
+    cfg = await _my_personal_mailbox(db, current_user.sub)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="У вас нет личного почтового ящика")
+
+    cfg.sweep_enabled = payload.sweep_enabled
+    db.add(AuditLog(
+        user_id=current_user.sub,
+        action="mailbox.sweep_consent",
+        entity_type="mailbox",
+        details={"address": cfg.name, "sweep_enabled": payload.sweep_enabled},
+    ))
+    await db.commit()
+    logger.info(
+        "mailbox_sweep_consent", user=current_user.sub, enabled=payload.sweep_enabled
+    )
+    return await _mailbox_out(cfg)
+
+
+async def _my_personal_mailbox(db: AsyncSession, sub: str) -> MailboxConfig | None:
+    return (
+        await db.execute(
+            select(MailboxConfig).where(
+                MailboxConfig.owner_sub == sub,
+                MailboxConfig.mailbox_type == "personal",
+                MailboxConfig.is_active == True,  # noqa: E712
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _mailbox_out(cfg: MailboxConfig) -> UserMailboxOut:
     from app.services.integration_config import get_mail_server_config
 
     mail_cfg = await get_mail_server_config()
@@ -155,6 +194,8 @@ async def get_my_mailbox(
         webmail_url=mail_cfg.webmail_url,
         last_sync_at=cfg.last_sync_at,
         sync_error=cfg.sync_error,
+        sweep_enabled=cfg.sweep_enabled,
+        quota_mb=cfg.quota_mb,
     )
 
 

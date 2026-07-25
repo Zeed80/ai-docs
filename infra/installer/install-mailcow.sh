@@ -37,10 +37,13 @@ cd "$ROOT_DIR"
 
 ENV_FILE="infra/.env"
 MAILCOW_DIR="infra/mailcow"
-DEFAULT_TAG="2026-05c"   # pinned release; bump deliberately via update-mailcow.sh
+# Single source of truth for the pinned release: MAILCOW_TAG in infra/.env
+# (install and update scripts must never carry two copies that can drift).
+# FALLBACK_TAG applies only to a fresh install with nothing in .env yet.
+FALLBACK_TAG="2026-07"
 
 MAIL_DOMAIN=""
-MAILCOW_TAG="$DEFAULT_TAG"
+MAILCOW_TAG=""
 NONINTERACTIVE=0
 
 while [ $# -gt 0 ]; do
@@ -59,7 +62,20 @@ OS="$(detect_os)"
 check_dependencies "$OS" || die "Установите недостающие зависимости и повторите."
 
 TRAEFIK_DOMAIN="$(get_env_var "$ENV_FILE" TRAEFIK_DOMAIN)"; TRAEFIK_DOMAIN="${TRAEFIK_DOMAIN:-localhost}"
+[ -z "$MAIL_DOMAIN" ] && MAIL_DOMAIN="$(get_env_var "$ENV_FILE" MAIL_DOMAIN)"
 [ -z "$MAIL_DOMAIN" ] && MAIL_DOMAIN="$(ask_input "Хост почтового сервера (webmail/admin/autodiscover)" "mail.$TRAEFIK_DOMAIN" "Mailcow")"
+
+# Tag/ports: CLI flag > infra/.env > fallback. Whatever we end up using is
+# written back to infra/.env so update-mailcow.sh and render_traefik_routes read
+# exactly the same values.
+[ -z "$MAILCOW_TAG" ] && MAILCOW_TAG="$(get_env_var "$ENV_FILE" MAILCOW_TAG)"
+MAILCOW_TAG="${MAILCOW_TAG:-$FALLBACK_TAG}"
+MC_HTTP_PORT="$(get_env_var "$ENV_FILE" MAILCOW_HTTP_PORT)";  MC_HTTP_PORT="${MC_HTTP_PORT:-8080}"
+MC_HTTPS_PORT="$(get_env_var "$ENV_FILE" MAILCOW_HTTPS_PORT)"; MC_HTTPS_PORT="${MC_HTTPS_PORT:-8443}"
+set_env_var "$ENV_FILE" MAIL_DOMAIN "$MAIL_DOMAIN"
+set_env_var "$ENV_FILE" MAILCOW_TAG "$MAILCOW_TAG"
+set_env_var "$ENV_FILE" MAILCOW_HTTP_PORT "$MC_HTTP_PORT"
+set_env_var "$ENV_FILE" MAILCOW_HTTPS_PORT "$MC_HTTPS_PORT"
 
 PROJECT="$(get_env_var "$ENV_FILE" COMPOSE_PROJECT_NAME)"; PROJECT="${PROJECT:-infra}"
 TRAEFIK_NET="${PROJECT}_app"
@@ -96,11 +112,16 @@ else
   # разводим порты, чтобы не конфликтовать с Traefik на 80/443 хоста.
   set_env_var "$MAILCOW_DIR/mailcow.conf" SKIP_LETS_ENCRYPT y
   set_env_var "$MAILCOW_DIR/mailcow.conf" SKIP_HTTP_VERIFICATION y
-  set_env_var "$MAILCOW_DIR/mailcow.conf" HTTP_PORT 8080
-  set_env_var "$MAILCOW_DIR/mailcow.conf" HTTPS_PORT 8443
+  set_env_var "$MAILCOW_DIR/mailcow.conf" HTTP_PORT "$MC_HTTP_PORT"
+  set_env_var "$MAILCOW_DIR/mailcow.conf" HTTPS_PORT "$MC_HTTPS_PORT"
   set_env_var "$MAILCOW_DIR/mailcow.conf" HTTP_BIND 127.0.0.1
   set_env_var "$MAILCOW_DIR/mailcow.conf" HTTPS_BIND 127.0.0.1
-  ok "mailcow.conf создан и настроен под внешний Traefik."
+  # ClamAV + Solr вместе едят ~4-6 ГБ RAM. На этом хосте рядом живут Ollama/vLLM/
+  # Qdrant, поэтому по умолчанию выключены; Rspamd (антиспам/DKIM) остаётся.
+  # Включить обратно: SKIP_CLAMD=n / SKIP_SOLR=n в infra/mailcow/mailcow.conf.
+  set_env_var "$MAILCOW_DIR/mailcow.conf" SKIP_CLAMD y
+  set_env_var "$MAILCOW_DIR/mailcow.conf" SKIP_SOLR y
+  ok "mailcow.conf создан и настроен под внешний Traefik (ClamAV/Solr выключены)."
 fi
 
 # ── 3. docker-compose.override.yml: подключение к сети Traefik ─────────────
@@ -139,10 +160,28 @@ else
   log "Пропущено. Запустите позже: (cd $MAILCOW_DIR && $COMPOSE up -d)"
 fi
 
+# ── 5. Traefik-роут + сертификат для почтовых портов ────────────────────────
+# Роут рендерится только когда infra/mailcow существует (см. render_traefik_routes),
+# поэтому его нужно перегенерировать именно сейчас, после клонирования.
+render_traefik_routes "$ENV_FILE" "$ROOT_DIR"
+COMPOSE_MAIN="$(compose_cmd)"
+info "Перечитываю конфиг Traefik…"
+( $COMPOSE_MAIN -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --env-file "$ENV_FILE"     restart traefik >/dev/null 2>&1 ) || warn "Не удалось перезапустить Traefik — сделайте вручную."
+
+# Почтовые демоны (Postfix/Dovecot) не участвуют в TLS-терминации Traefik и без
+# этого шага отдают самоподписанный сертификат — клиенты не подключатся.
+info "Синхронизирую сертификат Let's Encrypt в Mailcow…"
+if bash "$SELF_DIR/mailcow-certdump.sh"; then
+  ok "Сертификат для SMTP/IMAP на месте."
+else
+  warn "Сертификат пока не выпущен (нужна DNS A-запись для $MAIL_DOMAIN)."
+  warn "После появления DNS выполните: infra/installer/mailcow-certdump.sh"
+fi
+
 step "Готово"
 ok "Mailcow развёрнут для $MAIL_DOMAIN."
 warn "Не забудьте:"
-log "  1. Добавить роут в infra/traefik/prod/routes.yml.template (Host($MAIL_DOMAIN) → nginx-mailcow) и перерендерить (render_traefik_routes)."
+log "  1. Включить ежедневную синхронизацию сертификата (mailcow-certdump.timer) — см. mailcow.README."
 log "  2. Прописать DNS/SPF/DKIM/DMARC/PTR/autoconfig — см. infra/installer/mailcow.README."
 log "  3. Открыть на хосте порты 25/465/587/143/993/110/995 в фаерволе (публикуются Mailcow напрямую, не через Traefik)."
 log "  4. Создать домен и первый ящик в Mailcow admin UI (https://$MAIL_DOMAIN)."

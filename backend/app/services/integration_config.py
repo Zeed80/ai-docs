@@ -74,6 +74,7 @@ class MailServerConfig:
     imap_port: int
     smtp_host: str | None
     smtp_port: int
+    default_quota_mb: int = 1024
 
     @property
     def configured(self) -> bool:
@@ -99,6 +100,7 @@ async def get_mail_server_config() -> MailServerConfig:
         return MailServerConfig(
             api_url=None, api_key="", mail_domain=None, webmail_url=None,
             imap_host=None, imap_port=993, smtp_host=None, smtp_port=465,
+            default_quota_mb=1024,
         )
     return MailServerConfig(
         api_url=row.api_url,
@@ -109,4 +111,5 @@ async def get_mail_server_config() -> MailServerConfig:
         imap_port=row.imap_port,
         smtp_host=row.smtp_host,
         smtp_port=row.smtp_port,
+        default_quota_mb=row.default_quota_mb,
     )

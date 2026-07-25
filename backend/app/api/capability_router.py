@@ -92,12 +92,19 @@ _DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
         "send":              ("POST",  "/api/email/drafts/{draft_id}/send",            ["draft_id"]),
         "fetch_new":         ("POST",  "/api/email/fetch",                             []),
         "risk_check":        ("POST",  "/api/email/drafts/{draft_id}/risk-check",      ["draft_id"]),
-        "list_templates":    ("GET",   "/api/email/templates",                         []),
-        "get_template":      ("GET",   "/api/email/templates/{template_id}",           ["template_id"]),
-        "render_template":   ("POST",  "/api/email/templates/{template_id}/render",    ["template_id"]),
-        "suggest_template":  ("POST",  "/api/email/templates/suggest",                 []),
-        "style_match":       ("POST",  "/api/email/style-match",                       []),
-        "delete_template":   ("DELETE", "/api/email/templates/{template_id}",          ["template_id"]),
+        # Templates live in their own router mounted at /api/email-templates
+        # (app.main), not under /api/email — the trailing slash on the list route
+        # matters: httpx does not follow the 307 FastAPI issues without it.
+        "list_templates":    ("GET",   "/api/email-templates/",                        []),
+        "get_template":      ("GET",   "/api/email-templates/{template_id}",           ["template_id"]),
+        "render_template":   ("POST",  "/api/email-templates/{template_id}/render",    ["template_id"]),
+        "delete_template":   ("DELETE", "/api/email-templates/{template_id}",          ["template_id"]),
+        "suggest_template":  ("POST",  "/api/email/suggest-template",                  []),
+        "style_match":       ("POST",  "/api/email/style-analyze",                     []),
+        # Personal mailbox: the agent's own view of "моя почта" for the user it
+        # acts for (app.auth.acting) — read-only, no provisioning from the agent.
+        "my_mailbox":        ("GET",   "/api/mailbox/me",                              []),
+        "process_attachment": ("POST", "/api/email/messages/{message_id}/attachments/process", ["message_id"]),
     },
     "procurement": {
         "list_requests":   ("GET",   "/api/purchase-requests",                        []),
@@ -406,12 +413,27 @@ def validate_capability_catalog() -> list[str]:
     return problems
 
 
-def _service_headers() -> dict:
-    """Auth headers for internal service-to-service calls."""
+def _acting_user(request: Request) -> str | None:
+    """The human this agent call acts for, if the agent stated one."""
+    value = (request.headers.get("x-acting-user") or "").strip()
+    return value or None
+
+
+def _service_headers(acting_user: str | None = None) -> dict:
+    """Auth headers for internal service-to-service calls.
+
+    ``X-Acting-User`` is relayed verbatim from the agent's call so downstream
+    endpoints can scope per-user data (app.auth.acting.get_effective_user)
+    instead of seeing the full-admin service account. Dropping it degrades to
+    "service account only", never to "somebody else's data".
+    """
     from app.config import settings
+    headers: dict = {}
     if settings.agent_service_key:
-        return {"X-API-Key": settings.agent_service_key}
-    return {}
+        headers["X-API-Key"] = settings.agent_service_key
+    if acting_user:
+        headers["X-Acting-User"] = acting_user
+    return headers
 
 
 async def _proxy(
@@ -420,6 +442,7 @@ async def _proxy(
     path_params: list[str],
     body: dict,
     base_url: str,
+    acting_user: str | None = None,
 ) -> dict:
     """Interpolate path params, split remaining args into query/body, proxy request."""
     query: dict = {}
@@ -434,7 +457,7 @@ async def _proxy(
             payload[k] = v
 
     url = base_url.rstrip("/") + path
-    headers = _service_headers()
+    headers = _service_headers(acting_user)
     # Web research/browse read many live pages (+ PDF OCR) and legitimately take
     # minutes — the default 30s would time out and trigger wasteful retries that
     # re-run the whole search. Give these paths a generous budget.
@@ -677,7 +700,9 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
 
     await _audit_tool_call(capability_name, action, reason, request)
 
-    result = await _proxy(method, path_tpl, path_params, body, base_url)
+    result = await _proxy(
+        method, path_tpl, path_params, body, base_url, acting_user=_acting_user(request)
+    )
     return JSONResponse(content=result)
 
 
@@ -698,7 +723,7 @@ async def _audit_tool_call(
         from app.audit.service import log_action
         from app.db.session import _get_session_factory
 
-        actor = request.headers.get("x-agent-actor") or "agent"
+        actor = _acting_user(request) or request.headers.get("x-agent-actor") or "agent"
         async with _get_session_factory()() as db:
             await log_action(
                 db,

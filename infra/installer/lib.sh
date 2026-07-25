@@ -235,13 +235,34 @@ render_traefik_routes() {
   local tpl="$root/infra/traefik/prod/routes.yml.template"
   local out="$root/infra/traefik/prod/routes.yml"
   [ -f "$tpl" ] || { warn "Шаблон роутов не найден: $tpl"; return 0; }
-  local domain push mail
+  local domain push mail mail_port
   domain="$(get_env_var "$env_file" TRAEFIK_DOMAIN)"
   domain="${domain:-localhost}"
   push="push.${domain}"
   mail="$(get_env_var "$env_file" MAIL_DOMAIN)"
   mail="${mail:-mail.${domain}}"
-  sed -e "s/__PUSH_DOMAIN__/${push}/g" -e "s/__MAIL_DOMAIN__/${mail}/g" -e "s/__DOMAIN__/${domain}/g" "$tpl" > "$out"
+  mail_port="$(get_env_var "$env_file" MAILCOW_HTTP_PORT)"
+  mail_port="${mail_port:-8080}"
+
+  local tmp="${out}.tmp"
+  sed -e "s/__PUSH_DOMAIN__/${push}/g" \
+      -e "s/__MAIL_DOMAIN__/${mail}/g" \
+      -e "s/__MAILCOW_HTTP_PORT__/${mail_port}/g" \
+      -e "s/__DOMAIN__/${domain}/g" "$tpl" > "$tmp"
+
+  # Mailcow lives in a separate compose project (infra/mailcow). Until it is
+  # installed, its router/service must not exist: Traefik would ask Let's Encrypt
+  # for a certificate for a host with no DNS record on every start, burning ACME
+  # attempts and filling the log with failures.
+  if [ -d "$root/infra/mailcow/.git" ]; then
+    ok "Mailcow обнаружен — роут ${mail} включён (nginx-mailcow:${mail_port})."
+  else
+    sed -i -e '/MAILCOW-BLOCK-START/,/MAILCOW-BLOCK-END/d' \
+           -e '/MAILCOW-SERVICE-START/,/MAILCOW-SERVICE-END/d' "$tmp"
+    log "Mailcow не установлен — роут почты в routes.yml не включён."
+  fi
+
+  mv "$tmp" "$out"
   ok "Traefik-роуты сгенерированы для домена: ${domain}"
 }
 

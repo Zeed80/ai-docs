@@ -23,6 +23,8 @@ import json
 import re
 import uuid
 
+from app.auth.acting import get_effective_user
+from app.auth.models import UserInfo
 from app.core.chat_bus import chat_bus
 from app.db.models import Approval, ApprovalActionType, DraftAction
 from app.db.session import get_db
@@ -155,10 +157,15 @@ class SpecTableResponse(BaseModel):
 
 
 async def _render_and_publish(
-    db: AsyncSession, canvas_id: str, spec: TableSpec, *, note: str = ""
+    db: AsyncSession,
+    canvas_id: str,
+    spec: TableSpec,
+    *,
+    note: str = "",
+    viewer: UserInfo | None = None,
 ) -> SpecTableResponse:
     try:
-        result = await execute_spec(db, spec)
+        result = await execute_spec(db, spec, viewer=viewer)
     except ValueError as exc:
         return SpecTableResponse(
             status="error", canvas_id=canvas_id, total=0, shown=0,
@@ -201,6 +208,7 @@ async def _render_and_publish(
 @router.post("/agent/spec-table", response_model=SpecTableResponse)
 async def publish_spec_table(
     payload: SpecTableRequest,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ) -> SpecTableResponse:
     """Skill: workspace.spec_table — Build a table from a declarative spec.
@@ -259,12 +267,13 @@ async def publish_spec_table(
             ),
         )
     note = ("Привёл к каталогу: " + "; ".join(repairs)) if repairs else ""
-    return await _render_and_publish(db, payload.canvas_id, spec, note=note)
+    return await _render_and_publish(db, payload.canvas_id, spec, note=note, viewer=user)
 
 
 @router.post("/agent/spec-table/patch", response_model=SpecTableResponse)
 async def patch_spec_table(
     payload: SpecTablePatchRequest,
+    user: UserInfo = Depends(get_effective_user),
     db: AsyncSession = Depends(get_db),
 ) -> SpecTableResponse:
     """Skill: workspace.spec_table_patch — Edit an existing spec table.
@@ -314,7 +323,7 @@ async def patch_spec_table(
             message=f"Невозможно применить правку: {exc}",
             spec=spec.model_dump(mode="json"),
         )
-    return await _render_and_publish(db, payload.canvas_id, new_spec, note=note)
+    return await _render_and_publish(db, payload.canvas_id, new_spec, note=note, viewer=user)
 
 
 class SpecTableCellEditRequest(BaseModel):
