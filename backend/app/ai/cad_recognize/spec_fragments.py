@@ -123,7 +123,12 @@ _KIND_SCHEMA = {
         "part": {"type": ["string", "null"]},
         "kind": {"type": "string", "enum": ["rotation", "plate", "flange", "other"]},
         "bodies": {"type": ["integer", "null"]},
-        "views": {"type": "array", "items": {
+        # Bounded on purpose. An unbounded array under constrained decoding
+        # invites repetition: on a dense spindle sheet the model emitted
+        # "section" a dozen times, ran past the token budget and produced
+        # nothing parseable at all — the schema turned a good answer into no
+        # answer. Every array below carries a ceiling for the same reason.
+        "views": {"type": "array", "maxItems": 6, "items": {
             "type": "string", "enum": ["front", "side", "top", "section"],
         }},
     },
@@ -147,8 +152,8 @@ _SECTION_SCHEMA = {
 _ROTATION_SCHEMA = {
     "type": "object",
     "properties": {
-        "outer": {"type": "array", "items": _SECTION_SCHEMA},
-        "bore": {"type": "array", "items": _SECTION_SCHEMA},
+        "outer": {"type": "array", "maxItems": 40, "items": _SECTION_SCHEMA},
+        "bore": {"type": "array", "maxItems": 20, "items": _SECTION_SCHEMA},
     },
     "required": ["outer"],
 }
@@ -160,12 +165,12 @@ _PROFILE_SCHEMA = {
         "height_mm": {"type": ["number", "null"]},
         "diameter_mm": {"type": ["number", "null"]},
         "thickness_mm": {"type": ["number", "null"]},
-        "holes": {"type": "array", "items": {"type": "object", "properties": {
+        "holes": {"type": "array", "maxItems": 64, "items": {"type": "object", "properties": {
             "center_x_mm": {"type": ["number", "null"]},
             "center_y_mm": {"type": ["number", "null"]},
             "diameter_mm": {"type": ["number", "null"]},
         }}},
-        "hole_patterns": {"type": "array", "items": {"type": "object", "properties": {
+        "hole_patterns": {"type": "array", "maxItems": 12, "items": {"type": "object", "properties": {
             "kind": {"type": "string"},
             "count": {"type": ["integer", "null"]},
             "bolt_circle_diameter_mm": {"type": ["number", "null"]},
@@ -178,16 +183,59 @@ _PROFILE_SCHEMA = {
 _CALLOUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "dimensions": {"type": "array", "items": {"type": "object", "properties": {
+        "dimensions": {"type": "array", "maxItems": 80, "items": {"type": "object", "properties": {
             "value": {"type": "string"},
             "applies_to": {"type": ["string", "null"]},
         }, "required": ["value"]}},
-        "annotations": {"type": "array", "items": {"type": "object", "properties": {
+        "annotations": {"type": "array", "maxItems": 40, "items": {"type": "object", "properties": {
             "kind": {"type": "string"},
             "text": {"type": "string"},
         }, "required": ["text"]}},
     },
 }
+
+
+def _main_view_crop(image):
+    """The drawing itself, without the stamp, the notes column or the margins.
+
+    The single biggest measured win of fragment reading was aiming the stamp
+    question at the corner the stamp lives in. The same argument applies to
+    geometry: asking "what are the steps of this shaft" while the model is also
+    looking at a title block, a technical-requirements column and a frame is a
+    harder question than it needs to be.
+
+    The crop is found from ink, not from assumed proportions: the drawing area
+    is the bounding box of the ink left after the stamp band and the margins
+    are removed, so it follows whatever the sheet actually contains.
+    """
+    import numpy as np
+
+    width, height = image.size
+    grayscale = np.asarray(image.convert("L"))
+    ink = grayscale < 200
+
+    # Blank out the ГОСТ frame margins and the bottom-right stamp band before
+    # looking for the drawing, or the frame's own rectangle becomes the answer.
+    margin_x = max(int(width * 0.03), 4)
+    margin_y = max(int(height * 0.03), 4)
+    mask = np.zeros_like(ink)
+    mask[margin_y : height - margin_y, margin_x : width - margin_x] = True
+    mask[int(height * 0.70) :, int(width * 0.50) :] = False
+    ink = ink & mask
+
+    rows = np.flatnonzero(ink.any(axis=1))
+    cols = np.flatnonzero(ink.any(axis=0))
+    if rows.size == 0 or cols.size == 0:
+        return image
+    pad_x, pad_y = int(width * 0.02), int(height * 0.02)
+    left = max(int(cols[0]) - pad_x, 0)
+    right = min(int(cols[-1]) + pad_x, width)
+    top = max(int(rows[0]) - pad_y, 0)
+    bottom = min(int(rows[-1]) + pad_y, height)
+    if right - left < width * 0.15 or bottom - top < height * 0.15:
+        # A crop that small is a detection failure, not a drawing.
+        return image
+    return image.crop((left, top, right, bottom))
 
 
 async def _ask(
@@ -266,6 +314,10 @@ async def read_spec_by_fragments(
         return {}
 
     overview = _overview(image)
+    # Geometry questions get the drawing without the stamp and the notes; the
+    # classification and callout questions keep the whole sheet, because they
+    # are ABOUT the sheet.
+    geometry_view = _overview(_main_view_crop(image))
     ask = {"router": router, "confidential": confidential}
 
     kind_answer = await _ask(_KIND_PROMPT, overview, num_predict=400, schema=_KIND_SCHEMA, **ask)
@@ -277,7 +329,7 @@ async def read_spec_by_fragments(
     body: dict[str, Any] = {"type": _type_label(kind)}
     unresolved: list[str] = []
     if kind == "rotation":
-        geometry = await _ask(_ROTATION_PROMPT, overview, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
+        geometry = await _ask(_ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
         outer = [s for s in (geometry.get("outer") or []) if isinstance(s, dict)]
         bore = [s for s in (geometry.get("bore") or []) if isinstance(s, dict)]
         if outer:
@@ -287,7 +339,7 @@ async def read_spec_by_fragments(
         if bore:
             body["bore"] = bore
     elif kind in ("plate", "flange"):
-        profile = await _ask(_PROFILE_PROMPT, overview, num_predict=2000, schema=_PROFILE_SCHEMA, **ask)
+        profile = await _ask(_PROFILE_PROMPT, geometry_view, num_predict=2000, schema=_PROFILE_SCHEMA, **ask)
         if profile.get("shape"):
             body["profile"] = profile
         else:
