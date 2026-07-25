@@ -547,6 +547,9 @@ _LIST_FIELDS_TOP = (
 )
 _LIST_FIELDS_BODY = ("outer", "bore", "features")
 _LIST_FIELDS_PROFILE = ("holes", "hole_patterns", "slots")
+_ANNOTATION_KINDS = frozenset(
+    {"roughness", "hardness", "tolerance", "thread", "material", "other"}
+)
 
 
 def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
@@ -631,6 +634,19 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
         for item in spec.get(field) or []:
             if isinstance(item, dict) and "evidence" in item:
                 item["evidence"] = clean_evidence(item["evidence"])
+    # Metadata whose exact wording the contract fixes, but the reader does not
+    # know that: a null "applies_to" and an annotation kind outside the
+    # enumeration are normalised rather than allowed to reject the sheet. The
+    # VALUE is untouched — only the shape the schema insists on.
+    for item in spec.get("dimensions") or []:
+        if isinstance(item, dict) and item.get("applies_to") is None:
+            item["applies_to"] = ""
+    for item in spec.get("annotations") or []:
+        if isinstance(item, dict) and item.get("kind") not in _ANNOTATION_KINDS:
+            original = str(item.get("kind") or "").strip()
+            item["kind"] = "other"
+            if original and not str(item.get("text") or "").startswith(original):
+                item["text"] = f"{original}: {item.get('text') or ''}".strip()
     return spec
 
 

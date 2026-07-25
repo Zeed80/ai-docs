@@ -1148,7 +1148,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     SpecReaderNotVisionError,
                     SpecReadMalformedError,
                     SpecReadTruncatedError,
-                    read_drawing_spec_consensus,
+                )
+                from app.ai.cad_recognize.spec_fragments import (
+                    read_spec_best_effort,
                 )
 
                 try:
@@ -1156,7 +1158,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # times and intersecting turns its inconsistency into an
                     # explicit review item instead of a silent wrong number.
                     passes = int(params.get("read_passes") or 3)
-                    spec = await read_drawing_spec_consensus(content, passes=passes)
+                    spec = await read_spec_best_effort(content, passes=passes)
                 except (
                     SpecReaderNotVisionError,
                     SpecReadTruncatedError,
