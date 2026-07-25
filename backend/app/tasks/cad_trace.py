@@ -1148,10 +1148,15 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     SpecReaderNotVisionError,
                     SpecReadMalformedError,
                     SpecReadTruncatedError,
+                    read_drawing_spec_consensus,
                 )
 
                 try:
-                    spec = await read_drawing_spec(content)
+                    # Reading once is a bet on a stochastic model; reading a few
+                    # times and intersecting turns its inconsistency into an
+                    # explicit review item instead of a silent wrong number.
+                    passes = int(params.get("read_passes") or 3)
+                    spec = await read_drawing_spec_consensus(content, passes=passes)
                 except (
                     SpecReaderNotVisionError,
                     SpecReadTruncatedError,

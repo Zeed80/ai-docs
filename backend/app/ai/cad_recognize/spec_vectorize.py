@@ -424,6 +424,46 @@ def _spec_images(image, *, tile_size: int = 1400, overlap: int = 160) -> tuple[l
     return encoded, descriptions
 
 
+async def read_drawing_spec_consensus(
+    image_bytes: bytes,
+    *,
+    passes: int = 3,
+    router: Any | None = None,
+    confidential: bool = True,
+) -> dict:
+    """Read the sheet several times and keep only what the reads agree on.
+
+    Passes run SEQUENTIALLY on purpose: three concurrent vision calls share one
+    GPU, and the first live attempt at that returned a truncated answer in 11
+    seconds. A pass that raises (truncation, malformed JSON) is dropped rather
+    than aborting the set — the remaining passes may still agree — but if every
+    pass fails, the last error is re-raised so the caller reports the real
+    reason instead of a bare "no spec".
+    """
+    from app.ai.cad_recognize.spec_consensus import consensus_spec
+
+    if passes < 2:
+        return await read_drawing_spec(
+            image_bytes, router=router, confidential=confidential
+        )
+
+    reads: list[dict] = []
+    last_error: Exception | None = None
+    for _attempt in range(passes):
+        try:
+            spec = await read_drawing_spec(
+                image_bytes, router=router, confidential=confidential
+            )
+        except (SpecReadTruncatedError, SpecReadMalformedError) as exc:
+            last_error = exc
+            continue
+        if spec:
+            reads.append(spec)
+    if not reads and last_error is not None:
+        raise last_error
+    return consensus_spec(reads)
+
+
 async def read_drawing_spec(
     image_bytes: bytes, *, router: Any | None = None, confidential: bool = True
 ) -> dict:
