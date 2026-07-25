@@ -107,3 +107,37 @@ async def compile_candidate(
         raise CadKernelUnavailable(f"cad-kernel вернул HTTP {response.status_code}")
     metrics.cad_kernel_compile_total.labels(status="ok").inc()
     return _decode_artifacts(response.content)
+
+
+async def project_candidate(
+    candidate: FeatureTreeCandidate, *, views: tuple[str, ...] = ("front", "side")
+) -> dict[str, Any] | None:
+    """Orthographic views of a compiled candidate, as exact 2D primitives.
+
+    Returns None when the kernel does not expose ``/project`` (older image), so
+    a deployment mid-upgrade degrades to "no derived views" instead of failing
+    the whole digitization.
+    """
+    payload = {
+        "candidate": candidate.model_dump(mode="json"),
+        "views": list(views),
+        "confirm_assumptions": True,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=5.0)) as client:
+            response = await client.post(
+                f"{settings.cad_kernel_url.rstrip('/')}/project", json=payload
+            )
+    except httpx.HTTPError as exc:
+        raise CadKernelUnavailable(f"cad-kernel недоступен: {exc}") from exc
+    if response.status_code == 404:
+        return None
+    if response.status_code == 422:
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = None
+        raise CadKernelRejected(str(detail or "CAD-ядро отклонило проекцию"))
+    if response.status_code != 200:
+        raise CadKernelUnavailable(f"cad-kernel вернул HTTP {response.status_code}")
+    return response.json().get("views")

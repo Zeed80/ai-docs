@@ -31,6 +31,9 @@ import structlog
 from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
+# ГОСТ 2.104 stamp height in the drafter's paper-space pixels (55 mm × 4 px/mm).
+_TITLE_BLOCK_H_MM_PX = 55.0 * 4.0
+
 logger = structlog.get_logger()
 
 # ГОСТ 2.301 sheet sizes (portrait, mm) — landscape is matched by swapping.
@@ -414,20 +417,21 @@ def _dewarp_photo(image_bytes: bytes) -> bytes:
 
 
 def _overlay_spec_annotations(ir, spec: dict) -> None:
-    """Place the spec's dimensions/annotations/material as text below the draft.
+    """Place the read annotations as ГОСТ 2.316 technical requirements.
 
-    The spec-drafted geometry carries no labels; list the read dimensions,
-    tolerances, roughness, hardness and title-block material as text so the
-    'draft from description' result keeps the semantic layer the VLM captured.
+    The drafted geometry already carries its own dimensions, so only the
+    SEMANTIC layer belongs here: roughness, hardness, thread and tolerance
+    notes plus the material. Dimensions are deliberately NOT repeated as prose
+    — they are dimension entities on the geometry, and a duplicate text column
+    would state them twice with no way to tell which one is authoritative.
+
+    The block goes INSIDE the sheet, above the title block, per ГОСТ 2.316.
+    It used to be written below ``image_height`` and then grew the canvas,
+    which put it off the sheet and desynced the canvas from ``sheet.format``.
     """
     from app.ai.cad_ir.schema import Point, TextEntity
 
     lines: list[str] = []
-    for dim in spec.get("dimensions", []) or []:
-        value = str(dim.get("value", "")).strip()
-        target = str(dim.get("applies_to", "")).strip()
-        if value:
-            lines.append(f"{value}" + (f" — {target}" if target else ""))
     for ann in spec.get("annotations", []) or []:
         text = str(ann.get("text", "")).strip()
         if text:
@@ -435,24 +439,141 @@ def _overlay_spec_annotations(ir, spec: dict) -> None:
     title = spec.get("title_block") or {}
     if title.get("material"):
         lines.append(str(title["material"]))
-    if title.get("scale"):
-        lines.append(str(title["scale"]))
     if not lines:
         return
-    height = 14.0
-    x = 20.0
-    y = ir.source.image_height + height
+
+    sheet_w = float(ir.source.image_width)
+    sheet_h = float(ir.source.image_height)
+    # Paper-space text height: ~5 mm at the drafter's 4 px/mm sheet canvas.
+    height = 5.0 * 4.0
+    x = 25.0 * 4.0
+    # Stack upward from just above the stamp band so the block never collides
+    # with the title block and never leaves the sheet.
+    bottom = sheet_h - (_TITLE_BLOCK_H_MM_PX + 10.0 * 4.0)
+    top = bottom - height * 1.6 * len(lines)
+    if top < 0:  # pathological tiny canvas — keep it on the sheet regardless
+        top = 0.0
+    y = top + height
     for text in lines:
         ir.entities.append(
             TextEntity(
-                position=Point(x=x, y=y), text=text, height=height,
+                position=Point(x=min(x, max(sheet_w - 10.0, 0.0)), y=y),
+                text=text, height=height,
                 line_class="dim", width_class="thin", origin="spec",
                 assurance="inferred",
             )
         )
         y += height * 1.6
-    # Grow the sheet to fit the annotation column.
-    ir.source.image_height = int(y + height)
+    # The canvas is the sheet: it is NOT grown to fit annotations.
+
+
+async def _derive_solid_views(candidate, report: dict) -> dict | None:
+    """Orthographic views of the compiled solid, verified against it.
+
+    Returns None when the kernel cannot project (an older kernel, an
+    unprojectable shape): derived views are an enrichment of the redraw, not a
+    precondition for it.
+    """
+    from app.ai.cad_projection import verify_views_against_solid
+    from app.services.cad_kernel import project_candidate
+
+    try:
+        views = await project_candidate(candidate, views=("front", "side"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cad_projection_failed", error=str(exc))
+        return None
+    if not views:
+        return None
+    return {
+        "views": views,
+        "verification": verify_views_against_solid(views, report),
+    }
+
+
+async def _build_spec_solid(
+    spec: dict, generation_id: str, owner_sub: str | None
+) -> dict | None:
+    """Compile the read spec into a solid and store STEP/IGES/STL alongside it.
+
+    Returns a summary for ``params.solid_3d`` (or None when the spec has no
+    complete body of revolution). Never raises: the 3D model is an additional
+    artifact of the redraw, so an unavailable kernel degrades to "no solid",
+    not to a failed digitization.
+    """
+    from app.ai.cad_solid import (
+        estimate_mass_kg,
+        feature_tree_from_spec,
+        verify_solid_against_spec,
+    )
+    from app.services.cad_kernel import CadKernelError, compile_candidate
+    from app.storage import upload_file as _upload
+
+    candidate = feature_tree_from_spec(spec)
+    if candidate is None:
+        return None
+    try:
+        artifacts = await compile_candidate(
+            candidate,
+            # The assumptions are declared in missing_data and surfaced to the
+            # reviewer with the result; blocking here would mean no solid at
+            # all for every part whose section was not read.
+            confirm_assumptions=True,
+            metadata={"generation_id": generation_id, "source": "spec_reader"},
+        )
+    except CadKernelError as exc:
+        logger.warning("cad_solid_failed", generation_id=generation_id, error=str(exc))
+        return {"built": False, "error": str(exc)[:400], "label": candidate.label}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cad_solid_error", generation_id=generation_id, error=str(exc))
+        return {"built": False, "error": str(exc)[:400], "label": candidate.label}
+
+    report = artifacts.report or {}
+    verification = verify_solid_against_spec(report, spec)
+    # Stage 2: views are DERIVED from the solid, so projection alignment is
+    # arithmetic. Stage 3: what the sheet said is bound to the edges the kernel
+    # built, addressed by its own stable keys — the pair a CAM plan needs.
+    projection = await _derive_solid_views(candidate, report)
+    from app.ai.cad_semantics import bind_spec_to_solid, collect_part_properties
+
+    semantics = bind_spec_to_solid(spec, report)
+    properties = collect_part_properties(spec, report)
+    # Stage 5: the ЕСТД generator's own input, built from measured geometry and
+    # bound callouts instead of features guessed off a raster.
+    from app.ai.cad_machining import blank_from_solid, surface_specs_from_solid
+
+    machining = {
+        "surfaces": surface_specs_from_solid(semantics, properties),
+        "blank": blank_from_solid(properties),
+    }
+    prefix = f"image-gen/{owner_sub or 'shared'}/{generation_id}_solid"
+    paths: dict[str, str] = {}
+    for suffix, payload, content_type in (
+        ("step", artifacts.step, "application/step"),
+        ("iges", artifacts.iges, "application/iges"),
+        ("stl", artifacts.stl, "model/stl"),
+    ):
+        if not payload:
+            continue
+        path = f"{prefix}.{suffix}"
+        _upload(payload, path, content_type)
+        paths[suffix] = path
+
+    material = str((spec.get("title_block") or {}).get("material") or "")
+    return {
+        "built": True,
+        "label": candidate.label,
+        "paths": paths,
+        "assumptions": candidate.missing_data,
+        "verification": verification.as_dict(),
+        "volume_mm3": report.get("volume_mm3"),
+        "surface_area_mm2": report.get("surface_area_mm2"),
+        "bounds_mm": report.get("bounds_mm"),
+        "mass_kg": estimate_mass_kg(report.get("volume_mm3"), material),
+        "projection": projection,
+        "semantics": semantics,
+        "properties": properties,
+        "machining": machining,
+    }
 
 
 def _verify_spec_dimensions(ir, spec: dict) -> dict:
@@ -500,7 +621,10 @@ def _verify_spec_dimensions(ir, spec: dict) -> dict:
                     stated.append(float(value))
 
     def _match(value: float) -> bool:
-        tol = max(0.5, abs(value) * 0.02)
+        # 0.5% — the same window the graph verifier uses. The drafter builds
+        # geometry FROM these numbers, so anything looser would hide a real
+        # drafter bug (a dropped section, a wrong scale) instead of catching it.
+        tol = max(0.05, abs(value) * 0.005)
         return any(abs(m - value) <= tol for m in measured)
 
     unique = sorted({round(value, 2) for value in stated})
@@ -854,14 +978,20 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         #                 READS the source image into a structured spec,
         #                 Model 2 (deterministic-first) DRAFTS clean geometry.
         #                 A redraw, not a pixel copy — no image-domain gap.
-        #   "graph"     — OPT-IN experiment: a whole-sheet VLM coordinate
-        #                 reader emits a full EngineeringDrawingGraph, gated
-        #                 fail-closed by independent verifiers. Not wired to
-        #                 the everyday user button: local VLMs do not yet emit
-        #                 accurate global pixel coordinates for a full sheet,
-        #                 so real sheets currently fail the gate by design.
-        #   "text_spec" — draft from a free-text ТЗ (no source image).
-        # "trace" remains the established pixel path below.
+        #   "graph"     — API-ONLY experiment (2026-07-25: removed from both
+        #                 UIs). A whole-sheet VLM coordinate reader emits a
+        #                 full EngineeringDrawingGraph, gated fail-closed by
+        #                 independent verifiers. Every live run on a real sheet
+        #                 has failed (see CAD_DRAWING_GRAPH_PLAN.md): universal
+        #                 VLMs do not emit accurate whole-sheet coordinates.
+        #                 Kept only until its view/relation contract has been
+        #                 harvested into EngineeringDrawingSpec.
+        #   "text_spec" — draft from a free-text ТЗ (no source image). NOT a
+        #                 digitizing method; the UI offers it as its own
+        #                 workflow, shown only when no sheet is attached.
+        # "trace" is the auxiliary pixel path below: it is kept for classes the
+        # spec drafter cannot express yet and as a verification surface, not as
+        # the way to reach an exact ЕСКД redraw.
         if vectorize_method in ("spec", "graph", "text_spec"):
             if vectorize_method == "graph":
                 from app.ai.cad_drawing_graph import (
@@ -1014,7 +1144,22 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
                 if not content:
                     return await _fail("Метод «по описанию»: нужен исходный скан/фото.")
-                spec = await read_drawing_spec(content)
+                from app.ai.cad_recognize.spec_vectorize import (
+                    SpecReaderNotVisionError,
+                    SpecReadMalformedError,
+                    SpecReadTruncatedError,
+                )
+
+                try:
+                    spec = await read_drawing_spec(content)
+                except (
+                    SpecReaderNotVisionError,
+                    SpecReadTruncatedError,
+                    SpecReadMalformedError,
+                ) as exc:
+                    # A misconfigured slot and a cut-off answer are both
+                    # actionable, and neither means "unreadable drawing".
+                    return await _fail(f"Метод «по описанию»: {exc}")
                 if not spec:
                     return await _fail(
                         "Метод «по описанию»: модель чтения чертежа не вернула "
@@ -1023,6 +1168,18 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     )
                 unresolved = [str(i) for i in spec.get("unresolved", []) if str(i)]
                 if unresolved:
+                    # Persist WHAT WAS READ even though nothing is drafted: a
+                    # fail-closed stop the user cannot inspect is unactionable —
+                    # they need to see which values the reader did prove.
+                    async with factory() as db:
+                        stopped = await db.get(ImageGeneration, gen_uuid)
+                        if stopped:
+                            stopped.params = {
+                                **(stopped.params or {}),
+                                "spec": spec,
+                                "cad_pipeline_manifest": pipeline_manifest,
+                            }
+                            await db.commit()
                     return await _fail(
                         "Метод «по описанию»: построение остановлено — не определены "
                         "обязательные данные: " + ", ".join(unresolved[:8])
@@ -1052,6 +1209,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 # measure the numbers the spec stated? Non-blocking (a redraw is
                 # not held to the pixel gate); mismatches are surfaced for review.
                 spec_dim_check = _verify_spec_dimensions(spec_ir, spec)
+                # Stage 1 of the 3D-first path: a body of revolution is a
+                # profile spun about an axis, and every number in that profile
+                # was just read off the sheet — so the solid is exact by
+                # construction. It is a draft artifact alongside the 2D sheet,
+                # never a gate on it: a kernel failure must not cost the user
+                # the drawing they asked for.
+                solid_result = await _build_spec_solid(spec, generation_id, owner_sub)
                 validate_ir(spec_ir)
                 async with factory() as db:
                     gen = await db.get(ImageGeneration, gen_uuid)
@@ -1069,6 +1233,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "spec_dimension_check": spec_dim_check,
                         "cad_pipeline_manifest": pipeline_manifest,
                         "normalized_source_path": normalized_path,
+                        **({"solid_3d": solid_result} if solid_result else {}),
                     }
                     await cad_ir_store.save_revision(
                         db, gen, spec_ir, origin="auto", created_by=owner_sub,
@@ -1081,6 +1246,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 return {
                     "ok": True, "generation_id": generation_id,
                     "entities": len(spec_ir.entities), "method": "spec",
+                    "solid_3d": bool(solid_result and solid_result.get("built")),
                 }
 
             from app.ai.cad_recognize.spec_vectorize import (
