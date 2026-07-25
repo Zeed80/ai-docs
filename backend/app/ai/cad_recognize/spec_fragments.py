@@ -114,8 +114,85 @@ def _stamp_crop(image):
     return image.crop((left, top, width, height))
 
 
+# JSON schemas for the bounded questions. Ollama enforces these during
+# decoding, so the answer cannot arrive fenced, truncated or mis-nested — the
+# three ways free-form answers were losing whole sheets.
+_KIND_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "part": {"type": ["string", "null"]},
+        "kind": {"type": "string", "enum": ["rotation", "plate", "flange", "other"]},
+        "bodies": {"type": ["integer", "null"]},
+        "views": {"type": "array", "items": {
+            "type": "string", "enum": ["front", "side", "top", "section"],
+        }},
+    },
+    "required": ["kind"],
+}
+_STAMP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        field: {"type": ["string", "null"]}
+        for field in ("designation", "name", "material", "scale", "mass")
+    },
+}
+_SECTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "diameter_mm": {"type": ["number", "null"]},
+        "length_mm": {"type": ["number", "null"]},
+        "note": {"type": ["string", "null"]},
+    },
+}
+_ROTATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "outer": {"type": "array", "items": _SECTION_SCHEMA},
+        "bore": {"type": "array", "items": _SECTION_SCHEMA},
+    },
+    "required": ["outer"],
+}
+_PROFILE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "shape": {"type": "string", "enum": ["rectangle", "circle"]},
+        "width_mm": {"type": ["number", "null"]},
+        "height_mm": {"type": ["number", "null"]},
+        "diameter_mm": {"type": ["number", "null"]},
+        "thickness_mm": {"type": ["number", "null"]},
+        "holes": {"type": "array", "items": {"type": "object", "properties": {
+            "center_x_mm": {"type": ["number", "null"]},
+            "center_y_mm": {"type": ["number", "null"]},
+            "diameter_mm": {"type": ["number", "null"]},
+        }}},
+        "hole_patterns": {"type": "array", "items": {"type": "object", "properties": {
+            "kind": {"type": "string"},
+            "count": {"type": ["integer", "null"]},
+            "bolt_circle_diameter_mm": {"type": ["number", "null"]},
+            "hole_diameter_mm": {"type": ["number", "null"]},
+            "start_angle_deg": {"type": ["number", "null"]},
+        }}},
+    },
+    "required": ["shape"],
+}
+_CALLOUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "dimensions": {"type": "array", "items": {"type": "object", "properties": {
+            "value": {"type": "string"},
+            "applies_to": {"type": ["string", "null"]},
+        }, "required": ["value"]}},
+        "annotations": {"type": "array", "items": {"type": "object", "properties": {
+            "kind": {"type": "string"},
+            "text": {"type": "string"},
+        }, "required": ["text"]}},
+    },
+}
+
+
 async def _ask(
-    prompt: str, image, *, router: Any, confidential: bool, num_predict: int
+    prompt: str, image, *, router: Any, confidential: bool, num_predict: int,
+    schema: dict | None = None,
 ) -> dict:
     """One bounded question. A failure returns {} and never raises."""
     from app.ai.cad_recognize.spec_vectorize import (
@@ -139,7 +216,7 @@ async def _ask(
         confidential=confidential,
         allow_cloud=False,
         preferred_model=seeing_model,
-        metadata={"num_predict": num_predict},
+        metadata={"num_predict": num_predict, "json_schema": schema},
     )
     try:
         response = await router.run(request)
@@ -190,16 +267,16 @@ async def read_spec_by_fragments(
     overview = _overview(image)
     ask = {"router": router, "confidential": confidential}
 
-    kind_answer = await _ask(_KIND_PROMPT, overview, num_predict=400, **ask)
+    kind_answer = await _ask(_KIND_PROMPT, overview, num_predict=400, schema=_KIND_SCHEMA, **ask)
     kind = str(kind_answer.get("kind") or "").strip().lower()
     part = str(kind_answer.get("part") or "").strip()
 
-    stamp = await _ask(_STAMP_PROMPT, _stamp_crop(image), num_predict=600, **ask)
+    stamp = await _ask(_STAMP_PROMPT, _stamp_crop(image), num_predict=600, schema=_STAMP_SCHEMA, **ask)
 
     body: dict[str, Any] = {"type": _type_label(kind)}
     unresolved: list[str] = []
     if kind == "rotation":
-        geometry = await _ask(_ROTATION_PROMPT, overview, num_predict=4000, **ask)
+        geometry = await _ask(_ROTATION_PROMPT, overview, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
         outer = [s for s in (geometry.get("outer") or []) if isinstance(s, dict)]
         bore = [s for s in (geometry.get("bore") or []) if isinstance(s, dict)]
         if outer:
@@ -209,7 +286,7 @@ async def read_spec_by_fragments(
         if bore:
             body["bore"] = bore
     elif kind in ("plate", "flange"):
-        profile = await _ask(_PROFILE_PROMPT, overview, num_predict=2000, **ask)
+        profile = await _ask(_PROFILE_PROMPT, overview, num_predict=2000, schema=_PROFILE_SCHEMA, **ask)
         if profile.get("shape"):
             body["profile"] = profile
         else:
@@ -219,7 +296,7 @@ async def read_spec_by_fragments(
             f"класс детали не определён (ответ модели: {kind or 'пусто'})"
         )
 
-    callouts = await _ask(_CALLOUT_PROMPT, overview, num_predict=3000, **ask)
+    callouts = await _ask(_CALLOUT_PROMPT, overview, num_predict=3000, schema=_CALLOUT_SCHEMA, **ask)
 
     assembled: dict[str, Any] = {
         "schema_version": 1,

@@ -136,3 +136,29 @@ def test_the_report_counts_errors_separately_from_warnings():
     assert report["errors"] == 0
     assert len(report["findings"]) == 1
     assert report["findings"][0]["severity"] == "warn"
+
+
+def test_silence_from_the_raster_check_is_not_reported_as_agreement():
+    """A flange once passed while the check had measured one 4 px hole."""
+    spec = {"main_view": {"profile": {
+        "shape": "circle", "diameter_mm": 560, "thickness_mm": 20,
+        "holes": [{"center_x_mm": 0, "center_y_mm": 0, "diameter_mm": 80}],
+    }}}
+
+    class _Ink:
+        pass
+
+    import app.ai.cad_recognize.spec_crosscheck as module
+
+    original = module.measure_circle_radii
+    module.measure_circle_radii = lambda _ink: [4.0]
+    try:
+        report = cross_check_spec(spec, _Ink())
+    finally:
+        module.measure_circle_radii = original
+    assert report["errors"] == 0
+    assert report["raster_check"] == "insufficient_measurements"
+
+
+def test_no_image_says_the_check_was_not_attempted():
+    assert cross_check_spec({"main_view": {}})["raster_check"] == "not_attempted"

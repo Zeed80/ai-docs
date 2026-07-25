@@ -173,9 +173,19 @@ class OllamaProvider(AIProvider):
         }
         if system_text:
             payload["system"] = system_text
-        # Note: format="json" is intentionally NOT set here — many vision models
-        # (qwen3.x, llava) return empty response when format is forced. JSON output
-        # is controlled via the system prompt instruction instead.
+        # Structured output is OPT-IN per call via metadata["json_schema"].
+        #
+        # An older comment here claimed format=json makes vision models answer
+        # with an empty string. Measured against the current reader on a real
+        # flange sheet (2026-07-25) that is no longer true, and the difference
+        # is large: free-form took 7.7 s and came back wrapped in markdown
+        # fences, a schema took 0.3 s, parsed without repair, and filled a
+        # thickness the free-form answer had left null. It stays opt-in because
+        # the claim may still hold for some model in the catalogue — a caller
+        # that asks for a schema has measured its own model.
+        json_schema = (request.metadata or {}).get("json_schema")
+        if json_schema:
+            payload["format"] = json_schema
 
         # Vision inference needs much more time than text tasks. Raised from
         # 660 s on 2026-07-25: reading a full A3 sheet with qwen3-vl:32b timed

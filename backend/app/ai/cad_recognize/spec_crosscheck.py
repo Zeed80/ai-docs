@@ -232,6 +232,13 @@ def check_spec_against_raster(
     stated = _spec_circle_diameters(spec)
     measured = sorted({round(r, 3) for r in circle_radii_px if r > 0}, reverse=True)
     if len(stated) < 2 or len(measured) < 2:
+        # Silence here is NOT confirmation, and reporting it as "no errors"
+        # once let a flange pass while the check had measured a single 4 px
+        # hole. Measured 2026-07-25: the classical tracer decomposes large
+        # circles into segments by design, so on a flange sheet it fits only
+        # the tiny bolt holes. Preprocessing is not the cause — channel-min
+        # binarisation moved the ink fraction from 0.0164 to 0.0166 and still
+        # produced one circle.
         return findings
 
     stated_ratio = stated[0] / stated[-1]
@@ -288,6 +295,12 @@ def cross_check_spec(spec: dict, ink: Any | None = None) -> dict[str, Any]:
     if ink is not None:
         measured = measure_circle_radii(ink)
         findings.extend(check_spec_against_raster(spec, measured))
+    stated_circles = len(_spec_circle_diameters(spec))
+    raster_state = (
+        "not_attempted" if ink is None
+        else ("checked" if len(measured) >= 2 and stated_circles >= 2
+              else "insufficient_measurements")
+    )
     return {
         "findings": [
             {
@@ -298,4 +311,8 @@ def cross_check_spec(spec: dict, ink: Any | None = None) -> dict[str, Any]:
         ],
         "errors": sum(1 for f in findings if f.severity == "error"),
         "measured_circles": len(measured),
+        # Whether the raster comparison actually ran. Without this, "errors: 0"
+        # reads as "the image agrees" when it can equally mean "there was
+        # nothing to compare".
+        "raster_check": raster_state,
     }
