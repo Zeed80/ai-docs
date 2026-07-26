@@ -701,6 +701,15 @@ class SheetViewRequest(BaseModel):
     section_origin_mm: float | None = None
 
 
+class SheetDimensionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    view_index: int = Field(ge=0, le=5)
+    edge_index: int = Field(ge=0, le=5000)
+    kind: Literal["DistanceX", "DistanceY", "Distance", "Diameter", "Radius"] = "Distance"
+    label: str | None = None
+
+
 class DrawingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -710,6 +719,79 @@ class DrawingRequest(BaseModel):
     confirm_assumptions: bool = False
     hidden_lines: bool = True
     curve_samples: int = Field(default=32, ge=4, le=200)
+    dimensions: list[SheetDimensionRequest] = Field(default_factory=list, max_length=200)
+
+
+def _cut_face_outlines(
+    shape: Part.Shape, depth_mm: float, scale: float, samples: int
+) -> list[list[tuple[float, float]]]:
+    """Closed outlines of the material a section plane cuts through.
+
+    ГОСТ 2.306 hatches the cut material, and only the material — the bore of a
+    hollow shaft must stay white. Taking the section view's outer boundary
+    would fill the bore in, so the region is computed from the solid itself:
+    intersect it with the cutting plane and take the resulting faces, which by
+    construction are exactly the material and exactly not the holes.
+
+    Coordinates come back in the same view frame TechDraw uses for its edges
+    (u along the model's Z, v along X, both scaled), so the hatch lands on the
+    geometry rather than beside it. The caller verifies that against the view's
+    own bounds and drops the hatch instead of misplacing it.
+    """
+    box = shape.BoundBox
+    # TechDraw centres a view on the shape, so the hatch must be centred the
+    # same way — in raw model coordinates the outline lands beside the view and
+    # the alignment check throws it away.
+    centre_u, centre_v = box.Center.z, box.Center.x
+    reach = max(box.XLength, box.YLength, box.ZLength) * 2.0 + 10.0
+    plane = Part.makePlane(
+        reach * 2, reach * 2,
+        App.Vector(-reach, depth_mm, -reach),
+        App.Vector(0.0, 1.0, 0.0),
+    )
+    try:
+        cut = shape.common(plane)
+    except Exception:  # noqa: BLE001 — an unsectionable shape simply has no hatch
+        return []
+
+    outlines: list[list[tuple[float, float]]] = []
+    for face in cut.Faces:
+        wire = face.OuterWire
+        # OrderedEdges walks the wire in connection order; Edges does not, and
+        # sampling them as they come produced a boundary that jumped between
+        # opposite ends of the part — a bow-tie polygon whose "hatch" was a
+        # diagonal line straight across the drawing.
+        ordered = getattr(wire, "OrderedEdges", None) or wire.Edges
+        points: list[tuple[float, float]] = []
+        for edge in ordered:
+            try:
+                first, last = edge.FirstParameter, edge.LastParameter
+                sampled = []
+                for index in range(samples + 1):
+                    point = edge.valueAt(first + (last - first) * index / samples)
+                    sampled.append((
+                        round((point.z - centre_u) * scale, 6),
+                        round((point.x - centre_v) * scale, 6),
+                    ))
+            except Exception:  # noqa: BLE001
+                continue
+            # OrderedEdges walks the wire in connection order, but each edge
+            # keeps its OWN parameterisation, so consecutive edges can run in
+            # opposite directions. Sampling them as-is zig-zags across the
+            # section, and the hatch follows a diagonal instead of the bore.
+            if points and sampled:
+                start_gap = math.dist(points[-1], sampled[0])
+                end_gap = math.dist(points[-1], sampled[-1])
+                if end_gap < start_gap:
+                    sampled.reverse()
+            points.extend(sampled)
+        deduped: list[tuple[float, float]] = []
+        for point in points:
+            if not deduped or point != deduped[-1]:
+                deduped.append(point)
+        if len(deduped) >= 3:
+            outlines.append(deduped)
+    return outlines
 
 
 def _techdraw_edges(view, samples: int) -> dict[str, list[dict[str, Any]]]:
@@ -763,6 +845,7 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
 
         base_view = None
         views: list[dict[str, Any]] = []
+        view_objects: list[Any] = []
         for index, wanted in enumerate(request.views):
             if wanted.kind == "section":
                 if base_view is None:
@@ -820,18 +903,80 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                     "u_min": min(p[0] for p in points), "u_max": max(p[0] for p in points),
                     "v_min": min(p[1] for p in points), "v_max": max(p[1] for p in points),
                 }
+            hatch: list[list[tuple[float, float]]] = []
+            if wanted.kind == "section" and bounds is not None:
+                # The cutting plane's own coordinate is the one along its
+                # NORMAL — Y here — not the section origin's depth along the
+                # part. Passing the latter put the plane past the end of the
+                # shaft, where it intersects nothing, and the hatch came back
+                # empty with no error to explain it.
+                candidate_hatch = _cut_face_outlines(
+                    shape, shape.BoundBox.Center.y, request.scale,
+                    max(4, request.curve_samples // 4),
+                )
+                # Fail closed on misalignment: a hatch drawn next to the view
+                # instead of inside it is worse than none, and the only honest
+                # check is whether it lands within the view's own bounds.
+                margin = 1.0
+                for outline in candidate_hatch:
+                    us = [p[0] for p in outline]
+                    vs = [p[1] for p in outline]
+                    if (
+                        min(us) >= bounds["u_min"] - margin
+                        and max(us) <= bounds["u_max"] + margin
+                        and min(vs) >= bounds["v_min"] - margin
+                        and max(vs) <= bounds["v_max"] + margin
+                    ):
+                        hatch.append(outline)
+
+            view_objects.append(view)
             views.append({
                 "kind": wanted.kind,
                 "label": wanted.label,
                 "bounds_mm": bounds,
                 "visible": entities["visible"],
                 "hidden": entities["hidden"],
-                # A section's cut face is hatched by ГОСТ 2.306; the caller
-                # draws the hatch, the kernel says which outline to hatch.
-                "hatch_outline": wanted.kind == "section",
+                # Closed outlines of the cut MATERIAL (ГОСТ 2.306) — the bore
+                # is excluded by construction, so it stays white.
+                "hatch": hatch,
             })
+        dimensions: list[dict[str, Any]] = []
+        for wanted_dim in request.dimensions:
+            if wanted_dim.view_index >= len(view_objects):
+                continue
+            owner = view_objects[wanted_dim.view_index]
+            dim = document.addObject("TechDraw::DrawViewDimension", f"Dim{len(dimensions)}")
+            page.addView(dim)
+            dim.Type = wanted_dim.kind
+            dim.References2D = [(owner, f"Edge{wanted_dim.edge_index}")]
+            try:
+                document.recompute()
+                anchors = [
+                    (round(point.x, 6), round(point.y, 6))
+                    for point in dim.getLinearPoints()
+                ]
+            except Exception as exc:  # noqa: BLE001 — one dimension, not the sheet
+                warnings.append(f"dimension on edge {wanted_dim.edge_index}: {exc}")
+                continue
+            if len(anchors) < 2:
+                continue
+            dimensions.append({
+                "view_index": wanted_dim.view_index,
+                "kind": wanted_dim.kind,
+                "label": wanted_dim.label,
+                # MEASURED off the model, in the view's own millimetres. The
+                # arrows and the dimension line are the caller's to draw:
+                # TechDraw computes those in its GUI renderer, and headless
+                # getArrowPositions returns zeros.
+                "anchors_mm": anchors,
+                "value_mm": round(
+                    math.dist(anchors[0], anchors[1]) / request.scale, 6
+                ),
+            })
+
         return {
-            "views": views, "scale": request.scale, "warnings": warnings,
+            "views": views, "dimensions": dimensions,
+            "scale": request.scale, "warnings": warnings,
             "kernel": "FreeCAD/TechDraw",
         }
     finally:

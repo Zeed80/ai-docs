@@ -149,6 +149,7 @@ async def draw_candidate_sheet(
     views: list[dict[str, Any]],
     scale: float = 1.0,
     hidden_lines: bool = True,
+    dimensions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Sheet views built by TechDraw, sections included.
 
@@ -163,6 +164,7 @@ async def draw_candidate_sheet(
         "views": views,
         "scale": scale,
         "hidden_lines": hidden_lines,
+        "dimensions": dimensions or [],
         "confirm_assumptions": True,
     }
     try:

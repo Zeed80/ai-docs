@@ -154,7 +154,90 @@ def place_views(
                     offset_v=placement["offset_v"],
                 )
             )
+        entities.extend(
+            _hatch_from_outlines(
+                view.get("hatch") or [],
+                px_per_mm=px_per_mm,
+                offset_u=placement["offset_u"],
+                offset_v=placement["offset_v"],
+            )
+        )
     return entities, placements
+
+
+def dimensions_from_kernel(
+    dimensions: list[dict[str, Any]],
+    placements: dict[str, dict[str, float]],
+    view_order: list[str],
+    *,
+    px_per_mm: float,
+) -> list[Any]:
+    """Kernel-measured dimensions → IR dimension entities on the sheet.
+
+    The VALUE and the anchor points come from TechDraw measuring the solid, so
+    a dimension cannot disagree with the geometry it labels — which is the
+    whole point of taking them from the model instead of restating the spec.
+    """
+    from app.ai.cad_ir.schema import DimensionEntity
+
+    entities: list[Any] = []
+    for item in dimensions:
+        anchors = item.get("anchors_mm") or []
+        if len(anchors) < 2:
+            continue
+        index = int(item.get("view_index") or 0)
+        if index >= len(view_order):
+            continue
+        placement = placements.get(view_order[index])
+        if not placement:
+            continue
+        value = item.get("value_mm")
+        label = str(item.get("label") or "")
+        text = f"{label}{value:g}" if isinstance(value, (int, float)) else label
+        (u1, v1), (u2, v2) = anchors[0], anchors[1]
+        entities.append(
+            DimensionEntity(
+                p1=Point(
+                    x=(placement["offset_u"] + float(u1)) * px_per_mm,
+                    y=(placement["offset_v"] - float(v1)) * px_per_mm,
+                ),
+                p2=Point(
+                    x=(placement["offset_u"] + float(u2)) * px_per_mm,
+                    y=(placement["offset_v"] - float(v2)) * px_per_mm,
+                ),
+                text=text,
+                value_mm=float(value) if isinstance(value, (int, float)) else None,
+                **_ORIGIN,
+            )
+        )
+    return entities
+
+
+def _hatch_from_outlines(
+    outlines: list[list[list[float]]],
+    *,
+    px_per_mm: float,
+    offset_u: float,
+    offset_v: float,
+) -> list[Any]:
+    """Cut-material outlines → ГОСТ 2.306 hatch regions, in sheet pixels.
+
+    The kernel returns the material the section plane passes through, holes
+    already excluded, so each outline is filled as it stands. ``v`` is negated
+    for the same reason the edges are: the projector works y-up and the IR
+    canvas is y-down.
+    """
+    from app.ai.cad_ir.schema import HatchRegion
+
+    regions: list[Any] = []
+    for outline in outlines:
+        points = [
+            Point(x=(offset_u + float(u)) * px_per_mm, y=(offset_v - float(v)) * px_per_mm)
+            for u, v in outline
+        ]
+        if len(points) >= 3:
+            regions.append(HatchRegion(boundary=points, pattern="ansi31", **_ORIGIN))
+    return regions
 
 
 def verify_views_against_solid(

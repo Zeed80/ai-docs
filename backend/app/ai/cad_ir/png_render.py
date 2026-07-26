@@ -25,6 +25,32 @@ from app.ai.cad_ir.schema import (
 )
 
 
+def _draw_hatch_lines(canvas, boundary, holes, thin_px: int, spacing_px: int = 12) -> None:
+    """ГОСТ 2.306 hatching: 45-degree lines clipped to the cut material.
+
+    The preview drew only the region's OUTLINE, so a sectioned part looked
+    exactly like an unsectioned one — the single most recognizable feature of
+    a machine drawing was missing from the picture the user is shown.
+    """
+    import cv2
+    import numpy as np
+
+    mask = np.zeros(canvas.shape[:2], dtype=np.uint8)
+    cv2.fillPoly(mask, [boundary], 255)
+    for hole in holes:
+        cv2.fillPoly(mask, [hole], 0)
+    if not mask.any():
+        return
+    lines = np.zeros_like(mask)
+    x0, y0, width, height = cv2.boundingRect(boundary)
+    # y = x + c across the region: c runs from -(x0+width) to (y0+height).
+    start = -(x0 + width)
+    stop = y0 + height
+    for offset in range(start, stop + spacing_px, spacing_px):
+        cv2.line(lines, (x0, x0 + offset), (x0 + width, x0 + width + offset), 255, thin_px)
+    canvas[(lines > 0) & (mask > 0)] = 0
+
+
 def rasterize_entities(
     entities: list[Entity],
     width: int,
@@ -76,6 +102,10 @@ def rasterize_entities(
                     [[int(round(p.x)), int(round(p.y))] for p in hole], dtype=np.int32
                 )
                 cv2.polylines(canvas, [harr], True, 0, t, cv2.LINE_AA)
+            _draw_hatch_lines(canvas, arr, [
+                np.array([[int(round(p.x)), int(round(p.y))] for p in hole], dtype=np.int32)
+                for hole in entity.holes
+            ], thin_px)
         elif isinstance(entity, DimensionEntity):
             cv2.line(
                 canvas,

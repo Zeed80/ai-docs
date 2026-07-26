@@ -91,3 +91,49 @@ def test_a_rejected_request_is_reported_as_rejection_not_an_outage():
 def test_a_broken_kernel_is_reported_as_unavailable():
     with pytest.raises(CadKernelUnavailable):
         _call(_response(500))
+
+
+def test_hatch_outlines_become_regions_on_the_sheet():
+    """A section is recognizable by its hatching; the preview drew none.
+
+    The kernel returns the outline of the cut MATERIAL — holes already
+    excluded, so the bore stays white — and those become hatch regions placed
+    with the view they belong to.
+    """
+    from app.ai.cad_projection import place_views
+
+    views = {
+        "front": {
+            "bounds_mm": {"u_min": -10.0, "u_max": 10.0, "v_min": -5.0, "v_max": 5.0},
+            "visible": [{"type": "line", "points": [[-10.0, -5.0], [10.0, -5.0]]}],
+            "hidden": [],
+            "hatch": [[[-10.0, -5.0], [10.0, -5.0], [10.0, 5.0], [-10.0, 5.0]]],
+        }
+    }
+
+    entities, placements = place_views(views, px_per_mm=2.0)
+
+    hatches = [e for e in entities if e.type == "hatch"]
+    assert len(hatches) == 1, entities
+    assert len(hatches[0].boundary) == 4
+    # Placed with its view, and y is flipped like every other entity: the
+    # projector works y-up and the canvas is y-down.
+    assert hatches[0].boundary[0].x == (placements["front"]["offset_u"] - 10.0) * 2.0
+
+
+def test_measured_dimensions_carry_the_kernel_value():
+    """The value is measured off the solid, so it cannot disagree with it."""
+    from app.ai.cad_projection import dimensions_from_kernel
+
+    entities = dimensions_from_kernel(
+        [{"view_index": 0, "anchors_mm": [[2.5, -20.0], [2.5, 20.0]],
+          "value_mm": 80.0, "label": "Ø"}],
+        {"front": {"offset_u": 100.0, "offset_v": 50.0}},
+        ["front"],
+        px_per_mm=2.0,
+    )
+
+    assert len(entities) == 1
+    assert entities[0].value_mm == 80.0
+    assert entities[0].text == "Ø80"
+    assert entities[0].p1.x == (100.0 + 2.5) * 2.0
