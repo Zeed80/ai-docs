@@ -49,6 +49,7 @@ CONFIDENTIAL_TASKS: set[AITask] = {
     AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY,
     AITask.CAD_SPEC_READ,
     AITask.CAD_SPEC_DRAFT,
+    AITask.CAD_TEXT_OCR,
 }
 
 # Coordinate extraction is a constrained observation task.  Keep the routing

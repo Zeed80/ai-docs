@@ -700,6 +700,13 @@ _SLOTS = [
      "Переранжирование результатов поиска", True),
     ("cad_spec_read", "Оцифровка", "Чтение чертежа (VLM)",
      "Метод «по описанию»: модель читает исходное изображение в структурный спек", True),
+    # The text layer is its own slot because it is its own job: transcribing
+    # what is WRITTEN on the sheet, where a small document specialist beats the
+    # large general reader (fit recall 0.800 -> 1.000). It used to be a
+    # hardcoded model name, so nothing else could be tried against it.
+    ("cad_text_ocr", "Оцифровка", "Текстовый слой чертежа (OCR)",
+     "Транскрипция надписей и размеров с листа. Специализированная документная "
+     "модель читает точнее общего VLM; геометрию не определяет", True),
     # NB: the experimental whole-sheet graph pipeline (layout / fragment /
     # evidence-verify / legacy read) is intentionally NOT surfaced as user
     # slots — it runs opt-in on its model_registry.yaml fallback defaults.
@@ -719,6 +726,7 @@ _SLOT_MODALITY = {
     "embedding": "embedding",
     "rerank": "rerank",
     "cad_spec_read": "vision",
+    "cad_text_ocr": "vision",
     "cad_spec_draft": "text",
 }
 
@@ -780,6 +788,8 @@ def _slot_current_model(slot: str, registry) -> str | None:
         return get_routing_for(AITask.EMAIL_DRAFTING).primary
     if slot == "cad_spec_read":
         return get_routing_for(AITask.CAD_SPEC_READ).primary
+    if slot == "cad_text_ocr":
+        return get_routing_for(AITask.CAD_TEXT_OCR).primary
     if slot == "cad_spec_draft":
         return get_routing_for(AITask.CAD_SPEC_DRAFT).primary
     if slot == "ocr_large":
@@ -1024,6 +1034,8 @@ def _slot_affected(slot: str) -> list[str]:
         return [AITask.EMAIL_DRAFTING.value]
     if slot == "cad_spec_read":
         return [AITask.CAD_SPEC_READ.value]
+    if slot == "cad_text_ocr":
+        return [AITask.CAD_TEXT_OCR.value]
     if slot == "cad_spec_draft":
         return [AITask.CAD_SPEC_DRAFT.value]
     if slot == "agent_orchestrator":
@@ -1228,6 +1240,8 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
             _mirror_ai_config(DocumentGroup(rerank_model=key))
         elif slot == "agent_email":
             _assign_task(AITask.EMAIL_DRAFTING, key)
+        elif slot == "cad_text_ocr":
+            _assign_task(AITask.CAD_TEXT_OCR, key)
         elif slot == "cad_spec_read":
             # This slot has a safety-reviewed dedicated route. Do not retain an
             # old generic-VLM tail (notably qwen3-vl) after the operator changes

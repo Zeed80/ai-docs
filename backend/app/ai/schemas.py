@@ -82,6 +82,10 @@ class AITask(str, Enum):
     CAD_DRAWING_GRAPH_EVIDENCE_VERIFY = "cad_drawing_graph_evidence_verify"
     CAD_SPEC_READ = "cad_spec_read"
     CAD_SPEC_DRAFT = "cad_spec_draft"
+    # CAD_TEXT_OCR: the drawing's TEXT layer — transcription only, no geometry.
+    # Separate from CAD_SPEC_READ because a document specialist beats a general
+    # VLM at reading what is written, and the two want different models.
+    CAD_TEXT_OCR = "cad_text_ocr"
 
 
 class ChatMessage(BaseModel):

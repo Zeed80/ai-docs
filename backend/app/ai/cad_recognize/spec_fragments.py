@@ -397,10 +397,33 @@ async def _ask(
 # full stamp. This matches what the literature reports for drawings (a 0.23B
 # fine-tuned extractor beating frontier models on GD&T): the win on a technical
 # sheet is specialisation, not scale.
-_OCR_MODEL = "glm-ocr:latest"
+_OCR_MODEL = "glm-ocr:latest"  # fallback only; the assignment decides
 # It repeats its answer when given room, so the budget is small and repeated
 # blocks are collapsed.
 _OCR_NUM_PREDICT = 700
+
+
+def _ocr_model_and_url() -> tuple[str, str]:
+    """The assigned text-layer model, or the built-in default.
+
+    This used to be a constant and a direct Ollama call, so the one component
+    measured to fix fit and roughness recall could not be swapped, compared or
+    even seen from the settings UI. It is a routed task now (cad_text_ocr), and
+    the constant survives only as the fallback for a database that has not been
+    seeded yet.
+    """
+    from app.config import settings
+
+    url = str(settings.ollama_url).rstrip("/")
+    try:
+        from app.ai.schemas import AITask
+        from app.ai.task_routing import resolve_model
+
+        model, _provider = resolve_model(AITask.CAD_TEXT_OCR)
+    except Exception as exc:  # noqa: BLE001 — routing must never lose the layer
+        logger.warning("cad_ocr_routing_failed", error=str(exc)[:160])
+        model = None
+    return (model or _OCR_MODEL), url
 
 
 async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
@@ -417,12 +440,11 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
 
     import httpx
 
-    from app.config import settings
-
+    model, ollama_url = _ocr_model_and_url()
     buffer = _io.BytesIO()
     image.save(buffer, format="PNG")
     payload = {
-        "model": _OCR_MODEL,
+        "model": model,
         "prompt": "Прочитай все надписи и размеры с этого чертежа.",
         "images": [base64.b64encode(buffer.getvalue()).decode()],
         "stream": False,
@@ -431,9 +453,7 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=5.0)) as client:
-            response = await client.post(
-                f"{str(settings.ollama_url).rstrip('/')}/api/generate", json=payload
-            )
+            response = await client.post(f"{ollama_url}/api/generate", json=payload)
             response.raise_for_status()
             text = (response.json().get("response") or "")
     except Exception as exc:  # noqa: BLE001 — one lost layer, not the sheet

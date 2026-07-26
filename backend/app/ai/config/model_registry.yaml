@@ -729,6 +729,23 @@ routes:
       - "qwen3_vl_32b_ollama"
       - "claude_sonnet_anthropic"
     manual_review_fallback: true
+  cad_text_ocr:
+    required_modalities: ["vision"]
+    local_only: true
+    fallback_chain:
+      - "glm_ocr_ollama"
+    manual_review_fallback: false
+    notes: >
+      The drawing's TEXT layer, deliberately separate from cad_spec_read: the
+      general reader understands the sheet, this one only transcribes what is
+      written on it, and on a technical sheet a 1.1B document specialist beats
+      a 30B generalist at that job (fit recall 0.800 -> 1.000, roughness 0.875
+      -> 1.000).
+
+      Routable so the model can be swapped and compared from /settings/models.
+      It was a hardcoded model name and a direct Ollama call before, which made
+      trying anything else impossible without editing code.
+
   cad_spec_read:
     required_modalities: ["vision"]
     local_only: true
