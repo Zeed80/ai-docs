@@ -87,8 +87,9 @@ _PROFILE_PROMPT = (
 # 470 came back as four step lengths on a part whose overall length is 470.
 # So the two things the sheet actually shows are asked for directly.
 _CHAIN_PROMPT = (
-    "Перед тобой главный вид тела вращения. С чертежа уже прочитаны числа:\n"
-    "{callouts}\n\n"
+    "Перед тобой главный вид тела вращения. С чертежа уже прочитаны числа.\n"
+    "ДИАМЕТРЫ (на чертеже помечены знаком Ø): {diameters}\n"
+    "ОСЕВЫЕ РАЗМЕРЫ (без Ø): {lengths}\n\n"
     "Ответь ОДНОЙ строкой JSON:\n"
     '{{"diameters_mm":[],"bore_diameters_mm":[],"chain_mm":[],"overall_mm":null}}\n'
     "diameters_mm — диаметры ступеней НАРУЖНОГО контура слева направо, по "
@@ -102,7 +103,9 @@ _CHAIN_PROMPT = (
     "chain_mm — осевые размеры от ЛЕВОГО торца по возрастанию: положение конца "
     "каждой ступени. Последнее значение равно габаритной длине.\n"
     "overall_mm — габаритная длина детали.\n"
-    "Числа бери ТОЛЬКО из списка выше. Длина chain_mm должна равняться длине "
+    "diameters_mm и bore_diameters_mm бери ТОЛЬКО из списка ДИАМЕТРЫ. "
+    "chain_mm и overall_mm бери ТОЛЬКО из списка ОСЕВЫЕ РАЗМЕРЫ. Не переноси "
+    "число из одного списка в другой. Длина chain_mm должна равняться длине "
     "diameters_mm. Только JSON."
 )
 _CHAIN_SCHEMA = {
@@ -525,15 +528,44 @@ def _matches_callout(value: float, candidates: list[float], tol: float = 0.02) -
     return any(abs(value - candidate) <= window for candidate in candidates)
 
 
-def _callout_numbers(callouts: dict) -> list[float]:
-    """Every number the sheet's own callouts contain, largest first."""
-    import re
+# A drawing already says which of its numbers are diameters: it marks them Ø.
+# Everything else on a shaft sheet — 150, 78, 240, 470 — is a length. Pooling
+# the two into one list, which is what this did, hands the reader a bag of
+# numbers and lets it answer "Ø102" when asked for an axial position and "470"
+# when asked for a diameter. That is precisely the confusion behind every
+# refusal on the spindle sheet: 8 diameters against 6 axial values, an outer
+# profile summing to 364 on a part 470 long.
+_DIAMETER_MARK = re.compile(r"[ØøΦφ⌀]|\bØ")
+
+# The grade digit of a fit is not a size. "Ø80js6" carries one diameter, 80 —
+# but a bare digit scan also yields 6, and "Ø44H7" yields 7, so the candidate
+# list the reader chooses its diameters from was salted with 6s and 7s that
+# are nowhere on the part. Matched only when the code ENDS the token, so a
+# thread pitch ("M75x1,5") and a decimal are left alone.
+_FIT_CODE = re.compile(r"(?<=\d)\s*[A-Za-z]{1,2}\d{1,2}(?![\d,.x×])")
+
+
+def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
+    """Numbers from the sheet's callouts, largest first.
+
+    ``kind`` selects by the sheet's own marking: ``diameter`` keeps only
+    callouts carrying Ø, ``linear`` keeps only those without it, ``all`` keeps
+    everything (used where the distinction does not apply, e.g. plausibility
+    checks that just need to know a number was on the sheet).
+    """
+    import re as _re
 
     values: list[float] = []
     for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or []):
         text = str((item or {}).get("value") or (item or {}).get("text") or "")
         text = _STANDARD_REFERENCE.sub(" ", text)
-        for match in re.finditer(r"\d+(?:[.,]\d+)?", text):
+        marked = bool(_DIAMETER_MARK.search(text))
+        text = _FIT_CODE.sub(" ", text)
+        if kind == "diameter" and not marked:
+            continue
+        if kind == "linear" and marked:
+            continue
+        for match in _re.finditer(r"\d+(?:[.,]\d+)?", text):
             try:
                 value = float(match.group().replace(",", "."))
             except ValueError:
@@ -552,12 +584,17 @@ async def _sections_from_chain(
     — a chain that does not increase, or one whose last value disagrees with the
     stated overall, is a misread and says so instead of producing a part.
     """
+    diameters_seen = _callout_numbers(callouts, "diameter")
+    lengths_seen = _callout_numbers(callouts, "linear")
     candidates = _callout_numbers(callouts)
     if not candidates:
         return [], "выноски не прочитаны"
-    listed = ", ".join(f"{value:g}" for value in candidates[:30])
     answer = await _ask(
-        _CHAIN_PROMPT.format(callouts=listed), image, num_predict=900,
+        _CHAIN_PROMPT.format(
+            diameters=", ".join(f"{value:g}" for value in diameters_seen[:24]) or "—",
+            lengths=", ".join(f"{value:g}" for value in lengths_seen[:24]) or "—",
+        ),
+        image, num_predict=900,
         schema=_CHAIN_SCHEMA, router=router, confidential=confidential,
     )
     if not answer:
@@ -589,7 +626,13 @@ async def _sections_from_chain(
             f"осевые размеры идут ровным шагом {steps[0]:g} мм — "
             "это выдуманная цепочка, а не прочитанная с листа"
         )
-    off_sheet = [value for value in chain if not _matches_callout(value, candidates)]
+    # Checked against the AXIAL list specifically: a chain value that only
+    # matches a diameter is the reader crossing the two lists, which is the
+    # failure this split exists to catch.
+    off_sheet = [
+        value for value in chain
+        if not _matches_callout(value, lengths_seen or candidates)
+    ]
     if len(off_sheet) > len(chain) / 2:
         return [], (
             "больше половины осевых размеров нет среди прочитанных выносок "

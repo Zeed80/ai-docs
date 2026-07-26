@@ -149,3 +149,32 @@ def test_evenly_spaced_chain_is_refused_as_fabricated():
 
     assert sections == []
     assert problem and "ровным шагом" in problem
+
+
+def test_callouts_split_by_the_sheets_own_diameter_mark():
+    """A drawing already says which numbers are diameters: it marks them Ø.
+
+    Pooling them with the lengths hands the reader a bag of numbers and lets
+    it answer "Ø102" when asked for an axial position and "470" when asked for
+    a diameter — which is exactly what every refusal on the spindle sheet
+    looked like: 8 diameters against 6 axial values, an outer profile summing
+    to 364 on a part 470 long.
+    """
+    from app.ai.cad_recognize.spec_fragments import _callout_numbers
+
+    callouts = {
+        "dimensions": [
+            {"value": "Ø80js6"}, {"value": "Ø102h6"}, {"value": "Ø44H7"},
+            {"value": "150"}, {"value": "240"}, {"value": "470"},
+        ]
+    }
+
+    diameters = _callout_numbers(callouts, "diameter")
+    lengths = _callout_numbers(callouts, "linear")
+
+    assert set(diameters) == {102.0, 80.0, 44.0}
+    assert set(lengths) == {470.0, 240.0, 150.0}
+    # Nothing appears in both, and "all" still returns everything for the
+    # checks that only need to know a number was somewhere on the sheet.
+    assert not set(diameters) & set(lengths)
+    assert set(_callout_numbers(callouts)) == set(diameters) | set(lengths)
