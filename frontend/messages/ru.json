@@ -972,6 +972,7 @@
     "pipeline_unassigned": "не назначена",
     "pipeline_deterministic": "детерминированный",
     "latest_real_regression": "Последний live-прогон: {dwg} DWG + {photos} фото; entity precision {precision}, recall {recall}, F1 {f1}; exact-sheet {exact}, false-exact {falseExact}. Gate не пройден.",
+    "reconstruction_status": "Воспроизведение листа (отрисовать распознанное обратно и сравнить с чернилами оригинала — разметка не нужна): DWG recall {dwgR}, precision {dwgP}; фото recall {photoR}, precision {photoP}. Это НЕ entity F1 выше: там сверяется список сущностей с тем, как их нарезал сам CAD-файл.",
     "multi_type_candidate_status": "Multi-type v2, checkpoint {step}: независимый native-DXF holdout ({sheets} листов) — proposal precision {precision}, recall {recall}, F1 {f1}; segment F1 {segmentF1}, text-anchor F1 {textF1}. OCR-содержимое и связи не входят в эту метрику. Кандидат только opt-in, gate не пройден.",
     "description_drafting_status": "Черчение по описанию: эталонный детерминированный набор {passed}/{cases}, exact-case {exact}, DXF reopen {reopen}. Результат относится только к явно заданным размерам поддерживаемых профилей; неизвестные параметры блокируют построение.",
     "open_studio": "Студия",

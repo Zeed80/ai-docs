@@ -972,6 +972,7 @@
     "pipeline_unassigned": "unassigned",
     "pipeline_deterministic": "deterministic",
     "latest_real_regression": "Latest live run: {dwg} DWG + {photos} photos; entity precision {precision}, recall {recall}, F1 {f1}; exact-sheet {exact}, false-exact {falseExact}. Gate failed.",
+    "reconstruction_status": "Sheet reproduction (redraw what was recognized and compare with the original ink — no ground truth needed): DWG recall {dwgR}, precision {dwgP}; photos recall {photoR}, precision {photoP}. This is NOT the entity F1 above, which compares the entity list against how the CAD file happened to split it.",
     "multi_type_candidate_status": "Multi-type v2, checkpoint {step}: independent native-DXF holdout ({sheets} sheets) — proposal precision {precision}, recall {recall}, F1 {f1}; segment F1 {segmentF1}, text-anchor F1 {textF1}. OCR payload and relations are excluded. Candidate remains opt-in; gate failed.",
     "description_drafting_status": "Drafting from description: deterministic reference set {passed}/{cases}, exact-case {exact}, DXF reopen {reopen}. This result covers only explicit values in supported profiles; unknown parameters block drafting.",
     "open_studio": "Studio",

@@ -57,23 +57,35 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
         "native_dxf_entities": 1_661,
     },
     "latest_real_stack_regression": {
-        "evaluated_at": "2026-07-21",
+        "evaluated_at": "2026-07-26",
         "dwg_files": 10,
         "photo_files": 19,
-        "entity_precision": 0.055452,
-        "entity_recall": 0.035688,
-        "entity_f1": 0.043427,
+        "entity_precision": 0.146509,
+        "entity_recall": 0.079922,
+        "entity_f1": 0.103425,
         "exact_sheet_rate": 0.0,
         "false_exact_rate": 1.0,
         "dxf_reopen_rate": 1.0,
         "promotion_passed": False,
         "entity_f1_by_type": {
-            "segment": 0.033300,
-            "circle": 0.669903,
+            "segment": 0.100471,
+            "circle": 0.636816,
             "arc": 0.0,
             "hatch": 0.0,
             "text": 0.0,
         },
+        # Ink reproduced when the recognized entities are drawn back onto the
+        # sheet — the question "is the description complete enough to redraw
+        # the original", which needs no ground truth and so can be asked of
+        # any drawing. Distinct from the entity scores above, which ask the
+        # much stricter question "does our entity list match the CAD file's
+        # own entity list", where a line the DXF happens to store as two
+        # counts as a miss even though the sheets are identical.
+        "reconstruction_recall_dwg": 0.9995,
+        "reconstruction_precision_dwg": 0.9994,
+        "reconstruction_recall_photo": 0.9926,
+        "reconstruction_precision_photo": 0.9901,
+        "coverage_ok_rate": 1.0,
     },
     "description_drafting": {
         "contract": "description-spec-cadir-dxf-v2",

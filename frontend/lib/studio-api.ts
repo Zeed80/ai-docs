@@ -74,6 +74,11 @@ export interface VectorizerDevelopmentStatus {
     dxf_reopen_rate: number;
     promotion_passed: boolean;
     entity_f1_by_type: Record<string, number>;
+    reconstruction_recall_dwg: number;
+    reconstruction_precision_dwg: number;
+    reconstruction_recall_photo: number;
+    reconstruction_precision_photo: number;
+    coverage_ok_rate: number;
   };
   description_drafting: {
     contract: string;
@@ -290,7 +295,11 @@ export interface CadPipelineManifest {
         promotion_passed: boolean;
       }>;
     };
-    spec_reader: { task: string; models: CadPipelineModelAssignment[]; parameter_profile: string };
+    spec_reader: {
+      task: string;
+      models: CadPipelineModelAssignment[];
+      parameter_profile: string;
+    };
     drawing_graph_reader?: {
       task: string;
       models: CadPipelineModelAssignment[];
@@ -871,10 +880,7 @@ export interface CadIr {
   };
   review: IrReviewItem[];
   unresolved_regions: IrUnresolvedRegion[];
-  digitization_status:
-    | "exact_candidate"
-    | "review_required"
-    | "refused";
+  digitization_status: "exact_candidate" | "review_required" | "refused";
   parameters: {
     name: string;
     value: number;
@@ -1126,7 +1132,8 @@ export async function acceptVectorize(id: string): Promise<Generation> {
 export interface CadCertification {
   id?: string;
   revision: number;
-  profile: "auto" | "mechanical" | "construction" | "electrical" | "hydraulic" | "pid";
+  profile:
+    "auto" | "mechanical" | "construction" | "electrical" | "hydraulic" | "pid";
   status: "draft" | "drafter_approved" | "certified";
   verification?: { exact_ready?: boolean; checks?: Record<string, boolean> };
   drafter_approved_by?: string | null;
@@ -1136,7 +1143,9 @@ export interface CadCertification {
   manifest_hash?: string | null;
 }
 
-export async function getCadCertification(id: string): Promise<CadCertification> {
+export async function getCadCertification(
+  id: string,
+): Promise<CadCertification> {
   const res = await apiFetch(`${BASE}/${id}/certification`);
   return jsonOrThrow<CadCertification>(res);
 }
@@ -1153,10 +1162,15 @@ export async function approveCadAsDrafter(
   return jsonOrThrow<CadCertification>(res);
 }
 
-export async function approveCadAsNormcontroller(id: string): Promise<CadCertification> {
-  const res = await mutFetch(`${BASE}/${id}/certification/normcontrol-approve`, {
-    method: "POST",
-  });
+export async function approveCadAsNormcontroller(
+  id: string,
+): Promise<CadCertification> {
+  const res = await mutFetch(
+    `${BASE}/${id}/certification/normcontrol-approve`,
+    {
+      method: "POST",
+    },
+  );
   return jsonOrThrow<CadCertification>(res);
 }
 

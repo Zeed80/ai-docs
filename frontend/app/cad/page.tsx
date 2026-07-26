@@ -359,14 +359,45 @@ export default function CadListPage() {
               dwg: vectorizerStatus.latest_real_stack_regression.dwg_files,
               photos: vectorizerStatus.latest_real_stack_regression.photo_files,
               precision:
-                vectorizerStatus.latest_real_stack_regression.entity_precision.toFixed(4),
+                vectorizerStatus.latest_real_stack_regression.entity_precision.toFixed(
+                  4,
+                ),
               recall:
-                vectorizerStatus.latest_real_stack_regression.entity_recall.toFixed(4),
-              f1: vectorizerStatus.latest_real_stack_regression.entity_f1.toFixed(4),
+                vectorizerStatus.latest_real_stack_regression.entity_recall.toFixed(
+                  4,
+                ),
+              f1: vectorizerStatus.latest_real_stack_regression.entity_f1.toFixed(
+                4,
+              ),
               exact:
-                vectorizerStatus.latest_real_stack_regression.exact_sheet_rate.toFixed(2),
+                vectorizerStatus.latest_real_stack_regression.exact_sheet_rate.toFixed(
+                  2,
+                ),
               falseExact:
-                vectorizerStatus.latest_real_stack_regression.false_exact_rate.toFixed(2),
+                vectorizerStatus.latest_real_stack_regression.false_exact_rate.toFixed(
+                  2,
+                ),
+            })}
+          </p>
+          {/* The entity scores above answer "does our entity list match the CAD
+              file's own"; a user asking whether the sheet came across intact
+              needs the reproduction score, which is the one that moved. */}
+          <p className="mt-2 rounded border border-emerald-400/20 bg-emerald-950/20 px-2 py-1 text-xs text-emerald-100">
+            {t("reconstruction_status", {
+              dwgR: vectorizerStatus.latest_real_stack_regression.reconstruction_recall_dwg.toFixed(
+                4,
+              ),
+              dwgP: vectorizerStatus.latest_real_stack_regression.reconstruction_precision_dwg.toFixed(
+                4,
+              ),
+              photoR:
+                vectorizerStatus.latest_real_stack_regression.reconstruction_recall_photo.toFixed(
+                  4,
+                ),
+              photoP:
+                vectorizerStatus.latest_real_stack_regression.reconstruction_precision_photo.toFixed(
+                  4,
+                ),
             })}
           </p>
           {/* The multi-type candidate this used to report was deleted with the
@@ -379,15 +410,27 @@ export default function CadListPage() {
             {t("description_drafting_status", {
               passed: vectorizerStatus.description_drafting.passed_cases,
               cases: vectorizerStatus.description_drafting.evaluated_cases,
-              exact: vectorizerStatus.description_drafting.exact_case_rate.toFixed(2),
-              reopen: vectorizerStatus.description_drafting.dxf_reopen_rate.toFixed(2),
+              exact:
+                vectorizerStatus.description_drafting.exact_case_rate.toFixed(
+                  2,
+                ),
+              reopen:
+                vectorizerStatus.description_drafting.dxf_reopen_rate.toFixed(
+                  2,
+                ),
             })}
           </p>
           <div className="mt-3 grid gap-2 rounded border border-white/10 bg-black/20 p-3 text-xs text-zinc-300 md:grid-cols-2">
             <div>
-              <div className="font-medium text-zinc-200">{t("pipeline_models")}</div>
+              <div className="font-medium text-zinc-200">
+                {t("pipeline_models")}
+              </div>
               <div className="mt-1">
-                {t("pipeline_geometry")}: {vectorizerStatus.runtime_pipeline.components.geometry.assignment}
+                {t("pipeline_geometry")}:{" "}
+                {
+                  vectorizerStatus.runtime_pipeline.components.geometry
+                    .assignment
+                }
               </div>
               {/* The production reader comes FIRST and is not greyed out: it is
                   what actually runs. The whole-sheet graph reader is an
@@ -395,22 +438,38 @@ export default function CadListPage() {
                   describes the system that exists rather than the one that was
                   planned. */}
               <div>
-                {t("pipeline_spec_reader")}: {vectorizerStatus.runtime_pipeline.components.spec_reader.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
+                {t("pipeline_spec_reader")}:{" "}
+                {vectorizerStatus.runtime_pipeline.components.spec_reader.models
+                  .map((m) => m.key)
+                  .join(" → ") || t("pipeline_unassigned")}
               </div>
               <div className="text-zinc-500">
-                {t("pipeline_graph_experiment")}: {vectorizerStatus.runtime_pipeline.components.drawing_graph_reader?.models.map((m) => m.key).join(" → ") || t("pipeline_unassigned")}
+                {t("pipeline_graph_experiment")}:{" "}
+                {vectorizerStatus.runtime_pipeline.components.drawing_graph_reader?.models
+                  .map((m) => m.key)
+                  .join(" → ") || t("pipeline_unassigned")}
               </div>
             </div>
             <div>
-              <div>{t("pipeline_revision")}: {vectorizerStatus.runtime_pipeline.pipeline_revision}</div>
+              <div>
+                {t("pipeline_revision")}:{" "}
+                {vectorizerStatus.runtime_pipeline.pipeline_revision}
+              </div>
               <div className="font-mono text-[10px] text-zinc-500">
-                config {vectorizerStatus.runtime_pipeline.config_sha256.slice(0, 16)}…
+                config{" "}
+                {vectorizerStatus.runtime_pipeline.config_sha256.slice(0, 16)}…
               </div>
               <div className="mt-1">
-                {t("pipeline_profiles")}: {vectorizerStatus.runtime_pipeline.user_extensible_via.profiles.join(", ")}
+                {t("pipeline_profiles")}:{" "}
+                {vectorizerStatus.runtime_pipeline.user_extensible_via.profiles.join(
+                  ", ",
+                )}
               </div>
               <Link
-                href={vectorizerStatus.runtime_pipeline.user_extensible_via.model_assignments}
+                href={
+                  vectorizerStatus.runtime_pipeline.user_extensible_via
+                    .model_assignments
+                }
                 className="mt-2 inline-block text-sky-300 hover:text-sky-200"
               >
                 {t("pipeline_assign_models")}
