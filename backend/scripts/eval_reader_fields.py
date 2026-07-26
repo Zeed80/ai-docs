@@ -73,6 +73,14 @@ def _read_fields(spec: dict) -> dict:
     for hole in profile.get("holes") or []:
         if isinstance(hole, dict) and isinstance(hole.get("diameter_mm"), (int, float)):
             diameters.append(float(hole["diameter_mm"]))
+    # A pattern states its hole diameter once for the whole set; without this
+    # the score punished the reader for expressing four holes compactly.
+    for pattern in profile.get("hole_patterns") or []:
+        if not isinstance(pattern, dict):
+            continue
+        value = pattern.get("hole_diameter_mm")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            diameters.append(float(value))
 
     for dimension in spec.get("dimensions") or []:
         text = str((dimension or {}).get("value") or "")

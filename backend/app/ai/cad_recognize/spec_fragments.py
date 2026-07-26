@@ -79,6 +79,45 @@ _PROFILE_PROMPT = (
     "Только JSON."
 )
 
+_SHAPE_PROMPT = (
+    "Посмотри на контур детали на чертеже. Он круглый или прямоугольный? "
+    'Ответь ОДНОЙ строкой JSON: {"shape":"circle|rectangle"}. Только JSON.'
+)
+_SHAPE_SCHEMA = {
+    "type": "object",
+    "properties": {"shape": {"type": "string", "enum": ["rectangle", "circle"]}},
+    "required": ["shape"],
+}
+
+# Assignment, not reading: the values are already known from the callouts, and
+# the model only says which role each one plays. A read that cannot invent a
+# number cannot invent a part — the live failure this replaces had the reader
+# call a flange "rectangle" and hand back the BORE diameter as the outline.
+_ASSIGN_PROMPT = (
+    "С чертежа уже прочитаны размерные надписи:\n{callouts}\n\n"
+    "Определи, какую роль играет каждое значение на этой детали. Числа бери "
+    "ТОЛЬКО из списка выше, своих не придумывай; если роли на чертеже нет — "
+    "поставь null. Ответь ОДНОЙ строкой JSON:\n"
+    '{{"outer_diameter_mm":null,"width_mm":null,"height_mm":null,'
+    '"thickness_mm":null,"bore_diameter_mm":null,'
+    '"bolt_circle_diameter_mm":null,"bolt_hole_diameter_mm":null,'
+    '"bolt_hole_count":null}}\n'
+    "outer_diameter_mm — наружный габарит круглой детали (самый большой Ø). "
+    "bore_diameter_mm — центральное отверстие. thickness_mm — толщина с вида "
+    "сбоку или разреза. Только JSON."
+)
+_ASSIGN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        key: {"type": ["number", "null"]}
+        for key in (
+            "outer_diameter_mm", "width_mm", "height_mm", "thickness_mm",
+            "bore_diameter_mm", "bolt_circle_diameter_mm", "bolt_hole_diameter_mm",
+        )
+    } | {"bolt_hole_count": {"type": ["integer", "null"]}},
+}
+
+
 _CALLOUT_PROMPT = (
     "Выпиши с чертежа размерные надписи и технические обозначения. ОДНОЙ "
     "строкой JSON:\n"
@@ -356,6 +395,93 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
     return {"dimensions": dimensions, "annotations": annotations}
 
 
+def _callout_numbers(callouts: dict) -> list[float]:
+    """Every number the sheet's own callouts contain, largest first."""
+    import re
+
+    values: list[float] = []
+    for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or []):
+        text = str((item or {}).get("value") or (item or {}).get("text") or "")
+        for match in re.finditer(r"\d+(?:[.,]\d+)?", text):
+            try:
+                value = float(match.group().replace(",", "."))
+            except ValueError:
+                continue
+            if 0 < value <= 100_000:
+                values.append(value)
+    return sorted({round(v, 3) for v in values}, reverse=True)
+
+
+async def _profile_by_assignment(
+    image, callouts: dict, *, router: Any, confidential: bool
+) -> dict | None:
+    """Build the outline by ASSIGNING already-read numbers to roles.
+
+    Two narrow questions instead of one broad one: what shape is the contour,
+    and which of the numbers the sheet states plays which part. Every returned
+    value is checked against the callout list and dropped if it is not there,
+    so this path structurally cannot introduce a dimension the sheet never had.
+    """
+    candidates = _callout_numbers(callouts)
+    if not candidates:
+        return None
+    ask = {"router": router, "confidential": confidential}
+    shape_answer = await _ask(_SHAPE_PROMPT, image, num_predict=120, schema=_SHAPE_SCHEMA, **ask)
+    shape = str(shape_answer.get("shape") or "").strip().lower()
+    if shape not in ("circle", "rectangle"):
+        return None
+
+    listed = ", ".join(f"{value:g}" for value in candidates[:24])
+    answer = await _ask(
+        _ASSIGN_PROMPT.format(callouts=listed), image,
+        num_predict=400, schema=_ASSIGN_SCHEMA, **ask,
+    )
+    if not answer:
+        return None
+
+    allowed = set(candidates)
+
+    def taken(key: str) -> float | None:
+        value = answer.get(key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        value = float(value)
+        # The number must be one the sheet actually states.
+        return value if any(abs(value - c) <= max(0.05, c * 0.005) for c in allowed) else None
+
+    profile: dict[str, Any] = {"shape": shape}
+    if shape == "circle":
+        outer = taken("outer_diameter_mm")
+        if not outer:
+            return None
+        profile["diameter_mm"] = outer
+    else:
+        width, height = taken("width_mm"), taken("height_mm")
+        if not width or not height:
+            return None
+        profile["width_mm"], profile["height_mm"] = width, height
+    profile["thickness_mm"] = taken("thickness_mm")
+
+    holes: list[dict] = []
+    bore = taken("bore_diameter_mm")
+    if bore:
+        holes.append({"center_x_mm": 0.0, "center_y_mm": 0.0, "diameter_mm": bore})
+    profile["holes"] = holes
+
+    patterns: list[dict] = []
+    pcd = taken("bolt_circle_diameter_mm")
+    bolt = taken("bolt_hole_diameter_mm")
+    count = answer.get("bolt_hole_count")
+    if pcd and bolt and isinstance(count, int) and 2 <= count <= 128:
+        patterns.append({
+            "kind": "bolt_circle", "count": count,
+            "bolt_circle_diameter_mm": pcd, "hole_diameter_mm": bolt,
+            "start_angle_deg": 0.0,
+        })
+    profile["hole_patterns"] = patterns
+    return profile
+
+
 async def read_spec_by_fragments(
     image_bytes: bytes, *, router: Any | None = None, confidential: bool = True
 ) -> dict:
@@ -407,29 +533,10 @@ async def read_spec_by_fragments(
 
     stamp = await _ask(_STAMP_PROMPT, _stamp_crop(image), num_predict=600, schema=_STAMP_SCHEMA, **ask)
 
-    body: dict[str, Any] = {"type": _type_label(kind)}
-    unresolved: list[str] = []
-    if kind == "rotation":
-        geometry = await _ask(_ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
-        outer = [s for s in (geometry.get("outer") or []) if isinstance(s, dict)]
-        bore = [s for s in (geometry.get("bore") or []) if isinstance(s, dict)]
-        if outer:
-            body["outer"] = outer
-        else:
-            unresolved.append("ступенчатый контур не прочитан")
-        if bore:
-            body["bore"] = bore
-    elif kind in ("plate", "flange"):
-        profile = await _ask(_PROFILE_PROMPT, geometry_view, num_predict=2000, schema=_PROFILE_SCHEMA, **ask)
-        if profile.get("shape"):
-            body["profile"] = profile
-        else:
-            unresolved.append("контур плоской детали не прочитан")
-    else:
-        unresolved.append(
-            f"класс детали не определён (ответ модели: {kind or 'пусто'})"
-        )
-
+    # Callouts are read BEFORE geometry: the outline of a flat part is then
+    # assembled by assigning those numbers to roles instead of reading them a
+    # second time, which is what let a flange come back as a "rectangle" whose
+    # diameter was actually its bore.
     callouts = await _ask(_CALLOUT_PROMPT, overview, num_predict=3000, schema=_CALLOUT_SCHEMA, **ask)
     # The document model reads the sheet's text better than the general reader;
     # its lines are ADDED to what the general reader found rather than replacing
@@ -447,6 +554,38 @@ async def read_spec_by_fragments(
         callouts.setdefault("annotations", []).extend(
             a for a in ocr.get("annotations") or []
             if str(a.get("text") or "").strip().lower() not in known_notes
+        )
+
+    body: dict[str, Any] = {"type": _type_label(kind)}
+    unresolved: list[str] = []
+    if kind == "rotation":
+        geometry = await _ask(_ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
+        outer = [s for s in (geometry.get("outer") or []) if isinstance(s, dict)]
+        bore = [s for s in (geometry.get("bore") or []) if isinstance(s, dict)]
+        if outer:
+            body["outer"] = outer
+        else:
+            unresolved.append("ступенчатый контур не прочитан")
+        if bore:
+            body["bore"] = bore
+    elif kind in ("plate", "flange"):
+        profile = await _profile_by_assignment(
+            geometry_view, callouts, router=router, confidential=confidential
+        )
+        if profile is None:
+            # Fall back to reading the outline directly when the sheet's
+            # callouts were not enough to assign roles from.
+            profile = await _ask(
+                _PROFILE_PROMPT, geometry_view, num_predict=2000,
+                schema=_PROFILE_SCHEMA, **ask,
+            )
+        if profile and profile.get("shape"):
+            body["profile"] = profile
+        else:
+            unresolved.append("контур плоской детали не прочитан")
+    else:
+        unresolved.append(
+            f"класс детали не определён (ответ модели: {kind or 'пусто'})"
         )
 
     assembled: dict[str, Any] = {
