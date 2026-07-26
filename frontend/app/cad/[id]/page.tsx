@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 
 import CadWorkspace from "@/components/cad/CadWorkspace";
+import { getApiBaseUrl } from "@/lib/api-base";
 import { Generation, getGeneration } from "@/lib/studio-api";
 
 
@@ -86,6 +87,8 @@ function ReadSoFar({ spec }: { spec: Record<string, unknown> }) {
   );
 }
 
+const API = getApiBaseUrl();
+
 export default function CadEditorPage() {
   const t = useTranslations("cad");
   const params = useParams<{ id: string }>();
@@ -157,13 +160,30 @@ export default function CadEditorPage() {
         </p>
       )}
       {gen && gen.status === "failed" && (
-        <div className="space-y-2">
+        // min-h-screen on the page means a failed run left the whole viewport
+        // below the message as bare dark background — the "black square" this
+        // looked like from the user's seat. The space is the sheet's now: the
+        // drawing that was uploaded, beside what was read off it, which is
+        // exactly the comparison a person needs to judge the refusal.
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
           <p className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
             {gen.error || t("status_failed")}
           </p>
-          {(gen.params?.spec as Record<string, unknown> | undefined) && (
-            <ReadSoFar spec={gen.params.spec as Record<string, unknown>} />
-          )}
+          <div className="flex min-h-0 flex-1 flex-col gap-2 lg:flex-row">
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded border border-zinc-800 bg-zinc-900/40">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`${API}/api/image-gen/${gen.id}/source`}
+                alt={gen.source_image_paths?.[0] ?? ""}
+                className="max-h-full max-w-full object-contain"
+              />
+            </div>
+            {(gen.params?.spec as Record<string, unknown> | undefined) && (
+              <div className="min-h-0 overflow-auto lg:w-[46%]">
+                <ReadSoFar spec={gen.params.spec as Record<string, unknown>} />
+              </div>
+            )}
+          </div>
         </div>
       )}
       {gen && processing && (
