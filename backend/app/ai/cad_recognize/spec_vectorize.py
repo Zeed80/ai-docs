@@ -1217,7 +1217,8 @@ _PAPER_PX_PER_MM = 4.0
 
 
 def _drawing_area_mm(
-    sheet_format: str, landscape: bool, *, reserve_title_block: bool
+    sheet_format: str, landscape: bool, *, reserve_title_block: bool,
+    reserve_notes_mm: float = 0.0,
 ) -> tuple[float, float, float, float, float, float]:
     """Paper size and the usable drawing area inside the ГОСТ frame, in mm.
 
@@ -1234,12 +1235,15 @@ def _drawing_area_mm(
     if reserve_title_block:
         # Stamp band + a breathing gap; the drawing keeps everything above it.
         area_h -= _TITLE_BLOCK_H_MM + 5.0
+    # The requirements column sits above the stamp, so it takes sheet from
+    # the same direction: views that ignore it are drawn straight over it.
+    area_h -= max(0.0, reserve_notes_mm)
     return paper_w, paper_h, area_x0, area_y0, area_w, max(area_h, 1.0)
 
 
 def choose_standard_scale(
     obj_w_mm: float, obj_h_mm: float, sheet_format: str, *, landscape: bool = True,
-    fill: float = 0.8, reserve_title_block: bool = False,
+    fill: float = 0.8, reserve_title_block: bool = False, reserve_notes_mm: float = 0.0,
 ) -> tuple[float, str]:
     """Pick the LARGEST ГОСТ 2.302 scale at which the object fits the sheet.
 
@@ -1248,7 +1252,8 @@ def choose_standard_scale(
     e.g. ``(0.5, "1:2")``.
     """
     _pw, _ph, _x0, _y0, area_w, area_h = _drawing_area_mm(
-        sheet_format, landscape, reserve_title_block=reserve_title_block
+        sheet_format, landscape, reserve_title_block=reserve_title_block,
+        reserve_notes_mm=reserve_notes_mm,
     )
     avail_w = area_w * fill
     avail_h = area_h * fill
@@ -1288,6 +1293,52 @@ def _read_scale_ratio(spec: dict | None) -> tuple[float, str] | None:
     return None
 
 
+
+# ГОСТ 2.316 requirements column: same width as the title block, set directly
+# above it. Both the drafter (which must keep the views clear of it) and the
+# annotator (which draws it) size the block with this one function, so the
+# space reserved and the space used cannot drift apart.
+TECHNICAL_REQUIREMENTS_COLUMN_MM = 185.0
+TECHNICAL_REQUIREMENTS_HEADING = "Технические требования"
+
+
+def technical_requirements_lines(
+    spec: dict, *, text_mm: float = 5.0, column_mm: float = TECHNICAL_REQUIREMENTS_COLUMN_MM
+) -> list[str]:
+    """The heading plus the numbered, wrapped requirement lines."""
+    import textwrap
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for annotation in spec.get("annotations") or []:
+        text = str((annotation or {}).get("text", "")).strip()
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            lines.append(text)
+    material = str((spec.get("title_block") or {}).get("material") or "").strip()
+    if material and material.casefold() not in seen:
+        lines.append(material)
+    if not lines:
+        return []
+
+    # Advance per character at this text height, measured against the
+    # renderer rather than assumed: 0.55 let the longest requirement run
+    # a few millimetres past the frame.
+    per_line = max(20, int(column_mm / (text_mm * 0.62)))
+    wrapped: list[str] = [TECHNICAL_REQUIREMENTS_HEADING]
+    for index, text in enumerate(lines, start=1):
+        body = f"{index}. {text}"
+        wrapped.extend(textwrap.wrap(body, width=per_line) or [body])
+    return wrapped
+
+
+def technical_requirements_height_mm(spec: dict, *, text_mm: float = 5.0) -> float:
+    """How much sheet the requirements block needs, in mm."""
+    lines = technical_requirements_lines(spec, text_mm=text_mm)
+    return (len(lines) * text_mm * 1.6 + 5.0) if lines else 0.0
+
+
 def _place_on_sheet(
     layout_w_mm: float, layout_h_mm: float, sheet_format: str, landscape: bool,
     spec: dict | None = None,
@@ -1299,14 +1350,16 @@ def _place_on_sheet(
     y_top_px)``. The usable area excludes the stamp band, so the drawing never
     lands on top of the title block.
     """
+    notes_mm = technical_requirements_height_mm(spec or {})
     ratio, scale_label = choose_standard_scale(
         layout_w_mm, layout_h_mm, sheet_format,
-        landscape=landscape, reserve_title_block=True,
+        landscape=landscape, reserve_title_block=True, reserve_notes_mm=notes_mm,
     )
     read_scale = _read_scale_ratio(spec)
     if read_scale is not None:
         _pw, _ph, _ax, _ay, fit_w, fit_h = _drawing_area_mm(
-            sheet_format, landscape, reserve_title_block=True
+            sheet_format, landscape, reserve_title_block=True,
+            reserve_notes_mm=notes_mm,
         )
         read_ratio, read_label = read_scale
         # Honour the source scale only if the drawing still fits the sheet;
@@ -1319,7 +1372,7 @@ def _place_on_sheet(
             ratio, scale_label = read_ratio, read_label
     ppp = _PAPER_PX_PER_MM
     paper_w, paper_h, area_x0, area_y0, area_w, area_h = _drawing_area_mm(
-        sheet_format, landscape, reserve_title_block=True
+        sheet_format, landscape, reserve_title_block=True, reserve_notes_mm=notes_mm,
     )
     drawn_w = layout_w_mm * ratio
     drawn_h = layout_h_mm * ratio

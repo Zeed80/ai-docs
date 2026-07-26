@@ -430,40 +430,46 @@ def _overlay_spec_annotations(ir, spec: dict) -> None:
     which put it off the sheet and desynced the canvas from ``sheet.format``.
     """
     from app.ai.cad_ir.schema import Point, TextEntity
+    from app.ai.cad_recognize.spec_vectorize import (
+        TECHNICAL_REQUIREMENTS_COLUMN_MM,
+        technical_requirements_lines,
+    )
 
-    lines: list[str] = []
-    for ann in spec.get("annotations", []) or []:
-        text = str(ann.get("text", "")).strip()
-        if text:
-            lines.append(text)
-    title = spec.get("title_block") or {}
-    if title.get("material"):
-        lines.append(str(title["material"]))
-    if not lines:
+    # The SAME function the drafter used to reserve room for this block. Two
+    # separate implementations would drift, and the failure mode is silent:
+    # the sheet reserves one height and the annotator writes another, so the
+    # requirements land back on top of the views.
+    block = technical_requirements_lines(spec)
+    if not block:
         return
 
     sheet_w = float(ir.source.image_width)
     sheet_h = float(ir.source.image_height)
     # Paper-space text height: ~5 mm at the drafter's 4 px/mm sheet canvas.
     height = 5.0 * 4.0
-    x = 25.0 * 4.0
-    # Stack upward from just above the stamp band so the block never collides
-    # with the title block and never leaves the sheet.
-    bottom = sheet_h - (_TITLE_BLOCK_H_MM_PX + 10.0 * 4.0)
-    top = bottom - height * 1.6 * len(lines)
-    if top < 0:  # pathological tiny canvas — keep it on the sheet regardless
+    px_per_mm = 4.0
+    left = max(
+        10.0 * px_per_mm,
+        sheet_w - (TECHNICAL_REQUIREMENTS_COLUMN_MM + 20.0) * px_per_mm,
+    )
+    step = height * 1.6
+    # Stack UPWARD from just above the stamp band: the block grows with the
+    # part's requirements, and anchoring its top would push it into the views.
+    bottom = sheet_h - (_TITLE_BLOCK_H_MM_PX + 10.0 * px_per_mm)
+    top = bottom - step * len(block)
+    if top < 0:  # more requirements than sheet — keep them on it regardless
         top = 0.0
     y = top + height
-    for text in lines:
+    for text in block:
         ir.entities.append(
             TextEntity(
-                position=Point(x=min(x, max(sheet_w - 10.0, 0.0)), y=y),
+                position=Point(x=left, y=y),
                 text=text, height=height,
                 line_class="dim", width_class="thin", origin="spec",
                 assurance="inferred",
             )
         )
-        y += height * 1.6
+        y += step
     # The canvas is the sheet: it is NOT grown to fit annotations.
 
 
