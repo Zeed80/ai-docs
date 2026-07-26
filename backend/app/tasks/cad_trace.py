@@ -691,9 +691,12 @@ def _ocr_text_entities(image_bytes: bytes, lenient: bool = False):
     from app.ai.cad_ir.schema import Point, SourceRegion, TextEntity
     from app.ai.text_preserve import detect_text_regions
 
+    # glyphs_only: this caller ships region.text as a TextEntity, so the
+    # string has to be right, and on a full technical sheet tesseract's
+    # layout analysis competes with the linework and loses.
     classified = [
         (region, _classify_ocr_region(region, lenient=lenient))
-        for region in detect_text_regions(image_bytes)
+        for region in detect_text_regions(image_bytes, glyphs_only=True)
     ]
     # Height sanity (2026-07-17, user report "огромный текст"): tesseract
     # sometimes merges hatching/dimension strokes into one tall region, and

@@ -148,3 +148,43 @@ def test_already_drawn_skips_matching_structure():
     crop_text = Image.new("RGB", (130, 70), "white")
     ImageDraw.Draw(crop_text).text((10, 25), "Ra 6.3 ГОСТ", fill="black")
     assert _already_drawn(out, (35, 25), crop_text) is False
+
+
+def test_isolate_glyphs_keeps_lettering_and_drops_linework():
+    """The linework is what defeats OCR on a technical sheet, not the glyphs.
+
+    Handed a full drawing, tesseract returned boxes over hatching and strings
+    like 'AL SS'; on a rendered sheet with 15 legible labels it found 2, both
+    nonsense. Stripping the long components first is what made the labels
+    readable, so the filter has to keep small ink and drop long ink.
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.text_preserve import isolate_glyphs
+
+    canvas = np.full((800, 1200), 255, dtype=np.uint8)
+    cv2.line(canvas, (50, 400), (1150, 400), 0, 3)      # a contour
+    cv2.line(canvas, (600, 50), (600, 750), 0, 2)       # a dimension line
+    cv2.putText(canvas, "8100", (200, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+
+    kept = np.asarray(isolate_glyphs(Image.fromarray(canvas)).convert("L"))
+
+    assert (kept[150:220, 190:320] < 128).any(), "the lettering was dropped"
+    assert not (kept[395:405, 100:500] < 128).any(), "the contour survived"
+    assert not (kept[100:300, 595:605] < 128).any(), "the dimension line survived"
+
+
+def test_rotated_pass_does_not_duplicate_horizontal_text():
+    """The 90° pass sees horizontal text too. Shipping it twice was harmless
+    while only the box was used, and wrong once the string becomes a CAD
+    entity — every label appeared on the sheet twice."""
+    from app.ai.text_preserve import TextRegion, _overlaps
+
+    upright = TextRegion(text="8100", x=100, y=100, w=60, h=20, conf=90.0)
+    same_again = TextRegion(text="8100", x=103, y=101, w=58, h=19, conf=70.0)
+    elsewhere = TextRegion(text="8000", x=400, y=100, w=60, h=20, conf=90.0)
+
+    assert _overlaps(same_again, upright)
+    assert not _overlaps(elsewhere, upright)

@@ -399,7 +399,7 @@ async def test_cad_trace_vlm_enrichment_promotes_thread_reading(db_session, fake
 
     monkeypatch.setattr(
         "app.ai.text_preserve.detect_text_regions",
-        lambda _b: [TextRegion(text="M1B", x=60, y=60, w=40, h=16, conf=40.0)],
+        lambda _b, **_kw: [TextRegion(text="M1B", x=60, y=60, w=40, h=16, conf=40.0)],
     )
 
     async def _fake_vlm(_crop_bytes, **_kw):

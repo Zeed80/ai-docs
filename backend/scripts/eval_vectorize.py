@@ -634,7 +634,10 @@ def main() -> int:
                     dxf_to_ir(dxf.read_bytes()),
                     args.long_side,
                 )
-                png = render_ir_to_png(truth_ir, thin_px=2, thick_px=3)
+                # The GT render stands in for a scanned sheet, so it must carry
+                # the lettering: without it the benchmark erased every TEXT
+                # entity and then scored the recognizer for not finding them.
+                png = render_ir_to_png(truth_ir, thin_px=2, thick_px=3, draw_text=True)
             except Exception as exc:  # noqa: BLE001
                 results["dwg"][dwg.name] = {"error": "render_failed", "gt_counts": gt}
                 print(f"  canonical GT failed: {str(exc)[:120]}", file=sys.stderr)

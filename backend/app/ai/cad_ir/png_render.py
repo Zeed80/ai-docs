@@ -88,19 +88,92 @@ def rasterize_entities(
     return canvas
 
 
+_TEXT_FONTS = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+)
+
+
+def draw_text_entities(canvas, entities: list[Entity]) -> int:
+    """Stamp TextEntity labels onto a rasterized canvas. Returns how many
+    were drawn.
+
+    Deliberately absent from ``rasterize_entities``: that canvas is what the
+    coverage verifier scores, and text there arrives as original pixels
+    through ``keep_raster``, so drawing glyphs would double-count them. This
+    is for the opposite direction — turning an IR back into a picture of a
+    drawing, where a sheet with no lettering is not a drawing at all.
+
+    OpenCV's Hershey fonts have no Cyrillic, so this goes through PIL with a
+    real TrueType face; without one it draws nothing rather than mojibake.
+    """
+    import numpy as np
+
+    texts = [e for e in entities if isinstance(e, TextEntity) and (e.text or "").strip()]
+    if not texts:
+        return 0
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return 0
+
+    path = next((p for p in _TEXT_FONTS if __import__("os").path.exists(p)), None)
+    if path is None:
+        return 0
+
+    image = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(image)
+    drawn = 0
+    for entity in texts:
+        size = max(6, int(round(entity.height)))
+        try:
+            font = ImageFont.truetype(path, size)
+        except OSError:
+            return drawn
+        # TextEntity.position is the baseline-left corner (that is where the
+        # OCR path puts it: box left, box bottom); PIL anchors at the top.
+        x, y = float(entity.position.x), float(entity.position.y) - size
+        if abs(entity.rotation) < 1.0:
+            draw.text((x, y), entity.text, fill=0, font=font)
+        else:
+            # Rotated labels (vertical dimension text) are drawn on their own
+            # tile and pasted, since PIL cannot rotate text in place.
+            box = draw.textbbox((0, 0), entity.text, font=font)
+            tile = Image.new("L", (box[2] - box[0] + 4, box[3] - box[1] + 4), 255)
+            ImageDraw.Draw(tile).text((2, 2), entity.text, fill=0, font=font)
+            tile = tile.rotate(entity.rotation, expand=True, fillcolor=255)
+            image.paste(
+                Image.eval(tile, lambda v: v),
+                (int(x), int(y)),
+                Image.eval(tile, lambda v: 255 - v),
+            )
+        drawn += 1
+    canvas[:, :] = np.asarray(image)
+    return drawn
+
+
 def render_ir_to_png(
     ir: CadIR,
     keep_raster: Any | None = None,
     thin_px: int = 1,
     thick_px: int = 2,
+    draw_text: bool = False,
 ) -> bytes:
-    """PNG preview: entities + passthrough raster regions."""
+    """PNG preview: entities + passthrough raster regions.
+
+    ``draw_text`` additionally stamps TextEntity labels — needed when the
+    render has to stand in for a scanned sheet (benchmark ground truth),
+    not when it is a preview of traced geometry.
+    """
     import cv2
     import numpy as np
 
     canvas = rasterize_entities(
         ir.entities, ir.source.image_width, ir.source.image_height, thin_px, thick_px
     )
+    if draw_text:
+        draw_text_entities(canvas, ir.entities)
     if keep_raster is not None:
         canvas[np.asarray(keep_raster).astype(bool)] = 0
     ok, buf = cv2.imencode(".png", canvas)

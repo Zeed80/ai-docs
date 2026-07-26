@@ -46,6 +46,7 @@ def detect_text_regions(
     lang: str = "rus+eng",
     min_conf: float = 35.0,
     include_rotated: bool = True,
+    glyphs_only: bool = False,
 ) -> list[TextRegion]:
     """OCR the source image; return line-level bounding boxes (word boxes
     merged by tesseract's own line grouping) above ``min_conf``, in the
@@ -57,6 +58,11 @@ def detect_text_regions(
     (dense CAD drawings with hatching/GD&T symbols confuse tesseract's
     character recognition badly) without affecting the result, since
     ``composite_text_regions`` never uses ``.text``, only the bounding box.
+
+    ``glyphs_only`` first strips the linework (see ``isolate_glyphs``).
+    Callers that need only the LOCATION should leave it off; callers that use
+    ``.text`` on a technical drawing need it, because without it the strings
+    are noise.
 
     ``include_rotated`` adds a second pass over the image rotated 90° —
     tesseract cannot see vertical text at all, and ЕСКД drawings are full of
@@ -76,7 +82,7 @@ def detect_text_regions(
 
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        regions = _ocr_pass(img, lang, min_conf)
+        regions = _ocr_pass(img, lang, min_conf, glyphs_only)
         if include_rotated:
             # ЕСКД vertical text (frame columns, vertical dimensions like ⌀46)
             # reads bottom-to-top, i.e. it sits 90° CCW from horizontal — a
@@ -85,26 +91,90 @@ def detect_text_regions(
             # (x=yr, y=H-xr-wr, w=hr, h=wr).
             rotated = img.transpose(Image.Transpose.ROTATE_270)
             h_orig = img.height
-            for r in _ocr_pass(rotated, lang, min_conf):
-                regions.append(
-                    TextRegion(
-                        text=r.text,
-                        x=r.y, y=h_orig - r.x - r.w, w=r.h, h=r.w,
-                        conf=r.conf,
-                    )
+            for r in _ocr_pass(rotated, lang, min_conf, glyphs_only):
+                mapped = TextRegion(
+                    text=r.text,
+                    x=r.y, y=h_orig - r.x - r.w, w=r.h, h=r.w,
+                    conf=r.conf,
                 )
+                # The rotated pass sees horizontal text too, and shipping it
+                # twice doubles every label — harmless when only the box was
+                # ever used, wrong once the text becomes a CAD entity.
+                if not any(_overlaps(mapped, other) for other in regions):
+                    regions.append(mapped)
         return regions
     except Exception as exc:  # noqa: BLE001 — OCR must never break generation
         logger.warning("text_preserve_ocr_failed", error=str(exc))
         return []
 
 
-def _ocr_pass(img: "Image.Image", lang: str, min_conf: float) -> list[TextRegion]:
+def _overlaps(a: TextRegion, b: TextRegion, threshold: float = 0.5) -> bool:
+    """Do two boxes cover mostly the same ink? (intersection over the smaller
+    box, so a word box inside a line box counts as the same reading)."""
+    ix = max(0, min(a.x + a.w, b.x + b.w) - max(a.x, b.x))
+    iy = max(0, min(a.y + a.h, b.y + b.h) - max(a.y, b.y))
+    if ix <= 0 or iy <= 0:
+        return False
+    smaller = min(a.w * a.h, b.w * b.h)
+    return smaller > 0 and (ix * iy) / smaller >= threshold
+
+
+def isolate_glyphs(img: "Image.Image") -> "Image.Image":
+    """Keep only glyph-sized ink, dropping the linework around it.
+
+    Tesseract's layout analysis is defeated by a technical drawing: handed a
+    full sheet it returns boxes over hatching and contours and strings like
+    'AL SS' or 'eo 0'. On a rendered architectural sheet whose 15 labels were
+    all legible to the eye it found 2, both nonsense — the failure is not the
+    character recognizer but everything competing with the characters.
+
+    Lettering is small connected components; contours, dimension lines and
+    hatch strokes are long ones. Filtering on that alone turned the same
+    sheet into 'План на отм', 'Электрощитовая', 'Маш зал', '8000', '8100' at
+    83-96 confidence.
+
+    The size window scales with the sheet, since a glyph is a fraction of the
+    page whatever the scan resolution. A glyph fused to a leader line becomes
+    one long component and is dropped with it — a real limit of the approach,
+    and it costs a label rather than inventing one.
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    gray = cv2.cvtColor(np.asarray(img.convert("RGB")), cv2.COLOR_RGB2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    ink = (binary < 128).astype(np.uint8)
+    height, width = ink.shape
+    long_side = max(height, width)
+    min_h, max_h = max(3, round(long_side * 0.0025)), round(long_side * 0.035)
+    max_w = round(long_side * 0.05)
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    keep = np.zeros_like(ink)
+    for index in range(1, count):
+        _x, _y, box_w, box_h, area = stats[index]
+        if not (min_h <= box_h <= max_h and 1 <= box_w <= max_w):
+            continue
+        if area < 6 or area / float(box_w * box_h) <= 0.12:
+            continue  # sparse box = a stray diagonal, not a letter
+        keep[labels == index] = 1
+
+    canvas = np.full_like(ink, 255, dtype=np.uint8)
+    canvas[keep > 0] = 0
+    return Image.fromarray(canvas).convert("RGB")
+
+
+def _ocr_pass(
+    img: "Image.Image", lang: str, min_conf: float, glyphs_only: bool = False
+) -> list[TextRegion]:
     import cv2
     import numpy as np
     import pytesseract
     from PIL import Image
 
+    if glyphs_only:
+        img = isolate_glyphs(img)
     gray = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2GRAY)
     gray = cv2.resize(gray, None, fx=_OCR_UPSCALE, fy=_OCR_UPSCALE, interpolation=cv2.INTER_CUBIC)
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
