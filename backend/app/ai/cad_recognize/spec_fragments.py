@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 from typing import Any
 
 import structlog
@@ -491,6 +492,23 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
     return {"dimensions": dimensions, "annotations": annotations}
 
 
+# A standard's number is not a dimension. "Сталь 55 ГОСТ 1050-2013" and
+# "AT6 по ГОСТ 19860-73" put 1050, 2013, 19860 and 73 into the candidate list
+# the reader is told to choose its diameters and axial positions from — on the
+# spindle sheet the three largest "dimensions" offered were 19860, 2013 and
+# 1050, all of them citations.
+_STANDARD_REFERENCE = re.compile(
+    r"(?:ГОСТ|ОСТ|СТП|ТУ|ISO|DIN|EN|ANSI|ASME)\s*[Рр]?\s*[\d]+(?:[.\-–—]\d+)*",
+    re.IGNORECASE,
+)
+
+
+def _matches_callout(value: float, candidates: list[float], tol: float = 0.02) -> bool:
+    """Is this number one the sheet actually carries? (2% or 0.5 mm.)"""
+    window = max(0.5, abs(value) * tol)
+    return any(abs(value - candidate) <= window for candidate in candidates)
+
+
 def _callout_numbers(callouts: dict) -> list[float]:
     """Every number the sheet's own callouts contain, largest first."""
     import re
@@ -498,6 +516,7 @@ def _callout_numbers(callouts: dict) -> list[float]:
     values: list[float] = []
     for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or []):
         text = str((item or {}).get("value") or (item or {}).get("text") or "")
+        text = _STANDARD_REFERENCE.sub(" ", text)
         for match in re.finditer(r"\d+(?:[.,]\d+)?", text):
             try:
                 value = float(match.group().replace(",", "."))
@@ -542,6 +561,24 @@ async def _sections_from_chain(
         )
     if any(b <= a for a, b in zip(chain, chain[1:], strict=False)):
         return [], "осевые размеры не возрастают — это не размерная цепочка"
+
+    # An evenly spaced chain is a fabrication, not a reading. Asked for the
+    # axial positions of a ten-step spindle, the reader answered 0, 45, 90,
+    # 135 ... 405 — a part whose every step is the same length is not what the
+    # sheet shows, and none of those numbers appears among its callouts. The
+    # length check above passes such an answer happily, so it needs its own.
+    steps = [b - a for a, b in zip(chain, chain[1:], strict=False)]
+    if len(steps) >= 3 and max(steps) - min(steps) <= max(0.5, max(steps) * 0.02):
+        return [], (
+            f"осевые размеры идут ровным шагом {steps[0]:g} мм — "
+            "это выдуманная цепочка, а не прочитанная с листа"
+        )
+    off_sheet = [value for value in chain if not _matches_callout(value, candidates)]
+    if len(off_sheet) > len(chain) / 2:
+        return [], (
+            "больше половины осевых размеров нет среди прочитанных выносок "
+            f"({', '.join(f'{v:g}' for v in off_sheet[:6])})"
+        )
 
     overall = answer.get("overall_mm")
     if isinstance(overall, (int, float)) and overall > 0:
