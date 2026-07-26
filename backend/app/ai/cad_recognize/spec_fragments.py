@@ -180,15 +180,31 @@ def _overview(image, side: int = 1400):
 
 
 def _stamp_crop(image):
-    """The ГОСТ 2.104 stamp: bottom-right corner, kept at source resolution.
+    """The ГОСТ 2.104 stamp, measured where possible.
 
     Reading five short fields off a corner crop is a different task from
     finding them on a whole A3 sheet, and it is the one the model is good at.
+    Which corner, though, was a guess: a fixed 45%x28% of the sheet is too
+    small for a stamp on a wide sheet and drags a view into the crop on a tall
+    one. The stamp is a drawn object with measurable edges, so it is measured
+    (``sheet_layout``), and the fractions remain only for a sheet whose stamp
+    cannot be found at all.
     """
     width, height = image.size
-    left = int(width * 0.55)
-    top = int(height * 0.72)
-    return image.crop((left, top, width, height))
+    try:
+        from app.ai.cad_recognize.sheet_layout import detect_sheet_layout
+
+        title_block = detect_sheet_layout(image).title_block
+    except Exception as exc:  # noqa: BLE001 — a crop must never lose the read
+        logger.warning("cad_stamp_layout_failed", error=str(exc)[:160])
+        title_block = None
+    if title_block is not None and title_block.width > 40 and title_block.height > 20:
+        pad_x, pad_y = int(width * 0.01), int(height * 0.01)
+        return image.crop((
+            max(0, title_block.x0 - pad_x), max(0, title_block.y0 - pad_y),
+            min(width, title_block.x1 + pad_x), min(height, title_block.y1 + pad_y),
+        ))
+    return image.crop((int(width * 0.55), int(height * 0.72), width, height))
 
 
 # JSON schemas for the bounded questions. Ollama enforces these during
