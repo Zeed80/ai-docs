@@ -8,6 +8,84 @@ import { useTranslations } from "next-intl";
 import CadWorkspace from "@/components/cad/CadWorkspace";
 import { Generation, getGeneration } from "@/lib/studio-api";
 
+
+/** What the reader managed to get off the sheet, shown when the build is blocked.
+ *
+ * A fail-closed contract is right — a part built from a misread sheet is worse
+ * than no part. But the refusal was ALL the user got: a wall of internal
+ * wording ("цепочка не сходится с числом ступеней (8 диаметров, 6 осевых
+ * размеров)") and nothing else, while the reading itself sat in the
+ * generation's params, unseen. The stamp, the callouts and the requirements
+ * are usually right even when the geometry is not, and seeing them is what
+ * lets a person tell a bad read from a hard drawing. */
+function ReadSoFar({ spec }: { spec: Record<string, unknown> }) {
+  const title = (spec.title_block ?? {}) as Record<string, unknown>;
+  const dimensions = (spec.dimensions ?? []) as { value?: string }[];
+  const annotations = (spec.annotations ?? []) as { text?: string }[];
+  const body = (spec.main_view ?? {}) as Record<string, unknown>;
+  const outer = (body.outer ?? []) as { diameter_mm?: number; length_mm?: number }[];
+  const bore = (body.bore ?? []) as { diameter_mm?: number; length_mm?: number }[];
+
+  const field = (label: string, value: unknown) =>
+    value ? (
+      <div key={label}>
+        <span className="text-zinc-500">{label}: </span>
+        <span className="text-zinc-200">{String(value)}</span>
+      </div>
+    ) : null;
+
+  const steps = (items: { diameter_mm?: number; length_mm?: number }[]) =>
+    items
+      .map((s) => `⌀${s.diameter_mm ?? "?"}×${s.length_mm ?? "?"}`)
+      .join("  ");
+
+  return (
+    <section className="rounded border border-zinc-700 bg-zinc-900/60 px-3 py-2 text-xs">
+      <h2 className="mb-2 text-sm text-zinc-300">Что удалось прочитать с листа</h2>
+      <div className="grid gap-1 sm:grid-cols-2">
+        {field("Деталь", spec.part ?? title.name)}
+        {field("Материал", title.material)}
+        {field("Масштаб", title.scale)}
+        {field("Обозначение", title.designation)}
+      </div>
+      {outer.length > 0 && (
+        <p className="mt-2 break-words">
+          <span className="text-zinc-500">Наружный контур: </span>
+          <span className="text-zinc-200">{steps(outer)}</span>
+        </p>
+      )}
+      {bore.length > 0 && (
+        <p className="mt-1 break-words">
+          <span className="text-zinc-500">Расточка: </span>
+          <span className="text-zinc-200">{steps(bore)}</span>
+        </p>
+      )}
+      {dimensions.length > 0 && (
+        <p className="mt-2 break-words">
+          <span className="text-zinc-500">Размеры ({dimensions.length}): </span>
+          <span className="text-zinc-200">
+            {dimensions.map((d) => d.value).filter(Boolean).join(", ")}
+          </span>
+        </p>
+      )}
+      {annotations.length > 0 && (
+        <ul className="mt-2 space-y-0.5">
+          {annotations.map((a, index) => (
+            <li key={index} className="text-zinc-300">
+              — {a.text}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-2 text-zinc-500">
+        Чертёж не построен намеренно: часть данных прочитана неуверенно, и
+        деталь по ним была бы неверной. Прочитанное выше — то, на что можно
+        опереться.
+      </p>
+    </section>
+  );
+}
+
 export default function CadEditorPage() {
   const t = useTranslations("cad");
   const params = useParams<{ id: string }>();
@@ -79,9 +157,14 @@ export default function CadEditorPage() {
         </p>
       )}
       {gen && gen.status === "failed" && (
-        <p className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-          {gen.error || t("status_failed")}
-        </p>
+        <div className="space-y-2">
+          <p className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+            {gen.error || t("status_failed")}
+          </p>
+          {(gen.params?.spec as Record<string, unknown> | undefined) && (
+            <ReadSoFar spec={gen.params.spec as Record<string, unknown>} />
+          )}
+        </div>
       )}
       {gen && processing && (
         <p className="py-12 text-center text-sm text-amber-300">
