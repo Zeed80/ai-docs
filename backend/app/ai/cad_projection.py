@@ -165,6 +165,13 @@ def place_views(
     return entities, placements
 
 
+# ГОСТ 2.307 dimension appearance, in millimetres of paper.
+DIM_OFFSET_MM = 8.0      # dimension line stands off the measured feature
+DIM_EXTENSION_MM = 2.0   # extension line runs past the dimension line
+DIM_ARROW_MM = 3.5
+DIM_TEXT_MM = 3.5
+
+
 def dimensions_from_kernel(
     dimensions: list[dict[str, Any]],
     placements: dict[str, dict[str, float]],
@@ -172,13 +179,20 @@ def dimensions_from_kernel(
     *,
     px_per_mm: float,
 ) -> list[Any]:
-    """Kernel-measured dimensions → IR dimension entities on the sheet.
+    """Kernel-measured dimensions → a drawn ГОСТ 2.307 dimension on the sheet.
 
     The VALUE and the anchor points come from TechDraw measuring the solid, so
     a dimension cannot disagree with the geometry it labels — which is the
-    whole point of taking them from the model instead of restating the spec.
+    point of taking them from the model instead of restating the spec. What
+    TechDraw will not give headless is the APPEARANCE: getArrowPositions
+    returns zeros because arrows are placed by its GUI renderer. So the
+    witness lines, the dimension line, the arrowheads and the text are drawn
+    here, and before this they were a single bare line between two points with
+    no arrows and no value on it.
     """
-    from app.ai.cad_ir.schema import DimensionEntity
+    import math
+
+    from app.ai.cad_ir.schema import DimensionEntity, TextEntity
 
     entities: list[Any] = []
     for item in dimensions:
@@ -191,21 +205,73 @@ def dimensions_from_kernel(
         placement = placements.get(view_order[index])
         if not placement:
             continue
+
+        def to_point(u: float, v: float):
+            return Point(
+                x=(placement["offset_u"] + u) * px_per_mm,
+                y=(placement["offset_v"] - v) * px_per_mm,
+            )
+
+        (u1, v1), (u2, v2) = (float(anchors[0][0]), float(anchors[0][1])), (
+            float(anchors[1][0]), float(anchors[1][1])
+        )
+        du, dv = u2 - u1, v2 - v1
+        span = math.hypot(du, dv)
+        if span <= 1e-6:
+            continue
+        # Offset the dimension line perpendicular to what is being measured,
+        # away from the part: a dimension drawn ON the contour is unreadable.
+        nu, nv = -dv / span, du / span
+        ou, ov = nu * DIM_OFFSET_MM, nv * DIM_OFFSET_MM
+        eu, ev = nu * (DIM_OFFSET_MM + DIM_EXTENSION_MM), nv * (DIM_OFFSET_MM + DIM_EXTENSION_MM)
+
+        style = {"line_class": "dim", "width_class": "thin", **_ORIGIN}
+        # Witness lines from the feature out past the dimension line.
+        entities.append(Segment(p1=to_point(u1, v1), p2=to_point(u1 + eu, v1 + ev), **style))
+        entities.append(Segment(p1=to_point(u2, v2), p2=to_point(u2 + eu, v2 + ev), **style))
+        # The dimension line itself.
+        entities.append(
+            Segment(p1=to_point(u1 + ou, v1 + ov), p2=to_point(u2 + ou, v2 + ov), **style)
+        )
+        # Arrowheads: a closed sliver at each end, pointing outward.
+        tu, tv = du / span, dv / span
+        for sign, (bu, bv) in ((1.0, (u1 + ou, v1 + ov)), (-1.0, (u2 + ou, v2 + ov))):
+            tip_u, tip_v = bu, bv
+            back_u = bu + sign * tu * DIM_ARROW_MM
+            back_v = bv + sign * tv * DIM_ARROW_MM
+            wing = DIM_ARROW_MM * 0.28
+            entities.append(
+                Polyline(
+                    points=[
+                        to_point(tip_u, tip_v),
+                        to_point(back_u + nu * wing, back_v + nv * wing),
+                        to_point(back_u - nu * wing, back_v - nv * wing),
+                    ],
+                    closed=True,
+                    **style,
+                )
+            )
+
         value = item.get("value_mm")
         label = str(item.get("label") or "")
         text = f"{label}{value:g}" if isinstance(value, (int, float)) else label
-        (u1, v1), (u2, v2) = anchors[0], anchors[1]
+        if text:
+            mid_u = (u1 + u2) / 2.0 + ou + nu * 1.5
+            mid_v = (v1 + v2) / 2.0 + ov + nv * 1.5
+            entities.append(
+                TextEntity(
+                    position=to_point(mid_u, mid_v),
+                    text=text,
+                    height=DIM_TEXT_MM * px_per_mm,
+                    rotation=0.0,
+                    **style,
+                )
+            )
+        # The semantic entity stays: the DXF export and the reviewers read it,
+        # and it is what makes this a dimension rather than four strokes.
         entities.append(
             DimensionEntity(
-                p1=Point(
-                    x=(placement["offset_u"] + float(u1)) * px_per_mm,
-                    y=(placement["offset_v"] - float(v1)) * px_per_mm,
-                ),
-                p2=Point(
-                    x=(placement["offset_u"] + float(u2)) * px_per_mm,
-                    y=(placement["offset_v"] - float(v2)) * px_per_mm,
-                ),
-                text=text,
+                p1=to_point(u1, v1), p2=to_point(u2, v2), text=text,
                 value_mm=float(value) if isinstance(value, (int, float)) else None,
                 **_ORIGIN,
             )

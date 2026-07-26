@@ -133,7 +133,15 @@ def test_measured_dimensions_carry_the_kernel_value():
         px_per_mm=2.0,
     )
 
-    assert len(entities) == 1
-    assert entities[0].value_mm == 80.0
-    assert entities[0].text == "Ø80"
-    assert entities[0].p1.x == (100.0 + 2.5) * 2.0
+    # One dimension is drawn as ГОСТ 2.307 wants it: two witness lines, the
+    # dimension line, two arrowheads, the value, and the semantic entity that
+    # carries the measurement into the DXF export.
+    kinds = {e.type for e in entities}
+    assert kinds == {"segment", "polyline", "text", "dimension"}
+    dimension = next(e for e in entities if e.type == "dimension")
+    assert dimension.value_mm == 80.0
+    assert dimension.text == "Ø80"
+    assert dimension.p1.x == (100.0 + 2.5) * 2.0
+    assert [e.text for e in entities if e.type == "text"] == ["Ø80"]
+    # Arrowheads are closed slivers, not open strokes.
+    assert all(e.closed for e in entities if e.type == "polyline")

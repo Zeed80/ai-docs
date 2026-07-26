@@ -1401,6 +1401,14 @@ def _sheet_frame_entities(
             name=str(spec.get("part") or title.get("name") or ""),
             designation=str(title.get("designation") or ""),
             company=str(title.get("company") or ""),
+            # Read off the source sheet and previously dropped on the floor:
+            # the stamp had no graph for them, so the material and the scale
+            # were extracted, verified and then never drawn.
+            material=str(title.get("material") or ""),
+            scale=str(scale_label or title.get("scale") or ""),
+            mass=str(title.get("mass") or ""),
+            sheet=str(title.get("sheet") or ""),
+            sheets=str(title.get("sheets") or ""),
         )
     )
     for entity in entities:

@@ -9,8 +9,10 @@ from app.ai.cad_ir.schema import Segment, TextEntity
 def test_frame_produces_closed_rectangle_segments() -> None:
     entities = frame_and_title_block_entities(297, 210, 4.0)
     segments = [e for e in entities if isinstance(e, Segment)]
-    # 4 sheet border + 4 stamp border + 6 horizontal grid + 2 vertical grid
-    assert len(segments) == 4 + 4 + 6 + 2
+    # 4 sheet border + 4 stamp border + the ГОСТ 2.104 form-1 graphs:
+    # 10 horizontal rulings, 1 short Изм. divider, 8 verticals across the
+    # revision block and 5 more across the lower half.
+    assert len(segments) == 4 + 4 + 10 + 1 + 8 + 5
 
 
 def test_frame_segments_stay_within_sheet_bounds() -> None:
@@ -24,15 +26,26 @@ def test_frame_segments_stay_within_sheet_bounds() -> None:
             assert 0 <= p.y <= h_mm * px_per_mm
 
 
-def test_labels_only_added_when_provided() -> None:
+def test_graph_headers_are_always_present_and_values_only_when_read() -> None:
+    """The form's own captions belong to the form; the values belong to the part.
+
+    A ГОСТ stamp always says "Масштаб" and "Лист"; what it says next to them
+    depends on what was read. Previously the stamp drew no captions at all, so
+    a printed sheet had an anonymous grid and no place for material, scale or
+    mass — all three were extracted and then dropped.
+    """
     empty = frame_and_title_block_entities(297, 210, 4.0)
-    assert not any(isinstance(e, TextEntity) for e in empty)
+    captions = {e.text for e in empty if isinstance(e, TextEntity)}
+    assert {"Масштаб", "Масса", "Лист", "Листов", "Разраб."} <= captions
 
     filled = frame_and_title_block_entities(
-        297, 210, 4.0, name="Вал", designation="АБВГ.001", company="Завод"
+        297, 210, 4.0, name="Вал", designation="АБВГ.001", company="Завод",
+        material="Сталь 45", scale="1:2",
     )
     texts = {e.text for e in filled if isinstance(e, TextEntity)}
-    assert texts == {"Вал", "АБВГ.001", "Завод"}
+    assert {"Вал", "АБВГ.001", "Завод", "Сталь 45", "1:2"} <= texts
+    # Mass was not read, so no value is invented for it.
+    assert texts - captions == {"Вал", "АБВГ.001", "Завод", "Сталь 45", "1:2"}
 
 
 def test_all_entities_are_human_approved() -> None:
