@@ -141,3 +141,45 @@ async def project_candidate(
     if response.status_code != 200:
         raise CadKernelUnavailable(f"cad-kernel вернул HTTP {response.status_code}")
     return response.json().get("views")
+
+
+async def draw_candidate_sheet(
+    candidate: FeatureTreeCandidate,
+    *,
+    views: list[dict[str, Any]],
+    scale: float = 1.0,
+    hidden_lines: bool = True,
+) -> dict[str, Any] | None:
+    """Sheet views built by TechDraw, sections included.
+
+    ``project_candidate`` returns raw orthographic projections; this returns
+    what a drawing needs and those cannot express — above all a section view,
+    which for a hollow turned part IS the main view. Returns None on a kernel
+    without ``/drawing`` so a deployment mid-upgrade degrades to the older
+    projections instead of failing the digitization.
+    """
+    payload = {
+        "candidate": candidate.model_dump(mode="json"),
+        "views": views,
+        "scale": scale,
+        "hidden_lines": hidden_lines,
+        "confirm_assumptions": True,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=5.0)) as client:
+            response = await client.post(
+                f"{settings.cad_kernel_url.rstrip('/')}/drawing", json=payload
+            )
+    except httpx.HTTPError as exc:
+        raise CadKernelUnavailable(f"cad-kernel недоступен: {exc}") from exc
+    if response.status_code == 404:
+        return None
+    if response.status_code == 422:
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = None
+        raise CadKernelRejected(str(detail or "CAD-ядро отклонило построение листа"))
+    if response.status_code != 200:
+        raise CadKernelUnavailable(f"cad-kernel вернул HTTP {response.status_code}")
+    return response.json()

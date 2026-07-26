@@ -691,6 +691,153 @@ def project_views(request: ProjectRequest) -> dict[str, Any]:
     return {"views": views, "warnings": warnings, "kernel": "FreeCAD/OpenCascade"}
 
 
+class SheetViewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["front", "side", "top", "section"] = "front"
+    label: str | None = None
+    # Where the cutting plane sits along the view's own depth axis, in model mm.
+    # Only meaningful for a section; None puts it through the model centre.
+    section_origin_mm: float | None = None
+
+
+class DrawingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate: Candidate
+    views: list[SheetViewRequest] = Field(min_length=1, max_length=6)
+    scale: float = Field(default=1.0, gt=0.0, le=100.0)
+    confirm_assumptions: bool = False
+    hidden_lines: bool = True
+    curve_samples: int = Field(default=32, ge=4, le=200)
+
+
+def _techdraw_edges(view, samples: int) -> dict[str, list[dict[str, Any]]]:
+    """Edges of a computed TechDraw view, in the view's own millimetres."""
+
+    def uv(point: App.Vector) -> tuple[float, float]:
+        return (round(point.x, 6), round(point.y, 6))
+
+    out: dict[str, list[dict[str, Any]]] = {"visible": [], "hidden": []}
+    for key, getter in (("visible", "getVisibleEdges"), ("hidden", "getHiddenEdges")):
+        if not hasattr(view, getter):
+            continue
+        try:
+            edges = getattr(view, getter)()
+        except Exception:  # noqa: BLE001 — a view with no hidden set is normal
+            continue
+        for edge in edges or []:
+            item = _project_edge(edge, 1.0, 1.0, samples)
+            if item is not None:
+                out[key].append(item)
+    return out
+
+
+@app.post("/drawing")
+def build_drawing(request: DrawingRequest) -> dict[str, Any]:
+    """A sheet's views built by TechDraw, sections included.
+
+    ``/project`` returns raw orthographic projections; this returns what a
+    DRAWING needs and that endpoint cannot express — above all a section view,
+    which for a hollow turned part IS the main view. TechDraw does the cut, the
+    hidden-line removal and the silhouette work that would otherwise have to be
+    reimplemented against OpenCascade by hand.
+
+    Geometry comes back in each view's own millimetres, already scaled, so the
+    caller places views without re-measuring the model.
+    """
+    shape, warnings = _build_shape(
+        CompileRequest(
+            candidate=request.candidate,
+            confirm_assumptions=request.confirm_assumptions,
+            metadata={},
+        )
+    )
+
+    document = App.newDocument("sheet")
+    try:
+        body = document.addObject("Part::Feature", "Body")
+        body.Shape = shape
+        page = document.addObject("TechDraw::DrawPage", "Page")
+        page.Template = document.addObject("TechDraw::DrawSVGTemplate", "Template")
+
+        base_view = None
+        views: list[dict[str, Any]] = []
+        for index, wanted in enumerate(request.views):
+            if wanted.kind == "section":
+                if base_view is None:
+                    raise HTTPException(
+                        422, "a section needs a base view: list a front/side/top view first"
+                    )
+                view = document.addObject("TechDraw::DrawViewSection", f"View{index}")
+                page.addView(view)
+                view.BaseView = base_view
+                view.Source = [body]
+                view.SectionNormal = App.Vector(*_VIEW_FRAMES["front"][0])
+                # Without an explicit X the section picks its own, and it comes
+                # out mirrored against the base view: the shaft was drawn with
+                # its flange on the wrong end while every dimension still said
+                # otherwise.
+                view.XDirection = App.Vector(0.0, 0.0, 1.0)
+                centre = shape.BoundBox.Center
+                depth = (
+                    wanted.section_origin_mm
+                    if wanted.section_origin_mm is not None
+                    else centre.z
+                )
+                view.SectionOrigin = App.Vector(centre.x, centre.y, depth)
+            else:
+                view = document.addObject("TechDraw::DrawViewPart", f"View{index}")
+                page.addView(view)
+                view.Source = [body]
+                direction = _VIEW_FRAMES[wanted.kind][0]
+                view.Direction = App.Vector(*direction)
+                if wanted.kind == "front":
+                    view.XDirection = App.Vector(0.0, 0.0, 1.0)
+                if base_view is None:
+                    base_view = view
+            view.Scale = request.scale
+            if hasattr(view, "HardHidden"):
+                view.HardHidden = bool(request.hidden_lines)
+            document.recompute()
+            entities = _techdraw_edges(view, request.curve_samples)
+            # Circles carry a centre and a radius, not a point list; measuring
+            # only "points" left every round view — a shaft seen end-on, a
+            # flange — reporting no bounds at all, which the caller reads as
+            # "nothing to place".
+            points: list[tuple[float, float]] = []
+            for group in entities.values():
+                for item in group:
+                    if item.get("points"):
+                        points.extend(item["points"])
+                    elif item.get("type") == "circle":
+                        cu, cv = item["center"]
+                        radius = item["radius"]
+                        points.extend([(cu - radius, cv - radius), (cu + radius, cv + radius)])
+            bounds = None
+            if points:
+                bounds = {
+                    "u_min": min(p[0] for p in points), "u_max": max(p[0] for p in points),
+                    "v_min": min(p[1] for p in points), "v_max": max(p[1] for p in points),
+                }
+            views.append({
+                "kind": wanted.kind,
+                "label": wanted.label,
+                "bounds_mm": bounds,
+                "visible": entities["visible"],
+                "hidden": entities["hidden"],
+                # A section's cut face is hatched by ГОСТ 2.306; the caller
+                # draws the hatch, the kernel says which outline to hatch.
+                "hatch_outline": wanted.kind == "section",
+            })
+        return {
+            "views": views, "scale": request.scale, "warnings": warnings,
+            "kernel": "FreeCAD/TechDraw",
+        }
+    finally:
+        App.closeDocument(document.Name)
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
