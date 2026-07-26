@@ -623,6 +623,15 @@ def project_views(request: ProjectRequest) -> dict[str, Any]:
     Returns visible and hidden geometry separately so the caller can honour
     ГОСТ 2.303 line types, and the bounding box of each view so it can place
     them in projection alignment without re-measuring the model.
+
+    Built on TechDraw views rather than the legacy ``Drawing`` module, which
+    FreeCAD 1.x removed outright — and whose replacement, ``TechDraw.projectEx``,
+    segfaults when called directly on a shape. The view objects are the path
+    that actually works headless, and they are what ``/drawing`` already uses,
+    so both endpoints now share one projector instead of two.
+
+    Coordinates are the view's own, centred on the shape. Callers place views
+    from ``bounds_mm`` and compare extents, both of which are unchanged by that.
     """
     shape, warnings = _build_shape(
         CompileRequest(
@@ -631,64 +640,54 @@ def project_views(request: ProjectRequest) -> dict[str, Any]:
             metadata={},
         )
     )
-    # Imported lazily: importing the Drawing module at process start crashes
-    # this FreeCAD build (SIGSEGV), so it is only touched when a projection is
-    # actually requested.
-    import Drawing
+    document = App.newDocument("project")
+    try:
+        body = document.addObject("Part::Feature", "Body")
+        body.Shape = shape
+        page = document.addObject("TechDraw::DrawPage", "Page")
+        page.Template = document.addObject("TechDraw::DrawSVGTemplate", "Template")
 
-    views: dict[str, Any] = {}
-    for name in request.views:
-        direction, u_sign, v_sign = _VIEW_FRAMES[name]
-        try:
-            projected = Drawing.projectEx(shape, App.Vector(*direction))
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(422, f"projection of view {name!r} failed: {exc}") from exc
-        # projectEx returns (V, V1, VN, VO, VI, H, H1, HN, HO, HI). The plain
-        # `project` call returns only some of these, and on a revolved solid the
-        # BOTTOM generatrices live in VO (visible OUTLINE) — dropping that group
-        # silently produced a shaft drawn with only half its contour.
-        def _merge(indices: tuple[int, ...]) -> list[Part.Edge]:
-            edges: list[Part.Edge] = []
-            for index in indices:
-                if index < len(projected) and projected[index] is not None:
-                    edges.extend(projected[index].Edges)
-            return edges
-
-        groups = {
-            "visible": _merge((0, 1, 3)),   # sharp + smooth + silhouette
-            "hidden": _merge((5, 6, 8)),
-        }
-        entities: dict[str, list[dict[str, Any]]] = {"visible": [], "hidden": []}
-        for kind, edges in groups.items():
-            for edge in edges:
-                item = _project_edge(edge, u_sign, v_sign, request.curve_samples)
-                if item is not None:
-                    entities[kind].append(item)
-        all_points: list[tuple[float, float]] = []
-        for items in entities.values():
-            for item in items:
-                if "points" in item:
-                    all_points.extend(item["points"])
-                elif item["type"] == "circle":
-                    cu, cv = item["center"]
-                    radius = item["radius"]
-                    all_points.extend(
-                        [(cu - radius, cv - radius), (cu + radius, cv + radius)]
-                    )
-        bounds = None
-        if all_points:
-            bounds = {
-                "u_min": min(p[0] for p in all_points),
-                "u_max": max(p[0] for p in all_points),
-                "v_min": min(p[1] for p in all_points),
-                "v_max": max(p[1] for p in all_points),
+        views: dict[str, Any] = {}
+        for name in request.views:
+            direction = _VIEW_FRAMES[name][0]
+            view = document.addObject("TechDraw::DrawViewPart", f"View_{name}")
+            page.addView(view)
+            view.Source = [body]
+            view.Direction = App.Vector(*direction)
+            if name == "front":
+                view.XDirection = App.Vector(0.0, 0.0, 1.0)
+            if "ScaleType" in view.PropertiesList:
+                view.ScaleType = "Custom"
+            view.Scale = 1.0
+            if hasattr(view, "HardHidden"):
+                view.HardHidden = True
+            document.recompute()
+            entities = _techdraw_edges(view, request.curve_samples)
+            points: list[tuple[float, float]] = []
+            for group in entities.values():
+                for item in group:
+                    if item.get("points"):
+                        points.extend(item["points"])
+                    elif item.get("type") == "circle":
+                        cu, cv = item["center"]
+                        radius = item["radius"]
+                        points.extend([
+                            (cu - radius, cv - radius), (cu + radius, cv + radius),
+                        ])
+            bounds = None
+            if points:
+                bounds = {
+                    "u_min": min(p[0] for p in points), "u_max": max(p[0] for p in points),
+                    "v_min": min(p[1] for p in points), "v_max": max(p[1] for p in points),
+                }
+            views[name] = {
+                "bounds_mm": bounds,
+                "visible": entities["visible"],
+                "hidden": entities["hidden"],
             }
-        views[name] = {
-            "bounds_mm": bounds,
-            "visible": entities["visible"],
-            "hidden": entities["hidden"],
-        }
-    return {"views": views, "warnings": warnings, "kernel": "FreeCAD/OpenCascade"}
+        return {"views": views, "warnings": warnings, "kernel": "FreeCAD/TechDraw"}
+    finally:
+        App.closeDocument(document.Name)
 
 
 class SheetViewRequest(BaseModel):
@@ -879,6 +878,12 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                     view.XDirection = App.Vector(0.0, 0.0, 1.0)
                 if base_view is None:
                     base_view = view
+            # ScaleType governs whether Scale is honoured at all: it defaults to
+            # "Page", and a view left on that setting silently ignores Scale and
+            # projects at the page's 1:1 — the shaft came back 470 mm wide on a
+            # 1:2 sheet after the FreeCAD 1.1 upgrade, with no error anywhere.
+            if "ScaleType" in view.PropertiesList:
+                view.ScaleType = "Custom"
             view.Scale = request.scale
             if hasattr(view, "HardHidden"):
                 view.HardHidden = bool(request.hidden_lines)
