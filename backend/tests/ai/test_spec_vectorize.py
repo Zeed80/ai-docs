@@ -996,3 +996,39 @@ def test_drafter_reproduces_a_hand_written_spec_exactly():
         assert any(
             abs(d - diameter) <= 0.02 and abs(l - length) <= 0.02 for d, l in drawn
         ), f"Ø{diameter} L{length} is not on the drawing"
+
+
+def test_refusal_sheet_carries_the_reading_and_no_part_geometry():
+    """What a fail-closed stop can still hand over.
+
+    Refusing to build is right; handing over NOTHING threw away the work that
+    was right along with the work that was wrong. The stamp, the requirements
+    and the callouts were read and verified — only the geometry was not — and
+    the user was left starting from a blank page.
+
+    The sheet must carry those and must NOT carry a part: no contour, no
+    circle, no step. A refusal that produced something mistakable for a part
+    would be worse than the empty page it replaces.
+    """
+    from app.ai.cad_recognize.spec_vectorize import draft_sheet_without_geometry
+
+    spec = {
+        "part": "Шпиндель",
+        "main_view": {"type": "тело вращения", "outer": [], "bore": []},
+        "title_block": {"material": "Сталь 55 ГОСТ 1050-2013", "scale": "1:2"},
+        "dimensions": [{"value": "Ø102h6"}, {"value": "470"}],
+        "annotations": [{"kind": "hardness", "text": "HRC 58…62"}],
+    }
+
+    ir = draft_sheet_without_geometry(spec, sheet_format="A3")
+
+    assert ir is not None
+    texts = " ".join(e.text for e in ir.entities if e.type == "text")
+    assert "Сталь 55 ГОСТ 1050-2013" in texts
+    assert "HRC 58…62" in texts
+    assert "Ø102h6" in texts and "470" in texts
+    assert "Технические требования" in texts
+
+    # Sheet furniture is straight lines only — the frame and the stamp grid.
+    # A curve or an arc could only have come from the part.
+    assert not [e for e in ir.entities if e.type in ("circle", "arc", "polyline", "hatch")]

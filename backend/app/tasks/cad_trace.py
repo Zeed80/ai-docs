@@ -1200,9 +1200,36 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 unresolved = [str(i) for i in spec.get("unresolved", []) if str(i)]
                 unresolved.extend(blocking_checks)
                 if unresolved:
-                    # Persist WHAT WAS READ even though nothing is drafted: a
-                    # fail-closed stop the user cannot inspect is unactionable —
-                    # they need to see which values the reader did prove.
+                    # A fail-closed stop used to hand over NOTHING — no sheet,
+                    # no revision, nothing to open — which threw away the work
+                    # that was right along with the work that was wrong. The
+                    # stamp, the requirements and the callouts were read and
+                    # verified; only the geometry was not. So a sheet carrying
+                    # exactly those is saved, with NO part geometry on it, and
+                    # the run still fails: what could not be verified is not
+                    # drawn, and what is handed over cannot pass for a part.
+                    from app.ai.cad_recognize.spec_vectorize import (
+                        draft_sheet_without_geometry,
+                    )
+
+                    partial = None
+                    try:
+                        partial = draft_sheet_without_geometry(
+                            spec,
+                            sheet_format=str(params.get("sheet_format") or "").upper() or None,
+                            landscape=str(
+                                params.get("sheet_orientation") or "landscape"
+                            ).lower() != "portrait",
+                        )
+                        if partial is not None:
+                            partial.source.generation_id = generation_id
+                            validate_ir(partial)
+                    except Exception as exc:  # noqa: BLE001 — the refusal stands
+                        logger.warning(
+                            "cad_partial_sheet_failed",
+                            generation_id=generation_id, error=str(exc)[:200],
+                        )
+                        partial = None
                     async with factory() as db:
                         stopped = await db.get(ImageGeneration, gen_uuid)
                         if stopped:
@@ -1211,7 +1238,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                                 "spec": spec,
                                 "spec_crosscheck": crosscheck,
                                 "cad_pipeline_manifest": pipeline_manifest,
+                                "sheet_without_geometry": partial is not None,
                             }
+                            if partial is not None:
+                                await cad_ir_store.save_revision(
+                                    db, stopped, partial, origin="auto",
+                                    created_by=owner_sub, keep_raster=None,
+                                    thin_px=2, thick_px=4,
+                                )
                             await db.commit()
                     return await _fail(
                         "Метод «по описанию»: построение остановлено — не определены "

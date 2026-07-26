@@ -179,8 +179,16 @@ export default function CadEditorPage() {
               />
             </div>
             {(gen.params?.spec as Record<string, unknown> | undefined) && (
-              <div className="min-h-0 overflow-auto lg:w-[46%]">
+              <div className="min-h-0 space-y-2 overflow-auto lg:w-[46%]">
                 <ReadSoFar spec={gen.params.spec as Record<string, unknown>} />
+                {Boolean(gen.params?.sheet_without_geometry) && (
+                  <p className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    Лист сохранён без геометрии детали: рамка, штамп,
+                    технические требования и прочитанные размеры. Откройте его
+                    в редакторе и достройте контур — читать надписи заново не
+                    придётся.
+                  </p>
+                )}
               </div>
             )}
           </div>

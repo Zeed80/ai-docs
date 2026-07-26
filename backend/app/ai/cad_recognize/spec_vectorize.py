@@ -1381,6 +1381,87 @@ def _place_on_sheet(
     return ratio, scale_label, ppp, paper_w, paper_h, x_left, y_top
 
 
+def draft_sheet_without_geometry(
+    spec: dict, *, sheet_format: str | None = None, landscape: bool = True
+) -> CadIR | None:
+    """The sheet a refusal can still hand over: everything EXCEPT the part.
+
+    A fail-closed stop used to produce nothing at all, which threw away the
+    work that was right along with the work that was wrong. On a sheet whose
+    geometry could not be resolved the reader still had the stamp, the
+    technical requirements and every dimension callout — and those were simply
+    discarded, leaving the user to start from a blank page.
+
+    So: frame, ГОСТ 2.104 stamp filled from the reading, the ГОСТ 2.316
+    requirements block, and the callouts listed so nothing read has to be read
+    again. NO part geometry — not a contour, not a circle, not a step. That is
+    the whole point: what could not be verified is not drawn, and what the
+    drafter hands over cannot be mistaken for a part.
+    """
+    from app.ai.cad_ir.schema import CadIR, Point, SourceInfo, TextEntity
+
+    fmt = (sheet_format or "A3").upper()
+    if fmt not in _GOST_SHEETS:
+        fmt = "A3"
+    paper_w, paper_h, _ax, _ay, _aw, _ah = _drawing_area_mm(
+        fmt, landscape, reserve_title_block=True
+    )
+    ppp = _PAPER_PX_PER_MM
+    entities = list(_sheet_frame_entities(paper_w, paper_h, ppp, spec, None))
+
+    text_style = {
+        "line_class": "dim", "width_class": "thin",
+        "origin": "spec", "assurance": "inferred",
+    }
+    height = 5.0 * ppp
+    lines = technical_requirements_lines(spec)
+    y = 20.0 * ppp
+    for line in lines:
+        entities.append(
+            TextEntity(
+                position=Point(x=20.0 * ppp, y=y), text=line, height=height, **text_style
+            )
+        )
+        y += height * 1.6
+
+    # The callouts, so a person finishing this sheet by hand does not have to
+    # read the source again for numbers the reader already got right.
+    values = [
+        str((item or {}).get("value") or "").strip()
+        for item in (spec.get("dimensions") or [])
+    ]
+    values = [value for value in values if value]
+    if values:
+        y += height
+        entities.append(
+            TextEntity(
+                position=Point(x=20.0 * ppp, y=y),
+                text="Прочитанные размеры (геометрия не построена):",
+                height=height, **text_style,
+            )
+        )
+        y += height * 1.6
+        import textwrap
+
+        for chunk in textwrap.wrap(", ".join(values), width=110):
+            entities.append(
+                TextEntity(
+                    position=Point(x=20.0 * ppp, y=y), text=chunk,
+                    height=height * 0.8, **text_style,
+                )
+            )
+            y += height * 1.3
+
+    ir = CadIR(
+        source=SourceInfo(
+            image_width=int(paper_w * ppp), image_height=int(paper_h * ppp)
+        ),
+        entities=entities,
+    )
+    ir.sheet = _sheet_info(fmt, spec, None)
+    return ir
+
+
 def _sheet_frame_entities(
     paper_w_mm: float, paper_h_mm: float, ppp: float, spec: dict, scale_label: str | None
 ) -> list[Any]:
