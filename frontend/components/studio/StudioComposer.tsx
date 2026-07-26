@@ -152,8 +152,14 @@ export default function StudioComposer({
   // auxiliary pixel path, kept for classes the drafter cannot yet express.
   // Drafting from a free-text ТЗ is not a digitizing method and lives in its
   // own section below (it needs no source sheet).
+  // Restored from localStorage, so it can hold a method this build no longer
+  // offers: "graph" was removed from the UI on 2026-07-25, but anyone who had
+  // it selected kept sending it — the select rendered blank while the state
+  // still said "graph", and the run spent 8 minutes in the coordinate reader
+  // before failing closed. Anything not currently on offer falls back to the
+  // production default.
   const [vectorMethod, setVectorMethod] = useState<"trace" | "spec">(
-    prefs.vectorMethod ?? "spec",
+    prefs.vectorMethod === "trace" ? "trace" : "spec",
   );
   const [vectorDescription, setVectorDescription] = useState(
     prefs.vectorDescription ?? "",
