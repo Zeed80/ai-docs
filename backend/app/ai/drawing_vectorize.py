@@ -633,24 +633,82 @@ def _snap_to_junction(p, junction_points):
     return p
 
 
+def _taubin_circle(x, y):
+    """Taubin's algebraic circle fit. Returns (cx, cy, r) or None.
+
+    Kåsa's fit (plain least squares on x²+y²) minimizes an error weighted by
+    distance from the centre, which pulls the circle inward whenever the
+    points cover only a short arc: measured against ground truth, a drawn arc
+    of 33° came back with its radius tens of pixels short and its centre
+    displaced along the normal, even though the fitted curve tracked the ink
+    and the start/end angles were right to a few degrees. Taubin removes that
+    bias at essentially the same cost, and full circles — where Kåsa was
+    already fine — are unaffected because the bias vanishes as coverage grows.
+    """
+    import numpy as np
+
+    mean_x, mean_y = float(x.mean()), float(y.mean())
+    u, v = x - mean_x, y - mean_y
+    z = u * u + v * v
+    m_zz = float((z * z).mean())
+    m_xz, m_yz = float((u * z).mean()), float((v * z).mean())
+    m_xx, m_yy, m_xy = float((u * u).mean()), float((v * v).mean()), float((u * v).mean())
+    m_z = m_xx + m_yy
+    cov_xy = m_xx * m_yy - m_xy * m_xy
+
+    a3 = 4.0 * m_z
+    a2 = -3.0 * m_z * m_z - m_zz
+    a1 = m_zz * m_z + 4.0 * cov_xy * m_z - m_xz * m_xz - m_yz * m_yz - m_z**3
+    a0 = (
+        m_xz * m_xz * m_yy
+        + m_yz * m_yz * m_xx
+        - m_zz * cov_xy
+        - 2.0 * m_xz * m_yz * m_xy
+        + m_z * m_z * cov_xy
+    )
+    # Newton on the characteristic polynomial from the origin (Chernov): the
+    # root sought is the smallest non-negative one, and starting at 0 with a
+    # monotonicity guard converges to it in a handful of steps.
+    root, previous = 0.0, float("inf")
+    for _ in range(24):
+        value = a0 + root * (a1 + root * (a2 + root * a3))
+        if abs(value) > abs(previous):
+            break
+        previous = value
+        derivative = a1 + root * (2.0 * a2 + root * 3.0 * a3)
+        if derivative == 0.0:
+            break
+        step = value / derivative
+        root = max(0.0, root - step)
+        if abs(step) < 1e-12:
+            break
+
+    det = root * root - root * m_z + cov_xy
+    if det == 0.0:
+        return None
+    cx = (m_xz * (m_yy - root) - m_yz * m_xy) / det / 2.0
+    cy = (m_yz * (m_xx - root) - m_xz * m_xy) / det / 2.0
+    r_sq = cx * cx + cy * cy + m_z
+    if not np.isfinite(r_sq) or r_sq <= 0.0:
+        return None
+    return cx + mean_x, cy + mean_y, math.sqrt(r_sq)
+
+
 def _fit_circle_or_arc(ptsf, closed: bool) -> RawPrimitive | None:
-    """Kåsa algebraic circle fit; returns a circle (closed path) or arc (open
-    path) primitive when the points genuinely lie on one, else None — caller
-    falls back to a polyline. Thickness fields are filled in by the caller."""
+    """Taubin algebraic circle fit; returns a circle (closed path) or arc
+    (open path) primitive when the points genuinely lie on one, else None —
+    caller falls back to a polyline. Thickness fields are filled in by the
+    caller."""
     import numpy as np
 
     x, y = ptsf[:, 0], ptsf[:, 1]
     span = float(max(x.max() - x.min(), y.max() - y.min()))
-    a_mat = np.column_stack([2 * x, 2 * y, np.ones(len(ptsf))])
-    b_vec = x * x + y * y
-    try:
-        (cx, cy, c), *_ = np.linalg.lstsq(a_mat, b_vec, rcond=None)
-    except np.linalg.LinAlgError:
+    fit = _taubin_circle(x, y)
+    if fit is None:
         return None
-    r_sq = c + cx * cx + cy * cy
-    if r_sq <= _MIN_CIRCLE_RADIUS_PX**2:
+    cx, cy, r = fit
+    if r <= _MIN_CIRCLE_RADIUS_PX:
         return None
-    r = math.sqrt(r_sq)
     # A radius far beyond the path's own extent means "almost straight" — the
     # fit is numerically valid but meaningless as a drawable circle.
     if r > 4 * max(span, 1.0):

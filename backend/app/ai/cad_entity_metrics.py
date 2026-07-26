@@ -41,6 +41,34 @@ def _polyline_distance(pred, truth, pw: float, ph: float, tw: float, th: float) 
     return max(directed(left, right), directed(right, left))
 
 
+_ARC_SAMPLES = 24
+
+
+def _arc_points(arc, width: float, height: float) -> list[tuple[float, float]]:
+    start, end = float(arc.start_angle), float(arc.end_angle)
+    if end < start:
+        end += 360.0
+    points = []
+    for index in range(_ARC_SAMPLES + 1):
+        angle = math.radians(start + (end - start) * index / _ARC_SAMPLES)
+        points.append(
+            (
+                (arc.center.x + arc.radius * math.cos(angle)) / width,
+                (arc.center.y + arc.radius * math.sin(angle)) / height,
+            )
+        )
+    return points
+
+
+def _arc_curve_distance(pred, truth, pw: float, ph: float, tw: float, th: float) -> float:
+    left, right = _arc_points(pred, pw, ph), _arc_points(truth, tw, th)
+
+    def directed(source, target) -> float:
+        return max(min(_distance(point, other) for other in target) for point in source)
+
+    return max(directed(left, right), directed(right, left))
+
+
 def entity_distance(
     predicted: Entity,
     truth: Entity,
@@ -69,14 +97,19 @@ def entity_distance(
         radius = abs(predicted.radius / diagonal_p - truth.radius / diagonal_t)
         return max(center, radius)
     if predicted.type == "arc":
-        center = _distance(
-            _point(predicted.center, pw, ph), _point(truth.center, tw, th)
-        )
-        radius = abs(predicted.radius / diagonal_p - truth.radius / diagonal_t)
-        start = abs((predicted.start_angle - truth.start_angle) % 360.0)
-        end = abs((predicted.end_angle - truth.end_angle) % 360.0)
-        angle = max(min(start, 360.0 - start), min(end, 360.0 - end)) / 360.0
-        return max(center, radius, angle)
+        # Compared by the curve drawn, not by (centre, radius, angles).
+        #
+        # Those parameters are ill-conditioned for a shallow arc: for a real
+        # 286 px arc spanning 33°, dR/d(sagitta) is 24 px per px, so matching
+        # the radius inside the tolerance demands the sagitta of a two-pixel
+        # rasterized stroke to 0.19 px. No raster tracer can deliver that, and
+        # arcs whose fitted curve tracked the ink with start/end angles right
+        # to a few degrees were still scored as complete misses.
+        #
+        # The polyline comparison in this module has always worked on sampled
+        # geometry for the same reason. Two arcs that lay down the same ink
+        # are the same arc.
+        return _arc_curve_distance(predicted, truth, pw, ph, tw, th)
     if predicted.type == "polyline":
         return _polyline_distance(predicted, truth, pw, ph, tw, th)
     if predicted.type == "text":

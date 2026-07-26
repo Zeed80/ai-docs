@@ -549,12 +549,25 @@ def _fit_chain_ellipse(members: list[Segment], pts: list[Point]) -> Entity | Non
     )
 
 
-def _refit_chain(members: list[Segment], pts: list[Point], closed: bool) -> Entity | None:
-    """Kåsa circle fit over chain vertices, accepted only when edge midpoints
-    also sit on the circle (rejects genuine polygonal contours)."""
+def _refit_chain(
+    members: list[Segment],
+    pts: list[Point],
+    closed: bool,
+    min_turn_deg: float | None = None,
+) -> Entity | None:
+    """Circle fit over chain vertices, accepted only when edge midpoints also
+    sit on the circle (rejects genuine polygonal contours).
+
+    ``min_turn_deg`` overrides the whole-chain turn gate. That gate exists to
+    stop a nearly straight chain being called a huge circle, which is a real
+    risk when the chain is taken whole; a run selected for fitting has already
+    been chosen for turning, so applying the whole-chain figure again would
+    reject exactly the shallow arcs the run search was added to find.
+    """
     import numpy as np
 
-    if _total_turn_deg(pts) < _CHAIN_MIN_TOTAL_TURN_DEG:
+    gate = _CHAIN_MIN_TOTAL_TURN_DEG if min_turn_deg is None else min_turn_deg
+    if _total_turn_deg(pts) < gate:
         return None
     ptsf = np.array([[p.x, p.y] for p in pts], dtype=np.float32)
     prim = _fit_circle_or_arc(ptsf, closed)
@@ -587,6 +600,68 @@ def _refit_chain(members: list[Segment], pts: list[Point], closed: bool) -> Enti
     )
 
 
+# A run of chain edges is worth calling an arc when it is long enough to be a
+# drawn curve rather than pixel jitter, and turns enough to be distinguishable
+# from a straight line. Shallow is fine — a 30° fillet is a real arc, and the
+# radius-versus-span guard in the circle fitter is what rejects the nonsense.
+_ARC_RUN_MIN_EDGES = 4
+_ARC_RUN_MIN_TURN_DEG = 12.0
+# Lettering is full of short curves, and once the run search was allowed to
+# find shallow arcs it started calling them arcs — hundreds of false ones on a
+# sheet with a few dozen drawn. A drawn arc spans a meaningful part of a view.
+_ARC_RUN_MIN_EXTENT_PX = 25.0
+
+
+def _longest_arc_runs(
+    members: list[Segment], pts: list[Point], closed: bool
+) -> list[tuple[int, int, Entity]]:
+    """Find maximal spans of a chain that fit one circle, as (start, end, entity).
+
+    Fitting the WHOLE chain or nothing was the reason arcs never survived: a
+    chain grows through every degree-2 node, and an arc running tangentially
+    into a straight line has degree 2 at the meeting point. So the chain over
+    a 33° arc came out with 170° of total turn — arc plus the corners beyond
+    it — and one circle fit over all of it fails, taking the real arc with it.
+    On a sheet with 10 drawn arcs, 17 of 30 chains were discarded that way and
+    every arc was shipped as a fan of straight segments.
+
+    Greedy maximal runs instead: extend while the fit still holds, emit, then
+    continue past it. What is not arc stays segments, which is correct.
+    """
+    runs: list[tuple[int, int, Entity]] = []
+    start = 0
+    limit = len(pts)
+    while start < limit - _ARC_RUN_MIN_EDGES:
+        best: tuple[int, Entity] | None = None
+        for end in range(start + _ARC_RUN_MIN_EDGES + 1, limit + 1):
+            window = pts[start:end]
+            if _total_turn_deg(window) < _ARC_RUN_MIN_TURN_DEG:
+                continue
+            extent = max(
+                max(p.x for p in window) - min(p.x for p in window),
+                max(p.y for p in window) - min(p.y for p in window),
+            )
+            if extent < _ARC_RUN_MIN_EXTENT_PX:
+                continue
+            entity = _refit_chain(
+                members[start : end - 1],
+                window,
+                closed and start == 0 and end == limit,
+                min_turn_deg=_ARC_RUN_MIN_TURN_DEG,
+            )
+            if entity is None:
+                if best is not None:
+                    break  # the run ended; keep the longest fit found
+                continue
+            best = (end, entity)
+        if best is None:
+            start += 1
+            continue
+        runs.append((start, best[0] - 1, best[1]))
+        start = best[0] - 1
+    return runs
+
+
 def _refit_chains_to_arcs(segments: list[Segment]) -> tuple[list[Segment], list[Entity]]:
     chains = _extract_chains(segments)
     if not chains:
@@ -598,6 +673,10 @@ def _refit_chains_to_arcs(segments: list[Segment]) -> tuple[list[Segment], list[
         if entity is not None:
             fitted.append(entity)
             replaced_ids.update(s.id for s in members)
+            continue
+        for first, last, arc in _longest_arc_runs(members, pts, closed):
+            fitted.append(arc)
+            replaced_ids.update(s.id for s in members[first:last])
     if not fitted:
         return segments, []
     return [s for s in segments if s.id not in replaced_ids], fitted
