@@ -1,0 +1,103 @@
+{
+  "_comment": [
+    "Hand-written reference spec for test_vector_files/detal_126.png (Шпиндель",
+    "обрабатывающего центра V-10, Сталь 55 ГОСТ 1050-2013, М 1:2, A3).",
+    "",
+    "Purpose: isolate the DRAFTER. Every number here was read off the sheet by",
+    "hand, so anything the drafter gets wrong from this input is the drafter's",
+    "own defect and not a reading error. It is the baseline for 'is it the",
+    "drafter?' — nothing more.",
+    "",
+    "The axial chain read from the sheet is 78 / 150 / 240 / 470 from the left",
+    "face, 270 spanning the right portion, and 25 / 18 / 3 / 50 / 25 plus",
+    "35 / 99 around the nose. The outer steps below are reconstructed from that",
+    "chain and sum to the stated overall length of 470.",
+    "",
+    "WHAT THIS SPEC CANNOT SAY, because the contract has no field for it —",
+    "SpecSection is a diameter and a length, nothing else:",
+    "  - the 7:24 taper of the bore (Ø56,55 large end) — carried as a cylinder",
+    "  - the M75x1,5 and M54,5x2 threads",
+    "  - both keyways (85x12 and 35, R4/R6)",
+    "  - the cross-holes Ø14, Ø10, Ø9 and the 2 отв. M8 of section Б-Б",
+    "  - the 1x45° chamfers ('6 фасок')",
+    "  - the GD&T frames (0,008 Д, 0,03 Д) as geometry rather than text",
+    "So a 100% reproduction of THIS sheet is out of reach for reasons that have",
+    "nothing to do with the drafter or the reader: the contract cannot carry",
+    "the features. What the drafter can be held to is this spec, exactly."
+  ],
+  "schema_version": 1,
+  "part": "Шпиндель обрабатывающего центра V-10",
+  "main_view": {
+    "name": "Шпиндель",
+    "type": "тело вращения",
+    "outer": [
+      {"diameter_mm": 102.0, "length_mm": 15.0,  "note": "h6(-0,022), фланец у левого торца"},
+      {"diameter_mm": 80.0,  "length_mm": 135.0, "note": "js6(±0,0095), подшипниковая шейка"},
+      {"diameter_mm": 80.0,  "length_mm": 90.0,  "note": "h6(-0,019)"},
+      {"diameter_mm": 72.0,  "length_mm": 155.0, "note": "h6(-0,019)"},
+      {"diameter_mm": 55.0,  "length_mm": 75.0,  "note": "носок шпинделя"}
+    ],
+    "bore": [
+      {"diameter_mm": 56.55, "length_mm": 100.0, "note": "большой торец конуса 7:24 (контракт не несёт конусность)"},
+      {"diameter_mm": 51.0,  "length_mm": 140.0},
+      {"diameter_mm": 44.0,  "length_mm": 130.0, "note": "H7(+0,025)"},
+      {"diameter_mm": 50.0,  "length_mm": 100.0, "note": "H7(+0,025)"}
+    ]
+  },
+  "views": [
+    {"kind": "section", "body_index": 0, "label": "Г-Г"},
+    {"kind": "section", "body_index": 0, "label": "Б-Б"},
+    {"kind": "section", "body_index": 0, "label": "В-В"},
+    {"kind": "side",    "body_index": 0, "label": "А"}
+  ],
+  "dimensions": [
+    {"value": "470", "applies_to": "габаритная длина"},
+    {"value": "240", "applies_to": "от левого торца"},
+    {"value": "150", "applies_to": "от левого торца"},
+    {"value": "78",  "applies_to": "от левого торца"},
+    {"value": "270", "applies_to": "правая часть"},
+    {"value": "Ø102h6", "applies_to": "фланец"},
+    {"value": "Ø80js6", "applies_to": "подшипниковая шейка"},
+    {"value": "Ø80h6",  "applies_to": "шейка"},
+    {"value": "Ø72h6",  "applies_to": "шейка"},
+    {"value": "Ø56,55", "applies_to": "конус 7:24"},
+    {"value": "Ø51",    "applies_to": "расточка"},
+    {"value": "Ø44H7",  "applies_to": "расточка"},
+    {"value": "Ø50H7",  "applies_to": "расточка"},
+    {"value": "Ø55", "applies_to": "носок"},
+    {"value": "Ø26", "applies_to": "носок"},
+    {"value": "Ø24", "applies_to": "носок"},
+    {"value": "Ø14", "applies_to": "поперечное отверстие"},
+    {"value": "Ø10", "applies_to": "поперечное отверстие"},
+    {"value": "Ø9",  "applies_to": "поперечное отверстие"},
+    {"value": "85", "applies_to": "шпонпаз"},
+    {"value": "35", "applies_to": "шпонпаз"},
+    {"value": "99", "applies_to": "от правого торца"},
+    {"value": "M75x1,5", "applies_to": "резьба"},
+    {"value": "M54,5x2", "applies_to": "резьба"}
+  ],
+  "annotations": [
+    {"kind": "hardness",  "text": "HRC 58…62"},
+    {"kind": "hardness",  "text": "Т.О. 28…32 HRC"},
+    {"kind": "roughness", "text": "Ra 6,3"},
+    {"kind": "roughness", "text": "Ra 3,2"},
+    {"kind": "roughness", "text": "Ra 1,6"},
+    {"kind": "roughness", "text": "Ra 0,80"},
+    {"kind": "tolerance", "text": "Точность конуса — AT6 по ГОСТ 19860-73"},
+    {"kind": "tolerance", "text": "Допуск на радиальное биение конического отверстия 7:24 относительно подшипниковых шеек у торца шпинделя 0,008 мм, на длине 300 мм от торца шпинделя 0,01 мм"},
+    {"kind": "other",     "text": "Острые кромки притупить"},
+    {"kind": "other",     "text": "Неуказанные предельные отклонения размеров H14, h14, ±IT14/2"},
+    {"kind": "thread",    "text": "M75x1,5"},
+    {"kind": "thread",    "text": "M54,5x2"},
+    {"kind": "material",  "text": "Сталь 55 ГОСТ 1050-2013"}
+  ],
+  "title_block": {
+    "name": "Шпиндель обрабатывающего центра V-10",
+    "material": "Сталь 55 ГОСТ 1050-2013",
+    "scale": "1:2",
+    "designation": null,
+    "mass": null
+  },
+  "unresolved": [],
+  "optional_unresolved": []
+}

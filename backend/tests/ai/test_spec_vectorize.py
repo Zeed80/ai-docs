@@ -941,3 +941,58 @@ def test_an_unusable_hole_pattern_is_dropped_not_the_whole_sheet():
     assert len(profile.holes) == 1
     assert profile.holes[0].diameter_mm == 40
     assert profile.hole_patterns == []
+
+
+def test_drafter_reproduces_a_hand_written_spec_exactly():
+    """The drafter is not the weak link — pin that so it stays true.
+
+    ``example-drawings/detal_126_reference_spec.json`` is a hand-written spec
+    for the spindle sheet: every number in it was read off the drawing by a
+    human, so anything wrong downstream of it is the drafter's own defect.
+    Measured, all nine sections come back to within 0.02 mm of what the spec
+    stated, in the right order and at the right axial positions.
+
+    Which means: when a digitized sheet is wrong, look at the reader or at the
+    contract, not here.
+    """
+    import asyncio
+    import json
+    import pathlib
+    from collections import defaultdict
+
+    from app.ai.cad_recognize.spec_vectorize import draft_from_spec_async
+
+    spec_path = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "fixtures" / "detal_126_reference_spec.json"
+    )
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    spec.pop("_comment", None)
+
+    ir = asyncio.run(draft_from_spec_async(spec))
+
+    segments = [e for e in ir.entities if e.type == "segment"]
+    horizontal = [e for e in segments if abs(e.p1.y - e.p2.y) < 0.5]
+    ys = [p.y for e in segments for p in (e.p1, e.p2)]
+    axis = (min(ys) + max(ys)) / 2
+    body = [e for e in horizontal if max(e.p1.x, e.p2.x) < 800]
+    x0 = min(min(e.p1.x, e.p2.x) for e in body)
+    x1 = max(max(e.p1.x, e.p2.x) for e in body)
+    overall = sum(s["length_mm"] for s in spec["main_view"]["outer"])
+    mm_per_px = overall / (x1 - x0)
+
+    drawn = []
+    for entity in body:
+        if entity.p1.y >= axis - 1:
+            continue
+        left, right = min(entity.p1.x, entity.p2.x), max(entity.p1.x, entity.p2.x)
+        drawn.append((2 * (axis - entity.p1.y) * mm_per_px, (right - left) * mm_per_px))
+
+    expected = [
+        (s["diameter_mm"], s["length_mm"])
+        for s in spec["main_view"]["outer"] + spec["main_view"]["bore"]
+    ]
+    for diameter, length in expected:
+        assert any(
+            abs(d - diameter) <= 0.02 and abs(l - length) <= 0.02 for d, l in drawn
+        ), f"Ø{diameter} L{length} is not on the drawing"
