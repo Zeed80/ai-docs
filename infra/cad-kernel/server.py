@@ -698,6 +698,27 @@ class SheetViewRequest(BaseModel):
     # Where the cutting plane sits along the view's own depth axis, in model mm.
     # Only meaningful for a section; None puts it through the model centre.
     section_origin_mm: float | None = None
+    # A STEPPED or BROKEN section (ГОСТ 2.305): the polyline the cut follows,
+    # in model millimetres. A real sheet is full of these — a straight plane
+    # cannot pass through a keyway and a cross-hole that sit at different
+    # angles, which is exactly why Г-Г, Б-Б and В-В exist on the spindle. Empty
+    # means an ordinary single-plane section.
+    section_path_mm: list[tuple[float, float, float]] = Field(
+        default_factory=list, max_length=64
+    )
+    # Offset only — ступенчатый разрез, parallel planes joined by steps.
+    #
+    # TechDraw also offers "Aligned" (ломаный) and "NoParallel", and both
+    # SEGFAULT this build: a stepped path through a flange's bolt circle killed
+    # the kernel process outright, twice, and a segfault cannot be caught in
+    # process — with a single uvicorn worker it takes the service down and
+    # drops whatever else was in flight. Offset is measured working on the same
+    # input (18 edges against the plain section's 16, so the stepped cut really
+    # does catch more), so that is what the API exposes. Do not widen this
+    # enum without re-testing the others against a real part.
+    section_strategy: Literal["Offset"] = "Offset"
+    # The letter pair a section is labelled with (Г-Г → "Г").
+    section_symbol: str | None = Field(default=None, max_length=8)
 
 
 class SheetDimensionRequest(BaseModel):
@@ -722,7 +743,8 @@ class DrawingRequest(BaseModel):
 
 
 def _cut_face_outlines(
-    shape: Part.Shape, depth_mm: float, scale: float, samples: int
+    shape: Part.Shape, depth_mm: float, scale: float, samples: int,
+    path: list[tuple[float, float, float]] | None = None,
 ) -> list[list[tuple[float, float]]]:
     """Closed outlines of the material a section plane cuts through.
 
@@ -743,13 +765,26 @@ def _cut_face_outlines(
     # the alignment check throws it away.
     centre_u, centre_v = box.Center.z, box.Center.x
     reach = max(box.XLength, box.YLength, box.ZLength) * 2.0 + 10.0
-    plane = Part.makePlane(
-        reach * 2, reach * 2,
-        App.Vector(-reach, depth_mm, -reach),
-        App.Vector(0.0, 1.0, 0.0),
-    )
+    if path:
+        # A stepped or broken section does not cut along a PLANE, so the cut
+        # surface is the sheet swept by the section path along the viewing
+        # direction. Intersecting the solid with that shell gives the same
+        # thing a plane gives for a straight cut: the material, and not the
+        # holes.
+        try:
+            tool = Part.makePolygon([App.Vector(*point) for point in path])
+            tool = tool.extrude(App.Vector(0.0, reach * 2.0, 0.0))
+            tool.translate(App.Vector(0.0, -reach, 0.0))
+        except Exception:  # noqa: BLE001
+            return []
+    else:
+        tool = Part.makePlane(
+            reach * 2, reach * 2,
+            App.Vector(-reach, depth_mm, -reach),
+            App.Vector(0.0, 1.0, 0.0),
+        )
     try:
-        cut = shape.common(plane)
+        cut = shape.common(tool)
     except Exception:  # noqa: BLE001 — an unsectionable shape simply has no hatch
         return []
 
@@ -851,8 +886,28 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                     raise HTTPException(
                         422, "a section needs a base view: list a front/side/top view first"
                     )
-                view = document.addObject("TechDraw::DrawViewSection", f"View{index}")
+                stepped = len(wanted.section_path_mm) >= 2
+                view = document.addObject(
+                    "TechDraw::DrawComplexSection" if stepped else "TechDraw::DrawViewSection",
+                    f"View{index}",
+                )
                 page.addView(view)
+                if stepped:
+                    try:
+                        wire = Part.makePolygon(
+                            [App.Vector(*point) for point in wanted.section_path_mm]
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        raise HTTPException(
+                            422, f"section path is not a valid polyline: {exc}"
+                        ) from exc
+                    tool = document.addObject("Part::Feature", f"Tool{index}")
+                    tool.Shape = wire
+                    document.recompute()
+                    view.CuttingToolWireObject = tool
+                    view.ProjectionStrategy = wanted.section_strategy
+                if wanted.section_symbol:
+                    view.SectionSymbol = wanted.section_symbol
                 view.BaseView = base_view
                 view.Source = [body]
                 view.SectionNormal = App.Vector(*_VIEW_FRAMES["front"][0])
@@ -918,6 +973,7 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                 candidate_hatch = _cut_face_outlines(
                     shape, shape.BoundBox.Center.y, request.scale,
                     max(4, request.curve_samples // 4),
+                    path=list(wanted.section_path_mm) or None,
                 )
                 # Fail closed on misalignment: a hatch drawn next to the view
                 # instead of inside it is worse than none, and the only honest
