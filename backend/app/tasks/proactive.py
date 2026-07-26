@@ -600,10 +600,25 @@ def _format_duplicate_alert(
 
 
 async def _alert_duplicate_invoices(window_days: int = 2) -> dict:
-    from sqlalchemy import and_, or_, select
+    """Alert on invoices the anomaly detector flagged as duplicates.
 
+    This used to read ``Invoice.duplicate_status`` from ``app.domain.models``,
+    a parallel model layer that maps to the same table names as
+    ``app.db.models`` with a different schema. The live ``invoices`` table has
+    neither ``duplicate_status`` nor ``case_id``, so every run raised
+    UndefinedColumnError on ``invoices.case_id`` — 28 times a day, silently, so
+    duplicate invoices were never announced to anyone.
+
+    In the schema that actually exists, a duplicate is an AnomalyCard of type
+    ``duplicate`` against ``entity_type='invoice'`` (see
+    ``api/anomalies.py::_detect_duplicate``), which is what this reads now.
+    Only cards still open are worth an alert; a resolved or
+    false-positive one has already been decided by a human.
+    """
+    from sqlalchemy import and_, select
+
+    from app.db.models import AnomalyCard, AnomalyStatus, AnomalyType, Invoice
     from app.db.session import _get_session_factory
-    from app.domain.models import Invoice
 
     try:
         from app.utils.redis_client import get_sync_redis
@@ -617,20 +632,20 @@ async def _alert_duplicate_invoices(window_days: int = 2) -> dict:
 
     async with _get_session_factory()() as db:
         result = await db.execute(
-            select(Invoice).where(
+            select(AnomalyCard, Invoice)
+            .join(Invoice, Invoice.id == AnomalyCard.entity_id)
+            .where(
                 and_(
-                    Invoice.created_at >= window_start,
-                    or_(
-                        Invoice.duplicate_status == "duplicate_hash",
-                        Invoice.duplicate_status == "duplicate_supplier_number",
-                        Invoice.duplicate_status == "duplicate_hash_and_number",
-                    ),
+                    AnomalyCard.created_at >= window_start,
+                    AnomalyCard.anomaly_type == AnomalyType.duplicate,
+                    AnomalyCard.entity_type == "invoice",
+                    AnomalyCard.status == AnomalyStatus.open,
                 )
             )
         )
-        invoices = result.scalars().all()
+        flagged = result.all()
 
-        for inv in invoices:
+        for card, inv in flagged:
             dedup_key = f"proactive:dup_alerted:{inv.id}"
             if redis is not None:
                 try:
@@ -640,8 +655,14 @@ async def _alert_duplicate_invoices(window_days: int = 2) -> dict:
                     pass
 
             num = inv.invoice_number or str(inv.id)[:8]
+            # The card's own description says WHY it was flagged (how many
+            # other invoices carry this number from this supplier); the old
+            # duplicate_status string does not exist in this schema.
             message = _format_duplicate_alert(
-                num, inv.total_amount, inv.currency or "RUB", inv.duplicate_status
+                num,
+                inv.total_amount,
+                inv.currency or "RUB",
+                card.description or card.title,
             )
             try:
                 from app.core.chat_bus import chat_bus

@@ -298,3 +298,85 @@ class TestLlmEnrich:
             result = await _llm_enrich("context", "fallback text")
 
         assert result == "fallback text"
+
+
+# ── Duplicate alerts run against the schema that actually exists ──────────────
+
+@pytest.mark.asyncio
+async def test_duplicate_alert_reads_the_live_schema(db_session):
+    """The duplicate alert must query columns this database really has.
+
+    It used to read Invoice.duplicate_status from app.domain.models — a
+    parallel model layer over the same table names with a different schema —
+    and every run died on "column invoices.case_id does not exist", 28 times a
+    day, so no duplicate was ever announced. The other tests in this file mock
+    the session, which is precisely why none of them noticed: a MagicMock
+    answers any attribute. This one goes through the real tables.
+    """
+    from app.db.models import (
+        AnomalyCard,
+        AnomalySeverity,
+        AnomalyStatus,
+        AnomalyType,
+        Document,
+        DocumentStatus,
+        Invoice,
+    )
+    from app.tasks import proactive
+
+    document = Document(
+        file_name="dup.pdf", file_hash="duphash", file_size=10,
+        mime_type="application/pdf", storage_path="d/dup.pdf",
+        status=DocumentStatus.approved,
+    )
+    db_session.add(document)
+    await db_session.flush()
+
+    invoice = Invoice(
+        document_id=document.id, invoice_number="СЧ-77", total_amount=1500.0,
+        currency="RUB",
+    )
+    db_session.add(invoice)
+    await db_session.flush()
+
+    db_session.add(
+        AnomalyCard(
+            anomaly_type=AnomalyType.duplicate,
+            severity=AnomalySeverity.critical,
+            status=AnomalyStatus.open,
+            entity_type="invoice",
+            entity_id=invoice.id,
+            title="Дубликат счёта СЧ-77",
+            description="Найдено 2 других счетов с таким же номером",
+        )
+    )
+    await db_session.commit()
+
+    published: list[dict] = []
+
+    class _Bus:
+        async def publish(self, payload):
+            published.append(payload)
+
+    factory = MagicMock(return_value=_ctx(db_session))
+    with patch("app.db.session._get_session_factory", return_value=factory), \
+         patch("app.core.chat_bus.chat_bus", _Bus()), \
+         patch("app.tasks.proactive._get_notifier", AsyncMock(return_value=None)), \
+         patch("app.utils.redis_client.get_sync_redis", side_effect=RuntimeError):
+        result = await proactive._alert_duplicate_invoices()
+
+    assert result["alerted"] == 1, result
+    assert published and "СЧ-77" in published[0]["content"]
+
+
+class _ctx:
+    """Hand the task the test's own session instead of opening its own."""
+
+    def __init__(self, session):
+        self._session = session
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, *_exc):
+        return False
