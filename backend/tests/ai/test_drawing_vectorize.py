@@ -235,3 +235,41 @@ def test_width_classes_single_weight_sheet():
     thin_px, thick_px, split = _width_classes([3.0, 3.2, 2.9], [300, 300, 300])
     assert split is None
     assert thin_px == thick_px
+
+
+def test_branched_component_is_walked_to_exhaustion():
+    """A branch must not be dropped by the pixel walk.
+
+    A single walk per skeleton component stops at the first dead end, and on a
+    real sheet that abandoned 60% of the skeleton — the thin extension and
+    dimension lines — so the reconstruction lost half the drawing without
+    reporting anything wrong. Every pixel handed in has to come back out.
+    """
+    from app.ai.drawing_vectorize import _order_path_chains
+
+    spine = [(x, 10) for x in range(5, 25)]
+    branch = [(15, y) for y in range(11, 22)]  # a T: the walk can only take one arm
+    points = spine + branch
+
+    chains = _order_path_chains(points)
+
+    assert len(chains) >= 2, "a T-shaped component cannot be one walk"
+    walked = {p for chain in chains for p in chain}
+    assert walked == set(points), "the walk dropped skeleton pixels"
+
+
+def test_closed_ring_is_walked_once():
+    """A cycle has no free end; it must still be walked, and only once."""
+    import numpy as np
+
+    from app.ai.drawing_vectorize import _order_path_chains
+
+    ring = []
+    for angle in np.linspace(0, 2 * np.pi, 400, endpoint=False):
+        ring.append((int(30 + 20 * np.cos(angle)), int(30 + 20 * np.sin(angle))))
+    points = sorted(set(ring))
+
+    chains = _order_path_chains(points)
+
+    assert {p for chain in chains for p in chain} == set(points)
+    assert len(max(chains, key=len)) > len(points) * 0.8, "the ring was shredded"

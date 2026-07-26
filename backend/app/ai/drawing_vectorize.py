@@ -341,32 +341,45 @@ def _trace_paths(skel):
 
     paths = []
     for pts in by_label.values():
-        ordered = _order_path(pts)
-        if not ordered:
-            continue
-        # Re-attach junction centroids so strokes meet where originals met.
-        for end_idx, insert_front in ((0, True), (-1, False)):
-            ex, ey = ordered[end_idx]
-            attached = None
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    attached = junction_of.get((ex + dx, ey + dy)) or attached
-            if attached is not None:
-                pt = (int(round(attached[0])), int(round(attached[1])))
-                if insert_front:
-                    ordered.insert(0, pt)
-                else:
-                    ordered.append(pt)
-        paths.append(np.array(ordered, dtype=np.int32))
+        for ordered in _order_path_chains(pts):
+            if not ordered:
+                continue
+            # Re-attach junction centroids so strokes meet where originals met.
+            for end_idx, insert_front in ((0, True), (-1, False)):
+                ex, ey = ordered[end_idx]
+                attached = None
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        attached = junction_of.get((ex + dx, ey + dy)) or attached
+                if attached is not None:
+                    pt = (int(round(attached[0])), int(round(attached[1])))
+                    if insert_front:
+                        ordered.insert(0, pt)
+                    else:
+                        ordered.append(pt)
+            paths.append(np.array(ordered, dtype=np.int32))
     return paths, junction_points
 
 
-def _order_path(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Order a simple arc's pixels into a walkable sequence (endpoint to
-    endpoint; arbitrary start for cycles). Greedy 8-neighbor walk — after
-    junction removal, components are simple enough that this is exact; the
-    rare leftover branch pixel is simply skipped, which is harmless."""
+def _order_path_chains(points: list[tuple[int, int]]) -> list[list[tuple[int, int]]]:
+    """Order a skeleton component's pixels into walkable sequences, covering
+    every pixel.
+
+    A single greedy walk only holds when the component really is one simple
+    arc. Splitting at crossing-number junctions does not guarantee that: a
+    glyph, a dashed-line end, an arrowhead or a tangential meeting leaves
+    branches behind, and a walk that stops at the first dead end abandons
+    them. Measured on a dense production sheet, one walk per component
+    returned 39 368 of 97 098 skeleton pixels — the abandoned 60% were the
+    sheet's thin lines (extension, dimension, centre), so the reconstruction
+    silently lost half the drawing while reporting nothing wrong.
+
+    So walk repeatedly until the component is exhausted. Free ends are used
+    as starts first (a walk from a true endpoint follows a whole branch);
+    whatever remains is cyclic and is started anywhere.
+    """
     pset = set(points)
+    chains: list[list[tuple[int, int]]] = []
 
     def _nbrs(p):
         x, y = p
@@ -377,19 +390,39 @@ def _order_path(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
             if (dx or dy) and (x + dx, y + dy) in pset
         ]
 
-    start = next((p for p in points if len(_nbrs(p)) <= 1), points[0])
-    ordered = [start]
-    visited = {start}
-    cur = start
-    while True:
-        candidates = [q for q in _nbrs(cur) if q not in visited]
-        if not candidates:
-            break
-        # Prefer the 4-connected continuation to avoid diagonal shortcuts.
-        cur = min(candidates, key=lambda q: abs(q[0] - cur[0]) + abs(q[1] - cur[1]))
-        ordered.append(cur)
-        visited.add(cur)
-    return ordered
+    # Degrees in the untouched component: recomputing them after every walk
+    # would be quadratic, and a stale "free end" only costs a start position.
+    ends = [p for p in points if len(_nbrs(p)) <= 1]
+    starts = iter(ends + points)
+
+    while pset:
+        start = None
+        for candidate in starts:
+            if candidate in pset:
+                start = candidate
+                break
+        if start is None:  # every listed start consumed; take any leftover
+            start = next(iter(pset))
+        ordered = [start]
+        pset.discard(start)
+        cur = start
+        while True:
+            candidates = _nbrs(cur)
+            if not candidates:
+                break
+            # Prefer the 4-connected continuation to avoid diagonal shortcuts.
+            cur = min(candidates, key=lambda q: abs(q[0] - cur[0]) + abs(q[1] - cur[1]))
+            ordered.append(cur)
+            pset.discard(cur)
+        chains.append(ordered)
+    return chains
+
+
+def _order_path(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The longest single walk through a component (kept for callers that
+    want one representative stroke rather than full coverage)."""
+    chains = _order_path_chains(points)
+    return max(chains, key=len) if chains else []
 
 
 # ── Stroke width classes ─────────────────────────────────────────────────────
