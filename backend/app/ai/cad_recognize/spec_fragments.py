@@ -79,6 +79,43 @@ _PROFILE_PROMPT = (
     "Только JSON."
 )
 
+# A shaft sheet does not state step lengths — it states a CHAIN of axial
+# positions from one face, and the step lengths are their differences. Asking
+# for "the length of this step" is asking the model to do that subtraction in
+# its head while also reading, and it reliably gets it wrong: live, 150+78+240+
+# 470 came back as four step lengths on a part whose overall length is 470.
+# So the two things the sheet actually shows are asked for directly.
+_CHAIN_PROMPT = (
+    "Перед тобой главный вид тела вращения. С чертежа уже прочитаны числа:\n"
+    "{callouts}\n\n"
+    "Ответь ОДНОЙ строкой JSON:\n"
+    '{{"diameters_mm":[],"bore_diameters_mm":[],"chain_mm":[],"overall_mm":null}}\n'
+    "diameters_mm — диаметры ступеней НАРУЖНОГО контура слева направо, по "
+    "одному на ступень.\n"
+    "ВАЖНО: главный вид дан В РАЗРЕЗЕ, поэтому внутри детали видны размеры "
+    "РАСТОЧКИ. Наружный контур — это самая верхняя и самая нижняя линии "
+    "силуэта детали; его диаметры измеряются между ними. Размеры, выносимые "
+    "изнутри детали (отверстие, расточка, конус), в diameters_mm НЕ включай — "
+    "для них есть bore_diameters_mm.\n"
+    "bore_diameters_mm — диаметры внутреннего контура слева направо.\n"
+    "chain_mm — осевые размеры от ЛЕВОГО торца по возрастанию: положение конца "
+    "каждой ступени. Последнее значение равно габаритной длине.\n"
+    "overall_mm — габаритная длина детали.\n"
+    "Числа бери ТОЛЬКО из списка выше. Длина chain_mm должна равняться длине "
+    "diameters_mm. Только JSON."
+)
+_CHAIN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "diameters_mm": {"type": "array", "maxItems": 40, "items": {"type": "number"}},
+        "chain_mm": {"type": "array", "maxItems": 40, "items": {"type": "number"}},
+        "bore_diameters_mm": {"type": "array", "maxItems": 20, "items": {"type": "number"}},
+        "overall_mm": {"type": ["number", "null"]},
+    },
+    "required": ["diameters_mm", "chain_mm"],
+}
+
+
 _SHAPE_PROMPT = (
     "Посмотри на контур детали на чертеже. Он круглый или прямоугольный? "
     'Ответь ОДНОЙ строкой JSON: {"shape":"circle|rectangle"}. Только JSON.'
@@ -232,6 +269,45 @@ _CALLOUT_SCHEMA = {
         }, "required": ["text"]}},
     },
 }
+
+
+def _dominant_view_crop(image):
+    """The single densest drawing on the sheet, by connected ink.
+
+    A crop of "everything but the stamp" still hands the model three section
+    views, a detail view and a requirements column at once. The main view is the
+    largest connected cluster of ink that is not the frame — measured on the
+    spindle sheet it is 1796x901 of 2484x1758, i.e. the longitudinal view alone.
+    Falls back to the whole drawing area when nothing dominates.
+    """
+    import cv2
+    import numpy as np
+
+    width, height = image.size
+    grayscale = np.asarray(image.convert("L"))
+    ink = (grayscale < 200).astype(np.uint8)
+    try:
+        count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(ink, 8)
+    except Exception:  # noqa: BLE001
+        return _main_view_crop(image)
+    best = None
+    for index in range(1, count):
+        x, y, box_w, box_h, area = stats[index]
+        # The sheet frame is a huge, nearly empty box — it is not a view.
+        if box_w > width * 0.8 and box_h > height * 0.8:
+            continue
+        if box_w < width * 0.15 or box_h < height * 0.1:
+            continue
+        if best is None or area > best[4]:
+            best = (x, y, box_w, box_h, area)
+    if best is None:
+        return _main_view_crop(image)
+    x, y, box_w, box_h, _area = best
+    pad_x, pad_y = int(width * 0.02), int(height * 0.02)
+    return image.crop((
+        max(x - pad_x, 0), max(y - pad_y, 0),
+        min(x + box_w + pad_x, width), min(y + box_h + pad_y, height),
+    ))
 
 
 def _main_view_crop(image):
@@ -412,6 +488,70 @@ def _callout_numbers(callouts: dict) -> list[float]:
     return sorted({round(v, 3) for v in values}, reverse=True)
 
 
+async def _sections_from_chain(
+    image, callouts: dict, *, router: Any, confidential: bool
+) -> tuple[list[dict], str | None]:
+    """Step lengths as DIFFERENCES of the axial chain the sheet draws.
+
+    Returns the sections and, when the reading is self-inconsistent, the reason
+    — a chain that does not increase, or one whose last value disagrees with the
+    stated overall, is a misread and says so instead of producing a part.
+    """
+    candidates = _callout_numbers(callouts)
+    if not candidates:
+        return [], "выноски не прочитаны"
+    listed = ", ".join(f"{value:g}" for value in candidates[:30])
+    answer = await _ask(
+        _CHAIN_PROMPT.format(callouts=listed), image, num_predict=900,
+        schema=_CHAIN_SCHEMA, router=router, confidential=confidential,
+    )
+    if not answer:
+        return [], None
+
+    def numbers(key: str) -> list[float]:
+        return [
+            float(v) for v in (answer.get(key) or [])
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+        ]
+
+    diameters, chain = numbers("diameters_mm"), numbers("chain_mm")
+    if len(diameters) < 2 or len(chain) != len(diameters):
+        return [], (
+            f"цепочка не сходится с числом ступеней ({len(diameters)} диаметров, "
+            f"{len(chain)} осевых размеров)"
+        )
+    if any(b <= a for a, b in zip(chain, chain[1:], strict=False)):
+        return [], "осевые размеры не возрастают — это не размерная цепочка"
+
+    overall = answer.get("overall_mm")
+    if isinstance(overall, (int, float)) and overall > 0:
+        if abs(chain[-1] - float(overall)) > max(0.5, float(overall) * 0.02):
+            return [], (
+                f"конец цепочки {chain[-1]:g} мм не совпадает с габаритом "
+                f"{float(overall):g} мм"
+            )
+
+    bores = numbers("bore_diameters_mm")
+    if bores and diameters and max(bores) >= max(diameters):
+        # A bore cannot be the widest thing on a turned part; when it is, the
+        # reader has handed back internal dimensions as the outer contour —
+        # the exact confusion a sectioned main view invites.
+        return [], (
+            f"наибольший внутренний Ø{max(bores):g} не меньше наружного "
+            f"Ø{max(diameters):g} — прочитаны размеры расточки вместо контура"
+        )
+
+    sections: list[dict] = []
+    previous = 0.0
+    for diameter, position in zip(diameters, chain, strict=True):
+        sections.append({
+            "diameter_mm": diameter,
+            "length_mm": round(position - previous, 3),
+        })
+        previous = position
+    return sections, None
+
+
 async def _profile_by_assignment(
     image, callouts: dict, *, router: Any, confidential: bool
 ) -> dict | None:
@@ -525,6 +665,10 @@ async def read_spec_by_fragments(
     # classification and callout questions keep the whole sheet, because they
     # are ABOUT the sheet.
     geometry_view = _overview(_main_view_crop(image))
+    # The chain question gets the densest single view rather than the whole
+    # drawing area: on a busy sheet the difference is one longitudinal view
+    # against that view plus three sections, a detail and the notes column.
+    chain_view = _overview(_dominant_view_crop(image))
     ask = {"router": router, "confidential": confidential}
 
     kind_answer = await _ask(_KIND_PROMPT, overview, num_predict=400, schema=_KIND_SCHEMA, **ask)
@@ -559,8 +703,18 @@ async def read_spec_by_fragments(
     body: dict[str, Any] = {"type": _type_label(kind)}
     unresolved: list[str] = []
     if kind == "rotation":
-        geometry = await _ask(_ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
-        outer = [s for s in (geometry.get("outer") or []) if isinstance(s, dict)]
+        # Chain first: the sheet states positions, not lengths.
+        outer, chain_problem = await _sections_from_chain(
+            chain_view, callouts, router=router, confidential=confidential
+        )
+        geometry: dict = {}
+        if not outer:
+            if chain_problem:
+                unresolved.append(f"размерная цепочка: {chain_problem}")
+            geometry = await _ask(_ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
+            outer = [s for s in (geometry.get("outer") or []) if isinstance(s, dict)]
+        else:
+            geometry = await _ask(_ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
         bore = [s for s in (geometry.get("bore") or []) if isinstance(s, dict)]
         if outer:
             body["outer"] = outer

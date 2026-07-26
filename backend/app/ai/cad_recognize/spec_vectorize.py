@@ -1594,6 +1594,120 @@ def _feature_fits_profile(
     return math.hypot(center_x, center_y) + radius <= diameter / 2.0 + epsilon
 
 
+def _flange_section_view(
+    profile: dict, *, px_per_mm: float, axis_y: float, left_x: float,
+    dim_index: list, common: dict,
+) -> tuple[list[Any], float]:
+    """Longitudinal section of a flange, placed in projection with its face view.
+
+    A round flat part is not described by its face alone: the thickness, the
+    bore depth and the fact that the bolt holes go through all live in the cut.
+    ГОСТ 2.305 puts that section beside the face view on the SAME horizontal
+    axis, and it is built from the very numbers the face view uses, so the two
+    cannot disagree.
+    """
+    from app.ai.cad_ir.schema import HatchRegion
+
+    outer = float(profile["diameter_mm"])
+    thickness = float(profile["thickness_mm"])
+    half = outer * px_per_mm / 2.0
+    width = thickness * px_per_mm
+    entities: list[Any] = []
+
+    bore = 0.0
+    for hole in profile.get("holes") or []:
+        if isinstance(hole, dict) and abs(_num(hole.get("center_x_mm")) or 0.0) < 1e-6 \
+                and abs(_num(hole.get("center_y_mm")) or 0.0) < 1e-6:
+            bore = max(bore, _num(hole.get("diameter_mm")) or 0.0)
+    bore_half = bore * px_per_mm / 2.0
+
+    def seg(x1, y1, x2, y2, cls="contour", w="main"):
+        entities.append(Segment(
+            p1=Point(x=x1, y=y1), p2=Point(x=x2, y=y2),
+            line_class=cls, width_class=w, **common,
+        ))
+
+    right_x = left_x + width
+    # Outer silhouette of the cut: two walls, top and bottom.
+    for sign in (-1.0, 1.0):
+        outer_y = axis_y + sign * half
+        inner_y = axis_y + sign * bore_half if bore_half else axis_y
+        seg(left_x, outer_y, right_x, outer_y)
+        seg(left_x, outer_y, left_x, inner_y)
+        seg(right_x, outer_y, right_x, inner_y)
+        if bore_half:
+            seg(left_x, inner_y, right_x, inner_y)
+            entities.append(HatchRegion(
+                boundary=[
+                    Point(x=left_x, y=outer_y), Point(x=right_x, y=outer_y),
+                    Point(x=right_x, y=inner_y), Point(x=left_x, y=inner_y),
+                ],
+                pattern="ansi31", **common,
+            ))
+    if not bore_half:
+        entities.append(HatchRegion(
+            boundary=[
+                Point(x=left_x, y=axis_y - half), Point(x=right_x, y=axis_y - half),
+                Point(x=right_x, y=axis_y + half), Point(x=left_x, y=axis_y + half),
+            ],
+            pattern="ansi31", **common,
+        ))
+
+    axis_common = {**common, "line_class": "axis", "width_class": "thin"}
+    entities.append(Segment(
+        p1=Point(x=left_x - 8 * px_per_mm, y=axis_y),
+        p2=Point(x=right_x + 8 * px_per_mm, y=axis_y),
+        **axis_common,
+    ))
+    # The thickness lives only here, so it is dimensioned only here.
+    entities.append(DimensionEntity(
+        kind="linear",
+        p1=Point(x=left_x, y=axis_y + half + 12 * px_per_mm),
+        p2=Point(x=right_x, y=axis_y + half + 12 * px_per_mm),
+        text=_dimension_text(dim_index, thickness, diameter=False),
+        value_mm=thickness, **common,
+    ))
+    entities.append(TextEntity(
+        position=Point(x=left_x, y=axis_y - half - 6 * px_per_mm),
+        text="А-А", height=5.0 * px_per_mm,
+        line_class="dim", width_class="thin", **common,
+    ))
+    return entities, right_x
+
+
+def _flange_face_extras(
+    profile: dict, *, px_per_mm: float, center_x: float, center_y: float,
+    common: dict,
+) -> list[Any]:
+    """What a face view of a flange needs beyond its circles.
+
+    The pitch circle is a centre line, not an edge; each hole carries centre
+    marks; and the part's own axes run past the outline. Without these the view
+    is a picture of the shape rather than a drawing of the part.
+    """
+    entities: list[Any] = []
+    axis_common = {**common, "line_class": "axis", "width_class": "thin"}
+    outer_half = float(profile["diameter_mm"]) * px_per_mm / 2.0
+    over = outer_half + 8 * px_per_mm
+    entities.append(Segment(
+        p1=Point(x=center_x - over, y=center_y), p2=Point(x=center_x + over, y=center_y),
+        **axis_common,
+    ))
+    entities.append(Segment(
+        p1=Point(x=center_x, y=center_y - over), p2=Point(x=center_x, y=center_y + over),
+        **axis_common,
+    ))
+    for pattern in profile.get("hole_patterns") or []:
+        pcd = _num(pattern.get("bolt_circle_diameter_mm"))
+        if not pcd:
+            continue
+        entities.append(Circle(
+            center=Point(x=center_x, y=center_y), radius=pcd * px_per_mm / 2.0,
+            **axis_common,
+        ))
+    return entities
+
+
 def draft_prismatic_body(
     spec: dict,
     *,
