@@ -1035,6 +1035,11 @@ class SheetDimensionRequest(BaseModel):
 
     view_index: int = Field(ge=0, le=5)
     edge_index: int = Field(ge=0, le=5000)
+    # A diameter on a longitudinal section is measured BETWEEN the two
+    # generatrices (ГОСТ 2.307 draws it straight through the axis), and one
+    # edge cannot express that: the upper contour line on its own is a length,
+    # not a diameter. A second reference makes the pair one dimension.
+    second_edge_index: int | None = Field(default=None, ge=0, le=5000)
     kind: Literal["DistanceX", "DistanceY", "Distance", "Diameter", "Radius"] = "Distance"
     label: str | None = None
 
@@ -1330,7 +1335,10 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
             dim = document.addObject("TechDraw::DrawViewDimension", f"Dim{len(dimensions)}")
             page.addView(dim)
             dim.Type = wanted_dim.kind
-            dim.References2D = [(owner, f"Edge{wanted_dim.edge_index}")]
+            references = [(owner, f"Edge{wanted_dim.edge_index}")]
+            if wanted_dim.second_edge_index is not None:
+                references.append((owner, f"Edge{wanted_dim.second_edge_index}"))
+            dim.References2D = references
             try:
                 document.recompute()
                 anchors = [

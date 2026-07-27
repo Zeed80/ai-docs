@@ -165,6 +165,138 @@ def place_views(
     return entities, placements
 
 
+def place_sheet_views(
+    views: list[dict[str, Any]],
+    *,
+    px_per_mm: float,
+    origin_u_mm: float = 0.0,
+    origin_v_mm: float = 0.0,
+    gap_mm: float = VIEW_GAP_MM,
+    skip: set[int] | None = None,
+) -> tuple[list[Any], list[dict[str, float] | None]]:
+    """Lay out the views ``/drawing`` returned, in the order it returned them.
+
+    ``place_views`` takes a dict keyed by direction, which cannot express what a
+    real sheet needs: a SECTION is not a fourth direction, it is what stands in
+    the front view's place on a hollow part, and a sheet may carry two of them.
+    Placements come back as a LIST parallel to the input, because that is how
+    dimensions address their view (``view_index``).
+
+    The anchor view is the first non-section view, or the first view when every
+    one of them is a section. A section replaces the anchor position when it
+    cuts along the same direction; further views go right, then below, in ГОСТ
+    2.305 first-angle alignment.
+    """
+    placements: list[dict[str, float] | None] = [None] * len(views)
+    if not views:
+        return [], placements
+    # ``skip`` is for a view the KERNEL needed but the sheet must not carry: a
+    # section requires a base view to cut, and on a hollow part that base view
+    # would otherwise appear beside its own section — the same part drawn twice.
+    # It keeps its index so dimensions still address their view correctly.
+    skipped = skip or set()
+
+    def bounds(view: dict[str, Any]) -> dict[str, float] | None:
+        value = view.get("bounds_mm")
+        return value if isinstance(value, dict) and value else None
+
+    anchor_index = next(
+        (
+            index for index, view in enumerate(views)
+            if index not in skipped and view.get("kind") != "section" and bounds(view)
+        ),
+        next(
+            (
+                index for index, view in enumerate(views)
+                if index not in skipped and bounds(view)
+            ),
+            None,
+        ),
+    )
+    if anchor_index is None:
+        return [], placements
+
+    anchor = bounds(views[anchor_index])
+    assert anchor is not None
+    anchor_width = anchor["u_max"] - anchor["u_min"]
+    anchor_height = anchor["v_max"] - anchor["v_min"]
+    anchor_axis_v = (anchor["v_max"] + anchor["v_min"]) / 2.0
+    placements[anchor_index] = {
+        "offset_u": origin_u_mm - anchor["u_min"],
+        "offset_v": origin_v_mm + anchor["v_max"],
+    }
+
+    right_edge_mm = origin_u_mm + anchor_width
+    bottom_edge_mm = origin_v_mm + anchor_height
+    for index, view in enumerate(views):
+        if index == anchor_index or index in skipped:
+            continue
+        box = bounds(view)
+        if box is None:
+            continue
+        kind = view.get("kind")
+        if kind == "top":
+            # Directly below the anchor, sharing its u — first-angle.
+            placements[index] = {
+                "offset_u": origin_u_mm - box["u_min"],
+                "offset_v": bottom_edge_mm + gap_mm + box["v_max"],
+            }
+            bottom_edge_mm += gap_mm + (box["v_max"] - box["v_min"])
+            continue
+        # A side view or a section goes to the right, on the anchor's axis —
+        # the identity that makes this a projection rather than a second
+        # drawing of the same part.
+        axis_v = (box["v_max"] + box["v_min"]) / 2.0
+        placements[index] = {
+            "offset_u": right_edge_mm + gap_mm - box["u_min"],
+            "offset_v": placements[anchor_index]["offset_v"] - anchor_axis_v + axis_v,
+        }
+        right_edge_mm += gap_mm + (box["u_max"] - box["u_min"])
+
+    entities: list[Any] = []
+    for index, view in enumerate(views):
+        placement = placements[index]
+        if placement is None:
+            continue
+        for hidden in (False, True):
+            items = view.get("hidden" if hidden else "visible") or []
+            entities.extend(
+                _entities_from_items(
+                    items,
+                    hidden=hidden,
+                    px_per_mm=px_per_mm,
+                    offset_u=placement["offset_u"],
+                    offset_v=placement["offset_v"],
+                )
+            )
+        entities.extend(
+            _hatch_from_outlines(
+                view.get("hatch") or [],
+                px_per_mm=px_per_mm,
+                offset_u=placement["offset_u"],
+                offset_v=placement["offset_v"],
+            )
+        )
+    return entities, placements
+
+
+def sheet_extent_mm(
+    views: list[dict[str, Any]], placements: list[dict[str, float] | None]
+) -> tuple[float, float]:
+    """How much paper the placed views occupy, in view millimetres."""
+    us: list[float] = []
+    vs: list[float] = []
+    for view, placement in zip(views, placements, strict=False):
+        box = view.get("bounds_mm")
+        if not placement or not isinstance(box, dict) or not box:
+            continue
+        us += [placement["offset_u"] + box["u_min"], placement["offset_u"] + box["u_max"]]
+        vs += [placement["offset_v"] - box["v_max"], placement["offset_v"] - box["v_min"]]
+    if not us or not vs:
+        return 0.0, 0.0
+    return max(us) - min(us), max(vs) - min(vs)
+
+
 # ГОСТ 2.307 dimension appearance, in millimetres of paper.
 DIM_OFFSET_MM = 8.0      # dimension line stands off the measured feature
 DIM_EXTENSION_MM = 2.0   # extension line runs past the dimension line
@@ -307,7 +439,11 @@ def _hatch_from_outlines(
 
 
 def verify_views_against_solid(
-    views: dict[str, dict[str, Any]], report: dict[str, Any]
+    views: dict[str, dict[str, Any]],
+    report: dict[str, Any],
+    *,
+    part_class: str = "rotation",
+    scale: float = 1.0,
 ) -> dict[str, Any]:
     """Do the derived views measure the same part the kernel built?
 
@@ -315,11 +451,39 @@ def verify_views_against_solid(
     axis, a stale mapping) silently produces a plausible drawing of the wrong
     thing — which is exactly the failure this project keeps paying for. So the
     view extents are checked against the solid's bounding box.
+
+    What "front" should measure depends on the part. On a shaft it is length by
+    diameter; on a flange, seen down its own axis, the front view is diameter by
+    diameter and the old rule called every correct flange sheet wrong. When the
+    class is unknown the check reports the numbers and claims nothing.
     """
     bounds = report.get("bounds_mm") or {}
-    length = float(bounds.get("z") or 0.0)
-    diameter = max(float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0))
-    checks: dict[str, Any] = {"ok": True}
+    # ``/drawing`` returns each view already multiplied by the sheet scale,
+    # while the solid is measured in real millimetres. Comparing the two
+    # directly failed every correctly drawn sheet that was not 1:1 — a 470 mm
+    # shaft at 1:2.5 reads 188 mm on paper, and it should.
+    ratio = float(scale) if scale and scale > 0 else 1.0
+    length = float(bounds.get("z") or 0.0) * ratio
+    diameter = max(float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0)) * ratio
+    checks: dict[str, Any] = {"ok": True, "part_class": part_class, "scale": ratio}
+
+    if part_class in ("flange", "plate"):
+        # Seen along the axis: both extents are the outline, and the thickness
+        # is what a side view or a section shows instead.
+        front = (views.get("front") or {}).get("bounds_mm")
+        if front:
+            front_u = front["u_max"] - front["u_min"]
+            front_v = front["v_max"] - front["v_min"]
+            checks["front_width_mm"] = round(front_u, 3)
+            checks["front_height_mm"] = round(front_v, 3)
+            checks["front_matches_solid"] = (
+                abs(front_u - diameter) <= max(0.05, diameter * 0.005)
+                and abs(front_v - diameter) <= max(0.05, diameter * 0.005)
+            )
+            checks["ok"] = checks["ok"] and checks["front_matches_solid"]
+        checks["expected_thickness_mm"] = round(length, 3)
+        checks["expected_diameter_mm"] = round(diameter, 3)
+        return checks
 
     front = (views.get("front") or {}).get("bounds_mm")
     if front:
@@ -344,6 +508,8 @@ def verify_views_against_solid(
         )
         checks["ok"] = checks["ok"] and checks["side_matches_solid"]
 
-    checks["solid_length_mm"] = round(length, 3)
-    checks["solid_diameter_mm"] = round(diameter, 3)
+    # Both in paper millimetres, i.e. already scaled — the same units the
+    # view extents above are reported in.
+    checks["expected_length_mm"] = round(length, 3)
+    checks["expected_diameter_mm"] = round(diameter, 3)
     return checks
