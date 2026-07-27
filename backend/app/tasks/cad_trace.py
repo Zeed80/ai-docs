@@ -59,6 +59,115 @@ _TITLE_BLOCK_MIN_INK_FRACTION = 0.01
 
 @celery_app.task(
     bind=True,
+    name="cad_trace.rebuild_from_spec",
+    max_retries=0,
+    soft_time_limit=600,
+    time_limit=660,
+)
+def rebuild_from_spec(self, generation_id: str) -> dict:
+    """Rebuild the part and its sheet from the CORRECTED spec — no model runs.
+
+    Reading a sheet costs minutes of GPU and is where the mistakes come from;
+    building from a complete reading is deterministic and cheap. Once a person
+    has fixed a dimension, re-reading the drawing would be both slower and
+    worse — it might come back with a different mistake. So this path starts
+    from the stored spec and never looks at the image again.
+    """
+    return run_async(_rebuild_from_spec(generation_id))
+
+
+async def _rebuild_from_spec(generation_id: str) -> dict:
+    import uuid as _uuid
+
+    from app.ai.cad_ir.schema import ValidationIssueIR
+    from app.ai.cad_validate import validate_ir
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.db.session import get_sessionmaker
+    from app.services import cad_ir_store
+
+    factory = get_sessionmaker()
+    gen_uuid = _uuid.UUID(generation_id)
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return {"error": "not found"}
+        params = dict(gen.params or {})
+        owner_sub = gen.owner_sub
+    spec = params.get("spec_corrected") or params.get("spec")
+    if not spec:
+        return {"error": "нет сохранённой спецификации для пересборки"}
+
+    from app.ai.cad_recognize.spec_assumptions import apply_assumptions
+
+    spec, assumptions = apply_assumptions(_revalidated_spec(spec))
+    sheet_format = str(params.get("sheet_format") or "").upper() or None
+    landscape = str(params.get("sheet_orientation") or "landscape").lower() != "portrait"
+    solid_result = await _build_spec_solid(
+        spec, generation_id, owner_sub,
+        sheet_format=sheet_format, landscape=landscape,
+    )
+    if not solid_result or not solid_result.get("built"):
+        return {
+            "error": (solid_result or {}).get("error") or "деталь не собралась",
+            "built": False,
+        }
+    spec_ir = solid_result.pop("_sheet_ir", None)
+    if spec_ir is None:
+        return {"error": "CAD-ядро не построило лист", "built": False}
+    spec_ir.source.generation_id = generation_id
+    _overlay_spec_annotations(spec_ir, spec)
+    dim_check = _unplaced_callouts(solid_result, spec)
+    solid_result.pop("_dimensions", None)
+    validate_ir(spec_ir)
+    for assumption in assumptions:
+        spec_ir.validation.issues.append(
+            ValidationIssueIR(
+                code=(
+                    "SPEC_VALUE_DERIVED"
+                    if assumption.origin == "derived"
+                    else "SPEC_VALUE_ASSUMED"
+                ),
+                severity="warn",
+                level=3,
+                message_ru=(
+                    f"{assumption.path}.{assumption.field} = "
+                    f"{assumption.value:g} мм — {assumption.rule}"
+                ),
+                fix_hint="Проверьте по исходному листу и поправьте в редакторе",
+            )
+        )
+    spec_ir.digitization_status = "review_required"
+
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return {"error": "not found"}
+        gen.params = {
+            **(gen.params or {}),
+            "spec": spec,
+            "spec_dimension_check": dim_check,
+            "spec_assumptions": [item.as_dict() for item in assumptions],
+            "solid_3d": solid_result,
+            "rebuilt_from_spec": True,
+        }
+        # A rebuild is a new REVISION, never an overwrite: the reader's own
+        # attempt and the corrected one are both part of the record.
+        await cad_ir_store.save_revision(
+            db, gen, spec_ir, origin="human", created_by=owner_sub,
+            keep_raster=None, thin_px=2, thick_px=4,
+        )
+        gen.status = ImageGenStatus.done
+        await db.commit()
+    return {
+        "ok": True,
+        "generation_id": generation_id,
+        "entities": len(spec_ir.entities),
+        "assumptions": len(assumptions),
+    }
+
+
+@celery_app.task(
+    bind=True,
     name="cad_trace.run_cad_trace",
     max_retries=2,
     soft_time_limit=600,

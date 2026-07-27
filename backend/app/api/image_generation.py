@@ -750,6 +750,14 @@ class SpecCorrectionRequest(BaseModel):
     dimensions: list[dict[str, Any]] | None = None
     annotations: list[dict[str, Any]] | None = None
     views: list[dict[str, Any]] | None = None
+    chamfers: list[dict[str, Any]] | None = None
+    grooves: list[dict[str, Any]] | None = None
+    keyways: list[dict[str, Any]] | None = None
+    cross_holes: list[dict[str, Any]] | None = None
+    # Rebuild the part and the sheet from the corrected reading. Off by default:
+    # a correction is worth recording even when the person is not ready to see
+    # the consequences of it yet.
+    rebuild: bool = False
 
 
 @router.post("/{generation_id}/spec-correction")
@@ -775,10 +783,10 @@ async def correct_vectorize_spec(
     if not read_spec:
         raise HTTPException(400, "У этой оцифровки нет прочитанного спека")
 
-    supplied = {
-        key: value for key, value in body.model_dump().items() if value is not None
-    }
-    if not supplied:
+    payload = body.model_dump()
+    rebuild = bool(payload.pop("rebuild", False))
+    supplied = {key: value for key, value in payload.items() if value is not None}
+    if not supplied and not rebuild:
         raise HTTPException(400, "Не передано ни одного исправления")
 
     corrected = merge_correction(read_spec, supplied)
@@ -799,7 +807,17 @@ async def correct_vectorize_spec(
     params["spec_correction_record"] = record
     gen.params = params
     await db.commit()
-    return {"ok": True, "diff": record["diff"]}
+
+    task_id = None
+    if rebuild:
+        # Rebuilding never re-reads the drawing: the reading is the expensive,
+        # fallible half, and once a person has fixed a value, asking the model
+        # again would be slower AND might come back with a different mistake.
+        from app.tasks.cad_trace import rebuild_from_spec
+
+        task = rebuild_from_spec.apply_async(args=[str(generation_id)], queue="celery")
+        task_id = task.id
+    return {"ok": True, "diff": record["diff"], "rebuild_task_id": task_id}
 
 
 @router.post("/{generation_id}/accept-vectorize")

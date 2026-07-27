@@ -42,6 +42,13 @@ _LIST_FIELDS = (
     ("dimensions", ("dimensions",)),
     ("annotations", ("annotations",)),
     ("views", ("views",)),
+    # The features a real part has. Correctable for the same reason the contour
+    # is: a keyway the reader placed 40 mm off is one number away from right,
+    # and the correction is worth more as a training pair than as a lost part.
+    ("chamfers", ("main_view", "chamfers")),
+    ("grooves", ("main_view", "grooves")),
+    ("keyways", ("main_view", "keyways")),
+    ("cross_holes", ("main_view", "cross_holes")),
 )
 
 
