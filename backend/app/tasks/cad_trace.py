@@ -1363,6 +1363,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # what is still missing — otherwise a value just recovered
                     # would keep blocking the build.
                     spec = _revalidated_spec(spec)
+                # What neither the read nor the follow-up could establish is
+                # completed from principle — the sheet's own arithmetic where it
+                # forces a value, a standard where one fixes it — and marked as
+                # assumed. A part with one labelled dimension beats no part:
+                # the model is parametric, so the person fixes that dimension
+                # in the editor and rebuilds.
+                from app.ai.cad_recognize.spec_assumptions import apply_assumptions
+
+                spec, assumptions = apply_assumptions(spec)
+                if assumptions:
+                    spec = _revalidated_spec(spec)
                 # Cross-check before anything is built: the sheet's own
                 # arithmetic and the proportions of the traced ink can
                 # contradict a read that all passes agreed on.
@@ -1428,9 +1439,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 spec_dim_check = _unplaced_callouts(solid_result, spec)
                 solid_result.pop("_dimensions", None)
                 validate_ir(spec_ir)
-                if unresolved:
-                    from app.ai.cad_ir.schema import ValidationIssueIR
+                from app.ai.cad_ir.schema import ValidationIssueIR
 
+                if unresolved:
                     spec_ir.validation.issues.append(
                         ValidationIssueIR(
                             code="SPEC_READER_UNRESOLVED",
@@ -1440,6 +1451,26 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                                 "Геометрия черновика требует решения пользователя: "
                                 + "; ".join(dict.fromkeys(unresolved))
                             ),
+                        )
+                    )
+                # An assumed dimension must be impossible to mistake for a read
+                # one. It does not block — the whole point is that the part gets
+                # built — but it is stated, per value, with the rule behind it.
+                for assumption in assumptions:
+                    spec_ir.validation.issues.append(
+                        ValidationIssueIR(
+                            code=(
+                                "SPEC_VALUE_DERIVED"
+                                if assumption.origin == "derived"
+                                else "SPEC_VALUE_ASSUMED"
+                            ),
+                            severity="warn",
+                            level=3,
+                            message_ru=(
+                                f"{assumption.path}.{assumption.field} = "
+                                f"{assumption.value:g} мм — {assumption.rule}"
+                            ),
+                            fix_hint="Проверьте по исходному листу и поправьте в редакторе",
                         )
                     )
                 # Even a dimensionally consistent redraw is only a proposal:
@@ -1465,6 +1496,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         # to, and which answers were refused for having no
                         # callout behind them.
                         "spec_followup": followup_log,
+                        # Every value that was completed rather than read, with
+                        # the rule behind it — the review panel's own list.
+                        "spec_assumptions": [item.as_dict() for item in assumptions],
                         "spec_review_warnings": list(dict.fromkeys(unresolved)),
                         "sheet_without_geometry": sheet_without_geometry,
                         "cad_pipeline_manifest": pipeline_manifest,
