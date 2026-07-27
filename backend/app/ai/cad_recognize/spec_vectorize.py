@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -1464,13 +1465,43 @@ def _read_dimension_index(spec: dict) -> list[tuple[float, str, bool]]:
         if not isinstance(dim, dict):
             continue
         text = str(dim.get("value") or "").strip()
-        if not text:
+        kind = _callout_kind(text)
+        if kind is None:
             continue
         value = _num(text)
         if value is None or value <= 0:
             continue
-        index.append((value, text, text.lstrip()[:1] in ("Ø", "⌀", "D", "d")))
+        index.append((value, text, kind == "diameter"))
     return index
+
+
+# A thread designation IS the diameter callout for that step — the sheet writes
+# M75x1,5 where it would otherwise write Ø75, and drawing "Ø75" instead loses
+# the thread. Anything matching here is a diameter.
+_THREAD_CALLOUT = re.compile(r"^\s*(?:M|М|Tr|G|G1/)\s*\d", re.IGNORECASE)
+# Not a size a dimension measures. Found live on the spindle: "R4" matched a
+# 4 mm step and was drawn as its LENGTH, putting a radius label on a distance
+# dimension. Angles, chamfer notes, roughness and hardness fail the same way.
+_NOT_A_SIZE = re.compile(
+    r"^\s*R\s*\d|°|\bRa\b|\bRz\b|\bHRC\b|\bHB\b|^\s*\d+\s*[x×хX]\s*\d+\s*°?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _callout_kind(text: str) -> str | None:
+    """"diameter", "linear", or None when the callout is not a size at all.
+
+    Letting a non-size into the nominal index means one of them eventually
+    lands on a feature whose number happens to match, and the drawing then
+    states something the sheet never did.
+    """
+    if not text:
+        return None
+    if _THREAD_CALLOUT.match(text):
+        return "diameter"
+    if _NOT_A_SIZE.search(text):
+        return None
+    return "diameter" if text.lstrip()[:1] in ("Ø", "⌀", "D", "d") else "linear"
 
 
 def _dimension_text(

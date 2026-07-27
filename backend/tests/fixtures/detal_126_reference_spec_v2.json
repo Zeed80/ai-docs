@@ -10,7 +10,7 @@
     "v2 adds the features v1 had to list in prose because the contract had no",
     "field for them. They are now data:",
     "  - the 7:24 taper of the bore (Ø56,55 large end) — bore[0].taper",
-    "  - M75x1,5 and M54,5x2 — outer[].thread",
+    "  - M54,5x2 on the Ø55 nose — outer[].thread (M75x1,5 is left out: a\n    thread's nominal is the outer diameter of the step it is cut on,\n    and this profile does not separate the step that carries it)",
     "  - both keyways, 85x12 and 35 — keyways[]",
     "  - the cross-holes Ø14, Ø10, Ø9 — cross_holes[]",
     "  - the 1x45° chamfers ('6 фасок') — chamfers[]",
@@ -35,13 +35,7 @@
       {
         "diameter_mm": 102.0,
         "length_mm": 15.0,
-        "note": "h6(-0,022), фланец у левого торца",
-        "thread": {
-          "designation": "M75x1,5",
-          "system": "metric",
-          "nominal_diameter_mm": 75.0,
-          "pitch_mm": 1.5
-        }
+        "note": "h6(-0,022), фланец у левого торца"
       },
       {
         "diameter_mm": 80.0,

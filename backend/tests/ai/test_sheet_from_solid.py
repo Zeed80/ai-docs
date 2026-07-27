@@ -227,3 +227,23 @@ def test_labels_follow_the_measurement_not_the_position_in_the_list():
 
     assert dimensions[0]["label"] == "150"
     assert dimensions[1]["label"] == "Ø60"
+
+
+def test_a_callout_that_is_not_a_size_never_labels_a_dimension():
+    """Found live on the spindle: "R4" matched a 4 mm step and was drawn as its
+    LENGTH — a radius label sitting on a distance dimension. A thread, though,
+    IS the diameter callout for its step: the sheet writes M75x1,5 exactly
+    where it would otherwise write Ø75."""
+    from app.ai.cad_recognize.spec_vectorize import _callout_kind, _read_dimension_index
+
+    assert _callout_kind("R4") is None
+    assert _callout_kind("1x45°") is None
+    assert _callout_kind("Ra 6,3") is None
+    assert _callout_kind("HRC 42...48") is None
+    assert _callout_kind("150") == "linear"
+    assert _callout_kind("Ø80js6") == "diameter"
+    assert _callout_kind("M75x1,5") == "diameter"
+
+    spec = {"dimensions": [{"value": "R4"}, {"value": "4"}, {"value": "M75x1,5"}]}
+    index = _read_dimension_index(spec)
+    assert [text for _value, text, _is_d in index] == ["4", "M75x1,5"]
