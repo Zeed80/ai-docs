@@ -26,6 +26,7 @@ from app.ai.cad_recognize.spec_vectorize import (
     _prismatic_profiles,
     _rotation_parts,
     _sections_are_complete,
+    taper_end_diameter,
 )
 
 
@@ -48,16 +49,21 @@ def _profile_points(sections: list[dict]) -> list[dict[str, float]]:
     """Ordered (r, z) polyline of a stepped profile, in millimetres.
 
     Two points per section — enter and leave — so a step is a true right-angle
-    shoulder rather than a taper interpolated between section centres.
+    shoulder rather than a taper interpolated between section centres. A section
+    the sheet declares CONICAL is the exception: there the two radii differ, and
+    that difference is the whole feature. A 7:24 spindle nose built as a
+    cylinder is a different part that fits nothing.
     """
     points: list[dict[str, float]] = []
     z = 0.0
     for section in sections:
         radius = float(section["d"]) / 2.0
         length = float(section["l"])
+        end_diameter = taper_end_diameter(section)
+        end_radius = float(end_diameter) / 2.0 if end_diameter else radius
         points.append({"r": radius, "z": z})
         z += length
-        points.append({"r": radius, "z": z})
+        points.append({"r": end_radius, "z": z})
     return points
 
 
@@ -272,19 +278,229 @@ def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         )
 
     label = str(spec.get("part") or "Тело вращения") + " — revolve по прочитанному профилю"
+    features = [
+        Feature3D(
+            kind="revolve",
+            params=params,
+            param_provenance=provenance,
+            confidence=0.9,
+        )
+    ]
+    features.extend(_cut_features(body, outer, missing))
     return FeatureTreeCandidate(
-        features=[
-            Feature3D(
-                kind="revolve",
-                params=params,
-                param_provenance=provenance,
-                confidence=0.9,
-            )
-        ],
+        features=features,
         score=0.9,
         label=label[:500],
         missing_data=missing,
     )
+
+
+def _section_starts(outer: list[dict]) -> list[float]:
+    """Axial position where each section begins, from the left face."""
+    starts: list[float] = []
+    z = 0.0
+    for section in outer:
+        starts.append(z)
+        z += float(section.get("l") or 0.0)
+    return starts
+
+
+def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Feature3D]:
+    """Grooves, keyways, cross holes and edge work, as kernel operations.
+
+    Everything here was READ off the sheet: the sizes are the drawing's own, and
+    the only thing computed is where an edge sits, because the reader states a
+    place ("the shoulder at Ø80") and the kernel needs an edge. A feature whose
+    position cannot be resolved is declared in ``missing_data`` rather than
+    placed somewhere plausible — a chamfer on the wrong shoulder is a part that
+    looks right and is not.
+    """
+    features: list[Feature3D] = []
+    total_length = sum(float(section.get("l") or 0.0) for section in outer)
+    starts = _section_starts(outer)
+
+    for groove in body.get("grooves") or []:
+        position = _num(groove.get("axial_position_mm"))
+        width = _num(groove.get("width_mm"))
+        if position is None or not width:
+            missing.append("канавка без положения или ширины — не построена")
+            continue
+        params: dict[str, Any] = {
+            "axial_position_mm": position,
+            "width_mm": width,
+            "internal": bool(groove.get("internal")),
+        }
+        depth, root = _num(groove.get("depth_mm")), _num(groove.get("root_diameter_mm"))
+        if depth:
+            params["depth_mm"] = depth
+        elif root:
+            params["root_diameter_mm"] = root
+        else:
+            missing.append("канавка без глубины — не построена")
+            continue
+        features.append(Feature3D(
+            kind="groove",
+            params=params,
+            param_provenance={
+                "axial_position_mm": ParamProvenance(
+                    origin="stated", detail="положение канавки прочитано с чертежа"
+                ),
+            },
+            confidence=0.85,
+        ))
+
+    for keyway in body.get("keyways") or []:
+        start = _num(keyway.get("axial_start_mm"))
+        length = _num(keyway.get("length_mm"))
+        width = _num(keyway.get("width_mm"))
+        depth = _num(keyway.get("depth_mm"))
+        if start is None or not (length and width and depth):
+            missing.append("шпоночный паз прочитан не полностью — не построен")
+            continue
+        features.append(Feature3D(
+            kind="keyway",
+            params={
+                "axial_start_mm": start,
+                "length_mm": length,
+                "width_mm": width,
+                "depth_mm": depth,
+                "angle_deg": _num(keyway.get("angle_deg")) or 0.0,
+                "end_type": keyway.get("end_type") or "closed",
+            },
+            param_provenance={
+                "width_mm": ParamProvenance(
+                    origin="stated", detail="ширина паза с чертежа"
+                ),
+                "depth_mm": ParamProvenance(
+                    origin="stated", detail="глубина паза t1 с чертежа"
+                ),
+            },
+            confidence=0.85,
+        ))
+
+    for hole in body.get("cross_holes") or []:
+        diameter = _num(hole.get("diameter_mm"))
+        position = _num(hole.get("axial_position_mm"))
+        if not diameter or position is None:
+            missing.append("поперечное отверстие прочитано не полностью — не построено")
+            continue
+        count = int(hole.get("count") or 1)
+        spacing = _num(hole.get("spacing_deg"))
+        base_angle = _num(hole.get("angle_deg")) or 0.0
+        step = spacing if spacing else (360.0 / count if count > 1 else 0.0)
+        for index in range(max(1, count)):
+            params = {
+                "axis": "radial",
+                "diameter_mm": diameter,
+                "axial_position_mm": position,
+                "angle_deg": base_angle + index * step,
+                "center_x_mm": 0.0,
+                "center_y_mm": 0.0,
+            }
+            through = hole.get("through")
+            if through is not None:
+                params["through"] = bool(through)
+            depth = _num(hole.get("depth_mm"))
+            if depth and through is False:
+                params["depth_mm"] = depth
+            features.append(Feature3D(
+                kind="hole",
+                params=params,
+                param_provenance={
+                    "diameter_mm": ParamProvenance(
+                        origin="stated", detail="Ø поперечного отверстия с чертежа"
+                    ),
+                },
+                confidence=0.8,
+            ))
+
+    features.extend(_edge_features(body, outer, starts, total_length, missing))
+    return features
+
+
+def _edge_features(
+    body: dict,
+    outer: list[dict],
+    starts: list[float],
+    total_length: float,
+    missing: list[str],
+) -> list[Feature3D]:
+    """Chamfers and fillets, each pointed at the edge the sheet means."""
+    features: list[Feature3D] = []
+    for kind, items, size_key in (
+        ("chamfer", body.get("chamfers") or [], "size_mm"),
+        ("fillet", body.get("fillets") or [], "radius_mm"),
+    ):
+        for item in items:
+            size = _num(item.get(size_key))
+            if not size:
+                missing.append(f"{kind} без размера — не построен")
+                continue
+            selector = _edge_selector(item, outer, starts, total_length)
+            if selector is None:
+                missing.append(
+                    f"{kind}: не удалось определить ребро ({item.get('location')}) — не построен"
+                )
+                continue
+            params = {"size_mm": size, "edge_selector": selector}
+            if kind == "chamfer" and _num(item.get("angle_deg")):
+                params["angle_deg"] = _num(item.get("angle_deg"))
+            features.append(Feature3D(
+                kind=kind,
+                params=params,
+                param_provenance={
+                    "size_mm": ParamProvenance(
+                        origin="stated", detail=f"размер {kind} с чертежа"
+                    ),
+                },
+                confidence=0.75,
+            ))
+    return features
+
+
+def _edge_selector(
+    item: dict, outer: list[dict], starts: list[float], total_length: float
+) -> dict | None:
+    """Turn "the shoulder at Ø80" into something the kernel can resolve.
+
+    The reader names a PLACE, because an edge id exists only once a solid does.
+    Here that place becomes an axial position and a diameter; the kernel matches
+    it against the shape as it stands, with every preceding cut applied.
+    """
+    location = str(item.get("location") or "")
+    at_z = _num(item.get("at_z_mm"))
+    at_diameter = _num(item.get("at_diameter_mm"))
+
+    if location == "left_end":
+        first = outer[0] if outer else {}
+        return {
+            "curve": "Circle", "at_z_mm": 0.0,
+            "diameter_mm": at_diameter or _num(first.get("d")),
+        }
+    if location == "right_end":
+        last = outer[-1] if outer else {}
+        end_diameter = taper_end_diameter(last) if last else None
+        return {
+            "curve": "Circle", "at_z_mm": total_length,
+            "diameter_mm": at_diameter or end_diameter or _num(last.get("d")),
+        }
+    if location in ("shoulder", "bore_mouth"):
+        if at_z is not None:
+            return {
+                "curve": "Circle", "at_z_mm": at_z,
+                **({"diameter_mm": at_diameter} if at_diameter else {}),
+            }
+        if at_diameter:
+            # The shoulder where a step of this diameter meets its neighbour.
+            for index, section in enumerate(outer):
+                if _num(section.get("d")) == at_diameter and index + 1 < len(outer):
+                    return {
+                        "curve": "Circle",
+                        "at_z_mm": starts[index] + float(section.get("l") or 0.0),
+                        "diameter_mm": at_diameter,
+                    }
+        return None
+    return None
 
 
 def verify_solid_against_spec(report: dict, spec: dict) -> SolidVerification:

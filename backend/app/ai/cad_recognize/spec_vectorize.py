@@ -1080,7 +1080,13 @@ _SUB_FEATURES = {"hole", "keyway", "thread", "chamfer", "groove", "slot", "bore"
 
 
 def _sections_from_list(items: Any) -> list[dict]:
-    """Ordered (diameter, length) sections from a plain outer/bore list."""
+    """Ordered (diameter, length) sections from a plain outer/bore list.
+
+    The taper and the thread travel with the section rather than being dropped
+    here: this compact form is what both the drafter and the solid builder
+    consume, so anything left out of it cannot be built no matter how well the
+    sheet was read.
+    """
     sections: list[dict] = []
     for it in items or []:
         if not isinstance(it, dict):
@@ -1091,8 +1097,67 @@ def _sections_from_list(items: Any) -> list[dict]:
                 "d": diameter,
                 "l": _num(it.get("length_mm")) or _num(it.get("length")),
                 "note": it.get("note"),
+                "taper": it.get("taper"),
+                "thread": it.get("thread"),
+                "tolerance": it.get("tolerance"),
+                "roughness": it.get("roughness"),
             })
     return sections
+
+
+def taper_end_diameter(section: dict) -> float | None:
+    """The diameter at the FAR end of a conical section, in millimetres.
+
+    A sheet states a cone in whichever way suits it — a ratio (7:24 on a
+    spindle nose), an included angle, or the far diameter outright — and all
+    three describe the same generatrix. Resolving them here means the drafter
+    and the solid builder cannot disagree about what a taper is.
+
+    Returns ``None`` for a plain cylindrical section, or when the statement is
+    incomplete: a cone whose length is unknown has no computable end diameter,
+    and guessing one would invent geometry.
+    """
+    taper = section.get("taper")
+    if not isinstance(taper, dict):
+        return None
+    start = _num(section.get("d"))
+    length = _num(section.get("l"))
+    if not start or start <= 0:
+        return None
+
+    end = _num(taper.get("end_diameter_mm"))
+    if end and end > 0:
+        return end
+    if not length or length <= 0:
+        return None
+
+    ratio_text = taper.get("ratio")
+    if isinstance(ratio_text, str) and ratio_text.strip():
+        # "7:24" means 7 of diameter change per 24 of length; "1:10" likewise.
+        parts = ratio_text.replace(" ", "").split(":")
+        if len(parts) == 2:
+            try:
+                rise, run = float(parts[0].replace(",", ".")), float(parts[1].replace(",", "."))
+            except ValueError:
+                return None
+            if run > 0:
+                change = rise / run * length
+                return _tapered(start, change, taper)
+        return None
+
+    angle = _num(taper.get("included_angle_deg"))
+    if angle and 0 < angle < 180:
+        # The included angle spans BOTH generatrices, so the diameter changes
+        # by 2 * L * tan(angle/2).
+        change = 2.0 * length * math.tan(math.radians(angle / 2.0))
+        return _tapered(start, change, taper)
+    return None
+
+
+def _tapered(start: float, change: float, taper: dict) -> float | None:
+    """Apply a diameter change in the direction the sheet states."""
+    end = start - change if taper.get("direction") != "increasing" else start + change
+    return end if end > 0 else None
 
 
 def _sections_from_features(features: Any) -> list[dict]:
@@ -1147,19 +1212,35 @@ def _rotation_parts(spec: dict) -> list[dict]:
             continue
         outer = _outer_sections(part)
         if len(outer) >= 2:
-            result.append({
-                "outer": outer,
-                "bore": _bore_sections(part),
-                "body_index": offset + 1,
-            })
+            result.append(_rotation_body(part, outer, offset + 1))
     if not result:
         main = spec.get("main_view") or {}
         outer = _outer_sections(main)
         if len(outer) >= 2:
-            result.append({
-                "outer": outer, "bore": _bore_sections(main), "body_index": 0,
-            })
+            result.append(_rotation_body(main, outer, 0))
     return result
+
+
+# Features cut into a turned body. They ride along with the profile because a
+# consumer that receives the silhouette without them builds a smooth stand-in
+# and has no way to know something was left behind.
+_BODY_FEATURE_FIELDS = ("chamfers", "fillets", "grooves", "keyways", "cross_holes")
+
+
+def _rotation_body(node: dict, outer: list[dict], body_index: int) -> dict:
+    """One rotation body: its profile, its bore, and everything cut into it."""
+    body = {
+        "outer": outer,
+        "bore": _bore_sections(node),
+        "body_index": body_index,
+        "bore_start_mm": _num(node.get("bore_start_mm")) or 0.0,
+        "bore_from_end": node.get("bore_from_end") or "left",
+        "bore_blind": node.get("bore_blind"),
+    }
+    for field in _BODY_FEATURE_FIELDS:
+        items = node.get(field)
+        body[field] = [item for item in items if isinstance(item, dict)] if items else []
+    return body
 
 
 def _sections_are_complete(sections: list[dict]) -> bool:
