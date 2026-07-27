@@ -386,25 +386,38 @@ def _label_dimensions(dimensions: list[dict], requests: list[dict], spec: dict) 
     """Give each measured dimension the text the sheet actually carries.
 
     ``Ø80js6`` and ``80`` are different instructions to the shop. The VALUE
-    stays the kernel's measurement; only the text comes from the reading, and
-    only where a nominal matches.
+    stays the kernel's measurement; only the text comes from the reading.
+
+    Matching is by MEASUREMENT, never by position in the list. The kernel drops
+    a dimension it could not place, so the answers are not parallel to the
+    requests — pairing them by index would slide every label one place along
+    and put a fit on the wrong feature, which is exactly the bug this pipeline
+    already paid for once.
     """
     from app.ai.cad_recognize.spec_vectorize import _dimension_text, _read_dimension_index
 
     index = _read_dimension_index(spec)
-    for dimension, request in zip(dimensions, requests, strict=False):
-        nominal = request.get("_nominal_mm")
-        if not nominal:
-            continue
-        dimension["label"] = _dimension_text(
-            index, float(nominal), diameter=bool(request.get("_is_diameter"))
-        )
-        # The kernel measured the geometry; if that disagrees with the nominal
-        # the reading claimed, the drawing must not quietly show the reading.
+    unclaimed = list(requests)
+    for dimension in dimensions:
         measured = dimension.get("value_mm")
-        if isinstance(measured, (int, float)) and nominal:
-            if abs(float(measured) - float(nominal)) > max(0.05, nominal * 0.005):
-                dimension["label"] = ""
+        if not isinstance(measured, (int, float)) or measured <= 0:
+            continue
+        match = None
+        for request in unclaimed:
+            nominal = request.get("_nominal_mm")
+            if not nominal:
+                continue
+            if abs(float(measured) - float(nominal)) <= max(0.05, nominal * 0.005):
+                match = request
+                break
+        if match is None:
+            # The kernel measured something the reading does not claim. Its own
+            # number stands; nothing is invented to label it.
+            continue
+        unclaimed.remove(match)
+        dimension["label"] = _dimension_text(
+            index, float(match["_nominal_mm"]), diameter=bool(match.get("_is_diameter"))
+        )
 
 
 async def build_sheet_from_solid(
@@ -452,7 +465,20 @@ async def build_sheet_from_solid(
         if dimensioned and dimensioned.get("views"):
             drawing = dimensioned
             warnings = list(drawing.get("warnings") or [])
-    _label_dimensions(drawing.get("dimensions") or [], requests, spec)
+    # A dimension TechDraw could not measure comes back reading zero. Drawn, it
+    # is a stray witness line with "0" on it — worse than the dimension being
+    # absent, because a reader has to work out that it means nothing.
+    measured = [
+        item for item in (drawing.get("dimensions") or [])
+        if isinstance(item.get("value_mm"), (int, float)) and item["value_mm"] > 0
+    ]
+    if len(measured) != len(drawing.get("dimensions") or []):
+        warnings.append(
+            f"размеров отброшено как неизмеренные: "
+            f"{len(drawing.get('dimensions') or []) - len(measured)}"
+        )
+    drawing["dimensions"] = measured
+    _label_dimensions(measured, requests, spec)
 
     ir, extent = _assemble(drawing, spec, plan)
     verification = verify_views_against_solid(

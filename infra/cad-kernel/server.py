@@ -126,6 +126,43 @@ def _top_z_at(shape: Part.Shape, x: float, y: float) -> float:
     return max(levels)
 
 
+def _cut_feature(
+    shape: Part.Shape, tool: Part.Shape, label: str, warnings: list[str]
+) -> Part.Shape:
+    """Subtract one feature, and never let it cost the whole part.
+
+    OpenCascade's boolean is order-sensitive in ways nothing here controls:
+    measured on the reference spindle, cutting three cross-holes as Ø14, Ø10,
+    Ø9 produces an invalid solid, while the SAME three cut in the reverse order
+    produce a valid one. Each cut on its own is fine. There is no reordering
+    rule that is right in general, and a part that fails to build is worth far
+    less to the person waiting for it than a part missing one oil way and
+    saying so.
+
+    So: cut, then check. If the result is unusable, try the standard cleanup,
+    and failing that keep the previous solid and report the feature as not
+    built. removeSplitter alone does not rescue this case (measured), which is
+    why the fallback is a rollback rather than a repair.
+    """
+    try:
+        candidate = shape.cut(tool)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"{label} not built: OpenCascade rejected the cut ({str(exc)[:100]})")
+        return shape
+    if not candidate.isNull() and candidate.isValid() and candidate.Volume > 0:
+        return candidate
+    try:
+        cleaned = candidate.removeSplitter()
+        if not cleaned.isNull() and cleaned.isValid() and cleaned.Volume > 0:
+            return cleaned
+    except Exception:  # noqa: BLE001 — cleanup is best effort
+        pass
+    warnings.append(
+        f"{label} not built: OpenCascade returned invalid geometry for this cut"
+    )
+    return shape
+
+
 def _bottom_z_at(shape: Part.Shape, x: float, y: float) -> float:
     """The LOWEST material level under a point — the mirror of _top_z_at.
 
@@ -611,11 +648,8 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
             if feature.kind == "groove"
             else _keyway_tool(shape, feature)
         )
-        shape = shape.cut(tool)
-        if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
-            raise HTTPException(
-                422, f"OpenCascade produced invalid geometry after {feature.kind}"
-            )
+        position = feature.params.get("axial_position_mm", feature.params.get("axial_start_mm"))
+        shape = _cut_feature(shape, tool, f"{feature.kind} @ {position}", warnings)
 
     for feature in request.candidate.features:
         if feature.kind != "hole":
@@ -634,7 +668,12 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
         # dowel holes on every shaft drawing. Same feature, different direction,
         # so it is a parameter rather than a second kind.
         if (feature.params.get("axis") or "z") == "radial":
-            shape = shape.cut(_radial_hole_tool(shape, feature, radius, through, warnings, request))
+            shape = _cut_feature(
+                shape,
+                _radial_hole_tool(shape, feature, radius, through, warnings, request),
+                f"cross hole Ø{diameter:g} @ {feature.params.get('axial_position_mm')}",
+                warnings,
+            )
             continue
         if through is True:
             cutter = Part.makeCylinder(
@@ -678,7 +717,7 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
                 shape.BoundBox.ZMax - shape.BoundBox.ZMin + 2.0,
                 App.Vector(x, y, shape.BoundBox.ZMin - 1.0),
             )
-        shape = shape.cut(cutter)
+        shape = _cut_feature(shape, cutter, f"hole Ø{diameter:g}", warnings)
 
     # Edge operations come AFTER every cut: a chamfer belongs to the edge that
     # exists once the part is fully cut, and asking for one before the hole is

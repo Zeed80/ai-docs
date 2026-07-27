@@ -104,6 +104,49 @@ CAD_VECTORIZER_DEVELOPMENT_STATUS: dict[str, Any] = {
             "capsule_slots",
         ],
         "scope_warning": "Exact only for explicit values inside supported deterministic profiles",
+        "note": (
+            "This describes the TEXT-to-drawing path (черчение по описанию), "
+            "which still uses the 2D drafter. Digitizing a sheet no longer "
+            "does — see sheet_from_solid below."
+        ),
+    },
+    # The redraw path as it now works: the spec is compiled into a solid and
+    # the sheet is that solid's own projections. Numbers are from a live run of
+    # scripts/eval_sheet_from_solid.py against the hand-read reference spindle
+    # (backend/tests/fixtures/detal_126_reference_spec_v2.json), not estimates.
+    "sheet_from_solid": {
+        "contract": "spec-solid-techdraw-cadir-v1",
+        "evaluated_at": "2026-07-27",
+        "reference_spec": "backend/tests/fixtures/detal_126_reference_spec_v2.json",
+        "checks_passed": 9,
+        "checks_total": 9,
+        "unresolved_is_blocking": False,
+        "assumption_policy": (
+            "A value the sheet did not give is completed only from the sheet's "
+            "own arithmetic or from a standard (ГОСТ 10948/23360/8724), and is "
+            "reported per value as SPEC_VALUE_DERIVED or SPEC_VALUE_ASSUMED"
+        ),
+        "dimensions_from": "TechDraw measurement of the solid; text from the reading",
+        "supported_features": [
+            "stepped_rotation_body",
+            "conical_section (ratio / included angle / end diameter)",
+            "bore (through, blind, offset)",
+            "annular_groove",
+            "keyway (parallel)",
+            "cross_drilling (single or evenly spaced)",
+            "chamfer / fillet by semantic edge selector",
+            "cosmetic_thread (ГОСТ 2.311)",
+            "plate and flange with holes, bolt circles and capsule slots",
+        ],
+        "known_kernel_limits": [
+            "OpenCascade booleans are order-sensitive: on the reference spindle "
+            "three cross-holes cut Ø14, Ø10, Ø9 give an invalid solid while the "
+            "same three in reverse order do not. A feature that cannot be cut is "
+            "rolled back and reported rather than costing the part.",
+            "Chamfers on some edges are refused by OCC (raise or return invalid "
+            "geometry); same policy — the part survives, the feature is named.",
+            "GD&T frames are carried as annotation text, not as geometry.",
+        ],
     },
     "drawing_graph_drafting": {
         "contract": "engineering-drawing-graph-cadir-dxf-v1",

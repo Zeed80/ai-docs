@@ -206,3 +206,24 @@ def test_a_measurement_that_contradicts_the_reading_is_not_labelled_with_it():
     dimensions = [{"kind": "DistanceY", "value_mm": 79.0, "label": ""}]
     _label_dimensions(dimensions, [{"_nominal_mm": 80.0, "_is_diameter": True}], _SHAFT)
     assert dimensions[0]["label"] == ""
+
+
+def test_labels_follow_the_measurement_not_the_position_in_the_list():
+    """The kernel drops dimensions it cannot place, so answers are NOT parallel
+    to requests. Pairing by index slides every label one place along and puts a
+    fit on the wrong feature."""
+    # Requested Ø80, then 150, then Ø60 — but the kernel could not place the
+    # first one, so only two come back.
+    dimensions = [
+        {"kind": "DistanceX", "value_mm": 150.0, "label": ""},
+        {"kind": "DistanceY", "value_mm": 60.0, "label": ""},
+    ]
+    requests = [
+        {"_nominal_mm": 80.0, "_is_diameter": True},
+        {"_nominal_mm": 150.0, "_is_diameter": False},
+        {"_nominal_mm": 60.0, "_is_diameter": True},
+    ]
+    _label_dimensions(dimensions, requests, _SHAFT)
+
+    assert dimensions[0]["label"] == "150"
+    assert dimensions[1]["label"] == "Ø60"
