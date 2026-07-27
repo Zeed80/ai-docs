@@ -497,14 +497,22 @@ async def _derive_solid_views(candidate, report: dict) -> dict | None:
 
 
 async def _build_spec_solid(
-    spec: dict, generation_id: str, owner_sub: str | None
+    spec: dict,
+    generation_id: str,
+    owner_sub: str | None,
+    *,
+    sheet_format: str | None = None,
+    landscape: bool = True,
 ) -> dict | None:
-    """Compile the read spec into a solid and store STEP/IGES/STL alongside it.
+    """Compile the read spec into a solid, and draw the sheet from that solid.
 
-    Returns a summary for ``params.solid_3d`` (or None when the spec has no
-    complete body of revolution). Never raises: the 3D model is an additional
-    artifact of the redraw, so an unavailable kernel degrades to "no solid",
-    not to a failed digitization.
+    Returns a summary for ``params.solid_3d`` — plus, under ``_sheet_ir``, the
+    drawing itself, which the caller pops off before storing. The solid is no
+    longer an extra artifact beside a separately drafted sheet: it is where the
+    sheet comes from, so nothing on paper can disagree with the part.
+
+    Still never raises. A kernel that is down, or a part it cannot build, is
+    reported as such — with what was read kept — rather than crashing the task.
     """
     from app.ai.cad_solid import (
         estimate_mass_kg,
@@ -516,7 +524,14 @@ async def _build_spec_solid(
 
     candidate = feature_tree_from_spec(spec)
     if candidate is None:
-        return None
+        return {
+            "built": False,
+            "error": (
+                "прочитанного не хватает на деталь: нужен либо ступенчатый контур "
+                "с длинами, либо плоский контур с толщиной"
+            ),
+            "label": str(spec.get("part") or ""),
+        }
     try:
         artifacts = await compile_candidate(
             candidate,
@@ -535,9 +550,23 @@ async def _build_spec_solid(
 
     report = artifacts.report or {}
     verification = verify_solid_against_spec(report, spec)
-    # Stage 2: views are DERIVED from the solid, so projection alignment is
-    # arithmetic. Stage 3: what the sheet said is bound to the edges the kernel
-    # built, addressed by its own stable keys — the pair a CAM plan needs.
+    # The sheet itself: views, sections and dimensions all measured off this
+    # solid. A kernel too old to draw returns nothing, and the caller says so
+    # rather than substituting a drawing made some other way.
+    from app.ai.cad_ir.sheet_from_solid import build_sheet_from_solid
+
+    sheet: Any = None
+    try:
+        sheet = await build_sheet_from_solid(
+            candidate, spec, report,
+            sheet_format=sheet_format, landscape=landscape,
+        )
+    except Exception as exc:  # noqa: BLE001 — a drawing failure is reportable, not fatal
+        logger.warning(
+            "cad_sheet_from_solid_failed", generation_id=generation_id, error=str(exc)
+        )
+    # Stage 3: what the sheet said is bound to the edges the kernel built,
+    # addressed by its own stable keys — the pair a CAM plan needs.
     projection = await _derive_solid_views(candidate, report)
     from app.ai.cad_semantics import bind_spec_to_solid, collect_part_properties
 
@@ -565,7 +594,7 @@ async def _build_spec_solid(
         paths[suffix] = path
 
     material = str((spec.get("title_block") or {}).get("material") or "")
-    return {
+    result = {
         "built": True,
         "label": candidate.label,
         "paths": paths,
@@ -579,7 +608,26 @@ async def _build_spec_solid(
         "semantics": semantics,
         "properties": properties,
         "machining": machining,
+        # The feature tree travels with the result so the editor can offer the
+        # part AS READ for parametric editing. Without it the 3D panel proposed
+        # candidates re-derived from 2D heuristics and the tree actually built
+        # never reached the person editing it.
+        "feature_tree": candidate.model_dump(mode="json"),
     }
+    if sheet is not None:
+        result["sheet"] = {
+            "part_class": sheet.plan.part_class,
+            "views": [view["kind"] for view in sheet.plan.views],
+            "scale": sheet.plan.scale_label,
+            "sheet_format": sheet.plan.sheet_format,
+            "dimensions": len(sheet.drawing.get("dimensions") or []),
+            "verification": sheet.verification,
+            "warnings": sheet.warnings,
+        }
+        # Popped by the caller: an IR is not JSON for gen.params.
+        result["_sheet_ir"] = sheet.ir
+        result["_dimensions"] = sheet.drawing.get("dimensions") or []
+    return result
 
 
 def _revalidated_spec(spec: dict) -> dict:
@@ -610,6 +658,92 @@ def _revalidated_spec(spec: dict) -> dict:
         if key not in revalidated:
             revalidated[key] = value
     return revalidated
+
+
+async def _store_failed_reading(
+    factory,
+    gen_uuid,
+    spec: dict,
+    crosscheck: dict,
+    followup_log: list,
+    unresolved: list[str],
+    solid_result: dict | None,
+    pipeline_manifest: dict,
+) -> None:
+    """Keep what was read when the part could not be built.
+
+    Reading the sheet is the expensive, fallible half; building from a complete
+    reading is the cheap, deterministic one. Throwing the reading away because
+    the second half failed means paying for it again — and the reading is often
+    nearly right, one missing length short of a part. Stored here, the editor
+    can show it, a person can complete it, and the rebuild costs nothing.
+    """
+    from app.db.models import ImageGeneration
+
+    try:
+        async with factory() as db:
+            gen = await db.get(ImageGeneration, gen_uuid)
+            if gen is None:
+                return
+            gen.params = {
+                **(gen.params or {}),
+                "vectorize_method": "spec",
+                "spec": spec,
+                "spec_crosscheck": crosscheck,
+                "spec_followup": followup_log,
+                "spec_review_warnings": list(dict.fromkeys(unresolved)),
+                "solid_3d": solid_result or {"built": False},
+                "cad_pipeline_manifest": pipeline_manifest,
+            }
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 — the failure message matters more
+        logger.warning("cad_spec_reading_not_stored", error=str(exc)[:200])
+
+
+def _unplaced_callouts(solid_result: dict, spec: dict) -> dict:
+    """Which read dimensions the drawing does NOT show.
+
+    The old check asked whether the drafted geometry measures the numbers it was
+    drafted FROM — which it cannot help but do, so it could only ever cry wolf
+    or say nothing. Now that dimensions are measured off the solid, the question
+    that carries information is the reverse: the sheet stated these sizes, which
+    of them is missing from the drawing?
+
+    A missing callout is not an error. A chamfer note, a roughness symbol and a
+    thread designation are all read values that no linear dimension will match,
+    and the answer is a review list rather than a gate.
+    """
+    placed = [
+        float(item["value_mm"])
+        for item in (solid_result.get("_dimensions") or [])
+        if isinstance(item.get("value_mm"), (int, float))
+    ]
+    stated: list[tuple[float, str]] = []
+    for dimension in spec.get("dimensions") or []:
+        if not isinstance(dimension, dict):
+            continue
+        text = str(dimension.get("value") or "").strip()
+        value = _spec_num(text)
+        if value and value > 0:
+            stated.append((value, text))
+
+    def _shown(value: float) -> bool:
+        window = max(0.05, value * 0.005)
+        return any(abs(value - drawn) <= window for drawn in placed)
+
+    unplaced = sorted({text for value, text in stated if not _shown(value)})
+    return {
+        "status": "ok" if not unplaced else "partial",
+        "read": len(stated),
+        "placed": len(placed),
+        "unplaced": unplaced[:16],
+    }
+
+
+def _spec_num(text: str) -> float | None:
+    from app.ai.cad_recognize.spec_vectorize import _num
+
+    return _num(text)
 
 
 def _verify_spec_dimensions(ir, spec: dict) -> dict:
@@ -1174,13 +1308,6 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             # detal_126 where raster tracing gave a mess. It is a redraw, so it
             # is honestly a review_required draft, not a pixel-exact copy.
             if vectorize_method == "spec":
-                from app.ai.cad_recognize.spec_vectorize import (
-                    draft_from_spec_async,
-                    read_drawing_spec,
-                )
-                from app.ai.schemas import AITask
-                from app.ai.task_routing import get_routing_for
-
                 if not content:
                     return await _fail("Метод «по описанию»: нужен исходный скан/фото.")
                 from app.ai.cad_recognize.spec_vectorize import (
@@ -1253,76 +1380,61 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
                 unresolved = [str(i) for i in spec.get("unresolved", []) if str(i)]
                 unresolved.extend(blocking_checks)
-                draft_model = get_routing_for(AITask.CAD_SPEC_DRAFT).primary
                 spec_sheet = str(params.get("sheet_format") or "").upper() or None
                 spec_landscape = str(
                     params.get("sheet_orientation") or "landscape"
                 ).lower() != "portrait"
-                spec_ir = await draft_from_spec_async(
-                    spec,
-                    draft_model=draft_model,
-                    sheet_format=spec_sheet,
+
+                # 3D-first: the part is built, and the sheet is what that part
+                # looks like. Not a drawing that happens to have a model beside
+                # it — the model IS the drawing's source, so two views cannot
+                # disagree and a dimension cannot contradict what it labels.
+                solid_result = await _build_spec_solid(
+                    spec, generation_id, owner_sub, sheet_format=spec_sheet,
                     landscape=spec_landscape,
                 )
-                sheet_without_geometry = False
+                if not solid_result or not solid_result.get("built"):
+                    # The part could not be built, but the READING is not lost:
+                    # it is the expensive half, it is often nearly right, and a
+                    # person can finish it in the editor and rebuild. Storing it
+                    # before failing is what makes that possible — and it is why
+                    # the message can honestly say so.
+                    await _store_failed_reading(
+                        factory, gen_uuid, spec, crosscheck, followup_log,
+                        unresolved, solid_result, pipeline_manifest,
+                    )
+                    reason = (solid_result or {}).get("error") or (
+                        "по прочитанному не удалось собрать деталь"
+                    )
+                    return await _fail(
+                        "Оцифровка: деталь не построена — " + str(reason)[:400]
+                        + ". Прочитанное сохранено: откройте спецификацию, уточните "
+                        "недостающие размеры и пересоберите."
+                    )
+                spec_ir = solid_result.pop("_sheet_ir", None)
                 if spec_ir is None:
-                    # No usable contour was read. Still hand the sheet to the
-                    # CAD editor instead of turning a recoverable drafting job
-                    # into a dead failed generation: the human may trace or
-                    # construct the missing contour. Acceptance remains blocked
-                    # by SPEC_GEOMETRY_UNRESOLVED below until real geometry is
-                    # added. A known format is preferable, but A3 is only a
-                    # visible editable starting point, never an inferred fact.
-                    from app.ai.cad_recognize.spec_vectorize import (
-                        draft_sheet_without_geometry,
+                    return await _fail(
+                        "Оцифровка: деталь собрана, но CAD-ядро не смогло построить "
+                        "по ней лист. Проверьте доступность cad-kernel."
                     )
-
-                    spec_ir = draft_sheet_without_geometry(
-                        spec,
-                        sheet_format=spec_sheet,
-                        landscape=spec_landscape,
-                    )
-                    sheet_without_geometry = True
-                    unresolved.append(
-                        "контур детали не построен — требуется ручная трассировка или построение"
-                    )
-                if spec_ir is None:  # defensive: the sheet helper is expected to succeed
-                    return await _fail("Не удалось создать редактируемый CAD-черновик.")
                 spec_ir.source.generation_id = generation_id
-                if not sheet_without_geometry:
-                    _overlay_spec_annotations(spec_ir, spec)
-                # Reuse the graph verifier's dimension-vs-geometry consistency
-                # check as an advisory layer: does the drafted geometry actually
-                # measure the numbers the spec stated? Non-blocking (a redraw is
-                # not held to the pixel gate); mismatches are surfaced for review.
-                spec_dim_check = (
-                    _verify_spec_dimensions(spec_ir, spec)
-                    if not sheet_without_geometry
-                    else {"checked": 0, "mismatches": []}
-                )
-                # Stage 1 of the 3D-first path: a body of revolution is a
-                # profile spun about an axis, and every number in that profile
-                # was just read off the sheet — so the solid is exact by
-                # construction. It is a draft artifact alongside the 2D sheet,
-                # never a gate on it: a kernel failure must not cost the user
-                # the drawing they asked for.
-                solid_result = (
-                    await _build_spec_solid(spec, generation_id, owner_sub)
-                    if not unresolved and not sheet_without_geometry
-                    else None
-                )
+                sheet_without_geometry = False
+                _overlay_spec_annotations(spec_ir, spec)
+                # Which of the read callouts made it onto the sheet. The old
+                # check asked whether the drawn geometry measures the numbers it
+                # was drawn FROM, which it cannot help but do; the question that
+                # carries information is the opposite one — what did the sheet
+                # say that the drawing does not show?
+                spec_dim_check = _unplaced_callouts(solid_result, spec)
+                solid_result.pop("_dimensions", None)
                 validate_ir(spec_ir)
                 if unresolved:
                     from app.ai.cad_ir.schema import ValidationIssueIR
 
                     spec_ir.validation.issues.append(
                         ValidationIssueIR(
-                            code=(
-                                "SPEC_GEOMETRY_UNRESOLVED"
-                                if sheet_without_geometry
-                                else "SPEC_READER_UNRESOLVED"
-                            ),
-                            severity="error" if sheet_without_geometry else "warn",
+                            code="SPEC_READER_UNRESOLVED",
+                            severity="warn",
                             level=3,
                             message_ru=(
                                 "Геометрия черновика требует решения пользователя: "
