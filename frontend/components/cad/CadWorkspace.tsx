@@ -34,6 +34,7 @@ import {
 } from "@/lib/studio-api";
 
 import AssurancePanel from "@/components/cad/AssurancePanel";
+import SpecEditorPanel from "@/components/cad/SpecEditorPanel";
 import Cad3dPanel from "@/components/cad/Cad3dPanel";
 import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
 import EntityShape from "@/components/cad/EntityShape";
@@ -1440,6 +1441,16 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         followups={specFollowups}
         consensus={specConsensus}
         solid={solidSummary}
+        t={t}
+      />
+
+      <SpecEditorPanel
+        generationId={gen.id}
+        spec={gen.params?.spec as Record<string, unknown> | undefined}
+        assumptions={specAssumptions}
+        busy={busy}
+        onDone={() => window.location.reload()}
+        onError={setErr}
         t={t}
       />
 

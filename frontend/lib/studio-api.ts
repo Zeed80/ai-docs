@@ -1201,6 +1201,25 @@ export async function runFullCheck(id: string): Promise<IrEnvelope> {
   return jsonOrThrow<IrEnvelope>(res);
 }
 
+/** Corrections to what the reader extracted, optionally rebuilding the part.
+ *
+ * The correction is stored beside the original read either way — the pair is
+ * the training signal. With `rebuild`, the part and its sheet are built again
+ * from the corrected reading; the drawing is never re-read, because reading is
+ * the fallible half and a person has just done better than it. */
+export async function correctSpec(
+  id: string,
+  correction: Record<string, unknown>,
+  options: { rebuild?: boolean } = {},
+): Promise<{ ok: boolean; diff: unknown; rebuild_task_id?: string | null }> {
+  const res = await mutFetch(`${BASE}/${id}/spec-correction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...correction, rebuild: Boolean(options.rebuild) }),
+  });
+  return jsonOrThrow(res);
+}
+
 export async function acceptVectorize(id: string): Promise<Generation> {
   const res = await mutFetch(`${BASE}/${id}/accept-vectorize`, {
     method: "POST",
