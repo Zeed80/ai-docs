@@ -111,8 +111,13 @@ def build_cad_pipeline_manifest(
             "preserves_entity_ids": True,
             "preserves_relations": True,
         },
+        # Digitizing a sheet no longer drafts it: the reading is compiled into a
+        # solid and the drawing is that solid's projections. The model slot
+        # below still serves the TEXT-to-drawing path (черчение по описанию),
+        # so it is reported as what it is rather than as the redraw's drafter.
         "spec_drafter": {
             **_route(AITask.CAD_SPEC_DRAFT),
+            "used_for": "text_description_only",
             "coverage": "model-dependent; fail-closed outside supported geometry",
             "deterministic_contract": "engineering-drawing-spec-v2",
             "supported_geometry": [
@@ -123,6 +128,18 @@ def build_cad_pipeline_manifest(
                 "capsule_slots",
             ],
             "reference_cases": "tools/cad-dataset/description_cases.json",
+        },
+        "sheet_builder": {
+            "kind": "deterministic",
+            "version": "spec-solid-techdraw-v1",
+            "engine": "FreeCAD/OpenCascade + TechDraw",
+            "pipeline": "spec -> feature tree -> solid -> views/sections -> CAD IR",
+            "dimensions_measured_off": "the solid, not the reading",
+            "assumption_policy": (
+                "missing values completed only from the sheet's own arithmetic "
+                "or from ГОСТ 10948/23360/8724, and reported per value"
+            ),
+            "reference_case": "backend/tests/fixtures/detal_126_reference_spec_v2.json",
         },
         "engineering_graph": {"kind": "deterministic", "version": "engineering-graph-v1"},
         "constraint_verifier": {"kind": "deterministic", "version": "fail-closed-v1"},
