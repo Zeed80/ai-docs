@@ -66,6 +66,41 @@ _ROTATION_PROMPT = (
     "Только JSON."
 )
 
+# Asked as its own question, and asked LAST. These features are small, they are
+# scattered, and mixing them into the "describe the whole contour" question is
+# what made the previous contract give up on them entirely: the reader was told
+# to leave them out precisely because including them derailed the profile.
+_FEATURES_PROMPT = (
+    "Перед тобой главный вид тела вращения. Контур уже прочитан — теперь нужны "
+    "ТОЛЬКО мелкие элементы, вырезанные в детали. Отвечай ОДНОЙ строкой JSON:\n"
+    '{"chamfers":[{"size_mm":1,"angle_deg":45,"location":"left_end|right_end|shoulder",'
+    '"at_diameter_mm":null}],'
+    '"grooves":[{"axial_position_mm":0,"width_mm":3,"depth_mm":1.5}],'
+    '"keyways":[{"axial_start_mm":0,"length_mm":0,"width_mm":0,"depth_mm":0}],'
+    '"cross_holes":[{"diameter_mm":0,"axial_position_mm":0,"count":1,"through":true}]}\n'
+    "ПРАВИЛА:\n"
+    "1) Осевые координаты — от ЛЕВОГО торца детали, в миллиметрах.\n"
+    "2) Фаска: «1×45°» на чертеже означает size_mm=1, angle_deg=45. location — "
+    "где она: left_end/right_end (торец) или shoulder (уступ между ступенями).\n"
+    "3) Канавка (проточка) — узкий кольцевой вырез; width_mm вдоль оси, "
+    "depth_mm вглубь от поверхности.\n"
+    "4) Шпоночный паз: depth_mm — глубина t1 от поверхности вала.\n"
+    "5) Поперечное отверстие — сверление ПОПЕРЁК оси; count, если их несколько "
+    "по окружности.\n"
+    "6) Чего на чертеже нет — оставь пустым массивом. НЕ придумывай элементы и "
+    "НЕ повторяй здесь ступени контура.\n"
+    "Только JSON."
+)
+_FEATURES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "chamfers": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
+        "grooves": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
+        "keyways": {"type": "array", "maxItems": 16, "items": {"type": "object"}},
+        "cross_holes": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
+    },
+}
+
 _PROFILE_PROMPT = (
     "Перед тобой плоская деталь (пластина или фланец). Опиши её контур ОДНОЙ "
     "строкой JSON:\n"
@@ -528,6 +563,76 @@ def _matches_callout(value: float, candidates: list[float], tol: float = 0.02) -
     return any(abs(value - candidate) <= window for candidate in candidates)
 
 
+async def _read_cut_features(
+    image, outer: list[dict], *, router: Any, confidential: bool
+) -> dict[str, list[dict]]:
+    """Chamfers, grooves, keyways and cross-drillings, as their own question.
+
+    Every one of them is checked against the contour that was already read: a
+    groove 900 mm along a 470 mm shaft, or a keyway deeper than the shaft's
+    radius, is a misread rather than a feature — and one bad entry must not cost
+    the rest, so entries are dropped individually.
+    """
+    answer = await _ask(
+        _FEATURES_PROMPT, image, num_predict=1500, schema=_FEATURES_SCHEMA,
+        router=router, confidential=confidential,
+    )
+    if not answer:
+        return {}
+
+    total_length = sum(_num(s.get("length_mm")) or 0.0 for s in outer)
+    max_radius = max(
+        ((_num(s.get("diameter_mm")) or 0.0) / 2.0 for s in outer), default=0.0
+    )
+
+    def _within(position: float | None) -> bool:
+        return position is not None and -1e-6 <= position <= total_length + 1e-6
+
+    result: dict[str, list[dict]] = {}
+    chamfers = [
+        item for item in (answer.get("chamfers") or [])
+        if isinstance(item, dict)
+        and (_num(item.get("size_mm")) or 0) > 0
+        and item.get("location") in ("left_end", "right_end", "shoulder", "bore_mouth")
+    ]
+    if chamfers:
+        result["chamfers"] = chamfers
+
+    grooves = [
+        item for item in (answer.get("grooves") or [])
+        if isinstance(item, dict)
+        and _within(_num(item.get("axial_position_mm")))
+        and (_num(item.get("width_mm")) or 0) > 0
+        and 0 < (_num(item.get("depth_mm")) or 0) < max(max_radius, 1e-9)
+    ]
+    if grooves:
+        result["grooves"] = grooves
+
+    keyways = [
+        item for item in (answer.get("keyways") or [])
+        if isinstance(item, dict)
+        and _within(_num(item.get("axial_start_mm")))
+        and _within(
+            (_num(item.get("axial_start_mm")) or 0.0) + (_num(item.get("length_mm")) or 0.0)
+        )
+        and (_num(item.get("width_mm")) or 0) > 0
+        and 0 < (_num(item.get("depth_mm")) or 0) < max(max_radius, 1e-9)
+        and (_num(item.get("length_mm")) or 0) >= (_num(item.get("width_mm")) or 0)
+    ]
+    if keyways:
+        result["keyways"] = keyways
+
+    holes = [
+        item for item in (answer.get("cross_holes") or [])
+        if isinstance(item, dict)
+        and _within(_num(item.get("axial_position_mm")))
+        and 0 < (_num(item.get("diameter_mm")) or 0) < max(2.0 * max_radius, 1e-9)
+    ]
+    if holes:
+        result["cross_holes"] = holes
+    return result
+
+
 def _checked_bore(
     bore: list[dict], outer: list[dict], callouts: dict
 ) -> tuple[list[dict], str | None]:
@@ -913,6 +1018,15 @@ async def read_spec_by_fragments(
             body["bore"] = bore
         elif bore_problem:
             unresolved.append(f"расточка: {bore_problem}")
+        if outer:
+            # Only worth asking once there is a contour to hang them on: these
+            # are positions along a profile, and without the profile they have
+            # nothing to be positioned against.
+            body.update(
+                await _read_cut_features(
+                    geometry_view, outer, router=router, confidential=confidential
+                )
+            )
     elif kind in ("plate", "flange"):
         profile = await _profile_by_assignment(
             geometry_view, callouts, router=router, confidential=confidential

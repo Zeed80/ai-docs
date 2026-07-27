@@ -450,7 +450,20 @@ _SPEC_PROMPT = (
     "3) Сумма length_mm ≈ полная длина детали (сверься с габаритным размером).\n"
     "4) Если деталь ПОЛАЯ (в разрезе видно осевое отверстие/расточку) — опиши "
     "внутренний контур в bore[] так же по порядку.\n"
-    "5) Фаски/канавки/шпонпазы/поперечные отверстия НЕ включай в outer/bore.\n"
+    "5) Фаски/канавки/шпонпазы/поперечные отверстия в outer/bore НЕ включай — "
+    "они не меняют силуэт. Для них есть отдельные массивы тела (все "
+    "необязательные, пиши только реально видимое):\n"
+    '"chamfers":[{"size_mm":1,"angle_deg":45,"location":"left_end|right_end|shoulder",'
+    '"at_diameter_mm":null}],'
+    '"grooves":[{"axial_position_mm":0,"width_mm":3,"depth_mm":1.5}],'
+    '"keyways":[{"axial_start_mm":0,"length_mm":85,"width_mm":12,"depth_mm":5}],'
+    '"cross_holes":[{"diameter_mm":9,"axial_position_mm":0,"count":1,"through":true}]\n'
+    "Конус ступени: добавь ей "
+    '"taper":{"kind":"ratio|included_angle|end_diameter","ratio":"7:24"} — '
+    "ровно одно из трёх полей. Резьбовой участок: добавь ступени "
+    '"thread":{"designation":"M75x1,5","nominal_diameter_mm":75,"pitch_mm":1.5}.\n'
+    "Глухая или смещённая расточка: у тела есть bore_start_mm (от торца), "
+    'bore_from_end:"left|right", bore_blind:true|false.\n'
     "ПРАВИЛА для пластин/фланцев:\n"
     "1) profile обязателен: rectangle требует width_mm+height_mm, circle — diameter_mm.\n"
     "2) Координаты holes задавай от ЦЕНТРА профиля: +x вправо, +y вверх.\n"
