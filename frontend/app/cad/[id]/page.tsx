@@ -9,7 +9,6 @@ import CadWorkspace from "@/components/cad/CadWorkspace";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { Generation, getGeneration } from "@/lib/studio-api";
 
-
 /** What the reader managed to get off the sheet, shown when the build is blocked.
  *
  * A fail-closed contract is right — a part built from a misread sheet is worse
@@ -19,13 +18,25 @@ import { Generation, getGeneration } from "@/lib/studio-api";
  * generation's params, unseen. The stamp, the callouts and the requirements
  * are usually right even when the geometry is not, and seeing them is what
  * lets a person tell a bad read from a hard drawing. */
-function ReadSoFar({ spec }: { spec: Record<string, unknown> }) {
+function ReadSoFar({
+  spec,
+  note,
+}: {
+  spec: Record<string, unknown>;
+  note: string;
+}) {
   const title = (spec.title_block ?? {}) as Record<string, unknown>;
   const dimensions = (spec.dimensions ?? []) as { value?: string }[];
   const annotations = (spec.annotations ?? []) as { text?: string }[];
   const body = (spec.main_view ?? {}) as Record<string, unknown>;
-  const outer = (body.outer ?? []) as { diameter_mm?: number; length_mm?: number }[];
-  const bore = (body.bore ?? []) as { diameter_mm?: number; length_mm?: number }[];
+  const outer = (body.outer ?? []) as {
+    diameter_mm?: number;
+    length_mm?: number;
+  }[];
+  const bore = (body.bore ?? []) as {
+    diameter_mm?: number;
+    length_mm?: number;
+  }[];
 
   const field = (label: string, value: unknown) =>
     value ? (
@@ -42,7 +53,9 @@ function ReadSoFar({ spec }: { spec: Record<string, unknown> }) {
 
   return (
     <section className="rounded border border-zinc-700 bg-zinc-900/60 px-3 py-2 text-xs">
-      <h2 className="mb-2 text-sm text-zinc-300">Что удалось прочитать с листа</h2>
+      <h2 className="mb-2 text-sm text-zinc-300">
+        Что удалось прочитать с листа
+      </h2>
       <div className="grid gap-1 sm:grid-cols-2">
         {field("Деталь", spec.part ?? title.name)}
         {field("Материал", title.material)}
@@ -65,7 +78,10 @@ function ReadSoFar({ spec }: { spec: Record<string, unknown> }) {
         <p className="mt-2 break-words">
           <span className="text-zinc-500">Размеры ({dimensions.length}): </span>
           <span className="text-zinc-200">
-            {dimensions.map((d) => d.value).filter(Boolean).join(", ")}
+            {dimensions
+              .map((d) => d.value)
+              .filter(Boolean)
+              .join(", ")}
           </span>
         </p>
       )}
@@ -78,11 +94,7 @@ function ReadSoFar({ spec }: { spec: Record<string, unknown> }) {
           ))}
         </ul>
       )}
-      <p className="mt-2 text-zinc-500">
-        Чертёж не построен намеренно: часть данных прочитана неуверенно, и
-        деталь по ним была бы неверной. Прочитанное выше — то, на что можно
-        опереться.
-      </p>
+      <p className="mt-2 text-zinc-500">{note}</p>
     </section>
   );
 }
@@ -180,15 +192,16 @@ export default function CadEditorPage() {
             </div>
             {(gen.params?.spec as Record<string, unknown> | undefined) && (
               <div className="min-h-0 space-y-2 overflow-auto lg:w-[46%]">
-                <ReadSoFar spec={gen.params.spec as Record<string, unknown>} />
-                {Boolean(gen.params?.sheet_without_geometry) && (
-                  <p className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                    Лист сохранён без геометрии детали: рамка, штамп,
-                    технические требования и прочитанные размеры. Откройте его
-                    в редакторе и достройте контур — читать надписи заново не
-                    придётся.
-                  </p>
-                )}
+                <ReadSoFar
+                  spec={gen.params.spec as Record<string, unknown>}
+                  note={t("reading_kept_note")}
+                />
+                {/* The reading survives a failed build on purpose: it is the
+                    expensive half, and it is usually one value short of a
+                    part. */}
+                <p className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                  {t("reading_kept_after_failure")}
+                </p>
               </div>
             )}
           </div>

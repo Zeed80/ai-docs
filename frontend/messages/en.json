@@ -1049,6 +1049,8 @@
     "create": "Create",
     "rename": "Rename",
     "rename_prompt": "New drawing title:",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "reading_kept_after_failure": "The reading was kept. Open the specification, fill in what is missing and rebuild — the sheet does not have to be read again.",
+    "reading_kept_note": "The part could not be built from this reading. What is above is what you can rely on: fix what is missing and rebuild."
   }
 }

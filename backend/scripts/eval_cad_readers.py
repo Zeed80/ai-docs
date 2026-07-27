@@ -8,8 +8,9 @@ the sheet — facts a human read off the drawing, not another model's opinion.
 
 Scoring is deliberately coarse and unambiguous (name, material, scale, body
 kind, hollowness, overall length, largest diameter, a fit, a hardness note)
-plus the two operational questions that decide whether a user gets anything:
-did the spec validate, and did the drafter produce geometry.
+plus the operational questions that decide whether a user gets anything:
+did the spec validate, does it compile into a solid, and does a sheet come
+off that solid.
 
     python backend/scripts/eval_cad_readers.py \
         --image test_vector_files/detal_126.png --case spindle_v10 \
@@ -117,7 +118,6 @@ async def evaluate_model(
         EngineeringDrawingSpec,
         SpecReadMalformedError,
         SpecReadTruncatedError,
-        draft_from_spec,
     )
     from app.ai.router import ai_router
     from app.ai.schemas import AIRequest, AITask, ChatMessage
@@ -186,10 +186,54 @@ async def evaluate_model(
     result["blocking_unresolved"] = len(spec.get("unresolved") or [])
     result["views_read"] = [v.get("kind") for v in (spec.get("views") or [])]
     result.update(score_spec(spec, truth))
-    ir = draft_from_spec(spec, sheet_format="A3", landscape=True)
-    result["drafted_entities"] = 0 if ir is None else len(ir.entities)
+    # The operational question is no longer "did the 2D drafter emit entities"
+    # but "does this reading make a part" — that is what the user receives now,
+    # and a reading that scores well on facts and still cannot be built is a
+    # reading that failed at the only thing it is for.
+    result.update(await _buildability(spec))
     result["spec"] = spec
     return result
+
+
+async def _buildability(spec: dict) -> dict:
+    """Does this reading compile into a solid, and does a sheet come off it?"""
+    from app.ai.cad_ir.sheet_from_solid import build_sheet_from_solid
+    from app.ai.cad_solid import feature_tree_from_spec
+    from app.services.cad_kernel import compile_candidate
+
+    candidate = feature_tree_from_spec(spec)
+    if candidate is None:
+        return {"solid_built": False, "sheet_drawn": False,
+                "build_error": "no supported body in the reading"}
+    try:
+        artifacts = await compile_candidate(
+            candidate, confirm_assumptions=True, metadata={"source": "eval_readers"}
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed build is a result
+        return {"solid_built": False, "sheet_drawn": False,
+                "build_error": f"{exc.__class__.__name__}: {exc}"[:200]}
+    out: dict[str, Any] = {
+        "solid_built": True,
+        "solid_valid": bool((artifacts.report or {}).get("brep_valid")),
+        "features_built": [feature.kind for feature in candidate.features],
+        "features_declared_missing": list(candidate.missing_data),
+    }
+    try:
+        sheet = await build_sheet_from_solid(candidate, spec, artifacts.report or {})
+    except Exception as exc:  # noqa: BLE001
+        out["sheet_drawn"] = False
+        out["sheet_error"] = f"{exc.__class__.__name__}: {exc}"[:200]
+        return out
+    out["sheet_drawn"] = sheet is not None
+    if sheet is not None:
+        out["sheet"] = {
+            "format": sheet.plan.sheet_format,
+            "scale": sheet.plan.scale_label,
+            "views": [view["kind"] for view in sheet.plan.views],
+            "dimensions": len(sheet.drawing.get("dimensions") or []),
+            "views_match_solid": bool((sheet.verification or {}).get("ok")),
+        }
+    return out
 
 
 async def main() -> int:
