@@ -53,6 +53,11 @@ class Feature3D(BaseModel):
     kind: Literal[
         "extrude", "hole", "boss", "pocket", "fillet", "chamfer",
         "revolve", "loft", "shell", "thread",
+        # A pocket is cut from the top face straight down; an annular groove
+        # runs all the way round a turned surface and a keyway is milled into
+        # it from the side. Neither is expressible as a pocket, and both are on
+        # every real shaft drawing.
+        "groove", "keyway",
     ]
     source_entity_ids: list[str] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)

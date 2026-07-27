@@ -40,10 +40,150 @@ class SpecEvidence(BaseModel):
     raw_text: str | None = None
 
 
+class SpecTaper(BaseModel):
+    """A section whose diameter changes along its length (ГОСТ 2.307).
+
+    The sheet states a taper in whichever of three ways suits it — a ratio like
+    7:24 on a spindle nose, an included angle, or simply the diameter at the far
+    end. All three describe the same generatrix, so exactly one is required and
+    the drafter derives the rest.
+    """
+
+    kind: Literal["ratio", "included_angle", "end_diameter"]
+    ratio: str | None = None
+    included_angle_deg: float | None = Field(default=None, gt=0, lt=180)
+    end_diameter_mm: float | None = Field(default=None, gt=0)
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_exactly_one_statement(self) -> "SpecTaper":
+        stated = [
+            self.ratio is not None,
+            self.included_angle_deg is not None,
+            self.end_diameter_mm is not None,
+        ]
+        if sum(stated) != 1:
+            raise ValueError(
+                "taper needs exactly one of ratio / included_angle_deg / end_diameter_mm"
+            )
+        return self
+
+
+class SpecThread(BaseModel):
+    """A threaded length (ГОСТ 2.311 — drawn conventionally, never modelled).
+
+    ``nominal_diameter_mm`` is the OUTER diameter for an external thread, which
+    is the one the stepped profile already carries: a thread does not change the
+    silhouette, it annotates it.
+    """
+
+    designation: str = Field(min_length=2, max_length=40)
+    system: Literal["metric", "trapezoidal", "pipe", "inch", "other"] = "metric"
+    nominal_diameter_mm: float = Field(gt=0)
+    pitch_mm: float | None = Field(default=None, gt=0, le=100)
+    length_mm: float | None = Field(default=None, gt=0)
+    hand: Literal["right", "left"] = "right"
+    internal: bool = False
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
+class SpecChamfer(BaseModel):
+    """A chamfer on one edge (ГОСТ 10948 sizes, "1x45°" on the sheet)."""
+
+    size_mm: float = Field(gt=0)
+    angle_deg: float = Field(default=45.0, gt=0, lt=90)
+    # Where on the part: an end face, or the shoulder between two steps. The
+    # exact edge is resolved by the kernel from the geometry it just built —
+    # the reader states a PLACE, not an edge id it cannot know.
+    location: Literal["left_end", "right_end", "shoulder", "bore_mouth"]
+    at_z_mm: float | None = None
+    at_diameter_mm: float | None = Field(default=None, gt=0)
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
+class SpecFillet(BaseModel):
+    """A fillet radius, most often at a shoulder (stress relief)."""
+
+    radius_mm: float = Field(gt=0)
+    location: Literal["shoulder", "left_end", "right_end", "bore"]
+    at_z_mm: float | None = None
+    at_diameter_mm: float | None = Field(default=None, gt=0)
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
+class SpecGroove(BaseModel):
+    """An annular groove cut into a turned surface (ГОСТ 8820 and friends).
+
+    Either the depth or the root diameter says how deep it goes; stating both
+    invites them to disagree, so exactly one is required.
+    """
+
+    kind: Literal[
+        "relief", "o_ring", "retaining_ring", "thread_runout", "other"
+    ] = "other"
+    axial_position_mm: float
+    width_mm: float = Field(gt=0)
+    depth_mm: float | None = Field(default=None, gt=0)
+    root_diameter_mm: float | None = Field(default=None, gt=0)
+    internal: bool = False
+    standard_ref: str | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_one_depth_statement(self) -> "SpecGroove":
+        if (self.depth_mm is None) == (self.root_diameter_mm is None):
+            raise ValueError("groove needs exactly one of depth_mm / root_diameter_mm")
+        return self
+
+
+class SpecKeyway(BaseModel):
+    """A keyway milled into a shaft (ГОСТ 23360 parallel, 24071 Woodruff).
+
+    ``depth_mm`` is t1 — measured from the cylindrical surface inward, the way
+    the standard tabulates it and the way the sheet dimensions it.
+    """
+
+    kind: Literal["parallel", "woodruff"] = "parallel"
+    axial_start_mm: float
+    length_mm: float = Field(gt=0)
+    width_mm: float = Field(gt=0)
+    depth_mm: float = Field(gt=0)
+    angle_deg: float = 0.0
+    end_type: Literal["closed", "open", "runout"] = "closed"
+    standard_ref: str | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_a_slot_not_a_point(self) -> "SpecKeyway":
+        if self.length_mm < self.width_mm:
+            raise ValueError("keyway length_mm must be at least its width_mm")
+        return self
+
+
+class SpecCrossHole(BaseModel):
+    """A hole through the part ACROSS the axis — oil ways, cross-drillings."""
+
+    diameter_mm: float = Field(gt=0)
+    axial_position_mm: float
+    angle_deg: float = 0.0
+    through: bool | None = None
+    depth_mm: float | None = Field(default=None, gt=0)
+    count: int = Field(default=1, ge=1, le=64)
+    spacing_deg: float | None = None
+    thread: SpecThread | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
 class SpecSection(BaseModel):
     diameter_mm: float = Field(gt=0)
     length_mm: float | None = Field(default=None, gt=0)
     note: str | None = None
+    # A conical step: the diameter above is the one at the section's START.
+    taper: SpecTaper | None = None
+    # A thread annotates this step; it never changes the silhouette.
+    thread: SpecThread | None = None
+    tolerance: str | None = None
+    roughness: str | None = None
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
@@ -112,9 +252,60 @@ class SpecBody(BaseModel):
     outer: list[SpecSection] = Field(default_factory=list)
     bore: list[SpecSection] = Field(default_factory=list)
     profile: SpecPrismaticProfile | None = None
+    # Where the bore starts and whether it comes out the other side. Before
+    # this, every bore was drawn and built as a through hole from the left face,
+    # because that was the only thing the contract could say — a blind or
+    # offset bore came out as a different part with the same dimensions.
+    bore_start_mm: float = Field(default=0.0, ge=0)
+    bore_from_end: Literal["left", "right"] = "left"
+    bore_blind: bool | None = None
+    # Features cut INTO the body. None of these change the stepped silhouette,
+    # which is why they live beside it rather than in outer[].
+    chamfers: list[SpecChamfer] = Field(default_factory=list)
+    fillets: list[SpecFillet] = Field(default_factory=list)
+    grooves: list[SpecGroove] = Field(default_factory=list)
+    keyways: list[SpecKeyway] = Field(default_factory=list)
+    cross_holes: list[SpecCrossHole] = Field(default_factory=list)
     # Accepted only for compatibility with already stored prototype responses.
     # The deterministic drafter still requires explicit, complete outer[] data.
     features: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _features_must_fit_the_body(self) -> "SpecBody":
+        """A feature outside the material it is cut into is a misread.
+
+        Checked here rather than at build time because the kernel would either
+        fail obscurely or, worse, succeed on a part that is not the one drawn.
+        """
+        total_length = sum(
+            section.length_mm for section in self.outer if section.length_mm
+        )
+        max_radius = max(
+            (section.diameter_mm / 2.0 for section in self.outer), default=0.0
+        )
+        if total_length <= 0:
+            return self
+        for index, groove in enumerate(self.grooves):
+            if not (0.0 <= groove.axial_position_mm <= total_length):
+                raise ValueError(
+                    f"groove {index} sits at {groove.axial_position_mm} mm, "
+                    f"outside the {total_length} mm part"
+                )
+            if groove.depth_mm and max_radius and groove.depth_mm >= max_radius:
+                raise ValueError(f"groove {index} is deeper than the part's radius")
+        for index, keyway in enumerate(self.keyways):
+            if keyway.axial_start_mm < 0 or (
+                keyway.axial_start_mm + keyway.length_mm > total_length + 1e-6
+            ):
+                raise ValueError(f"keyway {index} runs past the end of the part")
+            if max_radius and keyway.depth_mm >= max_radius:
+                raise ValueError(f"keyway {index} is deeper than the part's radius")
+        for index, hole in enumerate(self.cross_holes):
+            if not (0.0 <= hole.axial_position_mm <= total_length):
+                raise ValueError(
+                    f"cross hole {index} sits outside the {total_length} mm part"
+                )
+        return self
 
 
 class SpecView(BaseModel):

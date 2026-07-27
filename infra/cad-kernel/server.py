@@ -31,6 +31,11 @@ class Feature(BaseModel):
         # about Z; circular sections lofted along Z); shell hollows the final
         # solid; thread is cosmetic per ЕСКД (reported, not modeled).
         "revolve", "loft", "shell", "thread",
+        # Turned-part cuts a pocket cannot express: a pocket is cut from the top
+        # face straight down -Z, while an annular groove goes all the way round
+        # a cylindrical surface and a keyway is milled into that surface from
+        # the side. Both are on every real shaft drawing.
+        "groove", "keyway",
     ]
     source_entity_ids: list[str] = Field(default_factory=list, max_length=500)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -121,6 +126,70 @@ def _top_z_at(shape: Part.Shape, x: float, y: float) -> float:
     return max(levels)
 
 
+def _bottom_z_at(shape: Part.Shape, x: float, y: float) -> float:
+    """The LOWEST material level under a point — the mirror of _top_z_at.
+
+    A hole drilled from the right-hand face needs the face it starts at, and
+    that is the bottom of the material, not the top.
+    """
+    probe = Part.makeLine(
+        App.Vector(x, y, shape.BoundBox.ZMin - 1.0),
+        App.Vector(x, y, shape.BoundBox.ZMax + 1.0),
+    )
+    section = shape.section(probe)
+    levels = [vertex.Point.z for vertex in section.Vertexes]
+    if not levels:
+        raise HTTPException(422, "Hole center has no supporting material")
+    return min(levels)
+
+
+def _radial_hole_tool(
+    shape: Part.Shape,
+    feature: "Feature",
+    radius: float,
+    through: Any,
+    warnings: list[str],
+    request: "CompileRequest",
+) -> Part.Shape:
+    """A hole drilled ACROSS the axis, at an angular position round the shaft."""
+    z = _coordinate(feature.params, "axial_position_mm")
+    angle = (
+        _coordinate(feature.params, "angle_deg")
+        if "angle_deg" in feature.params
+        else 0.0
+    )
+    bounds = shape.BoundBox
+    if z < bounds.ZMin - 1e-6 or z > bounds.ZMax + 1e-6:
+        raise HTTPException(422, "Cross hole lies outside the part along its axis")
+    surface_radius = _radius_at(shape, z, inner=False)
+    if surface_radius <= 0.0:
+        raise HTTPException(422, "Cross hole has no supporting material at that position")
+    if radius >= surface_radius:
+        raise HTTPException(422, "Cross hole is wider than the material it passes through")
+
+    if through is False:
+        depth = _number(feature.params, "depth_mm", maximum=2.0 * surface_radius)
+        start_x = surface_radius + 1.0
+        length = depth + 1.0
+        origin = App.Vector(start_x, 0.0, z)
+        direction = App.Vector(-1.0, 0.0, 0.0)
+    else:
+        if through is None and not request.confirm_assumptions:
+            raise HTTPException(409, "Unknown cross-hole depth requires explicit confirmation")
+        if through is None:
+            warnings.append(
+                f"Cross hole {2 * radius:g}mm compiled as through because depth is unknown"
+            )
+        length = 2.0 * (surface_radius + 1.0)
+        origin = App.Vector(-(surface_radius + 1.0), 0.0, z)
+        direction = App.Vector(1.0, 0.0, 0.0)
+
+    tool = Part.makeCylinder(radius, length, origin, direction)
+    if abs(angle) > 1e-9:
+        tool.rotate(App.Vector(0.0, 0.0, 0.0), App.Vector(0.0, 0.0, 1.0), angle)
+    return tool
+
+
 def _edge_key(edge: Part.Edge) -> str:
     bounds = edge.BoundBox
     payload = {
@@ -160,6 +229,192 @@ def _find_edge(shape: Part.Shape, key: str) -> Part.Edge:
     if len(matches) != 1:
         raise HTTPException(422, "Selected edge no longer exists after preceding operations")
     return matches[0]
+
+
+def _resolve_edge(shape: Part.Shape, params: dict[str, Any]) -> Part.Edge:
+    """The edge an operation applies to: by key, or by what it IS.
+
+    An edge_key can only be known AFTER a solid exists, which is fine for a
+    human picking in the editor and impossible for a drawing being redrawn: the
+    reader knows "1x45° on the shoulder at Ø80", not a hash. So an operation may
+    instead describe the edge — a circle, at this axial position, of this
+    diameter — and it is resolved against the shape as it stands at that moment,
+    with every preceding cut already applied.
+
+    Ambiguity is an error rather than a guess, and the error LISTS the
+    candidates: picking the wrong shoulder silently produces a plausible part
+    that is not the one on the sheet.
+    """
+    key = params.get("edge_key")
+    if isinstance(key, str) and key:
+        return _find_edge(shape, key)
+    selector = params.get("edge_selector")
+    if not isinstance(selector, dict):
+        raise HTTPException(422, "Edge operation requires edge_key or edge_selector")
+
+    tolerance = selector.get("tolerance_mm")
+    tolerance = float(tolerance) if isinstance(tolerance, (int, float)) else 0.25
+    wanted_curve = selector.get("curve")
+    at_z = selector.get("at_z_mm")
+    diameter = selector.get("diameter_mm")
+
+    candidates: list[tuple[float, float, Part.Edge]] = []
+    for edge in shape.Edges:
+        curve = edge.Curve.__class__.__name__
+        if wanted_curve and curve != wanted_curve:
+            continue
+        centre = edge.BoundBox.Center
+        # A circular edge on a turned part lies in a plane of constant z, and
+        # its diameter is what the drawing calls the step.
+        edge_z = centre.z
+        edge_diameter = 2.0 * getattr(edge.Curve, "Radius", 0.0) if curve == "Circle" else 0.0
+        if at_z is not None and abs(edge_z - float(at_z)) > tolerance:
+            continue
+        if diameter is not None and abs(edge_diameter - float(diameter)) > tolerance:
+            continue
+        candidates.append((edge_z, edge_diameter, edge))
+
+    if not candidates:
+        raise HTTPException(
+            422,
+            "No edge matches the selector "
+            f"{ {k: v for k, v in selector.items() if k != 'tolerance_mm'} }",
+        )
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    index = selector.get("index")
+    if isinstance(index, int) and not isinstance(index, bool):
+        if not 0 <= index < len(candidates):
+            raise HTTPException(
+                422, f"Edge selector index {index} out of range (0..{len(candidates) - 1})"
+            )
+        return candidates[index][2]
+    if len(candidates) > 1:
+        described = ", ".join(
+            f"(z={z:.3f}, Ø{d:.3f})" for z, d, _edge in candidates[:8]
+        )
+        raise HTTPException(
+            422,
+            f"Edge selector matches {len(candidates)} edges: {described}. "
+            "Add index or narrow at_z_mm/diameter_mm.",
+        )
+    return candidates[0][2]
+
+
+def _groove_tool(shape: Part.Shape, feature: "Feature") -> Part.Shape:
+    """The material an annular groove removes (ГОСТ 8820 and friends).
+
+    A groove goes all the way round the turned surface, so the tool is a ring:
+    the cylinder that reaches the surface minus the one that stays. Depth is
+    measured inward from the LOCAL surface, which is what the sheet dimensions
+    — a groove on a Ø80 step and the same groove on a Ø102 step are the same
+    groove, at different radii.
+    """
+    position = _coordinate(feature.params, "axial_position_mm")
+    width = _number(feature.params, "width_mm")
+    internal = bool(feature.params.get("internal"))
+    z0 = position - width / 2.0
+    bounds = shape.BoundBox
+    if z0 < bounds.ZMin - 1e-6 or z0 + width > bounds.ZMax + 1e-6:
+        raise HTTPException(422, "Groove lies outside the part along its axis")
+
+    surface_radius = _radius_at(shape, position, inner=internal)
+    if surface_radius <= 0.0:
+        raise HTTPException(422, "Groove has no supporting material at that position")
+    root = feature.params.get("root_diameter_mm")
+    if isinstance(root, (int, float)) and not isinstance(root, bool):
+        root_radius = float(root) / 2.0
+    else:
+        depth = _number(feature.params, "depth_mm")
+        root_radius = (
+            surface_radius + depth if internal else surface_radius - depth
+        )
+    if not internal and root_radius <= 0.0:
+        raise HTTPException(422, "Groove is deeper than the material it cuts into")
+
+    origin = App.Vector(0.0, 0.0, z0)
+    if internal:
+        # An internal groove widens the bore: cut out to the root radius.
+        return Part.makeCylinder(root_radius, width, origin).cut(
+            Part.makeCylinder(surface_radius, width, origin)
+        )
+    outer = Part.makeCylinder(surface_radius + 1.0, width, origin)
+    return outer.cut(Part.makeCylinder(root_radius, width, origin))
+
+
+def _keyway_tool(shape: Part.Shape, feature: "Feature") -> Part.Shape:
+    """The slot a keyway cutter leaves in a shaft (ГОСТ 23360).
+
+    Built lying along the axis at angle 0 and then rotated into place, because
+    that is how the sheet states it: a start, a length, a width, a depth from
+    the surface, and an angular position. A closed keyway ends in two radii, so
+    the tool is a rectangle with a cylinder at each end.
+    """
+    start = _coordinate(feature.params, "axial_start_mm")
+    length = _number(feature.params, "length_mm")
+    width = _number(feature.params, "width_mm")
+    depth = _number(feature.params, "depth_mm")
+    angle = _coordinate(feature.params, "angle_deg") if "angle_deg" in feature.params else 0.0
+    end_type = feature.params.get("end_type") or "closed"
+
+    bounds = shape.BoundBox
+    if start < bounds.ZMin - 1e-6 or start + length > bounds.ZMax + 1e-6:
+        raise HTTPException(422, "Keyway runs past the end of the part")
+    surface_radius = _radius_at(shape, start + length / 2.0, inner=False)
+    if surface_radius <= 0.0:
+        raise HTTPException(422, "Keyway has no supporting material at that position")
+    if depth >= surface_radius:
+        raise HTTPException(422, "Keyway is deeper than the shaft radius")
+
+    # The cutter is built in x: it spans from the surface inward by `depth`,
+    # plus 1 mm of overshoot above the surface so the cut is clean.
+    x0 = surface_radius - depth
+    height = depth + 1.0
+    if end_type == "closed":
+        body_length = max(length - width, 0.0)
+        tool = Part.makeBox(
+            height, width, body_length,
+            App.Vector(x0, -width / 2.0, start + width / 2.0),
+        )
+        for centre_z in (start + width / 2.0, start + length - width / 2.0):
+            cap = Part.makeCylinder(
+                width / 2.0, height,
+                App.Vector(x0, 0.0, centre_z),
+                App.Vector(1.0, 0.0, 0.0),
+            )
+            tool = tool.fuse(cap)
+    else:
+        # An open keyway runs out through the end face; no end radii.
+        tool = Part.makeBox(
+            height, width, length, App.Vector(x0, -width / 2.0, start)
+        )
+    if abs(angle) > 1e-9:
+        tool.rotate(App.Vector(0.0, 0.0, 0.0), App.Vector(0.0, 0.0, 1.0), angle)
+    return tool
+
+
+def _radius_at(shape: Part.Shape, z: float, *, inner: bool) -> float:
+    """The material radius of a turned part at one axial position.
+
+    Measured off the solid rather than taken from the request: by the time a
+    groove is cut, earlier features have already changed the shape, and a depth
+    applied to the wrong radius cuts either air or the axis.
+    """
+    plane = Part.makePlane(
+        max(shape.BoundBox.XLength, shape.BoundBox.YLength) * 4.0 + 10.0,
+        max(shape.BoundBox.XLength, shape.BoundBox.YLength) * 4.0 + 10.0,
+        App.Vector(
+            -(max(shape.BoundBox.XLength, shape.BoundBox.YLength) * 2.0 + 5.0),
+            -(max(shape.BoundBox.XLength, shape.BoundBox.YLength) * 2.0 + 5.0),
+            z,
+        ),
+    )
+    section = shape.section(plane)
+    radii = [
+        math.hypot(vertex.Point.x, vertex.Point.y) for vertex in section.Vertexes
+    ]
+    if not radii:
+        return 0.0
+    return min(radii) if inner else max(radii)
 
 
 def _revolve_points(raw: Any, label: str) -> list[App.Vector]:
@@ -349,23 +604,18 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
         shape = shape.fuse(tool) if feature.kind == "boss" else shape.cut(tool)
 
     for feature in request.candidate.features:
-        if feature.kind not in ("fillet", "chamfer"):
+        if feature.kind not in ("groove", "keyway"):
             continue
-        key = feature.params.get("edge_key")
-        if not isinstance(key, str):
-            raise HTTPException(422, "Edge operation requires edge_key")
-        edge = _find_edge(shape, key)
-        size = _number(feature.params, "size_mm", maximum=max(width, height, depth))
-        try:
-            shape = (
-                shape.makeFillet(size, [edge])
-                if feature.kind == "fillet"
-                else shape.makeChamfer(size, [edge])
+        tool = (
+            _groove_tool(shape, feature)
+            if feature.kind == "groove"
+            else _keyway_tool(shape, feature)
+        )
+        shape = shape.cut(tool)
+        if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
+            raise HTTPException(
+                422, f"OpenCascade produced invalid geometry after {feature.kind}"
             )
-        except Exception as exc:
-            raise HTTPException(422, f"OpenCascade rejected {feature.kind}: {exc}") from exc
-        if shape.isNull() or not shape.isValid():
-            raise HTTPException(422, f"OpenCascade produced invalid geometry after {feature.kind}")
 
     for feature in request.candidate.features:
         if feature.kind != "hole":
@@ -380,6 +630,12 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
             width=width, height=height,
         )
         through = feature.params.get("through")
+        # A cross-drilling runs ACROSS the axis, not along it — the oil ways and
+        # dowel holes on every shaft drawing. Same feature, different direction,
+        # so it is a parameter rather than a second kind.
+        if (feature.params.get("axis") or "z") == "radial":
+            shape = shape.cut(_radial_hole_tool(shape, feature, radius, through, warnings, request))
+            continue
         if through is True:
             cutter = Part.makeCylinder(
                 radius,
@@ -387,16 +643,32 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
                 App.Vector(x, y, shape.BoundBox.ZMin - 1.0),
             )
         elif through is False:
-            top_z = _top_z_at(shape, x, y)
-            available_depth = top_z - shape.BoundBox.ZMin
-            hole_depth = _number(feature.params, "depth_mm", maximum=available_depth)
-            if hole_depth >= available_depth - 1e-6:
-                raise HTTPException(422, "Blind hole depth must be smaller than local material depth")
-            cutter = Part.makeCylinder(
-                radius,
-                hole_depth + 1.0,
-                App.Vector(x, y, top_z - hole_depth),
-            )
+            # Which face the hole is drilled from. A bore that starts at the
+            # right-hand face was previously impossible to state, so it came out
+            # of the wrong end of the part with every dimension still correct.
+            from_face = feature.params.get("from_face") or "zmax"
+            if from_face == "zmin":
+                bottom_z = _bottom_z_at(shape, x, y)
+                available_depth = shape.BoundBox.ZMax - bottom_z
+                hole_depth = _number(feature.params, "depth_mm", maximum=available_depth)
+                if hole_depth >= available_depth - 1e-6:
+                    raise HTTPException(
+                        422, "Blind hole depth must be smaller than local material depth"
+                    )
+                cutter = Part.makeCylinder(
+                    radius, hole_depth + 1.0, App.Vector(x, y, bottom_z - 1.0)
+                )
+            else:
+                top_z = _top_z_at(shape, x, y)
+                available_depth = top_z - shape.BoundBox.ZMin
+                hole_depth = _number(feature.params, "depth_mm", maximum=available_depth)
+                if hole_depth >= available_depth - 1e-6:
+                    raise HTTPException(422, "Blind hole depth must be smaller than local material depth")
+                cutter = Part.makeCylinder(
+                    radius,
+                    hole_depth + 1.0,
+                    App.Vector(x, y, top_z - hole_depth),
+                )
         else:
             if not request.confirm_assumptions:
                 raise HTTPException(409, "Unknown hole depth requires explicit confirmation")
@@ -407,6 +679,43 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
                 App.Vector(x, y, shape.BoundBox.ZMin - 1.0),
             )
         shape = shape.cut(cutter)
+
+    # Edge operations come AFTER every cut: a chamfer belongs to the edge that
+    # exists once the part is fully cut, and asking for one before the hole is
+    # drilled means the mouth of that hole can never be chamfered. It also fails
+    # loudly rather than silently landing on some other edge.
+    for feature in request.candidate.features:
+        if feature.kind not in ("fillet", "chamfer"):
+            continue
+        edge = _resolve_edge(shape, feature.params)
+        size = _number(feature.params, "size_mm", maximum=max(width, height, depth))
+        # A refused edge operation must not cost the part. OpenCascade declines
+        # these routinely — an edge too short for the radius, a fillet across a
+        # groove it cannot blend — and losing a whole shaft over a 1x45° corner
+        # is the wrong trade. It declines in TWO ways, measured on this build:
+        # it raises (StdFail_NotDone), or it returns a shape that is simply not
+        # valid. Both mean the same thing, so both keep the previous solid and
+        # report the feature as not built.
+        previous = shape
+        try:
+            candidate = (
+                shape.makeFillet(size, [edge])
+                if feature.kind == "fillet"
+                else shape.makeChamfer(size, [edge])
+            )
+        except Exception as exc:
+            warnings.append(
+                f"{feature.kind} not built: OpenCascade rejected it ({str(exc)[:120]})"
+            )
+            continue
+        if candidate.isNull() or not candidate.isValid():
+            shape = previous
+            warnings.append(
+                f"{feature.kind} not built: OpenCascade returned invalid geometry "
+                f"for size {size:g} mm"
+            )
+            continue
+        shape = candidate
 
     # D3: shell hollows the finished solid (after all add/cut operations).
     shells = [f for f in request.candidate.features if f.kind == "shell"]
@@ -829,7 +1138,14 @@ def _cut_face_outlines(
 
 
 def _techdraw_edges(view, samples: int) -> dict[str, list[dict[str, Any]]]:
-    """Edges of a computed TechDraw view, in the view's own millimetres."""
+    """Edges of a computed TechDraw view, in the view's own millimetres.
+
+    Each visible edge carries its ``edge_index`` — the number a dimension
+    addresses it by (``References2D = [(view, "EdgeN")]``). Without it the
+    caller can SEE every edge of the view and still not name one, which is why
+    dimensioning a derived sheet was impossible: the geometry came back, the
+    handles did not.
+    """
 
     def uv(point: App.Vector) -> tuple[float, float]:
         return (round(point.x, 6), round(point.y, 6))
@@ -842,9 +1158,14 @@ def _techdraw_edges(view, samples: int) -> dict[str, list[dict[str, Any]]]:
             edges = getattr(view, getter)()
         except Exception:  # noqa: BLE001 — a view with no hidden set is normal
             continue
-        for edge in edges or []:
+        for index, edge in enumerate(edges or []):
             item = _project_edge(edge, 1.0, 1.0, samples)
             if item is not None:
+                # Visible edges are TechDraw's Edge0..N in this order; hidden
+                # ones are not addressable as dimension references, so they are
+                # left unnumbered rather than given a number that means nothing.
+                if key == "visible":
+                    item["edge_index"] = index
                 out[key].append(item)
     return out
 
