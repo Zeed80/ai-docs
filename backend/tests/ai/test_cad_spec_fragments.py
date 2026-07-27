@@ -58,10 +58,49 @@ async def test_fragments_win_when_they_produced_geometry(monkeypatch):
     monkeypatch.setattr(
         "app.ai.cad_recognize.spec_vectorize.read_drawing_spec_consensus", fake_whole
     )
-    result = await read_spec_best_effort(b"x")
-    assert result is fragment_spec
-    # The expensive whole-sheet read must not run when it is not needed.
-    assert called == ["fragments"]
+    result = await read_spec_best_effort(b"x", passes=3)
+    assert result["main_view"]["profile"]["diameter_mm"] == 560
+    assert result["title_block"]["material"] == "Чугун СЧ20"
+    # The expensive whole-sheet read must not run when it is not needed — but
+    # the fragment read itself now runs once per pass, because a single read is
+    # a single bet and this pipeline claims agreement, not luck.
+    assert called == ["fragments"] * 3
+    assert result["consensus"]["usable"] == 3
+    # Three identical reads are not a disagreement about anything.
+    assert result["unresolved"] == []
+
+
+@pytest.mark.asyncio
+async def test_fragment_passes_that_disagree_do_not_ship_a_lucky_read(monkeypatch):
+    """The value that changes between passes is exactly the one to withhold."""
+    reads = [
+        {"main_view": {"outer": [
+            {"diameter_mm": 30, "length_mm": 40},
+            {"diameter_mm": 50, "length_mm": 60},
+        ]}},
+        {"main_view": {"outer": [
+            {"diameter_mm": 30, "length_mm": 40},
+            {"diameter_mm": 50, "length_mm": 95},
+        ]}},
+        {"main_view": {"outer": [{"diameter_mm": 30, "length_mm": 40}]}},
+    ]
+    order = iter(reads)
+
+    async def fake_fragments(*_a, **_k):
+        return next(order)
+
+    async def fake_whole(*_a, **_k):
+        return {}
+
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_fragments.read_spec_by_fragments", fake_fragments
+    )
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_vectorize.read_drawing_spec_consensus", fake_whole
+    )
+    result = await read_spec_best_effort(b"x", passes=3)
+    assert not (result.get("main_view") or {}).get("outer")
+    assert any("профил" in item for item in result["unresolved"])
 
 
 @pytest.mark.asyncio

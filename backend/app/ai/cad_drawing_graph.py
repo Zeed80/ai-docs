@@ -1214,7 +1214,7 @@ async def read_drawing_graph_attempt(
         from app.ai.router import ai_router
 
         router = ai_router
-    images, tile_descriptions = _spec_images(image)
+    images, tile_descriptions, _coverage = _spec_images(image)
     request = AIRequest(
         task=AITask.CAD_DRAWING_GRAPH_READ,
         messages=[ChatMessage(

@@ -391,8 +391,53 @@ async def read_description_spec(
         return {}
 
 
-def _spec_images(image, *, tile_size: int = 1400, overlap: int = 160) -> tuple[list[bytes], list[str]]:
-    """Build a context image plus source-resolution tiles without data loss."""
+_MAX_SPEC_TILES = 8
+
+
+def _tile_budget_boxes(
+    boxes: list[tuple[int, int, int, int]], columns: int, rows: int, budget: int
+) -> list[tuple[int, int, int, int]]:
+    """Thin a tile grid down to ``budget`` WITHOUT dropping a band of the sheet.
+
+    The tiles are a row-major grid, so picking evenly spaced entries of the flat
+    list interacts with the row width and can miss whole COLUMNS: measured on a
+    wide sheet, an 8x3 grid kept only 6 of the 8 columns, and 9x2 and 12x2 kept
+    8 of 9 and 8 of 12. A vertical band of the drawing was simply never shown to
+    the reader, and nothing reported it.
+
+    So the grid is thinned by keeping at least one tile in every row and every
+    column first, and only then spending what is left of the budget on the rest.
+    """
+    if len(boxes) <= budget:
+        return boxes
+    keep: set[int] = set()
+    # One per row (walking the columns so the picks are not all in column 0),
+    # then one per column — together this guarantees no band is invisible.
+    for row in range(rows):
+        keep.add(row * columns + (row % columns))
+    for column in range(columns):
+        if not any(index % columns == column for index in keep):
+            keep.add((column % rows) * columns + column)
+    if len(keep) > budget:
+        keep = set(sorted(keep)[:budget])
+    remaining = [index for index in range(len(boxes)) if index not in keep]
+    room = budget - len(keep)
+    if room > 0 and remaining:
+        stride = max(1, len(remaining) // room)
+        keep.update(remaining[::stride][:room])
+    return [boxes[index] for index in sorted(keep)]
+
+
+def _spec_images(
+    image, *, tile_size: int = 1400, overlap: int = 160
+) -> tuple[list[bytes], list[str], float]:
+    """Build a context image plus source-resolution tiles without data loss.
+
+    Returns the encoded images, their descriptions and the SHARE OF THE SHEET
+    the tiles actually cover. A sheet too large for the tile budget is shown
+    only in part, and the caller records that: a value the reader never saw is
+    missing for a reason nobody could otherwise discover.
+    """
     import io
 
     context = image.copy()
@@ -402,7 +447,7 @@ def _spec_images(image, *, tile_size: int = 1400, overlap: int = 160) -> tuple[l
     encoded = [buffer.getvalue()]
     descriptions = [f"image 0: overview 0,0,{image.width},{image.height}"]
     if image.width <= tile_size and image.height <= tile_size:
-        return encoded, descriptions
+        return encoded, descriptions, 1.0
     step = tile_size - overlap
     xs = list(range(0, max(image.width - tile_size, 0) + 1, step))
     ys = list(range(0, max(image.height - tile_size, 0) + 1, step))
@@ -412,16 +457,41 @@ def _spec_images(image, *, tile_size: int = 1400, overlap: int = 160) -> tuple[l
         ys.append(max(image.height - tile_size, 0))
     # Bound latency for unusually large sheets while covering both edges and centre.
     boxes = [(x, y, min(x + tile_size, image.width), min(y + tile_size, image.height)) for y in ys for x in xs]
-    if len(boxes) > 8:
-        indexes = sorted({0, len(boxes) - 1, *(round(i * (len(boxes) - 1) / 7) for i in range(8))})
-        boxes = [boxes[index] for index in indexes]
+    full_grid = len(boxes)
+    boxes = _tile_budget_boxes(boxes, len(xs), len(ys), _MAX_SPEC_TILES)
     for index, box in enumerate(boxes, start=1):
         tile = image.crop(box)
         tile_buffer = io.BytesIO()
         tile.save(tile_buffer, format="PNG")
         encoded.append(tile_buffer.getvalue())
         descriptions.append(f"image {index}: source bbox {box[0]},{box[1]},{box[2]},{box[3]}")
-    return encoded, descriptions
+    coverage = _tile_coverage(boxes, image.width, image.height)
+    if len(boxes) < full_grid:
+        descriptions.append(
+            f"внимание: показано {len(boxes)} из {full_grid} фрагментов листа"
+        )
+    return encoded, descriptions, coverage
+
+
+def _tile_coverage(
+    boxes: list[tuple[int, int, int, int]], width: int, height: int
+) -> float:
+    """Share of the sheet the chosen tiles cover, overlaps counted once."""
+    if not boxes or width <= 0 or height <= 0:
+        return 0.0
+    # Sheets are small enough that a coarse occupancy grid is exact enough and
+    # needs no geometry library.
+    cells = 64
+    seen: set[tuple[int, int]] = set()
+    for x0, y0, x1, y1 in boxes:
+        cx0 = int(x0 * cells / width)
+        cx1 = max(cx0 + 1, math.ceil(x1 * cells / width))
+        cy0 = int(y0 * cells / height)
+        cy1 = max(cy0 + 1, math.ceil(y1 * cells / height))
+        for cy in range(cy0, min(cy1, cells)):
+            for cx in range(cx0, min(cx1, cells)):
+                seen.add((cx, cy))
+    return round(len(seen) / float(cells * cells), 3)
 
 
 async def read_drawing_spec_consensus(
@@ -488,7 +558,7 @@ async def read_drawing_spec(
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception:  # noqa: BLE001
         return {}
-    images, tile_descriptions = _spec_images(image)
+    images, tile_descriptions, tile_coverage = _spec_images(image)
     # Dedicated slot for the spec reader (Settings → Models → Оцифровка). When it
     # has no assignment, fall back to the shared drawing-analysis VLM so behaviour
     # is unchanged out of the box.
@@ -535,10 +605,21 @@ async def read_drawing_spec(
     if not parsed:
         return {}
     try:
-        return EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
+        validated = EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
     except ValidationError as exc:
         _log_spec_rejected("drawing_image", exc)
         return {}
+    # A sheet the reader was only shown in part explains a missing value better
+    # than any guess about the model. Optional: it never blocks geometry, but it
+    # must be visible when something turns out to be missing.
+    # Carried as a NOTE rather than a field: consensus rebuilds the spec dict
+    # from scratch and keeps only the contract's own keys, so an extra field
+    # would silently vanish on the multi-pass path while the note survives.
+    if tile_coverage < 0.999:
+        validated.setdefault("optional_unresolved", []).append(
+            f"лист показан модели не полностью: покрыто {tile_coverage:.0%} площади"
+        )
+    return validated
 
 
 _LIST_FIELDS_TOP = (

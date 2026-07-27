@@ -528,6 +528,74 @@ def _matches_callout(value: float, candidates: list[float], tol: float = 0.02) -
     return any(abs(value - candidate) <= window for candidate in candidates)
 
 
+def _checked_bore(
+    bore: list[dict], outer: list[dict], callouts: dict
+) -> tuple[list[dict], str | None]:
+    """The bore, but only if the sheet supports it.
+
+    The outer contour earns four guards on the way in — the chain must rise, it
+    must not be evenly spaced, its numbers must appear among the callouts, and
+    it must agree with the overall size. The bore had none: it came from its own
+    answer to a separate question and went straight into the part, so a bore the
+    reader invented, or read off the wrong view, became a hole through a real
+    shaft. Ø18 where the sheet says Ø80H7 is exactly that failure.
+
+    Rejecting the bore does NOT reject the part: the outer profile stays and the
+    reason travels with it, so the reviewer sees a solid shaft plus "the bore was
+    not confirmed" instead of a hollow one nobody checked.
+    """
+    sections = [item for item in bore if isinstance(item, dict)]
+    if not sections:
+        return [], None
+
+    diameters_seen = _callout_numbers(callouts, "diameter")
+    off_sheet = [
+        _num(item.get("diameter_mm")) for item in sections
+        if _num(item.get("diameter_mm")) is not None
+        and not _matches_callout(_num(item.get("diameter_mm")), diameters_seen)
+    ]
+    if diameters_seen and len(off_sheet) > len(sections) / 2:
+        return [], (
+            "диаметров расточки нет среди прочитанных выносок: "
+            + ", ".join(f"{value:g}" for value in off_sheet[:4])
+        )
+
+    outer_diameters = [
+        _num(item.get("diameter_mm")) for item in outer if isinstance(item, dict)
+    ]
+    largest_outer = max((value for value in outer_diameters if value), default=None)
+    largest_bore = max(
+        (value for value in (_num(item.get("diameter_mm")) for item in sections) if value),
+        default=None,
+    )
+    if largest_outer and largest_bore and largest_bore >= largest_outer:
+        return [], (
+            f"расточка Ø{largest_bore:g} не меньше наружного Ø{largest_outer:g} — "
+            "прочитан не тот контур"
+        )
+
+    bore_length = sum(
+        value for value in (_num(item.get("length_mm")) for item in sections) if value
+    )
+    outer_length = sum(
+        value for value in
+        (_num(item.get("length_mm")) for item in outer if isinstance(item, dict))
+        if value
+    )
+    if bore_length and outer_length and bore_length > outer_length * 1.02:
+        return [], (
+            f"расточка длиной {bore_length:g} мм длиннее детали ({outer_length:g} мм)"
+        )
+    return sections, None
+
+
+def _num(value: Any) -> float | None:
+    """Best-effort float from a fragment answer (None for anything else)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 # A drawing already says which of its numbers are diameters: it marks them Ø.
 # Everything else on a shaft sheet — 150, 78, 240, 470 — is a length. Pooling
 # the two into one list, which is what this did, hands the reader a bag of
@@ -831,13 +899,20 @@ async def read_spec_by_fragments(
             outer = [s for s in (geometry.get("outer") or []) if isinstance(s, dict)]
         else:
             geometry = await _ask(_ROTATION_PROMPT, geometry_view, num_predict=4000, schema=_ROTATION_SCHEMA, **ask)
-        bore = [s for s in (geometry.get("bore") or []) if isinstance(s, dict)]
+        # The bore answers a separate question, so it is checked against the
+        # sheet the same way the outer chain is — an unchecked cavity is a hole
+        # through a real part.
+        bore, bore_problem = _checked_bore(
+            geometry.get("bore") or [], outer, callouts
+        )
         if outer:
             body["outer"] = outer
         else:
             unresolved.append("ступенчатый контур не прочитан")
         if bore:
             body["bore"] = bore
+        elif bore_problem:
+            unresolved.append(f"расточка: {bore_problem}")
     elif kind in ("plate", "flange"):
         profile = await _profile_by_assignment(
             geometry_view, callouts, router=router, confidential=confidential
@@ -924,6 +999,46 @@ def _has_geometry(spec: dict) -> bool:
     return bool(body.get("outer") or (body.get("profile") or {}).get("shape"))
 
 
+async def read_fragments_consensus(
+    image_bytes: bytes, *, passes: int, router: Any | None = None,
+    confidential: bool = True,
+) -> dict:
+    """Read the sheet in fragments several times and keep what agrees.
+
+    A single fragment read is still a single bet on a stochastic model, and the
+    reader is not merely inaccurate — it is INCONSISTENT: two passes over the
+    same shaft disagreed about how many steps it has (4 versus 12). Reading once
+    and shipping the answer turns that coin flip into a dimension nobody can
+    tell from a measured one.
+
+    So the same intersection the whole-sheet path has always used is applied
+    here. Consensus can only REMOVE values, never add them, so this cannot
+    invent a part; at worst it declines to build one a single lucky pass would
+    have built, and says which value the passes disagreed on.
+    """
+    from app.ai.cad_recognize.spec_consensus import consensus_spec
+
+    reads: list[dict] = []
+    for _attempt in range(max(1, passes)):
+        spec = await read_spec_by_fragments(
+            image_bytes, router=router, confidential=confidential
+        )
+        if spec:
+            reads.append(spec)
+    if not reads:
+        return {}
+    merged = consensus_spec(reads)
+    if not merged:
+        return {}
+    # Telemetry the contract drops: which narrow question failed, and how the
+    # passes compared. Taken from the richest read so a pass that simply
+    # answered less does not erase it.
+    richest = max(reads, key=lambda spec: len(str(spec.get("fragments") or "")))
+    if richest.get("fragments"):
+        merged["fragments"] = richest["fragments"]
+    return merged
+
+
 async def read_spec_best_effort(
     image_bytes: bytes, *, passes: int = 3, router: Any | None = None,
     confidential: bool = True,
@@ -936,14 +1051,19 @@ async def read_spec_best_effort(
     consensus sometimes manages. So the fragments run first and the expensive
     read happens only when geometry is what is missing.
 
+    BOTH paths go through consensus. Until now the fragment path returned its
+    single read directly whenever it produced geometry — which is the common
+    case — so in a normal run the multi-pass agreement this pipeline advertises
+    never happened at all, and ``passes`` only ever reached the fallback.
+
     The stamp is taken from the fragment read even when geometry came from the
     fallback: on the flange it read all four fields correctly where whole-sheet
     reading returned an empty title block.
     """
     from app.ai.cad_recognize.spec_vectorize import read_drawing_spec_consensus
 
-    fragments = await read_spec_by_fragments(
-        image_bytes, router=router, confidential=confidential
+    fragments = await read_fragments_consensus(
+        image_bytes, passes=passes, router=router, confidential=confidential
     )
     if fragments and _has_geometry(fragments):
         return fragments

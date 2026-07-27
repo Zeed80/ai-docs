@@ -98,7 +98,11 @@ def _vote_sections(
     """
     populated = [read for read in reads if read]
     if not populated:
-        return None, 0, "профиль не прочитан ни в одном проходе"
+        # Every pass agreed there is nothing here — a flange has no stepped
+        # outer profile at all. Agreement that a thing is absent is agreement,
+        # not a disagreement, and reporting it as one put "профиль не прочитан"
+        # into unresolved for every correctly-read plate and flange.
+        return None, 0, None
     best: tuple[list[dict], int] | None = None
     for candidate in populated:
         agreeing = sum(1 for other in populated if _sections_agree(other, candidate))
@@ -198,10 +202,16 @@ def consensus_spec(specs: list[dict], *, minimum: int = MIN_AGREEMENT) -> dict:
     disagreements: list[str] = []
     merged: dict[str, Any] = {"schema_version": 1}
 
-    part, part_votes = _vote_text([spec.get("part") for spec in usable], minimum=minimum)
+    part_reads = [spec.get("part") for spec in usable]
+    part, part_votes = _vote_text(part_reads, minimum=minimum)
     merged["part"] = part or ""
-    if part is None:
-        disagreements.append("проходы не сошлись на названии детали")
+    # Only a real conflict counts: if no pass read a name at all, they agree
+    # that the stamp did not give one. A name is metadata anyway — it never
+    # blocks geometry, so a genuine conflict is optional, not unresolved.
+    if part is None and any(_text_key(value) for value in part_reads):
+        optional_conflicts = ["проходы не сошлись на названии детали"]
+    else:
+        optional_conflicts = []
 
     main_bodies = [spec.get("main_view") or {} for spec in usable]
     main, main_problems = _body_consensus(
@@ -212,7 +222,7 @@ def consensus_spec(specs: list[dict], *, minimum: int = MIN_AGREEMENT) -> dict:
 
     # Title-block metadata never blocks geometry, so a disagreement here is
     # optional rather than fatal.
-    optional: list[str] = []
+    optional: list[str] = list(optional_conflicts)
     title: dict[str, Any] = {}
     title_reads = [spec.get("title_block") or {} for spec in usable]
     for field in ("material", "designation", "scale", "company", "mass"):

@@ -124,7 +124,7 @@ async def evaluate_model(
     from PIL import Image
 
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    images, descriptions = _spec_images(image)
+    images, descriptions, _coverage = _spec_images(image)
     if single_image:
         # Production sends an overview plus source-resolution tiles. Several
         # models answer that with an empty string after minutes of GPU, so this

@@ -23,6 +23,7 @@ decides whether a contradiction blocks construction or goes to review.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,18 +54,28 @@ def _num(value: Any) -> float | None:
 
 
 def _stated_overall_length(spec: dict) -> float | None:
-    """The largest plain-length callout the reader captured, if any."""
+    """The largest plain-length callout the reader captured, if any.
+
+    A callout is rarely a bare number: the sheet writes ``470h14``, and a strict
+    ``float()`` used to drop exactly those — so on a drawing that toleranced its
+    overall size this check silently did nothing. The NOMINAL is parsed out and
+    the tolerance ignored; what still gets rejected is everything that is not a
+    length at all (diameters, radii, threads, angles and chamfers), because
+    mistaking one of those for the overall size is the failure this guards.
+    """
     values: list[float] = []
     for dimension in spec.get("dimensions") or []:
         if not isinstance(dimension, dict):
             continue
         text = str(dimension.get("value") or "").strip()
-        if not text or text[:1] in ("Ø", "⌀", "M", "R", "м", "м"):
+        if not text or text[:1] in ("Ø", "⌀", "M", "R", "м"):
             continue
-        try:
-            values.append(float(text.replace(",", ".")))
-        except ValueError:
+        # An angle or a chamfer ("45°", "1x45°", "2×45") is not a length.
+        if "°" in text or re.search(r"\d\s*[x×]\s*\d", text):
             continue
+        match = re.match(r"^\s*(\d+(?:[.,]\d+)?)", text)
+        if match:
+            values.append(float(match.group(1).replace(",", ".")))
     return max(values) if values else None
 
 
@@ -173,7 +184,11 @@ def check_spec_arithmetic(spec: dict) -> list[CrossCheckFinding]:
                 ))
 
         # When the sheet also stated an overall length, the sum must match it.
-        overall = _stated_overall_length(spec)
+        # Only when the sheet draws ONE body: the callouts are a single flat
+        # list with no body attached, so on a multi-part sheet the largest
+        # length belongs to whichever part is longest — comparing every body's
+        # sum against it says nothing about the others.
+        overall = _stated_overall_length(spec) if len(bodies) == 1 else None
         if overall and total and total > overall * (1 + _SUM_TOLERANCE):
             findings.append(CrossCheckFinding(
                 code="sections_exceed_stated_overall",
@@ -358,15 +373,6 @@ def measure_dominant_circle_px(ink: Any) -> float | None:
     return float(max(c[2] for c in circles[0]))
 
 
-# NOT IMPLEMENTED, deliberately: "is the stated hole actually drawn?".
-# Measured on the flange sheet, where a Ø80 bore is genuinely present and mm/px
-# is known from the outline. At param2 60/45/35 the detector does not find the
-# real bore at all — a correct reading would be flagged as wrong. At param2 25
-# it finds it, but then it also reports 3 circles at Ø200 and 3 at Ø300, where
-# the sheet draws none. A check that misses the true case at one threshold and
-# hallucinates at the other carries no information, and a false alarm on a
-# correct sheet is worse than no check. Left out until there is a detector that
-# can answer it; the honest fallback is the impossible-hole test below.
 def check_outline_against_image(
     spec: dict, dominant_radius_px: float | None
 ) -> list[CrossCheckFinding]:
@@ -378,6 +384,16 @@ def check_outline_against_image(
     inside what was measured — the check that would have caught a Ø80 bore read
     as Ø18, since a bore is not allowed to be larger than the outline it sits in
     once both are in the same units.
+
+    What it deliberately does NOT do is ask "is the stated hole actually drawn?".
+    Measured on the flange sheet, where a Ø80 bore is genuinely present and mm/px
+    is known from the outline: at param2 60/45/35 the detector does not find the
+    real bore at all — a correct reading would be flagged as wrong. At param2 25
+    it finds it, but then it also reports 3 circles at Ø200 and 3 at Ø300, where
+    the sheet draws none. A check that misses the true case at one threshold and
+    hallucinates at the other carries no information, and a false alarm on a
+    correct sheet is worse than no check. Left out until there is a detector that
+    can answer it; the honest fallback is the impossible-hole test below.
     """
     findings: list[CrossCheckFinding] = []
     if not dominant_radius_px or dominant_radius_px <= 0:
@@ -406,248 +422,6 @@ def check_outline_against_image(
                 details={"hole": position, "mm_per_px": round(mm_per_px, 4)},
             ))
     return findings
-
-
-def _spec_circle_diameters(spec: dict) -> list[float]:
-    """Every diameter the spec claims is drawn as a circle on the sheet."""
-    diameters: list[float] = []
-    for body in [spec.get("main_view") or {}, *(spec.get("parts") or [])]:
-        if not isinstance(body, dict):
-            continue
-        profile = body.get("profile")
-        if isinstance(profile, dict):
-            outer = _num(profile.get("diameter_mm"))
-            if outer:
-                diameters.append(outer)
-            for hole in profile.get("holes") or []:
-                value = _num(hole.get("diameter_mm")) if isinstance(hole, dict) else None
-                if value:
-                    diameters.append(value)
-            for pattern in profile.get("hole_patterns") or []:
-                if isinstance(pattern, dict):
-                    value = _num(pattern.get("hole_diameter_mm"))
-                    if value:
-                        diameters.append(value)
-    return sorted({round(value, 3) for value in diameters}, reverse=True)
-
-
-def check_spec_against_raster(
-    spec: dict, circle_radii_px: list[float]
-) -> list[CrossCheckFinding]:
-    """Compare the spec's diameter RATIOS with the ones measured on the sheet.
-
-    Scale-free on purpose: nobody has calibrated mm-per-pixel at this point, and
-    a ratio needs no calibration. Only the largest-to-smallest ratio is checked,
-    because that is the one a misread bore or outline distorts most and the one
-    least sensitive to a missed circle in the middle.
-    """
-    findings: list[CrossCheckFinding] = []
-    stated = _spec_circle_diameters(spec)
-    measured = sorted({round(r, 3) for r in circle_radii_px if r > 0}, reverse=True)
-    if len(stated) < 2 or len(measured) < 2:
-        # Silence here is NOT confirmation, and reporting it as "no errors"
-        # once let a flange pass while the check had measured a single 4 px
-        # hole. Measured 2026-07-25: the classical tracer decomposes large
-        # circles into segments by design, so on a flange sheet it fits only
-        # the tiny bolt holes. Preprocessing is not the cause — channel-min
-        # binarisation moved the ink fraction from 0.0164 to 0.0166 and still
-        # produced one circle.
-        return findings
-
-    stated_ratio = stated[0] / stated[-1]
-    measured_ratio = measured[0] / measured[-1]
-    if stated_ratio <= 0 or measured_ratio <= 0:
-        return findings
-    relative = abs(stated_ratio - measured_ratio) / measured_ratio
-    if relative > _RATIO_TOLERANCE * 5:
-        findings.append(CrossCheckFinding(
-            code="circle_ratio_mismatch",
-            message=(
-                "пропорции окружностей не сходятся с чертежом: по прочитанному "
-                f"наибольший/наименьший = {stated_ratio:.2f}, по изображению "
-                f"= {measured_ratio:.2f}"
-            ),
-            severity="error",
-            details={
-                "stated_ratio": round(stated_ratio, 3),
-                "measured_ratio": round(measured_ratio, 3),
-                "stated_diameters_mm": stated[:6],
-                "measured_radii_px": measured[:6],
-            },
-        ))
-    return findings
-
-
-def measure_dominant_circle_px(ink: Any) -> float | None:
-    """Radius of the one circle the sheet is unambiguous about, in pixels.
-
-    Tuned as a MEASURING tool, not a reconstruction one: at this threshold the
-    detector returns the dominant outline of a round part and nothing at all on
-    a shaft sheet that has no large circle. Measured on the labelled sheets —
-    flange: exactly one circle at r=277 px against a true 281 px outline; shaft
-    and bearing housing: none. Few measurements that can be trusted beat many
-    that cannot.
-    """
-    import cv2
-
-    try:
-        height, width = ink.shape[:2]
-        circles = cv2.HoughCircles(
-            cv2.bitwise_not(ink), cv2.HOUGH_GRADIENT, dp=1.2,
-            minDist=max(width, height) // 20, param1=120, param2=90,
-            minRadius=max(6, min(width, height) // 60),
-            maxRadius=min(width, height) // 2,
-        )
-    except Exception:  # noqa: BLE001 — measurement must never break the run
-        return None
-    if circles is None or len(circles[0]) == 0:
-        return None
-    return float(max(c[2] for c in circles[0]))
-
-
-# Below this radius a missing circle says nothing: the detector's own limit.
-def check_outline_against_image(
-    spec: dict, dominant_radius_px: float | None
-) -> list[CrossCheckFinding]:
-    """Does the outline the reader claims match the one the sheet draws?
-
-    Only meaningful for a round part, and only when the image offers exactly one
-    unambiguous circle. It calibrates millimetres per pixel from the claimed
-    outer diameter and then asks whether the OTHER stated circles could fit
-    inside what was measured — the check that would have caught a Ø80 bore read
-    as Ø18, since a bore is not allowed to be larger than the outline it sits in
-    once both are in the same units.
-    """
-    findings: list[CrossCheckFinding] = []
-    if not dominant_radius_px or dominant_radius_px <= 0:
-        return findings
-    profile = ((spec.get("main_view") or {}).get("profile")) or {}
-    outer = _num(profile.get("diameter_mm"))
-    if not outer or profile.get("shape") != "circle":
-        return findings
-
-    mm_per_px = outer / (2.0 * dominant_radius_px)
-    for position, hole in enumerate(profile.get("holes") or []):
-        if not isinstance(hole, dict):
-            continue
-        diameter = _num(hole.get("diameter_mm"))
-        if not diameter:
-            continue
-        # A hole bigger than the outline is impossible; a hole below the
-        # detector's own resolution cannot be confirmed and is left alone.
-        if diameter >= outer:
-            findings.append(CrossCheckFinding(
-                code="hole_larger_than_measured_outline",
-                message=(
-                    f"отверстие Ø{diameter:g} не помещается в наружный контур "
-                    f"Ø{outer:g}, измеренный на изображении"
-                ),
-                details={"hole": position, "mm_per_px": round(mm_per_px, 4)},
-            ))
-    return findings
-
-
-def _spec_circle_diameters(spec: dict) -> list[float]:
-    """Every diameter the spec claims is drawn as a circle on the sheet."""
-    diameters: list[float] = []
-    for body in [spec.get("main_view") or {}, *(spec.get("parts") or [])]:
-        if not isinstance(body, dict):
-            continue
-        profile = body.get("profile")
-        if isinstance(profile, dict):
-            outer = _num(profile.get("diameter_mm"))
-            if outer:
-                diameters.append(outer)
-            for hole in profile.get("holes") or []:
-                value = _num(hole.get("diameter_mm")) if isinstance(hole, dict) else None
-                if value:
-                    diameters.append(value)
-            for pattern in profile.get("hole_patterns") or []:
-                if isinstance(pattern, dict):
-                    value = _num(pattern.get("hole_diameter_mm"))
-                    if value:
-                        diameters.append(value)
-    return sorted({round(value, 3) for value in diameters}, reverse=True)
-
-
-def check_spec_against_raster(
-    spec: dict, circle_radii_px: list[float]
-) -> list[CrossCheckFinding]:
-    """Compare the spec's diameter RATIOS with the ones measured on the sheet.
-
-    Scale-free on purpose: nobody has calibrated mm-per-pixel at this point, and
-    a ratio needs no calibration. Only the largest-to-smallest ratio is checked,
-    because that is the one a misread bore or outline distorts most and the one
-    least sensitive to a missed circle in the middle.
-    """
-    findings: list[CrossCheckFinding] = []
-    stated = _spec_circle_diameters(spec)
-    measured = sorted({round(r, 3) for r in circle_radii_px if r > 0}, reverse=True)
-    if len(stated) < 2 or len(measured) < 2:
-        # Silence here is NOT confirmation, and reporting it as "no errors"
-        # once let a flange pass while the check had measured a single 4 px
-        # hole. Measured 2026-07-25: the classical tracer decomposes large
-        # circles into segments by design, so on a flange sheet it fits only
-        # the tiny bolt holes. Preprocessing is not the cause — channel-min
-        # binarisation moved the ink fraction from 0.0164 to 0.0166 and still
-        # produced one circle.
-        return findings
-
-    stated_ratio = stated[0] / stated[-1]
-    measured_ratio = measured[0] / measured[-1]
-    if stated_ratio <= 0 or measured_ratio <= 0:
-        return findings
-    relative = abs(stated_ratio - measured_ratio) / measured_ratio
-    if relative > _RATIO_TOLERANCE * 5:
-        findings.append(CrossCheckFinding(
-            code="circle_ratio_mismatch",
-            message=(
-                "пропорции окружностей не сходятся с чертежом: по прочитанному "
-                f"наибольший/наименьший = {stated_ratio:.2f}, по изображению "
-                f"= {measured_ratio:.2f}"
-            ),
-            severity="error",
-            details={
-                "stated_ratio": round(stated_ratio, 3),
-                "measured_ratio": round(measured_ratio, 3),
-                "stated_diameters_mm": stated[:6],
-                "measured_radii_px": measured[:6],
-            },
-        ))
-    return findings
-
-
-def measure_dominant_circle_px(ink: Any) -> float | None:
-    """Radius of the one circle the sheet is unambiguous about, in pixels.
-
-    Tuned as a MEASURING tool, not a reconstruction one: at this threshold the
-    detector returns the dominant outline of a round part and nothing at all on
-    a shaft sheet that has no large circle. Measured on the labelled sheets —
-    flange: exactly one circle at r=277 px against a true 281 px outline; shaft
-    and bearing housing: none. Few measurements that can be trusted beat many
-    that cannot.
-    """
-    import cv2
-
-    try:
-        height, width = ink.shape[:2]
-        circles = cv2.HoughCircles(
-            cv2.bitwise_not(ink), cv2.HOUGH_GRADIENT, dp=1.2,
-            minDist=max(width, height) // 20, param1=120, param2=90,
-            minRadius=max(6, min(width, height) // 60),
-            maxRadius=min(width, height) // 2,
-        )
-    except Exception:  # noqa: BLE001 — measurement must never break the run
-        return None
-    if circles is None or len(circles[0]) == 0:
-        return None
-    return float(max(c[2] for c in circles[0]))
-
-
-# Below this radius a missing circle says nothing: the detector's own limit.
-_MIN_CONFIRMABLE_RADIUS_PX = 18.0
-# How far a drawn circle may sit from the radius the reading implies.
-_RADIUS_BAND = 0.15
 
 
 def measure_circle_radii(ink: Any) -> list[float]:

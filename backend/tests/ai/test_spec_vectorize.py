@@ -109,10 +109,46 @@ def test_optional_metadata_does_not_block_complete_geometry():
 def test_spec_images_preserve_source_resolution_in_tiles():
     from PIL import Image
 
-    images, descriptions = _spec_images(Image.new("RGB", (2484, 1758), "white"))
+    images, descriptions, coverage = _spec_images(Image.new("RGB", (2484, 1758), "white"))
     assert len(images) > 1
     assert descriptions[0] == "image 0: overview 0,0,2484,1758"
     assert any("2484" in description for description in descriptions[1:])
+    assert coverage == 1.0
+
+
+@pytest.mark.parametrize(("columns", "rows"), [(8, 3), (9, 2), (12, 2), (4, 4), (3, 5)])
+def test_tile_budget_never_drops_a_band_of_the_sheet(columns, rows):
+    """A thinned grid must not leave a horizontal or vertical band unseen.
+
+    The old rule picked evenly spaced entries of the ROW-MAJOR list, and on wide
+    sheets that misses whole COLUMNS — measured: 8x3 kept 6 columns of 8, 9x2 and
+    12x2 kept 8 of 9 and 8 of 12. A vertical band of the drawing was never shown
+    to the reader, and nothing reported it.
+    """
+    from app.ai.cad_recognize.spec_vectorize import _tile_budget_boxes
+
+    grid = [(c, r, c + 1, r + 1) for r in range(rows) for c in range(columns)]
+    kept = _tile_budget_boxes(grid, columns, rows, 8)
+
+    assert len(kept) <= 8
+    assert len({box[1] for box in kept}) == min(rows, 8)
+    assert len({box[0] for box in kept}) == min(columns, 8)
+
+
+def test_a_sheet_over_the_tile_budget_says_so():
+    """A partially shown sheet must announce it — silence reads as full coverage."""
+    from PIL import Image
+
+    images, descriptions, coverage = _spec_images(Image.new("RGB", (5000, 4000), "white"))
+    boxes = [
+        tuple(int(value) for value in description.split("bbox ")[1].split(","))
+        for description in descriptions[1:]
+        if "bbox " in description
+    ]
+    assert len(boxes) == 8
+    assert len(images) == len(boxes) + 1
+    assert 0.0 < coverage < 1.0
+    assert any("из 16 фрагментов" in description for description in descriptions)
 
 
 def test_draft_multiple_rotation_bodies_each_with_own_axis():
