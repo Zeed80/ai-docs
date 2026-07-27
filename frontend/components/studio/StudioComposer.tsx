@@ -53,6 +53,7 @@ type StudioComposerPrefs = {
   vectorScale?: string;
   vectorSheetFormat?: "" | "A4" | "A3" | "A2" | "A1" | "A0";
   vectorMethod?: "trace" | "spec";
+  readPasses?: number;
   vectorDescription?: string;
   vectorLandscape?: boolean;
   blankFormat?: "A4" | "A3" | "A2" | "A1";
@@ -160,6 +161,12 @@ export default function StudioComposer({
   // production default.
   const [vectorMethod, setVectorMethod] = useState<"trace" | "spec">(
     prefs.vectorMethod === "trace" ? "trace" : "spec",
+  );
+  // How many times the reader looks at the sheet before the answers are
+  // intersected: it is inconsistent rather than merely inaccurate, so one read
+  // is a bet. More passes cost proportionally more GPU, hence a user choice.
+  const [readPasses, setReadPasses] = useState<number>(
+    typeof prefs.readPasses === "number" ? prefs.readPasses : 3,
   );
   const [vectorDescription, setVectorDescription] = useState(
     prefs.vectorDescription ?? "",
@@ -269,6 +276,7 @@ export default function StudioComposer({
           vectorScale,
           vectorSheetFormat,
           vectorMethod,
+          readPasses,
           vectorDescription,
           vectorLandscape,
           blankFormat,
@@ -304,6 +312,7 @@ export default function StudioComposer({
     vectorScale,
     vectorSheetFormat,
     vectorMethod,
+    readPasses,
     vectorDescription,
     vectorLandscape,
     blankFormat,
@@ -633,6 +642,12 @@ export default function StudioComposer({
       if (vlmEnrich) {
         (input.params as Record<string, unknown>).vlm_dimensions = true;
         (input.params as Record<string, unknown>).vlm_lines = true;
+      }
+      // Reading a sheet several times and intersecting the answers is what
+      // separates a confirmed dimension from a lucky one; it only applies when
+      // a sheet is actually being read.
+      if (method === "spec") {
+        (input.params as Record<string, unknown>).read_passes = readPasses;
       }
       if (sourceFile) {
         input.source_image_paths = [await uploadSource(sourceFile, "source")];
@@ -1299,6 +1314,29 @@ export default function StudioComposer({
                 <option value="spec">{t("method_spec")}</option>
                 <option value="trace">{t("method_trace")}</option>
               </select>
+            </label>
+          )}
+
+          {/* Reading the sheet once is a bet on a stochastic model; reading it
+              several times and intersecting turns disagreement into a review
+              item instead of a silently wrong number. */}
+          {(sourceFile || sourceGenerationId) && vectorMethod === "spec" && (
+            <label className="block">
+              <span className="text-xs text-zinc-500">
+                {t("read_passes_label")}
+              </span>
+              <select
+                value={readPasses}
+                onChange={(e) => setReadPasses(Number(e.target.value))}
+                className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+              >
+                <option value={1}>{t("read_passes_one")}</option>
+                <option value={2}>{t("read_passes_two")}</option>
+                <option value={3}>{t("read_passes_three")}</option>
+              </select>
+              <p className="mt-1 text-[11px] text-zinc-600">
+                {t("read_passes_hint")}
+              </p>
             </label>
           )}
 

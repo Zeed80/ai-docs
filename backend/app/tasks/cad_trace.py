@@ -582,6 +582,36 @@ async def _build_spec_solid(
     }
 
 
+def _revalidated_spec(spec: dict) -> dict:
+    """Re-derive ``unresolved`` after a follow-up filled a value in.
+
+    The contract's own validator APPENDS its machine codes, so a length that a
+    second look just recovered would keep its old "length-missing" entry and go
+    on blocking the build. Those generated codes are dropped and recomputed;
+    free-text reasons (a consensus disagreement, a refused bore) are kept —
+    nothing about them changed.
+    """
+    from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
+
+    candidate = dict(spec)
+    candidate["unresolved"] = [
+        item for item in (spec.get("unresolved") or [])
+        if not str(item).startswith("body:") and not str(item).startswith("view:")
+    ]
+    try:
+        revalidated = EngineeringDrawingSpec.model_validate(candidate).model_dump(
+            mode="json"
+        )
+    except Exception:  # noqa: BLE001 — keep the read rather than lose it to a re-check
+        return spec
+    # Fields the contract does not know about (provenance, consensus telemetry,
+    # fragment stats) are dropped by validation — carry them across.
+    for key, value in spec.items():
+        if key not in revalidated:
+            revalidated[key] = value
+    return revalidated
+
+
 def _verify_spec_dimensions(ir, spec: dict) -> dict:
     """Advisory reuse of the graph verifier's dimension-vs-geometry idea.
 
@@ -1182,6 +1212,30 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "валидный спек. Проверьте назначение CAD reader (Настройки → "
                         "Модели → Оцифровка) и исходный лист."
                     )
+                # A value the whole-sheet read missed is not the end of the
+                # sheet: asking for that ONE dimension, with its neighbours
+                # named, is a far easier question than the one that failed. An
+                # answer is accepted only if the sheet's own callouts carry it.
+                from app.ai.cad_recognize.spec_followup import (
+                    resolve_missing_dimensions,
+                )
+
+                try:
+                    spec, followup_log = await resolve_missing_dimensions(
+                        content, spec
+                    )
+                except Exception as exc:  # noqa: BLE001 — a follow-up must never cost the read
+                    logger.warning(
+                        "cad_spec_followup_failed",
+                        generation_id=generation_id,
+                        error=str(exc)[:200],
+                    )
+                    followup_log = []
+                if followup_log:
+                    # The spec was re-completed, so the contract has to re-derive
+                    # what is still missing — otherwise a value just recovered
+                    # would keep blocking the build.
+                    spec = _revalidated_spec(spec)
                 # Cross-check before anything is built: the sheet's own
                 # arithmetic and the proportions of the traced ink can
                 # contradict a read that all passes agreed on.
@@ -1295,6 +1349,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "spec": spec,
                         "spec_dimension_check": spec_dim_check,
                         "spec_crosscheck": crosscheck,
+                        # Which values a second look recovered, which it failed
+                        # to, and which answers were refused for having no
+                        # callout behind them.
+                        "spec_followup": followup_log,
                         "spec_review_warnings": list(dict.fromkeys(unresolved)),
                         "sheet_without_geometry": sheet_without_geometry,
                         "cad_pipeline_manifest": pipeline_manifest,

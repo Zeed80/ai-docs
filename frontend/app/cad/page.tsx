@@ -68,6 +68,11 @@ export default function CadListPage() {
   const [vectorizeMethod, setVectorizeMethod] = useState<"trace" | "spec">(
     "spec",
   );
+  // How many times the sheet is read before the answers are intersected. The
+  // reader is not merely inaccurate, it is INCONSISTENT, so a single read is a
+  // bet; three reads turn that inconsistency into a stated disagreement. It
+  // costs proportionally more GPU time, which is why the number is the user's.
+  const [readPasses, setReadPasses] = useState(3);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const scanRef = useRef<HTMLInputElement | null>(null);
 
@@ -163,6 +168,7 @@ export default function CadListPage() {
             source_filename: file.name,
             pdf_page: pdfPage,
             pdf_dpi: 300,
+            ...(vectorizeMethod === "spec" ? { read_passes: readPasses } : {}),
             ...(digitizeSheetFormat
               ? { sheet_format: digitizeSheetFormat }
               : {}),
@@ -174,7 +180,14 @@ export default function CadListPage() {
         setBusy(false);
       }
     },
-    [digitizationProfile, digitizeSheetFormat, vectorizeMethod, router, t],
+    [
+      digitizationProfile,
+      digitizeSheetFormat,
+      vectorizeMethod,
+      readPasses,
+      router,
+      t,
+    ],
   );
 
   const onRename = useCallback(
@@ -219,6 +232,18 @@ export default function CadListPage() {
             <option value="spec">{t("method_spec")}</option>
             <option value="trace">{t("method_trace")}</option>
           </select>
+          {vectorizeMethod === "spec" && (
+            <select
+              value={readPasses}
+              onChange={(e) => setReadPasses(Number(e.target.value))}
+              className="rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
+              title={t("read_passes_hint")}
+            >
+              <option value={1}>{t("read_passes_one")}</option>
+              <option value={2}>{t("read_passes_two")}</option>
+              <option value={3}>{t("read_passes_three")}</option>
+            </select>
+          )}
           <select
             value={digitizationProfile}
             onChange={(e) =>
