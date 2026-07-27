@@ -1454,9 +1454,17 @@ def draft_sheet_without_geometry(
 
     ir = CadIR(
         source=SourceInfo(
-            image_width=int(paper_w * ppp), image_height=int(paper_h * ppp)
+            image_width=int(paper_w * ppp), image_height=int(paper_h * ppp),
+            kind="spec",
         ),
+        # Paper-space pixels are generated at a known 4 px/mm. This makes the
+        # editable fallback DXF metrically usable instead of exposing a download
+        # button that inevitably returns SCALE_UNKNOWN/HTTP 409.
+        scale=1.0 / ppp,
+        scale_source="sheet_format",
         entities=entities,
+        recognizer_used="spec-drafter-sheet-only",
+        digitization_status="review_required",
     )
     ir.sheet = _sheet_info(fmt, spec, None)
     return ir

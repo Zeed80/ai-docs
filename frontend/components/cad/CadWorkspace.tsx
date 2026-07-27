@@ -1213,6 +1213,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const draftingSpec = gen.params?.spec as
     | { optional_unresolved?: string[]; unresolved?: string[] }
     | undefined;
+  const specReviewWarnings = (gen.params?.spec_review_warnings ?? []) as string[];
+  const sheetWithoutGeometry = Boolean(gen.params?.sheet_without_geometry);
   const drawingGraph = gen.params?.drawing_graph as
     | {
         graph_status?: string;
@@ -1387,6 +1389,24 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           <div className="font-medium">{t("vector.spec_optional_missing")}</div>
           <ul className="mt-1 list-disc pl-4">
             {draftingSpec.optional_unresolved.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {specReviewWarnings.length > 0 && (
+        <div className="rounded border border-amber-400/30 bg-amber-950/25 px-3 py-2 text-xs text-amber-100">
+          <div className="font-medium">
+            {t("vector.spec_review_title")}
+          </div>
+          <p className="mt-1 text-amber-200/80">
+            {sheetWithoutGeometry
+              ? t("vector.spec_review_no_geometry")
+              : t("vector.spec_review_user_decides")}
+          </p>
+          <ul className="mt-1 list-disc pl-4">
+            {specReviewWarnings.map((item) => (
               <li key={item}>{item}</li>
             ))}
           </ul>

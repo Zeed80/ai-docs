@@ -1199,58 +1199,6 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
                 unresolved = [str(i) for i in spec.get("unresolved", []) if str(i)]
                 unresolved.extend(blocking_checks)
-                if unresolved:
-                    # A fail-closed stop used to hand over NOTHING — no sheet,
-                    # no revision, nothing to open — which threw away the work
-                    # that was right along with the work that was wrong. The
-                    # stamp, the requirements and the callouts were read and
-                    # verified; only the geometry was not. So a sheet carrying
-                    # exactly those is saved, with NO part geometry on it, and
-                    # the run still fails: what could not be verified is not
-                    # drawn, and what is handed over cannot pass for a part.
-                    from app.ai.cad_recognize.spec_vectorize import (
-                        draft_sheet_without_geometry,
-                    )
-
-                    partial = None
-                    try:
-                        partial = draft_sheet_without_geometry(
-                            spec,
-                            sheet_format=str(params.get("sheet_format") or "").upper() or None,
-                            landscape=str(
-                                params.get("sheet_orientation") or "landscape"
-                            ).lower() != "portrait",
-                        )
-                        if partial is not None:
-                            partial.source.generation_id = generation_id
-                            validate_ir(partial)
-                    except Exception as exc:  # noqa: BLE001 — the refusal stands
-                        logger.warning(
-                            "cad_partial_sheet_failed",
-                            generation_id=generation_id, error=str(exc)[:200],
-                        )
-                        partial = None
-                    async with factory() as db:
-                        stopped = await db.get(ImageGeneration, gen_uuid)
-                        if stopped:
-                            stopped.params = {
-                                **(stopped.params or {}),
-                                "spec": spec,
-                                "spec_crosscheck": crosscheck,
-                                "cad_pipeline_manifest": pipeline_manifest,
-                                "sheet_without_geometry": partial is not None,
-                            }
-                            if partial is not None:
-                                await cad_ir_store.save_revision(
-                                    db, stopped, partial, origin="auto",
-                                    created_by=owner_sub, keep_raster=None,
-                                    thin_px=2, thick_px=4,
-                                )
-                            await db.commit()
-                    return await _fail(
-                        "Метод «по описанию»: построение остановлено — не определены "
-                        "обязательные данные: " + ", ".join(unresolved[:8])
-                    )
                 draft_model = get_routing_for(AITask.CAD_SPEC_DRAFT).primary
                 spec_sheet = str(params.get("sheet_format") or "").upper() or None
                 spec_landscape = str(
@@ -1262,28 +1210,76 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     sheet_format=spec_sheet,
                     landscape=spec_landscape,
                 )
+                sheet_without_geometry = False
                 if spec_ir is None:
-                    return await _fail(
-                        "Метод «по описанию»: назначенный чертёжник не смог построить "
-                        "поддерживаемую геометрию для этого профиля. Попробуйте другую "
-                        "модель в Настройки → Модели → Оцифровка или трассировку."
+                    # No usable contour was read. Still hand the sheet to the
+                    # CAD editor instead of turning a recoverable drafting job
+                    # into a dead failed generation: the human may trace or
+                    # construct the missing contour. Acceptance remains blocked
+                    # by SPEC_GEOMETRY_UNRESOLVED below until real geometry is
+                    # added. A known format is preferable, but A3 is only a
+                    # visible editable starting point, never an inferred fact.
+                    from app.ai.cad_recognize.spec_vectorize import (
+                        draft_sheet_without_geometry,
                     )
+
+                    spec_ir = draft_sheet_without_geometry(
+                        spec,
+                        sheet_format=spec_sheet,
+                        landscape=spec_landscape,
+                    )
+                    sheet_without_geometry = True
+                    unresolved.append(
+                        "контур детали не построен — требуется ручная трассировка или построение"
+                    )
+                if spec_ir is None:  # defensive: the sheet helper is expected to succeed
+                    return await _fail("Не удалось создать редактируемый CAD-черновик.")
                 spec_ir.source.generation_id = generation_id
-                _overlay_spec_annotations(spec_ir, spec)
-                spec_ir.digitization_status = "review_required"
+                if not sheet_without_geometry:
+                    _overlay_spec_annotations(spec_ir, spec)
                 # Reuse the graph verifier's dimension-vs-geometry consistency
                 # check as an advisory layer: does the drafted geometry actually
                 # measure the numbers the spec stated? Non-blocking (a redraw is
                 # not held to the pixel gate); mismatches are surfaced for review.
-                spec_dim_check = _verify_spec_dimensions(spec_ir, spec)
+                spec_dim_check = (
+                    _verify_spec_dimensions(spec_ir, spec)
+                    if not sheet_without_geometry
+                    else {"checked": 0, "mismatches": []}
+                )
                 # Stage 1 of the 3D-first path: a body of revolution is a
                 # profile spun about an axis, and every number in that profile
                 # was just read off the sheet — so the solid is exact by
                 # construction. It is a draft artifact alongside the 2D sheet,
                 # never a gate on it: a kernel failure must not cost the user
                 # the drawing they asked for.
-                solid_result = await _build_spec_solid(spec, generation_id, owner_sub)
+                solid_result = (
+                    await _build_spec_solid(spec, generation_id, owner_sub)
+                    if not unresolved and not sheet_without_geometry
+                    else None
+                )
                 validate_ir(spec_ir)
+                if unresolved:
+                    from app.ai.cad_ir.schema import ValidationIssueIR
+
+                    spec_ir.validation.issues.append(
+                        ValidationIssueIR(
+                            code=(
+                                "SPEC_GEOMETRY_UNRESOLVED"
+                                if sheet_without_geometry
+                                else "SPEC_READER_UNRESOLVED"
+                            ),
+                            severity="error" if sheet_without_geometry else "warn",
+                            level=3,
+                            message_ru=(
+                                "Геометрия черновика требует решения пользователя: "
+                                + "; ".join(dict.fromkeys(unresolved))
+                            ),
+                        )
+                    )
+                # Even a dimensionally consistent redraw is only a proposal:
+                # the person comparing it with the source decides whether it is
+                # correct, needs editing, or should be rejected.
+                spec_ir.digitization_status = "review_required"
                 async with factory() as db:
                     gen = await db.get(ImageGeneration, gen_uuid)
                     if not gen or gen.status == ImageGenStatus.cancelled:
@@ -1299,6 +1295,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "spec": spec,
                         "spec_dimension_check": spec_dim_check,
                         "spec_crosscheck": crosscheck,
+                        "spec_review_warnings": list(dict.fromkeys(unresolved)),
+                        "sheet_without_geometry": sheet_without_geometry,
                         "cad_pipeline_manifest": pipeline_manifest,
                         "normalized_source_path": normalized_path,
                         **({"solid_3d": solid_result} if solid_result else {}),
@@ -1314,6 +1312,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 return {
                     "ok": True, "generation_id": generation_id,
                     "entities": len(spec_ir.entities), "method": "spec",
+                    "review_required": True,
+                    "warnings": len(unresolved),
                     "solid_3d": bool(solid_result and solid_result.get("built")),
                 }
 

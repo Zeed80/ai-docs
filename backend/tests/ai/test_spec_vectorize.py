@@ -1028,6 +1028,9 @@ def test_refusal_sheet_carries_the_reading_and_no_part_geometry():
     assert "HRC 58…62" in texts
     assert "Ø102h6" in texts and "470" in texts
     assert "Технические требования" in texts
+    assert ir.scale == 0.25
+    assert ir.scale_source == "sheet_format"
+    assert ir.source.kind == "spec"
 
     # Sheet furniture is straight lines only — the frame and the stamp grid.
     # A curve or an arc could only have come from the part.

@@ -486,6 +486,10 @@ def _check_contour_geometry(ir: CadIR) -> list[ValidationIssueIR]:
         return []  # an untouched blank sheet isn't "malformed", just not started
     has_contour = any(
         e.line_class == "contour" and e.width_class == "main"
+        # A ГОСТ frame and stamp are sheet furniture, not the part. Counting
+        # them made a frame-only refusal look like a complete drawing after the
+        # next editor revalidation and could incorrectly unblock acceptance.
+        and "sheet_frame" not in e.evidence
         for e in ir.entities
         if e.type in ("segment", "arc", "circle", "polyline")
     )

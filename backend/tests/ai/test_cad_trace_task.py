@@ -117,6 +117,109 @@ async def test_cad_trace_run_end_to_end(db_session, fake_storage, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_spec_redraw_with_reader_warning_is_user_reviewable(
+    db_session, fake_storage, monkeypatch
+):
+    """A rejected intermediate chain must not erase a usable final profile.
+
+    Production reproduced this with a chain ending at 70 mm while the fallback
+    profile itself was 15+15+45+25 = 100 mm and passed cross-checking. The best
+    draft belongs in the editor for a human decision, not in ``failed`` as a
+    frame-only sheet.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.db.models import CadIrRevision, ImageGeneration, ImageGenStatus
+    from app.services import cad_ir_store
+    from app.tasks import cad_trace
+
+    conn = db_session.bind
+
+    def _factory():
+        return AsyncSession(
+            bind=conn, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        )
+
+    async def _read_spec(*_args, **_kwargs):
+        return {
+            "schema_version": 1,
+            "part": "Деталь",
+            "main_view": {
+                "type": "тело вращения (вал)",
+                "outer": [
+                    {"diameter_mm": 20, "length_mm": 15},
+                    {"diameter_mm": 30, "length_mm": 15},
+                    {"diameter_mm": 50, "length_mm": 45},
+                    {"diameter_mm": 40, "length_mm": 25},
+                ],
+                "bore": [],
+            },
+            "parts": [],
+            "views": [],
+            "dimensions": [{"value": "100", "applies_to": "габарит"}],
+            "annotations": [],
+            "title_block": {"name": "Деталь", "scale": "1:2"},
+            "unresolved": [
+                "размерная цепочка: конец цепочки 70 мм не совпадает с габаритом 100 мм"
+            ],
+            "optional_unresolved": [],
+        }
+
+    async def _no_solid(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: _factory)
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_fragments.read_spec_best_effort", _read_spec
+    )
+    monkeypatch.setattr(cad_trace, "_build_spec_solid", _no_solid)
+
+    fake_storage["image-gen-src/test/spec.png"] = _scan_png()
+    gen = ImageGeneration(
+        owner_sub=None,
+        operation="vectorize",
+        status=ImageGenStatus.queued,
+        params={
+            "vectorize_method": "spec",
+            "sheet_format": "A4",
+            "sheet_orientation": "landscape",
+        },
+        source_image_paths=["image-gen-src/test/spec.png"],
+    )
+    db_session.add(gen)
+    await db_session.commit()
+
+    result = await cad_trace._run(str(gen.id), task_id=None)
+
+    assert result.get("ok"), result
+    assert result["review_required"] is True
+    assert result["warnings"] == 1
+    await db_session.refresh(gen)
+    assert gen.status == ImageGenStatus.done
+    assert gen.error is None
+    assert gen.params["sheet_without_geometry"] is False
+    assert "70 мм" in gen.params["spec_review_warnings"][0]
+    assert gen.params["digitization_status"] == "review_required"
+
+    revision = (
+        await db_session.execute(
+            select(CadIrRevision).where(CadIrRevision.generation_id == gen.id)
+        )
+    ).scalar_one()
+    ir = cad_ir_store.load_ir(revision)
+    assert any(
+        entity.line_class == "contour"
+        and "sheet_frame" not in entity.evidence
+        for entity in ir.entities
+        if entity.type in ("segment", "arc", "circle", "polyline")
+    )
+    assert "SPEC_READER_UNRESOLVED" in {
+        issue.code for issue in ir.validation.issues
+    }
+
+
+@pytest.mark.asyncio
 async def test_cad_trace_flags_diffusion_added_ink(db_session, fake_storage, monkeypatch):
     """Vectorizing a diffusion (cleanup) result compares against the ORIGINAL
     photo: a stroke the diffusion invented must be flagged, not trusted."""
