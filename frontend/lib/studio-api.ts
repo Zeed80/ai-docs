@@ -917,6 +917,85 @@ export interface ParamProvenance {
   source_parameter?: string | null;
 }
 
+/** What the digitization checked, and what it could not. Every field here is
+ * written by the backend and was, until now, computed and then shown to nobody:
+ * silence about a check that did not run reads exactly like a check that
+ * passed. */
+export interface SpecCrossCheck {
+  findings: Array<{
+    code: string;
+    message: string;
+    severity: "error" | "warn";
+    details?: Record<string, unknown>;
+  }>;
+  errors: number;
+  measured_circles: number;
+  dominant_circle_px?: number | null;
+  /** "checked" | "insufficient_measurements" | "not_attempted" — the last two
+   * mean the image comparison did NOT happen. */
+  raster_check: string;
+}
+
+/** Which read callouts the drawing shows, and which it does not. */
+export interface SpecDimensionCheck {
+  status: "ok" | "partial" | string;
+  read?: number;
+  placed?: number;
+  unplaced?: string[];
+}
+
+/** A value that was completed rather than read, with the rule behind it. */
+export interface SpecAssumption {
+  path: string;
+  field: string;
+  value_mm: number;
+  rule: string;
+  /** "derived" — the sheet's own arithmetic forces it; "assumed" — a standard
+   * or a placeholder supplied it. */
+  origin: string;
+}
+
+/** One narrow question asked about a value the first read missed. */
+export interface SpecFollowup {
+  path: string;
+  field: string;
+  question: string;
+  answer_mm?: number | null;
+  accepted: boolean;
+  reason: string;
+}
+
+/** Agreement between repeated reads of the same sheet. */
+export interface SpecConsensus {
+  passes?: number;
+  usable?: number;
+  agreement?: string;
+  disagreements?: string[];
+}
+
+/** The solid the sheet was built from, and what it measures. */
+export interface Solid3dSummary {
+  built: boolean;
+  error?: string;
+  label?: string;
+  paths?: Record<string, string>;
+  assumptions?: string[];
+  verification?: Record<string, unknown>;
+  volume_mm3?: number;
+  mass_kg?: number | null;
+  bounds_mm?: Record<string, number>;
+  feature_tree?: FeatureTreeCandidate;
+  sheet?: {
+    part_class?: string;
+    views?: string[];
+    scale?: string;
+    sheet_format?: string;
+    dimensions?: number;
+    verification?: Record<string, unknown>;
+    warnings?: string[];
+  };
+}
+
 export interface Feature3D {
   kind: "extrude" | "hole" | "boss" | "pocket" | "fillet" | "chamfer";
   source_entity_ids: string[];

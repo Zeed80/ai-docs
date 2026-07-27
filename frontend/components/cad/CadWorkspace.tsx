@@ -13,6 +13,12 @@ import {
   IrLineClass,
   IrPatchOp,
   ReleaseManifest,
+  SpecAssumption,
+  SpecConsensus,
+  SpecCrossCheck,
+  SpecDimensionCheck,
+  SpecFollowup,
+  Solid3dSummary,
   approveCadAsDrafter,
   approveCadAsNormcontroller,
   artifactUrl,
@@ -27,6 +33,7 @@ import {
   sourceUrl,
 } from "@/lib/studio-api";
 
+import AssurancePanel from "@/components/cad/AssurancePanel";
 import Cad3dPanel from "@/components/cad/Cad3dPanel";
 import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
 import EntityShape from "@/components/cad/EntityShape";
@@ -145,7 +152,9 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   );
   const [err, setErr] = useState<string | null>(null);
   const [release, setRelease] = useState<ReleaseManifest | null>(null);
-  const [certification, setCertification] = useState<CadCertification | null>(null);
+  const [certification, setCertification] = useState<CadCertification | null>(
+    null,
+  );
   // Multi-select (A3): the whole selection set; `selected` below is the
   // single-entity view used by the property grid when exactly one is picked.
   const [selection, setSelection] = useState<Set<string>>(new Set());
@@ -1208,13 +1217,26 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     ? ""
     : t("vector.cmd_hint", { tool: t(`vector.tool_${tool}`) });
   const pipelineManifest = gen.params?.cad_pipeline_manifest as
-    | CadPipelineManifest
-    | undefined;
+    CadPipelineManifest | undefined;
   const draftingSpec = gen.params?.spec as
-    | { optional_unresolved?: string[]; unresolved?: string[] }
-    | undefined;
-  const specReviewWarnings = (gen.params?.spec_review_warnings ?? []) as string[];
+    { optional_unresolved?: string[]; unresolved?: string[] } | undefined;
+  const specReviewWarnings = (gen.params?.spec_review_warnings ??
+    []) as string[];
   const sheetWithoutGeometry = Boolean(gen.params?.sheet_without_geometry);
+  // What the digitization checked and what it could not. All of it was written
+  // by the backend and read by nobody — and a check that never ran looked
+  // exactly like a check that passed.
+  const specCrosscheck = gen.params?.spec_crosscheck as
+    SpecCrossCheck | undefined;
+  const specDimensionCheck = gen.params?.spec_dimension_check as
+    SpecDimensionCheck | undefined;
+  const specAssumptions = (gen.params?.spec_assumptions ??
+    []) as SpecAssumption[];
+  const specFollowups = (gen.params?.spec_followup ?? []) as SpecFollowup[];
+  const specConsensus = (
+    gen.params?.spec as { consensus?: SpecConsensus } | undefined
+  )?.consensus;
+  const solidSummary = gen.params?.solid_3d as Solid3dSummary | undefined;
   const drawingGraph = gen.params?.drawing_graph as
     | {
         graph_status?: string;
@@ -1320,86 +1342,190 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
       {pipelineManifest && (
         <details className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-400">
           <summary className="cursor-pointer text-zinc-300">
-            {t("vector.pipeline_manifest")}: {pipelineManifest.pipeline_revision} · {pipelineManifest.config_sha256.slice(0, 12)}…
+            {t("vector.pipeline_manifest")}:{" "}
+            {pipelineManifest.pipeline_revision} ·{" "}
+            {pipelineManifest.config_sha256.slice(0, 12)}…
           </summary>
           <div className="mt-2 grid gap-1 md:grid-cols-2">
-            <div>{t("vector.pipeline_profile")}: {pipelineManifest.profile}</div>
-            <div>{t("vector.pipeline_method")}: {pipelineManifest.method}</div>
-            <div>{t("vector.pipeline_input")}: {pipelineManifest.input_kind}</div>
-            <div>{t("vector.pipeline_reader")}: {pipelineManifest.components.spec_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
+            <div>
+              {t("vector.pipeline_profile")}: {pipelineManifest.profile}
+            </div>
+            <div>
+              {t("vector.pipeline_method")}: {pipelineManifest.method}
+            </div>
+            <div>
+              {t("vector.pipeline_input")}: {pipelineManifest.input_kind}
+            </div>
+            <div>
+              {t("vector.pipeline_reader")}:{" "}
+              {pipelineManifest.components.spec_reader.models
+                .map((model) => model.key)
+                .join(" → ") || "—"}
+            </div>
             {pipelineManifest.components.drawing_graph_reader && (
-              <div>{t("vector.pipeline_graph_reader")}: {pipelineManifest.components.drawing_graph_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
+              <div>
+                {t("vector.pipeline_graph_reader")}:{" "}
+                {pipelineManifest.components.drawing_graph_reader.models
+                  .map((model) => model.key)
+                  .join(" → ") || "—"}
+              </div>
             )}
             {pipelineManifest.components.drawing_graph_layout_reader && (
-              <div>{t("vector.pipeline_graph_layout")}: {pipelineManifest.components.drawing_graph_layout_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
+              <div>
+                {t("vector.pipeline_graph_layout")}:{" "}
+                {pipelineManifest.components.drawing_graph_layout_reader.models
+                  .map((model) => model.key)
+                  .join(" → ") || "—"}
+              </div>
             )}
             {pipelineManifest.components.drawing_graph_fragment_reader && (
-              <div>{t("vector.pipeline_graph_fragments")}: {pipelineManifest.components.drawing_graph_fragment_reader.models.map((model) => model.key).join(" → ") || "—"}</div>
+              <div>
+                {t("vector.pipeline_graph_fragments")}:{" "}
+                {pipelineManifest.components.drawing_graph_fragment_reader.models
+                  .map((model) => model.key)
+                  .join(" → ") || "—"}
+              </div>
             )}
             {pipelineManifest.components.drawing_graph_evidence_verifier && (
-              <div>{t("vector.pipeline_graph_vlm_verifier")}: {pipelineManifest.components.drawing_graph_evidence_verifier.models.map((model) => model.key).join(" → ") || "—"}</div>
+              <div>
+                {t("vector.pipeline_graph_vlm_verifier")}:{" "}
+                {pipelineManifest.components.drawing_graph_evidence_verifier.models
+                  .map((model) => model.key)
+                  .join(" → ") || "—"}
+              </div>
             )}
             {pipelineManifest.components.drawing_graph_drafter && (
-              <div>{t("vector.pipeline_graph_drafter")}: {pipelineManifest.components.drawing_graph_drafter.version}</div>
+              <div>
+                {t("vector.pipeline_graph_drafter")}:{" "}
+                {pipelineManifest.components.drawing_graph_drafter.version}
+              </div>
             )}
-            <div>{t("vector.pipeline_drafter")}: {pipelineManifest.components.spec_drafter.models.map((model) => model.key).join(" → ") || t("vector.pipeline_deterministic")}</div>
-            <div>{t("vector.pipeline_contract")}: {pipelineManifest.components.spec_drafter.deterministic_contract}</div>
+            <div>
+              {t("vector.pipeline_drafter")}:{" "}
+              {pipelineManifest.components.spec_drafter.models
+                .map((model) => model.key)
+                .join(" → ") || t("vector.pipeline_deterministic")}
+            </div>
+            <div>
+              {t("vector.pipeline_contract")}:{" "}
+              {pipelineManifest.components.spec_drafter.deterministic_contract}
+            </div>
             <div className="md:col-span-2">
-              {t("vector.pipeline_supported_geometry")}: {pipelineManifest.components.spec_drafter.supported_geometry.join(", ")}
+              {t("vector.pipeline_supported_geometry")}:{" "}
+              {pipelineManifest.components.spec_drafter.supported_geometry.join(
+                ", ",
+              )}
             </div>
             <div className="md:col-span-2 font-mono text-[10px]">
-              {t("vector.pipeline_reference_cases")}: {pipelineManifest.components.spec_drafter.reference_cases}
+              {t("vector.pipeline_reference_cases")}:{" "}
+              {pipelineManifest.components.spec_drafter.reference_cases}
             </div>
-            <div className="font-mono text-[10px]">source {pipelineManifest.source_sha256?.slice(0, 16) ?? "—"}…</div>
-            <Link href="/settings/models" className="text-sky-300 hover:text-sky-200">
+            <div className="font-mono text-[10px]">
+              source {pipelineManifest.source_sha256?.slice(0, 16) ?? "—"}…
+            </div>
+            <Link
+              href="/settings/models"
+              className="text-sky-300 hover:text-sky-200"
+            >
               {t("vector.pipeline_change_models")}
             </Link>
           </div>
         </details>
       )}
 
+      <AssurancePanel
+        crosscheck={specCrosscheck}
+        dimensionCheck={specDimensionCheck}
+        assumptions={specAssumptions}
+        followups={specFollowups}
+        consensus={specConsensus}
+        solid={solidSummary}
+        t={t}
+      />
+
       {drawingGraph && (
         <div className="rounded border border-sky-400/20 bg-sky-950/20 px-3 py-2 text-xs text-sky-100">
           <div className="font-medium">{t("vector.drawing_graph_title")}</div>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-sky-200/80">
-            <span>{t("vector.drawing_graph_status")}: {drawingGraph.graph_status ?? "—"}</span>
-            <span>{t("vector.drawing_graph_views")}: {drawingGraph.views?.length ?? 0}</span>
-            <span>{t("vector.drawing_graph_entities")}: {drawingGraph.entities?.length ?? 0}</span>
-            <span>{t("vector.drawing_graph_relations")}: {drawingGraph.relations?.length ?? 0}</span>
-            <span>{t("vector.drawing_graph_evidence")}: {drawingGraph.evidence?.length ?? 0}</span>
-            <span>{t("vector.drawing_graph_unresolved")}: {drawingGraph.unresolved_regions?.filter((item) => !item.resolved).length ?? 0}</span>
+            <span>
+              {t("vector.drawing_graph_status")}:{" "}
+              {drawingGraph.graph_status ?? "—"}
+            </span>
+            <span>
+              {t("vector.drawing_graph_views")}:{" "}
+              {drawingGraph.views?.length ?? 0}
+            </span>
+            <span>
+              {t("vector.drawing_graph_entities")}:{" "}
+              {drawingGraph.entities?.length ?? 0}
+            </span>
+            <span>
+              {t("vector.drawing_graph_relations")}:{" "}
+              {drawingGraph.relations?.length ?? 0}
+            </span>
+            <span>
+              {t("vector.drawing_graph_evidence")}:{" "}
+              {drawingGraph.evidence?.length ?? 0}
+            </span>
+            <span>
+              {t("vector.drawing_graph_unresolved")}:{" "}
+              {drawingGraph.unresolved_regions?.filter((item) => !item.resolved)
+                .length ?? 0}
+            </span>
           </div>
         </div>
       )}
 
       {drawingGraphVlmEvidence && (
-        <div className={`rounded border px-3 py-2 text-xs ${drawingGraphVlmEvidence.complete && drawingGraphVlmEvidence.independent ? "border-emerald-400/20 bg-emerald-950/20 text-emerald-100" : "border-amber-400/20 bg-amber-950/20 text-amber-100"}`}>
-          <div className="font-medium">{t("vector.graph_vlm_evidence_title")}</div>
+        <div
+          className={`rounded border px-3 py-2 text-xs ${drawingGraphVlmEvidence.complete && drawingGraphVlmEvidence.independent ? "border-emerald-400/20 bg-emerald-950/20 text-emerald-100" : "border-amber-400/20 bg-amber-950/20 text-amber-100"}`}
+        >
+          <div className="font-medium">
+            {t("vector.graph_vlm_evidence_title")}
+          </div>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
-            <span>{t("vector.graph_vlm_evidence_exact")}: {drawingGraphVlmEvidence.exact_checks ?? 0}/{drawingGraphVlmEvidence.expected_checks ?? 0}</span>
-            <span>{t("vector.graph_vlm_evidence_independent")}: {drawingGraphVlmEvidence.independent ? t("vector.yes") : t("vector.no")}</span>
-            <span>{t("vector.graph_vlm_evidence_models")}: {drawingGraphVlmEvidence.verifier_models?.join(" → ") || "—"}</span>
-            <span>{t("vector.graph_vlm_evidence_ocr")}: {drawingGraphVlmEvidence.classic_ocr_used ? t("vector.yes") : t("vector.no")}</span>
+            <span>
+              {t("vector.graph_vlm_evidence_exact")}:{" "}
+              {drawingGraphVlmEvidence.exact_checks ?? 0}/
+              {drawingGraphVlmEvidence.expected_checks ?? 0}
+            </span>
+            <span>
+              {t("vector.graph_vlm_evidence_independent")}:{" "}
+              {drawingGraphVlmEvidence.independent
+                ? t("vector.yes")
+                : t("vector.no")}
+            </span>
+            <span>
+              {t("vector.graph_vlm_evidence_models")}:{" "}
+              {drawingGraphVlmEvidence.verifier_models?.join(" → ") || "—"}
+            </span>
+            <span>
+              {t("vector.graph_vlm_evidence_ocr")}:{" "}
+              {drawingGraphVlmEvidence.classic_ocr_used
+                ? t("vector.yes")
+                : t("vector.no")}
+            </span>
           </div>
         </div>
       )}
 
-      {draftingSpec?.optional_unresolved && draftingSpec.optional_unresolved.length > 0 && (
-        <div className="rounded border border-amber-400/20 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
-          <div className="font-medium">{t("vector.spec_optional_missing")}</div>
-          <ul className="mt-1 list-disc pl-4">
-            {draftingSpec.optional_unresolved.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {draftingSpec?.optional_unresolved &&
+        draftingSpec.optional_unresolved.length > 0 && (
+          <div className="rounded border border-amber-400/20 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
+            <div className="font-medium">
+              {t("vector.spec_optional_missing")}
+            </div>
+            <ul className="mt-1 list-disc pl-4">
+              {draftingSpec.optional_unresolved.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
       {specReviewWarnings.length > 0 && (
         <div className="rounded border border-amber-400/30 bg-amber-950/25 px-3 py-2 text-xs text-amber-100">
-          <div className="font-medium">
-            {t("vector.spec_review_title")}
-          </div>
+          <div className="font-medium">{t("vector.spec_review_title")}</div>
           <p className="mt-1 text-amber-200/80">
             {sheetWithoutGeometry
               ? t("vector.spec_review_no_geometry")
@@ -1854,8 +1980,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                       ir.source.image_width / 10,
                     );
                     const height =
-                      width *
-                      (ir.source.image_height / ir.source.image_width);
+                      width * (ir.source.image_height / ir.source.image_width);
                     setViewBox({
                       x: Math.max(0, item.region.x0 - width * 0.25),
                       y: Math.max(0, item.region.y0 - height * 0.25),
@@ -1872,9 +1997,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                   type="button"
                   disabled={busy}
                   onClick={() =>
-                    void apply([
-                      { op: "resolve_region", region_id: item.id },
-                    ])
+                    void apply([{ op: "resolve_region", region_id: item.id }])
                   }
                   className="rounded bg-emerald-600/80 px-2 py-0.5 text-white disabled:opacity-50"
                 >
@@ -2288,9 +2411,9 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                     ? t("vector.accept_blocked_unresolved", {
                         n: unresolved.length,
                       })
-                  : !fullCheckCurrent
-                    ? t("vector.accept_blocked_full_check")
-                    : undefined
+                    : !fullCheckCurrent
+                      ? t("vector.accept_blocked_full_check")
+                      : undefined
             }
             onClick={async () => {
               setBusy(true);
