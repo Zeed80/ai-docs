@@ -42,7 +42,7 @@
 ## P2. Evidence-first чтение и граф размеров
 
 - [x] Разделить распознавание на обзор листа, виды/разрезы, локальные tiles и независимый OCR размерных надписей.
-- [-] Ввести явную модель видов, линий разреза, вынесенных сечений и связей между проекциями. Spec теперь хранит `view_id`, `parent_view_id`, relation, feature coverage, положение и model-space путь секущей; detail/removed_section сохраняются и блокируют coverage, пока их построение не поддержано.
+- [-] Ввести явную модель видов, линий разреза, вынесенных сечений и связей между проекциями. Spec теперь хранит `view_id`, `parent_view_id`, relation, feature coverage, положение и model-space путь секущей; вынесенное сечение строится как отдельный B-Rep section и сохраняет `presentation_kind=removed_section`. Местный detail сохраняется и блокирует coverage, пока не реализован корректный crop/scale.
 - [-] Собирать граф размерных цепей: реализованы наружная/внутренняя длина с offset, габарит, накопительные координаты ступеней, осевое размещение features, конусность, локальный диаметр поперечного отверстия и координатное попадание отверстий/пазов в плоский профиль; допуски и радиусные связи ещё расширяются.
 - [x] Решать реализованные размерные ограничения детерминированно; конфликт блокирует 3D-построение.
 - [x] Запретить перенос размерной надписи с наружного контура во внутренний и обратно без доказанной связи.
@@ -83,7 +83,7 @@
 - [-] Integration: отдельные контракты reader → normalized spec, byte-identical kernel payload, B-Rep → sheet и production DXF semantic reopen покрыты; единый тест полного конвейера с реальным CAD-kernel ещё нужен.
 - [ ] Regression: реальные листы с валами, полыми шпинделями, плитами/фланцами и отрицательными неоднозначными случаями.
 - [-] Метрики: добавлены topology/feature/view проверки, диагностический source-projection score из локализованного evidence, независимого raster-check и покрытия обязательных видов, production DXF reopen; corpus-level parameter accuracy и `false_accept_rate=0` ещё должны стать promotion gate.
-- [-] Production rebuild и повторный живой прогон `detal_126.png` (`06440e76-a0ca-49f3-b54c-867c5f0d7a04`) выполнены: статус `blocked`, 3 attempts, 178 per-value provenance-записей, 12 raw fragment-ответов, payload SHA `5c9eb9a7…`, `confirm_assumptions=false`; локализованных evidence-значений 0, поэтому `/compile` не вызван и STL/DXF не созданы. Визуальный UI smoke через production Authentik не выполнен без отдельной пользовательской сессии; backend/API и frontend production build проверены.
+- [-] Production rebuild и повторный живой прогон `detal_126.png` (`06440e76-a0ca-49f3-b54c-867c5f0d7a04`) выполнены: статус `blocked`, 3 attempts, 178 per-value provenance-записей, 12 raw fragment-ответов, payload SHA `5c9eb9a7…`, `confirm_assumptions=false`; локализованных evidence-значений 0, поэтому `/compile` не вызван и STL/DXF не созданы. После доработки видов production CAD-kernel smoke прошёл 15/15, включая topology и вынесенное сечение со штриховкой; HTTPS health и авторизованный API проверены. Визуальный UI smoke через production Authentik не выполнен без отдельной пользовательской сессии.
 
 ## Definition of Done для `detal_126.png`
 
