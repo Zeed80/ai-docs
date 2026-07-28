@@ -45,12 +45,96 @@ GROUND_TRUTH: dict[str, dict[str, Any]] = {
         "max_diameter_mm": 102.0,
         "expect_dimension_text": "80js6",
         "expect_annotation_contains": "hrc",
+        "reference_spec": "tests/fixtures/detal_126_reference_spec_v2.json",
     },
 }
 
 
 def _norm(value: Any) -> str:
     return str(value or "").strip().lower()
+
+
+_PARAMETER_GROUPS = {
+    "outer.diameter_mm": ("outer", "diameter_mm"),
+    "outer.length_mm": ("outer", "length_mm"),
+    "bore.diameter_mm": ("bore", "diameter_mm"),
+    "bore.length_mm": ("bore", "length_mm"),
+    "keyways.length_mm": ("keyways", "length_mm"),
+    "keyways.width_mm": ("keyways", "width_mm"),
+    "keyways.depth_mm": ("keyways", "depth_mm"),
+    "cross_holes.diameter_mm": ("cross_holes", "diameter_mm"),
+    "chamfers.size_mm": ("chamfers", "size_mm"),
+    "chamfers.angle_deg": ("chamfers", "angle_deg"),
+}
+
+
+def _parameter_groups(spec: dict) -> dict[str, list[float]]:
+    """Read-only manufacturing parameters, excluding constructed positions."""
+    body = spec.get("main_view") or {}
+    groups: dict[str, list[float]] = {}
+    for name, (collection, field) in _PARAMETER_GROUPS.items():
+        groups[name] = [
+            float(item[field])
+            for item in (body.get(collection) or [])
+            if isinstance(item, dict) and isinstance(item.get(field), (int, float))
+        ]
+    return groups
+
+
+def score_parameters(spec: dict, reference_spec: dict) -> dict[str, Any]:
+    """Micro accuracy over hand-read numeric facts, matched one-to-one."""
+    predicted = _parameter_groups(spec)
+    expected = _parameter_groups(reference_spec)
+    details: dict[str, dict[str, Any]] = {}
+    matched_total = 0
+    expected_total = 0
+    for name, wanted_values in expected.items():
+        remaining = list(predicted.get(name) or [])
+        matched = 0
+        for wanted in wanted_values:
+            tolerance = max(0.05, abs(wanted) * 0.001)
+            candidate = next(
+                (
+                    index
+                    for index, value in enumerate(remaining)
+                    if abs(value - wanted) <= tolerance
+                ),
+                None,
+            )
+            if candidate is not None:
+                matched += 1
+                remaining.pop(candidate)
+        matched_total += matched
+        expected_total += len(wanted_values)
+        details[name] = {
+            "matched": matched,
+            "expected": len(wanted_values),
+            "predicted_values": predicted.get(name) or [],
+            "expected_values": wanted_values,
+        }
+    return {
+        "parameters_matched": matched_total,
+        "parameters_total": expected_total,
+        "parameter_accuracy": matched_total / max(expected_total, 1),
+        "parameter_details": details,
+    }
+
+
+def summarize_results(results: list[dict]) -> dict[str, Any]:
+    matched = sum(int(result.get("parameters_matched") or 0) for result in results)
+    total = sum(int(result.get("parameters_total") or 0) for result in results)
+    claimed = sum(bool(result.get("success_claimed")) for result in results)
+    false_accepts = sum(bool(result.get("false_accept")) for result in results)
+    return {
+        "runs": len(results),
+        "valid_specs": sum(bool(result.get("validates")) for result in results),
+        "parameters_matched": matched,
+        "parameters_total": total,
+        "parameter_accuracy": matched / max(total, 1),
+        "success_claims": claimed,
+        "false_accepts": false_accepts,
+        "false_accept_rate": false_accepts / max(claimed, 1),
+    }
 
 
 def score_spec(spec: dict, truth: dict[str, Any]) -> dict[str, Any]:
@@ -98,11 +182,15 @@ def score_spec(spec: dict, truth: dict[str, Any]) -> dict[str, Any]:
     annotations = " ".join(_norm(a.get("text")) for a in (spec.get("annotations") or []))
     checks["annotation"] = truth["expect_annotation_contains"] in annotations
 
-    return {
+    result = {
         "checks": checks,
         "facts_correct": sum(1 for ok in checks.values() if ok),
         "facts_total": len(checks),
     }
+    reference_spec = truth.get("reference_spec_data")
+    if isinstance(reference_spec, dict):
+        result.update(score_parameters(spec, reference_spec))
+    return result
 
 
 async def evaluate_model(
@@ -143,6 +231,19 @@ async def evaluate_model(
         metadata={"num_predict": 24000},
     )
     result: dict[str, Any] = {"model": model_key, "images_sent": len(images)}
+    reference_spec = truth.get("reference_spec_data")
+    if isinstance(reference_spec, dict):
+        expected_total = sum(
+            len(values) for values in _parameter_groups(reference_spec).values()
+        )
+        # A malformed/empty/invalid answer missed every required parameter; it
+        # must stay in the micro denominator instead of looking like an empty
+        # corpus with no errors.
+        result.update({
+            "parameters_matched": 0,
+            "parameters_total": expected_total,
+            "parameter_accuracy": 0.0,
+        })
     started = time.monotonic()
     try:
         response = await ai_router.run(request)
@@ -198,16 +299,25 @@ async def evaluate_model(
 async def _buildability(spec: dict) -> dict:
     """Does this reading compile into a solid, and does a sheet come off it?"""
     from app.ai.cad_ir.sheet_from_solid import build_sheet_from_solid
-    from app.ai.cad_solid import feature_tree_from_spec
+    from app.ai.cad_solid import feature_tree_from_spec, solid_build_gate
     from app.services.cad_kernel import compile_candidate
 
     candidate = feature_tree_from_spec(spec)
     if candidate is None:
         return {"solid_built": False, "sheet_drawn": False,
                 "build_error": "no supported body in the reading"}
+    gate = solid_build_gate(spec, candidate, require_source_evidence=True)
+    if not gate["allowed"]:
+        return {
+            "solid_built": False,
+            "sheet_drawn": False,
+            "build_blocked": True,
+            "build_blockers": gate["blockers"],
+            "build_warnings": gate["warnings"],
+        }
     try:
         artifacts = await compile_candidate(
-            candidate, confirm_assumptions=True, metadata={"source": "eval_readers"}
+            candidate, confirm_assumptions=False, metadata={"source": "eval_readers"}
         )
     except Exception as exc:  # noqa: BLE001 — a failed build is a result
         return {"solid_built": False, "sheet_drawn": False,
@@ -249,13 +359,28 @@ async def main() -> int:
     args = parser.parse_args()
 
     image_bytes = pathlib.Path(args.image).read_bytes()
-    truth = GROUND_TRUTH[args.case]
+    truth = dict(GROUND_TRUTH[args.case])
+    reference_path = pathlib.Path(__file__).resolve().parents[1] / truth["reference_spec"]
+    reference_spec = json.loads(reference_path.read_text(encoding="utf-8"))
+    reference_spec.pop("_comment", None)
+    truth["reference_spec_data"] = reference_spec
     results = []
     for model_key in args.models:
         print(f"→ {model_key} ...", flush=True)
         result = await evaluate_model(
             model_key, image_bytes, truth, single_image=args.single_image
         )
+        result["success_claimed"] = bool(
+            result.get("solid_built")
+            and result.get("sheet_drawn")
+            and (result.get("sheet") or {}).get("views_match_solid")
+        )
+        truth_complete = bool(
+            result.get("parameter_accuracy") == 1.0
+            and result.get("facts_correct") == result.get("facts_total")
+            and int(result.get("blocking_unresolved") or 0) == 0
+        )
+        result["false_accept"] = bool(result["success_claimed"] and not truth_complete)
         summary = (
             f"  {result.get('seconds')}s imgs={result.get('images_sent')} "
             f"validates={result.get('validates', False)} "
@@ -269,11 +394,26 @@ async def main() -> int:
 
     out = pathlib.Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(
-        json.dumps({"case": args.case, "results": results}, ensure_ascii=False, indent=2)
-    )
+    summary = summarize_results(results)
+    report = {
+        "contract": "real-raster-cad-reader-v2",
+        "case": args.case,
+        "promotion_contract": {
+            "parameter_accuracy": 1.0,
+            "false_accept_rate": 0.0,
+            "valid_specs": len(results),
+        },
+        "summary": summary,
+        "results": results,
+    }
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2))
     print(f"\nwrote {out}")
-    return 0
+    promotion_passed = bool(
+        summary["valid_specs"] == len(results)
+        and summary["parameter_accuracy"] == 1.0
+        and summary["false_accept_rate"] == 0.0
+    )
+    return 0 if promotion_passed else 1
 
 
 if __name__ == "__main__":
