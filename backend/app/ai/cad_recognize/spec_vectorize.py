@@ -233,6 +233,7 @@ class SpecPrismaticProfile(BaseModel):
     width_mm: float | None = Field(default=None, gt=0)
     height_mm: float | None = Field(default=None, gt=0)
     diameter_mm: float | None = Field(default=None, gt=0)
+    corner_radius_mm: float | None = Field(default=None, gt=0)
     thickness_mm: float | None = Field(default=None, gt=0)
     holes: list[SpecHole] = Field(default_factory=list)
     hole_patterns: list[SpecHolePattern] = Field(default_factory=list)
@@ -242,6 +243,14 @@ class SpecPrismaticProfile(BaseModel):
     def _require_shape_dimensions(self) -> "SpecPrismaticProfile":
         if self.shape == "rectangle" and (self.width_mm is None or self.height_mm is None):
             raise ValueError("rectangle requires width_mm and height_mm")
+        if (
+            self.shape == "rectangle"
+            and self.corner_radius_mm is not None
+            and self.corner_radius_mm > min(self.width_mm, self.height_mm) / 2.0
+        ):
+            raise ValueError("corner_radius_mm exceeds half of the shorter side")
+        if self.shape != "rectangle" and self.corner_radius_mm is not None:
+            raise ValueError("corner_radius_mm is valid only for rectangle")
         if self.shape == "circle" and self.diameter_mm is None:
             raise ValueError("circle requires diameter_mm")
         return self
@@ -447,6 +456,7 @@ _SPEC_PROMPT = (
     '"evidence":[{"image_index":1,"bbox":[0,0,100,30],"raw_text":"Ø40"}]}],'
     '"bore":[{"diameter_mm":0,"length_mm":0,"note":"..."}],'
     '"profile":{"shape":"rectangle|circle","width_mm":0,"height_mm":0,'
+    '"corner_radius_mm":null,'
     '"diameter_mm":null,"thickness_mm":0,"holes":['
     '{"center_x_mm":0,"center_y_mm":0,"diameter_mm":0,"tolerance":null}],'
     '"hole_patterns":[{"kind":"bolt_circle","count":6,'
@@ -498,7 +508,8 @@ _SPEC_PROMPT = (
     "масштаба местного вида к масштабу родительского. Если центр или радиус "
     "не доказаны, оставь их null: такой detail должен остаться блокером.\n"
     "ПРАВИЛА для пластин/фланцев:\n"
-    "1) profile обязателен: rectangle требует width_mm+height_mm, circle — diameter_mm.\n"
+    "1) profile обязателен: rectangle требует width_mm+height_mm, circle — diameter_mm; "
+    "для явно скруглённых углов rectangle укажи corner_radius_mm по выноске R, не по картинке.\n"
     "2) Координаты holes задавай от ЦЕНТРА профиля: +x вправо, +y вверх.\n"
     "3) Включай только отверстия с доказанными диаметром и двумя координатами.\n"
     "4) Равномерный массив отверстий по делительной окружности задавай ОДНИМ "
@@ -2411,14 +2422,29 @@ def draft_prismatic_body(
         center_x = local_x + width_mm * px_per_mm / 2.0
         center_y = local_y + height_mm * px_per_mm / 2.0
         if profile["shape"] == "rectangle":
-            corners = [
-                Point(x=local_x, y=local_y),
-                Point(x=local_x + width_mm * px_per_mm, y=local_y),
-                Point(x=local_x + width_mm * px_per_mm, y=local_y + height_mm * px_per_mm),
-                Point(x=local_x, y=local_y + height_mm * px_per_mm),
-            ]
-            for p1, p2 in zip(corners, corners[1:] + corners[:1], strict=True):
-                entities.append(Segment(p1=p1, p2=p2, **common))
+            right = local_x + width_mm * px_per_mm
+            bottom = local_y + height_mm * px_per_mm
+            corner_radius = (_num(profile.get("corner_radius_mm")) or 0.0) * px_per_mm
+            if corner_radius:
+                entities.extend([
+                    Segment(p1=Point(x=local_x + corner_radius, y=local_y), p2=Point(x=right - corner_radius, y=local_y), **common),
+                    Arc(center=Point(x=right - corner_radius, y=local_y + corner_radius), radius=corner_radius, start_angle=270, end_angle=360, **common),
+                    Segment(p1=Point(x=right, y=local_y + corner_radius), p2=Point(x=right, y=bottom - corner_radius), **common),
+                    Arc(center=Point(x=right - corner_radius, y=bottom - corner_radius), radius=corner_radius, start_angle=0, end_angle=90, **common),
+                    Segment(p1=Point(x=right - corner_radius, y=bottom), p2=Point(x=local_x + corner_radius, y=bottom), **common),
+                    Arc(center=Point(x=local_x + corner_radius, y=bottom - corner_radius), radius=corner_radius, start_angle=90, end_angle=180, **common),
+                    Segment(p1=Point(x=local_x, y=bottom - corner_radius), p2=Point(x=local_x, y=local_y + corner_radius), **common),
+                    Arc(center=Point(x=local_x + corner_radius, y=local_y + corner_radius), radius=corner_radius, start_angle=180, end_angle=270, **common),
+                ])
+            else:
+                corners = [
+                    Point(x=local_x, y=local_y),
+                    Point(x=right, y=local_y),
+                    Point(x=right, y=bottom),
+                    Point(x=local_x, y=bottom),
+                ]
+                for p1, p2 in zip(corners, corners[1:] + corners[:1], strict=True):
+                    entities.append(Segment(p1=p1, p2=p2, **common))
             dim_y = local_y + height_mm * px_per_mm + 10.0 * px_per_mm
             entities.append(DimensionEntity(
                 kind="linear",

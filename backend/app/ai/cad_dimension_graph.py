@@ -45,6 +45,31 @@ def _tolerance_interval(
     return deviations_from_fit(nominal_mm, text)
 
 
+def _circle_fits_rounded_rectangle(
+    x: float,
+    y: float,
+    feature_radius: float,
+    width: float,
+    height: float,
+    corner_radius: float,
+) -> bool:
+    """Exact containment of a circular footprint in a centred rounded box."""
+    half_width, half_height = width / 2.0, height / 2.0
+    if feature_radius < 0 or corner_radius < 0:
+        return False
+    if abs(x) + feature_radius > half_width + 0.05:
+        return False
+    if abs(y) + feature_radius > half_height + 0.05:
+        return False
+    if corner_radius <= 0:
+        return True
+    arc_x, arc_y = half_width - corner_radius, half_height - corner_radius
+    if abs(x) <= arc_x or abs(y) <= arc_y:
+        return True
+    distance = ((abs(x) - arc_x) ** 2 + (abs(y) - arc_y) ** 2) ** 0.5
+    return distance + feature_radius <= corner_radius + 0.05
+
+
 def build_dimension_graph(spec: dict) -> dict[str, Any]:
     """Return nodes, constraints and blocking contradictions."""
     body = spec.get("main_view") or {}
@@ -314,17 +339,42 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
 
     profile = body.get("profile") or {}
     shape = profile.get("shape")
+    corner_radius = _number(profile.get("corner_radius_mm")) or 0.0
+    if shape == "rectangle" and corner_radius:
+        width = _number(profile.get("width_mm")) or 0.0
+        height = _number(profile.get("height_mm")) or 0.0
+        max_corner_radius = min(width, height) / 2.0
+        radius_ok = max_corner_radius > 0 and corner_radius <= max_corner_radius + 0.05
+        constraints.append({
+            "kind": "corner_radius_fits_profile",
+            "target": "main_view.profile.corner_radius_mm",
+            "radius_mm": corner_radius,
+            "max_radius_mm": max_corner_radius,
+            "ok": radius_ok,
+        })
+        if not radius_ok:
+            errors.append(
+                f"profile.corner_radius_mm R{corner_radius:g} не помещается в "
+                f"профиль {width:g}×{height:g} мм: максимум R{max_corner_radius:g}"
+            )
     for group in ("holes", "slots"):
         for index, feature in enumerate(profile.get(group) or []):
             x = _number(feature.get("center_x_mm"))
             y = _number(feature.get("center_y_mm"))
             if x is None or y is None:
                 continue
-            radius = (_number(feature.get("diameter_mm")) or _number(feature.get("width_mm")) or 0.0) / 2.0
+            radius = (
+                _number(feature.get("diameter_mm"))
+                or _number(feature.get("length_mm"))
+                or _number(feature.get("width_mm"))
+                or 0.0
+            ) / 2.0
             if shape == "rectangle":
                 width = _number(profile.get("width_mm")) or 0.0
                 height = _number(profile.get("height_mm")) or 0.0
-                fits = abs(x) + radius <= width / 2.0 + 0.05 and abs(y) + radius <= height / 2.0 + 0.05
+                fits = _circle_fits_rounded_rectangle(
+                    x, y, radius, width, height, corner_radius
+                )
             elif shape == "circle":
                 profile_radius = (_number(profile.get("diameter_mm")) or 0.0) / 2.0
                 fits = (x * x + y * y) ** 0.5 + radius <= profile_radius + 0.05

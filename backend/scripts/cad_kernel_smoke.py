@@ -17,6 +17,7 @@ the kernel actually did rather than only that it did not agree.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import urllib.error
@@ -137,6 +138,35 @@ def main() -> int:
         ),
     )
 
+    # A rounded plate is a different base B-Rep, not a square box whose read R
+    # disappeared before OpenCascade. Its volume is the rounded-rectangle area
+    # times depth.
+    status, payload = _compile(_candidate(_feature(
+        "extrude",
+        width_mm=100.0,
+        height_mm=60.0,
+        depth_mm=10.0,
+        corner_radius_mm=8.0,
+    )))
+    if status == 200:
+        rounded = _report_from_zip(payload)
+        expected = (100.0 * 60.0 - (4.0 - math.pi) * 8.0**2) * 10.0
+        actual = float(rounded["volume_mm3"])
+        check(
+            "rounded plate preserves its stated corner radius",
+            rounded["brep_valid"]
+            and rounded["manifold"]
+            and _localized(rounded, "extrude")
+            and abs(actual - expected) / expected < 0.001,
+            f"V={actual:.1f} mm3, expected={expected:.1f}",
+        )
+    else:
+        check(
+            "rounded plate preserves its stated corner radius",
+            False,
+            f"HTTP {status}: {payload}",
+        )
+
     # 1. An annular groove removes a ring of material and nothing else.
     status, payload = _compile(
         _candidate(
@@ -148,8 +178,6 @@ def main() -> int:
         report = _report_from_zip(payload)
         removed = base_volume - float(report["volume_mm3"])
         # Ring: pi * (R^2 - (R-d)^2) * w, R=51, d=3, w=6
-        import math
-
         expected = math.pi * (51.0**2 - 48.0**2) * 6.0
         check(
             "groove cuts the right ring",

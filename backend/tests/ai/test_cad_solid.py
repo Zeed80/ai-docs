@@ -327,6 +327,15 @@ def test_a_plate_becomes_an_extrusion_of_its_read_outline():
     assert base.param_provenance["thickness_mm"].origin == "stated"
 
 
+def test_a_rounded_plate_keeps_its_read_corner_radius_in_the_kernel_payload():
+    candidate = feature_tree_from_spec(_plate_spec(corner_radius_mm=8))
+
+    assert candidate is not None
+    base = candidate.features[0]
+    assert base.params["corner_radius_mm"] == 8
+    assert base.param_provenance["corner_radius_mm"].origin == "stated"
+
+
 def test_a_plate_without_a_read_thickness_builds_nothing():
     """Thickness comes from a side view; guessing it would invent the part."""
     spec = _plate_spec()

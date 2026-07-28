@@ -152,3 +152,32 @@ def test_dimension_graph_blocks_a_fillet_larger_than_its_shoulder():
 
     assert graph["status"] == "conflict"
     assert "максимум R5" in graph["errors"][0]
+
+
+def test_dimension_graph_checks_flat_profile_corner_radius():
+    graph = build_dimension_graph({
+        "main_view": {"profile": {
+            "shape": "rectangle",
+            "width_mm": 100,
+            "height_mm": 40,
+            "corner_radius_mm": 21,
+        }}
+    })
+
+    assert graph["status"] == "conflict"
+    assert "максимум R20" in graph["errors"][0]
+
+
+def test_hole_must_fit_inside_the_rounded_corner_not_only_the_bounding_box():
+    graph = build_dimension_graph({
+        "main_view": {"profile": {
+            "shape": "rectangle",
+            "width_mm": 100,
+            "height_mm": 60,
+            "corner_radius_mm": 15,
+            "holes": [{"center_x_mm": 44, "center_y_mm": 24, "diameter_mm": 8}],
+        }}
+    })
+
+    assert graph["status"] == "conflict"
+    assert "выходит за контур" in graph["errors"][0]

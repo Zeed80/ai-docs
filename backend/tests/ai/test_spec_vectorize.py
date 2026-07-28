@@ -245,6 +245,42 @@ def test_prismatic_plate_drafter_emits_exact_geometry_dimensions_and_holes():
     assert frame and all(entity.assurance == "inferred" for entity in frame)
 
 
+def test_prismatic_drafter_emits_four_true_corner_arcs_for_a_rounded_plate():
+    spec = EngineeringDrawingSpec.model_validate({
+        "main_view": {
+            "type": "призматическая пластина",
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 120,
+                "height_mm": 80,
+                "corner_radius_mm": 10,
+            },
+        },
+    }).model_dump(mode="json")
+
+    ir = draft_prismatic_body(spec, px_per_mm=2)
+
+    assert ir is not None
+    corner_arcs = [entity for entity in ir.entities if entity.type == "arc"]
+    assert len(corner_arcs) == 4
+    assert {arc.radius for arc in corner_arcs} == {20.0}
+
+
+def test_prismatic_profile_rejects_a_corner_radius_larger_than_half_side():
+    with pytest.raises(ValueError, match="corner_radius_mm"):
+        EngineeringDrawingSpec.model_validate({
+            "main_view": {
+                "type": "призматическая пластина",
+                "profile": {
+                    "shape": "rectangle",
+                    "width_mm": 100,
+                    "height_mm": 40,
+                    "corner_radius_mm": 21,
+                },
+            },
+        })
+
+
 def test_prismatic_drafter_declines_incomplete_profile():
     assert draft_prismatic_body({
         "main_view": {

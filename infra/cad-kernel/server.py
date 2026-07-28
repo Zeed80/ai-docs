@@ -653,6 +653,29 @@ def _build_shape(
         height = _number(base.params, "height_mm")
         depth = _number(base.params, "depth_mm")
         shape = Part.makeBox(width, height, depth)
+        corner_radius = base.params.get("corner_radius_mm")
+        if corner_radius is not None:
+            radius = _number(
+                base.params,
+                "corner_radius_mm",
+                maximum=min(width, height) / 2.0,
+            )
+            vertical_edges = [
+                edge for edge in shape.Edges
+                if edge.BoundBox.ZLength >= depth - 1e-6
+                and edge.BoundBox.XLength <= 1e-6
+                and edge.BoundBox.YLength <= 1e-6
+            ]
+            if len(vertical_edges) != 4:
+                raise HTTPException(422, "Rounded extrude base has no four vertical edges")
+            try:
+                shape = shape.makeFillet(radius, vertical_edges)
+            except Exception as exc:
+                raise HTTPException(
+                    422, f"OpenCascade rejected corner_radius_mm: {exc}"
+                ) from exc
+            if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
+                raise HTTPException(422, "OpenCascade produced invalid rounded extrude base")
     base_index = request.candidate.features.index(base)
     operation_audit.append({
         "feature_index": base_index,

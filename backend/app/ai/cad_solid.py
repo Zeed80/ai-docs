@@ -185,13 +185,28 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         height = _num(profile.get("height_mm"))
         if not width or not height:
             return None
+        corner_radius = _num(profile.get("corner_radius_mm"))
+        if corner_radius and corner_radius > min(width, height) / 2.0:
+            return None
+        base_params = {
+            "width_mm": width,
+            "height_mm": height,
+            "depth_mm": thickness,
+        }
+        if corner_radius:
+            base_params["corner_radius_mm"] = corner_radius
         features.append(Feature3D(
             kind="extrude",
-            params={"width_mm": width, "height_mm": height, "depth_mm": thickness},
+            params=base_params,
             param_provenance={
                 **provenance,
                 "width_mm": ParamProvenance(origin="stated", detail="габарит по чертежу"),
                 "height_mm": ParamProvenance(origin="stated", detail="габарит по чертежу"),
+                **({
+                    "corner_radius_mm": ParamProvenance(
+                        origin="stated", detail="радиус углов прочитан с выноски R"
+                    )
+                } if corner_radius else {}),
             },
             confidence=0.9,
         ))
