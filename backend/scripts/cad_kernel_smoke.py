@@ -97,6 +97,15 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ""))
 
 
+def _localized(report: dict, kind: str) -> bool:
+    return any(
+        item.get("kind") == kind
+        and item.get("status") == "built"
+        and item.get("localization_ok") is True
+        for item in report.get("feature_results", [])
+    )
+
+
 def main() -> int:
     status, health = _post("/health", {}) if False else (200, None)
     with urllib.request.urlopen(f"{KERNEL}/health", timeout=30) as response:
@@ -117,7 +126,9 @@ def main() -> int:
         and base_report["solid_count"] == 1
         and all(base_report.get(key, 0) > 0 for key in (
             "shell_count", "face_count", "edge_count", "vertex_count"
-        )),
+        ))
+        # The base itself is also localized as the full initial B-Rep.
+        and _localized(base_report, "revolve"),
         (
             f"V={base_volume:.0f} mm3, topology="
             f"{base_report.get('solid_count')}/{base_report.get('shell_count')}/"
@@ -145,6 +156,22 @@ def main() -> int:
             report["brep_valid"] and abs(removed - expected) / expected < 0.02,
             f"removed {removed:.0f} mm3, expected {expected:.0f}",
         )
+        localized = next(
+            (item for item in report.get("feature_results", []) if item.get("kind") == "groove"),
+            {},
+        )
+        bounds = localized.get("changed_bounds_mm") or {}
+        expected_bounds = localized.get("expected_bounds_mm") or {}
+        check(
+            "groove is localized on the final B-Rep",
+            localized.get("status") == "built"
+            and localized.get("localization_ok") is True
+            and abs(float(localized.get("changed_volume_mm3") or 0.0) - expected) / expected < 0.02
+            and 246.9 <= float(bounds.get("z_min", -1.0)) <= 247.1
+            and 252.9 <= float(bounds.get("z_max", -1.0)) <= 253.1
+            and bounds == expected_bounds,
+            f"changed={localized.get('changed_volume_mm3')}, bounds={bounds}",
+        )
     else:
         check("groove cuts the right ring", False, f"HTTP {status}: {payload}")
 
@@ -164,7 +191,10 @@ def main() -> int:
             removed = base_volume - float(report["volume_mm3"])
             check(
                 f"keyway at {angle:g}deg",
-                report["brep_valid"] and report["solid_count"] == 1 and removed > 0,
+                report["brep_valid"]
+                and report["solid_count"] == 1
+                and removed > 0
+                and _localized(report, "keyway"),
                 f"removed {removed:.0f} mm3",
             )
         else:
@@ -185,7 +215,7 @@ def main() -> int:
         removed = base_volume - float(report["volume_mm3"])
         check(
             "cross hole goes through",
-            report["brep_valid"] and removed > 0,
+            report["brep_valid"] and removed > 0 and _localized(report, "hole"),
             f"removed {removed:.0f} mm3",
         )
     else:
@@ -206,7 +236,9 @@ def main() -> int:
         removed = base_volume - float(report["volume_mm3"])
         check(
             "chamfer resolved by selector",
-            report["brep_valid"] and 0 < removed < base_volume * 0.01,
+            report["brep_valid"]
+            and 0 < removed < base_volume * 0.01
+            and _localized(report, "chamfer"),
             f"removed {removed:.1f} mm3",
         )
     else:

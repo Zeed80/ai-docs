@@ -263,6 +263,29 @@ def test_verification_fails_when_kernel_rolled_back_a_requested_feature():
     assert result.checks["requested_features"] == ["revolve", "hole"]
 
 
+def test_verification_rejects_a_built_feature_without_brep_localization():
+    spec = _shaft_spec()
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    report = _report(100.0, 50.0)
+    report["feature_results"] = [
+        {
+            "feature_index": 0,
+            "kind": "revolve",
+            "status": "built",
+            "requested_params": candidate.features[0].params,
+        }
+    ]
+
+    result = verify_solid_against_spec(report, spec, candidate)
+
+    assert not result.ok
+    assert result.checks["feature_complete"] is False
+    assert result.checks["unlocalized_features"] == [
+        "revolve[0]: изменение B-Rep не локализовано"
+    ]
+
+
 def test_verification_window_is_half_a_percent():
     spec = _shaft_spec()
     assert verify_solid_against_spec(_report(100.4, 50.0), spec).checks["length_ok"]

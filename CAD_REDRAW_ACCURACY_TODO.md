@@ -52,7 +52,7 @@
 
 - [x] Компилировать поддержанный feature tree: revolve/extrude, bore/taper, holes, keyways/grooves, chamfers/fillets, threads.
 - [x] Для каждой операции возвращать структурированный результат ядра `requested/built/failed` и причину отказа.
-- [-] Проверять габариты, профильный верхний предел объёма с учётом bore, число solid/shell/face/edge/vertex, manifold/B-Rep и каждую feature-операцию; остаётся геометрическая локализация каждого построенного feature на B-Rep.
+- [x] Проверять габариты, профильный верхний предел объёма с учётом bore, число solid/shell/face/edge/vertex, manifold/B-Rep и каждую feature-операцию. Для каждой геометрической операции ядро измеряет булеву разность B-Rep до/после, сохраняет фактические/ожидаемые объём и bbox; `built` без `localization_ok=true` блокирует верификацию.
 - [x] Не откатывать неудавшийся feature молча к предыдущему «валидному» телу: отказ фиксируется как failed и блокирует геометрическую верификацию.
 - [ ] Добавить независимый рендер 3D и сравнение проекций с исходными видами/разрезами.
 
@@ -79,11 +79,11 @@
 
 ## P7. Тесты и promotion gate
 
-- [-] Unit: добавлены critical missing data, dimension graph, feature completeness, labels, geometry-only, per-value provenance, source bbox mapping и view coverage; остаются topology/tolerance случаи.
+- [x] Unit: покрыты critical missing data, dimension graph, topology/tolerance, feature completeness и B-Rep localization contract, labels, geometry-only, per-value provenance, source bbox mapping и view coverage.
 - [-] Integration: отдельные контракты reader → normalized spec, byte-identical kernel payload, B-Rep → sheet и production DXF semantic reopen покрыты; единый тест полного конвейера с реальным CAD-kernel ещё нужен.
 - [ ] Regression: реальные листы с валами, полыми шпинделями, плитами/фланцами и отрицательными неоднозначными случаями.
 - [-] Метрики: добавлены topology/feature/view проверки, диагностический source-projection score из локализованного evidence, независимого raster-check и покрытия обязательных видов, production DXF reopen; corpus-level parameter accuracy и `false_accept_rate=0` ещё должны стать promotion gate.
-- [-] Production rebuild и повторный живой прогон `detal_126.png` (`06440e76-a0ca-49f3-b54c-867c5f0d7a04`) выполнены: статус `blocked`, 3 attempts, 178 per-value provenance-записей, 12 raw fragment-ответов, payload SHA `5c9eb9a7…`, `confirm_assumptions=false`; локализованных evidence-значений 0, поэтому `/compile` не вызван и STL/DXF не созданы. После доработки видов production CAD-kernel smoke прошёл 16/16, включая topology, вынесенное сечение со штриховкой и нативный detail crop/scale; HTTPS health и авторизованный API проверены. Визуальный UI smoke через production Authentik не выполнен без отдельной пользовательской сессии.
+- [-] Production rebuild и повторный живой прогон `detal_126.png` (`06440e76-a0ca-49f3-b54c-867c5f0d7a04`) выполнены: статус `blocked`, 3 attempts, 178 per-value provenance-записей, 12 raw fragment-ответов, payload SHA `5c9eb9a7…`, `confirm_assumptions=false`; локализованных evidence-значений 0, поэтому `/compile` не вызван и STL/DXF не созданы. После доработки видов и feature-аудита production CAD-kernel smoke прошёл 17/17, включая topology, вынесенное сечение, нативный detail crop/scale и точный B-Rep delta канавки; HTTPS health и авторизованный API проверены. Визуальный UI smoke через production Authentik не выполнен без отдельной пользовательской сессии.
 
 ## Definition of Done для `detal_126.png`
 

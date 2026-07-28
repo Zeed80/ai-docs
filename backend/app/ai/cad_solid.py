@@ -653,6 +653,12 @@ def verify_solid_against_spec(
         for item in feature_results
         if item.get("status") != "built"
     ] or [item for item in kernel_warnings if "not built" in item.lower()]
+    unlocalized_features = [
+        f"{item.get('kind')}[{item.get('feature_index')}]: изменение B-Rep не локализовано"
+        for item in feature_results
+        if item.get("status") == "built" and item.get("localization_ok") is not True
+    ]
+    failed_features.extend(unlocalized_features)
     requested_features = [feature.kind for feature in candidate.features] if candidate else []
     feature_complete = not failed_features
     topology_ok = bool(
@@ -700,6 +706,7 @@ def verify_solid_against_spec(
         "feature_complete": feature_complete,
         "requested_features": requested_features,
         "failed_features": failed_features,
+        "unlocalized_features": unlocalized_features,
         "feature_results": feature_results,
     }
     return SolidVerification(checks)

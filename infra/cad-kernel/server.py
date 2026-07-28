@@ -567,7 +567,59 @@ def _apply_shell(shape: Part.Shape, feature: Feature) -> Part.Shape:
     return result
 
 
-def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
+def _shape_bounds(shape: Part.Shape) -> dict[str, float] | None:
+    if shape.isNull() or not shape.Vertexes:
+        return None
+    box = shape.BoundBox
+    return {
+        "x_min": float(box.XMin), "x_max": float(box.XMax),
+        "y_min": float(box.YMin), "y_max": float(box.YMax),
+        "z_min": float(box.ZMin), "z_max": float(box.ZMax),
+    }
+
+
+def _operation_localization(
+    before: Part.Shape,
+    after: Part.Shape,
+    *,
+    mode: Literal["cut", "add"],
+    expected_tool: Part.Shape | None = None,
+) -> dict[str, Any]:
+    """Measure where one feature changed the B-Rep and whether it changed it there."""
+    try:
+        actual = before.cut(after) if mode == "cut" else after.cut(before)
+        actual_volume = float(actual.Volume)
+        expected = None
+        if expected_tool is not None:
+            expected = (
+                before.common(expected_tool)
+                if mode == "cut" else expected_tool.cut(before)
+            )
+        expected_volume = float(expected.Volume) if expected is not None else None
+        volume_ok = actual_volume > 1e-6
+        if expected_volume is not None:
+            volume_ok = volume_ok and expected_volume > 1e-6 and abs(
+                actual_volume - expected_volume
+            ) <= max(1e-5, expected_volume * 0.005)
+        return {
+            "localization_kind": "brep_boolean_delta",
+            "localization_ok": volume_ok,
+            "changed_volume_mm3": actual_volume,
+            "changed_bounds_mm": _shape_bounds(actual),
+            "expected_volume_mm3": expected_volume,
+            "expected_bounds_mm": _shape_bounds(expected) if expected is not None else None,
+        }
+    except Exception as exc:  # noqa: BLE001 — audit failure must fail closed, not the export
+        return {
+            "localization_kind": "brep_boolean_delta",
+            "localization_ok": False,
+            "localization_error": str(exc)[:200],
+        }
+
+
+def _build_shape(
+    request: CompileRequest,
+) -> tuple[Part.Shape, list[str], list[dict[str, Any]]]:
     bases = [
         feature for feature in request.candidate.features
         if feature.kind in ("extrude", "revolve", "loft")
@@ -579,6 +631,7 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
 
     base = bases[0]
     warnings: list[str] = []
+    operation_audit: list[dict[str, Any]] = []
     # An extrude base is a box anchored at the origin, so cut/add features are
     # addressed from its corner. A turned base is symmetric about the axis, so
     # ITS features are addressed from the axis (x=y=0 is the centre) and bounded
@@ -600,8 +653,17 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
         height = _number(base.params, "height_mm")
         depth = _number(base.params, "depth_mm")
         shape = Part.makeBox(width, height, depth)
+    base_index = request.candidate.features.index(base)
+    operation_audit.append({
+        "feature_index": base_index,
+        "kind": base.kind,
+        "localization_kind": "base_body",
+        "localization_ok": True,
+        "changed_volume_mm3": float(shape.Volume),
+        "changed_bounds_mm": _shape_bounds(shape),
+    })
 
-    for feature in request.candidate.features:
+    for feature_index, feature in enumerate(request.candidate.features):
         if feature.kind not in ("boss", "pocket"):
             continue
         profile = feature.params.get("profile")
@@ -638,9 +700,19 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
             tool = Part.makeBox(profile_width, profile_height, solid_height, App.Vector(x0, y0, z))
         else:
             raise HTTPException(422, f"Unsupported {feature.kind} profile")
+        previous = shape
         shape = shape.fuse(tool) if feature.kind == "boss" else shape.cut(tool)
+        operation_audit.append({
+            "feature_index": feature_index,
+            "kind": feature.kind,
+            **_operation_localization(
+                previous, shape,
+                mode="add" if feature.kind == "boss" else "cut",
+                expected_tool=tool,
+            ),
+        })
 
-    for feature in request.candidate.features:
+    for feature_index, feature in enumerate(request.candidate.features):
         if feature.kind not in ("groove", "keyway"):
             continue
         tool = (
@@ -649,9 +721,15 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
             else _keyway_tool(shape, feature)
         )
         position = feature.params.get("axial_position_mm", feature.params.get("axial_start_mm"))
+        previous = shape
         shape = _cut_feature(shape, tool, f"{feature.kind} @ {position}", warnings)
+        operation_audit.append({
+            "feature_index": feature_index,
+            "kind": feature.kind,
+            **_operation_localization(previous, shape, mode="cut", expected_tool=tool),
+        })
 
-    for feature in request.candidate.features:
+    for feature_index, feature in enumerate(request.candidate.features):
         if feature.kind != "hole":
             continue
         diameter = _number(feature.params, "diameter_mm", maximum=min(width, height) * 2)
@@ -668,12 +746,19 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
         # dowel holes on every shaft drawing. Same feature, different direction,
         # so it is a parameter rather than a second kind.
         if (feature.params.get("axis") or "z") == "radial":
+            cutter = _radial_hole_tool(shape, feature, radius, through, warnings, request)
+            previous = shape
             shape = _cut_feature(
                 shape,
-                _radial_hole_tool(shape, feature, radius, through, warnings, request),
+                cutter,
                 f"cross hole Ø{diameter:g} @ {feature.params.get('axial_position_mm')}",
                 warnings,
             )
+            operation_audit.append({
+                "feature_index": feature_index,
+                "kind": feature.kind,
+                **_operation_localization(previous, shape, mode="cut", expected_tool=cutter),
+            })
             continue
         if through is True:
             cutter = Part.makeCylinder(
@@ -717,13 +802,19 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
                 shape.BoundBox.ZMax - shape.BoundBox.ZMin + 2.0,
                 App.Vector(x, y, shape.BoundBox.ZMin - 1.0),
             )
+        previous = shape
         shape = _cut_feature(shape, cutter, f"hole Ø{diameter:g}", warnings)
+        operation_audit.append({
+            "feature_index": feature_index,
+            "kind": feature.kind,
+            **_operation_localization(previous, shape, mode="cut", expected_tool=cutter),
+        })
 
     # Edge operations come AFTER every cut: a chamfer belongs to the edge that
     # exists once the part is fully cut, and asking for one before the hole is
     # drilled means the mouth of that hole can never be chamfered. It also fails
     # loudly rather than silently landing on some other edge.
-    for feature in request.candidate.features:
+    for feature_index, feature in enumerate(request.candidate.features):
         if feature.kind not in ("fillet", "chamfer"):
             continue
         # An edge the selector cannot find is the same class of problem as one
@@ -735,6 +826,13 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
             edge = _resolve_edge(shape, feature.params)
         except HTTPException as exc:
             warnings.append(f"{feature.kind} not built: {exc.detail}")
+            operation_audit.append({
+                "feature_index": feature_index,
+                "kind": feature.kind,
+                "localization_kind": "edge_delta",
+                "localization_ok": False,
+                "localization_error": str(exc.detail)[:200],
+            })
             continue
         size = _number(feature.params, "size_mm", maximum=max(width, height, depth))
         # A refused edge operation must not cost the part. OpenCascade declines
@@ -755,6 +853,11 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
             warnings.append(
                 f"{feature.kind} not built: OpenCascade rejected it ({str(exc)[:120]})"
             )
+            operation_audit.append({
+                "feature_index": feature_index, "kind": feature.kind,
+                "localization_kind": "edge_delta", "localization_ok": False,
+                "localization_error": str(exc)[:200],
+            })
             continue
         if candidate.isNull() or not candidate.isValid():
             shape = previous
@@ -762,20 +865,50 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
                 f"{feature.kind} not built: OpenCascade returned invalid geometry "
                 f"for size {size:g} mm"
             )
+            operation_audit.append({
+                "feature_index": feature_index, "kind": feature.kind,
+                "localization_kind": "edge_delta", "localization_ok": False,
+                "localization_error": "OpenCascade returned invalid geometry",
+            })
             continue
         shape = candidate
+        operation_audit.append({
+            "feature_index": feature_index,
+            "kind": feature.kind,
+            **{
+                **_operation_localization(previous, shape, mode="cut"),
+                "localization_kind": "edge_delta",
+            },
+        })
 
     # D3: shell hollows the finished solid (after all add/cut operations).
     shells = [f for f in request.candidate.features if f.kind == "shell"]
     if len(shells) > 1:
         raise HTTPException(422, "At most one shell feature is supported")
     for feature in shells:
+        previous = shape
         shape = _apply_shell(shape, feature)
+        operation_audit.append({
+            "feature_index": request.candidate.features.index(feature),
+            "kind": feature.kind,
+            **_operation_localization(previous, shape, mode="cut"),
+        })
+
+    for feature_index, feature in enumerate(request.candidate.features):
+        if feature.kind == "thread":
+            operation_audit.append({
+                "feature_index": feature_index,
+                "kind": feature.kind,
+                "localization_kind": "cosmetic_annotation",
+                "localization_ok": True,
+                "changed_volume_mm3": 0.0,
+                "changed_bounds_mm": None,
+            })
 
     shape = shape.removeSplitter()
     if shape.isNull() or not shape.isValid() or shape.Volume <= 0:
         raise HTTPException(422, "OpenCascade produced an invalid or empty solid")
-    return shape, warnings
+    return shape, warnings, operation_audit
 
 
 def _cosmetic_threads(request: CompileRequest) -> list[dict[str, Any]]:
@@ -990,7 +1123,7 @@ def project_views(request: ProjectRequest) -> dict[str, Any]:
     Coordinates are the view's own, centred on the shape. Callers place views
     from ``bounds_mm`` and compare extents, both of which are unchanged by that.
     """
-    shape, warnings = _build_shape(
+    shape, warnings, _operation_audit = _build_shape(
         CompileRequest(
             candidate=request.candidate,
             confirm_assumptions=request.confirm_assumptions,
@@ -1253,7 +1386,7 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
     Geometry comes back in each view's own millimetres, already scaled, so the
     caller places views without re-measuring the model.
     """
-    shape, warnings = _build_shape(
+    shape, warnings, _operation_audit = _build_shape(
         CompileRequest(
             candidate=request.candidate,
             confirm_assumptions=request.confirm_assumptions,
@@ -1520,7 +1653,11 @@ def _brep_report(shape: "Part.Shape", metadata: dict[str, Any], warnings: list[s
     return report
 
 
-def _feature_results(request: CompileRequest, warnings: list[str]) -> list[dict[str, Any]]:
+def _feature_results(
+    request: CompileRequest,
+    warnings: list[str],
+    operation_audit: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Structured requested/built/failed result for every feature operation.
 
     Older reports exposed only free-text warnings, so a rolled-back hole or
@@ -1530,6 +1667,11 @@ def _feature_results(request: CompileRequest, warnings: list[str]) -> list[dict[
     """
     failures = [item for item in warnings if "not built" in item.lower()]
     consumed: set[int] = set()
+    audit_by_index = {
+        int(item["feature_index"]): item
+        for item in operation_audit
+        if isinstance(item.get("feature_index"), int)
+    }
     results: list[dict[str, Any]] = []
     for index, feature in enumerate(request.candidate.features):
         aliases = {
@@ -1548,15 +1690,23 @@ def _feature_results(request: CompileRequest, warnings: list[str]) -> list[dict[
             ),
             None,
         )
+        audit = audit_by_index.get(index) or {}
+        localization_failed = audit.get("localization_ok") is False
         entry: dict[str, Any] = {
             "feature_index": index,
             "kind": feature.kind,
-            "status": "failed" if failed_index is not None else "built",
+            "status": "failed" if failed_index is not None or localization_failed else "built",
             "requested_params": feature.params,
+            **{key: value for key, value in audit.items() if key not in {"feature_index", "kind"}},
         }
         if failed_index is not None:
             consumed.add(failed_index)
             entry["reason"] = failures[failed_index]
+        elif localization_failed:
+            entry["reason"] = str(
+                audit.get("localization_error")
+                or "feature did not produce the expected local B-Rep change"
+            )
         results.append(entry)
     return results
 
@@ -1564,7 +1714,7 @@ def _feature_results(request: CompileRequest, warnings: list[str]) -> list[dict[
 @app.post("/compile")
 def compile_candidate(request: CompileRequest) -> Response:
     cosmetic_threads = _cosmetic_threads(request)
-    shape, warnings = _build_shape(request)
+    shape, warnings, operation_audit = _build_shape(request)
     document = App.newDocument("EngineeringModel")
     try:
         model = document.addObject("Part::Feature", "Model")
@@ -1604,7 +1754,9 @@ def compile_candidate(request: CompileRequest) -> Response:
                         },
                         "edges": _edge_descriptors(shape),
                         "cosmetic_threads": cosmetic_threads,
-                        "feature_results": _feature_results(request, warnings),
+                        "feature_results": _feature_results(
+                            request, warnings, operation_audit
+                        ),
                         "kernel": "FreeCAD/OpenCascade",
                     },
                     ensure_ascii=False,
