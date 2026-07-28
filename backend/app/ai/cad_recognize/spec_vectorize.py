@@ -736,7 +736,13 @@ async def read_drawing_spec_consensus(
             reads.append(spec)
     if not reads and last_error is not None:
         raise last_error
-    return consensus_spec(reads)
+    merged = consensus_spec(reads)
+    if merged:
+        merged["reader_attempts"] = [
+            {"pass": index + 1, "mode": "whole_sheet", "spec": spec}
+            for index, spec in enumerate(reads)
+        ]
+    return merged
 
 
 async def read_drawing_spec(

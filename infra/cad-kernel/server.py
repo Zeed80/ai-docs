@@ -1476,6 +1476,47 @@ def _brep_report(shape: "Part.Shape", metadata: dict[str, Any], warnings: list[s
     return report
 
 
+def _feature_results(request: CompileRequest, warnings: list[str]) -> list[dict[str, Any]]:
+    """Structured requested/built/failed result for every feature operation.
+
+    Older reports exposed only free-text warnings, so a rolled-back hole or
+    chamfer looked like a successful solid.  Warning matching is consumed once
+    and includes the requested feature index; it is intentionally conservative
+    when OpenCascade did not provide a richer operation identifier.
+    """
+    failures = [item for item in warnings if "not built" in item.lower()]
+    consumed: set[int] = set()
+    results: list[dict[str, Any]] = []
+    for index, feature in enumerate(request.candidate.features):
+        aliases = {
+            "hole": ("hole",),
+            "keyway": ("keyway",),
+            "groove": ("groove",),
+            "chamfer": ("chamfer",),
+            "fillet": ("fillet",),
+        }.get(feature.kind, ())
+        failed_index = next(
+            (
+                position
+                for position, warning in enumerate(failures)
+                if position not in consumed
+                and any(alias in warning.lower() for alias in aliases)
+            ),
+            None,
+        )
+        entry: dict[str, Any] = {
+            "feature_index": index,
+            "kind": feature.kind,
+            "status": "failed" if failed_index is not None else "built",
+            "requested_params": feature.params,
+        }
+        if failed_index is not None:
+            consumed.add(failed_index)
+            entry["reason"] = failures[failed_index]
+        results.append(entry)
+    return results
+
+
 @app.post("/compile")
 def compile_candidate(request: CompileRequest) -> Response:
     cosmetic_threads = _cosmetic_threads(request)
@@ -1519,6 +1560,7 @@ def compile_candidate(request: CompileRequest) -> Response:
                         },
                         "edges": _edge_descriptors(shape),
                         "cosmetic_threads": cosmetic_threads,
+                        "feature_results": _feature_results(request, warnings),
                         "kernel": "FreeCAD/OpenCascade",
                     },
                     ensure_ascii=False,

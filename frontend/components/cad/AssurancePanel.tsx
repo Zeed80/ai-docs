@@ -52,7 +52,8 @@ export default function AssurancePanel({
   const acceptedFollowups = (followups ?? []).filter((f) => f.accepted);
   const rasterRan = crosscheck?.raster_check === "checked";
   const solidVerified = Boolean(
-    (solid?.verification as { ok?: boolean } | undefined)?.ok,
+    (solid?.verification as { ok?: boolean } | undefined)?.ok &&
+      solid?.build_status === "verified",
   );
   const sheetVerified = Boolean(
     (solid?.sheet?.verification as { ok?: boolean } | undefined)?.ok,
@@ -125,12 +126,26 @@ export default function AssurancePanel({
                     solid.sheet?.sheet_format,
                     solid.sheet?.scale,
                     solid.sheet?.views?.join(" + "),
+                    solid.build_status,
                     sheetVerified ? t("vector.assurance_views_match") : "",
                   ]
                     .filter(Boolean)
                     .join(" · ")
                 : solid.error
             }
+          />
+        ) : null}
+
+        {solid?.source_projection_verification ? (
+          <Row
+            ok={Boolean(solid.source_projection_verification.ok)}
+            label={t("vector.assurance_source_projection")}
+            detail={[
+              solid.source_projection_verification.status,
+              ...(solid.source_projection_verification.missing_evidence ?? []),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           />
         ) : null}
 

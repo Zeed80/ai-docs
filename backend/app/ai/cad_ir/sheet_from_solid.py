@@ -57,6 +57,7 @@ class SheetPlan:
     # a base view, so on a hollow part the plain front view is requested and
     # then dropped: it is the same part its own section already draws.
     scaffold_views: set[int] = field(default_factory=set)
+    geometry_only: bool = True
 
 
 @dataclass
@@ -128,6 +129,34 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
     return views
 
 
+def verify_view_coverage(plan: SheetPlan, spec: dict) -> dict[str, Any]:
+    """Do the planned visible views expose every modeled feature family?"""
+    visible = [
+        view["kind"]
+        for index, view in enumerate(plan.views)
+        if index not in plan.scaffold_views
+    ]
+    body = spec.get("main_view") or {}
+    required: list[dict[str, str]] = []
+    if body.get("bore"):
+        required.append({"feature": "bore", "view": "section"})
+    if body.get("keyways") or body.get("cross_holes"):
+        required.append({"feature": "radial_features", "view": "side"})
+    for source_view in spec.get("views") or []:
+        if not isinstance(source_view, dict):
+            continue
+        kind = str(source_view.get("kind") or "")
+        if kind in {"side", "top", "section"}:
+            required.append({"feature": f"source_view:{kind}", "view": kind})
+    missing = [item for item in required if item["view"] not in visible]
+    return {
+        "ok": not missing,
+        "visible_views": visible,
+        "required": required,
+        "missing": missing,
+    }
+
+
 def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tuple[float, float]:
     """Roughly how much room the views need, before anything is drawn.
 
@@ -163,6 +192,7 @@ def plan_sheet(
     *,
     sheet_format: str | None = None,
     landscape: bool = True,
+    geometry_only: bool = True,
 ) -> SheetPlan:
     """Pick the views, the paper and the ГОСТ 2.302 scale — in that order."""
     from app.ai.cad_recognize.spec_vectorize import (
@@ -181,7 +211,9 @@ def plan_sheet(
     for candidate in formats:
         ratio, label = choose_standard_scale(
             layout_w, layout_h, candidate,
-            landscape=landscape, reserve_title_block=True, reserve_notes_mm=notes_mm,
+            landscape=landscape,
+            reserve_title_block=not geometry_only,
+            reserve_notes_mm=0.0 if geometry_only else notes_mm,
         )
         chosen_format = candidate
         # Stop at the first sheet the part reads well on rather than the first
@@ -212,6 +244,7 @@ def plan_sheet(
         layout_w_mm=layout_w,
         layout_h_mm=layout_h,
         scaffold_views=scaffold,
+        geometry_only=geometry_only,
     )
 
 
@@ -482,6 +515,7 @@ async def build_sheet_from_solid(
     *,
     sheet_format: str | None = None,
     landscape: bool = True,
+    geometry_only: bool = True,
 ) -> SheetResult | None:
     """Compile the sheet: views from the kernel, everything else from the read.
 
@@ -496,7 +530,13 @@ async def build_sheet_from_solid(
     )
     from app.services.cad_kernel import draw_candidate_sheet
 
-    plan = plan_sheet(spec, report, sheet_format=sheet_format, landscape=landscape)
+    plan = plan_sheet(
+        spec,
+        report,
+        sheet_format=sheet_format,
+        landscape=landscape,
+        geometry_only=geometry_only,
+    )
     drawing = await draw_candidate_sheet(
         candidate, views=plan.views, scale=plan.ratio, hidden_lines=True
     )
@@ -536,7 +576,7 @@ async def build_sheet_from_solid(
     _label_dimensions(measured, requests, spec)
 
     ir, extent = _assemble(drawing, spec, plan)
-    verification = verify_views_against_solid(
+    geometry_verification = verify_views_against_solid(
         {
             str(view.get("kind")): view
             for view in (drawing.get("views") or [])
@@ -548,6 +588,13 @@ async def build_sheet_from_solid(
         # is measured in real millimetres.
         scale=plan.ratio,
     )
+    view_coverage = verify_view_coverage(plan, spec)
+    verification = {
+        **geometry_verification,
+        "geometry_ok": bool(geometry_verification.get("ok")),
+        "view_coverage": view_coverage,
+        "ok": bool(geometry_verification.get("ok") and view_coverage["ok"]),
+    }
     logger.info(
         "cad_sheet_from_solid",
         part_class=plan.part_class,
@@ -564,7 +611,7 @@ async def build_sheet_from_solid(
 
 
 def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[float, float]]:
-    """Views, dimensions, frame and stamp, on one ГОСТ sheet."""
+    """Views and dimensions, with sheet furniture only when explicitly asked."""
     from app.ai.cad_projection import (
         dimensions_from_kernel,
         place_sheet_views,
@@ -578,10 +625,10 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     )
 
     views = drawing.get("views") or []
-    notes_mm = technical_requirements_height_mm(spec)
+    notes_mm = 0.0 if plan.geometry_only else technical_requirements_height_mm(spec)
     paper_w, paper_h, area_x0, area_y0, area_w, area_h = _drawing_area_mm(
         plan.sheet_format, plan.landscape,
-        reserve_title_block=True, reserve_notes_mm=notes_mm,
+        reserve_title_block=not plan.geometry_only, reserve_notes_mm=notes_mm,
     )
 
     # Lay the views out at the origin first, measure them, then centre.
@@ -602,9 +649,10 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         list(range(len(views))),
         px_per_mm=PAPER_PX_PER_MM,
     )
-    entities += _sheet_frame_entities(
-        paper_w, paper_h, PAPER_PX_PER_MM, spec, plan.scale_label
-    )
+    if not plan.geometry_only:
+        entities += _sheet_frame_entities(
+            paper_w, paper_h, PAPER_PX_PER_MM, spec, plan.scale_label
+        )
 
     ir = CadIR(
         source=SourceInfo(
@@ -621,4 +669,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         digitization_status="review_required",
     )
     ir.sheet = _sheet_info(plan.sheet_format, spec, plan.scale_label)
+    if plan.geometry_only:
+        ir.sheet.frame = False
+        ir.sheet.title_block = {}
     return ir, (extent_w, extent_h)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import zipfile
 from dataclasses import dataclass
@@ -80,11 +81,11 @@ async def compile_candidate(
     confirm_assumptions: bool,
     metadata: dict[str, str | int | float | bool | None],
 ) -> CadKernelArtifacts:
-    payload = {
-        "candidate": candidate.model_dump(mode="json"),
-        "confirm_assumptions": confirm_assumptions,
-        "metadata": metadata,
-    }
+    payload = candidate_compile_payload(
+        candidate,
+        confirm_assumptions=confirm_assumptions,
+        metadata=metadata,
+    )["payload"]
     from app.core import metrics
 
     try:
@@ -107,6 +108,28 @@ async def compile_candidate(
         raise CadKernelUnavailable(f"cad-kernel вернул HTTP {response.status_code}")
     metrics.cad_kernel_compile_total.labels(status="ok").inc()
     return _decode_artifacts(response.content)
+
+
+def candidate_compile_payload(
+    candidate: FeatureTreeCandidate,
+    *,
+    confirm_assumptions: bool,
+    metadata: dict[str, str | int | float | bool | None],
+) -> dict[str, Any]:
+    """Return the exact JSON boundary and its stable digest for audit/UI.
+
+    ``httpx(..., json=payload)`` serializes this same object.  The digest uses a
+    canonical representation so key ordering in a browser cannot change it.
+    """
+    payload = {
+        "candidate": candidate.model_dump(mode="json"),
+        "confirm_assumptions": confirm_assumptions,
+        "metadata": metadata,
+    }
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return {"payload": payload, "sha256": hashlib.sha256(canonical).hexdigest()}
 
 
 async def project_candidate(

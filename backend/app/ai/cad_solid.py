@@ -45,6 +45,62 @@ class SolidVerification:
         return dict(self.checks)
 
 
+def solid_build_gate(
+    spec: dict,
+    candidate: FeatureTreeCandidate,
+    *,
+    require_source_evidence: bool = False,
+) -> dict[str, list[str] | bool]:
+    """Classify what may and may not cross the spec -> CAD boundary.
+
+    ``missing_data`` historically mixed harmless review notes with facts that
+    change the part.  That allowed a sectioned hollow spindle to be compiled as
+    a solid shaft.  The gate is deliberately conservative: unresolved reader
+    facts and omitted requested geometry are blockers; an absent bore is a
+    blocker when the drawing explicitly contains a section, otherwise it stays
+    a visible warning for a potentially solid shaft.
+    """
+    blockers = [str(item) for item in spec.get("unresolved") or [] if str(item)]
+    from app.ai.cad_dimension_graph import build_dimension_graph
+
+    blockers.extend(build_dimension_graph(spec)["errors"])
+    if require_source_evidence:
+        body = spec.get("main_view") or {}
+        missing_evidence = [
+            f"main_view.{group}.{index}"
+            for group in ("outer", "bore", "keyways", "cross_holes", "grooves", "chamfers")
+            for index, item in enumerate(body.get(group) or [])
+            if isinstance(item, dict) and not item.get("evidence")
+        ]
+        if missing_evidence:
+            blockers.append(
+                "геометрия без локализованного evidence: "
+                + ", ".join(missing_evidence[:8])
+                + (f" и ещё {len(missing_evidence) - 8}" if len(missing_evidence) > 8 else "")
+            )
+    warnings: list[str] = []
+    has_section = any(
+        str(view.get("kind") or "").lower() in {"section", "cut", "разрез", "сечение"}
+        for view in spec.get("views") or []
+        if isinstance(view, dict)
+    )
+    for item in candidate.missing_data:
+        message = str(item)
+        lowered = message.lower()
+        is_critical = any(marker in lowered for marker in (
+            "не построен",
+            "длиннее детали",
+            "построено только главное",
+            "прочитан не полностью",
+        ))
+        if "разрез не прочитан" in lowered:
+            is_critical = has_section
+        (blockers if is_critical else warnings).append(message)
+    blockers = list(dict.fromkeys(blockers))
+    warnings = [item for item in dict.fromkeys(warnings) if item not in blockers]
+    return {"allowed": not blockers, "blockers": blockers, "warnings": warnings}
+
+
 def _profile_points(sections: list[dict]) -> list[dict[str, float]]:
     """Ordered (r, z) polyline of a stepped profile, in millimetres.
 
@@ -286,6 +342,36 @@ def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
             confidence=0.9,
         )
     ]
+    axial_start = 0.0
+    for section in outer:
+        thread = section.get("thread") or {}
+        designation = str(thread.get("designation") or thread.get("spec") or "").strip()
+        if designation:
+            diameter = _num(thread.get("nominal_diameter_mm")) or _num(section.get("d"))
+            if diameter:
+                thread_params: dict[str, Any] = {
+                    "spec": designation,
+                    "diameter_mm": diameter,
+                    "axial_start_mm": axial_start,
+                    "length_mm": float(section.get("l") or 0.0),
+                }
+                pitch = _num(thread.get("pitch_mm"))
+                if pitch:
+                    thread_params["pitch_mm"] = pitch
+                features.append(Feature3D(
+                    kind="thread",
+                    params=thread_params,
+                    param_provenance={
+                        "spec": ParamProvenance(
+                            origin="stated", detail="обозначение резьбы прочитано с чертежа"
+                        ),
+                        "diameter_mm": ParamProvenance(
+                            origin="stated", detail="номинальный диаметр резьбы"
+                        ),
+                    },
+                    confidence=0.85,
+                ))
+        axial_start += float(section.get("l") or 0.0)
     features.extend(_cut_features(body, outer, missing))
     return FeatureTreeCandidate(
         features=features,
@@ -503,7 +589,11 @@ def _edge_selector(
     return None
 
 
-def verify_solid_against_spec(report: dict, spec: dict) -> SolidVerification:
+def verify_solid_against_spec(
+    report: dict,
+    spec: dict,
+    candidate: FeatureTreeCandidate | None = None,
+) -> SolidVerification:
     """Does the built solid measure what the sheet said?
 
     Checks the two quantities a revolve cannot fake: overall length along the
@@ -529,8 +619,24 @@ def verify_solid_against_spec(report: dict, spec: dict) -> SolidVerification:
 
     length_ok = close(built_length, stated_length)
     diameter_ok = close(built_diameter, stated_diameter)
+    kernel_warnings = [str(item) for item in report.get("warnings") or []]
+    feature_results = [
+        item for item in report.get("feature_results") or [] if isinstance(item, dict)
+    ]
+    failed_features = [
+        str(item.get("reason") or f"{item.get('kind')} не построен")
+        for item in feature_results
+        if item.get("status") != "built"
+    ] or [item for item in kernel_warnings if "not built" in item.lower()]
+    requested_features = [feature.kind for feature in candidate.features] if candidate else []
+    feature_complete = not failed_features
     checks = {
-        "ok": bool(length_ok and diameter_ok and report.get("brep_valid")),
+        "ok": bool(
+            length_ok
+            and diameter_ok
+            and report.get("brep_valid")
+            and feature_complete
+        ),
         "stated_length_mm": round(stated_length, 3),
         "built_length_mm": round(built_length, 3),
         "length_ok": length_ok,
@@ -541,6 +647,10 @@ def verify_solid_against_spec(report: dict, spec: dict) -> SolidVerification:
         "manifold": bool(report.get("manifold")),
         "solid_count": report.get("solid_count"),
         "volume_mm3": report.get("volume_mm3"),
+        "feature_complete": feature_complete,
+        "requested_features": requested_features,
+        "failed_features": failed_features,
+        "feature_results": feature_results,
     }
     return SolidVerification(checks)
 

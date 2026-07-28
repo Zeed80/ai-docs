@@ -8,12 +8,18 @@ result claims about itself. The live half lives in scripts/cad_kernel_smoke.py.
 
 from __future__ import annotations
 
+import io
+
+import ezdxf
+
 from app.ai.cad_ir.sheet_from_solid import (
+    _assemble,
     _dimension_requests,
     _label_dimensions,
     classify_part,
     plan_sheet,
     plan_views,
+    verify_view_coverage,
 )
 
 _SHAFT = {
@@ -93,6 +99,18 @@ def test_a_shaft_with_cross_features_gets_the_end_view_that_shows_them():
         }
     }
     assert "side" in [view["kind"] for view in plan_views("solid_rotation", spec)]
+    plan = plan_sheet(spec, _SHAFT_REPORT)
+    assert verify_view_coverage(plan, spec)["ok"] is True
+
+
+def test_view_coverage_requires_a_section_for_a_read_bore():
+    plan = plan_sheet(_HOLLOW, _SHAFT_REPORT)
+    assert verify_view_coverage(plan, _HOLLOW)["ok"] is True
+    plan.views = [{"kind": "front"}]
+    plan.scaffold_views = set()
+    coverage = verify_view_coverage(plan, _HOLLOW)
+    assert coverage["ok"] is False
+    assert coverage["missing"][0]["view"] == "section"
 
 
 def test_the_scale_is_standard_and_the_sheet_is_the_smallest_that_reads():
@@ -101,6 +119,37 @@ def test_the_scale_is_standard_and_the_sheet_is_the_smallest_that_reads():
     assert plan.sheet_format in {"A4", "A3"}
     # A part is not enlarged onto a bigger sheet just because it would fit.
     assert plan.ratio <= 1.0
+
+
+def test_redraw_sheet_is_geometry_only_by_default():
+    plan = plan_sheet(_SHAFT, _SHAFT_REPORT)
+    assert plan.geometry_only is True
+    ir, _extent = _assemble({"views": [], "dimensions": []}, _SHAFT, plan)
+    assert ir.sheet is not None
+    assert ir.sheet.frame is False
+    assert ir.sheet.title_block == {}
+    assert not any("sheet_frame" in entity.evidence for entity in ir.entities)
+
+
+def test_geometry_only_sheet_reopens_as_dxf_without_frame_entities():
+    from app.ai.cad_ir.dxf_render import render_ir_to_dxf
+
+    plan = plan_sheet(_SHAFT, _SHAFT_REPORT)
+    drawing = {
+        "views": [{
+            "kind": "front",
+            "bounds_mm": {"u_min": 0, "u_max": 100, "v_min": -10, "v_max": 10},
+            "visible": [{"type": "line", "points": [[0, 0], [100, 0]]}],
+            "hidden": [],
+            "hatch": [],
+        }],
+        "dimensions": [],
+    }
+    ir, _extent = _assemble(drawing, _SHAFT, plan)
+    document = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode("utf-8")))
+    entities = list(document.modelspace())
+    assert entities
+    assert all(entity.dxf.layer != "FRAME" for entity in entities)
 
 
 def test_the_source_scale_is_honoured_when_it_fits():

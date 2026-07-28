@@ -513,6 +513,77 @@ async def get_generation(
     return _gen_out(gen)
 
 
+def _cad_trace_payload(gen: ImageGeneration, key: str) -> Any:
+    params = gen.params or {}
+    if key == "cad_reading":
+        return params.get(key) or {
+            "spec": params.get("spec"),
+            "followup": params.get("spec_followup") or [],
+            "crosscheck": params.get("spec_crosscheck"),
+            "unresolved": params.get("spec_review_warnings") or [],
+            "assumptions": params.get("spec_assumptions") or [],
+        }
+    return params.get(key)
+
+
+@router.get("/{generation_id}/cad-reading")
+async def get_cad_reading(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Everything established by the reader before 3D normalization."""
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    reading = _cad_trace_payload(gen, "cad_reading")
+    if not reading or not reading.get("spec"):
+        raise HTTPException(404, "Результат чтения ещё не сохранён")
+    return reading
+
+
+@router.get("/{generation_id}/solid-input")
+async def get_solid_input(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Exact payload prepared for the CAD kernel, including canonical SHA."""
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    solid_input = _cad_trace_payload(gen, "solid_input")
+    if not solid_input:
+        raise HTTPException(404, "Вход 3D-модели ещё не сформирован")
+    return solid_input
+
+
+@router.get("/{generation_id}/solid-input/diff")
+async def get_solid_input_diff(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Readable boundary between model reading and deterministic compilation."""
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    reading = _cad_trace_payload(gen, "cad_reading") or {}
+    solid_input = _cad_trace_payload(gen, "solid_input") or {}
+    solid = (gen.params or {}).get("solid_3d") or {}
+    candidate = (solid_input.get("payload") or {}).get("candidate") or {}
+    gate = solid.get("build_gate") or {}
+    return {
+        "read": reading.get("spec"),
+        "normalized_feature_tree": candidate,
+        "kernel_payload_sha256": solid_input.get("sha256"),
+        "blockers": gate.get("blockers") or solid.get("blockers") or [],
+        "warnings": gate.get("warnings") or solid.get("warnings") or [],
+        "excluded": candidate.get("missing_data") or [],
+        "build_status": solid.get("build_status") or "blocked",
+    }
+
+
 @router.get("/{generation_id}/result")
 async def get_result(
     generation_id: uuid.UUID,
@@ -789,24 +860,26 @@ async def correct_vectorize_spec(
     if not supplied and not rebuild:
         raise HTTPException(400, "Не передано ни одного исправления")
 
-    corrected = merge_correction(read_spec, supplied)
-    record = build_correction_record(
-        generation_id=str(generation_id),
-        source_path=params.get("normalized_source_path"),
-        read_spec=read_spec,
-        corrected_spec=corrected,
-        corrected_by=getattr(user, "sub", None),
-        reader_models=(
-            (params.get("cad_pipeline_manifest") or {})
-            .get("components", {})
-            .get("spec_reader", {})
-            .get("models", [])
-        ),
-    )
-    params["spec_corrected"] = corrected
-    params["spec_correction_record"] = record
-    gen.params = params
-    await db.commit()
+    record = params.get("spec_correction_record") or {"diff": []}
+    if supplied:
+        corrected = merge_correction(read_spec, supplied)
+        record = build_correction_record(
+            generation_id=str(generation_id),
+            source_path=params.get("normalized_source_path"),
+            read_spec=read_spec,
+            corrected_spec=corrected,
+            corrected_by=getattr(user, "sub", None),
+            reader_models=(
+                (params.get("cad_pipeline_manifest") or {})
+                .get("components", {})
+                .get("spec_reader", {})
+                .get("models", [])
+            ),
+        )
+        params["spec_corrected"] = corrected
+        params["spec_correction_record"] = record
+        gen.params = params
+        await db.commit()
 
     task_id = None
     if rebuild:
@@ -818,6 +891,32 @@ async def correct_vectorize_spec(
         task = rebuild_from_spec.apply_async(args=[str(generation_id)], queue="celery")
         task_id = task.id
     return {"ok": True, "diff": record["diff"], "rebuild_task_id": task_id}
+
+
+@router.patch("/{generation_id}/cad-reading")
+async def patch_cad_reading(
+    generation_id: uuid.UUID,
+    body: SpecCorrectionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Public audit-oriented alias for field corrections to the saved read."""
+    return await correct_vectorize_spec(generation_id, body, db, user)
+
+
+@router.post("/{generation_id}/solid-input/rebuild")
+async def rebuild_solid_input(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Recompile the stored/corrected reading without another VLM call."""
+    return await correct_vectorize_spec(
+        generation_id,
+        SpecCorrectionRequest(rebuild=True),
+        db,
+        user,
+    )
 
 
 @router.post("/{generation_id}/accept-vectorize")
@@ -857,6 +956,18 @@ async def accept_vectorize_generation(
             409,
             "Полная проверка не завершилась успешно; недоступность модели не считается проверкой.",
         )
+    params = dict(gen.params or {})
+    if params.get("vectorize_method") == "spec":
+        solid = dict(params.get("solid_3d") or {})
+        geometry_ok = bool((solid.get("verification") or {}).get("ok"))
+        feature_complete = bool(
+            (solid.get("verification") or {}).get("feature_complete", True)
+        )
+        if not solid.get("built") or not geometry_ok or not feature_complete:
+            raise HTTPException(
+                409,
+                "3D-модель не прошла геометрическую и feature-верификацию; исправьте чтение и пересоберите.",
+            )
     if any(not region.resolved for region in ir.unresolved_regions):
         raise HTTPException(
             409,
@@ -883,6 +994,17 @@ async def accept_vectorize_generation(
     gen.accepted_revision = revision.revision
     revision.approved_by = user.sub
     revision.approved_at = accepted_at
+    if params.get("vectorize_method") == "spec":
+        solid = dict(params.get("solid_3d") or {})
+        solid["build_status"] = "verified"
+        solid["source_projection_verification"] = {
+            "ok": True,
+            "status": "human_full_check",
+            "revision": revision.revision,
+            "approved_by": user.sub,
+        }
+        params["solid_3d"] = solid
+        gen.params = params
     await db.commit()
     return _gen_out(gen)
 

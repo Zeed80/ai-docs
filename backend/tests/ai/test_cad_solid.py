@@ -9,6 +9,7 @@ import pytest
 from app.ai.cad_solid import (
     estimate_mass_kg,
     feature_tree_from_spec,
+    solid_build_gate,
     verify_solid_against_spec,
 )
 
@@ -46,6 +47,29 @@ def test_every_solid_parameter_declares_it_came_from_the_sheet():
     assert provenance["profile_points"].origin == "stated"
 
 
+def test_read_thread_is_carried_to_the_kernel_feature_tree():
+    spec = _shaft_spec(main_view={
+        "outer": [
+            {"diameter_mm": 30, "length_mm": 40},
+            {
+                "diameter_mm": 50,
+                "length_mm": 60,
+                "thread": {
+                    "designation": "M50x1,5",
+                    "nominal_diameter_mm": 50,
+                    "pitch_mm": 1.5,
+                },
+            },
+        ],
+    })
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    thread = next(feature for feature in candidate.features if feature.kind == "thread")
+    assert thread.params["spec"] == "M50x1,5"
+    assert thread.params["axial_start_mm"] == 40
+    assert thread.params["pitch_mm"] == 1.5
+
+
 def test_bore_becomes_a_coaxial_cut_not_a_guess():
     spec = _shaft_spec(main_view={"bore": [{"diameter_mm": 16, "length_mm": 90}]})
     candidate = feature_tree_from_spec(spec)
@@ -61,6 +85,42 @@ def test_solid_part_declares_the_unread_cavity():
     candidate = feature_tree_from_spec(_shaft_spec())
     assert candidate is not None
     assert any("разрез" in item for item in candidate.missing_data)
+
+
+def test_unread_bore_blocks_3d_when_the_reader_found_a_section():
+    spec = _shaft_spec(views=[{"kind": "section"}])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    gate = solid_build_gate(spec, candidate)
+    assert gate["allowed"] is False
+    assert any("разрез" in item for item in gate["blockers"])
+
+
+def test_unread_bore_is_only_a_warning_without_section_evidence():
+    spec = _shaft_spec()
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    gate = solid_build_gate(spec, candidate)
+    assert gate["allowed"] is True
+    assert any("разрез" in item for item in gate["warnings"])
+
+
+def test_reader_unresolved_always_blocks_the_3d_boundary():
+    spec = _shaft_spec(unresolved=["размерная цепочка не сходится"])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    gate = solid_build_gate(spec, candidate)
+    assert gate["allowed"] is False
+    assert gate["blockers"] == ["размерная цепочка не сходится"]
+
+
+def test_raster_redraw_requires_localized_geometry_evidence_before_kernel():
+    spec = _shaft_spec()
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    gate = solid_build_gate(spec, candidate, require_source_evidence=True)
+    assert gate["allowed"] is False
+    assert any("без локализованного evidence" in item for item in gate["blockers"])
 
 
 def test_bore_wider_than_the_body_is_refused_not_repaired():
@@ -146,6 +206,26 @@ def test_verification_rejects_an_invalid_brep_even_when_sizes_match():
     report = _report(100.0, 50.0)
     report["brep_valid"] = False
     assert not verify_solid_against_spec(report, spec).ok
+
+
+def test_verification_fails_when_kernel_rolled_back_a_requested_feature():
+    spec = _shaft_spec(
+        main_view={
+            "cross_holes": [
+                {"diameter_mm": 9, "axial_position_mm": 50, "through": True}
+            ]
+        }
+    )
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    report = _report(100.0, 50.0)
+    report["warnings"] = [
+        "cross hole Ø9 @ 50 not built: OpenCascade returned invalid geometry"
+    ]
+    result = verify_solid_against_spec(report, spec, candidate)
+    assert not result.ok
+    assert result.checks["feature_complete"] is False
+    assert result.checks["requested_features"] == ["revolve", "hole"]
 
 
 def test_verification_window_is_half_a_percent():

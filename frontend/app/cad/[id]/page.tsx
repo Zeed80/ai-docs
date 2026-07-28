@@ -99,6 +99,50 @@ function ReadSoFar({
   );
 }
 
+function BlockedSolidInput({
+  input,
+  solid,
+  t,
+}: {
+  input: Record<string, unknown>;
+  solid?: Record<string, unknown>;
+  t: (key: string) => string;
+}) {
+  const payload = (input.payload ?? {}) as Record<string, unknown>;
+  const candidate = (payload.candidate ?? {}) as Record<string, unknown>;
+  const features = (candidate.features ?? []) as Array<Record<string, unknown>>;
+  const blockers = (solid?.blockers ?? []) as string[];
+  return (
+    <section className="rounded border border-sky-500/30 bg-sky-950/20 p-3 text-xs">
+      <h2 className="text-sm text-sky-200">{t("blocked_solid_input")}</h2>
+      {blockers.map((item) => (
+        <p key={item} className="mt-1 text-red-300">✕ {item}</p>
+      ))}
+      <p className="mt-2 break-all font-mono text-[10px] text-zinc-500">
+        SHA-256: {String(input.sha256 ?? "—")}
+      </p>
+      <div className="mt-2 space-y-2">
+        {features.map((feature, index) => (
+          <div key={index} className="rounded border border-white/10 p-2">
+            <div className="font-mono text-sky-300">
+              {index + 1}. {String(feature.kind ?? "—")}
+            </div>
+            <pre className="mt-1 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-zinc-400">
+              {JSON.stringify(feature.params ?? {}, null, 2)}
+            </pre>
+          </div>
+        ))}
+      </div>
+      <details className="mt-2">
+        <summary className="cursor-pointer text-zinc-400">{t("kernel_payload_json")}</summary>
+        <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-zinc-500">
+          {JSON.stringify(payload, null, 2)}
+        </pre>
+      </details>
+    </section>
+  );
+}
+
 const API = getApiBaseUrl();
 
 export default function CadEditorPage() {
@@ -196,6 +240,13 @@ export default function CadEditorPage() {
                   spec={gen.params.spec as Record<string, unknown>}
                   note={t("reading_kept_note")}
                 />
+                {(gen.params?.solid_input as Record<string, unknown> | undefined) && (
+                  <BlockedSolidInput
+                    input={gen.params.solid_input as Record<string, unknown>}
+                    solid={gen.params.solid_3d as Record<string, unknown> | undefined}
+                    t={t}
+                  />
+                )}
                 {/* The reading survives a failed build on purpose: it is the
                     expensive half, and it is usually one value short of a
                     part. */}

@@ -398,7 +398,14 @@ def dimensions_from_kernel(
 
         value = item.get("value_mm")
         label = str(item.get("label") or "")
-        text = f"{label}{value:g}" if isinstance(value, (int, float)) else label
+        # TechDraw may return either a prefix ("Ø") or the complete formatted
+        # callout ("Ø56.55", "M75x1,5").  Appending the measured value to the
+        # latter produced Ø56.5556.55, 1717 and M75x1,575 on real sheets.
+        text = (
+            label
+            if any(character.isdigit() for character in label)
+            else f"{label}{value:g}"
+        ) if isinstance(value, (int, float)) else label
         if text:
             mid_u = (u1 + u2) / 2.0 + ou + nu * 1.5
             mid_v = (v1 + v2) / 2.0 + ov + nv * 1.5

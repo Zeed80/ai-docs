@@ -34,6 +34,8 @@ import {
 } from "@/lib/studio-api";
 
 import AssurancePanel from "@/components/cad/AssurancePanel";
+import CadModelTracePanel from "@/components/cad/CadModelTracePanel";
+import type { KernelInput } from "@/components/cad/CadModelTracePanel";
 import SpecEditorPanel from "@/components/cad/SpecEditorPanel";
 import Cad3dPanel from "@/components/cad/Cad3dPanel";
 import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
@@ -1238,6 +1240,10 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     gen.params?.spec as { consensus?: SpecConsensus } | undefined
   )?.consensus;
   const solidSummary = gen.params?.solid_3d as Solid3dSummary | undefined;
+  const cadReading = gen.params?.cad_reading as
+    | Record<string, unknown>
+    | undefined;
+  const solidInput = gen.params?.solid_input as KernelInput | undefined;
   const drawingGraph = gen.params?.drawing_graph as
     | {
         graph_status?: string;
@@ -1440,6 +1446,13 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         assumptions={specAssumptions}
         followups={specFollowups}
         consensus={specConsensus}
+        solid={solidSummary}
+        t={t}
+      />
+
+      <CadModelTracePanel
+        reading={cadReading}
+        kernelInput={solidInput}
         solid={solidSummary}
         t={t}
       />

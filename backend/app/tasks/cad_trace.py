@@ -100,17 +100,38 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
     from app.ai.cad_recognize.spec_assumptions import apply_assumptions
 
     spec, assumptions = apply_assumptions(_revalidated_spec(spec))
+    from app.ai.cad_dimension_graph import build_dimension_graph
+
+    dimension_graph = build_dimension_graph(spec)
+    if dimension_graph["errors"]:
+        spec = {
+            **spec,
+            "unresolved": list(dict.fromkeys([
+                *(spec.get("unresolved") or []),
+                *dimension_graph["errors"],
+            ])),
+        }
     sheet_format = str(params.get("sheet_format") or "").upper() or None
     landscape = str(params.get("sheet_orientation") or "landscape").lower() != "portrait"
     solid_result = await _build_spec_solid(
         spec, generation_id, owner_sub,
-        sheet_format=sheet_format, landscape=landscape,
+        sheet_format=sheet_format,
+        landscape=landscape,
+        # A plain retry must not bypass the raster evidence gate.  A stored
+        # human correction is the explicit review action that may replace
+        # missing model evidence for the corrected candidate.
+        require_source_evidence=not bool(params.get("spec_corrected")),
     )
     if not solid_result or not solid_result.get("built"):
         return {
             "error": (solid_result or {}).get("error") or "деталь не собралась",
             "built": False,
         }
+    from app.ai.cad_source_projection import evaluate_source_projection
+
+    solid_result["source_projection_verification"] = evaluate_source_projection(
+        spec, params.get("spec_crosscheck") or {}, solid_result
+    )
     spec_ir = solid_result.pop("_sheet_ir", None)
     if spec_ir is None:
         return {"error": "CAD-ядро не построило лист", "built": False}
@@ -119,6 +140,19 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
     dim_check = _unplaced_callouts(solid_result, spec)
     solid_result.pop("_dimensions", None)
     validate_ir(spec_ir)
+    if dim_check.get("status") != "ok":
+        spec_ir.validation.issues.append(
+            ValidationIssueIR(
+                code="SPEC_CALLOUTS_UNPLACED",
+                severity="error",
+                level=2,
+                message_ru=(
+                    "Не все геометрические размеры исходника размещены: "
+                    + ", ".join(dim_check.get("unplaced") or [])
+                ),
+                fix_hint="Добавьте нужный вид/сечение или исправьте связь размера с feature",
+            )
+        )
     for assumption in assumptions:
         spec_ir.validation.issues.append(
             ValidationIssueIR(
@@ -145,8 +179,17 @@ async def _rebuild_from_spec(generation_id: str) -> dict:
         gen.params = {
             **(gen.params or {}),
             "spec": spec,
+            "cad_reading": {
+                "spec": spec,
+                "unresolved": list(spec.get("unresolved") or []),
+                "assumptions": [item.as_dict() for item in assumptions],
+                "dimension_graph": dimension_graph,
+                "source": "human_correction" if params.get("spec_corrected") else "stored_read",
+            },
             "spec_dimension_check": dim_check,
+            "dimension_graph": dimension_graph,
             "spec_assumptions": [item.as_dict() for item in assumptions],
+            "solid_input": solid_result.get("kernel_input"),
             "solid_3d": solid_result,
             "rebuilt_from_spec": True,
         }
@@ -612,6 +655,7 @@ async def _build_spec_solid(
     *,
     sheet_format: str | None = None,
     landscape: bool = True,
+    require_source_evidence: bool = False,
 ) -> dict | None:
     """Compile the read spec into a solid, and draw the sheet from that solid.
 
@@ -626,39 +670,65 @@ async def _build_spec_solid(
     from app.ai.cad_solid import (
         estimate_mass_kg,
         feature_tree_from_spec,
+        solid_build_gate,
         verify_solid_against_spec,
     )
-    from app.services.cad_kernel import CadKernelError, compile_candidate
+    from app.services.cad_kernel import (
+        CadKernelError,
+        candidate_compile_payload,
+        compile_candidate,
+    )
     from app.storage import upload_file as _upload
 
     candidate = feature_tree_from_spec(spec)
     if candidate is None:
         return {
             "built": False,
+            "build_status": "blocked",
             "error": (
                 "прочитанного не хватает на деталь: нужен либо ступенчатый контур "
                 "с длинами, либо плоский контур с толщиной"
             ),
             "label": str(spec.get("part") or ""),
         }
+    build_gate = solid_build_gate(
+        spec, candidate, require_source_evidence=require_source_evidence
+    )
+    confirm_assumptions = bool(build_gate["warnings"])
+    kernel_input = candidate_compile_payload(
+        candidate,
+        confirm_assumptions=confirm_assumptions,
+        metadata={"generation_id": generation_id, "source": "spec_reader"},
+    )
+    if not build_gate["allowed"]:
+        return {
+            "built": False,
+            "build_status": "blocked",
+            "error": "критические данные чертежа не подтверждены",
+            "blockers": build_gate["blockers"],
+            "warnings": build_gate["warnings"],
+            "label": candidate.label,
+            "feature_tree": candidate.model_dump(mode="json"),
+            "kernel_input": kernel_input,
+        }
     try:
         artifacts = await compile_candidate(
             candidate,
-            # The assumptions are declared in missing_data and surfaced to the
-            # reviewer with the result; blocking here would mean no solid at
-            # all for every part whose section was not read.
-            confirm_assumptions=True,
+            # Critical uncertainty has already been refused above.  Remaining
+            # items are explicit review warnings (for example a drawing that
+            # contains no section and may legitimately describe a solid shaft).
+            confirm_assumptions=confirm_assumptions,
             metadata={"generation_id": generation_id, "source": "spec_reader"},
         )
     except CadKernelError as exc:
         logger.warning("cad_solid_failed", generation_id=generation_id, error=str(exc))
-        return {"built": False, "error": str(exc)[:400], "label": candidate.label}
+        return {"built": False, "build_status": "blocked", "error": str(exc)[:400], "label": candidate.label}
     except Exception as exc:  # noqa: BLE001
         logger.warning("cad_solid_error", generation_id=generation_id, error=str(exc))
-        return {"built": False, "error": str(exc)[:400], "label": candidate.label}
+        return {"built": False, "build_status": "blocked", "error": str(exc)[:400], "label": candidate.label}
 
     report = artifacts.report or {}
-    verification = verify_solid_against_spec(report, spec)
+    verification = verify_solid_against_spec(report, spec, candidate)
     # The sheet itself: views, sections and dimensions all measured off this
     # solid. A kernel too old to draw returns nothing, and the caller says so
     # rather than substituting a drawing made some other way.
@@ -668,7 +738,7 @@ async def _build_spec_solid(
     try:
         sheet = await build_sheet_from_solid(
             candidate, spec, report,
-            sheet_format=sheet_format, landscape=landscape,
+            sheet_format=sheet_format, landscape=landscape, geometry_only=True,
         )
     except Exception as exc:  # noqa: BLE001 — a drawing failure is reportable, not fatal
         logger.warning(
@@ -705,10 +775,20 @@ async def _build_spec_solid(
     material = str((spec.get("title_block") or {}).get("material") or "")
     result = {
         "built": True,
+        # Geometry-vs-spec is necessary but not sufficient: the spec itself was
+        # read by a model.  Until an independent source-projection comparison
+        # passes, a compiled body is explicitly unverified.
+        "build_status": "built_unverified",
         "label": candidate.label,
         "paths": paths,
         "assumptions": candidate.missing_data,
+        "build_gate": build_gate,
         "verification": verification.as_dict(),
+        "source_projection_verification": {
+            "ok": False,
+            "status": "not_run",
+            "reason": "независимое сравнение проекций с исходным чертежом не выполнено",
+        },
         "volume_mm3": report.get("volume_mm3"),
         "surface_area_mm2": report.get("surface_area_mm2"),
         "bounds_mm": report.get("bounds_mm"),
@@ -722,6 +802,7 @@ async def _build_spec_solid(
         # candidates re-derived from 2D heuristics and the tree actually built
         # never reached the person editing it.
         "feature_tree": candidate.model_dump(mode="json"),
+        "kernel_input": kernel_input,
     }
     if sheet is not None:
         result["sheet"] = {
@@ -729,6 +810,7 @@ async def _build_spec_solid(
             "views": [view["kind"] for view in sheet.plan.views],
             "scale": sheet.plan.scale_label,
             "sheet_format": sheet.plan.sheet_format,
+            "geometry_only": sheet.plan.geometry_only,
             "dimensions": len(sheet.drawing.get("dimensions") or []),
             "verification": sheet.verification,
             "warnings": sheet.warnings,
@@ -788,6 +870,7 @@ async def _store_failed_reading(
     can show it, a person can complete it, and the rebuild costs nothing.
     """
     from app.db.models import ImageGeneration
+    from app.ai.cad_dimension_graph import build_dimension_graph
 
     try:
         async with factory() as db:
@@ -799,9 +882,24 @@ async def _store_failed_reading(
                 "vectorize_method": "spec",
                 "spec": spec,
                 "spec_crosscheck": crosscheck,
+                "dimension_graph": build_dimension_graph(spec),
                 "spec_followup": followup_log,
                 "spec_review_warnings": list(dict.fromkeys(unresolved)),
                 "solid_3d": solid_result or {"built": False},
+                "cad_reading": {
+                    "spec": spec,
+                    "attempts": spec.get("reader_attempts") or [],
+                    "reader_models": (
+                        pipeline_manifest.get("components", {})
+                        .get("spec_reader", {})
+                        .get("models", [])
+                    ),
+                    "followup": followup_log,
+                    "crosscheck": crosscheck,
+                    "dimension_graph": build_dimension_graph(spec),
+                    "unresolved": list(dict.fromkeys(unresolved)),
+                },
+                "solid_input": (solid_result or {}).get("kernel_input"),
                 "cad_pipeline_manifest": pipeline_manifest,
             }
             await db.commit()
@@ -827,11 +925,15 @@ def _unplaced_callouts(solid_result: dict, spec: dict) -> dict:
         for item in (solid_result.get("_dimensions") or [])
         if isinstance(item.get("value_mm"), (int, float))
     ]
+    from app.ai.cad_recognize.spec_vectorize import _callout_kind
+
     stated: list[tuple[float, str]] = []
     for dimension in spec.get("dimensions") or []:
         if not isinstance(dimension, dict):
             continue
         text = str(dimension.get("value") or "").strip()
+        if _callout_kind(text) is None:
+            continue
         value = _spec_num(text)
         if value and value > 0:
             stated.append((value, text))
@@ -1497,9 +1599,18 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     finding["message"] for finding in crosscheck["findings"]
                     if finding["severity"] == "error"
                 ]
+                from app.ai.cad_dimension_graph import build_dimension_graph
+
+                dimension_graph = build_dimension_graph(spec)
+                blocking_checks.extend(dimension_graph["errors"])
 
                 unresolved = [str(i) for i in spec.get("unresolved", []) if str(i)]
                 unresolved.extend(blocking_checks)
+                if unresolved:
+                    spec = {
+                        **spec,
+                        "unresolved": list(dict.fromkeys(unresolved)),
+                    }
                 spec_sheet = str(params.get("sheet_format") or "").upper() or None
                 spec_landscape = str(
                     params.get("sheet_orientation") or "landscape"
@@ -1511,7 +1622,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 # disagree and a dimension cannot contradict what it labels.
                 solid_result = await _build_spec_solid(
                     spec, generation_id, owner_sub, sheet_format=spec_sheet,
-                    landscape=spec_landscape,
+                    landscape=spec_landscape, require_source_evidence=True,
                 )
                 if not solid_result or not solid_result.get("built"):
                     # The part could not be built, but the READING is not lost:
@@ -1531,6 +1642,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         + ". Прочитанное сохранено: откройте спецификацию, уточните "
                         "недостающие размеры и пересоберите."
                     )
+                from app.ai.cad_source_projection import evaluate_source_projection
+
+                solid_result["source_projection_verification"] = (
+                    evaluate_source_projection(spec, crosscheck, solid_result)
+                )
                 spec_ir = solid_result.pop("_sheet_ir", None)
                 if spec_ir is None:
                     return await _fail(
@@ -1549,6 +1665,20 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 solid_result.pop("_dimensions", None)
                 validate_ir(spec_ir)
                 from app.ai.cad_ir.schema import ValidationIssueIR
+
+                if spec_dim_check.get("status") != "ok":
+                    spec_ir.validation.issues.append(
+                        ValidationIssueIR(
+                            code="SPEC_CALLOUTS_UNPLACED",
+                            severity="error",
+                            level=2,
+                            message_ru=(
+                                "Не все геометрические размеры исходника размещены: "
+                                + ", ".join(spec_dim_check.get("unplaced") or [])
+                            ),
+                            fix_hint="Добавьте нужный вид/сечение или исправьте связь размера с feature",
+                        )
+                    )
 
                 if unresolved:
                     spec_ir.validation.issues.append(
@@ -1601,10 +1731,25 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "spec": spec,
                         "spec_dimension_check": spec_dim_check,
                         "spec_crosscheck": crosscheck,
+                        "dimension_graph": dimension_graph,
                         # Which values a second look recovered, which it failed
                         # to, and which answers were refused for having no
                         # callout behind them.
                         "spec_followup": followup_log,
+                        "cad_reading": {
+                            "spec": spec,
+                            "attempts": spec.get("reader_attempts") or [],
+                            "reader_models": (
+                                pipeline_manifest.get("components", {})
+                                .get("spec_reader", {})
+                                .get("models", [])
+                            ),
+                            "followup": followup_log,
+                            "crosscheck": crosscheck,
+                            "dimension_graph": dimension_graph,
+                            "unresolved": list(dict.fromkeys(unresolved)),
+                            "assumptions": [item.as_dict() for item in assumptions],
+                        },
                         # Every value that was completed rather than read, with
                         # the rule behind it — the review panel's own list.
                         "spec_assumptions": [item.as_dict() for item in assumptions],
@@ -1612,6 +1757,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "sheet_without_geometry": sheet_without_geometry,
                         "cad_pipeline_manifest": pipeline_manifest,
                         "normalized_source_path": normalized_path,
+                        "solid_input": (solid_result or {}).get("kernel_input"),
                         **({"solid_3d": solid_result} if solid_result else {}),
                     }
                     await cad_ir_store.save_revision(

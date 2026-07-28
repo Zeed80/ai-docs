@@ -1150,6 +1150,10 @@ async def read_fragments_consensus(
     richest = max(reads, key=lambda spec: len(str(spec.get("fragments") or "")))
     if richest.get("fragments"):
         merged["fragments"] = richest["fragments"]
+    merged["reader_attempts"] = [
+        {"pass": index + 1, "mode": "fragments", "spec": spec}
+        for index, spec in enumerate(reads)
+    ]
     return merged
 
 
@@ -1195,4 +1199,5 @@ async def read_spec_best_effort(
         if not (whole.get("views") or []):
             whole["views"] = fragments.get("views") or []
         whole["fragments"] = fragments.get("fragments")
+        whole["fragment_reader_attempts"] = fragments.get("reader_attempts") or []
     return whole

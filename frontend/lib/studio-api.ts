@@ -976,6 +976,17 @@ export interface SpecConsensus {
 /** The solid the sheet was built from, and what it measures. */
 export interface Solid3dSummary {
   built: boolean;
+  build_status?: "blocked" | "built_unverified" | "verified" | string;
+  blockers?: string[];
+  warnings?: string[];
+  build_gate?: { allowed?: boolean; blockers?: string[]; warnings?: string[] };
+  kernel_input?: { sha256?: string; payload?: Record<string, unknown> };
+  source_projection_verification?: {
+    ok?: boolean;
+    status?: string;
+    checks?: Record<string, boolean>;
+    missing_evidence?: string[];
+  };
   error?: string;
   label?: string;
   paths?: Record<string, string>;

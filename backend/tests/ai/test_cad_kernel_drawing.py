@@ -145,3 +145,28 @@ def test_measured_dimensions_carry_the_kernel_value():
     assert [e.text for e in entities if e.type == "text"] == ["Ø80"]
     # Arrowheads are closed slivers, not open strokes.
     assert all(e.closed for e in entities if e.type == "polyline")
+
+
+@pytest.mark.parametrize(
+    ("label", "value", "expected"),
+    [
+        ("17", 17.0, "17"),
+        ("Ø56.55", 56.55, "Ø56.55"),
+        ("M75x1,5", 75.0, "M75x1,5"),
+        ("Ø", 90.0, "Ø90"),
+    ],
+)
+def test_dimension_label_does_not_duplicate_a_value_already_in_label(
+    label: str, value: float, expected: str
+):
+    from app.ai.cad_projection import dimensions_from_kernel
+
+    entities = dimensions_from_kernel(
+        [{"view_index": 0, "anchors_mm": [[0, 0], [10, 0]],
+          "value_mm": value, "label": label}],
+        {"front": {"offset_u": 0.0, "offset_v": 0.0}},
+        ["front"],
+        px_per_mm=1.0,
+    )
+    dimension = next(entity for entity in entities if entity.type == "dimension")
+    assert dimension.text == expected

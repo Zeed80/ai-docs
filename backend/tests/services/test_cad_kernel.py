@@ -4,7 +4,12 @@ import zipfile
 
 import pytest
 
-from app.services.cad_kernel import CadKernelError, _decode_artifacts
+from app.ai.cad_ir.feature_tree import Feature3D, FeatureTreeCandidate
+from app.services.cad_kernel import (
+    CadKernelError,
+    _decode_artifacts,
+    candidate_compile_payload,
+)
 
 
 def _archive(*, report: object | None = None, extra: bool = False, iges: bool = False) -> bytes:
@@ -53,3 +58,30 @@ def test_decode_artifacts_accepts_optional_iges():
 def test_decode_artifacts_rejects_untrusted_kernel_payload(payload: bytes, expected: str):
     with pytest.raises(CadKernelError, match=expected):
         _decode_artifacts(payload)
+
+
+def test_compile_payload_digest_is_stable_and_covers_exact_kernel_json():
+    candidate = FeatureTreeCandidate(
+        features=[
+            Feature3D(
+                kind="revolve",
+                params={"profile_points": [{"r": 10, "z": 0}, {"r": 10, "z": 20}]},
+                confidence=0.9,
+            )
+        ],
+        score=0.9,
+        label="Вал",
+    )
+    first = candidate_compile_payload(
+        candidate,
+        confirm_assumptions=False,
+        metadata={"source": "spec_reader", "generation_id": "test"},
+    )
+    second = candidate_compile_payload(
+        candidate,
+        confirm_assumptions=False,
+        metadata={"generation_id": "test", "source": "spec_reader"},
+    )
+    assert first["payload"] == second["payload"]
+    assert first["sha256"] == second["sha256"]
+    assert len(first["sha256"]) == 64
