@@ -691,6 +691,19 @@ level: 6 или 7. severity: "error"|"warn"|"info".
 Если чертёж выглядит нормально — верни {"issues": []}. НЕ придумывай проблем, которых нет —
 ложное срабатывание отвлекает инженера от реальных ошибок не меньше, чем пропуск настоящей."""
 
+_SOURCE_RESULT_REVIEW = """
+
+Тебе переданы ДВА изображения одной детали:
+- изображение 0 — исходный чертёж, который нужно было прочитать;
+- изображение 1 — текущий рендер, построенный из проверенной 3D-модели.
+
+Сначала сопоставь только геометрию детали: число и типы видов/разрезов, наружный и
+внутренний профили, отверстия, пазы, канавки, фаски и их взаимное положение. Рамку,
+штамп, фон, качество скана и различия масштаба листа игнорируй. Любое пропущенное,
+лишнее или геометрически отличающееся место верни как issue уровня 7. Не объявляй
+совпадение только потому, что второй рисунок сам по себе выглядит правдоподобно.
+"""
+
 
 def _parse_llm_review(raw_text: str) -> list[ValidationIssueIR]:
     from app.ai.drawing_extractor import _parse_json_response
@@ -715,6 +728,7 @@ def _parse_llm_review(raw_text: str) -> list[ValidationIssueIR]:
 async def run_llm_review_levels(
     png_bytes: bytes,
     *,
+    source_png_bytes: bytes | None = None,
     router: "object | None" = None,
     confidential: bool = True,
     strict: bool = False,
@@ -744,13 +758,29 @@ async def run_llm_review_levels(
 
         router = ai_router
 
+    paired = source_png_bytes is not None
     request = AIRequest(
         task=AITask.DRAWING_ANALYSIS_VLM,
         messages=[
-            ChatMessage(role="system", content=_LLM_REVIEW_PROMPT),
-            ChatMessage(role="user", content="Проверь этот чертёж."),
+            ChatMessage(
+                role="system",
+                content=_LLM_REVIEW_PROMPT + (_SOURCE_RESULT_REVIEW if paired else ""),
+            ),
+            ChatMessage(
+                role="user",
+                content=(
+                    "Сравни исходный чертёж (изображение 0) с текущим рендером "
+                    "(изображение 1)." if paired else "Проверь этот чертёж."
+                ),
+            ),
         ],
-        images=[base64.b64encode(png_bytes).decode()],
+        images=[
+            base64.b64encode(payload).decode()
+            for payload in (
+                [source_png_bytes, png_bytes] if paired else [png_bytes]
+            )
+            if payload is not None
+        ],
         confidential=confidential,
         allow_cloud=False,
     )

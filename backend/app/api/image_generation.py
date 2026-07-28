@@ -968,6 +968,18 @@ async def accept_vectorize_generation(
                 409,
                 "3D-модель не прошла геометрическую и feature-верификацию; исправьте чтение и пересоберите.",
             )
+        source_check = solid.get("source_projection_verification") or {}
+        paired = source_check.get("paired_comparison") or {}
+        if not (
+            source_check.get("ok") is True
+            and source_check.get("status") == "paired_full_check_passed"
+            and source_check.get("revision") == revision.revision
+            and paired.get("ok") is True
+        ):
+            raise HTTPException(
+                409,
+                "Исходный чертёж и текущий рендер не прошли обязательную парную сверку.",
+            )
     if any(not region.resolved for region in ir.unresolved_regions):
         raise HTTPException(
             409,
@@ -998,8 +1010,9 @@ async def accept_vectorize_generation(
         solid = dict(params.get("solid_3d") or {})
         solid["build_status"] = "verified"
         solid["source_projection_verification"] = {
+            **(solid.get("source_projection_verification") or {}),
             "ok": True,
-            "status": "human_full_check",
+            "approval_status": "human_approved_after_paired_full_check",
             "revision": revision.revision,
             "approved_by": user.sub,
         }
@@ -1208,6 +1221,13 @@ def _invalidate_vector_approval(gen: ImageGeneration) -> None:
     params = dict(gen.params or {})
     params.pop("full_check_revision", None)
     params.pop("full_check_status", None)
+    params.pop("full_check_source_comparison", None)
+    solid = dict(params.get("solid_3d") or {})
+    source_check = dict(solid.get("source_projection_verification") or {})
+    if source_check:
+        source_check.update({"ok": False, "status": "stale_after_revision_change"})
+        solid["source_projection_verification"] = source_check
+        params["solid_3d"] = solid
     gen.params = params
     if gen.accepted:
         gen.accepted = False
@@ -1241,10 +1261,31 @@ async def run_full_check(
     if not gen.result_path:
         raise HTTPException(409, "Нет рендера для проверки — сначала сохраните ревизию.")
     png_bytes = download_file(gen.result_path)
+    params = dict(gen.params or {})
+    paired_required = params.get("vectorize_method") == "spec"
+    source_png_bytes = None
+    source_path = params.get("normalized_source_path")
+    if not source_path and gen.source_image_paths:
+        source_path = gen.source_image_paths[0]
+    if source_path:
+        try:
+            source_png_bytes = download_file(source_path)
+        except Exception:  # noqa: BLE001 — handled as a fail-closed missing source below
+            source_png_bytes = None
+    if paired_required and source_png_bytes is None:
+        gen.params = {**params, "full_check_status": "source_missing"}
+        await db.commit()
+        raise HTTPException(
+            409,
+            "Парная проверка не выполнена: исходное изображение недоступно.",
+        )
 
     try:
         llm_issues = await run_llm_review_levels(
-            png_bytes, confidential=True, strict=True
+            png_bytes,
+            source_png_bytes=source_png_bytes,
+            confidential=True,
+            strict=True,
         )
     except FullCheckUnavailableError as exc:
         gen.params = {
@@ -1262,13 +1303,50 @@ async def run_full_check(
 
     _invalidate_vector_approval(gen)
     row = await cad_ir_store.save_revision(db, gen, ir, origin="llm_review", created_by=user.sub)
-    gen.params = {
+    visual_issues = [issue for issue in llm_issues if issue.code == "VLM_CRITIC"]
+    comparison = {
+        "required": paired_required,
+        "ran": source_png_bytes is not None,
+        "ok": source_png_bytes is not None and not visual_issues,
+        "revision": row.revision,
+        "source_path": source_path,
+        "result_path": gen.result_path,
+        "issues": [issue.message_ru for issue in visual_issues],
+        "method": "paired_vlm_source_vs_generated_render",
+    }
+    updated_params = {
         **(gen.params or {}),
         "full_check_revision": row.revision,
         "full_check_status": "findings" if llm_issues else "passed",
+        "full_check_source_comparison": comparison,
     }
+    if paired_required:
+        solid = dict(updated_params.get("solid_3d") or {})
+        previous = dict(solid.get("source_projection_verification") or {})
+        sheet_ok = bool(
+            (((solid.get("sheet") or {}).get("verification") or {}).get("ok"))
+        )
+        comparison_ok = bool(comparison["ok"] and sheet_ok)
+        solid["source_projection_verification"] = {
+            **previous,
+            "ok": comparison_ok,
+            "status": (
+                "paired_full_check_passed" if comparison_ok
+                else "paired_full_check_findings"
+            ),
+            "paired_comparison": comparison,
+            "revision": row.revision,
+        }
+        updated_params["solid_3d"] = solid
+    gen.params = updated_params
     await db.commit()
-    return {"revision": row.revision, "origin": row.origin, "summary": row.summary, "ir": ir.model_dump()}
+    return {
+        "revision": row.revision,
+        "origin": row.origin,
+        "summary": row.summary,
+        "source_comparison": comparison,
+        "ir": ir.model_dump(),
+    }
 
 
 class FeatureParameterOverride(BaseModel):

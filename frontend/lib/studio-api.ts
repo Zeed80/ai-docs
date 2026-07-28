@@ -989,6 +989,18 @@ export interface Solid3dSummary {
     score?: number;
     score_components?: Record<string, number>;
     promotion_eligible?: boolean;
+    revision?: number;
+    approval_status?: string;
+    paired_comparison?: {
+      required?: boolean;
+      ran?: boolean;
+      ok?: boolean;
+      revision?: number;
+      source_path?: string | null;
+      result_path?: string | null;
+      issues?: string[];
+      method?: string;
+    };
   };
   error?: string;
   label?: string;

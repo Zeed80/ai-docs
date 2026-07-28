@@ -405,3 +405,31 @@ async def test_llm_review_empty_issues_when_drawing_looks_fine() -> None:
     )
     issues = await run_llm_review_levels(b"fake-png", router=fake_router)
     assert issues == []
+
+
+@pytest.mark.asyncio
+async def test_llm_review_puts_source_before_generated_render_for_paired_check() -> None:
+    import base64
+    from unittest.mock import AsyncMock
+
+    from app.ai.schemas import AIResponse, AITask, ProviderKind
+
+    fake_router = AsyncMock()
+    fake_router.run.return_value = AIResponse(
+        task=AITask.DRAWING_ANALYSIS_VLM,
+        provider=ProviderKind.OLLAMA,
+        model="test",
+        text='{"issues": []}',
+    )
+
+    await run_llm_review_levels(
+        b"generated-render", source_png_bytes=b"source-drawing", router=fake_router
+    )
+
+    request = fake_router.run.await_args.args[0]
+    assert request.images == [
+        base64.b64encode(b"source-drawing").decode(),
+        base64.b64encode(b"generated-render").decode(),
+    ]
+    assert "изображение 0" in request.messages[0].content
+    assert "изображение 1" in request.messages[0].content

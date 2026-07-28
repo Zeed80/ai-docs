@@ -158,6 +158,7 @@ export default function AssurancePanel({
               typeof solid.source_projection_verification.score === "number"
                 ? `${Math.round(solid.source_projection_verification.score * 100)}%`
                 : "",
+              ...(solid.source_projection_verification.paired_comparison?.issues ?? []),
               ...(solid.source_projection_verification.missing_evidence ?? []),
             ]
               .filter(Boolean)

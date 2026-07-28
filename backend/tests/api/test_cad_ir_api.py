@@ -924,6 +924,83 @@ async def test_full_check_merges_llm_issues_into_a_new_revision(client, fake_sto
 
 
 @pytest.mark.asyncio
+async def test_spec_full_check_compares_source_with_generated_render(
+    client, fake_storage, monkeypatch, db_session
+):
+    import uuid
+
+    from app.db.models import ImageGeneration
+
+    captured: dict = {}
+
+    async def _paired_review(png_bytes, **kwargs):
+        captured["result"] = png_bytes
+        captured["source"] = kwargs.get("source_png_bytes")
+        return []
+
+    monkeypatch.setattr("app.ai.cad_validate.run_llm_review_levels", _paired_review)
+    gen_out = (await client.post(
+        "/api/image-gen/blank-sheet", json={"format": "A4"}
+    )).json()
+    gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
+    assert gen is not None and gen.result_path
+    fake_storage["source/spec.png"] = b"source-png"
+    gen.source_image_paths = ["source/spec.png"]
+    gen.params = {
+        **(gen.params or {}),
+        "vectorize_method": "spec",
+        "solid_3d": {
+            "built": True,
+            "sheet": {"verification": {"ok": True}},
+            "verification": {"ok": True, "feature_complete": True},
+        },
+    }
+    await db_session.commit()
+
+    response = await client.post(f"/api/image-gen/{gen.id}/ir/full-check")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert captured["source"] == b"source-png"
+    assert captured["result"]
+    assert body["source_comparison"]["ok"] is True
+    detail = (await client.get(f"/api/image-gen/{gen.id}")).json()
+    source_check = detail["params"]["solid_3d"]["source_projection_verification"]
+    assert source_check["status"] == "paired_full_check_passed"
+    assert source_check["revision"] == body["revision"]
+
+    accepted = await client.post(f"/api/image-gen/{gen.id}/accept-vectorize")
+
+    assert accepted.status_code == 200, accepted.text
+    accepted_check = accepted.json()["params"]["solid_3d"]["source_projection_verification"]
+    assert accepted_check["approval_status"] == "human_approved_after_paired_full_check"
+    assert accepted_check["paired_comparison"]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_spec_full_check_refuses_to_run_without_source(
+    client, fake_storage, db_session
+):
+    import uuid
+
+    from app.db.models import ImageGeneration
+
+    gen_out = (await client.post(
+        "/api/image-gen/blank-sheet", json={"format": "A4"}
+    )).json()
+    gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
+    assert gen is not None
+    gen.params = {**(gen.params or {}), "vectorize_method": "spec"}
+    gen.source_image_paths = []
+    await db_session.commit()
+
+    response = await client.post(f"/api/image-gen/{gen.id}/ir/full-check")
+
+    assert response.status_code == 409
+    assert "исходное изображение" in response.text
+
+
+@pytest.mark.asyncio
 async def test_full_check_is_fail_closed_when_local_model_is_unavailable(
     client, fake_storage, monkeypatch
 ):
@@ -977,6 +1054,40 @@ async def test_accept_vectorize_rejects_unresolved_source_regions(
     response = await client.post(f"/api/image-gen/{gen.id}/accept-vectorize")
     assert response.status_code == 409
     assert "нераспознанные области" in response.text
+
+
+@pytest.mark.asyncio
+async def test_spec_accept_requires_current_paired_source_comparison(
+    client, fake_storage, db_session
+):
+    import uuid
+
+    from app.db.models import ImageGeneration
+
+    gen_out = (await client.post(
+        "/api/image-gen/blank-sheet", json={"format": "A4"}
+    )).json()
+    gen = await db_session.get(ImageGeneration, uuid.UUID(gen_out["id"]))
+    assert gen is not None
+    gen.params = {
+        **(gen.params or {}),
+        "vectorize_method": "spec",
+        "solid_3d": {
+            "built": True,
+            "verification": {"ok": True, "feature_complete": True},
+            "source_projection_verification": {
+                "ok": False,
+                "status": "not_run",
+            },
+        },
+    }
+    await db_session.commit()
+    await _mark_full_check_current(db_session, str(gen.id))
+
+    response = await client.post(f"/api/image-gen/{gen.id}/accept-vectorize")
+
+    assert response.status_code == 409
+    assert "парную сверку" in response.text
 
 
 @pytest.mark.asyncio
