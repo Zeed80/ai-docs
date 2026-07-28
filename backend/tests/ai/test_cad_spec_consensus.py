@@ -94,6 +94,19 @@ def test_a_value_only_one_pass_saw_is_not_confirmed():
     assert values == ["Ø50js6"]
 
 
+def test_multiple_labeled_sections_are_not_collapsed_by_consensus():
+    views = [
+        {"kind": "section", "view_id": "a", "label": "А-А"},
+        {"kind": "section", "view_id": "b", "label": "Б-Б"},
+    ]
+    spec = consensus_spec([
+        _read(_PROFILE, views=views),
+        _read(_PROFILE, views=views),
+        _read(_PROFILE, views=views),
+    ])
+    assert [view["view_id"] for view in spec["views"]] == ["a", "b"]
+
+
 def test_a_disputed_stamp_field_is_optional_not_blocking():
     reads = [
         _read(_PROFILE, title_block={"material": "Сталь 45"}),

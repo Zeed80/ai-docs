@@ -13,6 +13,8 @@ def test_source_projection_requires_localized_evidence_for_every_read_section():
     )
     assert result["ok"] is False
     assert result["missing_evidence"] == ["main_view.outer.0"]
+    assert result["score"] < 1.0
+    assert result["promotion_eligible"] is False
 
 
 def test_source_projection_passes_only_when_all_independent_checks_pass():
@@ -27,6 +29,8 @@ def test_source_projection_passes_only_when_all_independent_checks_pass():
     )
     assert result["ok"] is True
     assert result["status"] == "passed"
+    assert result["score"] == 1.0
+    assert result["promotion_eligible"] is True
 
 
 def test_source_projection_rejects_an_independent_raster_error():

@@ -58,6 +58,7 @@ class SheetPlan:
     # then dropped: it is the same part its own section already draws.
     scaffold_views: set[int] = field(default_factory=set)
     geometry_only: bool = True
+    view_reasons: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -103,22 +104,40 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
     extra. ``/drawing`` needs a base view before a section, so a front view is
     always requested first even when the sheet will not carry it.
     """
+    source_views = [
+        view for view in (spec.get("views") or []) if isinstance(view, dict)
+    ]
+    source_sections = [view for view in source_views if view.get("kind") == "section"]
     views: list[dict[str, Any]] = [{"kind": "front"}]
     if part_class == "hollow_rotation":
-        views.append({"kind": "section", "label": "А-А", "section_symbol": "А"})
+        source = source_sections[0] if source_sections else {}
+        section = {
+            "kind": "section",
+            "label": source.get("label") or "А-А",
+            "section_symbol": (source.get("label") or "А").split("-")[0],
+        }
+        if source.get("section_origin_mm") is not None:
+            section["section_origin_mm"] = source["section_origin_mm"]
+        if source.get("section_path_mm"):
+            section["section_path_mm"] = source["section_path_mm"]
+        views.append(section)
     elif part_class in ("flange", "plate"):
         views.append({"kind": "section", "label": "А-А", "section_symbol": "А"})
 
     requested = {
         str(view.get("kind"))
-        for view in (spec.get("views") or [])
-        if isinstance(view, dict)
+        for view in source_views
     }
     # A view the reader saw on the source sheet is reproduced. "top" used to be
     # read, validated and then silently never drawn.
-    for kind in ("side", "top"):
+    for kind in ("side", "top", "section"):
         if kind in requested and not any(v["kind"] == kind for v in views):
-            views.append({"kind": kind})
+            source = next(view for view in source_views if view.get("kind") == kind)
+            planned = {"kind": kind}
+            for field in ("label", "section_origin_mm", "section_path_mm"):
+                if source.get(field) not in (None, []):
+                    planned[field] = source[field]
+            views.append(planned)
     if part_class in ("solid_rotation", "hollow_rotation") and not any(
         v["kind"] == "side" for v in views
     ):
@@ -127,6 +146,36 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
         if body.get("keyways") or body.get("cross_holes"):
             views.append({"kind": "side"})
     return views
+
+
+def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> list[dict[str, Any]]:
+    body = spec.get("main_view") or {}
+    source_kinds = {
+        str(view.get("kind")) for view in (spec.get("views") or [])
+        if isinstance(view, dict)
+    }
+    reasons: list[dict[str, Any]] = []
+    for index, view in enumerate(views):
+        kind = view["kind"]
+        reason = "основная проекция детали"
+        if kind == "section":
+            reason = "показ внутреннего профиля" if body.get("bore") else "разрез прочитан на исходном листе"
+        elif kind == "side" and (body.get("keyways") or body.get("cross_holes")):
+            reason = "показ радиальных отверстий и пазов"
+        elif kind in source_kinds:
+            reason = "проекция присутствует на исходном листе"
+        reasons.append({
+            "view_index": index,
+            "kind": kind,
+            "visible": True,
+            "reason": reason,
+        })
+    if part_class == "hollow_rotation":
+        for item in reasons:
+            if item["kind"] == "front":
+                item["visible"] = False
+                item["reason"] = "техническая основа для построения продольного разреза"
+    return reasons
 
 
 def verify_view_coverage(plan: SheetPlan, spec: dict) -> dict[str, Any]:
@@ -146,7 +195,7 @@ def verify_view_coverage(plan: SheetPlan, spec: dict) -> dict[str, Any]:
         if not isinstance(source_view, dict):
             continue
         kind = str(source_view.get("kind") or "")
-        if kind in {"side", "top", "section"}:
+        if kind in {"side", "top", "section", "detail", "removed_section"}:
             required.append({"feature": f"source_view:{kind}", "view": kind})
     missing = [item for item in required if item["view"] not in visible]
     return {
@@ -154,6 +203,7 @@ def verify_view_coverage(plan: SheetPlan, spec: dict) -> dict[str, Any]:
         "visible_views": visible,
         "required": required,
         "missing": missing,
+        "view_reasons": plan.view_reasons,
     }
 
 
@@ -245,6 +295,7 @@ def plan_sheet(
         layout_h_mm=layout_h,
         scaffold_views=scaffold,
         geometry_only=geometry_only,
+        view_reasons=_view_reasons(views, part_class, spec),
     )
 
 

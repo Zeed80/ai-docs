@@ -986,6 +986,9 @@ export interface Solid3dSummary {
     status?: string;
     checks?: Record<string, boolean>;
     missing_evidence?: string[];
+    score?: number;
+    score_components?: Record<string, number>;
+    promotion_eligible?: boolean;
   };
   error?: string;
   label?: string;
@@ -1004,6 +1007,12 @@ export interface Solid3dSummary {
     dimensions?: number;
     verification?: Record<string, unknown>;
     warnings?: string[];
+    view_reasons?: Array<{
+      view_index?: number;
+      kind?: string;
+      visible?: boolean;
+      reason?: string;
+    }>;
   };
 }
 

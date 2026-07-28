@@ -90,6 +90,54 @@ def test_a_view_the_reader_saw_is_reproduced():
     assert "top" in [view["kind"] for view in plan_views("solid_rotation", spec)]
 
 
+def test_read_offset_section_reaches_the_kernel_view_plan():
+    spec = {
+        **_SHAFT,
+        "views": [{
+            "kind": "section", "view_id": "section-b",
+            "parent_view_id": "main", "label": "Б-Б",
+            "section_origin_mm": 12.0,
+            "section_path_mm": [[0, 0, 0], [20, 0, 0], [20, 10, 0]],
+        }],
+    }
+    section = next(
+        view for view in plan_views("solid_rotation", spec)
+        if view["kind"] == "section"
+    )
+    assert section["label"] == "Б-Б"
+    assert section["section_origin_mm"] == 12.0
+    assert len(section["section_path_mm"]) == 3
+
+
+def test_unsupported_removed_section_stays_a_coverage_blocker():
+    spec = {
+        **_SHAFT,
+        "views": [{
+            "kind": "removed_section", "view_id": "section-v",
+            "parent_view_id": "main", "label": "В-В",
+        }],
+    }
+    plan = plan_sheet(spec, _SHAFT_REPORT)
+    coverage = verify_view_coverage(plan, spec)
+    assert coverage["ok"] is False
+    assert coverage["missing"] == [{
+        "feature": "source_view:removed_section", "view": "removed_section",
+    }]
+
+
+def test_view_plan_explains_why_each_projection_exists():
+    spec = {
+        "main_view": {
+            **_SHAFT["main_view"],
+            "cross_holes": [{"diameter_mm": 8, "axial_position_mm": 20}],
+        }
+    }
+    plan = plan_sheet(spec, _SHAFT_REPORT)
+    side = next(item for item in plan.view_reasons if item["kind"] == "side")
+    assert "радиальных" in side["reason"]
+    assert side["visible"] is True
+
+
 def test_a_shaft_with_cross_features_gets_the_end_view_that_shows_them():
     spec = {
         "main_view": {

@@ -412,7 +412,14 @@ def _agreed_items(reads: list[list[dict]], key: str, *, minimum: int) -> list[di
         for item in read:
             if not isinstance(item, dict):
                 continue
-            text = _text_key(item.get(key))
+            if key == "kind" and (
+                item.get("view_id") or item.get("label")
+            ):
+                text = _text_key(
+                    f"{item.get(key)}|{item.get('view_id') or item.get('label')}"
+                )
+            else:
+                text = _text_key(item.get(key))
             if not text or text in seen_here:
                 continue
             seen_here.add(text)

@@ -808,6 +808,7 @@ async def _build_spec_solid(
         result["sheet"] = {
             "part_class": sheet.plan.part_class,
             "views": [view["kind"] for view in sheet.plan.views],
+            "view_reasons": sheet.plan.view_reasons,
             "scale": sheet.plan.scale_label,
             "sheet_format": sheet.plan.sheet_format,
             "geometry_only": sheet.plan.geometry_only,

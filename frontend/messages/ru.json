@@ -698,6 +698,7 @@
       "assurance_solid_built": "Деталь собрана в 3D, чертёж построен по ней",
       "assurance_solid_failed": "Деталь не собрана",
       "assurance_views_match": "виды сходятся с телом",
+      "assurance_view_reason": "Вид: {view}",
       "assurance_callouts": "Размеры на чертеже: {placed} из {read} прочитанных",
       "assurance_followup_accepted": "Уточнено довопросами: {count}",
       "assurance_followup_refused": "Довопросы без подтверждения: {count}",

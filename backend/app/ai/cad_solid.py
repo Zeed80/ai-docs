@@ -123,6 +123,22 @@ def _profile_points(sections: list[dict]) -> list[dict[str, float]]:
     return points
 
 
+def _profile_volume_mm3(sections: list[dict]) -> float:
+    """Exact volume of coaxial cylindrical/frustum sections before cuts."""
+    import math
+
+    volume = 0.0
+    for section in sections:
+        start_diameter = float(section["d"])
+        end_diameter = float(taper_end_diameter(section) or start_diameter)
+        length = float(section["l"])
+        volume += (
+            math.pi * length / 12.0
+            * (start_diameter**2 + start_diameter * end_diameter + end_diameter**2)
+        )
+    return volume
+
+
 def feature_tree_from_spec(spec: dict) -> FeatureTreeCandidate | None:
     """Build a solid feature tree from the read spec.
 
@@ -319,6 +335,15 @@ def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         )
         bore_length = sum(float(section["l"]) for section in bore)
         outer_length = sum(float(section["l"]) for section in outer)
+        bore_start = _num(body.get("bore_start_mm")) or 0.0
+        if body.get("bore_from_end") == "right":
+            bore_offset = outer_length - bore_start - bore_length
+        else:
+            bore_offset = bore_start
+        if bore_offset < -1e-6 or bore_offset + bore_length > outer_length + 1e-6:
+            return None
+        for point in bore_points:
+            point["z"] += bore_offset
         if bore_length > outer_length + 1e-6:
             missing.append(
                 "расточка длиннее детали — проверьте прочитанные длины"
@@ -630,11 +655,29 @@ def verify_solid_against_spec(
     ] or [item for item in kernel_warnings if "not built" in item.lower()]
     requested_features = [feature.kind for feature in candidate.features] if candidate else []
     feature_complete = not failed_features
+    topology_ok = bool(
+        report.get("brep_valid")
+        and report.get("manifold")
+        and report.get("solid_count") == 1
+        and float(report.get("volume_mm3") or 0.0) > 0
+    )
+    outer_volume = _profile_volume_mm3(outer)
+    bore = parts[0].get("bore") or []
+    expected_base_volume = outer_volume - (_profile_volume_mm3(bore) if bore else 0.0)
+    built_volume = float(report.get("volume_mm3") or 0.0)
+    # Every post-base rotation feature is subtractive or cosmetic. Therefore a
+    # volume ABOVE the read outer-minus-bore profile proves that a cavity/cut
+    # was omitted, even when the envelope and B-Rep validity still look right.
+    volume_not_above_profile = (
+        expected_base_volume > 0
+        and built_volume <= expected_base_volume + max(0.1, expected_base_volume * 0.005)
+    )
     checks = {
         "ok": bool(
             length_ok
             and diameter_ok
-            and report.get("brep_valid")
+            and topology_ok
+            and volume_not_above_profile
             and feature_complete
         ),
         "stated_length_mm": round(stated_length, 3),
@@ -646,7 +689,14 @@ def verify_solid_against_spec(
         "brep_valid": bool(report.get("brep_valid")),
         "manifold": bool(report.get("manifold")),
         "solid_count": report.get("solid_count"),
+        "shell_count": report.get("shell_count"),
+        "face_count": report.get("face_count"),
+        "edge_count": report.get("edge_count"),
+        "vertex_count": report.get("vertex_count"),
         "volume_mm3": report.get("volume_mm3"),
+        "topology_ok": topology_ok,
+        "profile_volume_upper_mm3": round(expected_base_volume, 3),
+        "volume_not_above_profile": volume_not_above_profile,
         "feature_complete": feature_complete,
         "requested_features": requested_features,
         "failed_features": failed_features,
@@ -688,16 +738,27 @@ def _verify_prismatic(spec: dict, report: dict) -> SolidVerification:
         return abs(a - b) <= max(0.05, b * 0.005)
 
     holes = _expanded_profile_holes(profile) or []
+    topology_ok = bool(
+        report.get("brep_valid")
+        and report.get("manifold")
+        and report.get("solid_count") == 1
+        and float(report.get("volume_mm3") or 0.0) > 0
+    )
     checks = {
         "ok": all(close(a, b) for a, b in zip(built, stated, strict=True))
-        and bool(report.get("brep_valid")),
+        and topology_ok,
         "stated_envelope_mm": [round(value, 3) for value in stated],
         "built_envelope_mm": [round(value, 3) for value in built],
         "holes_expected": len(holes),
         "brep_valid": bool(report.get("brep_valid")),
         "manifold": bool(report.get("manifold")),
         "solid_count": report.get("solid_count"),
+        "shell_count": report.get("shell_count"),
+        "face_count": report.get("face_count"),
+        "edge_count": report.get("edge_count"),
+        "vertex_count": report.get("vertex_count"),
         "volume_mm3": report.get("volume_mm3"),
+        "topology_ok": topology_ok,
     }
     return SolidVerification(checks)
 

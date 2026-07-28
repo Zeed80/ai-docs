@@ -318,9 +318,22 @@ class SpecView(BaseModel):
     view, so projection alignment is exact by construction.
     """
 
-    kind: Literal["front", "top", "side", "section"]
+    kind: Literal["front", "top", "side", "section", "detail", "removed_section"]
+    view_id: str | None = Field(default=None, max_length=40)
     body_index: int = Field(default=0, ge=0)
     label: str | None = None
+    parent_view_id: str | None = Field(default=None, max_length=40)
+    relation: Literal[
+        "primary", "orthographic", "section", "detail", "removed_section"
+    ] | None = None
+    # Model-space cutting definition. It is optional because a plain central
+    # longitudinal section needs no path; an offset section must carry one or
+    # remain explicitly unsupported by the coverage gate.
+    section_origin_mm: float | None = None
+    section_path_mm: list[tuple[float, float, float]] = Field(
+        default_factory=list, max_length=64
+    )
+    features_shown: list[str] = Field(default_factory=list, max_length=64)
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
@@ -435,7 +448,10 @@ _SPEC_PROMPT = (
     '"slots":[{"center_x_mm":0,"center_y_mm":0,"length_mm":40,'
     '"width_mm":12,"rotation_deg":0,"tolerance":null}]}},'
     '"parts":[{"name":"..","type":"..","outer":[...],"bore":[...]}],'
-    '"views":[{"kind":"front|top|side","body_index":0,"label":"Вид слева"}],'
+    '"views":[{"kind":"front|top|side|section|detail|removed_section",'
+    '"view_id":"main","body_index":0,"label":"А-А",'
+    '"parent_view_id":null,"relation":"primary|orthographic|section|detail|removed_section",'
+    '"section_origin_mm":null,"section_path_mm":[],"features_shown":[]}],'
     '"dimensions":[{"value":"Ø80js6","applies_to":".."}],'
     '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":".."}],'
     '"title_block":{"material":"..","scale":".."},'

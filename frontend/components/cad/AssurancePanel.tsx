@@ -113,27 +113,40 @@ export default function AssurancePanel({
         ))}
 
         {solid ? (
-          <Row
-            ok={Boolean(solid.built) && solidVerified}
-            label={
-              solid.built
-                ? t("vector.assurance_solid_built")
-                : t("vector.assurance_solid_failed")
-            }
-            detail={
-              solid.built
-                ? [
-                    solid.sheet?.sheet_format,
-                    solid.sheet?.scale,
-                    solid.sheet?.views?.join(" + "),
-                    solid.build_status,
-                    sheetVerified ? t("vector.assurance_views_match") : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")
-                : solid.error
-            }
-          />
+          <>
+            <Row
+              ok={Boolean(solid.built) && solidVerified}
+              label={
+                solid.built
+                  ? t("vector.assurance_solid_built")
+                  : t("vector.assurance_solid_failed")
+              }
+              detail={
+                solid.built
+                  ? [
+                      solid.sheet?.sheet_format,
+                      solid.sheet?.scale,
+                      solid.sheet?.views?.join(" + "),
+                      solid.build_status,
+                      sheetVerified ? t("vector.assurance_views_match") : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : solid.error
+              }
+            />
+            {(solid.sheet?.view_reasons ?? []).map((view) => (
+              <Row
+                key={`${view.view_index}-${view.kind}`}
+                ok={view.visible !== false}
+                neutral={view.visible === false}
+                label={t("vector.assurance_view_reason", {
+                  view: view.kind ?? "—",
+                })}
+                detail={view.reason}
+              />
+            ))}
+          </>
         ) : null}
 
         {solid?.source_projection_verification ? (
@@ -142,6 +155,9 @@ export default function AssurancePanel({
             label={t("vector.assurance_source_projection")}
             detail={[
               solid.source_projection_verification.status,
+              typeof solid.source_projection_verification.score === "number"
+                ? `${Math.round(solid.source_projection_verification.score * 100)}%`
+                : "",
               ...(solid.source_projection_verification.missing_evidence ?? []),
             ]
               .filter(Boolean)

@@ -34,7 +34,7 @@ _KIND_PROMPT = (
     "Ты — инженер-конструктор. Посмотри на чертёж и ответь ОДНОЙ строкой JSON "
     "без пояснений:\n"
     '{"part":"название детали из штампа","kind":"rotation|plate|flange|other",'
-    '"bodies":1,"views":["front","side","top","section"]}\n'
+    '"bodies":1,"views":["front","side","top","section","detail","removed_section"]}\n'
     "kind: rotation — тело вращения (вал, шпиндель, втулка); plate — плоская "
     "деталь с толщиной; flange — круглая пластина/фланец; other — остальное.\n"
     "views — только те проекции, что реально есть на листе.\n"
@@ -260,7 +260,7 @@ _KIND_SCHEMA = {
         # nothing parseable at all — the schema turned a good answer into no
         # answer. Every array below carries a ceiling for the same reason.
         "views": {"type": "array", "maxItems": 6, "items": {
-            "type": "string", "enum": ["front", "side", "top", "section"],
+            "type": "string", "enum": ["front", "side", "top", "section", "detail", "removed_section"],
         }},
     },
     "required": ["kind"],
@@ -1066,7 +1066,7 @@ async def read_spec_by_fragments(
         "views": [
             {"kind": view, "body_index": 0}
             for view in (kind_answer.get("views") or [])
-            if view in ("front", "top", "side", "section")
+            if view in ("front", "top", "side", "section", "detail", "removed_section")
         ],
         "dimensions": [
             d for d in (callouts.get("dimensions") or []) if isinstance(d, dict)

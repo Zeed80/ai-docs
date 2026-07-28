@@ -81,6 +81,20 @@ def test_bore_becomes_a_coaxial_cut_not_a_guess():
     assert candidate.missing_data == []
 
 
+def test_offset_bore_is_shifted_from_the_stated_end_face():
+    spec = _shaft_spec(main_view={
+        "bore": [{"diameter_mm": 16, "length_mm": 30}],
+        "bore_start_mm": 10,
+        "bore_from_end": "right",
+        "bore_blind": True,
+    })
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    points = candidate.features[0].params["bore_points"]
+    assert points[0]["z"] == pytest.approx(60.0)
+    assert points[-1]["z"] == pytest.approx(90.0)
+
+
 def test_solid_part_declares_the_unread_cavity():
     candidate = feature_tree_from_spec(_shaft_spec())
     assert candidate is not None
@@ -206,6 +220,27 @@ def test_verification_rejects_an_invalid_brep_even_when_sizes_match():
     report = _report(100.0, 50.0)
     report["brep_valid"] = False
     assert not verify_solid_against_spec(report, spec).ok
+
+
+def test_verification_rejects_multiple_or_non_manifold_solids():
+    spec = _shaft_spec()
+    report = _report(100.0, 50.0, volume=1000.0)
+    report["solid_count"] = 2
+    assert not verify_solid_against_spec(report, spec).ok
+    report["solid_count"] = 1
+    report["manifold"] = False
+    assert not verify_solid_against_spec(report, spec).ok
+
+
+def test_hollow_spec_rejects_solid_outer_profile_volume():
+    spec = _shaft_spec(main_view={
+        "bore": [{"diameter_mm": 20, "length_mm": 100}],
+    })
+    solid_outer_volume = math.pi * 15**2 * 40 + math.pi * 25**2 * 60
+    report = _report(100.0, 50.0, volume=solid_outer_volume)
+    result = verify_solid_against_spec(report, spec)
+    assert not result.ok
+    assert result.checks["volume_not_above_profile"] is False
 
 
 def test_verification_fails_when_kernel_rolled_back_a_requested_feature():
@@ -355,6 +390,7 @@ def test_plate_verification_checks_all_three_read_extents():
     report = {
         "bounds_mm": {"x": 120.0, "y": 60.0, "z": 10.0},
         "brep_valid": True, "manifold": True, "solid_count": 1,
+        "volume_mm3": 72_000.0,
     }
     assert verify_solid_against_spec(report, spec).ok
     report["bounds_mm"]["z"] = 12.0

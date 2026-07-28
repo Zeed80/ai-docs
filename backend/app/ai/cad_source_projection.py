@@ -28,6 +28,10 @@ def evaluate_source_projection(
                 "has_evidence": bool(item.get("evidence")),
             })
     missing_evidence = [item["path"] for item in evidence_items if not item["has_evidence"]]
+    evidence_coverage = (
+        (len(evidence_items) - len(missing_evidence)) / len(evidence_items)
+        if evidence_items else 0.0
+    )
     raster_checked = crosscheck.get("raster_check") == "checked"
     crosscheck_errors = [
         finding.get("message")
@@ -36,6 +40,17 @@ def evaluate_source_projection(
     ]
     sheet_verification = (solid_result.get("sheet") or {}).get("verification") or {}
     view_coverage = sheet_verification.get("view_coverage") or {}
+    required_views = view_coverage.get("required") or []
+    missing_views = view_coverage.get("missing") or []
+    view_score = (
+        (len(required_views) - len(missing_views)) / len(required_views)
+        if required_views else (1.0 if view_coverage.get("ok") else 0.0)
+    )
+    raster_score = 1.0 if raster_checked and not crosscheck_errors else 0.0
+    # Diagnostic only, never a promotion shortcut. Missing source evidence
+    # cannot be hidden by perfect self-consistency between a solid and its own
+    # generated views.
+    score = round((evidence_coverage + raster_score + view_score) / 3.0, 3)
     checks = {
         "localized_geometry_evidence": bool(evidence_items) and not missing_evidence,
         "raster_crosscheck_ran": raster_checked,
@@ -49,5 +64,12 @@ def evaluate_source_projection(
         "checks": checks,
         "missing_evidence": missing_evidence,
         "crosscheck_errors": crosscheck_errors,
+        "score": score,
+        "score_components": {
+            "localized_evidence_coverage": round(evidence_coverage, 3),
+            "independent_raster_check": raster_score,
+            "required_view_coverage": round(view_score, 3),
+        },
+        "promotion_eligible": bool(ok and score == 1.0),
         "method": "localized_evidence+independent_raster_crosscheck+view_coverage",
     }
