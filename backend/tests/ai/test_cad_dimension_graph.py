@@ -1,3 +1,5 @@
+import pytest
+
 from app.ai.cad_dimension_graph import build_dimension_graph
 
 
@@ -121,7 +123,7 @@ def test_dimension_graph_blocks_invalid_tolerance_instead_of_ignoring_it():
     assert "Zz99" in graph["errors"][0]
 
 
-def test_valid_offset_fit_is_kept_as_an_explicit_partial_interval():
+def test_tabulated_offset_fit_becomes_a_complete_interval():
     graph = build_dimension_graph({
         "main_view": {"outer": [
             {"diameter_mm": 80, "length_mm": 40, "tolerance": "k6"},
@@ -133,7 +135,25 @@ def test_valid_offset_fit_is_kept_as_an_explicit_partial_interval():
     )
 
     assert graph["status"] == "ok"
-    assert tolerance["source"] == "grade_only_it6"
+    assert tolerance["source"] == "gost_25346"
+    assert tolerance["lower_deviation_mm"] == pytest.approx(0.002)
+    assert tolerance["upper_deviation_mm"] == pytest.approx(0.021)
+    assert tolerance["interval_complete"] is True
+
+
+def test_untabulated_offset_fit_stays_an_explicit_partial_interval():
+    graph = build_dimension_graph({
+        "main_view": {"outer": [
+            {"diameter_mm": 80, "length_mm": 40, "tolerance": "f7"},
+        ]}
+    })
+    tolerance = next(
+        item for item in graph["constraints"]
+        if item["kind"] == "tolerance_interval"
+    )
+
+    assert graph["status"] == "ok"
+    assert tolerance["source"] == "grade_only_it7"
     assert tolerance["interval_complete"] is False
 
 

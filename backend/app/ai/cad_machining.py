@@ -57,11 +57,10 @@ def it_tolerance_mm(nominal_mm: float, grade: int) -> float | None:
 def deviations_from_fit(nominal_mm: float, fit: str | None) -> tuple[float | None, float | None, str]:
     """Upper/lower deviation implied by a fit class, in millimetres.
 
-    Only the cases a shop actually reads off a shaft or bore drawing are
-    resolved: ``js``/``JS`` (symmetric), lowercase ``h`` (shaft, zero above), and
-    uppercase ``H`` (hole, zero below). Any other letter yields the grade width
-    without a side, because guessing which way a ``k6`` shifts would silently
-    move the part into the wrong half of its fit.
+    Symmetric and zero-line fields are resolved directly from the IT width.
+    Offset shaft fields use the versioned reference table shared with techdraw;
+    an unlisted field still yields only its grade width because guessing the
+    side would silently move the part into the wrong half of its fit.
     """
     if not fit:
         return None, None, "not_stated"
@@ -82,6 +81,11 @@ def deviations_from_fit(nominal_mm: float, fit: str | None) -> tuple[float | Non
         return 0.0, -width, "gost_25346"
     if letters == "H":
         return width, 0.0, "gost_25346"
+    from app.ai.techdraw_reference import tolerance_band
+
+    band = tolerance_band(f"{letters}{grade}", nominal_mm)
+    if band is not None:
+        return band.es_um / 1000.0, band.ei_um / 1000.0, "gost_25346"
     return None, None, f"grade_only_it{grade}"
 
 

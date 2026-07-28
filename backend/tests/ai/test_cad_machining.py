@@ -35,11 +35,25 @@ def test_symmetric_shaft_and_hole_fits_resolve_to_deviations():
     assert deviations_from_fit(16, "H7") == (pytest.approx(0.018), 0.0, "gost_25346")
 
 
-def test_an_unresolvable_fit_direction_is_not_guessed():
-    """Guessing which way k6 shifts would move the part into the wrong fit."""
-    upper, lower, source = deviations_from_fit(50, "k6")
+def test_tabulated_offset_shaft_fits_resolve_without_guessing():
+    assert deviations_from_fit(50, "k6") == (
+        pytest.approx(0.018), pytest.approx(0.002), "gost_25346"
+    )
+    assert deviations_from_fit(80, "m6") == (
+        pytest.approx(0.030), pytest.approx(0.011), "gost_25346"
+    )
+    assert deviations_from_fit(120, "n6") == (
+        pytest.approx(0.045), pytest.approx(0.023), "gost_25346"
+    )
+    assert deviations_from_fit(180, "p6") == (
+        pytest.approx(0.068), pytest.approx(0.043), "gost_25346"
+    )
+
+
+def test_an_untabulated_fit_direction_is_not_guessed():
+    upper, lower, source = deviations_from_fit(50, "f7")
     assert upper is None and lower is None
-    assert source == "grade_only_it6"
+    assert source == "grade_only_it7"
 
 
 def test_a_missing_fit_says_so_rather_than_defaulting():
