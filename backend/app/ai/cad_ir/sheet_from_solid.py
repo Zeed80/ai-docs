@@ -138,6 +138,19 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
                 if source.get(field) not in (None, []):
                     planned[field] = source[field]
             views.append(planned)
+    for source in source_views:
+        if source.get("kind") != "removed_section":
+            continue
+        planned = {
+            "kind": "section",
+            "presentation_kind": "removed_section",
+            "label": source.get("label"),
+            "section_symbol": (source.get("label") or "").split("-")[0] or None,
+        }
+        for field in ("section_origin_mm", "section_path_mm"):
+            if source.get(field) not in (None, []):
+                planned[field] = source[field]
+        views.append(planned)
     if part_class in ("solid_rotation", "hollow_rotation") and not any(
         v["kind"] == "side" for v in views
     ):
@@ -156,7 +169,7 @@ def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> l
     }
     reasons: list[dict[str, Any]] = []
     for index, view in enumerate(views):
-        kind = view["kind"]
+        kind = view.get("presentation_kind") or view["kind"]
         reason = "основная проекция детали"
         if kind == "section":
             reason = "показ внутреннего профиля" if body.get("bore") else "разрез прочитан на исходном листе"
@@ -181,7 +194,7 @@ def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> l
 def verify_view_coverage(plan: SheetPlan, spec: dict) -> dict[str, Any]:
     """Do the planned visible views expose every modeled feature family?"""
     visible = [
-        view["kind"]
+        view.get("presentation_kind") or view["kind"]
         for index, view in enumerate(plan.views)
         if index not in plan.scaffold_views
     ]
@@ -219,16 +232,18 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
     bounds = report.get("bounds_mm") or {}
     length = float(bounds.get("z") or 0.0)
     diameter = max(float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0))
-    kinds = [view["kind"] for view in views]
+    kinds = [view.get("presentation_kind") or view["kind"] for view in views]
 
     if part_class in ("flange", "plate"):
         width, height = diameter, diameter
-        if "section" in kinds:
+        if "section" in kinds or "removed_section" in kinds:
             width += VIEW_GAP_MM + max(length, 1.0)
     else:
         width, height = length, diameter
         if "side" in kinds:
             width += VIEW_GAP_MM + diameter
+        if "removed_section" in kinds:
+            width += VIEW_GAP_MM + length
         if "top" in kinds:
             height += VIEW_GAP_MM + diameter
     # Dimensions and their witness lines stand off the part; give them room, or

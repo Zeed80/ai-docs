@@ -342,6 +342,38 @@ def main() -> int:
     else:
         check("view edges are addressable", False, f"HTTP {status}: {payload}")
 
+    # 10. A removed section is constructed as a real B-Rep section but keeps
+    # its presentation identity for coverage/layout on the generated sheet.
+    status, removed = _post(
+        "/drawing",
+        {
+            "candidate": _candidate(_base()),
+            "confirm_assumptions": True,
+            "views": [
+                {"kind": "front"},
+                {
+                    "kind": "section",
+                    "presentation_kind": "removed_section",
+                    "label": "В-В",
+                    "section_symbol": "В",
+                },
+            ],
+            "scale": 0.5,
+            "hidden_lines": True,
+            "dimensions": [],
+        },
+    )
+    removed_views = removed.get("views") if isinstance(removed, dict) else None
+    removed_view = removed_views[1] if removed_views and len(removed_views) > 1 else {}
+    check(
+        "removed section keeps its presentation kind",
+        status == 200
+        and removed_view.get("kind") == "removed_section"
+        and removed_view.get("label") == "В-В"
+        and bool(removed_view.get("hatch")),
+        f"HTTP {status}, kind={removed_view.get('kind')}, hatch={len(removed_view.get('hatch') or [])}",
+    )
+
     failed = [name for ok, name, _detail in _results if not ok]
     print(f"\n{len(_results) - len(failed)}/{len(_results)} passed")
     if failed:

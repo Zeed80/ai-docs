@@ -109,7 +109,7 @@ def test_read_offset_section_reaches_the_kernel_view_plan():
     assert len(section["section_path_mm"]) == 3
 
 
-def test_unsupported_removed_section_stays_a_coverage_blocker():
+def test_removed_section_is_built_as_section_with_separate_presentation_kind():
     spec = {
         **_SHAFT,
         "views": [{
@@ -119,10 +119,23 @@ def test_unsupported_removed_section_stays_a_coverage_blocker():
     }
     plan = plan_sheet(spec, _SHAFT_REPORT)
     coverage = verify_view_coverage(plan, spec)
+    removed = next(
+        view for view in plan.views
+        if view.get("presentation_kind") == "removed_section"
+    )
+    assert removed["kind"] == "section"
+    assert removed["label"] == "В-В"
+    assert coverage["ok"] is True
+
+
+def test_detail_view_stays_an_explicit_coverage_blocker():
+    spec = {
+        **_SHAFT,
+        "views": [{"kind": "detail", "view_id": "d", "label": "А"}],
+    }
+    coverage = verify_view_coverage(plan_sheet(spec, _SHAFT_REPORT), spec)
     assert coverage["ok"] is False
-    assert coverage["missing"] == [{
-        "feature": "source_view:removed_section", "view": "removed_section",
-    }]
+    assert coverage["missing"][0]["view"] == "detail"
 
 
 def test_view_plan_explains_why_each_projection_exists():

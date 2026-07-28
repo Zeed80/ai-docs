@@ -1051,6 +1051,10 @@ class SheetViewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["front", "side", "top", "section"] = "front"
+    # Geometry may be a regular section while the sheet presents it away from
+    # the parent view as a removed section. Keeping construction and
+    # presentation separate avoids teaching OpenCascade a fake fifth camera.
+    presentation_kind: Literal["section", "removed_section"] | None = None
     label: str | None = None
     # Where the cutting plane sits along the view's own depth axis, in model mm.
     # Only meaningful for a section; None puts it through the model centre.
@@ -1366,7 +1370,7 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
 
             view_objects.append(view)
             views.append({
-                "kind": wanted.kind,
+                "kind": wanted.presentation_kind or wanted.kind,
                 "label": wanted.label,
                 "bounds_mm": bounds,
                 "visible": entities["visible"],
