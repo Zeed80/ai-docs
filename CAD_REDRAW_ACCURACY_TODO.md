@@ -83,7 +83,7 @@
 - [-] Integration: отдельные контракты reader → normalized spec, byte-identical kernel payload, B-Rep → sheet и production DXF semantic reopen покрыты; единый тест полного конвейера с реальным CAD-kernel ещё нужен.
 - [ ] Regression: реальные листы с валами, полыми шпинделями, плитами/фланцами и отрицательными неоднозначными случаями.
 - [ ] Метрики: точность параметров/топологии/features/views, source-projection score, `false_accept_rate=0`, DXF reopen `=1`.
-- [-] Production rebuild и живой прогон `detal_126.png` выполнены: новый контур честно вернул `blocked`, сохранил три raw attempts и kernel payload, не вызвал `/compile` и не создал STL/DXF. Визуальный UI smoke через production Authentik не выполнен без отдельной пользовательской сессии; backend/API и frontend production build проверены.
+- [-] Production rebuild и повторный живой прогон `detal_126.png` (`06440e76-a0ca-49f3-b54c-867c5f0d7a04`) выполнены: статус `blocked`, 3 attempts, 178 per-value provenance-записей, 12 raw fragment-ответов, payload SHA `5c9eb9a7…`, `confirm_assumptions=false`; локализованных evidence-значений 0, поэтому `/compile` не вызван и STL/DXF не созданы. Визуальный UI smoke через production Authentik не выполнен без отдельной пользовательской сессии; backend/API и frontend production build проверены.
 
 ## Definition of Done для `detal_126.png`
 
