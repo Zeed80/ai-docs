@@ -92,3 +92,63 @@ def test_dimension_graph_exposes_derived_section_coordinates():
     nodes = {node["id"]: node["value_mm"] for node in graph["nodes"]}
     assert nodes["main_view.outer.1.z_start_mm"] == 40
     assert nodes["main_view.outer.1.z_end_mm"] == 100
+
+
+def test_dimension_graph_resolves_fit_and_symmetric_tolerance_intervals():
+    graph = build_dimension_graph({
+        "main_view": {"outer": [
+            {"diameter_mm": 80, "length_mm": 40, "tolerance": "js6"},
+            {"diameter_mm": 30, "length_mm": 20, "tolerance": "±0,1"},
+        ]}
+    })
+    nodes = {node["id"]: node["value_mm"] for node in graph["nodes"]}
+
+    assert graph["status"] == "ok"
+    assert nodes["main_view.outer.0.diameter_min_mm"] == 79.9905
+    assert nodes["main_view.outer.0.diameter_max_mm"] == 80.0095
+    assert nodes["main_view.outer.1.diameter_min_mm"] == 29.9
+    assert nodes["main_view.outer.1.diameter_max_mm"] == 30.1
+
+
+def test_dimension_graph_blocks_invalid_tolerance_instead_of_ignoring_it():
+    graph = build_dimension_graph({
+        "main_view": {"outer": [
+            {"diameter_mm": 80, "length_mm": 40, "tolerance": "Zz99"},
+        ]}
+    })
+
+    assert graph["status"] == "conflict"
+    assert "Zz99" in graph["errors"][0]
+
+
+def test_valid_offset_fit_is_kept_as_an_explicit_partial_interval():
+    graph = build_dimension_graph({
+        "main_view": {"outer": [
+            {"diameter_mm": 80, "length_mm": 40, "tolerance": "k6"},
+        ]}
+    })
+    tolerance = next(
+        item for item in graph["constraints"]
+        if item["kind"] == "tolerance_interval"
+    )
+
+    assert graph["status"] == "ok"
+    assert tolerance["source"] == "grade_only_it6"
+    assert tolerance["interval_complete"] is False
+
+
+def test_dimension_graph_blocks_a_fillet_larger_than_its_shoulder():
+    graph = build_dimension_graph({
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 40, "length_mm": 20},
+                {"diameter_mm": 50, "length_mm": 30},
+            ],
+            "fillets": [{
+                "radius_mm": 6, "location": "shoulder", "at_z_mm": 20,
+            }],
+        }
+    })
+
+    assert graph["status"] == "conflict"
+    assert "максимум R5" in graph["errors"][0]

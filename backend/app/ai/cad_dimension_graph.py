@@ -12,6 +12,7 @@ from typing import Any
 
 
 _NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
+_SYMMETRIC_TOLERANCE = re.compile(r"±\s*(\d+(?:[.,]\d+)?)")
 
 
 def _number(value: Any) -> float | None:
@@ -26,6 +27,22 @@ def _number(value: Any) -> float | None:
         return float(match.group(0).replace(",", "."))
     except ValueError:
         return None
+
+
+def _tolerance_interval(
+    nominal_mm: float, tolerance: Any
+) -> tuple[float | None, float | None, str]:
+    """Resolve only tolerance forms whose numeric interval is unambiguous."""
+    text = str(tolerance or "").strip()
+    if not text:
+        return None, None, "not_stated"
+    symmetric = _SYMMETRIC_TOLERANCE.fullmatch(text)
+    if symmetric:
+        delta = float(symmetric.group(1).replace(",", "."))
+        return delta, -delta, "stated"
+    from app.ai.cad_machining import deviations_from_fit
+
+    return deviations_from_fit(nominal_mm, text)
 
 
 def build_dimension_graph(spec: dict) -> dict[str, Any]:
@@ -49,6 +66,45 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
                     "evidence": item.get("evidence") or [],
                     "status": "read" if value is not None else "missing",
                 })
+            tolerance = item.get("tolerance")
+            if diameter is not None and tolerance:
+                upper, lower, source = _tolerance_interval(diameter, tolerance)
+                # k6/p7 and similar fits have a known IT grade width but need
+                # a fundamental-deviation table before their interval can be
+                # located around nominal. They are valid, explicitly partial
+                # constraints — not contradictions and not invented limits.
+                grade_only = source.startswith("grade_only_it")
+                ok = grade_only or (
+                    upper is not None and lower is not None and lower <= upper
+                )
+                constraints.append({
+                    "kind": "tolerance_interval",
+                    "target": f"main_view.{group}.{index}.diameter_mm",
+                    "nominal_mm": diameter,
+                    "tolerance": tolerance,
+                    "upper_deviation_mm": upper,
+                    "lower_deviation_mm": lower,
+                    "source": source,
+                    "interval_complete": not grade_only,
+                    "ok": ok,
+                })
+                if ok and not grade_only:
+                    nodes.extend([
+                        {
+                            "id": f"main_view.{group}.{index}.diameter_min_mm",
+                            "value_mm": diameter + float(lower),
+                            "status": "derived",
+                        },
+                        {
+                            "id": f"main_view.{group}.{index}.diameter_max_mm",
+                            "value_mm": diameter + float(upper),
+                            "status": "derived",
+                        },
+                    ])
+                elif not ok:
+                    errors.append(
+                        f"{group}[{index}] содержит неподдержанный или неполный допуск {tolerance!r}"
+                    )
             if length is not None:
                 start = total
                 total += length
@@ -201,6 +257,60 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
                     errors.append(
                         f"cross_holes[{index}] Ø{feature_diameter or 0:g} не помещается в локальный диаметр Ø{local_diameter or 0:g}"
                     )
+
+    # A shoulder fillet must fit both the radial step and the two adjacent
+    # axial runs. This is known before OpenCascade and is therefore a graph
+    # contradiction, not a kernel warning to discover after the build.
+    boundaries: list[tuple[float, int]] = []
+    cursor = 0.0
+    for index, item in enumerate(outer[:-1]):
+        cursor += _number(item.get("length_mm", item.get("l"))) or 0.0
+        boundaries.append((cursor, index))
+    for index, fillet in enumerate(body.get("fillets") or []):
+        radius = _number(fillet.get("radius_mm"))
+        if radius is None or fillet.get("location") != "shoulder":
+            continue
+        at_z = _number(fillet.get("at_z_mm"))
+        at_diameter = _number(fillet.get("at_diameter_mm"))
+        boundary_index = None
+        if at_z is not None:
+            boundary_index = next(
+                (item_index for z, item_index in boundaries if abs(z - at_z) <= 0.05),
+                None,
+            )
+        elif at_diameter is not None:
+            boundary_index = next(
+                (
+                    item_index for _z, item_index in boundaries
+                    if abs((_number(outer[item_index].get("diameter_mm", outer[item_index].get("d"))) or 0.0) - at_diameter) <= 0.05
+                ),
+                None,
+            )
+        if boundary_index is None:
+            continue
+        left, right = outer[boundary_index], outer[boundary_index + 1]
+        radial_step = abs(
+            (_number(left.get("diameter_mm", left.get("d"))) or 0.0)
+            - (_number(right.get("diameter_mm", right.get("d"))) or 0.0)
+        ) / 2.0
+        max_radius = min(
+            radial_step,
+            _number(left.get("length_mm", left.get("l"))) or 0.0,
+            _number(right.get("length_mm", right.get("l"))) or 0.0,
+        )
+        ok = max_radius > 0 and radius <= max_radius + 0.05
+        constraints.append({
+            "kind": "fillet_fits_shoulder",
+            "feature": f"main_view.fillets.{index}",
+            "radius_mm": radius,
+            "max_radius_mm": max_radius,
+            "shoulder_z_mm": boundaries[boundary_index][0],
+            "ok": ok,
+        })
+        if not ok:
+            errors.append(
+                f"fillets[{index}] R{radius:g} не помещается на уступе: максимум R{max_radius:g}"
+            )
 
     profile = body.get("profile") or {}
     shape = profile.get("shape")
