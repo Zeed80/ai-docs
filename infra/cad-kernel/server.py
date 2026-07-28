@@ -16,7 +16,7 @@ import Mesh
 import Part
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Feature(BaseModel):
@@ -1050,7 +1050,7 @@ def project_views(request: ProjectRequest) -> dict[str, Any]:
 class SheetViewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["front", "side", "top", "section"] = "front"
+    kind: Literal["front", "side", "top", "section", "detail"] = "front"
     # Geometry may be a regular section while the sheet presents it away from
     # the parent view as a removed section. Keeping construction and
     # presentation separate avoids teaching OpenCascade a fake fifth camera.
@@ -1080,6 +1080,19 @@ class SheetViewRequest(BaseModel):
     section_strategy: Literal["Offset"] = "Offset"
     # The letter pair a section is labelled with (Г-Г → "Г").
     section_symbol: str | None = Field(default=None, max_length=8)
+    # Parent-view model coordinates and model radius. A detail with no exact
+    # crop is rejected by the API instead of silently enlarging the whole part.
+    detail_center_mm: tuple[float, float] | None = None
+    detail_radius_mm: float | None = Field(default=None, gt=0)
+    detail_scale_factor: float = Field(default=2.0, ge=1.0, le=10.0)
+
+    @model_validator(mode="after")
+    def _require_detail_crop(self) -> "SheetViewRequest":
+        if self.kind == "detail" and (
+            self.detail_center_mm is None or self.detail_radius_mm is None
+        ):
+            raise ValueError("detail needs detail_center_mm and detail_radius_mm")
+        return self
 
 
 class SheetDimensionRequest(BaseModel):
@@ -1259,7 +1272,22 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
         views: list[dict[str, Any]] = []
         view_objects: list[Any] = []
         for index, wanted in enumerate(request.views):
-            if wanted.kind == "section":
+            if wanted.kind == "detail":
+                if base_view is None:
+                    raise HTTPException(
+                        422, "a detail needs a base view: list a front/side/top view first"
+                    )
+                detail_scale = request.scale * wanted.detail_scale_factor
+                if detail_scale > 100.0:
+                    raise HTTPException(422, "detail scale exceeds 100:1")
+                view = document.addObject("TechDraw::DrawViewDetail", f"View{index}")
+                page.addView(view)
+                view.BaseView = base_view
+                view.Source = [body]
+                centre_u, centre_v = wanted.detail_center_mm or (0.0, 0.0)
+                view.AnchorPoint = App.Vector(centre_u, centre_v, 0.0)
+                view.Radius = float(wanted.detail_radius_mm or 0.0)
+            elif wanted.kind == "section":
                 if base_view is None:
                     raise HTTPException(
                         422, "a section needs a base view: list a front/side/top view first"
@@ -1317,7 +1345,10 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
             # 1:2 sheet after the FreeCAD 1.1 upgrade, with no error anywhere.
             if "ScaleType" in view.PropertiesList:
                 view.ScaleType = "Custom"
-            view.Scale = request.scale
+            view.Scale = (
+                request.scale * wanted.detail_scale_factor
+                if wanted.kind == "detail" else request.scale
+            )
             if hasattr(view, "HardHidden"):
                 view.HardHidden = bool(request.hidden_lines)
             document.recompute()
@@ -1372,6 +1403,11 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
             views.append({
                 "kind": wanted.presentation_kind or wanted.kind,
                 "label": wanted.label,
+                "detail_center_mm": wanted.detail_center_mm,
+                "detail_radius_mm": wanted.detail_radius_mm,
+                "detail_scale_factor": (
+                    wanted.detail_scale_factor if wanted.kind == "detail" else None
+                ),
                 "bounds_mm": bounds,
                 "visible": entities["visible"],
                 "hidden": entities["hidden"],

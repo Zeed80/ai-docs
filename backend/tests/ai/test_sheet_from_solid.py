@@ -138,6 +138,28 @@ def test_detail_view_stays_an_explicit_coverage_blocker():
     assert coverage["missing"][0]["view"] == "detail"
 
 
+def test_detail_with_model_crop_is_planned_and_satisfies_coverage():
+    spec = {
+        **_SHAFT,
+        "views": [{
+            "kind": "detail", "view_id": "d", "label": "А",
+            "parent_view_id": "main",
+            "detail_center_mm": [150.0, 0.0],
+            "detail_radius_mm": 20.0,
+            "detail_scale_factor": 4.0,
+        }],
+    }
+    plan = plan_sheet(spec, _SHAFT_REPORT)
+    detail = next(view for view in plan.views if view["kind"] == "detail")
+
+    assert detail["detail_center_mm"] == [150.0, 0.0]
+    assert detail["detail_radius_mm"] == 20.0
+    assert detail["detail_scale_factor"] == 4.0
+    assert verify_view_coverage(plan, spec)["ok"] is True
+    reason = next(item for item in plan.view_reasons if item["kind"] == "detail")
+    assert "местный" in reason["reason"]
+
+
 def test_view_plan_explains_why_each_projection_exists():
     spec = {
         "main_view": {

@@ -374,6 +374,47 @@ def main() -> int:
         f"HTTP {status}, kind={removed_view.get('kind')}, hatch={len(removed_view.get('hatch') or [])}",
     )
 
+    # 11. A local detail is a native crop of the parent projection, with a
+    # separate paper scale. It must be smaller in model coverage but larger on
+    # paper than the same region in the base view.
+    status, detailed = _post(
+        "/drawing",
+        {
+            "candidate": _candidate(_base()),
+            "confirm_assumptions": True,
+            "views": [
+                {"kind": "front"},
+                {
+                    "kind": "detail",
+                    "label": "А",
+                    "detail_center_mm": [150.0, 0.0],
+                    "detail_radius_mm": 30.0,
+                    "detail_scale_factor": 4.0,
+                },
+            ],
+            "scale": 0.5,
+            "hidden_lines": True,
+            "dimensions": [],
+        },
+    )
+    detail_views = detailed.get("views") if isinstance(detailed, dict) else None
+    detail_view = detail_views[1] if detail_views and len(detail_views) > 1 else {}
+    detail_bounds = detail_view.get("bounds_mm") or {}
+    detail_width = (
+        float(detail_bounds.get("u_max", 0.0)) - float(detail_bounds.get("u_min", 0.0))
+    )
+    check(
+        "detail view crops and magnifies its parent projection",
+        status == 200
+        and detail_view.get("kind") == "detail"
+        and detail_view.get("label") == "А"
+        and detail_view.get("detail_radius_mm") == 30.0
+        and detail_view.get("detail_scale_factor") == 4.0
+        and detail_width > 0.0
+        and detail_width <= 125.0,
+        f"HTTP {status}, width={detail_width:.1f}, edges={len(detail_view.get('visible') or [])}",
+    )
+
     failed = [name for ok, name, _detail in _results if not ok]
     print(f"\n{len(_results) - len(failed)}/{len(_results)} passed")
     if failed:

@@ -333,9 +333,16 @@ class SpecView(BaseModel):
     section_path_mm: list[tuple[float, float, float]] = Field(
         default_factory=list, max_length=64
     )
+    # A detail is a crop of its parent projection, never a separately guessed
+    # sketch. Coordinates are in the parent's model-space projection: u grows
+    # right from the part's left end for longitudinal views, v grows up from
+    # the part axis/centre. Radius is a real part size; magnification affects
+    # paper scale only.
+    detail_center_mm: tuple[float, float] | None = None
+    detail_radius_mm: float | None = Field(default=None, gt=0)
+    detail_scale_factor: float = Field(default=2.0, ge=1.0, le=10.0)
     features_shown: list[str] = Field(default_factory=list, max_length=64)
     evidence: list[SpecEvidence] = Field(default_factory=list)
-
 
 class SpecDimension(BaseModel):
     value: str = Field(min_length=1)
@@ -451,7 +458,9 @@ _SPEC_PROMPT = (
     '"views":[{"kind":"front|top|side|section|detail|removed_section",'
     '"view_id":"main","body_index":0,"label":"А-А",'
     '"parent_view_id":null,"relation":"primary|orthographic|section|detail|removed_section",'
-    '"section_origin_mm":null,"section_path_mm":[],"features_shown":[]}],'
+    '"section_origin_mm":null,"section_path_mm":[],'
+    '"detail_center_mm":null,"detail_radius_mm":null,"detail_scale_factor":2,'
+    '"features_shown":[]}],'
     '"dimensions":[{"value":"Ø80js6","applies_to":".."}],'
     '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":".."}],'
     '"title_block":{"material":"..","scale":".."},'
@@ -481,6 +490,13 @@ _SPEC_PROMPT = (
     '"thread":{"designation":"M75x1,5","nominal_diameter_mm":75,"pitch_mm":1.5}.\n'
     "Глухая или смещённая расточка: у тела есть bore_start_mm (от торца), "
     'bore_from_end:"left|right", bore_blind:true|false.\n'
+    "ПРАВИЛО для местного вида detail: укажи detail_center_mm=[u,v] и "
+    "detail_radius_mm только если граница увеличиваемой области однозначно "
+    "связана с родительской проекцией. Для продольного вида u отсчитывается "
+    "вправо от левого торца детали, v — вверх от оси; для торцевого вида обе "
+    "координаты отсчитываются от центра. detail_scale_factor — отношение "
+    "масштаба местного вида к масштабу родительского. Если центр или радиус "
+    "не доказаны, оставь их null: такой detail должен остаться блокером.\n"
     "ПРАВИЛА для пластин/фланцев:\n"
     "1) profile обязателен: rectangle требует width_mm+height_mm, circle — diameter_mm.\n"
     "2) Координаты holes задавай от ЦЕНТРА профиля: +x вправо, +y вверх.\n"

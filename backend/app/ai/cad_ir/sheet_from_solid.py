@@ -151,6 +151,23 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
             if source.get(field) not in (None, []):
                 planned[field] = source[field]
         views.append(planned)
+    for source in source_views:
+        if source.get("kind") != "detail":
+            continue
+        centre = source.get("detail_center_mm")
+        radius = source.get("detail_radius_mm")
+        # A label without a model-space crop cannot be reconstructed from the
+        # solid. Keep it absent so coverage stays red instead of magnifying an
+        # arbitrary part of the projection.
+        if not centre or not radius:
+            continue
+        views.append({
+            "kind": "detail",
+            "label": source.get("label"),
+            "detail_center_mm": centre,
+            "detail_radius_mm": radius,
+            "detail_scale_factor": source.get("detail_scale_factor") or 2.0,
+        })
     if part_class in ("solid_rotation", "hollow_rotation") and not any(
         v["kind"] == "side" for v in views
     ):
@@ -175,6 +192,8 @@ def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> l
             reason = "показ внутреннего профиля" if body.get("bore") else "разрез прочитан на исходном листе"
         elif kind == "side" and (body.get("keyways") or body.get("cross_holes")):
             reason = "показ радиальных отверстий и пазов"
+        elif kind == "detail":
+            reason = "увеличенный местный вид, прочитанный на исходном листе"
         elif kind in source_kinds:
             reason = "проекция присутствует на исходном листе"
         reasons.append({
@@ -246,6 +265,13 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
             width += VIEW_GAP_MM + length
         if "top" in kinds:
             height += VIEW_GAP_MM + diameter
+    for view in views:
+        if (view.get("presentation_kind") or view.get("kind")) != "detail":
+            continue
+        radius = float(view.get("detail_radius_mm") or 0.0)
+        factor = float(view.get("detail_scale_factor") or 2.0)
+        if radius > 0:
+            width += VIEW_GAP_MM + 2.0 * radius * factor
     # Dimensions and their witness lines stand off the part; give them room, or
     # the sheet fits the geometry and clips everything that describes it.
     return width + 40.0, height + 40.0
