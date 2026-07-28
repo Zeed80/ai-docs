@@ -144,7 +144,7 @@ def test_tabulated_offset_fit_becomes_a_complete_interval():
 def test_untabulated_offset_fit_stays_an_explicit_partial_interval():
     graph = build_dimension_graph({
         "main_view": {"outer": [
-            {"diameter_mm": 80, "length_mm": 40, "tolerance": "f7"},
+            {"diameter_mm": 80, "length_mm": 40, "tolerance": "e7"},
         ]}
     })
     tolerance = next(
@@ -155,6 +155,24 @@ def test_untabulated_offset_fit_stays_an_explicit_partial_interval():
     assert graph["status"] == "ok"
     assert tolerance["source"] == "grade_only_it7"
     assert tolerance["interval_complete"] is False
+
+
+def test_clearance_fit_is_a_complete_negative_interval():
+    graph = build_dimension_graph({
+        "main_view": {"outer": [
+            {"diameter_mm": 80, "length_mm": 40, "tolerance": "g6"},
+        ]}
+    })
+    tolerance = next(
+        item for item in graph["constraints"]
+        if item["kind"] == "tolerance_interval"
+    )
+
+    assert graph["status"] == "ok"
+    assert tolerance["source"] == "gost_25346"
+    assert tolerance["lower_deviation_mm"] == pytest.approx(-0.029)
+    assert tolerance["upper_deviation_mm"] == pytest.approx(-0.010)
+    assert tolerance["interval_complete"] is True
 
 
 def test_dimension_graph_blocks_a_fillet_larger_than_its_shoulder():

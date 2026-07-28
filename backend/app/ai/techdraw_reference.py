@@ -63,7 +63,24 @@ _SHAFT_FUNDAMENTAL_EI_UM: dict[str, tuple[int, ...]] = {
     "p": (6, 12, 15, 18, 22, 26, 32, 37, 43, 50, 56, 62),
 }
 
-_SHAFT_GRADES = {"h": (6, 7, 8, 9, 11), "js": (6,), "k": (6,), "m": (6,), "n": (6,), "p": (6,)}
+# Shaft fundamental upper deviation es (µm) for the preferred clearance
+# fields. These are the zero-nearest values from ISO 286-2:2010 Tables 20-21;
+# the lower deviation is es minus the selected IT width.
+_SHAFT_FUNDAMENTAL_ES_UM: dict[str, tuple[int, ...]] = {
+    "f": (-6, -10, -13, -16, -20, -25, -30, -36, -43, -50, -56, -62),
+    "g": (-2, -4, -5, -6, -7, -9, -10, -12, -14, -15, -17, -18),
+}
+
+_SHAFT_GRADES = {
+    "f": (6, 7, 8, 9),
+    "g": (6, 7, 8, 9),
+    "h": (6, 7, 8, 9, 11),
+    "js": (6,),
+    "k": (6,),
+    "m": (6,),
+    "n": (6,),
+    "p": (6,),
+}
 _HOLE_GRADES = {"H": (7, 8, 9, 11), "JS": (7,)}
 
 _TOL_SYMBOL_RE = re.compile(r"^([A-Za-z]{1,2})(\d{1,2})$")
@@ -123,6 +140,10 @@ def tolerance_band(symbol: str, nominal_mm: float) -> ToleranceBand | None:
         it6 = _IT_GRADE_UM[6][idx]
         ei = float(_SHAFT_FUNDAMENTAL_EI_UM[letter][idx])
         return ToleranceBand(es_um=ei + it6, ei_um=ei)
+    if letter in _SHAFT_FUNDAMENTAL_ES_UM and grade in _SHAFT_GRADES[letter]:
+        it = _IT_GRADE_UM[grade][idx]
+        es = float(_SHAFT_FUNDAMENTAL_ES_UM[letter][idx])
+        return ToleranceBand(es_um=es, ei_um=es - it)
     return None
 
 

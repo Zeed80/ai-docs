@@ -51,9 +51,18 @@ def test_tabulated_offset_shaft_fits_resolve_without_guessing():
 
 
 def test_an_untabulated_fit_direction_is_not_guessed():
-    upper, lower, source = deviations_from_fit(50, "f7")
+    upper, lower, source = deviations_from_fit(50, "e7")
     assert upper is None and lower is None
     assert source == "grade_only_it7"
+
+
+def test_tabulated_clearance_shaft_fits_resolve_to_negative_deviations():
+    assert deviations_from_fit(25, "f7") == (
+        pytest.approx(-0.020), pytest.approx(-0.041), "gost_25346"
+    )
+    assert deviations_from_fit(80, "g6") == (
+        pytest.approx(-0.010), pytest.approx(-0.029), "gost_25346"
+    )
 
 
 def test_a_missing_fit_says_so_rather_than_defaulting():

@@ -46,6 +46,21 @@ def test_js6_symmetric():
     assert band == ref.ToleranceBand(es_um=8.0, ei_um=-8.0)
 
 
+def test_f_and_g_clearance_fields_match_iso_286_tables_20_and_21():
+    assert ref.tolerance_band("f7", 25) == ref.ToleranceBand(
+        es_um=-20.0, ei_um=-41.0
+    )
+    assert ref.tolerance_band("g6", 80) == ref.ToleranceBand(
+        es_um=-10.0, ei_um=-29.0
+    )
+    assert ref.tolerance_band("f7", 400) == ref.ToleranceBand(
+        es_um=-62.0, ei_um=-119.0
+    )
+    assert ref.tolerance_band("g9", 180) == ref.ToleranceBand(
+        es_um=-14.0, ei_um=-114.0
+    )
+
+
 def test_tolerance_band_unknown_symbol():
     assert ref.tolerance_band("zz6", 25) is None
 
