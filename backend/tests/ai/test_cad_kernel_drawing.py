@@ -170,3 +170,39 @@ def test_dimension_label_does_not_duplicate_a_value_already_in_label(
     )
     dimension = next(entity for entity in entities if entity.type == "dimension")
     assert dimension.text == expected
+
+
+@pytest.mark.parametrize(
+    ("label", "value", "fit", "deviation", "thread"),
+    [
+        ("Ø80g6", 80.0, "g6", None, None),
+        ("Ø50-0,02", 50.0, None, "-0,02", None),
+        ("M75x1,5", 75.0, None, None, "M75x1.5"),
+    ],
+)
+def test_dimension_keeps_structured_semantics_bound_to_its_geometry(
+    label: str,
+    value: float,
+    fit: str | None,
+    deviation: str | None,
+    thread: str | None,
+):
+    from app.ai.cad_projection import dimensions_from_kernel
+
+    entities = dimensions_from_kernel(
+        [{
+            "view_index": 0,
+            "anchors_mm": [[0, 0], [10, 0]],
+            "value_mm": value,
+            "label": label,
+        }],
+        {"front": {"offset_u": 0.0, "offset_v": 0.0}},
+        ["front"],
+        px_per_mm=1.0,
+    )
+
+    dimension = next(entity for entity in entities if entity.type == "dimension")
+    assert dimension.fit == fit
+    assert dimension.deviation == deviation
+    assert dimension.thread == thread
+    assert dimension.tolerance == (fit or deviation)

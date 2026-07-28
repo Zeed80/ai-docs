@@ -163,6 +163,12 @@ class DimensionEntity(_EntityBase):
     text: str = ""
     # parsed nominal value in mm when known (VLM/human), None when unread
     value_mm: float | None = None
+    # Structured manufacturing semantics parsed from the displayed callout.
+    # ``text`` remains the exact sheet spelling; these fields let downstream
+    # code consume it without reparsing or losing the link to this dimension.
+    fit: str | None = None
+    deviation: str | None = None
+    thread: str | None = None
     tolerance: str | None = None
     line_class: LineClass = "dim"
 

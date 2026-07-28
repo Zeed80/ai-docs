@@ -337,6 +337,7 @@ def dimensions_from_kernel(
     import math
 
     from app.ai.cad_ir.schema import DimensionEntity, TextEntity
+    from app.ai.cad_semantics import parse_dimension
 
     entities: list[Any] = []
     for item in dimensions:
@@ -406,6 +407,7 @@ def dimensions_from_kernel(
             if any(character.isdigit() for character in label)
             else f"{label}{value:g}"
         ) if isinstance(value, (int, float)) else label
+        semantic = parse_dimension(text) or {}
         if text:
             mid_u = (u1 + u2) / 2.0 + ou + nu * 1.5
             mid_v = (v1 + v2) / 2.0 + ov + nv * 1.5
@@ -433,6 +435,10 @@ def dimensions_from_kernel(
                     or _DIMENSION_KINDS.get(str(item.get("kind") or ""), "linear")
                 ),
                 value_mm=float(value) if isinstance(value, (int, float)) else None,
+                fit=semantic.get("fit"),
+                deviation=semantic.get("deviation"),
+                thread=semantic.get("thread"),
+                tolerance=semantic.get("fit") or semantic.get("deviation"),
                 **_ORIGIN,
             )
         )
