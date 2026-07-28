@@ -175,6 +175,59 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
     return _normalize_dxf(buf.getvalue()).encode("utf-8")
 
 
+def verify_dxf_roundtrip(ir: CadIR) -> dict:
+    """Reopen the actual export and compare semantic entity/layer counts.
+
+    DXF dimensions and annotations may own auxiliary block geometry, so this
+    deliberately compares the primary editable entity in modelspace rather
+    than requiring byte- or exploded-primitive identity.
+    """
+    import io
+    from collections import Counter
+
+    import ezdxf
+
+    expected: Counter[tuple[str, str]] = Counter()
+    for entity in ir.entities:
+        if getattr(entity, "construction", False):
+            continue
+        layer = LINE_CLASS_LAYERS.get(entity.line_class, "OBJECT")
+        if isinstance(entity, Segment):
+            expected[(layer, "LINE")] += 1
+        elif isinstance(entity, Circle):
+            expected[(layer, "CIRCLE")] += 1
+        elif isinstance(entity, Arc):
+            expected[(layer, "ARC")] += 1
+        elif isinstance(entity, Polyline):
+            expected[(layer, "LWPOLYLINE")] += 1
+        elif isinstance(entity, TextEntity):
+            expected[(TEXT_LAYER, "TEXT")] += 1
+        elif isinstance(entity, DimensionEntity):
+            expected[("DIM", "DIMENSION")] += 1
+        elif isinstance(entity, HatchRegion):
+            expected[("HATCH", "HATCH")] += 1
+        elif isinstance(entity, AnnotationEntity):
+            expected[("DIM", "TEXT")] += 1
+
+    try:
+        document = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode("utf-8")))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reopens": False, "missing": [], "error": str(exc)[:300]}
+    actual = Counter((entity.dxf.layer, entity.dxftype()) for entity in document.modelspace())
+    missing = [
+        {"layer": layer, "type": kind, "expected": count, "actual": actual[(layer, kind)]}
+        for (layer, kind), count in sorted(expected.items())
+        if actual[(layer, kind)] < count
+    ]
+    return {
+        "ok": not missing,
+        "reopens": True,
+        "expected": {f"{layer}:{kind}": count for (layer, kind), count in sorted(expected.items())},
+        "actual": {f"{layer}:{kind}": count for (layer, kind), count in sorted(actual.items())},
+        "missing": missing,
+    }
+
+
 # ezdxf stamps a per-write timestamp and regenerates $VERSIONGUID on every
 # write; neutralize both (plus $FINGERPRINTGUID for good measure) so the same
 # IR yields byte-identical DXF (C5 reproducibility).

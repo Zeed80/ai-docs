@@ -50,8 +50,51 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
                     "status": "read" if value is not None else "missing",
                 })
             if length is not None:
+                start = total
                 total += length
+                nodes.extend([
+                    {"id": f"main_view.{group}.{index}.z_start_mm", "value_mm": start, "status": "derived"},
+                    {"id": f"main_view.{group}.{index}.z_end_mm", "value_mm": total, "status": "derived"},
+                ])
+                taper = item.get("taper") or {}
+                if taper:
+                    end_diameter = _number(taper.get("end_diameter_mm"))
+                    ratio = str(taper.get("ratio") or "")
+                    ratio_parts = [_number(value) for value in ratio.split(":", 1)]
+                    if end_diameter is not None:
+                        ok = end_diameter > 0
+                        constraints.append({
+                            "kind": "positive_taper_end",
+                            "section": f"main_view.{group}.{index}",
+                            "value_mm": end_diameter,
+                            "ok": ok,
+                        })
+                        if not ok:
+                            errors.append(f"{group}[{index}] задаёт неположительный конечный диаметр конуса")
+                    elif len(ratio_parts) == 2 and None not in ratio_parts:
+                        numerator, denominator = ratio_parts
+                        ok = bool(numerator and denominator and numerator > 0 and denominator > 0)
+                        constraints.append({
+                            "kind": "valid_taper_ratio",
+                            "section": f"main_view.{group}.{index}",
+                            "ratio": ratio,
+                            "ok": ok,
+                        })
+                        if not ok:
+                            errors.append(f"{group}[{index}] содержит недопустимое обозначение конусности {ratio!r}")
         return total
+
+    def outer_diameter_at(position: float) -> float | None:
+        cursor = 0.0
+        for item in outer:
+            length = _number(item.get("length_mm", item.get("l")))
+            diameter = _number(item.get("diameter_mm", item.get("d")))
+            if length is None:
+                continue
+            if cursor - 0.05 <= position <= cursor + length + 0.05:
+                return diameter
+            cursor += length
+        return None
 
     outer_total = sections("outer", outer)
     bore_total = sections("bore", bore)
@@ -99,18 +142,19 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
             )
 
     if bore and outer_total > 0:
-        ok = bore_total <= outer_total + 0.05
+        bore_start = _number(body.get("bore_start_mm")) or 0.0
+        ok = bore_start + bore_total <= outer_total + 0.05
         constraints.append({
             "kind": "less_or_equal",
-            "left": "bore_total_length_mm",
+            "left": "bore_start_plus_length_mm",
             "right": "outer_total_length_mm",
-            "left_value_mm": bore_total,
+            "left_value_mm": bore_start + bore_total,
             "right_value_mm": outer_total,
             "ok": ok,
         })
         if not ok:
             errors.append(
-                f"длина внутреннего профиля {bore_total:g} мм превышает длину детали {outer_total:g} мм"
+                f"расточка {bore_start:g}..{bore_start + bore_total:g} мм выходит за длину детали {outer_total:g} мм"
             )
     elif internal_callouts:
         errors.append(
@@ -137,6 +181,55 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
             if not ok:
                 errors.append(
                     f"{group}[{index}] расположен вне длины детали: {position:g}..{position + length:g} мм"
+                )
+            if group == "cross_holes":
+                feature_diameter = _number(feature.get("diameter_mm"))
+                local_diameter = outer_diameter_at(position)
+                fits = (
+                    feature_diameter is not None
+                    and local_diameter is not None
+                    and feature_diameter <= local_diameter + 0.05
+                )
+                constraints.append({
+                    "kind": "diameter_inside",
+                    "feature": f"main_view.{group}.{index}",
+                    "feature_diameter_mm": feature_diameter,
+                    "local_body_diameter_mm": local_diameter,
+                    "ok": fits,
+                })
+                if not fits:
+                    errors.append(
+                        f"cross_holes[{index}] Ø{feature_diameter or 0:g} не помещается в локальный диаметр Ø{local_diameter or 0:g}"
+                    )
+
+    profile = body.get("profile") or {}
+    shape = profile.get("shape")
+    for group in ("holes", "slots"):
+        for index, feature in enumerate(profile.get(group) or []):
+            x = _number(feature.get("center_x_mm"))
+            y = _number(feature.get("center_y_mm"))
+            if x is None or y is None:
+                continue
+            radius = (_number(feature.get("diameter_mm")) or _number(feature.get("width_mm")) or 0.0) / 2.0
+            if shape == "rectangle":
+                width = _number(profile.get("width_mm")) or 0.0
+                height = _number(profile.get("height_mm")) or 0.0
+                fits = abs(x) + radius <= width / 2.0 + 0.05 and abs(y) + radius <= height / 2.0 + 0.05
+            elif shape == "circle":
+                profile_radius = (_number(profile.get("diameter_mm")) or 0.0) / 2.0
+                fits = (x * x + y * y) ** 0.5 + radius <= profile_radius + 0.05
+            else:
+                continue
+            constraints.append({
+                "kind": "inside_profile",
+                "feature": f"main_view.profile.{group}.{index}",
+                "center_mm": [x, y],
+                "radius_mm": radius,
+                "ok": fits,
+            })
+            if not fits:
+                errors.append(
+                    f"profile.{group}[{index}] с центром ({x:g}, {y:g}) мм выходит за контур детали"
                 )
 
     return {

@@ -1665,6 +1665,21 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 solid_result.pop("_dimensions", None)
                 validate_ir(spec_ir)
                 from app.ai.cad_ir.schema import ValidationIssueIR
+                from app.ai.cad_ir.dxf_render import verify_dxf_roundtrip
+
+                dxf_roundtrip = verify_dxf_roundtrip(spec_ir)
+                spec_ir.validation.dxf_reopens = bool(dxf_roundtrip.get("ok"))
+                solid_result["dxf_roundtrip"] = dxf_roundtrip
+                if not dxf_roundtrip.get("ok"):
+                    spec_ir.validation.issues.append(
+                        ValidationIssueIR(
+                            code="DXF_SEMANTIC_ROUNDTRIP_FAILED",
+                            severity="error",
+                            level=2,
+                            message_ru="DXF не прошёл повторное открытие и сверку сущностей/слоёв с CadIR",
+                            fix_hint="Исправьте DXF-экспорт до выдачи результата",
+                        )
+                    )
 
                 if spec_dim_check.get("status") != "ok":
                     spec_ir.validation.issues.append(

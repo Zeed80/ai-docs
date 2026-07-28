@@ -35,7 +35,7 @@ import {
 
 import AssurancePanel from "@/components/cad/AssurancePanel";
 import CadModelTracePanel from "@/components/cad/CadModelTracePanel";
-import type { KernelInput } from "@/components/cad/CadModelTracePanel";
+import type { KernelInput, ModelEvidence } from "@/components/cad/CadModelTracePanel";
 import SpecEditorPanel from "@/components/cad/SpecEditorPanel";
 import Cad3dPanel from "@/components/cad/Cad3dPanel";
 import CommandLine, { CommandPrompt } from "@/components/cad/CommandLine";
@@ -164,6 +164,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   const [tool, setTool] = useState<Tool>("select");
   const [showSource, setShowSource] = useState(true);
   const [sourceOpacity, setSourceOpacity] = useState(0.45);
+  const [evidenceHighlight, setEvidenceHighlight] = useState<number[] | null>(null);
   const hasNormalizedSource = Boolean(gen.params?.normalized_source_path);
   const [sourceVariant, setSourceVariant] = useState<"original" | "normalized">(
     hasNormalizedSource ? "normalized" : "original",
@@ -1454,6 +1455,24 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         reading={cadReading}
         kernelInput={solidInput}
         solid={solidSummary}
+        onEvidenceFocus={(evidence: ModelEvidence) => {
+          const bbox = evidence.source_bbox;
+          if (!bbox || bbox.length !== 4 || !ir) return;
+          const [x0, y0, x1, y1] = bbox;
+          const width = Math.max(x1 - x0, ir.source.image_width / 20);
+          const height = Math.max(y1 - y0, ir.source.image_height / 20);
+          const padX = width * 0.75;
+          const padY = height * 0.75;
+          setShowSource(true);
+          setSourceVariant("original");
+          setEvidenceHighlight(bbox);
+          setViewBox({
+            x: Math.max(0, x0 - padX),
+            y: Math.max(0, y0 - padY),
+            width: Math.min(ir.source.image_width, width + 2 * padX),
+            height: Math.min(ir.source.image_height, height + 2 * padY),
+          });
+        }}
         t={t}
       />
 
@@ -1832,6 +1851,18 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
               height={ir.source.image_height}
               opacity={sourceOpacity}
               preserveAspectRatio="none"
+            />
+          )}
+          {evidenceHighlight && (
+            <rect
+              x={evidenceHighlight[0]}
+              y={evidenceHighlight[1]}
+              width={evidenceHighlight[2] - evidenceHighlight[0]}
+              height={evidenceHighlight[3] - evidenceHighlight[1]}
+              fill="#f59e0b33"
+              stroke="#f59e0b"
+              strokeWidth={Math.max(activeViewBox.width / 400, 1)}
+              pointerEvents="none"
             />
           )}
           {unresolved.map((item) => (

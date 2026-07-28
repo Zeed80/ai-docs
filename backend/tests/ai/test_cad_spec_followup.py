@@ -111,6 +111,24 @@ async def test_a_reader_that_cannot_answer_leaves_the_gap(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_followup_without_independent_callouts_is_refused(monkeypatch):
+    async def fake_ask(*_a, **_kw):
+        return {"length_mm": 200.0}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    no_callouts = {
+        "main_view": {"outer": [{"diameter_mm": 60.0, "length_mm": None}]},
+        "dimensions": [],
+    }
+    spec, log = await resolve_missing_dimensions(
+        _sheet_bytes(), no_callouts, router=object()
+    )
+    assert spec["main_view"]["outer"][0]["length_mm"] is None
+    assert log[0]["accepted"] is False
+    assert "нет независимо прочитанных выносок" in log[0]["reason"]
+
+
+@pytest.mark.asyncio
 async def test_a_complete_spec_asks_nothing(monkeypatch):
     async def fake_ask(*_a, **_kw):  # pragma: no cover — must not run
         raise AssertionError("a complete spec must not be questioned")

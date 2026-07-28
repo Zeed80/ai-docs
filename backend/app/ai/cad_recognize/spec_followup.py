@@ -254,7 +254,11 @@ async def resolve_missing_dimensions(
             log.append(entry)
             continue
         entry.answer = float(value)
-        if allowed and not _matches_callout(float(value), allowed):
+        if not allowed:
+            entry.reason = "на листе нет независимо прочитанных выносок для проверки ответа"
+            log.append(entry)
+            continue
+        if not _matches_callout(float(value), allowed):
             # The follow-up may only RECOVER a number the sheet carries. A value
             # that appears nowhere among the callouts is the model filling in a
             # blank, which is exactly what this pipeline must not do quietly.
@@ -263,9 +267,7 @@ async def resolve_missing_dimensions(
             continue
         target[key] = float(value)
         entry.accepted = True
-        entry.reason = (
-            "подтверждён выноской листа" if allowed else "выноски не прочитаны, принято как есть"
-        )
+        entry.reason = "подтверждён выноской листа"
         log.append(entry)
 
     accepted = [item for item in log if item.accepted]

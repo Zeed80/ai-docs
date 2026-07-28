@@ -27,6 +27,9 @@ def test_agreeing_passes_keep_the_profile():
     assert len(spec["main_view"]["outer"]) == 2
     assert spec["unresolved"] == []
     assert spec["consensus"]["usable"] == 3
+    diameter = spec["value_provenance"]["main_view/outer/0/diameter_mm"]
+    assert diameter["votes"] == 3
+    assert diameter["confidence"] == 1.0
 
 
 def test_small_reading_noise_still_counts_as_agreement():
@@ -38,6 +41,26 @@ def test_small_reading_noise_still_counts_as_agreement():
     spec = consensus_spec([_read(_PROFILE), _read(noisy), _read(_PROFILE)])
     assert spec["main_view"]["outer"]
     assert spec["unresolved"] == []
+    provenance = spec["value_provenance"]["main_view/outer/0/diameter_mm"]
+    assert provenance["votes"] == 3
+    assert [item["value"] for item in provenance["observations"]] == [30, 30.1, 30]
+
+
+def test_provenance_maps_tile_evidence_to_full_sheet_coordinates():
+    profile = [{
+        "diameter_mm": 30,
+        "length_mm": 40,
+        "evidence": [{"image_index": 1, "bbox": [10, 20, 110, 70], "raw_text": "Ø30"}],
+    }]
+    read = _read(profile, source_images=[{
+        "image_index": 1,
+        "image_width": 1400,
+        "image_height": 1400,
+        "source_bbox": [1200, 800, 2600, 2200],
+    }])
+    spec = consensus_spec([read, read, read])
+    evidence = spec["value_provenance"]["main_view/outer/0/diameter_mm"]["evidence"][0]
+    assert evidence["source_bbox"] == [1210.0, 820.0, 1310.0, 870.0]
 
 
 def test_a_profile_that_changes_between_passes_is_refused():

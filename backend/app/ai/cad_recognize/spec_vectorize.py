@@ -770,6 +770,21 @@ async def read_drawing_spec(
     except Exception:  # noqa: BLE001
         return {}
     images, tile_descriptions, tile_coverage = _spec_images(image)
+    source_images: list[dict[str, Any]] = []
+    for image_index, (encoded, description) in enumerate(zip(images, tile_descriptions)):
+        rendered = Image.open(io.BytesIO(encoded))
+        numbers = [int(value) for value in re.findall(r"\d+", description)]
+        source_bbox = (
+            numbers[-4:]
+            if len(numbers) >= 5
+            else [0, 0, image.width, image.height]
+        )
+        source_images.append({
+            "image_index": image_index,
+            "image_width": rendered.width,
+            "image_height": rendered.height,
+            "source_bbox": source_bbox,
+        })
     # Dedicated slot for the spec reader (Settings → Models → Оцифровка). When it
     # has no assignment, fall back to the shared drawing-analysis VLM so behaviour
     # is unchanged out of the box.
@@ -830,6 +845,11 @@ async def read_drawing_spec(
         validated.setdefault("optional_unresolved", []).append(
             f"лист показан модели не полностью: покрыто {tile_coverage:.0%} площади"
         )
+    validated["source_images"] = source_images
+    # Keep the exact model answer beside the validated interpretation. This is
+    # audit data, never geometry input: consensus rebuilds the accepted spec and
+    # the raw answer remains under reader_attempts for a person to compare.
+    validated["reader_raw_response"] = response.text or ""
     return validated
 
 

@@ -410,7 +410,7 @@ def _main_view_crop(image):
 
 async def _ask(
     prompt: str, image, *, router: Any, confidential: bool, num_predict: int,
-    schema: dict | None = None,
+    schema: dict | None = None, audit: list[dict[str, Any]] | None = None,
 ) -> dict:
     """One bounded question. A failure returns {} and never raises."""
     from app.ai.cad_recognize.spec_vectorize import (
@@ -441,6 +441,12 @@ async def _ask(
     except Exception as exc:  # noqa: BLE001 — one lost fragment, not the sheet
         logger.warning("cad_fragment_failed", error=str(exc)[:200])
         return {}
+    if audit is not None:
+        audit.append({
+            "question": prompt.splitlines()[0][:200],
+            "model": seeing_model,
+            "raw_response": response.text or "",
+        })
     parsed = _parse_spec_json(response.text or "")
     return _coerce_spec_containers(parsed) if parsed else {}
 
@@ -958,7 +964,12 @@ async def read_spec_by_fragments(
     # drawing area: on a busy sheet the difference is one longitudinal view
     # against that view plus three sections, a detail and the notes column.
     chain_view = _overview(_dominant_view_crop(image))
-    ask = {"router": router, "confidential": confidential}
+    fragment_answers: list[dict[str, Any]] = []
+    ask = {
+        "router": router,
+        "confidential": confidential,
+        "audit": fragment_answers,
+    }
 
     kind_answer = await _ask(_KIND_PROMPT, overview, num_predict=400, schema=_KIND_SCHEMA, **ask)
     kind = str(kind_answer.get("kind") or "").strip().lower()
@@ -1076,8 +1087,10 @@ async def read_spec_by_fragments(
             "geometry": bool(body.get("outer") or body.get("profile")),
             "callouts": bool(callouts),
         },
+        "fragment_answers": fragment_answers,
     }
     fragments = assembled.pop("fragments")
+    fragment_answers = assembled.pop("fragment_answers")
     # The per-question coercion runs on FRAGMENT answers, where a profile is the
     # top-level object; the assembled spec nests it under main_view, so the
     # cleanup has to run once more here or unusable entries reach validation and
@@ -1091,6 +1104,7 @@ async def read_spec_by_fragments(
         # validation: knowing WHICH question failed is the point of reading in
         # fragments at all.
         validated["fragments"] = fragments
+        validated["fragment_answers"] = fragment_answers
         return validated
     except ValidationError as exc:
         logger.warning(

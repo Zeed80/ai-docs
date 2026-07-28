@@ -24,22 +24,44 @@ type SolidAudit = {
   build_gate?: { blockers?: string[]; warnings?: string[] };
 };
 
+export type ModelEvidence = {
+  pass?: number;
+  image_index?: number;
+  bbox?: number[];
+  source_bbox?: number[];
+  raw_text?: string;
+};
+
+type ValueProvenance = {
+  value?: unknown;
+  votes?: number;
+  passes?: number;
+  confidence?: number;
+  evidence?: ModelEvidence[];
+};
+
 /** Human-readable audit boundary: model reading -> exact CAD-kernel request. */
 export default function CadModelTracePanel({
   reading,
   kernelInput,
   solid,
+  onEvidenceFocus,
   t,
 }: {
   reading?: Record<string, unknown>;
   kernelInput?: KernelInput;
   solid?: SolidAudit;
+  onEvidenceFocus?: (evidence: ModelEvidence) => void;
   t: (key: string, values?: Record<string, string | number>) => string;
 }) {
   if (!reading && !kernelInput) return null;
   const candidate = kernelInput?.payload?.candidate;
   const blockers = solid?.build_gate?.blockers ?? solid?.blockers ?? [];
   const warnings = solid?.build_gate?.warnings ?? solid?.warnings ?? [];
+  const spec = (reading?.spec ?? reading) as Record<string, unknown> | undefined;
+  const provenance = Object.entries(
+    (spec?.value_provenance as Record<string, ValueProvenance> | undefined) ?? {},
+  );
 
   return (
     <section className="rounded border border-sky-400/20 bg-sky-950/10 p-3 text-xs">
@@ -63,6 +85,56 @@ export default function CadModelTracePanel({
             </div>
           ))}
         </div>
+      )}
+
+      {provenance.length > 0 && (
+        <details className="mt-3 rounded border border-white/10 bg-black/20 p-2" open>
+          <summary className="cursor-pointer font-medium text-zinc-200">
+            {t("vector.model_trace_values")}
+          </summary>
+          <div className="mt-2 max-h-80 overflow-auto">
+            <table className="w-full text-left text-[10px]">
+              <thead className="sticky top-0 bg-zinc-950 text-zinc-500">
+                <tr>
+                  <th className="p-1">{t("vector.model_trace_path")}</th>
+                  <th className="p-1">{t("vector.model_trace_value")}</th>
+                  <th className="p-1">{t("vector.model_trace_votes")}</th>
+                  <th className="p-1">{t("vector.model_trace_evidence")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {provenance.map(([path, item]) => {
+                  const evidence = (item.evidence ?? []).find(
+                    (entry) => entry.source_bbox?.length === 4,
+                  );
+                  return (
+                    <tr key={path} className="border-t border-white/5 text-zinc-300">
+                      <td className="p-1 font-mono text-zinc-400">{path}</td>
+                      <td className="p-1 font-mono">{String(item.value ?? "—")}</td>
+                      <td className="p-1 whitespace-nowrap">
+                        {item.votes ?? 0}/{item.passes ?? 0} · {Math.round((item.confidence ?? 0) * 100)}%
+                      </td>
+                      <td className="p-1">
+                        {evidence ? (
+                          <button
+                            type="button"
+                            onClick={() => onEvidenceFocus?.(evidence)}
+                            className="rounded bg-sky-600/30 px-1.5 py-0.5 text-sky-200 hover:bg-sky-600/50"
+                            title={evidence.raw_text}
+                          >
+                            {t("vector.model_trace_show_source")}
+                          </button>
+                        ) : (
+                          <span className="text-zinc-600">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </details>
       )}
 
       <div className="mt-3 grid gap-2 lg:grid-cols-2">

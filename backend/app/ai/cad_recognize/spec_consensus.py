@@ -30,6 +30,17 @@ _NUMERIC_FLOOR = 0.05
 # three reads this means a strict majority.
 MIN_AGREEMENT = 2
 
+_PROVENANCE_SKIP = {
+    "consensus",
+    "reader_attempts",
+    "reader_raw_response",
+    "source_images",
+    "unresolved",
+    "optional_unresolved",
+    "value_provenance",
+    "evidence",
+}
+
 
 def _numbers_agree(left: Any, right: Any) -> bool:
     if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
@@ -157,6 +168,129 @@ def _body_consensus(
     return merged, disagreements
 
 
+def _same_value(left: Any, right: Any) -> bool:
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return _numbers_agree(left, right)
+    if isinstance(left, str) and isinstance(right, str):
+        return _text_key(left) == _text_key(right)
+    return left == right
+
+
+def _iter_leaves(value: Any, path: tuple[Any, ...] = ()):  # noqa: ANN202
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in _PROVENANCE_SKIP:
+                continue
+            yield from _iter_leaves(child, (*path, key))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _iter_leaves(child, (*path, index))
+    elif value is not None and not isinstance(value, (dict, list)):
+        yield path, value
+
+
+def _item_identity(path: tuple[Any, ...], item: dict) -> tuple[str, str] | None:
+    root = path[0] if path else None
+    key = {"dimensions": "value", "annotations": "text", "views": "kind"}.get(root)
+    if key and _text_key(item.get(key)):
+        return key, _text_key(item.get(key))
+    return None
+
+
+def _lookup(read: dict, path: tuple[Any, ...], merged: dict) -> tuple[Any, dict | None]:
+    """Resolve a merged leaf in one raw pass and return its owning item."""
+    current: Any = read
+    owner: dict | None = None
+    for depth, part in enumerate(path):
+        if isinstance(part, int):
+            if not isinstance(current, list):
+                return None, None
+            merged_parent: Any = merged
+            for segment in path[:depth]:
+                merged_parent = merged_parent[segment]
+            merged_item = merged_parent[part] if part < len(merged_parent) else None
+            identity = _item_identity(path, merged_item) if isinstance(merged_item, dict) else None
+            if identity:
+                key, expected = identity
+                current = next(
+                    (item for item in current if isinstance(item, dict) and _text_key(item.get(key)) == expected),
+                    None,
+                )
+                if current is None:
+                    return None, None
+            elif part < len(current):
+                current = current[part]
+            else:
+                return None, None
+        elif isinstance(current, dict) and part in current:
+            owner = current
+            current = current[part]
+        else:
+            return None, None
+    return current, owner
+
+
+def _source_bbox(evidence: dict, source_images: list[dict]) -> list[float] | None:
+    bbox = evidence.get("bbox")
+    index = evidence.get("image_index")
+    if not isinstance(index, int) or not isinstance(bbox, list) or len(bbox) != 4:
+        return None
+    image = next((item for item in source_images if item.get("image_index") == index), None)
+    if not image:
+        return None
+    source = image.get("source_bbox")
+    width, height = image.get("image_width"), image.get("image_height")
+    if not isinstance(source, list) or len(source) != 4 or not width or not height:
+        return None
+    sx = (float(source[2]) - float(source[0])) / float(width)
+    sy = (float(source[3]) - float(source[1])) / float(height)
+    return [
+        float(source[0]) + float(bbox[0]) * sx,
+        float(source[1]) + float(bbox[1]) * sy,
+        float(source[0]) + float(bbox[2]) * sx,
+        float(source[1]) + float(bbox[3]) * sy,
+    ]
+
+
+def _build_value_provenance(merged: dict, reads: list[dict]) -> dict[str, dict]:
+    """Explain every accepted scalar: votes, confidence, raw values and source."""
+    result: dict[str, dict] = {}
+    total = len(reads)
+    for path, accepted in _iter_leaves(merged):
+        observations: list[dict] = []
+        for pass_index, read in enumerate(reads, start=1):
+            observed, owner = _lookup(read, path, merged)
+            if observed is None:
+                continue
+            evidence: list[dict] = []
+            if isinstance(owner, dict):
+                for raw in owner.get("evidence") or []:
+                    if not isinstance(raw, dict):
+                        continue
+                    item = dict(raw)
+                    source = _source_bbox(item, read.get("source_images") or [])
+                    if source is not None:
+                        item["source_bbox"] = [round(value, 3) for value in source]
+                    evidence.append(item)
+            observations.append({"pass": pass_index, "value": observed, "evidence": evidence})
+        agreeing = [item for item in observations if _same_value(item["value"], accepted)]
+        key = "/".join(str(part) for part in path)
+        result[key] = {
+            "value": accepted,
+            "votes": len(agreeing),
+            "passes": total,
+            "confidence": round(len(agreeing) / total, 3) if total else 0.0,
+            "accepted_from_passes": [item["pass"] for item in agreeing],
+            "observations": [{"pass": item["pass"], "value": item["value"]} for item in observations],
+            "evidence": [
+                {**evidence, "pass": item["pass"]}
+                for item in agreeing
+                for evidence in item["evidence"]
+            ],
+        }
+    return result
+
+
 def _profile_consensus(
     profiles: list[dict], *, minimum: int, seen: int, total: int
 ) -> tuple[dict | None, str | None]:
@@ -196,6 +330,7 @@ def consensus_spec(specs: list[dict], *, minimum: int = MIN_AGREEMENT) -> dict:
         merged["consensus"] = {
             "passes": 1, "usable": 1, "agreement": "single_pass",
         }
+        merged["value_provenance"] = _build_value_provenance(merged, usable)
         return merged
 
     total = len(usable)
@@ -244,6 +379,8 @@ def consensus_spec(specs: list[dict], *, minimum: int = MIN_AGREEMENT) -> dict:
         [spec.get("views") or [] for spec in usable], "kind", minimum=minimum
     )
     merged["parts"] = []
+    if usable[0].get("source_images"):
+        merged["source_images"] = usable[0]["source_images"]
 
     # Anything a single pass declared unresolved stays unresolved: one reader
     # admitting it could not prove a value is enough to keep it out.
@@ -262,6 +399,7 @@ def consensus_spec(specs: list[dict], *, minimum: int = MIN_AGREEMENT) -> dict:
         "part_votes": part_votes,
         "disagreements": disagreements,
     }
+    merged["value_provenance"] = _build_value_provenance(merged, usable)
     return merged
 
 

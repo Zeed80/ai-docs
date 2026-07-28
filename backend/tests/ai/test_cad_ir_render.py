@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("cv2")
 
 from app.ai.cad_ir import CadIR, SourceInfo
-from app.ai.cad_ir.dxf_render import render_ir_to_dxf
+from app.ai.cad_ir.dxf_render import render_ir_to_dxf, verify_dxf_roundtrip
 from app.ai.cad_ir.png_render import render_ir_to_png
 from app.ai.cad_ir.schema import (
     Arc,
@@ -61,6 +61,13 @@ def test_dxf_readback_layers_and_geometry() -> None:
     axis_line = [e for e in msp if e.dxftype() == "LINE" and e.dxf.layer == "CENTER"]
     assert len(axis_line) == 1
     assert {e.dxf.layer for e in msp} <= {"OBJECT", "OBJECT_THIN", "CENTER", "HIDDEN", "DIM", "HATCH", "ANNOTATION"}
+
+
+def test_dxf_semantic_roundtrip_matches_ir_entities_and_layers() -> None:
+    report = verify_dxf_roundtrip(_ir())
+    assert report["reopens"] is True
+    assert report["ok"] is True
+    assert report["missing"] == []
 
 
 def test_construction_geometry_excluded_from_export() -> None:

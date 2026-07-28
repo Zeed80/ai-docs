@@ -40,3 +40,55 @@ def test_internal_callout_cannot_be_silently_used_as_outer_geometry():
     })
     assert graph["status"] == "conflict"
     assert "bore[] отсутствует" in graph["errors"][0]
+
+
+def test_offset_bore_must_end_inside_the_part():
+    graph = build_dimension_graph({
+        "main_view": {
+            "outer": [{"diameter_mm": 80, "length_mm": 100}],
+            "bore": [{"diameter_mm": 20, "length_mm": 80}],
+            "bore_start_mm": 30,
+        }
+    })
+    assert graph["status"] == "conflict"
+    assert "30..110" in graph["errors"][0]
+
+
+def test_profile_hole_must_fit_inside_rectangle():
+    graph = build_dimension_graph({
+        "main_view": {"profile": {
+            "shape": "rectangle",
+            "width_mm": 100,
+            "height_mm": 60,
+            "thickness_mm": 10,
+            "holes": [{"center_x_mm": 49, "center_y_mm": 0, "diameter_mm": 10}],
+        }}
+    })
+    assert graph["status"] == "conflict"
+    assert "выходит за контур" in graph["errors"][0]
+
+
+def test_cross_hole_must_fit_local_shaft_diameter():
+    graph = build_dimension_graph({
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 20, "length_mm": 50},
+                {"diameter_mm": 80, "length_mm": 50},
+            ],
+            "cross_holes": [{"diameter_mm": 30, "axial_position_mm": 20}],
+        }
+    })
+    assert graph["status"] == "conflict"
+    assert "локальный диаметр" in graph["errors"][0]
+
+
+def test_dimension_graph_exposes_derived_section_coordinates():
+    graph = build_dimension_graph({
+        "main_view": {"outer": [
+            {"diameter_mm": 20, "length_mm": 40},
+            {"diameter_mm": 30, "length_mm": 60},
+        ]}
+    })
+    nodes = {node["id"]: node["value_mm"] for node in graph["nodes"]}
+    assert nodes["main_view.outer.1.z_start_mm"] == 40
+    assert nodes["main_view.outer.1.z_end_mm"] == 100
