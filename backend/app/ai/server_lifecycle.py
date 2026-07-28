@@ -53,6 +53,45 @@ def on_demand_enabled() -> bool:
     return os.environ.get("MODEL_SERVER_ON_DEMAND", "true").strip().lower() != "false"
 
 
+def assigned_providers() -> set[str]:
+    """Provider kinds that some task is actually routed to.
+
+    A vLLM or llama.cpp container pins its model in VRAM for its whole lifetime,
+    so one that nothing is assigned to is pure loss: on a single-GPU box the
+    llama.cpp server alone held 22 of 24 GB while no routing referred to it.
+
+    Only PRIMARY assignments count. A fallback entry means "if the assigned
+    model fails, try this one" — it is not a decision to keep a second model
+    resident, and treating it as one would keep both servers up for ever.
+
+    Returns an empty set only when the routing store cannot be read at all; the
+    caller must treat that as "unknown" rather than "nothing is assigned", or a
+    Redis hiccup would stop the servers a running system depends on.
+    """
+    from app.ai.model_registry import ModelRegistry
+    from app.ai.task_routing import get_task_routing
+
+    registry = ModelRegistry.from_yaml("app/ai/config/model_registry.yaml")
+    providers: set[str] = set()
+    for routing in get_task_routing().values():
+        key = routing.primary
+        if not key:
+            continue
+        capability = registry.models.get(key)
+        if capability is not None:
+            providers.add(capability.provider.value)
+    return providers
+
+
+def _assignment_state() -> set[str] | None:
+    """``assigned_providers()`` but None when it cannot be determined."""
+    try:
+        return assigned_providers()
+    except Exception as exc:  # noqa: BLE001 — unknown is not "nothing"
+        logger.warning("model_assignments_unreadable", error=str(exc)[:200])
+        return None
+
+
 def _health_url(provider: str) -> str | None:
     from app.config import settings
 
@@ -172,6 +211,13 @@ async def ensure_running(provider: str, *, wait: bool = True) -> bool:
     """
     if provider not in MANAGED_PROVIDERS:
         return True
+    # A request routed here means something is assigned to this provider — but
+    # check anyway: a stale fallback chain or a hand-picked model can address a
+    # server nobody assigned, and starting it costs the whole GPU.
+    assigned = _assignment_state()
+    if assigned is not None and provider not in assigned:
+        logger.info("model_server_not_assigned", provider=provider)
+        return False
     mark_used(provider)
     if not on_demand_enabled():
         return True
@@ -210,14 +256,51 @@ async def stop_server(provider: str) -> bool:
     return await _docker_action(provider, "stop")
 
 
-async def stop_idle_servers(threshold_seconds: float | None = None) -> list[str]:
-    """Stop managed servers idle longer than the threshold. Returns stopped ones."""
-    if not on_demand_enabled() or not _docker_available():
+async def stop_unassigned_servers() -> list[str]:
+    """Stop managed servers nothing is routed to, without waiting for idle.
+
+    ``docker compose up`` starts every service in the active profile, so both
+    model servers come up whether or not any task is assigned to them — and
+    then hold VRAM until the idle sweep gets round to them. A server nobody
+    assigned is not idle, it is unwanted, and waiting ten minutes to say so
+    means ten minutes of a GPU that the assigned models needed.
+
+    Called at startup and on every sweep, so a model UNASSIGNED in the settings
+    frees its server on the next pass rather than at the next restart.
+    """
+    if not _docker_available():
         return []
-    threshold = threshold_seconds if threshold_seconds is not None else idle_timeout_seconds()
-    now = time.time()
+    assigned = _assignment_state()
+    if assigned is None:
+        return []
     stopped: list[str] = []
     for provider in MANAGED_PROVIDERS:
+        if provider in assigned:
+            continue
+        if not await is_running(provider):
+            continue
+        logger.info("unassigned_model_server_stopping", provider=provider)
+        if await stop_server(provider):
+            stopped.append(provider)
+    if stopped:
+        logger.info("unassigned_model_servers_stopped", servers=stopped)
+    return stopped
+
+
+async def stop_idle_servers(threshold_seconds: float | None = None) -> list[str]:
+    """Stop managed servers idle longer than the threshold. Returns stopped ones."""
+    if not _docker_available():
+        return []
+    # An unassigned server goes regardless of the idle clock and regardless of
+    # whether on-demand starting is switched off: nothing is routed to it.
+    stopped: list[str] = list(await stop_unassigned_servers())
+    if not on_demand_enabled():
+        return stopped
+    threshold = threshold_seconds if threshold_seconds is not None else idle_timeout_seconds()
+    now = time.time()
+    for provider in MANAGED_PROVIDERS:
+        if provider in stopped:
+            continue
         if not await is_running(provider):
             continue
         used = last_used(provider)

@@ -237,6 +237,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async def _idle_server_sweep() -> None:
         from app.ai import server_lifecycle
 
+        # First pass immediately: `docker compose up` starts every service in
+        # the active profile, so a model server nobody assigned is already
+        # holding VRAM by the time this runs. Waiting two minutes to release it
+        # means two minutes of a GPU the assigned models needed.
+        try:
+            await server_lifecycle.stop_unassigned_servers()
+        except Exception as exc:
+            logger.debug("unassigned_server_sweep_error", error=str(exc))
         while True:
             await asyncio.sleep(120.0)
             try:
