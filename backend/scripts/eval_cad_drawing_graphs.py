@@ -19,6 +19,49 @@ from app.ai.cad_drawing_graph import (
 from app.ai.cad_ir.dxf_render import render_ir_to_dxf
 
 
+def match_parameter_values(actual: list[float], expected: list[float]) -> int:
+    """Count nominal values one-to-one; duplicates remain separate parameters."""
+    remaining = [float(value) for value in actual]
+    matched = 0
+    for wanted in expected:
+        tolerance = max(0.05, abs(float(wanted)) * 0.001)
+        candidate = next(
+            (
+                index
+                for index, value in enumerate(remaining)
+                if abs(value - float(wanted)) <= tolerance
+            ),
+            None,
+        )
+        if candidate is not None:
+            matched += 1
+            remaining.pop(candidate)
+    return matched
+
+
+def summarize_results(results: list[dict]) -> dict:
+    parameters_total = sum(result["parameters_total"] for result in results)
+    parameters_matched = sum(result["parameters_matched"] for result in results)
+    accepted = sum(bool(result["accepted"]) for result in results)
+    false_accepts = sum(bool(result["false_accept"]) for result in results)
+    passed = sum(bool(result["passed"]) for result in results)
+    return {
+        "cases": len(results),
+        "passed": passed,
+        "exact_graph_rate": passed / max(len(results), 1),
+        "parameters_matched": parameters_matched,
+        "parameters_total": parameters_total,
+        "parameter_accuracy": parameters_matched / max(parameters_total, 1),
+        "accepted_cases": accepted,
+        "false_accepts": false_accepts,
+        "false_accept_rate": false_accepts / max(accepted, 1),
+        "dxf_reopen_rate": (
+            sum(bool(result["dxf_reopens"]) for result in results)
+            / max(len(results), 1)
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -54,6 +97,10 @@ def main() -> int:
             for entity in ir.entities
             if entity.type == "dimension" and entity.value_mm is not None
         )
+        expected_values = sorted(
+            float(value) for value in expected["dimension_values_mm"]
+        )
+        parameters_matched = match_parameter_values(dimensions, expected_values)
         if counts != expected["entity_counts"]:
             errors.append(f"counts={counts} expected={expected['entity_counts']}")
         if ids != expected["entity_ids"]:
@@ -87,6 +134,10 @@ def main() -> int:
                     issue.code for issue in verification.blocking
                 )
             )
+        accepted = bool(
+            ir.digitization_status == "exact_candidate" and verification.exact_ready
+        )
+        false_accept = bool(accepted and errors)
         results.append({
             "id": case["id"],
             "passed": not errors,
@@ -96,22 +147,35 @@ def main() -> int:
             "relation_kinds": relation_kinds,
             "texts": texts,
             "dimension_values_mm": dimensions,
+            "parameters_matched": parameters_matched,
+            "parameters_total": len(expected_values),
+            "accepted": accepted,
+            "false_accept": false_accept,
             "dxf_types": dxf_types,
             "dxf_reopens": dxf_reopens,
         })
 
-    passed = sum(result["passed"] for result in results)
+    summary = summarize_results(results)
     report = {
-        "contract": "engineering-drawing-graph-cadir-dxf-v1",
-        "cases": len(results),
-        "passed": passed,
-        "exact_graph_rate": passed / max(len(results), 1),
+        "contract": "engineering-drawing-graph-cadir-dxf-v2",
+        **summary,
+        "promotion_contract": {
+            "parameter_accuracy": 1.0,
+            "false_accept_rate": 0.0,
+            "dxf_reopen_rate": 1.0,
+        },
         "results": results,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2))
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if passed == len(results) else 1
+    promotion_passed = bool(
+        summary["exact_graph_rate"] == 1.0
+        and summary["parameter_accuracy"] == 1.0
+        and summary["false_accept_rate"] == 0.0
+        and summary["dxf_reopen_rate"] == 1.0
+    )
+    return 0 if promotion_passed else 1
 
 
 if __name__ == "__main__":
