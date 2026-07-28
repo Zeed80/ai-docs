@@ -297,6 +297,18 @@ def sheet_extent_mm(
     return max(us) - min(us), max(vs) - min(vs)
 
 
+# TechDraw's dimension types, mapped onto what the IR calls them. A diameter on
+# a longitudinal view is measured as a DistanceY between the two generatrices,
+# so the caller states the intent and it must survive into the IR.
+_DIMENSION_KINDS = {
+    "Diameter": "diameter",
+    "Radius": "radial",
+    "Distance": "linear",
+    "DistanceX": "linear",
+    "DistanceY": "linear",
+}
+
+
 # ГОСТ 2.307 dimension appearance, in millimetres of paper.
 DIM_OFFSET_MM = 8.0      # dimension line stands off the measured feature
 DIM_EXTENSION_MM = 2.0   # extension line runs past the dimension line
@@ -404,6 +416,15 @@ def dimensions_from_kernel(
         entities.append(
             DimensionEntity(
                 p1=to_point(u1, v1), p2=to_point(u2, v2), text=text,
+                # What KIND of size this is, carried through from the kernel. It
+                # was dropped, so every dimension reached the IR as "linear" —
+                # a Ø102 measured between two generatrices exported to DXF as a
+                # plain distance, and downstream anything reading the IR saw a
+                # part with no diameters at all.
+                kind=str(
+                    item.get("ir_kind")
+                    or _DIMENSION_KINDS.get(str(item.get("kind") or ""), "linear")
+                ),
                 value_mm=float(value) if isinstance(value, (int, float)) else None,
                 **_ORIGIN,
             )

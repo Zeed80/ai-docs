@@ -306,7 +306,56 @@ def _dimension_requests(
         requests.extend(
             _diameter_requests(view, view_index, wanted_diameters, ratio)
         )
+        if total_length > 0 and not any(
+            request.get("_is_overall") for request in requests
+        ):
+            overall = _overall_length_request(view, view_index, total_length, ratio)
+            if overall is not None:
+                requests.append(overall)
     return requests
+
+
+def _overall_length_request(
+    view: dict, view_index: int, total_length: float, ratio: float
+) -> dict[str, Any] | None:
+    """The overall length, measured between the two end faces.
+
+    No single edge is the part's length: the silhouette is broken into steps, so
+    asking for a 364 mm edge finds nothing and the sheet comes out with every
+    step dimensioned and no overall size — the one dimension a shop reads first.
+    It is the distance between the END FACES, which are the extreme edges
+    perpendicular to the axis.
+    """
+    verticals: list[tuple[float, int]] = []
+    for item in view.get("visible") or []:
+        index = item.get("edge_index")
+        if index is None or item.get("type") != "line":
+            continue
+        points = item.get("points") or []
+        if len(points) != 2:
+            continue
+        (u1, v1), (u2, v2) = points
+        if abs(u2 - u1) > 1e-6:  # not perpendicular to the axis
+            continue
+        verticals.append((u1, int(index)))
+    if len(verticals) < 2:
+        return None
+    verticals.sort()
+    left, right = verticals[0], verticals[-1]
+    if abs((right[0] - left[0]) / ratio - total_length) > max(0.05, total_length * 0.01):
+        # The extreme faces do not span the length the reading states — say
+        # nothing rather than label a span with a number it is not.
+        return None
+    return {
+        "view_index": view_index,
+        "edge_index": left[1],
+        "second_edge_index": right[1],
+        "kind": "DistanceX",
+        "label": "",
+        "_nominal_mm": total_length,
+        "_is_diameter": False,
+        "_is_overall": True,
+    }
 
 
 def _diameter_requests(
@@ -415,9 +464,15 @@ def _label_dimensions(dimensions: list[dict], requests: list[dict], spec: dict) 
             # number stands; nothing is invented to label it.
             continue
         unclaimed.remove(match)
+        is_diameter = bool(match.get("_is_diameter"))
         dimension["label"] = _dimension_text(
-            index, float(match["_nominal_mm"]), diameter=bool(match.get("_is_diameter"))
+            index, float(match["_nominal_mm"]), diameter=is_diameter
         )
+        # A diameter on a longitudinal view is MEASURED as a DistanceY between
+        # the two generatrices, so only the request knows it is a diameter. Say
+        # so, or it reaches the IR (and the DXF) as a plain distance and the
+        # part appears to have no diameters at all.
+        dimension["ir_kind"] = "diameter" if is_diameter else "linear"
 
 
 async def build_sheet_from_solid(

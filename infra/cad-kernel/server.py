@@ -726,7 +726,16 @@ def _build_shape(request: CompileRequest) -> tuple[Part.Shape, list[str]]:
     for feature in request.candidate.features:
         if feature.kind not in ("fillet", "chamfer"):
             continue
-        edge = _resolve_edge(shape, feature.params)
+        # An edge the selector cannot find is the same class of problem as one
+        # OpenCascade refuses to cut, and it gets the same answer: the feature
+        # is not built and says so. Raising here cost the WHOLE part for a 1 mm
+        # chamfer whose diameter the reader got wrong — measured on a real
+        # sheet, where the rest of the reading was fine.
+        try:
+            edge = _resolve_edge(shape, feature.params)
+        except HTTPException as exc:
+            warnings.append(f"{feature.kind} not built: {exc.detail}")
+            continue
         size = _number(feature.params, "size_mm", maximum=max(width, height, depth))
         # A refused edge operation must not cost the part. OpenCascade declines
         # these routinely — an edge too short for the radius, a fillet across a
