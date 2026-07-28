@@ -22,6 +22,14 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+# An absolute script path makes Python expose ``scripts/`` rather than the
+# backend root on sys.path.  Keep the live command documented above runnable in
+# both the checkout (``backend/scripts``) and the production image (``/app``).
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 KERNEL = os.environ.get("CAD_KERNEL_URL", "http://cad-kernel:8092")
 
@@ -104,6 +112,114 @@ def _localized(report: dict, kind: str) -> bool:
         and item.get("status") == "built"
         and item.get("localization_ok") is True
         for item in report.get("feature_results", [])
+    )
+
+
+def _check_full_application_pipeline() -> None:
+    """Exercise the application boundary around the real kernel end to end.
+
+    The lower-level checks above deliberately speak the kernel protocol
+    directly.  This one starts at the normalized reader output and finishes by
+    independently reopening the DXF, so a green run also proves that the
+    application adapters between those stages still agree with each other.
+    """
+    import asyncio
+
+    from app.ai.cad_ir.dxf_render import render_ir_to_dxf, verify_dxf_roundtrip
+    from app.ai.cad_ir.sheet_from_solid import build_sheet_from_solid
+    from app.ai.cad_solid import feature_tree_from_spec, solid_build_gate
+    from app.services.cad_kernel import compile_candidate
+
+    spec = {
+        "part": "Контрольный полый вал",
+        "main_view": {
+            "type": "тело вращения",
+            "outer": [
+                {"diameter_mm": 80.0, "length_mm": 40.0},
+                {"diameter_mm": 60.0, "length_mm": 60.0},
+            ],
+            "bore": [{"diameter_mm": 30.0, "length_mm": 100.0}],
+        },
+        "views": [{"kind": "section", "label": "А-А"}],
+        "dimensions": [
+            {"value": "Ø80g6"},
+            {"value": "Ø60"},
+            {"value": "Ø30"},
+            {"value": "40"},
+            {"value": "100"},
+        ],
+    }
+    candidate = feature_tree_from_spec(spec)
+    if candidate is None:
+        check("normalized spec reaches a reopened semantic DXF", False, "no feature tree")
+        return
+    gate = solid_build_gate(spec, candidate)
+    if not gate["allowed"]:
+        check(
+            "normalized spec reaches a reopened semantic DXF",
+            False,
+            f"build gate: {gate['blockers']}",
+        )
+        return
+
+    try:
+        artifacts = asyncio.run(
+            compile_candidate(
+                candidate,
+                confirm_assumptions=False,
+                metadata={"source": "cad_kernel_smoke", "geometry_only": True},
+            )
+        )
+        sheet = asyncio.run(
+            build_sheet_from_solid(
+                candidate,
+                spec,
+                artifacts.report,
+                geometry_only=True,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - a live smoke must report the boundary failure
+        check(
+            "normalized spec reaches a reopened semantic DXF",
+            False,
+            f"{type(exc).__name__}: {exc}",
+        )
+        return
+    if sheet is None:
+        check("normalized spec reaches a reopened semantic DXF", False, "no sheet")
+        return
+
+    dxf = render_ir_to_dxf(sheet.ir)
+    roundtrip = verify_dxf_roundtrip(sheet.ir)
+    entity_types = {entity.type for entity in sheet.ir.entities}
+    visible_views = sheet.verification.get("view_coverage", {}).get("visible_views", [])
+    dimension_texts = [
+        entity.text
+        for entity in sheet.ir.entities
+        if entity.type == "dimension"
+    ]
+    expected_dimensions = {"40", "100", "Ø80g6", "Ø60", "Ø30"}
+    ok = (
+        bool(artifacts.report.get("brep_valid"))
+        and bool(artifacts.report.get("manifold"))
+        and sheet.plan.geometry_only
+        and sheet.ir.sheet is not None
+        and sheet.ir.sheet.frame is False
+        and "section" in visible_views
+        and "hatch" in entity_types
+        and "dimension" in entity_types
+        and set(dimension_texts) == expected_dimensions
+        and len(dimension_texts) == len(expected_dimensions)
+        and bool(roundtrip.get("ok"))
+        and len(dxf) > 0
+    )
+    check(
+        "normalized spec reaches a reopened semantic DXF",
+        ok,
+        (
+            f"views={visible_views}, entities={len(sheet.ir.entities)}, "
+            f"dimensions={dimension_texts}, roundtrip={roundtrip.get('ok')}"
+        ),
     )
 
 
@@ -474,6 +590,11 @@ def main() -> int:
         and detail_width <= 125.0,
         f"HTTP {status}, width={detail_width:.1f}, edges={len(detail_view.get('visible') or [])}",
     )
+
+    # 12. The application-level chain, not only isolated kernel endpoints:
+    # normalized reading -> feature tree -> B-Rep -> sectioned sheet -> CadIR
+    # -> geometry-only DXF -> independent semantic reopen.
+    _check_full_application_pipeline()
 
     failed = [name for ok, name, _detail in _results if not ok]
     print(f"\n{len(_results) - len(failed)}/{len(_results)} passed")

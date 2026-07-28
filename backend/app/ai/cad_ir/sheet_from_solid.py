@@ -384,8 +384,6 @@ def _dimension_requests(
         if s.get("l") and abs(float(s["l"]) - longest) > 1e-6
     })
     total_length = sum(float(s.get("l") or 0.0) for s in outer)
-    if total_length > 0:
-        wanted_lengths.append(total_length)
 
     for view_index, view in enumerate(views):
         # A dimension on a view the sheet does not carry is a dimension nobody

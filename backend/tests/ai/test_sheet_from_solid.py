@@ -316,6 +316,34 @@ def test_the_dimension_chain_is_left_open():
     assert lengths == [120.0, 150.0]
 
 
+def test_overall_length_is_requested_only_once_between_end_faces():
+    """A full-length bore edge must not duplicate the overall dimension."""
+    spec = {
+        "main_view": {
+            "type": "тело вращения",
+            "outer": [
+                {"diameter_mm": 80.0, "length_mm": 40.0},
+                {"diameter_mm": 60.0, "length_mm": 60.0},
+            ],
+            "bore": [{"diameter_mm": 30.0, "length_mm": 100.0}],
+        }
+    }
+    plan = plan_sheet(spec, {"bounds_mm": {"x": 80, "y": 80, "z": 100}})
+    plan.ratio, plan.scaffold_views = 1.0, set()
+    view = _view("section", [
+        (1, 15.0, 0.0, 100.0),
+        (2, 0.0, 0.0, 0.0),
+        (3, 0.0, 100.0, 100.0),
+    ])
+
+    requests = _dimension_requests({"views": [view]}, spec, plan)
+    overall = [request for request in requests if request.get("_is_overall")]
+
+    assert len(overall) == 1
+    assert overall[0]["_nominal_mm"] == 100.0
+    assert sum(request["_nominal_mm"] == 100.0 for request in requests) == 1
+
+
 def test_a_dimension_on_a_scaffold_view_is_never_requested():
     """It would be placed on a view the sheet does not carry, and vanish."""
     plan = plan_sheet(_HOLLOW, _SHAFT_REPORT)

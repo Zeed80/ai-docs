@@ -1604,7 +1604,15 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                 # getArrowPositions returns zeros.
                 "anchors_mm": anchors,
                 "value_mm": round(
-                    math.dist(anchors[0], anchors[1]) / request.scale, 6
+                    (
+                        abs(anchors[0][0] - anchors[1][0])
+                        if wanted_dim.kind == "DistanceX"
+                        else abs(anchors[0][1] - anchors[1][1])
+                        if wanted_dim.kind == "DistanceY"
+                        else math.dist(anchors[0], anchors[1])
+                    )
+                    / request.scale,
+                    6,
                 ),
             })
 
