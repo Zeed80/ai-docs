@@ -913,8 +913,8 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
     Models routinely return ``null`` or a bare object where the contract asks
     for a list — a live read of a real sheet was discarded whole because
     ``hole_patterns`` came back as one object instead of a one-element list.
-    Only CONTAINER SHAPE is repaired here: no value is invented, converted or
-    defaulted, so a missing dimension still blocks drafting exactly as before.
+    Only representation shape is repaired here: no measured value is invented
+    or changed, so a missing dimension still blocks drafting exactly as before.
     """
 
     def as_list(value: Any) -> list:
@@ -1002,12 +1002,51 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
                     ]
         for field in _LIST_FIELDS_BODY:
             for item in body.get(field) or []:
-                if isinstance(item, dict) and "evidence" in item:
+                if not isinstance(item, dict):
+                    continue
+                if "evidence" in item:
                     item["evidence"] = clean_evidence(item["evidence"])
+                taper = item.get("taper")
+                if isinstance(taper, dict) and not taper.get("kind"):
+                    stated = [
+                        field
+                        for field in ("ratio", "included_angle_deg", "end_diameter_mm")
+                        if taper.get(field) is not None
+                    ]
+                    if len(stated) == 1:
+                        taper["kind"] = {
+                            "ratio": "ratio",
+                            "included_angle_deg": "included_angle",
+                            "end_diameter_mm": "end_diameter",
+                        }[stated[0]]
     for field in ("dimensions", "annotations", "views"):
         for item in spec.get(field) or []:
             if isinstance(item, dict) and "evidence" in item:
                 item["evidence"] = clean_evidence(item["evidence"])
+    for index, item in enumerate(spec.get("views") or []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("detail_scale_factor") is None:
+            item.pop("detail_scale_factor", None)
+        path = item.get("section_path_mm")
+        valid_path = (
+            isinstance(path, list)
+            and all(
+                isinstance(point, (list, tuple))
+                and len(point) == 3
+                and all(
+                    isinstance(value, (int, float)) and not isinstance(value, bool)
+                    for value in point
+                )
+                for point in path
+            )
+        )
+        if path and not valid_path:
+            item["section_path_mm"] = []
+            label = item.get("view_id") or item.get("label") or index
+            spec.setdefault("unresolved", []).append(
+                f"view:{label}: путь сечения не подтверждён: {str(path)[:80]}"
+            )
     # Metadata whose exact wording the contract fixes, but the reader does not
     # know that: a null "applies_to" and an annotation kind outside the
     # enumeration are normalised rather than allowed to reject the sheet. The

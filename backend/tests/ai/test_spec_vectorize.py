@@ -841,6 +841,40 @@ def test_shape_repair_never_invents_a_missing_dimension():
     assert draft_rotation_body(spec.model_dump(mode="json"), px_per_mm=4.0) is None
 
 
+def test_reader_format_repair_keeps_invalid_section_path_fail_closed():
+    """Observed live: ratio had no discriminator and paths were flat pairs."""
+    from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
+
+    parsed = {
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {
+                    "diameter_mm": 56.55,
+                    "length_mm": 40,
+                    "taper": {"ratio": "7:24"},
+                },
+                {"diameter_mm": 50, "length_mm": 60},
+            ],
+        },
+        "views": [{
+            "kind": "section",
+            "view_id": "А-А",
+            "section_path_mm": [150, 270],
+            "detail_scale_factor": None,
+        }],
+    }
+
+    repaired = _coerce_spec_containers(parsed)
+    spec = EngineeringDrawingSpec.model_validate(repaired)
+
+    assert spec.main_view.outer[0].taper is not None
+    assert spec.main_view.outer[0].taper.kind == "ratio"
+    assert spec.views[0].section_path_mm == []
+    assert spec.views[0].detail_scale_factor == 2.0
+    assert any("путь сечения не подтверждён" in item for item in spec.unresolved)
+
+
 def test_truncated_reader_json_is_reported_not_salvaged():
     """Closing the open braces would draft a silently shorter part."""
     from app.ai.cad_recognize.spec_vectorize import (
