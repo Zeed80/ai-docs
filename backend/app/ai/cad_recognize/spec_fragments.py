@@ -570,7 +570,8 @@ def _matches_callout(value: float, candidates: list[float], tol: float = 0.02) -
 
 
 async def _read_cut_features(
-    image, outer: list[dict], *, router: Any, confidential: bool
+    image, outer: list[dict], *, router: Any, confidential: bool,
+    audit: list[dict[str, Any]] | None = None,
 ) -> dict[str, list[dict]]:
     """Chamfers, grooves, keyways and cross-drillings, as their own question.
 
@@ -581,7 +582,7 @@ async def _read_cut_features(
     """
     answer = await _ask(
         _FEATURES_PROMPT, image, num_predict=1500, schema=_FEATURES_SCHEMA,
-        router=router, confidential=confidential,
+        router=router, confidential=confidential, audit=audit,
     )
     if not answer:
         return {}
@@ -755,7 +756,8 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
 
 
 async def _sections_from_chain(
-    image, callouts: dict, *, router: Any, confidential: bool
+    image, callouts: dict, *, router: Any, confidential: bool,
+    audit: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict], str | None]:
     """Step lengths as DIFFERENCES of the axial chain the sheet draws.
 
@@ -775,6 +777,7 @@ async def _sections_from_chain(
         ),
         image, num_predict=900,
         schema=_CHAIN_SCHEMA, router=router, confidential=confidential,
+        audit=audit,
     )
     if not answer:
         return [], None
@@ -848,7 +851,8 @@ async def _sections_from_chain(
 
 
 async def _profile_by_assignment(
-    image, callouts: dict, *, router: Any, confidential: bool
+    image, callouts: dict, *, router: Any, confidential: bool,
+    audit: list[dict[str, Any]] | None = None,
 ) -> dict | None:
     """Build the outline by ASSIGNING already-read numbers to roles.
 
@@ -860,7 +864,7 @@ async def _profile_by_assignment(
     candidates = _callout_numbers(callouts)
     if not candidates:
         return None
-    ask = {"router": router, "confidential": confidential}
+    ask = {"router": router, "confidential": confidential, "audit": audit}
     shape_answer = await _ask(_SHAPE_PROMPT, image, num_predict=120, schema=_SHAPE_SCHEMA, **ask)
     shape = str(shape_answer.get("shape") or "").strip().lower()
     if shape not in ("circle", "rectangle"):
@@ -1005,7 +1009,8 @@ async def read_spec_by_fragments(
     if kind == "rotation":
         # Chain first: the sheet states positions, not lengths.
         outer, chain_problem = await _sections_from_chain(
-            chain_view, callouts, router=router, confidential=confidential
+            chain_view, callouts, router=router, confidential=confidential,
+            audit=fragment_answers,
         )
         geometry: dict = {}
         if not outer:
@@ -1035,12 +1040,14 @@ async def read_spec_by_fragments(
             # nothing to be positioned against.
             body.update(
                 await _read_cut_features(
-                    geometry_view, outer, router=router, confidential=confidential
+                    geometry_view, outer, router=router, confidential=confidential,
+                    audit=fragment_answers,
                 )
             )
     elif kind in ("plate", "flange"):
         profile = await _profile_by_assignment(
-            geometry_view, callouts, router=router, confidential=confidential
+            geometry_view, callouts, router=router, confidential=confidential,
+            audit=fragment_answers,
         )
         if profile is None:
             # Fall back to reading the outline directly when the sheet's

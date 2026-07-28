@@ -34,6 +34,30 @@ async def _read(monkeypatch, answer: dict) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_feature_question_is_kept_in_the_parent_reader_audit(monkeypatch):
+    audit: list[dict] = []
+
+    async def fake_ask(*_a, **kwargs):
+        kwargs["audit"].append({
+            "question": "cut features",
+            "model": "test-reader",
+            "raw_response": '{"chamfers": []}',
+        })
+        return {"chamfers": []}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    await _read_cut_features(
+        object(), _OUTER, router=object(), confidential=True, audit=audit
+    )
+
+    assert audit == [{
+        "question": "cut features",
+        "model": "test-reader",
+        "raw_response": '{"chamfers": []}',
+    }]
+
+
+@pytest.mark.asyncio
 async def test_the_features_a_real_shaft_has_are_kept(monkeypatch):
     result = await _read(monkeypatch, {
         "chamfers": [{"size_mm": 1.0, "angle_deg": 45.0, "location": "left_end"}],

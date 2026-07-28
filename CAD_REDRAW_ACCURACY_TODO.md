@@ -26,7 +26,7 @@
 
 ## P1. Прозрачность «что прочитано → что передано в 3D»
 
-- [-] Сохранять все попытки чтения, consensus, нормализованную спецификацию, граф размеров, feature tree и точный kernel payload. Для whole-sheet сохраняется точный raw response; для fragment-reader архивируются основные ограниченные вопросы/ответы, но дочерние chain/features-вопросы ещё нужно включить в тот же журнал.
+- [x] Сохранять все попытки чтения, consensus, нормализованную спецификацию, граф размеров, feature tree и точный kernel payload. Для whole-sheet сохраняется точный raw response; fragment-reader архивирует в одном журнале основные и дочерние chain/features/profile-вопросы с моделью и полным raw response.
 - [x] Для каждого принятого scalar-значения хранить значение по проходам, голоса, confidence, evidence и номера проходов; для feature-параметров — stated/derived/assumed/human provenance.
 - [x] Добавить API:
   - `GET /api/image-gen/{id}/cad-reading`;

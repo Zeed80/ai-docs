@@ -161,6 +161,41 @@ def test_standard_reference_numbers_are_not_dimension_candidates():
         assert citation not in numbers, f"{citation} is a standard, not a size"
 
 
+@pytest.mark.asyncio
+async def test_dimension_chain_question_uses_the_parent_reader_audit(monkeypatch):
+    from app.ai.cad_recognize import spec_fragments as fragments
+
+    audit: list[dict] = []
+
+    async def fake_ask(*_a, **kwargs):
+        kwargs["audit"].append({
+            "question": "dimension chain",
+            "model": "test-reader",
+            "raw_response": '{"diameters_mm":[30,40],"chain_mm":[20,50]}',
+        })
+        return {
+            "diameters_mm": [30, 40],
+            "chain_mm": [20, 50],
+            "overall_mm": 50,
+        }
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+    sections, problem = await fragments._sections_from_chain(
+        None,
+        {"dimensions": [{"value": "Ø30"}, {"value": "Ø40"}, {"value": "20"}, {"value": "50"}]},
+        router=object(),
+        confidential=True,
+        audit=audit,
+    )
+
+    assert problem is None
+    assert sections == [
+        {"diameter_mm": 30.0, "length_mm": 20.0},
+        {"diameter_mm": 40.0, "length_mm": 30.0},
+    ]
+    assert audit[0]["raw_response"].startswith('{"diameters_mm"')
+
+
 def test_evenly_spaced_chain_is_refused_as_fabricated():
     """A chain whose every step is equal was invented, not read.
 
