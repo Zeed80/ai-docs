@@ -112,8 +112,18 @@ def main() -> int:
     base_volume = float(base_report["volume_mm3"])
     check(
         "plain shaft builds",
-        base_report["brep_valid"] and base_report["solid_count"] == 1,
-        f"V={base_volume:.0f} mm3",
+        base_report["brep_valid"]
+        and base_report["manifold"]
+        and base_report["solid_count"] == 1
+        and all(base_report.get(key, 0) > 0 for key in (
+            "shell_count", "face_count", "edge_count", "vertex_count"
+        )),
+        (
+            f"V={base_volume:.0f} mm3, topology="
+            f"{base_report.get('solid_count')}/{base_report.get('shell_count')}/"
+            f"{base_report.get('face_count')}/{base_report.get('edge_count')}/"
+            f"{base_report.get('vertex_count')}"
+        ),
     )
 
     # 1. An annular groove removes a ring of material and nothing else.
@@ -206,12 +216,27 @@ def main() -> int:
     status, payload = _compile(
         _candidate(_base(), _feature("chamfer", size_mm=1.0, edge_selector={"curve": "Circle"}))
     )
-    detail = json.dumps(payload, ensure_ascii=False)[:160] if isinstance(payload, dict) else str(payload)[:160]
-    check(
-        "ambiguous selector is refused with candidates",
-        status == 422 and "matches" in detail,
-        f"HTTP {status}: {detail}",
-    )
+    if status == 200:
+        report = _report_from_zip(payload)
+        failed = [
+            item for item in report.get("feature_results", [])
+            if item.get("kind") == "chamfer" and item.get("status") == "failed"
+        ]
+        detail = " | ".join(report.get("warnings", []))[:240]
+        check(
+            "ambiguous selector is refused with candidates",
+            abs(float(report["volume_mm3"]) - base_volume) < 1.0
+            and bool(failed)
+            and "matches" in detail,
+            f"HTTP 200, kept body, failed={len(failed)}: {detail}",
+        )
+    else:
+        detail = json.dumps(payload, ensure_ascii=False)[:240] if isinstance(payload, dict) else str(payload)[:240]
+        check(
+            "ambiguous selector is refused with candidates",
+            status == 422 and "matches" in detail,
+            f"HTTP {status}: {detail}",
+        )
 
     # 6. A chamfer OpenCascade refuses must not cost the part (warning, not 422).
     # It refuses in two different ways, and both were measured on this build:
