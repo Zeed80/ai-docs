@@ -61,6 +61,30 @@ def test_f_and_g_clearance_fields_match_iso_286_tables_20_and_21():
     )
 
 
+def test_F_and_G_hole_fields_are_reflected_clearance_deviations():
+    assert ref.tolerance_band("F7", 25) == ref.ToleranceBand(
+        es_um=41.0, ei_um=20.0
+    )
+    assert ref.tolerance_band("G6", 80) == ref.ToleranceBand(
+        es_um=29.0, ei_um=10.0
+    )
+
+
+def test_zero_line_and_symmetric_fields_cover_additional_it_grades():
+    assert ref.tolerance_band("h5", 25) == ref.ToleranceBand(
+        es_um=0.0, ei_um=-9.0
+    )
+    assert ref.tolerance_band("H12", 80) == ref.ToleranceBand(
+        es_um=300.0, ei_um=0.0
+    )
+    assert ref.tolerance_band("js10", 40) == ref.ToleranceBand(
+        es_um=50.0, ei_um=-50.0
+    )
+    assert ref.tolerance_band("JS16", 400) == ref.ToleranceBand(
+        es_um=1800.0, ei_um=-1800.0
+    )
+
+
 def test_tolerance_band_unknown_symbol():
     assert ref.tolerance_band("zz6", 25) is None
 
@@ -72,6 +96,8 @@ def test_tolerance_band_out_of_range():
 def test_is_valid_tolerance_symbol():
     assert ref.is_valid_tolerance_symbol("h7")
     assert ref.is_valid_tolerance_symbol("H11")
+    assert ref.is_valid_tolerance_symbol("F8")
+    assert ref.is_valid_tolerance_symbol("JS14")
     assert not ref.is_valid_tolerance_symbol("zzz")
     assert not ref.is_valid_tolerance_symbol("h99")
 

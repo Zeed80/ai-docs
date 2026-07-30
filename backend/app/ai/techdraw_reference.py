@@ -46,11 +46,18 @@ ISO_SIZE_RANGES: tuple[tuple[float, float], ...] = (
 # supports. Source: ISO 286-1 / ГОСТ 25346-89 standard tolerance grade table.
 _IT_GRADE_UM: dict[int, tuple[int, ...]] = {
     # range index aligns with ISO_SIZE_RANGES
+    5:  (4, 5, 6, 8, 9, 11, 13, 15, 18, 20, 23, 25),
     6:  (6, 8, 9, 11, 13, 16, 19, 22, 25, 29, 32, 36),
     7:  (10, 12, 15, 18, 21, 25, 30, 35, 40, 46, 52, 57),
     8:  (14, 18, 22, 27, 33, 39, 46, 54, 63, 72, 81, 89),
     9:  (25, 30, 36, 43, 52, 62, 74, 87, 100, 115, 130, 140),
+    10: (40, 48, 58, 70, 84, 100, 120, 140, 160, 185, 210, 230),
     11: (60, 75, 90, 110, 130, 160, 190, 220, 250, 290, 320, 360),
+    12: (100, 120, 150, 180, 210, 250, 300, 350, 400, 460, 520, 570),
+    13: (140, 180, 220, 270, 330, 390, 460, 540, 630, 720, 810, 890),
+    14: (250, 300, 360, 430, 520, 620, 740, 870, 1000, 1150, 1300, 1400),
+    15: (400, 480, 580, 700, 840, 1000, 1200, 1400, 1600, 1850, 2100, 2300),
+    16: (600, 750, 900, 1100, 1300, 1600, 1900, 2200, 2500, 2900, 3200, 3600),
 }
 
 # Shaft fundamental (lower) deviation ei (µm) for transition/interference
@@ -71,17 +78,30 @@ _SHAFT_FUNDAMENTAL_ES_UM: dict[str, tuple[int, ...]] = {
     "g": (-2, -4, -5, -6, -7, -9, -10, -12, -14, -15, -17, -18),
 }
 
+# ISO 286 hole F/G fields are the corresponding shaft f/g zero-nearest
+# deviations reflected about the zero line. Keeping this relation explicit
+# prevents a second hand-copied table from drifting away from the shaft data.
+_HOLE_FUNDAMENTAL_EI_UM: dict[str, tuple[int, ...]] = {
+    letter.upper(): tuple(-value for value in deviations)
+    for letter, deviations in _SHAFT_FUNDAMENTAL_ES_UM.items()
+}
+
 _SHAFT_GRADES = {
     "f": (6, 7, 8, 9),
     "g": (6, 7, 8, 9),
-    "h": (6, 7, 8, 9, 11),
-    "js": (6,),
+    "h": tuple(_IT_GRADE_UM),
+    "js": tuple(_IT_GRADE_UM),
     "k": (6,),
     "m": (6,),
     "n": (6,),
     "p": (6,),
 }
-_HOLE_GRADES = {"H": (7, 8, 9, 11), "JS": (7,)}
+_HOLE_GRADES = {
+    "F": (6, 7, 8, 9),
+    "G": (6, 7, 8, 9),
+    "H": tuple(_IT_GRADE_UM),
+    "JS": tuple(_IT_GRADE_UM),
+}
 
 _TOL_SYMBOL_RE = re.compile(r"^([A-Za-z]{1,2})(\d{1,2})$")
 
@@ -132,7 +152,7 @@ def tolerance_band(symbol: str, nominal_mm: float) -> ToleranceBand | None:
     if letter == "H" and grade in _HOLE_GRADES["H"]:
         it = _IT_GRADE_UM[grade][idx]
         return ToleranceBand(es_um=float(it), ei_um=0.0)
-    if letter in ("js", "JS") and grade in (6, 7):
+    if letter in ("js", "JS") and grade in _IT_GRADE_UM:
         it = _IT_GRADE_UM[grade][idx]
         half = it / 2.0
         return ToleranceBand(es_um=half, ei_um=-half)
@@ -144,6 +164,10 @@ def tolerance_band(symbol: str, nominal_mm: float) -> ToleranceBand | None:
         it = _IT_GRADE_UM[grade][idx]
         es = float(_SHAFT_FUNDAMENTAL_ES_UM[letter][idx])
         return ToleranceBand(es_um=es, ei_um=es - it)
+    if letter in _HOLE_FUNDAMENTAL_EI_UM and grade in _HOLE_GRADES[letter]:
+        it = _IT_GRADE_UM[grade][idx]
+        ei = float(_HOLE_FUNDAMENTAL_EI_UM[letter][idx])
+        return ToleranceBand(es_um=ei + it, ei_um=ei)
     return None
 
 
