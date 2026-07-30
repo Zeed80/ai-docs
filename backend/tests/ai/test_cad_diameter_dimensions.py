@@ -40,23 +40,11 @@ def test_detal_126_diameters_are_classified_against_the_main_profile():
     }
     assert {14, 470} <= transitions
     sections = outer_sections_from_diameter_evidence(result)
-    assert sections == [
-        {
-            "diameter_mm": 102.0,
-            "length_mm": 14.0,
-            "note": "контур и осевая станция подтверждены OCR+CV",
-        },
-        {
-            "diameter_mm": 80.0,
-            "length_mm": 357.0,
-            "note": "контур и осевая станция подтверждены OCR+CV",
-        },
-        {
-            "diameter_mm": 72.0,
-            "length_mm": 99.0,
-            "note": "контур и осевая станция подтверждены OCR+CV",
-        },
-    ]
+    assert [
+        (item["diameter_mm"], item["length_mm"]) for item in sections
+    ] == [(102.0, 14.0), (80.0, 357.0), (72.0, 99.0)]
+    assert all(item["evidence"][0]["bbox"] for item in sections)
+    assert all("vector outer contour" in item["evidence"][0]["raw_text"] for item in sections)
     bore = bore_sections_from_diameter_evidence(result)
     assert [(item["diameter_mm"], item["length_mm"]) for item in bore] == [
         (56.55, 78.0),
@@ -68,6 +56,7 @@ def test_detal_126_diameters_are_classified_against_the_main_profile():
         (55.0, 25.0),
     ]
     assert bore[0]["taper"]["ratio"] == "7:24"
+    assert all(item["evidence"][0]["bbox"] for item in bore)
     from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
 
     validated = EngineeringDrawingSpec.model_validate({

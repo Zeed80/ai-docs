@@ -695,6 +695,8 @@ def outer_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[
 
     sections: list[dict] = []
     previous = 0.0
+    center = float(diameter_map.get("profile_center_y_px") or 0.0)
+    px_per_mm = float(diameter_map.get("px_per_mm") or 0.0)
     for index, item in enumerate(outer):
         transition = transitions[index]
         if float(transition.get("confidence") or 0.0) < 0.6:
@@ -708,6 +710,19 @@ def outer_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[
             "diameter_mm": float(item["value_mm"]),
             "length_mm": round(float(station) - previous, 3),
             "note": "контур и осевая станция подтверждены OCR+CV",
+            "evidence": [{
+                "image_index": 0,
+                "bbox": [
+                    float(item["profile_interval_px"][0]),
+                    round(center - float(item["value_mm"]) * px_per_mm / 2.0, 1),
+                    float(item["profile_interval_px"][1]),
+                    round(center + float(item["value_mm"]) * px_per_mm / 2.0, 1),
+                ],
+                "raw_text": (
+                    f"vector outer contour Ø{float(item['value_mm']):g}; "
+                    f"station {float(station):g}"
+                ),
+            }],
         })
         previous = float(station)
     return sections
@@ -758,6 +773,9 @@ def bore_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[d
     previous = float(taper.get("length_mm") or 0.0)
     if previous <= 0 or abs(float(merged[0]["axial_interval_mm"][0]) - previous) > 2.0:
         return []
+    center = float(diameter_map.get("profile_center_y_px") or 0.0)
+    px_per_mm = float(diameter_map.get("px_per_mm") or 0.0)
+    taper_interval = taper.get("profile_interval_px") or [0.0, 0.0]
     sections: list[dict] = [{
         "diameter_mm": float(taper["start_diameter_mm"]),
         "length_mm": round(previous, 3),
@@ -766,6 +784,19 @@ def bore_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[d
             "kind": "ratio",
             "ratio": "7:24",
         },
+        "evidence": [{
+            "image_index": 0,
+            "bbox": [
+                float(taper_interval[0]),
+                round(center - float(taper["start_diameter_mm"]) * px_per_mm / 2.0, 1),
+                float(taper_interval[1]),
+                round(center + float(taper["start_diameter_mm"]) * px_per_mm / 2.0, 1),
+            ],
+            "raw_text": (
+                f"vector bore taper Ø{float(taper['start_diameter_mm']):g}; "
+                f"7:24; station {previous:g}"
+            ),
+        }],
     }]
     for index, item in enumerate(merged):
         measured_end = float(item["axial_interval_mm"][1])
@@ -781,6 +812,19 @@ def bore_sections_from_diameter_evidence(diameter_map: dict[str, Any]) -> list[d
             "diameter_mm": float(item["value_mm"]),
             "length_mm": round(station - previous, 3),
             "note": "внутренний контур измерен и привязан к осевой станции",
+            "evidence": [{
+                "image_index": 0,
+                "bbox": [
+                    float(item["profile_interval_px"][0]),
+                    round(center - float(item["value_mm"]) * px_per_mm / 2.0, 1),
+                    float(item["profile_interval_px"][1]),
+                    round(center + float(item["value_mm"]) * px_per_mm / 2.0, 1),
+                ],
+                "raw_text": (
+                    f"vector bore contour Ø{float(item['value_mm']):g}; "
+                    f"station {station:g}"
+                ),
+            }],
         })
         previous = station
     if abs(previous - float(overall)) > 0.05:
