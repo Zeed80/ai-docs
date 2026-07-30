@@ -113,7 +113,7 @@ def render_ir_to_svg(ir: CadIR) -> bytes:
                 f'x2="{_fmt(e.p2.x)}" y2="{_fmt(e.p2.y)}"/>{arrows}{label}</g>'
             )
         elif isinstance(e, AnnotationEntity):
-            text = annotation_text(e.kind, e.value, e.symbol, e.datum_refs)
+            text = e.text or annotation_text(e.kind, e.value, e.symbol, e.datum_refs)
             x, y, h = e.position.x, e.position.y, e.height
             leader = (
                 f'<line x1="{_fmt(x)}" y1="{_fmt(y)}" '

@@ -285,8 +285,8 @@ _CALLOUT_PROMPT = (
     "Выпиши с чертежа размерные надписи и технические обозначения. ОДНОЙ "
     "строкой JSON:\n"
     '{"dimensions":[{"value":"Ø80js6","applies_to":null}],'
-    '"annotations":[{"kind":"roughness|hardness|tolerance|thread|material|other",'
-    '"text":"Ra 1,6"}]}\n'
+    '"annotations":[{"kind":"roughness|hardness|tolerance|datum|thread|weld|material|other",'
+    '"text":"Ra 1,6","value":null,"symbol":null,"datum_refs":[]}]}\n'
     "value — ровно как написано на чертеже, вместе с допуском и посадкой. "
     "Ничего не добавляй от себя. Кириллицу не экранируй. Только JSON."
 )
@@ -406,8 +406,16 @@ _CALLOUT_SCHEMA = {
             "applies_to": {"type": ["string", "null"]},
         }, "required": ["value"]}},
         "annotations": {"type": "array", "maxItems": 40, "items": {"type": "object", "properties": {
-            "kind": {"type": "string"},
+            "kind": {"type": "string", "enum": [
+                "roughness", "hardness", "tolerance", "datum", "thread",
+                "weld", "material", "other",
+            ]},
             "text": {"type": "string"},
+            "value": {"type": ["string", "null"]},
+            "symbol": {"type": ["string", "null"]},
+            "datum_refs": {
+                "type": "array", "maxItems": 8, "items": {"type": "string"}
+            },
         }, "required": ["text"]}},
     },
 }

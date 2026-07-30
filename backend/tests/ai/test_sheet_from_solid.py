@@ -235,6 +235,44 @@ def test_geometry_only_sheet_reopens_as_dxf_without_frame_entities():
     assert all(entity.dxf.layer != "FRAME" for entity in entities)
 
 
+def test_geometry_only_sheet_places_exact_structured_annotations_in_reserved_band():
+    from app.ai.cad_ir.dxf_render import render_ir_to_dxf, verify_dxf_roundtrip
+
+    spec = {
+        **_SHAFT,
+        "annotations": [
+            {"kind": "roughness", "text": "Ra 1,6", "value": "1,6"},
+            {"kind": "datum", "text": "Д", "symbol": "Д"},
+            {
+                "kind": "tolerance",
+                "text": "↗ 0,008 Д",
+                "symbol": "runout",
+                "value": "0,008",
+                "datum_refs": ["Д"],
+            },
+            # Technical notes do not belong on a geometry-only sheet.
+            {"kind": "hardness", "text": "HRC 58…62"},
+        ],
+    }
+    plan = plan_sheet(spec, _SHAFT_REPORT)
+    ir, _extent = _assemble({"views": [], "dimensions": []}, spec, plan)
+
+    annotations = [entity for entity in ir.entities if entity.type == "annotation"]
+    assert [entity.text for entity in annotations] == ["Ra 1,6", "Д", "↗ 0,008 Д"]
+    assert [entity.kind for entity in annotations] == ["roughness", "datum", "tolerance"]
+    assert all(entity.assurance == "constraint_validated" for entity in annotations)
+    assert len({entity.position.y for entity in annotations}) == 3
+    assert verify_dxf_roundtrip(ir)["ok"] is True
+
+    document = ezdxf.read(io.StringIO(render_ir_to_dxf(ir).decode("utf-8")))
+    dxf_texts = {
+        entity.dxf.text
+        for entity in document.modelspace()
+        if entity.dxftype() == "TEXT"
+    }
+    assert {"Ra 1,6", "Д", "↗ 0,008 Д"} <= dxf_texts
+
+
 def test_the_source_scale_is_honoured_when_it_fits():
     spec = {**_SHAFT, "title_block": {"scale": "1:5"}}
     plan = plan_sheet(spec, _SHAFT_REPORT)

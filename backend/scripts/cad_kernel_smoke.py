@@ -148,6 +148,17 @@ def _check_full_application_pipeline() -> None:
             {"value": "40"},
             {"value": "100"},
         ],
+        "annotations": [
+            {"kind": "roughness", "text": "Ra 1,6", "value": "1,6"},
+            {"kind": "datum", "text": "Д", "symbol": "Д"},
+            {
+                "kind": "tolerance",
+                "text": "↗ 0,008 Д",
+                "symbol": "runout",
+                "value": "0,008",
+                "datum_refs": ["Д"],
+            },
+        ],
     }
     candidate = feature_tree_from_spec(spec)
     if candidate is None:
@@ -199,6 +210,12 @@ def _check_full_application_pipeline() -> None:
         if entity.type == "dimension"
     ]
     expected_dimensions = {"40", "100", "Ø80g6", "Ø60", "Ø30"}
+    annotation_texts = {
+        entity.text
+        for entity in sheet.ir.entities
+        if entity.type == "annotation"
+    }
+    expected_annotations = {"Ra 1,6", "Д", "↗ 0,008 Д"}
     ok = (
         bool(artifacts.report.get("brep_valid"))
         and bool(artifacts.report.get("manifold"))
@@ -210,6 +227,7 @@ def _check_full_application_pipeline() -> None:
         and "dimension" in entity_types
         and set(dimension_texts) == expected_dimensions
         and len(dimension_texts) == len(expected_dimensions)
+        and annotation_texts == expected_annotations
         and bool(roundtrip.get("ok"))
         and len(dxf) > 0
     )
@@ -218,7 +236,8 @@ def _check_full_application_pipeline() -> None:
         ok,
         (
             f"views={visible_views}, entities={len(sheet.ir.entities)}, "
-            f"dimensions={dimension_texts}, roundtrip={roundtrip.get('ok')}"
+            f"dimensions={dimension_texts}, annotations={sorted(annotation_texts)}, "
+            f"roundtrip={roundtrip.get('ok')}"
         ),
     )
 

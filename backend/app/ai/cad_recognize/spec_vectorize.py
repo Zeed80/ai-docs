@@ -373,8 +373,14 @@ class SpecDimension(BaseModel):
 
 
 class SpecAnnotation(BaseModel):
-    kind: Literal["roughness", "hardness", "tolerance", "thread", "material", "other"]
+    kind: Literal[
+        "roughness", "hardness", "tolerance", "datum", "thread", "weld",
+        "material", "other",
+    ]
     text: str = Field(min_length=1)
+    value: str | None = None
+    symbol: str | None = None
+    datum_refs: list[str] = Field(default_factory=list, max_length=8)
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
@@ -533,7 +539,8 @@ _SPEC_PROMPT = (
     '"detail_center_mm":null,"detail_radius_mm":null,"detail_scale_factor":2,'
     '"features_shown":[]}],'
     '"dimensions":[{"value":"Ø80js6","applies_to":".."}],'
-    '"annotations":[{"kind":"roughness|hardness|tolerance|thread","text":".."}],'
+    '"annotations":[{"kind":"roughness|hardness|tolerance|datum|thread|weld",'
+    '"text":"..","value":null,"symbol":null,"datum_refs":[]}],'
     '"title_block":{"material":"..","scale":".."},'
     '"unresolved":["обязательная геометрия, которую не удалось доказать"],'
     '"optional_unresolved":["необязательные метаданные: материал/масштаб/штамп"]}\n'
@@ -1069,7 +1076,10 @@ _LIST_FIELDS_TOP = (
 _LIST_FIELDS_BODY = ("outer", "bore", "features")
 _LIST_FIELDS_PROFILE = ("holes", "hole_patterns", "slots")
 _ANNOTATION_KINDS = frozenset(
-    {"roughness", "hardness", "tolerance", "thread", "material", "other"}
+    {
+        "roughness", "hardness", "tolerance", "datum", "thread", "weld",
+        "material", "other",
+    }
 )
 
 

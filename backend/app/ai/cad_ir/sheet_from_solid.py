@@ -39,6 +39,10 @@ PAPER_PX_PER_MM = 4.0
 _FORMAT_LADDER = ("A4", "A3", "A2", "A1", "A0")
 # Below this the drawing is too small to read even if it technically fits.
 _MIN_USEFUL_RATIO = 1 / 5
+_SEMANTIC_ANNOTATION_KINDS = frozenset(
+    {"roughness", "tolerance", "datum", "thread", "weld"}
+)
+_ANNOTATION_ROW_MM = 6.0
 
 
 @dataclass
@@ -68,6 +72,22 @@ class SheetResult:
     drawing: dict[str, Any]
     verification: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+
+
+def _semantic_annotations(spec: dict) -> list[dict[str, Any]]:
+    """Manufacturing symbols that belong on a geometry-only detail sheet."""
+    return [
+        item
+        for item in (spec.get("annotations") or [])
+        if isinstance(item, dict)
+        and item.get("kind") in _SEMANTIC_ANNOTATION_KINDS
+        and str(item.get("text") or "").strip()
+    ]
+
+
+def _semantic_annotations_height_mm(spec: dict) -> float:
+    annotations = _semantic_annotations(spec)
+    return len(annotations) * _ANNOTATION_ROW_MM + (4.0 if annotations else 0.0)
 
 
 def classify_part(spec: dict, report: dict) -> str:
@@ -295,7 +315,11 @@ def plan_sheet(
     part_class = classify_part(spec, report)
     views = plan_views(part_class, spec)
     layout_w, layout_h = _estimate_layout_mm(part_class, report, views)
-    notes_mm = technical_requirements_height_mm(spec)
+    notes_mm = (
+        _semantic_annotations_height_mm(spec)
+        if geometry_only
+        else technical_requirements_height_mm(spec)
+    )
 
     formats = [sheet_format.upper()] if sheet_format else list(_FORMAT_LADDER)
     chosen_format, ratio, label = formats[-1], 1.0, "1:1"
@@ -304,7 +328,7 @@ def plan_sheet(
             layout_w, layout_h, candidate,
             landscape=landscape,
             reserve_title_block=not geometry_only,
-            reserve_notes_mm=0.0 if geometry_only else notes_mm,
+            reserve_notes_mm=notes_mm,
         )
         chosen_format = candidate
         # Stop at the first sheet the part reads well on rather than the first
@@ -715,7 +739,11 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     )
 
     views = drawing.get("views") or []
-    notes_mm = 0.0 if plan.geometry_only else technical_requirements_height_mm(spec)
+    notes_mm = (
+        _semantic_annotations_height_mm(spec)
+        if plan.geometry_only
+        else technical_requirements_height_mm(spec)
+    )
     paper_w, paper_h, area_x0, area_y0, area_w, area_h = _drawing_area_mm(
         plan.sheet_format, plan.landscape,
         reserve_title_block=not plan.geometry_only, reserve_notes_mm=notes_mm,
@@ -739,6 +767,12 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         list(range(len(views))),
         px_per_mm=PAPER_PX_PER_MM,
     )
+    if plan.geometry_only:
+        entities += _annotation_entities(
+            spec,
+            x_mm=area_x0 + 2.0,
+            y_mm=area_y0 + area_h + 5.0,
+        )
     if not plan.geometry_only:
         entities += _sheet_frame_entities(
             paper_w, paper_h, PAPER_PX_PER_MM, spec, plan.scale_label
@@ -763,3 +797,39 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         ir.sheet.frame = False
         ir.sheet.title_block = {}
     return ir, (extent_w, extent_h)
+
+
+def _annotation_entities(
+    spec: dict, *, x_mm: float, y_mm: float
+) -> list[Any]:
+    """Place exact structured manufacturing symbols in their reserved band."""
+    from app.ai.cad_ir.schema import AnnotationEntity, Point
+
+    entities: list[Any] = []
+    for index, item in enumerate(_semantic_annotations(spec)):
+        text = str(item.get("text") or "").strip()
+        kind = str(item["kind"])
+        value = item.get("value")
+        symbol = item.get("symbol")
+        if value is None and kind in {"roughness", "thread", "weld"}:
+            value = text
+        if symbol is None and kind == "datum":
+            symbol = text
+        entities.append(
+            AnnotationEntity(
+                kind=kind,
+                position=Point(
+                    x=x_mm * PAPER_PX_PER_MM,
+                    y=(y_mm + index * _ANNOTATION_ROW_MM) * PAPER_PX_PER_MM,
+                ),
+                text=text,
+                value=str(value) if value is not None else None,
+                symbol=str(symbol) if symbol is not None else None,
+                datum_refs=[str(ref) for ref in (item.get("datum_refs") or [])],
+                height=3.5 * PAPER_PX_PER_MM,
+                evidence=[f"spec_annotation:{index}"],
+                origin="spec",
+                assurance="constraint_validated",
+            )
+        )
+    return entities

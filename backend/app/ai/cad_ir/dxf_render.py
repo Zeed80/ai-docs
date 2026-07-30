@@ -150,7 +150,9 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
             # Structured ЕСКД annotations export as text on the DIM layer,
             # with a leader and (for tolerance/datum) a boxed frame — editable
             # CAD geometry, not a flattened glyph.
-            text = annotation_text(entity.kind, entity.value, entity.symbol, entity.datum_refs)
+            text = entity.text or annotation_text(
+                entity.kind, entity.value, entity.symbol, entity.datum_refs
+            )
             h = max(entity.height * scale, 0.1)
             msp.add_text(
                 text, dxfattribs={"layer": "DIM", "height": h},
