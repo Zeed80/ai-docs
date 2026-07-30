@@ -66,3 +66,22 @@ def test_a_sheet_with_no_callouts_read_does_not_veto_the_bore():
         [{"diameter_mm": 60.0, "length_mm": 300.0}], _OUTER, {}
     )
     assert bore and problem is None
+
+
+def test_a_bore_with_the_wrong_localized_role_is_refused():
+    evidence = {
+        "status": "ok",
+        "observations": [
+            {"value_mm": 60, "role": "bore", "confidence": 0.9},
+            {"value_mm": 18, "role": "outer", "confidence": 0.9},
+        ],
+    }
+    bore, problem = _checked_bore(
+        [{"diameter_mm": 18.0, "length_mm": 50.0}],
+        _OUTER,
+        {"dimensions": [{"value": "Ø18"}]},
+        diameter_evidence=evidence,
+    )
+
+    assert bore == []
+    assert problem and "внутренним контуром" in problem

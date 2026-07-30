@@ -233,7 +233,11 @@ async def test_dimension_chain_question_uses_the_parent_reader_audit(monkeypatch
 
 @pytest.mark.asyncio
 async def test_dimension_chain_receives_localized_datum_evidence(monkeypatch):
-    from app.ai.cad_recognize import axial_dimensions, spec_fragments as fragments
+    from app.ai.cad_recognize import (
+        axial_dimensions,
+        diameter_dimensions,
+        spec_fragments as fragments,
+    )
 
     captured = {}
 
@@ -278,6 +282,19 @@ async def test_dimension_chain_receives_localized_datum_evidence(monkeypatch):
         }
 
     monkeypatch.setattr(axial_dimensions, "localize_axial_dimensions", fake_localize)
+    monkeypatch.setattr(
+        diameter_dimensions,
+        "localize_diameter_dimensions",
+        lambda *_args: {
+            "status": "ok",
+            "observations": [
+                {"value_mm": 30, "role": "outer", "confidence": 0.95},
+                {"value_mm": 40, "role": "outer", "confidence": 0.95},
+            ],
+            "outer_transition_stations": [],
+            "blockers": [],
+        },
+    )
     monkeypatch.setattr(fragments, "_ask", fake_ask)
 
     sections, problem = await fragments._sections_from_chain(
@@ -292,6 +309,64 @@ async def test_dimension_chain_receives_localized_datum_evidence(monkeypatch):
     assert sections
     assert '"relation":"from_left_datum"' in captured["prompt"]
     assert '"station_from_left_mm":20' in captured["prompt"]
+    assert '"role":"outer"' in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_dimension_chain_rejects_diameter_assigned_to_wrong_contour(monkeypatch):
+    from app.ai.cad_recognize import (
+        axial_dimensions,
+        diameter_dimensions,
+        spec_fragments as fragments,
+    )
+
+    monkeypatch.setattr(
+        axial_dimensions,
+        "localize_axial_dimensions",
+        lambda *_args: {
+            "status": "ok",
+            "observations": [
+                {"station_from_left_mm": 20, "confidence": 0.95},
+                {"station_from_left_mm": 50, "confidence": 0.95},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        diameter_dimensions,
+        "localize_diameter_dimensions",
+        lambda *_args: {
+            "status": "ok",
+            "observations": [
+                {"value_mm": 30, "role": "outer", "confidence": 0.95},
+                {"value_mm": 40, "role": "bore", "confidence": 0.95},
+            ],
+        },
+    )
+
+    async def fake_ask(*_args, **_kwargs):
+        return {
+            "diameters_mm": [30, 40],
+            "chain_mm": [20, 50],
+            "overall_mm": 50,
+        }
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+    sections, problem = await fragments._sections_from_chain(
+        object(),
+        {
+            "dimensions": [
+                {"value": "Ø30"}, {"value": "Ø40"},
+                {"value": "20"}, {"value": "50"},
+            ]
+        },
+        router=object(),
+        confidential=True,
+        source_image=object(),
+    )
+
+    assert sections == []
+    assert problem and "наружные диаметры" in problem
+    assert "Ø40" in problem
 
 
 @pytest.mark.asyncio
@@ -368,6 +443,107 @@ def test_evenly_spaced_chain_is_refused_as_fabricated():
     assert problem and "ровным шагом" in problem
 
 
+def test_whole_fallback_cannot_overwrite_verified_fragment_outer_or_restore_bore():
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    fragments = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 102, "length_mm": 14,
+                 "note": "контур и осевая станция подтверждены OCR+CV"},
+                {"diameter_mm": 80, "length_mm": 357,
+                 "note": "контур и осевая станция подтверждены OCR+CV"},
+                {"diameter_mm": 72, "length_mm": 99,
+                 "note": "контур и осевая станция подтверждены OCR+CV"},
+            ],
+        },
+        "unresolved": [
+            "расточка: диаметры расточки не подтверждены локализованным внутренним контуром: Ø12"
+        ],
+    }
+    whole = {
+        "main_view": {
+            "outer": [{"diameter_mm": 65, "length_mm": None}],
+            "bore": [{"diameter_mm": 12, "length_mm": 35}],
+        },
+        "unresolved": ["whole-sheet неполон"],
+    }
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["outer"] == fragments["main_view"]["outer"]
+    assert "bore" not in merged["main_view"]
+    assert merged["unresolved"] == [
+        "whole-sheet неполон",
+        "расточка: диаметры расточки не подтверждены локализованным внутренним контуром: Ø12",
+    ]
+    assert whole["main_view"]["outer"][0]["diameter_mm"] == 65
+
+
+def test_whole_fallback_cannot_overwrite_verified_fragment_bore():
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    verified_bore = [
+        {
+            "diameter_mm": 56.55,
+            "length_mm": 78,
+            "note": "конус подтверждён контуром и отношением 7:24",
+            "taper": {"kind": "ratio", "ratio": "7:24"},
+        },
+        {
+            "diameter_mm": 51,
+            "length_mm": 72,
+            "note": "внутренний контур измерен и привязан к осевой станции",
+        },
+    ]
+    fragments = {"main_view": {"bore": verified_bore}, "unresolved": []}
+    whole = {
+        "main_view": {"bore": [{"diameter_mm": 12, "length_mm": 35}]},
+        "unresolved": [
+            "body:0:bore:0:length-missing",
+            "другой блокер",
+        ],
+    }
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["bore"] == verified_bore
+    assert merged["unresolved"] == ["другой блокер"]
+
+
+def test_whole_fallback_cannot_restore_unverified_small_features():
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+
+    verified_keyway = {
+        "axial_start_mm": 277,
+        "length_mm": 85,
+        "width_mm": 12,
+        "depth_mm": 5,
+        "evidence": [{"image_index": 0, "bbox": [1, 2, 3, 4]}],
+    }
+    fragments = {
+        "main_view": {"keyways": [verified_keyway]},
+        "unresolved": [
+            "малые элементы: keyway-2: глубина не подтверждена",
+            "малые элементы: поперечное отверстие Ø14 указано, но не локализовано",
+        ],
+    }
+    whole = {
+        "main_view": {
+            "keyways": [{"axial_start_mm": 10, "length_mm": 20}],
+            "cross_holes": [{"diameter_mm": 14, "axial_position_mm": 60}],
+            "chamfers": [{"size_mm": 2, "location": "right_end"}],
+        },
+        "unresolved": [],
+    }
+
+    merged = _merge_fragment_truth(whole, fragments)
+
+    assert merged["main_view"]["keyways"] == [verified_keyway]
+    assert "cross_holes" not in merged["main_view"]
+    assert "chamfers" not in merged["main_view"]
+
+
 def test_callouts_split_by_the_sheets_own_diameter_mark():
     """A drawing already says which numbers are diameters: it marks them Ø.
 
@@ -395,3 +571,17 @@ def test_callouts_split_by_the_sheets_own_diameter_mark():
     # checks that only need to know a number was somewhere on the sheet.
     assert not set(diameters) & set(lengths)
     assert set(_callout_numbers(callouts)) == set(diameters) | set(lengths)
+
+
+def test_uppercase_hole_fit_is_a_diameter_when_ocr_lost_the_symbol():
+    from app.ai.cad_recognize.spec_fragments import _callout_numbers
+
+    callouts = {
+        "dimensions": [
+            {"value": "50H7 (+0,025)"},
+            {"value": "470h14"},
+        ]
+    }
+
+    assert _callout_numbers(callouts, "diameter") == [50.0]
+    assert _callout_numbers(callouts, "linear") == [470.0]

@@ -12,9 +12,13 @@ entry must not cost the rest.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+from PIL import Image
 
 from app.ai.cad_recognize.spec_fragments import _read_cut_features
+from app.ai.cad_recognize.spec_fragments import _feature_completeness_issues
 
 _OUTER = [
     {"diameter_mm": 80.0, "length_mm": 150.0},
@@ -126,3 +130,71 @@ async def test_a_sheet_with_no_such_features_yields_nothing(monkeypatch):
 @pytest.mark.asyncio
 async def test_a_failed_question_costs_only_itself(monkeypatch):
     assert await _read(monkeypatch, {}) == {}
+
+
+@pytest.mark.asyncio
+async def test_local_slot_depth_cannot_be_replaced_by_unrelated_sheet_number(monkeypatch):
+    from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
+
+    source = (
+        Path(__file__).resolve().parents[3]
+        / "test_vector_files" / "detal_126.png"
+    )
+    image = Image.open(source).convert("RGB")
+    values = [470, 270, 240, 150, 99, 85, 78, 50, 35, 26, 25, 20, 18, 15, 14, 12, 8, 5, 4, 3.2]
+    profile_evidence = {
+        "axial_map": localize_axial_dimensions(image, values),
+        "diameter_map": {"profile_center_y_px": 593},
+    }
+
+    async def fake_ask(*_args, **_kwargs):
+        return {
+            "keyways": [
+                {"axial_start_mm": 277, "length_mm": 85, "width_mm": 12, "depth_mm": 3.2},
+                {"axial_start_mm": 372, "length_mm": 35, "width_mm": 8, "depth_mm": 4},
+            ]
+        }
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    result = await _read_cut_features(
+        image,
+        [{"diameter_mm": 80, "length_mm": 470}],
+        router=object(),
+        confidential=True,
+        source_image=image,
+        callouts={"dimensions": [{"value": str(value)} for value in values]},
+        profile_evidence=profile_evidence,
+    )
+
+    assert "keyways" not in result
+    blockers = profile_evidence["feature_unresolved"]
+    assert "3.2" in blockers[0]
+    assert "keyway-2" in blockers[1]
+
+
+def test_named_holes_chamfers_and_threads_cannot_disappear():
+    issues = _feature_completeness_issues(
+        {
+            "dimensions": [
+                {"value": "Ø14 (+0,02)"},
+                {"value": "Ø10 ±0,05"},
+                {"value": "Ø9"},
+                {"value": "1×45°"},
+                {"value": "6 фасок"},
+                {"value": "M75×1,5"},
+                {"value": "M54,5×2"},
+            ]
+        },
+        {
+            "chamfers": [{"size_mm": 1, "location": "left_end"}],
+            "cross_holes": [{"diameter_mm": 9, "axial_position_mm": 455}],
+        },
+        [{"diameter_mm": 80, "length_mm": 470}],
+        {"observations": [{"role": "outer", "value_mm": 80}]},
+    )
+
+    assert "поперечное отверстие Ø9" not in "\n".join(issues)
+    assert "поперечное отверстие Ø10" in "\n".join(issues)
+    assert "поперечное отверстие Ø14" in "\n".join(issues)
+    assert "указано 6 фасок, локализовано 1" in issues
+    assert any("M54,5" in issue and "M75" in issue for issue in issues)

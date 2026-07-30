@@ -127,6 +127,8 @@ _CHAIN_PROMPT = (
     "ОСЕВЫЕ РАЗМЕРЫ (без Ø): {lengths}\n\n"
     "ЛОКАЛИЗОВАННЫЕ ОСЕВЫЕ РАЗМЕРНЫЕ ЛИНИИ (детерминированный OCR+CV):\n"
     "{localized}\n\n"
+    "ЛОКАЛИЗОВАННЫЕ ДИАМЕТРЫ ГЛАВНОГО ПРОФИЛЯ (outer/bore):\n"
+    "{localized_diameters}\n\n"
     "Ответь ОДНОЙ строкой JSON:\n"
     '{{"diameters_mm":[],"bore_diameters_mm":[],"chain_mm":[],"overall_mm":null}}\n'
     "diameters_mm — диаметры ступеней НАРУЖНОГО контура слева направо, по "
@@ -142,6 +144,9 @@ _CHAIN_PROMPT = (
     "Для chain_mm используй station_from_left_mm только у тех локализованных "
     "линий, чьи стрелки относятся к НАРУЖНОМУ контуру. local_interval без "
     "station_from_left_mm нельзя превращать в накопительный размер.\n"
+    "В diameters_mm разрешены только значения с role=outer, в "
+    "bore_diameters_mm — только значения с role=bore. Значение из другой роли "
+    "нельзя переносить между наружным и внутренним контуром.\n"
     "overall_mm — габаритная длина детали.\n"
     "diameters_mm и bore_diameters_mm бери ТОЛЬКО из списка ДИАМЕТРЫ. "
     "chain_mm и overall_mm бери ТОЛЬКО из списка ОСЕВЫЕ РАЗМЕРЫ. Не переноси "
@@ -662,6 +667,8 @@ def _matches_callout(value: float, candidates: list[float], tol: float = 0.02) -
 async def _read_cut_features(
     image, outer: list[dict], *, router: Any, confidential: bool,
     audit: list[dict[str, Any]] | None = None,
+    source_image=None, callouts: dict[str, Any] | None = None,
+    profile_evidence: dict[str, Any] | None = None,
 ) -> dict[str, list[dict]]:
     """Chamfers, grooves, keyways and cross-drillings, as their own question.
 
@@ -670,12 +677,47 @@ async def _read_cut_features(
     radius, is a misread rather than a feature — and one bad entry must not cost
     the rest, so entries are dropped individually.
     """
+    feature_evidence: dict[str, Any] = {}
+    if source_image is not None and profile_evidence is not None:
+        from app.ai.cad_recognize.turned_features import localize_turned_features
+
+        feature_evidence = localize_turned_features(
+            source_image,
+            profile_evidence.get("axial_map") or {},
+            _callout_numbers(callouts or {}, "linear"),
+            profile_center_y_px=(
+                profile_evidence.get("diameter_map") or {}
+            ).get("profile_center_y_px"),
+            known_diameter_values=_callout_numbers(callouts or {}, "diameter"),
+            outer_diameter_values=[
+                float(item["value_mm"])
+                for item in (
+                    (profile_evidence.get("diameter_map") or {}).get("observations")
+                    or []
+                )
+                if item.get("role") == "outer"
+                and isinstance(item.get("value_mm"), (int, float))
+            ],
+        )
+        profile_evidence["feature_map"] = feature_evidence
+    import json
+
+    evidence_prompt = ""
+    if feature_evidence:
+        evidence_prompt = (
+            "\nДЕТЕРМИНИРОВАННО ЛОКАЛИЗОВАННЫЕ КОНТУРЫ МАЛЫХ ЭЛЕМЕНТОВ:\n"
+            + json.dumps(feature_evidence, ensure_ascii=False, separators=(",", ":"))
+            + "\nДля каждого keyway-кандидата прочитай с чертежа недостающую depth_mm. "
+            "Не меняй подтверждённые координату, длину и ширину."
+        )
     answer = await _ask(
-        _FEATURES_PROMPT, image, num_predict=1500, schema=_FEATURES_SCHEMA,
+        _FEATURES_PROMPT + evidence_prompt,
+        image, num_predict=1500, schema=_FEATURES_SCHEMA,
         router=router, confidential=confidential, audit=audit,
     )
-    if not answer:
+    if not answer and not feature_evidence:
         return {}
+    answer = answer or {}
 
     total_length = sum(_num(s.get("length_mm")) or 0.0 for s in outer)
     max_radius = max(
@@ -716,6 +758,70 @@ async def _read_cut_features(
         and 0 < (_num(item.get("depth_mm")) or 0) < max(max_radius, 1e-9)
         and (_num(item.get("length_mm")) or 0) >= (_num(item.get("width_mm")) or 0)
     ]
+    candidates = feature_evidence.get("keyway_candidates") or []
+    missing_keyways: list[str] = [
+        f"evidence: {item}" for item in feature_evidence.get("blockers") or []
+    ]
+    if candidates:
+        verified_keyways: list[dict[str, Any]] = []
+        unused = list(keyways)
+        for candidate in candidates:
+            expected_length = _num(candidate.get("stated_length_mm"))
+            expected_width = _num(candidate.get("stated_width_mm"))
+            if expected_length is None or expected_width is None:
+                missing_keyways.append(
+                    f"{candidate.get('id')}: длина или ширина не связана с выноской"
+                )
+                continue
+            matches = [
+                item for item in unused
+                if abs((_num(item.get("length_mm")) or -1000) - expected_length) <= 1.0
+                and abs((_num(item.get("width_mm")) or -1000) - expected_width) <= 0.6
+            ]
+            if not matches:
+                missing_keyways.append(
+                    f"{candidate.get('id')}: модель не прочитала глубину паза "
+                    f"{expected_length:g}×{expected_width:g}"
+                )
+                continue
+            item = min(
+                matches,
+                key=lambda value: abs(
+                    (_num(value.get("axial_start_mm")) or 0.0)
+                    - float(candidate["axial_start_mm"])
+                ),
+            )
+            depth = _num(item.get("depth_mm"))
+            depth_evidence = candidate.get("depth_observation") or {}
+            expected_depth = _num(depth_evidence.get("value_mm"))
+            if (
+                depth is None
+                or expected_depth is None
+                or abs(depth - expected_depth) > 0.05
+            ):
+                missing_keyways.append(
+                    f"{candidate.get('id')}: глубина {depth!r} не подтверждена "
+                    "локализованной выноской этого паза"
+                )
+                continue
+            unused.remove(item)
+            verified = dict(item)
+            verified.update({
+                "axial_start_mm": round(float(candidate["axial_start_mm"]), 3),
+                "length_mm": expected_length,
+                "width_mm": expected_width,
+                "evidence": [{
+                    "image_index": 0,
+                    "bbox": candidate.get("bbox"),
+                    "raw_text": (
+                        f"vector contour {expected_length:g}×{expected_width:g}; "
+                        f"depth callout {expected_depth:g}"
+                    ),
+                }],
+            })
+            verified_keyways.append(verified)
+        keyways = verified_keyways
+        profile_evidence["feature_unresolved"] = missing_keyways
     if keyways:
         result["keyways"] = keyways
 
@@ -725,13 +831,127 @@ async def _read_cut_features(
         and _within(_num(item.get("axial_position_mm")))
         and 0 < (_num(item.get("diameter_mm")) or 0) < max(2.0 * max_radius, 1e-9)
     ]
+    radial_candidates = feature_evidence.get("radial_opening_candidates") or []
+    if radial_candidates:
+        holes = [
+            item for item in holes
+            if any(
+                abs(
+                    (_num(item.get("axial_position_mm")) or -1000)
+                    - float(candidate["axial_position_mm"])
+                ) <= 1.0
+                and any(
+                    abs((_num(item.get("diameter_mm")) or -1000) - float(value)) <= 0.2
+                    for value in candidate.get("supported_diameters_mm") or []
+                )
+                for candidate in radial_candidates
+            )
+        ]
     if holes:
         result["cross_holes"] = holes
+    completeness_issues = _feature_completeness_issues(
+        callouts or {}, result, outer,
+        (profile_evidence or {}).get("diameter_map") or {},
+    )
+    missing_keyways.extend(completeness_issues)
+    if profile_evidence is not None:
+        profile_evidence["feature_unresolved"] = missing_keyways
+    if profile_evidence is not None:
+        from app.ai.cad_process_log import record_cad_process_event
+
+        await record_cad_process_event(
+            "reader.feature_evidence",
+            "completed" if not missing_keyways else "review_required",
+            "Малые элементы сопоставлены с локализованными контурами и выносками",
+            {
+                "evidence": feature_evidence,
+                "accepted": result,
+                "blockers": missing_keyways,
+            },
+        )
     return result
 
 
+def _feature_completeness_issues(
+    callouts: dict[str, Any],
+    features: dict[str, list[dict]],
+    outer: list[dict],
+    diameter_evidence: dict[str, Any],
+) -> list[str]:
+    """Refuse a smooth stand-in when the sheet explicitly names cut features."""
+    texts = [
+        str((item or {}).get("value") or (item or {}).get("text") or "")
+        for item in (callouts.get("dimensions") or [])
+        + (callouts.get("annotations") or [])
+        if isinstance(item, dict)
+    ]
+    issues: list[str] = []
+
+    profile_diameters = [
+        float(item["value_mm"])
+        for item in (diameter_evidence.get("observations") or [])
+        if item.get("role") in {"outer", "bore"}
+        and isinstance(item.get("value_mm"), (int, float))
+    ]
+    named_small_holes: set[float] = set()
+    for text in texts:
+        if not _DIAMETER_MARK.search(text):
+            continue
+        nominal = re.search(r"\d+(?:[.,]\d+)?", text)
+        if not nominal:
+            continue
+        value = float(nominal.group().replace(",", "."))
+        if value <= 25 and not _matches_callout(value, profile_diameters):
+            named_small_holes.add(value)
+    accepted_holes = [
+        _num(item.get("diameter_mm"))
+        for item in features.get("cross_holes") or []
+        if isinstance(item, dict)
+    ]
+    for diameter in sorted(named_small_holes):
+        if not _matches_callout(diameter, [value for value in accepted_holes if value]):
+            issues.append(
+                f"поперечное отверстие Ø{diameter:g} указано, но не локализовано"
+            )
+
+    chamfer_count = max(
+        (
+            int(match.group(1))
+            for text in texts
+            for match in [re.search(r"\b(\d+)\s*фас", text, re.IGNORECASE)]
+            if match
+        ),
+        default=0,
+    )
+    if chamfer_count and len(features.get("chamfers") or []) < chamfer_count:
+        issues.append(
+            f"указано {chamfer_count} фасок, локализовано "
+            f"{len(features.get('chamfers') or [])}"
+        )
+
+    thread_callouts = sorted({
+        match.group(0).replace(" ", "")
+        for text in texts
+        for match in re.finditer(
+            r"\bM\s*\d+(?:[.,]\d+)?(?:\s*[xх×]\s*\d+(?:[.,]\d+)?)?",
+            text,
+            re.IGNORECASE,
+        )
+    })
+    assigned_threads = [
+        item.get("thread") for item in outer if isinstance(item, dict) and item.get("thread")
+    ]
+    if thread_callouts and len(assigned_threads) < len(thread_callouts):
+        issues.append(
+            "резьбы указаны, но не привязаны к участкам: "
+            + ", ".join(thread_callouts)
+        )
+    return issues
+
+
 def _checked_bore(
-    bore: list[dict], outer: list[dict], callouts: dict
+    bore: list[dict], outer: list[dict], callouts: dict,
+    diameter_evidence: dict[str, Any] | None = None,
 ) -> tuple[list[dict], str | None]:
     """The bore, but only if the sheet supports it.
 
@@ -761,6 +981,24 @@ def _checked_bore(
             "диаметров расточки нет среди прочитанных выносок: "
             + ", ".join(f"{value:g}" for value in off_sheet[:4])
         )
+
+    if (diameter_evidence or {}).get("status") == "ok":
+        supported = [
+            float(item["value_mm"])
+            for item in (diameter_evidence or {}).get("observations") or []
+            if item.get("role") == "bore"
+            and isinstance(item.get("value_mm"), (int, float))
+            and float(item.get("confidence") or 0.0) >= 0.6
+        ]
+        unsupported = [
+            value for value in (_num(item.get("diameter_mm")) for item in sections)
+            if value is not None and not _matches_callout(value, supported)
+        ]
+        if unsupported:
+            return [], (
+                "диаметры расточки не подтверждены локализованным внутренним "
+                "контуром: " + ", ".join(f"Ø{value:g}" for value in unsupported[:6])
+            )
 
     outer_diameters = [
         _num(item.get("diameter_mm")) for item in outer if isinstance(item, dict)
@@ -829,11 +1067,24 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
     for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or []):
         text = str((item or {}).get("value") or (item or {}).get("text") or "")
         text = _STANDARD_REFERENCE.sub(" ", text)
-        marked = bool(_DIAMETER_MARK.search(text))
+        # Hole fits are diameter callouts even when OCR drops the leading Ø:
+        # ``50H7`` cannot be a linear size. Limit the repair to uppercase H so
+        # an overall length carrying lowercase h14 is not reclassified.
+        fit_implies_diameter = bool(
+            _re.match(r"^\s*\d+(?:[.,]\d+)?\s*H\d{1,2}\b", text)
+        )
+        marked = bool(_DIAMETER_MARK.search(text)) or fit_implies_diameter
         text = _FIT_CODE.sub(" ", text)
         if kind == "diameter" and not marked:
             continue
         if kind == "linear" and marked:
+            continue
+        if kind == "diameter":
+            nominal = _re.search(r"\d+(?:[.,]\d+)?", text)
+            if nominal:
+                value = float(nominal.group().replace(",", "."))
+                if 0 < value <= 100_000:
+                    values.append(value)
             continue
         for match in _re.finditer(r"\d+(?:[.,]\d+)?", text):
             try:
@@ -848,6 +1099,7 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
 async def _sections_from_chain(
     image, callouts: dict, *, router: Any, confidential: bool,
     audit: list[dict[str, Any]] | None = None, source_image=None,
+    evidence_context: dict[str, Any] | None = None,
 ) -> tuple[list[dict], str | None]:
     """Step lengths as DIFFERENCES of the axial chain the sheet draws.
 
@@ -862,6 +1114,7 @@ async def _sections_from_chain(
         return [], "выноски не прочитаны"
     from app.ai.cad_process_log import record_cad_process_event
     from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
+    from app.ai.cad_recognize.diameter_dimensions import localize_diameter_dimensions
 
     axial_map = localize_axial_dimensions(source_image or image, lengths_seen)
     await record_cad_process_event(
@@ -874,6 +1127,27 @@ async def _sections_from_chain(
             "mm_per_px": axial_map.get("mm_per_px"),
             "observations": axial_map.get("observations") or [],
             "blockers": axial_map.get("blockers") or [],
+        },
+    )
+    diameter_map = localize_diameter_dimensions(
+        source_image or image, diameters_seen, axial_map, lengths_seen
+    )
+    if evidence_context is not None:
+        evidence_context["axial_map"] = axial_map
+        evidence_context["diameter_map"] = diameter_map
+    await record_cad_process_event(
+        "reader.diameter_dimensions",
+        "completed" if diameter_map.get("status") == "ok" else "failed",
+        "Диаметральные выноски связаны с наружным и внутренним контурами",
+        {
+            "status": diameter_map.get("status"),
+            "profile_center_y_px": diameter_map.get("profile_center_y_px"),
+            "px_per_mm": diameter_map.get("px_per_mm"),
+            "observations": diameter_map.get("observations") or [],
+            "outer_transition_stations": (
+                diameter_map.get("outer_transition_stations") or []
+            ),
+            "blockers": diameter_map.get("blockers") or [],
         },
     )
     import json
@@ -892,11 +1166,32 @@ async def _sections_from_chain(
         ensure_ascii=False,
         separators=(",", ":"),
     )
+    localized_diameters = json.dumps(
+        {
+            "diameters": [
+                {
+                    key: item.get(key)
+                    for key in (
+                        "id", "value_mm", "role", "source", "raw_text",
+                        "label_bbox", "profile_measurement_line",
+                        "profile_interval_px", "axial_interval_mm", "confidence",
+                    )
+                }
+                for item in (diameter_map.get("observations") or [])
+            ],
+            "outer_transition_stations": (
+                diameter_map.get("outer_transition_stations") or []
+            ),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     answer = await _ask(
         _CHAIN_PROMPT.format(
             diameters=", ".join(f"{value:g}" for value in diameters_seen[:24]) or "—",
             lengths=", ".join(f"{value:g}" for value in lengths_seen[:24]) or "—",
             localized=localized or "[]",
+            localized_diameters=localized_diameters or "[]",
         ),
         image, num_predict=900,
         schema=_CHAIN_SCHEMA, router=router, confidential=confidential,
@@ -912,6 +1207,30 @@ async def _sections_from_chain(
         ]
 
     diameters, chain = numbers("diameters_mm"), numbers("chain_mm")
+    from app.ai.cad_recognize.diameter_dimensions import (
+        outer_sections_from_diameter_evidence,
+    )
+
+    evidence_outer = outer_sections_from_diameter_evidence(diameter_map)
+    if evidence_outer:
+        await record_cad_process_event(
+            "reader.profile_evidence",
+            "completed",
+            "Наружный профиль собран из измеренного контура и размерных станций",
+            {
+                "sections": evidence_outer,
+                "model_diameters_mm": diameters,
+                "model_chain_mm": chain,
+                "model_agrees": (
+                    len(evidence_outer) == len(diameters)
+                    and all(
+                        _matches_callout(section["diameter_mm"], [diameter])
+                        for section, diameter in zip(evidence_outer, diameters, strict=True)
+                    )
+                ),
+            },
+        )
+        return evidence_outer, None
     if len(diameters) < 2 or len(chain) != len(diameters):
         return [], (
             f"цепочка не сходится с числом ступеней ({len(diameters)} диаметров, "
@@ -926,6 +1245,12 @@ async def _sections_from_chain(
         if isinstance(item.get("station_from_left_mm"), (int, float))
         and float(item.get("confidence") or 0.0) >= 0.6
     ]
+    localized_stations.extend(
+        float(item["station_from_left_mm"])
+        for item in (diameter_map.get("outer_transition_stations") or [])
+        if isinstance(item.get("station_from_left_mm"), (int, float))
+        and float(item.get("confidence") or 0.0) >= 0.6
+    )
     if axial_map.get("status") == "ok" and localized_stations:
         unsupported = [
             value for value in chain
@@ -935,6 +1260,24 @@ async def _sections_from_chain(
             return [], (
                 "осевые позиции не подтверждены локализованными размерными "
                 "линиями: " + ", ".join(f"{value:g}" for value in unsupported[:8])
+            )
+
+    if diameter_map.get("status") == "ok":
+        supported_outer = [
+            float(item["value_mm"])
+            for item in (diameter_map.get("observations") or [])
+            if item.get("role") == "outer"
+            and isinstance(item.get("value_mm"), (int, float))
+            and float(item.get("confidence") or 0.0) >= 0.6
+        ]
+        unsupported_outer = [
+            value for value in diameters
+            if not _matches_callout(value, supported_outer)
+        ]
+        if unsupported_outer:
+            return [], (
+                "наружные диаметры не подтверждены локализованным контуром: "
+                + ", ".join(f"Ø{value:g}" for value in unsupported_outer[:8])
             )
 
     # An evenly spaced chain is a fabrication, not a reading. Asked for the
@@ -970,6 +1313,23 @@ async def _sections_from_chain(
             )
 
     bores = numbers("bore_diameters_mm")
+    if diameter_map.get("status") == "ok" and bores:
+        supported_bore = [
+            float(item["value_mm"])
+            for item in (diameter_map.get("observations") or [])
+            if item.get("role") == "bore"
+            and isinstance(item.get("value_mm"), (int, float))
+            and float(item.get("confidence") or 0.0) >= 0.6
+        ]
+        unsupported_bore = [
+            value for value in bores
+            if not _matches_callout(value, supported_bore)
+        ]
+        if unsupported_bore:
+            return [], (
+                "внутренние диаметры не подтверждены локализованным контуром: "
+                + ", ".join(f"Ø{value:g}" for value in unsupported_bore[:8])
+            )
     if bores and diameters and max(bores) >= max(diameters):
         # A bore cannot be the widest thing on a turned part; when it is, the
         # reader has handed back internal dimensions as the outer contour —
@@ -1148,9 +1508,11 @@ async def read_spec_by_fragments(
     unresolved: list[str] = []
     if kind == "rotation":
         # Chain first: the sheet states positions, not lengths.
+        profile_evidence: dict[str, Any] = {}
         outer, chain_problem = await _sections_from_chain(
             chain_view, callouts, router=router, confidential=confidential,
             audit=fragment_answers, source_image=image,
+            evidence_context=profile_evidence,
         )
         geometry: dict = {}
         if not outer:
@@ -1163,9 +1525,31 @@ async def read_spec_by_fragments(
         # The bore answers a separate question, so it is checked against the
         # sheet the same way the outer chain is — an unchecked cavity is a hole
         # through a real part.
-        bore, bore_problem = _checked_bore(
-            geometry.get("bore") or [], outer, callouts
+        from app.ai.cad_recognize.diameter_dimensions import (
+            bore_sections_from_diameter_evidence,
         )
+
+        bore = bore_sections_from_diameter_evidence(
+            profile_evidence.get("diameter_map") or {}
+        )
+        if bore:
+            bore_problem = None
+            from app.ai.cad_process_log import record_cad_process_event
+
+            await record_cad_process_event(
+                "reader.bore_evidence",
+                "completed",
+                "Внутренний профиль собран из измеренного контура и осевых станций",
+                {
+                    "sections": bore,
+                    "model_bore": geometry.get("bore") or [],
+                },
+            )
+        else:
+            bore, bore_problem = _checked_bore(
+                geometry.get("bore") or [], outer, callouts,
+                diameter_evidence=profile_evidence.get("diameter_map"),
+            )
         if outer:
             body["outer"] = outer
         else:
@@ -1178,11 +1562,15 @@ async def read_spec_by_fragments(
             # Only worth asking once there is a contour to hang them on: these
             # are positions along a profile, and without the profile they have
             # nothing to be positioned against.
-            body.update(
-                await _read_cut_features(
-                    geometry_view, outer, router=router, confidential=confidential,
-                    audit=fragment_answers,
-                )
+            feature_result = await _read_cut_features(
+                geometry_view, outer, router=router, confidential=confidential,
+                audit=fragment_answers, source_image=image, callouts=callouts,
+                profile_evidence=profile_evidence,
+            )
+            body.update(feature_result)
+            unresolved.extend(
+                f"малые элементы: {item}"
+                for item in profile_evidence.get("feature_unresolved") or []
             )
     elif kind in ("plate", "flange"):
         profile = await _profile_by_assignment(
@@ -1272,6 +1660,78 @@ def _type_label(kind: str) -> str:
 def _has_geometry(spec: dict) -> bool:
     body = spec.get("main_view") or {}
     return bool(body.get("outer") or (body.get("profile") or {}).get("shape"))
+
+
+def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
+    """Let whole-sheet fallback fill gaps, never overwrite verified geometry."""
+    import copy
+
+    merged = copy.deepcopy(whole)
+    fragment_body = fragments.get("main_view") or {}
+    merged_body = merged.setdefault("main_view", {})
+    fragment_outer = [
+        item for item in (fragment_body.get("outer") or []) if isinstance(item, dict)
+    ]
+    verified_outer = bool(fragment_outer) and all(
+        "подтверждены OCR+CV" in str(item.get("note") or "")
+        for item in fragment_outer
+    )
+    if verified_outer:
+        merged_body["outer"] = copy.deepcopy(fragment_body["outer"])
+    fragment_bore = [
+        item for item in (fragment_body.get("bore") or []) if isinstance(item, dict)
+    ]
+    verified_bore = bool(fragment_bore) and all(
+        "контур" in str(item.get("note") or "").lower()
+        for item in fragment_bore
+    )
+    if verified_bore:
+        merged_body["bore"] = copy.deepcopy(fragment_body["bore"])
+    if (fragment_body.get("profile") or {}).get("shape"):
+        merged_body["profile"] = copy.deepcopy(fragment_body["profile"])
+
+    fragment_unresolved = [
+        str(item) for item in (fragments.get("unresolved") or []) if str(item)
+    ]
+    feature_fields = ("chamfers", "fillets", "grooves", "keyways", "cross_holes")
+    feature_rejected = any(
+        item.startswith("малые элементы:") for item in fragment_unresolved
+    )
+    if feature_rejected:
+        for field in feature_fields:
+            merged_body.pop(field, None)
+    for field in feature_fields:
+        verified_features = [
+            item for item in (fragment_body.get(field) or [])
+            if isinstance(item, dict) and item.get("evidence")
+        ]
+        if verified_features:
+            merged_body[field] = copy.deepcopy(verified_features)
+    bore_rejected = any(item.startswith("расточка:") for item in fragment_unresolved)
+    if bore_rejected and not fragment_body.get("bore"):
+        merged_body.pop("bore", None)
+
+    unresolved = [str(item) for item in (merged.get("unresolved") or []) if str(item)]
+    if verified_outer:
+        unresolved = [
+            item for item in unresolved
+            if not re.match(r"^body:\d+:outer:\d+:length-missing$", item)
+        ]
+        if all(_num(item.get("length_mm")) for item in fragment_outer):
+            unresolved = [
+                item for item in unresolved
+                if "невозможно вычислить точные длины ступеней" not in item
+            ]
+    if verified_bore:
+        unresolved = [
+            item for item in unresolved
+            if not re.match(r"^body:\d+:bore:\d+:length-missing$", item)
+        ]
+    for item in fragment_unresolved:
+        if item not in unresolved:
+            unresolved.append(item)
+    merged["unresolved"] = unresolved
+    return merged
 
 
 async def read_fragments_consensus(
@@ -1394,6 +1854,7 @@ async def read_spec_best_effort(
     if not whole:
         return fragments
     if fragments:
+        whole = _merge_fragment_truth(whole, fragments)
         if not (whole.get("title_block") or {}):
             whole["title_block"] = fragments.get("title_block") or {}
         if not (whole.get("dimensions") or []):
@@ -1402,4 +1863,14 @@ async def read_spec_best_effort(
             whole["views"] = fragments.get("views") or []
         whole["fragments"] = fragments.get("fragments")
         whole["fragment_reader_attempts"] = fragments.get("reader_attempts") or []
+        await record_cad_process_event(
+            "reader.strategy.merge",
+            "completed",
+            "Проверенная fragment-геометрия сохранена поверх whole-sheet fallback",
+            {
+                "outer_sections": len(((whole.get("main_view") or {}).get("outer") or [])),
+                "bore_sections": len(((whole.get("main_view") or {}).get("bore") or [])),
+                "unresolved": whole.get("unresolved") or [],
+            },
+        )
     return whole

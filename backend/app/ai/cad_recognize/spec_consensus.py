@@ -175,7 +175,59 @@ def _body_consensus(
             merged["profile"] = profile
         elif profile_problem:
             disagreements.append(f"{label} (контур): {profile_problem}")
+
+    for field in ("chamfers", "fillets", "grooves", "keyways", "cross_holes"):
+        feature_reads = [body.get(field) or [] for body in bodies]
+        accepted = _agreed_feature_items(feature_reads, minimum=minimum)
+        if accepted:
+            merged[field] = accepted
+        elif any(feature_reads):
+            disagreements.append(
+                f"{label} ({field}): проходы не сошлись на малых элементах"
+            )
     return merged, disagreements
+
+
+def _feature_items_agree(left: dict, right: dict) -> bool:
+    """Compare one cut feature without relying on list order or evidence."""
+    keys = set(left) | set(right)
+    keys -= {"evidence", "note", "confidence", "source"}
+    for key in keys:
+        a, b = left.get(key), right.get(key)
+        if a is None and b is None:
+            continue
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            if not _numbers_agree(a, b):
+                return False
+        elif isinstance(a, dict) and isinstance(b, dict):
+            if not _feature_items_agree(a, b):
+                return False
+        elif _text_key(a) != _text_key(b):
+            return False
+    return True
+
+
+def _agreed_feature_items(
+    reads: list[list[dict]], *, minimum: int
+) -> list[dict]:
+    """Keep only complete feature objects independently confirmed by passes."""
+    candidates = [
+        item for read in reads for item in read if isinstance(item, dict)
+    ]
+    accepted: list[dict] = []
+    for candidate in candidates:
+        if any(_feature_items_agree(candidate, item) for item in accepted):
+            continue
+        votes = sum(
+            1 for read in reads
+            if any(
+                isinstance(item, dict) and _feature_items_agree(candidate, item)
+                for item in read
+            )
+        )
+        if votes >= minimum:
+            accepted.append(candidate)
+    return accepted
 
 
 def _same_value(left: Any, right: Any) -> bool:

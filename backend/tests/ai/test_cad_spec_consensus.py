@@ -163,6 +163,40 @@ def test_a_bore_only_some_passes_saw_becomes_a_review_item():
     assert any("расточка" in item for item in spec["unresolved"])
 
 
+def test_agreeing_cut_features_survive_consensus():
+    keyway = {
+        "kind": "parallel",
+        "axial_start_mm": 277,
+        "length_mm": 85,
+        "width_mm": 12,
+        "depth_mm": 5,
+    }
+    reads = [
+        _read(_PROFILE, main_view={"keyways": [keyway]}),
+        _read(_PROFILE, main_view={"keyways": [dict(keyway)]}),
+        _read(_PROFILE),
+    ]
+
+    spec = consensus_spec(reads)
+
+    assert spec["main_view"]["keyways"] == [keyway]
+
+
+def test_disputed_cut_feature_is_not_silently_dropped():
+    reads = [
+        _read(_PROFILE, main_view={"cross_holes": [{
+            "diameter_mm": 9, "axial_position_mm": 455, "count": 1,
+        }]}),
+        _read(_PROFILE),
+        _read(_PROFILE),
+    ]
+
+    spec = consensus_spec(reads)
+
+    assert "cross_holes" not in spec["main_view"]
+    assert any("cross_holes" in item for item in spec["unresolved"])
+
+
 def test_a_flange_profile_needs_more_than_one_pass_to_survive():
     """Live: one pass returned a complete circle profile, another returned none."""
     flange = {"shape": "circle", "diameter_mm": 560, "thickness_mm": 20, "holes": []}
