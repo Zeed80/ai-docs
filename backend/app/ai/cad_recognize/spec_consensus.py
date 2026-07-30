@@ -136,7 +136,22 @@ def _vote_sections(
             "проходы чтения не сошлись на профиле "
             f"(ступеней по проходам: {counts}, совпало {best[1]} из {len(reads)})"
         )
-    return best[0], best[1], None
+    accepted = [dict(item) for item in best[0]]
+    agreeing_reads = [
+        read for read in populated if _sections_agree(read, best[0])
+    ]
+    for index, section in enumerate(accepted):
+        thread_reads = [
+            [read[index]["thread"]]
+            if isinstance(read[index].get("thread"), dict) else []
+            for read in agreeing_reads
+        ]
+        agreed_threads = _agreed_feature_items(thread_reads, minimum=minimum)
+        if agreed_threads:
+            section["thread"] = agreed_threads[0]
+        else:
+            section.pop("thread", None)
+    return accepted, best[1], None
 
 
 def _body_consensus(

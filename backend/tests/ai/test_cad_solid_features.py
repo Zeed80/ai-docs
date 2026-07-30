@@ -115,6 +115,24 @@ def test_a_ring_of_cross_holes_is_expanded_around_the_axis():
     assert all(hole.params["axis"] == "radial" for hole in holes)
 
 
+def test_radial_counterbore_compiles_as_a_second_shallow_cut():
+    candidate = _tree(cross_holes=[{
+        "diameter_mm": 10.0,
+        "axial_position_mm": 200.0,
+        "angle_deg": 0.0,
+        "through": False,
+        "depth_mm": 8.5,
+        "counterbore_diameter_mm": 24.0,
+        "counterbore_depth_mm": 3.0,
+    }])
+
+    holes = _of_kind(candidate, "hole")
+    assert [(item.params["diameter_mm"], item.params["depth_mm"]) for item in holes] == [
+        (10.0, 8.5),
+        (24.0, 3.0),
+    ]
+
+
 def test_a_chamfer_points_at_the_end_face_it_names():
     candidate = _tree(chamfers=[{"size_mm": 1.0, "angle_deg": 45.0, "location": "left_end"}])
     chamfer = _of_kind(candidate, "chamfer")[0]

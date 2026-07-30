@@ -21,6 +21,7 @@ from app.ai.cad_recognize.spec_vectorize import (
     EngineeringDrawingSpec,
     SpecBody,
     SpecChamfer,
+    SpecCrossHole,
     SpecGroove,
     SpecKeyway,
     SpecTaper,
@@ -53,6 +54,25 @@ def test_a_thread_annotates_the_step_it_sits_on():
     )
     assert thread.system == "metric" and thread.hand == "right"
     assert thread.internal is False
+
+
+def test_cross_hole_counterbore_requires_a_complete_larger_step():
+    hole = SpecCrossHole(
+        diameter_mm=10,
+        axial_position_mm=40,
+        through=False,
+        depth_mm=8.5,
+        counterbore_diameter_mm=24,
+        counterbore_depth_mm=3,
+    )
+    assert hole.counterbore_diameter_mm == 24
+
+    with pytest.raises(ValidationError):
+        SpecCrossHole(
+            diameter_mm=10,
+            axial_position_mm=40,
+            counterbore_diameter_mm=24,
+        )
 
 
 def test_a_groove_states_its_depth_or_its_root_never_both():

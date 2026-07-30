@@ -198,6 +198,29 @@ def test_agreeing_cross_hole_boolean_survives_consensus():
     spec = consensus_spec(reads)
 
     assert spec["main_view"]["cross_holes"] == [hole]
+
+
+def test_profile_thread_needs_majority_even_when_section_geometry_agrees():
+    threaded = {
+        "diameter_mm": 55,
+        "length_mm": 25,
+        "thread": {
+            "designation": "M54,5x2",
+            "nominal_diameter_mm": 54.5,
+            "pitch_mm": 2,
+            "internal": True,
+        },
+    }
+    plain = {"diameter_mm": 55, "length_mm": 25}
+    reads = [
+        _read(_PROFILE, main_view={"bore": [dict(threaded)]}),
+        _read(_PROFILE, main_view={"bore": [dict(threaded)]}),
+        _read(_PROFILE, main_view={"bore": [dict(plain)]}),
+    ]
+
+    spec = consensus_spec(reads)
+
+    assert spec["main_view"]["bore"][0]["thread"]["designation"] == "M54,5x2"
     assert spec["unresolved"] == []
 
 

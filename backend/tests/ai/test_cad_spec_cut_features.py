@@ -19,6 +19,7 @@ from PIL import Image
 
 from app.ai.cad_recognize.spec_fragments import _read_cut_features
 from app.ai.cad_recognize.spec_fragments import _feature_completeness_issues
+from app.ai.cad_recognize.spec_fragments import _assign_profile_threads
 
 _OUTER = [
     {"diameter_mm": 80.0, "length_mm": 150.0},
@@ -284,12 +285,18 @@ async def test_opposite_to_bore_holes_get_geometry_derived_depth(monkeypatch):
         "status": "ok",
         "keyway_candidates": [],
         "radial_opening_candidates": [{
+            "id": "radial-opening-2",
+            "bbox": [500, 150, 540, 550],
+            "axial_position_mm": 430,
+            "supported_diameters_mm": [14],
+        }, {
             "id": "radial-opening-3",
             "bbox": [600, 150, 630, 550],
             "axial_position_mm": 455,
             "supported_diameters_mm": [9, 10],
         }],
         "diameter_label_observations": [
+            {"value_mm": 24, "side": "top", "bbox": [710, 150, 760, 180], "raw_text": "Ø24"},
             {"value_mm": 10, "side": "top", "bbox": [700, 200, 750, 230], "raw_text": "Ø10"},
             {"value_mm": 9, "side": "bottom", "bbox": [700, 500, 750, 530], "raw_text": "Ø9"},
         ],
@@ -307,7 +314,9 @@ async def test_opposite_to_bore_holes_get_geometry_derived_depth(monkeypatch):
             return {"radial_features": [
                 {"candidate_id": "radial-opening-3", "diameter_mm": 10,
                  "kind": "to_bore", "side": "bottom"},
-                {"candidate_id": "radial-opening-3", "diameter_mm": 9,
+                {"candidate_id": "radial-opening-3", "diameter_mm": 24,
+                 "kind": "counterbore", "side": "top", "depth_mm": 3},
+                {"candidate_id": "radial-opening-2", "diameter_mm": 9,
                  "kind": "to_bore", "side": "bottom"},
             ]}
         return {}
@@ -329,7 +338,9 @@ async def test_opposite_to_bore_holes_get_geometry_derived_depth(monkeypatch):
         source,
         [{"diameter_mm": 72, "length_mm": 470}],
         router=object(), confidential=True, source_image=source,
-        callouts={"dimensions": [{"value": "Ø10"}, {"value": "Ø9"}]},
+        callouts={"dimensions": [
+            {"value": "Ø24"}, {"value": "Ø10"}, {"value": "Ø9"},
+        ]},
         profile_evidence=profile_evidence,
     )
 
@@ -337,7 +348,40 @@ async def test_opposite_to_bore_holes_get_geometry_derived_depth(monkeypatch):
         (item["diameter_mm"], item["angle_deg"], item["depth_mm"])
         for item in result["cross_holes"]
     ] == [(10.0, 0.0, 8.5), (9.0, 180.0, 8.5)]
+    assert result["cross_holes"][0]["counterbore_diameter_mm"] == 24.0
+    assert result["cross_holes"][0]["counterbore_depth_mm"] == 3.0
     assert not any(
         "несколько диаметров" in item
         for item in profile_evidence["feature_unresolved"]
     )
+
+
+def test_thread_is_assigned_only_to_a_unique_matching_profile_section():
+    outer = [{"diameter_mm": 80, "length_mm": 400}, {"diameter_mm": 72, "length_mm": 70}]
+    bore = [{"diameter_mm": 56, "length_mm": 445}, {"diameter_mm": 55, "length_mm": 25}]
+
+    unresolved = _assign_profile_threads(
+        {"dimensions": [{"value": "M75×1,5"}, {"value": "M54,5×2"}]},
+        outer,
+        bore,
+    )
+
+    assert unresolved == ["M75x1,5"]
+    assert bore[1]["thread"] == {
+        "designation": "M54,5x2",
+        "system": "metric",
+        "nominal_diameter_mm": 54.5,
+        "pitch_mm": 2.0,
+        "internal": True,
+        "evidence": [{"image_index": 0, "bbox": None, "raw_text": "M54,5×2"}],
+    }
+    issues = _feature_completeness_issues(
+        {"dimensions": [{"value": "M75×1,5"}, {"value": "M54,5×2"}]},
+        {},
+        outer,
+        {"observations": []},
+        bore=bore,
+    )
+    assert len(issues) == 1
+    assert "M75" in issues[0]
+    assert "M54,5" not in issues[0]

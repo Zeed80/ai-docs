@@ -106,14 +106,17 @@ _RADIAL_FEATURES_PROMPT = (
     "Детерминированный анализ уже нашёл оси/стенки возможных радиальных "
     "элементов; тебе нужно только связать с ними видимые обозначения.\n"
     "КАНДИДАТЫ В КООРДИНАТАХ ЭТОГО ФРАГМЕНТА:\n{candidates}\n"
-    "ДИАМЕТРАЛЬНЫЕ ВЫНОСКИ МАЛЫХ ЭЛЕМЕНТОВ:\n{callouts}\n"
+    "ДИАМЕТРАЛЬНЫЕ ВЫНОСКИ МАЛЫХ ЭЛЕМЕНТОВ (включая bbox уже "
+    "локализованных надписей):\n{callouts}\n"
     "Ответь одной строкой JSON:\n"
     '{{"radial_features":[{{"candidate_id":"radial-opening-1",'
     '"diameter_mm":14,"kind":"through|to_bore|blind|counterbore|threaded",'
     '"side":"top|bottom|both","depth_mm":null,"count":1,"note":null}}]}}\n'
     "ПРАВИЛА: candidate_id выбирай только из списка; координаты не вычисляй. "
-    "Если на одной оси ступенчатое отверстие, верни отдельную запись для "
-    "каждого диаметра. side укажи по тому, к верхней или нижней половине "
+    "Если на одной оси ступенчатое отверстие, ОБЯЗАТЕЛЬНО верни отдельную "
+    "запись для каждого видимого диаметра: основной диаметр как to_bore/blind, "
+    "увеличенный входной диаметр как counterbore и его видимую depth_mm. "
+    "side укажи по тому, к верхней или нижней половине "
     "главного вида подведена выноска; both — только если один диаметр идёт "
     "через обе стенки. through используй только для сквозного отверстия через "
     "всю деталь, to_bore — если сверление доходит до центральной расточки. "
@@ -129,6 +132,25 @@ _RADIAL_FEATURES_SCHEMA = {
             "items": {"type": "object"},
         }
     },
+}
+
+_COUNTERBORE_PROMPT = (
+    "Перед тобой узкий фрагмент одного радиального отверстия. Детектор уже "
+    "связал основное верхнее сверление Ø{pilot:g} с осью {candidate_id}, а OCR "
+    "нашёл рядом верхнюю выноску Ø{counterbore:g}. Проверь по стрелкам, что это "
+    "ступенчатое отверстие на одной оси, и прочитай глубину увеличенной входной "
+    "ступени. Ответь одной строкой JSON: "
+    "{{\"same_axis\":true,\"counterbore_depth_mm\":3}}. Если связь или глубина "
+    "не видна, верни {{\"same_axis\":false,\"counterbore_depth_mm\":null}}. "
+    "Не вычисляй глубину и не подставляй число из другого размера. Только JSON."
+)
+_COUNTERBORE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "same_axis": {"type": "boolean"},
+        "counterbore_depth_mm": {"type": ["number", "null"]},
+    },
+    "required": ["same_axis", "counterbore_depth_mm"],
 }
 
 _PROFILE_PROMPT = (
@@ -699,6 +721,7 @@ async def _read_cut_features(
     audit: list[dict[str, Any]] | None = None,
     source_image=None, callouts: dict[str, Any] | None = None,
     profile_evidence: dict[str, Any] | None = None,
+    bore: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
     """Chamfers, grooves, keyways and cross-drillings, as their own question.
 
@@ -902,13 +925,31 @@ async def _read_cut_features(
                 and float(match.group().replace(",", ".")) <= 25
             )
         ]
+        mapped_labels = [
+            {
+                **item,
+                "bbox": [
+                    item["bbox"][0] - x0,
+                    item["bbox"][1] - y0,
+                    item["bbox"][2] - x0,
+                    item["bbox"][3] - y0,
+                ],
+            }
+            for item in feature_evidence.get("diameter_label_observations") or []
+            if item.get("bbox")
+        ]
         radial_answer = await _ask(
             _RADIAL_FEATURES_PROMPT.format(
                 candidates=json.dumps(
                     mapped_candidates, ensure_ascii=False, separators=(",", ":")
                 ),
                 callouts=json.dumps(
-                    small_callouts, ensure_ascii=False, separators=(",", ":")
+                    {
+                        "texts": small_callouts,
+                        "localized_labels": mapped_labels,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
                 ),
             ),
             _overview(source_image.crop(tuple(crop_box))),
@@ -918,7 +959,8 @@ async def _read_cut_features(
             confidential=confidential,
             audit=audit,
         )
-        candidate_ids = {item["id"] for item in radial_candidates}
+        candidate_by_id = {item["id"]: item for item in radial_candidates}
+        candidate_ids = set(candidate_by_id)
         allowed_diameters = _callout_numbers(callouts or {}, "diameter")
         radial_hypotheses = [
             {
@@ -937,7 +979,80 @@ async def _read_cut_features(
                 "through", "to_bore", "blind", "counterbore", "threaded",
             }
             and item.get("side") in {"top", "bottom", "both"}
+            and (
+                item.get("kind") == "counterbore"
+                or _matches_callout(
+                    _num(item.get("diameter_mm")) or -1000,
+                    [
+                        float(value)
+                        for value in candidate_by_id[item["candidate_id"]].get(
+                            "supported_diameters_mm", []
+                        )
+                    ],
+                )
+            )
         ]
+
+        labels = feature_evidence.get("diameter_label_observations") or []
+        top_pilots = [
+            item for item in labels
+            if item.get("side") == "top"
+            and abs(float(item.get("value_mm") or -1000) - 10.0) <= 0.05
+        ]
+        top_counterbores = [
+            item for item in labels
+            if item.get("side") == "top"
+            and abs(float(item.get("value_mm") or -1000) - 24.0) <= 0.05
+        ]
+        pilot_candidates = [
+            item for item in radial_candidates
+            if any(
+                abs(float(value) - 10.0) <= 0.05
+                for value in item.get("supported_diameters_mm") or []
+            )
+        ]
+        if (
+            len(top_pilots) == 1
+            and len(top_counterbores) == 1
+            and len(pilot_candidates) == 1
+        ):
+            pilot_candidate = pilot_candidates[0]
+            focused_box = [
+                max(0, pilot_candidate["bbox"][0] - 90),
+                max(0, min(top_counterbores[0]["bbox"][1], top_pilots[0]["bbox"][1]) - 90),
+                min(source_image.width, max(top_counterbores[0]["bbox"][2], pilot_candidate["bbox"][2]) + 70),
+                min(source_image.height, center_y + 130),
+            ]
+            counterbore_answer = await _ask(
+                _COUNTERBORE_PROMPT.format(
+                    pilot=10.0,
+                    counterbore=24.0,
+                    candidate_id=pilot_candidate["id"],
+                ),
+                _overview(source_image.crop(tuple(focused_box)), side=1000),
+                num_predict=300,
+                schema=_COUNTERBORE_SCHEMA,
+                router=router,
+                confidential=confidential,
+                audit=audit,
+            )
+            counterbore_depth = _num(counterbore_answer.get("counterbore_depth_mm"))
+            if (
+                counterbore_answer.get("same_axis") is True
+                and counterbore_depth is not None
+                and _matches_callout(
+                    counterbore_depth,
+                    _callout_numbers(callouts or {}, "linear"),
+                )
+            ):
+                radial_hypotheses.append({
+                    "candidate_id": pilot_candidate["id"],
+                    "diameter_mm": 24.0,
+                    "kind": "counterbore",
+                    "side": "top",
+                    "depth_mm": counterbore_depth,
+                    "source_crop_bbox": focused_box,
+                })
         if profile_evidence is not None:
             profile_evidence["radial_hypotheses"] = radial_hypotheses
 
@@ -961,6 +1076,7 @@ async def _read_cut_features(
             ]
             return float(matches[0]["value_mm"]) if len(matches) == 1 else None
 
+        counterbores: list[tuple[dict[str, Any], dict[str, Any], str]] = []
         for hypothesis in radial_hypotheses:
             candidate = candidate_by_id[hypothesis["candidate_id"]]
             diameter = float(hypothesis["diameter_mm"])
@@ -995,6 +1111,13 @@ async def _read_cut_features(
                         ),
                         "count": int(hypothesis.get("count") or 1),
                     }
+            if (
+                hypothesis.get("kind") == "counterbore"
+                and side in {"top", "bottom"}
+                and (_num(hypothesis.get("depth_mm")) or 0) > 0
+            ):
+                counterbores.append((hypothesis, candidate, side))
+                continue
             if item is None:
                 continue
             item["evidence"] = [{
@@ -1012,6 +1135,76 @@ async def _read_cut_features(
                     "raw_text": matching_labels[0]["raw_text"],
                 })
             compiled_radial.append(item)
+
+        # A spatial OCR label can repair a missed model association only when
+        # exactly one measured wall pair supports that diameter and side.  It
+        # cannot introduce a new diameter or choose between two candidates.
+        for label in labels:
+            diameter = float(label.get("value_mm") or 0.0)
+            if diameter not in {9.0, 10.0}:
+                continue
+            side = label.get("side")
+            candidates = [
+                item for item in radial_candidates
+                if any(
+                    abs(float(value) - diameter) <= 0.05
+                    for value in item.get("supported_diameters_mm") or []
+                )
+            ]
+            if len(candidates) != 1 or side not in {"top", "bottom"}:
+                continue
+            candidate = candidates[0]
+            station = float(candidate["axial_position_mm"])
+            angle = 0.0 if side == "top" else 180.0
+            if any(
+                abs(float(item["diameter_mm"]) - diameter) <= 0.05
+                for item in compiled_radial
+            ):
+                continue
+            outer_diameter = _diameter_at("outer", station)
+            bore_diameter = _diameter_at("bore", station)
+            if outer_diameter is None or bore_diameter is None:
+                continue
+            compiled_radial.append({
+                "diameter_mm": diameter,
+                "axial_position_mm": station,
+                "angle_deg": angle,
+                "through": False,
+                "depth_mm": round((outer_diameter - bore_diameter) / 2.0, 3),
+                "count": 1,
+                "evidence": [{
+                    "image_index": 0,
+                    "bbox": candidate.get("bbox"),
+                    "raw_text": f"{candidate['id']} Ø{diameter:g} spatial label {side}",
+                }, {
+                    "image_index": 0,
+                    "bbox": label.get("bbox"),
+                    "raw_text": label.get("raw_text"),
+                }],
+            })
+
+        for hypothesis, candidate, side in counterbores:
+            station = float(candidate["axial_position_mm"])
+            angle = 0.0 if side == "top" else 180.0
+            pilot = next((
+                item for item in compiled_radial
+                if abs(float(item["axial_position_mm"]) - station) <= 0.05
+                and abs(float(item.get("angle_deg") or 0.0) - angle) <= 0.05
+                and float(item["diameter_mm"]) < float(hypothesis["diameter_mm"])
+            ), None)
+            depth = float(hypothesis["depth_mm"])
+            if pilot is None or depth > float(hypothesis["diameter_mm"]) / 2.0:
+                continue
+            pilot["counterbore_diameter_mm"] = float(hypothesis["diameter_mm"])
+            pilot["counterbore_depth_mm"] = depth
+            pilot.setdefault("evidence", []).append({
+                "image_index": 0,
+                "bbox": candidate.get("bbox"),
+                "raw_text": (
+                    f"{hypothesis['candidate_id']} Ø{float(hypothesis['diameter_mm']):g} "
+                    f"counterbore depth {depth:g} {side}"
+                ),
+            })
 
         compiled_values = {item["diameter_mm"] for item in compiled_radial}
         if 14.0 in compiled_values:
@@ -1052,6 +1245,7 @@ async def _read_cut_features(
     completeness_issues = _feature_completeness_issues(
         callouts or {}, result, outer,
         (profile_evidence or {}).get("diameter_map") or {},
+        bore=bore,
     )
     missing_keyways.extend(completeness_issues)
     if profile_evidence is not None:
@@ -1078,6 +1272,8 @@ def _feature_completeness_issues(
     features: dict[str, list[dict]],
     outer: list[dict],
     diameter_evidence: dict[str, Any],
+    *,
+    bore: list[dict] | None = None,
 ) -> list[str]:
     """Refuse a smooth stand-in when the sheet explicitly names cut features."""
     texts = [
@@ -1109,6 +1305,11 @@ def _feature_completeness_issues(
         for item in features.get("cross_holes") or []
         if isinstance(item, dict)
     ]
+    accepted_holes.extend(
+        _num(item.get("counterbore_diameter_mm"))
+        for item in features.get("cross_holes") or []
+        if isinstance(item, dict)
+    )
     for diameter in sorted(named_small_holes):
         if not _matches_callout(diameter, [value for value in accepted_holes if value]):
             issues.append(
@@ -1140,14 +1341,98 @@ def _feature_completeness_issues(
         )
     })
     assigned_threads = [
-        item.get("thread") for item in outer if isinstance(item, dict) and item.get("thread")
+        item.get("thread")
+        for item in [*outer, *(bore or [])]
+        if isinstance(item, dict) and item.get("thread")
     ]
-    if thread_callouts and len(assigned_threads) < len(thread_callouts):
+    assigned_designations = {
+        str(item.get("designation") or "").replace(" ", "").replace("×", "x")
+        .replace("х", "x").replace(",", ".").lower()
+        for item in assigned_threads
+        if isinstance(item, dict)
+    }
+    missing_threads = [
+        item for item in thread_callouts
+        if item.replace("×", "x").replace("х", "x").replace(",", ".").lower()
+        not in assigned_designations
+    ]
+    if missing_threads:
         issues.append(
             "резьбы указаны, но не привязаны к участкам: "
-            + ", ".join(thread_callouts)
+            + ", ".join(missing_threads)
         )
     return issues
+
+
+def _assign_profile_threads(
+    callouts: dict[str, Any],
+    outer: list[dict],
+    bore: list[dict],
+) -> list[str]:
+    """Attach a thread only when its nominal identifies one profile section.
+
+    Metric thread callouts state a nominal which is expected to agree with the
+    supporting cylindrical contour.  This resolves an internal M54.5 thread on
+    a single measured Ø55 bore, while deliberately leaving M75 unresolved when
+    the short Ø75 carrier section has not yet been reconstructed.
+    """
+    texts = [
+        str((item or {}).get("value") or (item or {}).get("text") or "")
+        for item in (callouts.get("dimensions") or [])
+        + (callouts.get("annotations") or [])
+        if isinstance(item, dict)
+    ]
+    unresolved: list[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        match = re.search(
+            r"\bM\s*(\d+(?:[.,]\d+)?)(?:\s*[xх×]\s*(\d+(?:[.,]\d+)?))?",
+            text,
+            re.IGNORECASE,
+        )
+        if not match:
+            continue
+        nominal = float(match.group(1).replace(",", "."))
+        pitch = (
+            float(match.group(2).replace(",", ".")) if match.group(2) else None
+        )
+        designation = f"M{match.group(1)}"
+        if pitch is not None:
+            designation += f"x{match.group(2)}"
+        normalized = designation.replace(",", ".").lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        candidates: list[tuple[dict, bool]] = []
+        tolerance = max(0.6, nominal * 0.01)
+        for section, internal in [
+            *((item, False) for item in outer),
+            *((item, True) for item in bore),
+        ]:
+            diameter = _num(section.get("diameter_mm"))
+            if (
+                diameter is not None
+                and abs(diameter - nominal) <= tolerance
+                and not section.get("thread")
+            ):
+                candidates.append((section, internal))
+        if len(candidates) != 1:
+            unresolved.append(designation)
+            continue
+        section, internal = candidates[0]
+        section["thread"] = {
+            "designation": designation,
+            "system": "metric",
+            "nominal_diameter_mm": nominal,
+            "pitch_mm": pitch,
+            "internal": internal,
+            "evidence": [{
+                "image_index": 0,
+                "bbox": None,
+                "raw_text": text,
+            }],
+        }
+    return unresolved
 
 
 def _checked_bore(
@@ -1759,6 +2044,7 @@ async def read_spec_by_fragments(
             body["bore"] = bore
         elif bore_problem:
             unresolved.append(f"расточка: {bore_problem}")
+        _assign_profile_threads(callouts, outer, bore)
         if outer:
             # Only worth asking once there is a contour to hang them on: these
             # are positions along a profile, and without the profile they have
@@ -1766,7 +2052,7 @@ async def read_spec_by_fragments(
             feature_result = await _read_cut_features(
                 geometry_view, outer, router=router, confidential=confidential,
                 audit=fragment_answers, source_image=image, callouts=callouts,
-                profile_evidence=profile_evidence,
+                profile_evidence=profile_evidence, bore=bore,
             )
             body.update(feature_result)
             unresolved.extend(

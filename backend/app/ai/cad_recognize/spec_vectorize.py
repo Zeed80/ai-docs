@@ -169,10 +169,23 @@ class SpecCrossHole(BaseModel):
     angle_deg: float = 0.0
     through: bool | None = None
     depth_mm: float | None = Field(default=None, gt=0)
+    counterbore_diameter_mm: float | None = Field(default=None, gt=0)
+    counterbore_depth_mm: float | None = Field(default=None, gt=0)
     count: int = Field(default=1, ge=1, le=64)
     spacing_deg: float | None = None
     thread: SpecThread | None = None
     evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_counterbore(self) -> "SpecCrossHole":
+        if (self.counterbore_diameter_mm is None) != (self.counterbore_depth_mm is None):
+            raise ValueError("counterbore needs both diameter and depth")
+        if (
+            self.counterbore_diameter_mm is not None
+            and self.counterbore_diameter_mm <= self.diameter_mm
+        ):
+            raise ValueError("counterbore diameter must exceed pilot diameter")
+        return self
 
 
 class SpecSection(BaseModel):

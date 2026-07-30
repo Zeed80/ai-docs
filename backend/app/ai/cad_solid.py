@@ -303,7 +303,6 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
                 },
                 confidence=0.8,
             ))
-
     if len(features) == 1:
         missing.append("на профиле не прочитано ни одного отверстия или паза")
     label = str(spec.get("part") or "Пластина") + " — по прочитанному контуру и толщине"
@@ -539,6 +538,33 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 },
                 confidence=0.8,
             ))
+            counterbore_diameter = _num(hole.get("counterbore_diameter_mm"))
+            counterbore_depth = _num(hole.get("counterbore_depth_mm"))
+            if counterbore_diameter and counterbore_depth:
+                features.append(Feature3D(
+                    kind="hole",
+                    params={
+                        "axis": "radial",
+                        "diameter_mm": counterbore_diameter,
+                        "axial_position_mm": position,
+                        "angle_deg": base_angle + index * step,
+                        "center_x_mm": 0.0,
+                        "center_y_mm": 0.0,
+                        "through": False,
+                        "depth_mm": counterbore_depth,
+                    },
+                    param_provenance={
+                        "diameter_mm": ParamProvenance(
+                            origin="stated",
+                            detail="Ø цековки поперечного отверстия с чертежа",
+                        ),
+                        "depth_mm": ParamProvenance(
+                            origin="stated",
+                            detail="глубина цековки с чертежа",
+                        ),
+                    },
+                    confidence=0.8,
+                ))
 
     features.extend(_edge_features(body, outer, starts, total_length, missing))
     return features
