@@ -450,11 +450,14 @@ def test_whole_fallback_cannot_overwrite_verified_fragment_outer_or_restore_bore
         "main_view": {
             "outer": [
                 {"diameter_mm": 102, "length_mm": 14,
-                 "note": "контур и осевая станция подтверждены OCR+CV"},
+                 "note": "контур и осевая станция подтверждены OCR+CV",
+                 "evidence": [{"image_index": 0, "bbox": [1, 2, 3, 4]}]},
                 {"diameter_mm": 80, "length_mm": 357,
-                 "note": "контур и осевая станция подтверждены OCR+CV"},
+                 "note": "контур и осевая станция подтверждены OCR+CV",
+                 "evidence": [{"image_index": 0, "bbox": [2, 2, 4, 4]}]},
                 {"diameter_mm": 72, "length_mm": 99,
-                 "note": "контур и осевая станция подтверждены OCR+CV"},
+                 "note": "наружный резьбовой участок подтверждён размерной цепью",
+                 "evidence": [{"image_index": 0, "bbox": [3, 2, 5, 4]}]},
             ],
         },
         "unresolved": [
@@ -489,11 +492,13 @@ def test_whole_fallback_cannot_overwrite_verified_fragment_bore():
             "length_mm": 78,
             "note": "конус подтверждён контуром и отношением 7:24",
             "taper": {"kind": "ratio", "ratio": "7:24"},
+            "evidence": [{"image_index": 0, "bbox": [1, 2, 3, 4]}],
         },
         {
             "diameter_mm": 51,
             "length_mm": 72,
             "note": "внутренний контур измерен и привязан к осевой станции",
+            "evidence": [{"image_index": 0, "bbox": [2, 2, 4, 4]}],
         },
     ]
     fragments = {"main_view": {"bore": verified_bore}, "unresolved": []}

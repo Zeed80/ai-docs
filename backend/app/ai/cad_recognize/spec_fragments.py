@@ -153,6 +153,31 @@ _COUNTERBORE_SCHEMA = {
     "required": ["same_axis", "counterbore_depth_mm"],
 }
 
+_THREAD_CARRIER_PROMPT = (
+    "На фрагменте продольного разреза показан короткий наружный участок "
+    "резьбы {designation}. Измеренный синий контур-кандидат Ø{nominal:g} "
+    "занимает приблизительно {approx_start:g}…{approx_end:g} мм от левого "
+    "торца. Прочитай нижнюю осевую размерную цепь и выбери ТОЧНЫЕ начало и "
+    "конец несущего участка только из списка {stations}. Разность должна быть "
+    "одним явно написанным линейным размером из {lengths}. Не используй "
+    "приблизительные границы контура как размеры. Если обе границы и размер "
+    "не видны однозначно, верни confirmed=false и null. Ответ одной строкой "
+    "JSON: {{\"confirmed\":true,\"start_mm\":377,\"end_mm\":395,"
+    "\"length_mm\":18}}."
+)
+
+_THREAD_CARRIER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "confirmed": {"type": "boolean"},
+        "start_mm": {"type": ["number", "null"]},
+        "end_mm": {"type": ["number", "null"]},
+        "length_mm": {"type": ["number", "null"]},
+    },
+    "required": ["confirmed", "start_mm", "end_mm", "length_mm"],
+    "additionalProperties": False,
+}
+
 _PROFILE_PROMPT = (
     "Перед тобой плоская деталь (пластина или фланец). Опиши её контур ОДНОЙ "
     "строкой JSON:\n"
@@ -1385,6 +1410,176 @@ def _feature_completeness_issues(
     return issues
 
 
+async def _recover_external_thread_carrier(
+    source_image,
+    callouts: dict[str, Any],
+    outer: list[dict],
+    bore: list[dict],
+    diameter_evidence: dict[str, Any],
+    *,
+    router: Any,
+    confidential: bool,
+    audit: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Split one measured thread carrier only after its chain bounds are read.
+
+    The vector contour can prove that an Ø75 envelope exists, but thread lines
+    make its pixel endpoints deliberately inexact.  A focused reader therefore
+    chooses only among stations derived from already accepted profile stations
+    plus explicitly read linear dimensions.  The answer is rejected unless
+    both bounds are in that closed set and their difference is itself stated.
+    """
+    texts = [
+        str((item or {}).get("value") or (item or {}).get("text") or "")
+        for item in (callouts.get("dimensions") or [])
+        + (callouts.get("annotations") or [])
+        if isinstance(item, dict)
+    ]
+    threads: list[tuple[str, float, float | None]] = []
+    for text in texts:
+        match = re.search(
+            r"\bM\s*(\d+(?:[.,]\d+)?)(?:\s*[xх×]\s*(\d+(?:[.,]\d+)?))?",
+            text,
+            re.IGNORECASE,
+        )
+        if not match:
+            continue
+        nominal = float(match.group(1).replace(",", "."))
+        pitch = float(match.group(2).replace(",", ".")) if match.group(2) else None
+        designation = f"M{match.group(1)}" + (f"x{match.group(2)}" if pitch else "")
+        if not any(
+            abs(float(item.get("diameter_mm") or -1000) - nominal)
+            <= max(0.6, nominal * 0.01)
+            for item in [*outer, *bore]
+        ):
+            threads.append((designation, nominal, pitch))
+    if len(threads) != 1:
+        return False
+    designation, nominal, pitch = threads[0]
+    candidates = [
+        item for item in diameter_evidence.get("outer_candidates") or []
+        if abs(float(item.get("value_mm") or -1000) - nominal) <= 0.05
+        and len(item.get("axial_interval_mm") or []) == 2
+        and len(item.get("profile_interval_px") or []) == 2
+    ]
+    if len(candidates) != 1:
+        return False
+    candidate = candidates[0]
+    approx_start, approx_end = map(float, candidate["axial_interval_mm"])
+
+    anchors = {0.0}
+    for sections in (outer, bore):
+        station = 0.0
+        for section in sections:
+            station += float(section.get("length_mm") or 0.0)
+            anchors.add(round(station, 3))
+    lengths = sorted({
+        round(float(value), 3)
+        for value in _callout_numbers(callouts, "linear")
+        if 1.0 <= float(value) <= 120.0
+    })
+    search_lo, search_hi = approx_start - 18.0, approx_end + 18.0
+    stations = set(anchors)
+    for anchor in anchors:
+        for length in lengths:
+            stations.add(round(anchor - length, 3))
+            stations.add(round(anchor + length, 3))
+    allowed_stations = sorted(
+        station for station in stations if search_lo <= station <= search_hi
+    )
+    if len(allowed_stations) < 2:
+        return False
+
+    px0, px1 = map(int, candidate["profile_interval_px"])
+    center_y = int(diameter_evidence.get("profile_center_y_px") or source_image.height / 2)
+    crop_box = [
+        max(0, px0 - 180),
+        max(0, center_y - 260),
+        min(source_image.width, px1 + 260),
+        min(source_image.height, center_y + 390),
+    ]
+    answer = await _ask(
+        _THREAD_CARRIER_PROMPT.format(
+            designation=designation,
+            nominal=nominal,
+            approx_start=approx_start,
+            approx_end=approx_end,
+            stations=allowed_stations,
+            lengths=lengths,
+        ),
+        _overview(source_image.crop(tuple(crop_box)), side=1000),
+        num_predict=300,
+        schema=_THREAD_CARRIER_SCHEMA,
+        router=router,
+        confidential=confidential,
+        audit=audit,
+    )
+    start = _num(answer.get("start_mm"))
+    end = _num(answer.get("end_mm"))
+    length = _num(answer.get("length_mm"))
+    if (
+        answer.get("confirmed") is not True
+        or start is None or end is None or length is None
+        or not _matches_callout(start, allowed_stations)
+        or not _matches_callout(end, allowed_stations)
+        or not _matches_callout(length, lengths)
+        or abs((end - start) - length) > 0.05
+        or start < approx_start - 8.0
+        or end > approx_end + 8.0
+        or end <= start
+    ):
+        return False
+
+    section_start = 0.0
+    carrier_index = None
+    for index, section in enumerate(outer):
+        section_end = section_start + float(section.get("length_mm") or 0.0)
+        if section_start <= start < end <= section_end:
+            carrier_index = index
+            break
+        section_start = section_end
+    if carrier_index is None:
+        return False
+    original = outer[carrier_index]
+    section_end = section_start + float(original["length_mm"])
+    split: list[dict[str, Any]] = []
+    if start > section_start + 0.05:
+        split.append({**original, "length_mm": round(start - section_start, 3)})
+    split.append({
+        **original,
+        "diameter_mm": nominal,
+        "length_mm": round(length, 3),
+        "note": "наружный резьбовой участок подтверждён контуром и размерной цепью",
+        "thread": {
+            "designation": designation,
+            "system": "metric",
+            "nominal_diameter_mm": nominal,
+            "pitch_mm": pitch,
+            "internal": False,
+            "evidence": [{
+                "image_index": 0,
+                "bbox": crop_box,
+                "raw_text": (
+                    f"{designation}; carrier Ø{nominal:g}; "
+                    f"stations {start:g}…{end:g}; length {length:g}"
+                ),
+            }],
+        },
+        "evidence": [{
+            "image_index": 0,
+            "bbox": crop_box,
+            "raw_text": (
+                f"interrupted vector contour Ø{nominal:g}; "
+                f"dimension chain {start:g}…{end:g}"
+            ),
+        }],
+    })
+    if end < section_end - 0.05:
+        split.append({**original, "length_mm": round(section_end - end, 3)})
+    outer[carrier_index:carrier_index + 1] = split
+    return True
+
+
 def _assign_profile_threads(
     callouts: dict[str, Any],
     outer: list[dict],
@@ -2065,6 +2260,16 @@ async def read_spec_by_fragments(
             body["bore"] = bore
         elif bore_problem:
             unresolved.append(f"расточка: {bore_problem}")
+        await _recover_external_thread_carrier(
+            image,
+            callouts,
+            outer,
+            bore,
+            profile_evidence.get("diameter_map") or {},
+            router=router,
+            confidential=confidential,
+            audit=fragment_answers,
+        )
         _assign_profile_threads(callouts, outer, bore)
         if outer:
             # Only worth asking once there is a contour to hang them on: these
@@ -2181,7 +2386,7 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         item for item in (fragment_body.get("outer") or []) if isinstance(item, dict)
     ]
     verified_outer = bool(fragment_outer) and all(
-        "подтверждены OCR+CV" in str(item.get("note") or "")
+        bool(item.get("evidence"))
         for item in fragment_outer
     )
     if verified_outer:
@@ -2190,7 +2395,7 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         item for item in (fragment_body.get("bore") or []) if isinstance(item, dict)
     ]
     verified_bore = bool(fragment_bore) and all(
-        "контур" in str(item.get("note") or "").lower()
+        bool(item.get("evidence"))
         for item in fragment_bore
     )
     if verified_bore:

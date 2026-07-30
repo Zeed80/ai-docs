@@ -381,36 +381,49 @@ def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
             confidence=0.9,
         )
     ]
-    axial_start = 0.0
-    for section in outer:
-        thread = section.get("thread") or {}
-        designation = str(thread.get("designation") or thread.get("spec") or "").strip()
-        if designation:
-            diameter = _num(thread.get("nominal_diameter_mm")) or _num(section.get("d"))
-            if diameter:
-                thread_params: dict[str, Any] = {
-                    "spec": designation,
-                    "diameter_mm": diameter,
-                    "axial_start_mm": axial_start,
-                    "length_mm": float(section.get("l") or 0.0),
-                }
-                pitch = _num(thread.get("pitch_mm"))
-                if pitch:
-                    thread_params["pitch_mm"] = pitch
-                features.append(Feature3D(
-                    kind="thread",
-                    params=thread_params,
-                    param_provenance={
-                        "spec": ParamProvenance(
-                            origin="stated", detail="обозначение резьбы прочитано с чертежа"
-                        ),
-                        "diameter_mm": ParamProvenance(
-                            origin="stated", detail="номинальный диаметр резьбы"
-                        ),
-                    },
-                    confidence=0.85,
-                ))
-        axial_start += float(section.get("l") or 0.0)
+    def append_threads(
+        sections: list[dict], *, start_offset: float, internal: bool
+    ) -> None:
+        axial_start = start_offset
+        for section in sections:
+            thread = section.get("thread") or {}
+            designation = str(
+                thread.get("designation") or thread.get("spec") or ""
+            ).strip()
+            if designation:
+                diameter = (
+                    _num(thread.get("nominal_diameter_mm"))
+                    or _num(section.get("d"))
+                )
+                if diameter:
+                    thread_params: dict[str, Any] = {
+                        "spec": designation,
+                        "diameter_mm": diameter,
+                        "axial_start_mm": axial_start,
+                        "length_mm": float(section.get("l") or 0.0),
+                        "internal": internal,
+                    }
+                    pitch = _num(thread.get("pitch_mm"))
+                    if pitch:
+                        thread_params["pitch_mm"] = pitch
+                    features.append(Feature3D(
+                        kind="thread",
+                        params=thread_params,
+                        param_provenance={
+                            "spec": ParamProvenance(
+                                origin="stated",
+                                detail="обозначение резьбы прочитано с чертежа",
+                            ),
+                            "diameter_mm": ParamProvenance(
+                                origin="stated", detail="номинальный диаметр резьбы"
+                            ),
+                        },
+                        confidence=0.85,
+                    ))
+            axial_start += float(section.get("l") or 0.0)
+
+    append_threads(outer, start_offset=0.0, internal=False)
+    append_threads(bore, start_offset=bore_offset if bore else 0.0, internal=True)
     features.extend(_cut_features(body, outer, missing))
     return FeatureTreeCandidate(
         features=features,

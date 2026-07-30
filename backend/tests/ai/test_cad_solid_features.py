@@ -142,6 +142,32 @@ def test_a_chamfer_points_at_the_end_face_it_names():
     assert chamfer.params["size_mm"] == 1.0
 
 
+def test_internal_bore_thread_reaches_the_feature_tree_with_axial_location():
+    candidate = _tree(bore=[
+        {"diameter_mm": 50, "length_mm": 445},
+        {
+            "diameter_mm": 55,
+            "length_mm": 25,
+            "thread": {
+                "designation": "M54,5x2",
+                "nominal_diameter_mm": 54.5,
+                "pitch_mm": 2,
+                "internal": True,
+            },
+        },
+    ])
+
+    thread = _of_kind(candidate, "thread")[0]
+    assert thread.params == {
+        "spec": "M54,5x2",
+        "diameter_mm": 54.5,
+        "axial_start_mm": 445.0,
+        "length_mm": 25.0,
+        "internal": True,
+        "pitch_mm": 2.0,
+    }
+
+
 def test_a_chamfer_on_a_shoulder_is_placed_by_the_diameter_it_names():
     """"1x45° at the Ø80 shoulder" is a place; the kernel needs an edge."""
     candidate = _tree(chamfers=[

@@ -365,6 +365,44 @@ def main() -> int:
     else:
         check("cross hole goes through", False, f"HTTP {status}: {payload}")
 
+    # Cosmetic threads do not alter volume, but both external and internal
+    # localization must survive into report.json for TechDraw and audit UI.
+    status, payload = _compile(
+        _candidate(
+            _base(),
+            _feature(
+                "thread", spec="M75x1,5", diameter_mm=75.0, pitch_mm=1.5,
+                axial_start_mm=377.0, length_mm=18.0, internal=False,
+            ),
+            _feature(
+                "thread", spec="M54,5x2", diameter_mm=54.5, pitch_mm=2.0,
+                axial_start_mm=445.0, length_mm=25.0, internal=True,
+            ),
+        )
+    )
+    if status == 200:
+        report = _report_from_zip(payload)
+        check(
+            "external and internal threads keep exact localization",
+            report.get("cosmetic_threads") == [
+                {
+                    "spec": "M75x1,5", "diameter_mm": 75.0, "pitch_mm": 1.5,
+                    "axial_start_mm": 377.0, "length_mm": 18.0, "internal": False,
+                },
+                {
+                    "spec": "M54,5x2", "diameter_mm": 54.5, "pitch_mm": 2.0,
+                    "axial_start_mm": 445.0, "length_mm": 25.0, "internal": True,
+                },
+            ],
+            f"threads={report.get('cosmetic_threads')}",
+        )
+    else:
+        check(
+            "external and internal threads keep exact localization",
+            False,
+            f"HTTP {status}: {payload}",
+        )
+
     # 4. A chamfer picked by WHAT IT IS, not by a hash nobody can know in advance.
     status, payload = _compile(
         _candidate(

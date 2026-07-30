@@ -950,6 +950,20 @@ def _cosmetic_threads(request: CompileRequest) -> list[dict[str, Any]]:
         pitch = feature.params.get("pitch_mm")
         if pitch is not None:
             entry["pitch_mm"] = _number(feature.params, "pitch_mm", maximum=100)
+        axial_start = feature.params.get("axial_start_mm")
+        if axial_start is not None:
+            start = _coordinate(feature.params, "axial_start_mm")
+            if start < 0:
+                raise HTTPException(
+                    422, "Feature parameter 'axial_start_mm' is outside supported bounds"
+                )
+            entry["axial_start_mm"] = start
+        length = feature.params.get("length_mm")
+        if length is not None:
+            entry["length_mm"] = _number(
+                feature.params, "length_mm", maximum=100_000
+            )
+        entry["internal"] = bool(feature.params.get("internal"))
         threads.append(entry)
     return threads
 

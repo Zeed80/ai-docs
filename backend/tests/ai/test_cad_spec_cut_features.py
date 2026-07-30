@@ -20,6 +20,7 @@ from PIL import Image
 from app.ai.cad_recognize.spec_fragments import _read_cut_features
 from app.ai.cad_recognize.spec_fragments import _feature_completeness_issues
 from app.ai.cad_recognize.spec_fragments import _assign_profile_threads
+from app.ai.cad_recognize.spec_fragments import _recover_external_thread_carrier
 
 _OUTER = [
     {"diameter_mm": 80.0, "length_mm": 150.0},
@@ -402,3 +403,93 @@ def test_unassigned_thread_reports_measured_but_unbounded_carrier():
     assert "контур-кандидат Ø75" in issues[0]
     assert "366…400 мм" in issues[0]
     assert "двум осевым размерам" in issues[0]
+
+
+@pytest.mark.asyncio
+async def test_external_thread_carrier_requires_exact_chain_bounds(monkeypatch):
+    async def fake_ask(*_args, **_kwargs):
+        return {
+            "confirmed": True,
+            "start_mm": 377,
+            "end_mm": 395,
+            "length_mm": 18,
+        }
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    outer = [
+        {"diameter_mm": 102, "length_mm": 14, "evidence": [{"bbox": [0, 0, 1, 1]}]},
+        {"diameter_mm": 80, "length_mm": 357, "evidence": [{"bbox": [1, 0, 2, 1]}]},
+        {"diameter_mm": 72, "length_mm": 99, "evidence": [{"bbox": [2, 0, 3, 1]}]},
+    ]
+    bore = [
+        {"diameter_mm": 56.55, "length_mm": 78},
+        {"diameter_mm": 51, "length_mm": 72},
+        {"diameter_mm": 44, "length_mm": 50},
+        {"diameter_mm": 51, "length_mm": 152},
+        {"diameter_mm": 50, "length_mm": 43},
+        {"diameter_mm": 56, "length_mm": 50},
+        {"diameter_mm": 55, "length_mm": 25},
+    ]
+    evidence = {
+        "profile_center_y_px": 300,
+        "outer_candidates": [{
+            "value_mm": 75,
+            "axial_interval_mm": [365.5, 401.2],
+            "profile_interval_px": [520, 625],
+        }],
+    }
+    callouts = {"dimensions": [
+        {"value": "M75×1,5"}, {"value": "25"}, {"value": "18"},
+        {"value": "50"}, {"value": "99"},
+    ]}
+
+    recovered = await _recover_external_thread_carrier(
+        Image.new("RGB", (900, 700), "white"),
+        callouts,
+        outer,
+        bore,
+        evidence,
+        router=object(),
+        confidential=True,
+    )
+
+    assert recovered is True
+    assert [
+        (item["diameter_mm"], item["length_mm"]) for item in outer
+    ] == [(102, 14), (80, 357), (72, 6.0), (75.0, 18.0), (72, 75.0)]
+    assert outer[3]["thread"]["designation"] == "M75x1,5"
+    assert outer[3]["thread"]["internal"] is False
+
+
+@pytest.mark.asyncio
+async def test_external_thread_carrier_rejects_approximate_pixel_bounds(monkeypatch):
+    async def fake_ask(*_args, **_kwargs):
+        return {
+            "confirmed": True,
+            "start_mm": 365.5,
+            "end_mm": 401.2,
+            "length_mm": 35.7,
+        }
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    outer = [{"diameter_mm": 72, "length_mm": 470}]
+    original = [dict(outer[0])]
+    recovered = await _recover_external_thread_carrier(
+        Image.new("RGB", (900, 700), "white"),
+        {"dimensions": [{"value": "M75×1,5"}, {"value": "18"}]},
+        outer,
+        [],
+        {
+            "profile_center_y_px": 300,
+            "outer_candidates": [{
+                "value_mm": 75,
+                "axial_interval_mm": [365.5, 401.2],
+                "profile_interval_px": [520, 625],
+            }],
+        },
+        router=object(),
+        confidential=True,
+    )
+
+    assert recovered is False
+    assert outer == original
