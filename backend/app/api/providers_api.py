@@ -739,6 +739,9 @@ _SLOT_THINKING_TASKS: dict[str, list[str]] = {
     "structured_extraction": ["structured_extraction", "long_context_summarization"],
     "agent_email": ["email_drafting"],
     "agent_large": ["code_generation"],
+    "cad_spec_read": ["cad_spec_read"],
+    "cad_text_ocr": ["cad_text_ocr"],
+    "cad_spec_draft": ["cad_spec_draft"],
 }
 _SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_orchestrator": ["orchestrator_disable_thinking", "worker_disable_thinking"],

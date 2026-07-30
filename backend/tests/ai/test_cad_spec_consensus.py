@@ -32,6 +32,29 @@ def test_agreeing_passes_keep_the_profile():
     assert diameter["confidence"] == 1.0
 
 
+def test_agreeing_partial_profile_is_kept_for_audit_but_stays_unresolved():
+    partial = [
+        {"diameter_mm": 65, "length_mm": None},
+        {"diameter_mm": 56.55, "length_mm": None},
+    ]
+    reads = [
+        _read(
+            partial,
+            unresolved=[
+                "body:0:outer:0:length-missing",
+                "body:0:outer:1:length-missing",
+            ],
+        )
+        for _ in range(3)
+    ]
+
+    spec = consensus_spec(reads)
+
+    assert spec["main_view"]["outer"] == partial
+    assert "body:0:outer:0:length-missing" in spec["unresolved"]
+    assert not any("не сошлись на профиле" in item for item in spec["unresolved"])
+
+
 def test_small_reading_noise_still_counts_as_agreement():
     """559.9 and 560.0 off the same sheet are the same dimension."""
     noisy = [

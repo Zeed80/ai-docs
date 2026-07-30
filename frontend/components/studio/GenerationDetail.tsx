@@ -26,6 +26,95 @@ interface Props {
   onClose: () => void;
 }
 
+interface CadProcessEvent {
+  sequence: number;
+  at: string;
+  stage: string;
+  status: "started" | "completed" | "failed" | "warning" | "skipped";
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+interface CadProcess {
+  status?: "running" | "done" | "failed";
+  current_stage?: string;
+  current_status?: string;
+  updated_at?: string;
+  events?: CadProcessEvent[];
+}
+
+function CadProcessTimeline({
+  process,
+  title,
+  currentLabel,
+  detailsLabel,
+}: {
+  process?: CadProcess;
+  title: string;
+  currentLabel: string;
+  detailsLabel: string;
+}) {
+  const events = process?.events ?? [];
+  if (!events.length) return null;
+  const tone: Record<string, string> = {
+    started: "border-sky-400/30 bg-sky-950/20 text-sky-200",
+    completed: "border-emerald-400/30 bg-emerald-950/20 text-emerald-200",
+    failed: "border-red-400/30 bg-red-950/20 text-red-200",
+    warning: "border-amber-400/30 bg-amber-950/20 text-amber-200",
+    skipped: "border-zinc-500/30 bg-zinc-900/50 text-zinc-400",
+  };
+  return (
+    <details
+      open={process?.status === "running" || process?.status === "failed"}
+      className="rounded border border-white/10 bg-white/[0.03] p-2 text-xs"
+    >
+      <summary className="cursor-pointer font-medium text-zinc-200">
+        {title} · {events.length}
+        {process?.current_stage
+          ? ` · ${currentLabel}: ${process.current_stage}`
+          : ""}
+      </summary>
+      <ol className="mt-2 max-h-96 space-y-1.5 overflow-y-auto pr-1">
+        {events.map((event) => {
+          const hasDetails = Boolean(
+            event.details && Object.keys(event.details).length,
+          );
+          return (
+            <li
+              key={`${event.sequence}-${event.at}`}
+              className={`rounded border px-2 py-1.5 ${tone[event.status] ?? tone.skipped}`}
+            >
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className="font-mono text-[10px] opacity-70">
+                  #{event.sequence}
+                </span>
+                <span className="font-mono text-[10px]">{event.stage}</span>
+                <span className="text-[10px] uppercase opacity-70">
+                  {event.status}
+                </span>
+                <time className="ml-auto text-[10px] opacity-60">
+                  {new Date(event.at).toLocaleTimeString()}
+                </time>
+              </div>
+              <div className="mt-0.5 text-zinc-200">{event.message}</div>
+              {hasDetails && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-[10px] opacity-70">
+                    {detailsLabel}
+                  </summary>
+                  <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded bg-black/30 p-1.5 text-[10px] text-zinc-300">
+                    {JSON.stringify(event.details, null, 2)}
+                  </pre>
+                </details>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </details>
+  );
+}
+
 export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   const t = useTranslations("studio");
   const [iterPrompt, setIterPrompt] = useState("");
@@ -49,6 +138,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const hasDxf = typeof gen.params?.dxf_path === "string";
+  const cadProcess = gen.params?.cad_process as CadProcess | undefined;
   const graphReadAttempt = gen.params?.drawing_graph_read_attempt as
     | {
         raw_sha256?: string;
@@ -417,6 +507,12 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
             ✕
           </button>
         </div>
+        <CadProcessTimeline
+          process={cadProcess}
+          title={t("detail.cad_process_title")}
+          currentLabel={t("detail.cad_process_current")}
+          detailsLabel={t("detail.cad_process_details")}
+        />
         <Link
           href={`/cad/${gen.id}`}
           className="rounded bg-sky-600 px-3 py-2 text-center text-sm text-white hover:bg-sky-500"
@@ -456,6 +552,15 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
           ✕
         </button>
       </div>
+
+      {gen.operation === "vectorize" && (
+        <CadProcessTimeline
+          process={cadProcess}
+          title={t("detail.cad_process_title")}
+          currentLabel={t("detail.cad_process_current")}
+          detailsLabel={t("detail.cad_process_details")}
+        />
+      )}
 
       {/* Primary actions up top so they're reachable without scrolling past the
           (tall) result image — important on mobile where the panel is an

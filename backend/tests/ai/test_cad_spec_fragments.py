@@ -104,7 +104,7 @@ async def test_fragment_passes_that_disagree_do_not_ship_a_lucky_read(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_the_fallback_runs_only_for_missing_geometry(monkeypatch):
+async def test_the_fallback_runs_for_missing_geometry(monkeypatch):
     async def fake_fragments(*_a, **_k):
         return {
             "main_view": {},
@@ -133,6 +133,41 @@ async def test_the_fallback_runs_only_for_missing_geometry(monkeypatch):
     # The stamp read off a crop beats the one the whole-sheet pass missed.
     assert result["title_block"]["material"] == "Сталь 45"
     assert [d["value"] for d in result["dimensions"]] == ["Ø80js6"]
+
+
+@pytest.mark.asyncio
+async def test_unresolved_fragment_geometry_triggers_whole_sheet_fallback(monkeypatch):
+    fragment_spec = {
+        "main_view": {"outer": [{"diameter_mm": 80, "length_mm": 597.2}]},
+        "title_block": {"material": "Сталь 55"},
+        "unresolved": ["сумма ступеней 597.2 мм больше габарита 470 мм"],
+    }
+    whole_spec = {
+        "main_view": {"outer": [{"diameter_mm": 80, "length_mm": 470}]},
+        "title_block": {},
+        "unresolved": [],
+    }
+    called = []
+
+    async def fake_fragments(*_a, **_k):
+        return fragment_spec
+
+    async def fake_whole(*_a, **_k):
+        called.append("whole")
+        return whole_spec
+
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_fragments.read_spec_by_fragments", fake_fragments
+    )
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_vectorize.read_drawing_spec_consensus", fake_whole
+    )
+
+    result = await read_spec_best_effort(b"x", passes=3)
+
+    assert called == ["whole"]
+    assert result["main_view"]["outer"][0]["length_mm"] == 470
+    assert result["title_block"]["material"] == "Сталь 55"
 
 
 def test_standard_reference_numbers_are_not_dimension_candidates():

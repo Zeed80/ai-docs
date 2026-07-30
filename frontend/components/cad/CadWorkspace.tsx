@@ -1222,6 +1222,20 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     : t("vector.cmd_hint", { tool: t(`vector.tool_${tool}`) });
   const pipelineManifest = gen.params?.cad_pipeline_manifest as
     CadPipelineManifest | undefined;
+  const cadProcess = gen.params?.cad_process as
+    | {
+        status?: string;
+        current_stage?: string;
+        events?: Array<{
+          sequence?: number;
+          at?: string;
+          stage?: string;
+          status?: string;
+          message?: string;
+          details?: Record<string, unknown>;
+        }>;
+      }
+    | undefined;
   const draftingSpec = gen.params?.spec as
     { optional_unresolved?: string[]; unresolved?: string[] } | undefined;
   const specReviewWarnings = (gen.params?.spec_review_warnings ??
@@ -1346,6 +1360,53 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           </span>
         )}
       </div>
+
+      {cadProcess?.events?.length ? (
+        <details className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-400">
+          <summary className="cursor-pointer text-zinc-300">
+            {t("detail.cad_process_title")} · {cadProcess.events.length} ·{" "}
+            {t("detail.cad_process_current")}: {cadProcess.current_stage ?? "—"}
+          </summary>
+          <ol className="mt-2 max-h-96 space-y-1.5 overflow-y-auto">
+            {cadProcess.events.map((event, index) => (
+              <li
+                key={`${event.sequence ?? index}-${event.at ?? ""}`}
+                className={`rounded border px-2 py-1.5 ${
+                  event.status === "failed"
+                    ? "border-red-400/30 bg-red-950/20"
+                    : event.status === "completed"
+                      ? "border-emerald-400/20 bg-emerald-950/10"
+                      : event.status === "started"
+                        ? "border-sky-400/20 bg-sky-950/10"
+                        : "border-white/10 bg-black/20"
+                }`}
+              >
+                <div className="flex flex-wrap gap-x-2 text-[10px]">
+                  <span className="font-mono">#{event.sequence ?? index + 1}</span>
+                  <span className="font-mono text-zinc-300">{event.stage}</span>
+                  <span>{event.status}</span>
+                  {event.at && (
+                    <time className="ml-auto">
+                      {new Date(event.at).toLocaleTimeString()}
+                    </time>
+                  )}
+                </div>
+                <div className="mt-0.5 text-zinc-200">{event.message}</div>
+                {event.details && Object.keys(event.details).length > 0 && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-[10px] text-zinc-500">
+                      {t("detail.cad_process_details")}
+                    </summary>
+                    <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded bg-black/30 p-1.5 text-[10px]">
+                      {JSON.stringify(event.details, null, 2)}
+                    </pre>
+                  </details>
+                )}
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
 
       {pipelineManifest && (
         <details className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-400">

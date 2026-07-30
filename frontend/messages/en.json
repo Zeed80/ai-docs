@@ -561,7 +561,10 @@
       "doc_badge": "Document: {id}",
       "case_badge": "Case: {id}",
       "graph_reader_diagnostics": "Coordinate reader diagnostics: {count} errors",
-      "graph_reader_model": "Reader model"
+      "graph_reader_model": "Reader model",
+      "cad_process_title": "CAD reading and build log",
+      "cad_process_current": "current stage",
+      "cad_process_details": "Stage technical data"
     },
     "vector": {
       "title": "Digitized drawing",

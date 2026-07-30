@@ -413,6 +413,10 @@ async def _ask(
     schema: dict | None = None, audit: list[dict[str, Any]] | None = None,
 ) -> dict:
     """One bounded question. A failure returns {} and never raises."""
+    import time
+    import hashlib
+
+    from app.ai.cad_process_log import record_cad_process_event
     from app.ai.cad_recognize.spec_vectorize import (
         _coerce_spec_containers,
         _first_vision_model,
@@ -436,19 +440,64 @@ async def _ask(
         preferred_model=seeing_model,
         metadata={"num_predict": num_predict, "json_schema": schema},
     )
+    question = prompt.splitlines()[0][:200]
+    prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    started = time.monotonic()
+    await record_cad_process_event(
+        "reader.fragment.question",
+        "started",
+        question,
+        {
+            "model": seeing_model,
+            "num_predict": num_predict,
+            "schema": bool(schema),
+            "prompt_sha256": prompt_sha256,
+            "image_size": [getattr(image, "width", None), getattr(image, "height", None)],
+        },
+    )
     try:
         response = await router.run(request)
     except Exception as exc:  # noqa: BLE001 — one lost fragment, not the sheet
         logger.warning("cad_fragment_failed", error=str(exc)[:200])
+        await record_cad_process_event(
+            "reader.fragment.question",
+            "failed",
+            question,
+            {
+                "model": seeing_model,
+                "duration_ms": round((time.monotonic() - started) * 1000),
+                "error": f"{type(exc).__name__}: {exc}"[:400],
+            },
+        )
         return {}
     if audit is not None:
         audit.append({
-            "question": prompt.splitlines()[0][:200],
+            "question": question,
             "model": seeing_model,
             "raw_response": response.text or "",
         })
     parsed = _parse_spec_json(response.text or "")
-    return _coerce_spec_containers(parsed) if parsed else {}
+    result = _coerce_spec_containers(parsed) if parsed else {}
+    raw = response.raw or {}
+    answer = response.text or ""
+    await record_cad_process_event(
+        "reader.fragment.question",
+        "completed" if result else "failed",
+        question,
+        {
+            "model": response.model or seeing_model,
+            "duration_ms": response.usage.latency_ms
+            or round((time.monotonic() - started) * 1000),
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "answer_chars": len(answer),
+            "answer_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+            "answer_preview": answer[:2000],
+            "thinking_chars": len(str(raw.get("thinking") or "")),
+            "parsed": bool(result),
+        },
+    )
+    return result
 
 
 # A purpose-built document model rather than a bigger general one. Measured on
@@ -496,10 +545,13 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
     if it names a known kind.
     """
     import base64
+    import hashlib
     import io as _io
     import re
+    import time
 
     import httpx
+    from app.ai.cad_process_log import record_cad_process_event
 
     model, ollama_url = _ocr_model_and_url()
     buffer = _io.BytesIO()
@@ -510,15 +562,32 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
         "images": [base64.b64encode(buffer.getvalue()).decode()],
         "stream": False,
         "think": False,
+        "chat_template_kwargs": {"enable_thinking": False},
         "options": {"num_predict": _OCR_NUM_PREDICT, "temperature": 0},
     }
+    started = time.monotonic()
+    await record_cad_process_event(
+        "reader.text_ocr",
+        "started",
+        "Текстовый OCR получил обзор листа",
+        {"model": model, "num_predict": _OCR_NUM_PREDICT},
+    )
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=5.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
             response = await client.post(f"{ollama_url}/api/generate", json=payload)
             response.raise_for_status()
-            text = (response.json().get("response") or "")
+            raw_body = response.json()
+            text = (raw_body.get("response") or "")
     except Exception as exc:  # noqa: BLE001 — one lost layer, not the sheet
         logger.warning("cad_ocr_layer_failed", error=str(exc)[:200])
+        await record_cad_process_event(
+            "reader.text_ocr", "failed", "Текстовый OCR завершился ошибкой",
+            {
+                "model": model,
+                "duration_ms": round((time.monotonic() - started) * 1000),
+                "error": f"{type(exc).__name__}: {exc}"[:400],
+            },
+        )
         return {}
 
     seen: set[str] = set()
@@ -549,6 +618,22 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
             continue
         if re.search(r"\d", line) and len(line) <= 60:
             dimensions.append({"value": line[:60], "applies_to": None})
+    await record_cad_process_event(
+        "reader.text_ocr",
+        "completed" if text.strip() else "failed",
+        "Текстовый слой чертежа обработан",
+        {
+            "model": model,
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "answer_chars": len(text),
+            "answer_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "answer_preview": text[:2000],
+            "thinking_chars": len(str(raw_body.get("thinking") or "")),
+            "output_tokens": raw_body.get("eval_count"),
+            "dimensions": len(dimensions),
+            "annotations": len(annotations),
+        },
+    )
     return {"dimensions": dimensions, "annotations": annotations}
 
 
@@ -1154,9 +1239,28 @@ async def read_fragments_consensus(
     from app.ai.cad_recognize.spec_consensus import consensus_spec
 
     reads: list[dict] = []
+    from app.ai.cad_process_log import record_cad_process_event
+
     for _attempt in range(max(1, passes)):
+        await record_cad_process_event(
+            "reader.fragments.pass",
+            "started",
+            f"Фрагментное чтение: проход {_attempt + 1}/{max(1, passes)}",
+            {"pass": _attempt + 1, "passes": max(1, passes)},
+        )
         spec = await read_spec_by_fragments(
             image_bytes, router=router, confidential=confidential
+        )
+        await record_cad_process_event(
+            "reader.fragments.pass",
+            "completed" if spec else "failed",
+            f"Фрагментное чтение: проход {_attempt + 1}/{max(1, passes)} завершён",
+            {
+                "pass": _attempt + 1,
+                "valid_spec": bool(spec),
+                "has_geometry": _has_geometry(spec) if spec else False,
+                "questions": len(spec.get("fragment_answers") or []) if spec else 0,
+            },
         )
         if spec:
             reads.append(spec)
@@ -1200,11 +1304,33 @@ async def read_spec_best_effort(
     reading returned an empty title block.
     """
     from app.ai.cad_recognize.spec_vectorize import read_drawing_spec_consensus
+    from app.ai.cad_process_log import record_cad_process_event
 
     fragments = await read_fragments_consensus(
         image_bytes, passes=passes, router=router, confidential=confidential
     )
-    if fragments and _has_geometry(fragments):
+    fragment_unresolved = [
+        str(item) for item in (fragments.get("unresolved") or []) if str(item)
+    ] if fragments else []
+    fragment_ready = bool(
+        fragments and _has_geometry(fragments) and not fragment_unresolved
+    )
+    await record_cad_process_event(
+        "reader.strategy",
+        "completed",
+        (
+            "Фрагментный consensus достаточен; полное чтение не требуется"
+            if fragment_ready
+            else "Фрагментный consensus неполон; запускается полное чтение листа"
+        ),
+        {
+            "has_fragment_spec": bool(fragments),
+            "has_geometry": _has_geometry(fragments) if fragments else False,
+            "unresolved": fragment_unresolved,
+            "whole_sheet_fallback": not fragment_ready,
+        },
+    )
+    if fragment_ready:
         return fragments
 
     whole = await read_drawing_spec_consensus(

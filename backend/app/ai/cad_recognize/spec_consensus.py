@@ -90,10 +90,20 @@ def _vote_text(values: list[Any], *, minimum: int) -> tuple[str | None, int]:
 def _sections_agree(left: list[dict], right: list[dict]) -> bool:
     if len(left) != len(right):
         return False
+
+    def same_optional_number(a: Any, b: Any) -> bool:
+        # Two passes that both leave a value unread are in agreement about the
+        # partial observation. Keep the observed diameters in the audit spec;
+        # the full validator still records every missing length as unresolved,
+        # so this can never promote incomplete geometry to the CAD kernel.
+        if a is None and b is None:
+            return True
+        return _numbers_agree(a, b)
+
     for a, b in zip(left, right, strict=True):
-        if not _numbers_agree(a.get("diameter_mm"), b.get("diameter_mm")):
+        if not same_optional_number(a.get("diameter_mm"), b.get("diameter_mm")):
             return False
-        if not _numbers_agree(a.get("length_mm"), b.get("length_mm")):
+        if not same_optional_number(a.get("length_mm"), b.get("length_mm")):
             return False
     return True
 

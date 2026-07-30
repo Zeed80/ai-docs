@@ -445,6 +445,54 @@ class EngineeringDrawingSpec(BaseModel):
         return self
 
 
+def _whole_sheet_reader_schema() -> dict[str, Any]:
+    """Compact structured-output schema used only by the whole-sheet reader.
+
+    Dimensions, notes and the title block are read by dedicated fragment/OCR
+    passes and merged back by ``read_spec_best_effort``. Asking the whole-sheet
+    model to repeat them made a dense A3 shaft hit 6000 output tokens three
+    times in a row before it could close the JSON. Evidence is also omitted
+    here: uncertain values must become ``unresolved``; the source-image map and
+    the exact raw response remain in the audit trail.
+
+    The returned object is still validated against the full
+    ``EngineeringDrawingSpec`` before it can reach geometry generation.
+    """
+    import copy
+
+    schema = copy.deepcopy(EngineeringDrawingSpec.model_json_schema())
+    properties = schema.get("properties") or {}
+    for field in ("dimensions", "annotations", "title_block"):
+        properties.pop(field, None)
+    required = schema.get("required")
+    if isinstance(required, list):
+        schema["required"] = [
+            field for field in required
+            if field not in {"dimensions", "annotations", "title_block"}
+        ]
+
+    def strip_audit_fields(node: Any) -> None:
+        if isinstance(node, dict):
+            node_properties = node.get("properties")
+            if isinstance(node_properties, dict):
+                node_properties.pop("evidence", None)
+                node_properties.pop("features", None)
+            node_required = node.get("required")
+            if isinstance(node_required, list):
+                node["required"] = [
+                    field for field in node_required
+                    if field not in {"evidence", "features"}
+                ]
+            for value in node.values():
+                strip_audit_fields(value)
+        elif isinstance(node, list):
+            for value in node:
+                strip_audit_fields(value)
+
+    strip_audit_fields(schema)
+    return schema
+
+
 _SPEC_PROMPT = (
     "Ты — инженер-конструктор. Изучи чертёж и опиши деталь СТРУКТУРНО для "
     "повторного черчения. Изображение 0 — общий вид листа, остальные изображения "
@@ -767,14 +815,34 @@ async def read_drawing_spec_consensus(
 
     reads: list[dict] = []
     last_error: Exception | None = None
+    from app.ai.cad_process_log import record_cad_process_event
+
     for _attempt in range(passes):
+        await record_cad_process_event(
+            "reader.whole_sheet.pass",
+            "started",
+            f"Полное чтение листа: проход {_attempt + 1}/{passes}",
+            {"pass": _attempt + 1, "passes": passes},
+        )
         try:
             spec = await read_drawing_spec(
                 image_bytes, router=router, confidential=confidential
             )
         except (SpecReadTruncatedError, SpecReadMalformedError) as exc:
             last_error = exc
+            await record_cad_process_event(
+                "reader.whole_sheet.pass",
+                "failed",
+                f"Полное чтение листа: проход {_attempt + 1}/{passes} отклонён",
+                {"pass": _attempt + 1, "error": f"{type(exc).__name__}: {exc}"[:400]},
+            )
             continue
+        await record_cad_process_event(
+            "reader.whole_sheet.pass",
+            "completed" if spec else "failed",
+            f"Полное чтение листа: проход {_attempt + 1}/{passes} завершён",
+            {"pass": _attempt + 1, "valid_spec": bool(spec)},
+        )
         if spec:
             reads.append(spec)
     if not reads and last_error is not None:
@@ -797,11 +865,14 @@ async def read_drawing_spec(
     failure so the caller can fall back to the tracing method.
     """
     import base64
+    import hashlib
     import io
+    import time
 
     from PIL import Image
 
     from app.ai.schemas import AIRequest, AITask, ChatMessage
+    from app.ai.cad_process_log import record_cad_process_event
     from app.ai.vlm_dimensions import _parse_json_array  # tolerant fence stripping
 
     if router is None:
@@ -853,30 +924,104 @@ async def read_drawing_spec(
         task=read_task,
         messages=[ChatMessage(
             role="user",
-            content=_SPEC_PROMPT + "\nКАРТА ИЗОБРАЖЕНИЙ:\n" + "\n".join(tile_descriptions),
+            content=(
+                _SPEC_PROMPT
+                + "\nДЛЯ ЭТОГО ПОЛНОГО ПРОХОДА верни только геометрию: "
+                "main_view, parts, views, unresolved и optional_unresolved. "
+                "Не повторяй dimensions, annotations, title_block и evidence — "
+                "они читаются отдельными специализированными проходами."
+                + "\nКАРТА ИЗОБРАЖЕНИЙ:\n"
+                + "\n".join(tile_descriptions)
+            ),
         )],
         images=[base64.b64encode(value).decode() for value in images],
         confidential=confidential,
         allow_cloud=False,
         preferred_model=seeing_model,
-        # A whole-sheet spec is long, and Cyrillic costs ~6 output chars per
-        # letter once Ollama escapes it. The default 8192 truncated real sheets
-        # mid-JSON.
-        metadata={"num_predict": 24000},
+        # The old 24k budget let a misrouted thinking model burn the entire
+        # Celery deadline on one answer.  Real valid specs are far smaller; 6k
+        # keeps enough room for escaped Cyrillic while bounding a runaway pass.
+        metadata={
+            "num_predict": 6000,
+            "json_schema": _whole_sheet_reader_schema(),
+        },
+    )
+    started = time.monotonic()
+    await record_cad_process_event(
+        "reader.whole_sheet.request",
+        "started",
+        "VLM получил полный лист и карту фрагментов",
+        {
+            "model": seeing_model,
+            "images": len(images),
+            "tile_coverage": tile_coverage,
+            "num_predict": 6000,
+            "thinking": get_routing_for(read_task).thinking,
+        },
     )
     try:
         response = await router.run(request)
-    except Exception:  # noqa: BLE001 — never sink the pipeline on a VLM error
+    except Exception as exc:  # noqa: BLE001 — never sink the pipeline on a VLM error
+        await record_cad_process_event(
+            "reader.whole_sheet.request",
+            "failed",
+            "VLM-вызов полного листа завершился ошибкой",
+            {
+                "model": seeing_model,
+                "duration_ms": round((time.monotonic() - started) * 1000),
+                "error": f"{type(exc).__name__}: {exc}"[:400],
+            },
+        )
         return {}
-    parsed = _coerce_spec_containers(
-        _parse_spec_json(response.text or "", strict=True)
-    )
+    answer = response.text or ""
+    answer_sha256 = hashlib.sha256(answer.encode("utf-8")).hexdigest()
+    response_details = {
+        "model": response.model or seeing_model,
+        "duration_ms": response.usage.latency_ms,
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+        "answer_chars": len(answer),
+        "answer_sha256": answer_sha256,
+        "answer_preview": answer[:2000],
+        "answer_tail": answer[-2000:],
+        "thinking_chars": len(str((response.raw or {}).get("thinking") or "")),
+        "done_reason": (response.raw or {}).get("done_reason"),
+    }
+    try:
+        parsed = _coerce_spec_containers(_parse_spec_json(answer, strict=True))
+    except (SpecReadTruncatedError, SpecReadMalformedError) as exc:
+        await record_cad_process_event(
+            "reader.whole_sheet.request",
+            "failed",
+            "Ответ полного чтения получен, но JSON не завершён",
+            {**response_details, "error": f"{type(exc).__name__}: {exc}"[:400]},
+        )
+        raise
     if not parsed:
+        await record_cad_process_event(
+            "reader.whole_sheet.request",
+            "failed",
+            "Ответ полного чтения пуст или не является валидным JSON",
+            {
+                **response_details,
+            },
+        )
         return {}
     try:
         validated = EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
     except ValidationError as exc:
         _log_spec_rejected("drawing_image", exc)
+        await record_cad_process_event(
+            "reader.whole_sheet.request",
+            "failed",
+            "JSON полного чтения не прошёл EngineeringDrawingSpec",
+            {
+                "validation_errors": len(exc.errors()),
+                "model": response.model or seeing_model,
+                "answer_sha256": answer_sha256,
+                "answer_preview": answer[:2000],
+            },
+        )
         return {}
     # A sheet the reader was only shown in part explains a missing value better
     # than any guess about the model. Optional: it never blocks geometry, but it
@@ -893,6 +1038,14 @@ async def read_drawing_spec(
     # audit data, never geometry input: consensus rebuilds the accepted spec and
     # the raw answer remains under reader_attempts for a person to compare.
     validated["reader_raw_response"] = response.text or ""
+    await record_cad_process_event(
+        "reader.whole_sheet.request",
+        "completed",
+        "Ответ полного чтения принят в EngineeringDrawingSpec",
+        {
+            **response_details,
+        },
+    )
     return validated
 
 

@@ -526,6 +526,27 @@ def _cad_trace_payload(gen: ImageGeneration, key: str) -> Any:
     return params.get(key)
 
 
+@router.get("/{generation_id}/cad-process")
+async def get_cad_process(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Live, durable timeline of drawing read, normalization and drafting.
+
+    Events are committed while the worker runs, so this remains useful when a
+    provider hangs, the task times out, or no CadIR/result was ever produced.
+    """
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    process = _cad_trace_payload(gen, "cad_process")
+    if not process:
+        raise HTTPException(404, "Журнал этапов ещё не создан")
+    return process
+
+
 @router.get("/{generation_id}/cad-reading")
 async def get_cad_reading(
     generation_id: uuid.UUID,

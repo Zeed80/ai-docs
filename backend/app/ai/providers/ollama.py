@@ -31,6 +31,22 @@ def _think_flag(request: AIRequest) -> bool:
     return bool(request.thinking)
 
 
+def _thinking_payload(request: AIRequest) -> dict[str, Any]:
+    """Ollama + model-template controls for the requested reasoning mode.
+
+    ``think=false`` is Ollama's public switch, while several Qwen templates
+    also inspect ``enable_thinking``.  Sending both is intentional: the live
+    Apex vision model ignored the first switch alone and put its complete JSON
+    in the thinking field, leaving an empty answer.
+    """
+
+    enabled = _think_flag(request)
+    payload: dict[str, Any] = {"think": enabled}
+    if not enabled:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    return payload
+
+
 def _pydantic_to_ollama_format(schema_cls: Any) -> dict[str, Any] | None:
     """Convert a Pydantic model class to an Ollama-compatible JSON schema for structured output."""
     try:
@@ -59,7 +75,7 @@ class OllamaProvider(AIProvider):
             "model": model,
             "messages": messages,
             "stream": False,
-            "think": _think_flag(request),
+            **_thinking_payload(request),
             "options": _inference_options(request, default_temperature=0.2),
             "keep_alive": _ollama_keep_alive(model),
         }
@@ -98,7 +114,7 @@ class OllamaProvider(AIProvider):
             "model": model,
             "messages": messages,
             "stream": False,
-            "think": _think_flag(request),
+            **_thinking_payload(request),
             "options": _inference_options(request, default_temperature=0.0),
             "keep_alive": _ollama_keep_alive(model),
         }
@@ -168,7 +184,7 @@ class OllamaProvider(AIProvider):
             "prompt": prompt_text,
             "images": [_ollama_image_payload(img) for img in request.images],
             "stream": False,
-            "think": _think_flag(request),
+            **_thinking_payload(request),
             "options": opts,
         }
         if system_text:

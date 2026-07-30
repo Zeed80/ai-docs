@@ -41,6 +41,8 @@ def test_thinking_field_tristate_default():
 def test_slot_supports_thinking():
     assert _slot_supports_thinking("agent_orchestrator")
     assert _slot_supports_thinking("structured_extraction")
+    assert _slot_supports_thinking("cad_spec_read")
+    assert _slot_supports_thinking("cad_spec_draft")
     assert not _slot_supports_thinking("embedding")
     assert not _slot_supports_thinking("rerank")
 
@@ -52,6 +54,20 @@ def test_apply_slot_thinking_writes_task_routing(routing_mem_store):
     # Turning it off (force) is distinct from default (None).
     _apply_slot_thinking("structured_extraction", False)
     assert tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).thinking is False
+
+
+def test_cad_reader_thinking_can_be_forced_off(routing_mem_store):
+    _apply_slot_thinking("cad_spec_read", False)
+
+    assert tr.get_routing_for(AITask.CAD_SPEC_READ).thinking is False
+
+
+def test_cad_reader_and_drafter_default_to_no_thinking(monkeypatch):
+    monkeypatch.setattr(tr, "_defaults_cache", None)
+    monkeypatch.setattr(tr, "_redis_get", lambda: None)
+
+    assert tr.get_routing_for(AITask.CAD_SPEC_READ).thinking is False
+    assert tr.get_routing_for(AITask.CAD_SPEC_DRAFT).thinking is False
 
 
 def test_apply_slot_thinking_agent_field_tristate(monkeypatch):
@@ -159,3 +175,15 @@ def test_reasoning_disable_params_covers_ollama():
     # Strict endpoints without a known knob stay empty (avoid 400s).
     assert _reasoning_disable_params("lmstudio") == {}
     assert _reasoning_disable_params("openai_compatible") == {}
+
+
+def test_ollama_no_thinking_payload_covers_model_template():
+    from app.ai.providers.ollama import _thinking_payload
+    from app.ai.schemas import AIRequest
+
+    request = AIRequest(task=AITask.CAD_SPEC_READ, prompt="read", thinking=False)
+
+    assert _thinking_payload(request) == {
+        "think": False,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }

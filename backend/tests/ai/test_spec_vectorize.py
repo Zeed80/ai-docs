@@ -11,12 +11,36 @@ from app.ai.cad_recognize.spec_vectorize import (
     _num,
     _parse_spec_json,
     _spec_images,
+    _whole_sheet_reader_schema,
     choose_standard_scale,
     draft_from_spec_async,
     draft_prismatic_body,
     draft_rotation_body,
     read_description_spec,
 )
+
+
+def test_whole_sheet_reader_schema_omits_fragment_owned_audit_payload():
+    schema = _whole_sheet_reader_schema()
+
+    assert "main_view" in schema["properties"]
+    assert "views" in schema["properties"]
+    assert "dimensions" not in schema["properties"]
+    assert "annotations" not in schema["properties"]
+    assert "title_block" not in schema["properties"]
+
+    def property_names(value):
+        if isinstance(value, dict):
+            yield from value.get("properties", {}).keys()
+            for child in value.values():
+                yield from property_names(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from property_names(child)
+
+    names = set(property_names(schema))
+    assert "evidence" not in names
+    assert "features" not in names
 
 
 def test_num_reads_values_from_messy_fields():

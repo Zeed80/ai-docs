@@ -561,7 +561,10 @@
       "doc_badge": "Документ: {id}",
       "case_badge": "Дело: {id}",
       "graph_reader_diagnostics": "Диагностика координатного reader-а: ошибок {count}",
-      "graph_reader_model": "Модель reader-а"
+      "graph_reader_model": "Модель reader-а",
+      "cad_process_title": "Журнал чтения и построения CAD",
+      "cad_process_current": "текущий этап",
+      "cad_process_details": "Технические данные этапа"
     },
     "vector": {
       "title": "Оцифрованный чертёж",

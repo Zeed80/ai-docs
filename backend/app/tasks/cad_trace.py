@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 
@@ -35,6 +37,87 @@ from app.tasks.celery_app import celery_app
 _TITLE_BLOCK_H_MM_PX = 55.0 * 4.0
 
 logger = structlog.get_logger()
+
+_CAD_PROCESS_LOG_VERSION = 1
+_CAD_PROCESS_LOG_MAX_EVENTS = 500
+
+
+async def _append_cad_process_event(
+    gen_uuid: uuid.UUID,
+    stage: str,
+    status: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Persist one live CAD pipeline event without owning the task session.
+
+    A fresh short session makes every event visible to polling clients even if
+    the worker is later killed by a hard/soft time limit.  Observability must
+    never be able to fail the drawing itself, hence the best-effort boundary.
+    """
+
+    from app.db.models import ImageGeneration
+    from app.db.session import _get_session_factory
+
+    try:
+        factory = _get_session_factory()
+        async with factory() as db:
+            gen = await db.get(ImageGeneration, gen_uuid)
+            if gen is None:
+                return
+            params = dict(gen.params or {})
+            process = dict(params.get("cad_process") or {})
+            events = list(process.get("events") or [])
+            now = datetime.now(UTC).isoformat()
+            sequence = int(events[-1].get("sequence") or 0) + 1 if events else 1
+            event = {
+                "sequence": sequence,
+                "at": now,
+                "stage": stage,
+                "status": status,
+                "message": message,
+                "details": details or {},
+            }
+            events.append(event)
+            process.update({
+                "version": _CAD_PROCESS_LOG_VERSION,
+                "status": (
+                    "failed" if stage == "pipeline" and status == "failed"
+                    else "done" if stage == "pipeline" and status == "completed"
+                    else process.get("status", "running")
+                ),
+                "current_stage": stage,
+                "current_status": status,
+                "updated_at": now,
+                "events": events[-_CAD_PROCESS_LOG_MAX_EVENTS:],
+            })
+            process.setdefault("started_at", now)
+            params["cad_process"] = process
+            gen.params = params
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 - telemetry cannot break CAD work
+        logger.warning(
+            "cad_process_event_store_failed",
+            generation_id=str(gen_uuid),
+            stage=stage,
+            error=str(exc)[:200],
+        )
+
+
+async def _finalize_cad_task_failure(generation_id: str, message: str) -> None:
+    """Make an out-of-coroutine Celery failure visible in API and UI."""
+
+    from app.tasks.image_generation import _mark_failed
+
+    gen_uuid = uuid.UUID(generation_id)
+    await _append_cad_process_event(
+        gen_uuid,
+        "pipeline",
+        "failed",
+        message,
+        {"terminal": True},
+    )
+    await _mark_failed(gen_uuid, message)
 
 # ГОСТ 2.301 sheet sizes (portrait, mm) — landscape is matched by swapping.
 _GOST_SHEETS = {
@@ -224,10 +307,29 @@ def run_cad_trace(self, generation_id: str) -> dict:
     started = _time.monotonic()
     try:
         result = run_async(_run(generation_id, self.request.id))
-    except Exception:
+    except Exception as exc:
         metrics.cad_digitize_total.labels(status="error").inc()
+        # A Celery soft limit can be raised while the event loop is polling,
+        # outside ``_run`` and therefore outside its normal fail-closed handler.
+        # Persist a terminal state here so the generation never remains
+        # permanently ``running`` after the worker has stopped.
+        message = (
+            "Оцифровка остановлена по лимиту времени (600 с). "
+            "Откройте журнал этапов: последний running-этап показывает место задержки."
+            if type(exc).__name__ == "SoftTimeLimitExceeded"
+            else f"{type(exc).__name__}: {exc}"
+        )
+        try:
+            run_async(_finalize_cad_task_failure(generation_id, message))
+        except Exception as persist_exc:  # noqa: BLE001
+            logger.error(
+                "cad_trace_terminal_failure_not_persisted",
+                generation_id=generation_id,
+                error=str(persist_exc)[:200],
+            )
         raise
-    metrics.cad_digitize_duration_seconds.observe(_time.monotonic() - started)
+    finally:
+        metrics.cad_digitize_duration_seconds.observe(_time.monotonic() - started)
     status = "error" if result.get("error") else ("declined" if result.get("declined") else "done")
     metrics.cad_digitize_total.labels(status=status).inc()
     return result
@@ -673,6 +775,7 @@ async def _build_spec_solid(
         solid_build_gate,
         verify_solid_against_spec,
     )
+    from app.ai.cad_process_log import record_cad_process_event
     from app.services.cad_kernel import (
         CadKernelError,
         candidate_compile_payload,
@@ -680,8 +783,20 @@ async def _build_spec_solid(
     )
     from app.storage import upload_file as _upload
 
+    await record_cad_process_event(
+        "solid.normalize",
+        "started",
+        "Преобразование прочитанной спецификации в feature tree",
+        None,
+    )
     candidate = feature_tree_from_spec(spec)
     if candidate is None:
+        await record_cad_process_event(
+            "solid.normalize",
+            "failed",
+            "Feature tree не сформирован: недостаточно геометрии",
+            None,
+        )
         return {
             "built": False,
             "build_status": "blocked",
@@ -700,7 +815,29 @@ async def _build_spec_solid(
         confirm_assumptions=confirm_assumptions,
         metadata={"generation_id": generation_id, "source": "spec_reader"},
     )
+    await record_cad_process_event(
+        "solid.gate",
+        "completed" if build_gate["allowed"] else "failed",
+        (
+            "Feature tree допущен к CAD-ядру"
+            if build_gate["allowed"]
+            else "Feature tree заблокирован до CAD-ядра"
+        ),
+        {
+            "label": candidate.label,
+            "blockers": build_gate["blockers"],
+            "warnings": build_gate["warnings"],
+            "kernel_payload_sha256": kernel_input.get("sha256"),
+            "confirm_assumptions": confirm_assumptions,
+        },
+    )
     if not build_gate["allowed"]:
+        await record_cad_process_event(
+            "kernel.compile",
+            "skipped",
+            "CAD-ядро не вызвано из-за блокеров чтения",
+            {"blockers": build_gate["blockers"]},
+        )
         return {
             "built": False,
             "build_status": "blocked",
@@ -711,6 +848,15 @@ async def _build_spec_solid(
             "feature_tree": candidate.model_dump(mode="json"),
             "kernel_input": kernel_input,
         }
+    await record_cad_process_event(
+        "kernel.compile",
+        "started",
+        "Точный payload передан в CAD-ядро",
+        {
+            "kernel_payload_sha256": kernel_input.get("sha256"),
+            "candidate_kind": candidate.features[0].kind if candidate.features else None,
+        },
+    )
     try:
         artifacts = await compile_candidate(
             candidate,
@@ -722,12 +868,35 @@ async def _build_spec_solid(
         )
     except CadKernelError as exc:
         logger.warning("cad_solid_failed", generation_id=generation_id, error=str(exc))
+        await record_cad_process_event(
+            "kernel.compile", "failed", "CAD-ядро отклонило feature tree",
+            {"error": str(exc)[:400]},
+        )
         return {"built": False, "build_status": "blocked", "error": str(exc)[:400], "label": candidate.label}
     except Exception as exc:  # noqa: BLE001
         logger.warning("cad_solid_error", generation_id=generation_id, error=str(exc))
+        await record_cad_process_event(
+            "kernel.compile", "failed", "Ошибка вызова CAD-ядра",
+            {"error": f"{type(exc).__name__}: {exc}"[:400]},
+        )
         return {"built": False, "build_status": "blocked", "error": str(exc)[:400], "label": candidate.label}
 
     report = artifacts.report or {}
+    await record_cad_process_event(
+        "kernel.compile",
+        "completed",
+        "CAD-ядро вернуло B-Rep и отчёт операций",
+        {
+            "volume_mm3": report.get("volume_mm3"),
+            "bounds_mm": report.get("bounds_mm"),
+            "feature_operations": len(report.get("feature_operations") or []),
+            "artifacts": {
+                "step": bool(artifacts.step),
+                "iges": bool(artifacts.iges),
+                "stl": bool(artifacts.stl),
+            },
+        },
+    )
     verification = verify_solid_against_spec(report, spec, candidate)
     # The sheet itself: views, sections and dimensions all measured off this
     # solid. A kernel too old to draw returns nothing, and the caller says so
@@ -735,6 +904,12 @@ async def _build_spec_solid(
     from app.ai.cad_ir.sheet_from_solid import build_sheet_from_solid
 
     sheet: Any = None
+    await record_cad_process_event(
+        "sheet.build",
+        "started",
+        "Построение необходимых 2D-видов из B-Rep",
+        {"geometry_only": True, "sheet_format": sheet_format},
+    )
     try:
         sheet = await build_sheet_from_solid(
             candidate, spec, report,
@@ -743,6 +918,10 @@ async def _build_spec_solid(
     except Exception as exc:  # noqa: BLE001 — a drawing failure is reportable, not fatal
         logger.warning(
             "cad_sheet_from_solid_failed", generation_id=generation_id, error=str(exc)
+        )
+        await record_cad_process_event(
+            "sheet.build", "failed", "Не удалось построить лист из B-Rep",
+            {"error": f"{type(exc).__name__}: {exc}"[:400]},
         )
     # Stage 3: what the sheet said is bound to the edges the kernel built,
     # addressed by its own stable keys — the pair a CAM plan needs.
@@ -819,6 +998,17 @@ async def _build_spec_solid(
         # Popped by the caller: an IR is not JSON for gen.params.
         result["_sheet_ir"] = sheet.ir
         result["_dimensions"] = sheet.drawing.get("dimensions") or []
+        await record_cad_process_event(
+            "sheet.build",
+            "completed",
+            "2D-лист построен из проверяемой 3D-модели",
+            {
+                "views": [view["kind"] for view in sheet.plan.views],
+                "dimensions": len(sheet.drawing.get("dimensions") or []),
+                "geometry_only": sheet.plan.geometry_only,
+                "warnings": sheet.warnings,
+            },
+        )
     return result
 
 
@@ -1307,9 +1497,27 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             except Exception as _exc:  # noqa: BLE001 — best-effort ancestry
                 logger.warning("parent_lookup_failed", error=str(_exc))
 
+    from app.ai.cad_process_log import (
+        install_cad_process_recorder,
+        reset_cad_process_recorder,
+    )
+
+    async def _record(
+        stage: str,
+        status: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        await _append_cad_process_event(
+            gen_uuid, stage, status, message, details
+        )
+
+    recorder_token = install_cad_process_recorder(_record)
+
     async def _fail(message: str) -> dict:
         from app.tasks.image_generation import _mark_failed
 
+        await _record("pipeline", "failed", message, {"terminal": True})
         await _mark_failed(gen_uuid, message, owner_sub)
         return {"error": message}
 
@@ -1317,6 +1525,16 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         import hashlib
 
         vectorize_method = str(params.get("vectorize_method") or "trace")
+        await _record(
+            "pipeline",
+            "started",
+            "Оцифровка запущена",
+            {
+                "task_id": task_id,
+                "method": vectorize_method,
+                "read_passes": int(params.get("read_passes") or 3),
+            },
+        )
         description_mode = vectorize_method == "text_spec" and bool(description)
         if not source_paths and not description_mode:
             return await _fail("Для оцифровки нужен исходный скан/фото.")
@@ -1324,6 +1542,16 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         source_sha256 = hashlib.sha256(
             content if content else description.encode("utf-8")
         ).hexdigest()
+        await _record(
+            "source.load",
+            "completed",
+            "Исходник загружен",
+            {
+                "bytes": len(content),
+                "sha256": source_sha256,
+                "kind": "description" if description_mode else "image",
+            },
+        )
         if content.startswith(b"%PDF"):
             try:
                 content = _pdf_page_to_png(
@@ -1339,6 +1567,12 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # clean scan (no confident paper quad).
         if content:
             content = _dewarp_photo(content)
+            await _record(
+                "source.normalize",
+                "completed",
+                "Нормализация и dewarp исходника завершены",
+                {"bytes": len(content)},
+            )
         from app.ai.cad_pipeline_manifest import build_cad_pipeline_manifest
 
         pipeline_manifest = build_cad_pipeline_manifest(
@@ -1357,6 +1591,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     "cad_pipeline_manifest": pipeline_manifest,
                 }
                 await db.commit()
+        await _record(
+            "pipeline.manifest",
+            "completed",
+            "Снимок маршрута и версий компонентов сохранён",
+            {
+                "config_sha256": pipeline_manifest.get("config_sha256"),
+                "spec_reader": (
+                    pipeline_manifest.get("components", {}).get("spec_reader", {})
+                ),
+            },
+        )
 
         # Three non-trace drafting workflows, kept explicitly separate:
         #   "spec"      — the production «По описанию» path: Model 1 (VLM)
@@ -1532,11 +1777,41 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 )
 
                 try:
+                    import asyncio
+
                     # Reading once is a bet on a stochastic model; reading a few
                     # times and intersecting turns its inconsistency into an
                     # explicit review item instead of a silent wrong number.
                     passes = int(params.get("read_passes") or 3)
-                    spec = await read_spec_best_effort(content, passes=passes)
+                    await _record(
+                        "reader",
+                        "started",
+                        "Начато многоэтапное чтение чертежа",
+                        {"passes": passes, "timeout_seconds": 480},
+                    )
+                    async with asyncio.timeout(480):
+                        spec = await read_spec_best_effort(content, passes=passes)
+                    await _record(
+                        "reader",
+                        "completed" if spec else "failed",
+                        (
+                            "Чтение завершено, спецификация получена"
+                            if spec
+                            else "Чтение завершено без валидной спецификации"
+                        ),
+                        {
+                            "attempts": len(spec.get("reader_attempts") or [])
+                            if spec else 0,
+                            "has_geometry": bool(
+                                spec and (spec.get("main_view") or {}).get("outer")
+                            ),
+                        },
+                    )
+                except TimeoutError:
+                    return await _fail(
+                        "Метод «по описанию»: чтение остановлено через 480 с. "
+                        "Последний незавершённый запрос виден в журнале этапов."
+                    )
                 except (
                     SpecReaderNotVisionError,
                     SpecReadTruncatedError,
@@ -1560,6 +1835,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 )
 
                 try:
+                    await _record(
+                        "reader.followup", "started",
+                        "Начато уточнение недостающих размеров", None,
+                    )
                     spec, followup_log = await resolve_missing_dimensions(
                         content, spec
                     )
@@ -1570,6 +1849,12 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         error=str(exc)[:200],
                     )
                     followup_log = []
+                await _record(
+                    "reader.followup",
+                    "completed",
+                    "Уточнение недостающих размеров завершено",
+                    {"questions": len(followup_log)},
+                )
                 if followup_log:
                     # The spec was re-completed, so the contract has to re-derive
                     # what is still missing — otherwise a value just recovered
@@ -1604,6 +1889,16 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
 
                 dimension_graph = build_dimension_graph(spec)
                 blocking_checks.extend(dimension_graph["errors"])
+                await _record(
+                    "normalize.verify",
+                    "completed",
+                    "Нормализация, cross-check и граф размеров завершены",
+                    {
+                        "assumptions": len(assumptions),
+                        "crosscheck_findings": len(crosscheck.get("findings") or []),
+                        "dimension_errors": len(dimension_graph.get("errors") or []),
+                    },
+                )
 
                 unresolved = [str(i) for i in spec.get("unresolved", []) if str(i)]
                 unresolved.extend(blocking_checks)
@@ -1784,6 +2079,16 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     job = await studio_queue.job_for_generation(db, gen_uuid)
                     await studio_queue.mark_job_done(db, job)
                     await db.commit()
+                await _record(
+                    "pipeline",
+                    "completed",
+                    "Оцифровка завершена; чтение и результат сохранены",
+                    {
+                        "entities": len(spec_ir.entities),
+                        "solid_built": bool(solid_result and solid_result.get("built")),
+                        "build_status": (solid_result or {}).get("build_status", "blocked"),
+                    },
+                )
                 return {
                     "ok": True, "generation_id": generation_id,
                     "entities": len(spec_ir.entities), "method": "spec",
@@ -2242,3 +2547,5 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.warning("cad_trace_failed", generation_id=generation_id, error=str(exc))
         return await _fail(f"{type(exc).__name__}: {exc}")
+    finally:
+        reset_cad_process_recorder(recorder_token)

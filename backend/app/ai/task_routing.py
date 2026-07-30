@@ -60,6 +60,14 @@ TASK_DEFAULT_THINKING: dict[AITask, bool] = {
     AITask.CAD_DRAWING_GRAPH_LAYOUT: False,
     AITask.CAD_DRAWING_GRAPH_FRAGMENT_READ: False,
     AITask.CAD_DRAWING_GRAPH_EVIDENCE_VERIFY: False,
+    # Structured CAD output must be returned in the answer field.  With a
+    # thinking model left on, Ollama can put the entire JSON in ``thinking``
+    # and return an empty answer, wasting the full reader budget.  Keep these
+    # assignments explicitly off by default; the settings UI may override each
+    # slot independently.
+    AITask.CAD_SPEC_READ: False,
+    AITask.CAD_SPEC_DRAFT: False,
+    AITask.CAD_TEXT_OCR: False,
 }
 
 
