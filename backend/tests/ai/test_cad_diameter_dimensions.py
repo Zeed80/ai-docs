@@ -45,6 +45,15 @@ def test_detal_126_diameters_are_classified_against_the_main_profile():
     ] == [(102.0, 14.0), (80.0, 357.0), (72.0, 99.0)]
     assert all(item["evidence"][0]["bbox"] for item in sections)
     assert all("vector outer contour" in item["evidence"][0]["raw_text"] for item in sections)
+    thread_candidate = next(
+        item for item in result["outer_candidates"]
+        if item["value_mm"] == 75.0
+    )
+    assert thread_candidate["role"] == "outer_candidate"
+    assert thread_candidate["source"] == "interrupted_vector_contour"
+    assert 360 < thread_candidate["axial_interval_mm"][0] < 375
+    assert 395 < thread_candidate["axial_interval_mm"][1] < 405
+    assert "осевые станции" in thread_candidate["blocker"]
     bore = bore_sections_from_diameter_evidence(result)
     assert [(item["diameter_mm"], item["length_mm"]) for item in bore] == [
         (56.55, 78.0),

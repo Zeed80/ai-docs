@@ -1357,10 +1357,31 @@ def _feature_completeness_issues(
         not in assigned_designations
     ]
     if missing_threads:
-        issues.append(
-            "резьбы указаны, но не привязаны к участкам: "
-            + ", ".join(missing_threads)
-        )
+        candidate_notes: list[str] = []
+        for designation in missing_threads:
+            nominal_match = re.search(r"M\s*(\d+(?:[.,]\d+)?)", designation, re.IGNORECASE)
+            nominal = (
+                float(nominal_match.group(1).replace(",", "."))
+                if nominal_match else None
+            )
+            candidates = [
+                item for item in diameter_evidence.get("outer_candidates") or []
+                if nominal is not None
+                and abs(float(item.get("value_mm") or -1000) - nominal) <= 0.05
+            ]
+            if len(candidates) == 1:
+                interval = candidates[0].get("axial_interval_mm") or []
+                candidate_notes.append(
+                    f"{designation}: измерен наружный контур-кандидат Ø{nominal:g}"
+                    + (
+                        f" на приблизительном интервале {interval[0]:g}…{interval[1]:g} мм"
+                        if len(interval) == 2 else ""
+                    )
+                    + ", но его границы не привязаны к двум осевым размерам"
+                )
+            else:
+                candidate_notes.append(f"{designation}: несущий участок не локализован")
+        issues.append("резьбы указаны, но не привязаны к участкам: " + "; ".join(candidate_notes))
     return issues
 
 

@@ -385,3 +385,20 @@ def test_thread_is_assigned_only_to_a_unique_matching_profile_section():
     assert len(issues) == 1
     assert "M75" in issues[0]
     assert "M54,5" not in issues[0]
+
+
+def test_unassigned_thread_reports_measured_but_unbounded_carrier():
+    issues = _feature_completeness_issues(
+        {"dimensions": [{"value": "M75×1,5"}]},
+        {},
+        [{"diameter_mm": 72, "length_mm": 99}],
+        {"outer_candidates": [{
+            "value_mm": 75,
+            "axial_interval_mm": [366.0, 400.0],
+        }]},
+    )
+
+    assert len(issues) == 1
+    assert "контур-кандидат Ø75" in issues[0]
+    assert "366…400 мм" in issues[0]
+    assert "двум осевым размерам" in issues[0]

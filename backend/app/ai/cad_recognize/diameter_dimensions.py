@@ -341,6 +341,87 @@ def _contour_outer_observations(
     return observations
 
 
+def _interrupted_outer_candidates(
+    blue,
+    *,
+    known: list[float],
+    left: int,
+    right: int,
+    center: float,
+    px_per_mm: float,
+    accepted: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep measurable plateaus that are interrupted by drawing conventions.
+
+    An external thread is drawn with several parallel contour lines.  At the
+    M75 section of the control spindle this makes the raw outside span jump to
+    the adjacent root line for a few pixels, so the strict plateau detector
+    correctly refuses to use it as the revolved profile.  Dropping that
+    measurement altogether, however, hides the exact reason the thread cannot
+    yet be built.  This secondary list records such candidates for audit only;
+    ``outer_sections_from_diameter_evidence`` deliberately ignores it.
+    """
+    import numpy as np
+
+    measurements = [
+        _profile_measurement(blue, x, center, px_per_mm)
+        for x in range(left, right + 1)
+    ]
+    minimum_width = max(28, int((right - left) * 0.02))
+    max_gap = max(12, int((right - left) * 0.012))
+    result: list[dict[str, Any]] = []
+    for value in known:
+        matching = [
+            index
+            for index, item in enumerate(measurements)
+            if item is not None
+            and abs(float(item["outer_mm"]) - value) / value <= 0.025
+        ]
+        if not matching:
+            continue
+        groups: list[list[int]] = [[matching[0]]]
+        for index in matching[1:]:
+            if index - groups[-1][-1] <= max_gap:
+                groups[-1].append(index)
+            else:
+                groups.append([index])
+        for group in groups:
+            start_index, end_index = group[0], group[-1]
+            if end_index - start_index + 1 < minimum_width:
+                continue
+            x0, x1 = left + start_index, left + end_index
+            if any(
+                item.get("value_mm") == value
+                and len(item.get("profile_interval_px") or []) == 2
+                and x0 >= item["profile_interval_px"][0] - 2
+                and x1 <= item["profile_interval_px"][1] + 2
+                for item in accepted
+            ):
+                continue
+            estimates = [float(measurements[index]["outer_mm"]) for index in group]
+            median = float(np.median(estimates))
+            result.append({
+                "id": "",
+                "value_mm": round(float(value), 3),
+                "role": "outer_candidate",
+                "source": "interrupted_vector_contour",
+                "profile_interval_px": [x0, x1],
+                "axial_interval_mm": [
+                    round((x0 - left) / px_per_mm, 3),
+                    round((x1 - left) / px_per_mm, 3),
+                ],
+                "profile_check_mm": round(median, 3),
+                "confidence": round(
+                    max(0.6, min(0.86, 1.0 - abs(median - value) / value)), 3
+                ),
+                "blocker": (
+                    "контур прерывается линиями условного изображения; нужны "
+                    "две подтвержденные осевые станции"
+                ),
+            })
+    return result
+
+
 def _contour_bore_observations(
     blue,
     *,
@@ -531,6 +612,15 @@ def localize_diameter_dimensions(
         px_per_mm=px_per_mm,
     )
     observations.extend(contour_outer)
+    outer_candidates = _interrupted_outer_candidates(
+        blue,
+        known=sorted(contour_candidates),
+        left=left,
+        right=right,
+        center=center,
+        px_per_mm=px_per_mm,
+        accepted=contour_outer,
+    )
     contour_bore = _contour_bore_observations(
         blue,
         known=sorted(contour_candidates),
@@ -663,6 +753,7 @@ def localize_diameter_dimensions(
         "profile_center_y_px": round(center, 1),
         "px_per_mm": round(px_per_mm, 6),
         "observations": accepted,
+        "outer_candidates": outer_candidates,
         "outer_transition_stations": transitions,
         "bore_taper": taper_observation,
         "overall_mm": axial_map.get("overall_mm"),
