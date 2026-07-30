@@ -1,0 +1,94 @@
+{
+  "_comment": [
+    "Hand-checked reader benchmark truth for test_vector_files/detal_126.png.",
+    "Only source-supported manufacturing values are scored. Unlike v2, this",
+    "does not contain constructed axial positions or invented chamfer edges.",
+    "The sheet states six 1x45 degree chamfers, but only one edge is currently",
+    "localized; that ambiguity remains an explicit production blocker and is",
+    "not converted into false reference geometry."
+  ],
+  "schema_version": 1,
+  "part": "Шпиндель обрабатывающего центра V-10",
+  "main_view": {
+    "name": "Шпиндель",
+    "type": "тело вращения",
+    "outer": [
+      {"diameter_mm": 102.0, "length_mm": 14.0, "note": "h6(-0,022)"},
+      {"diameter_mm": 80.0, "length_mm": 357.0, "note": "js6(±0,0095)"},
+      {"diameter_mm": 72.0, "length_mm": 6.0, "note": "h6(-0,019)"},
+      {
+        "diameter_mm": 75.0,
+        "length_mm": 18.0,
+        "thread": {
+          "designation": "M75x1,5",
+          "system": "metric",
+          "nominal_diameter_mm": 75.0,
+          "pitch_mm": 1.5,
+          "length_mm": 18.0,
+          "internal": false
+        }
+      },
+      {"diameter_mm": 72.0, "length_mm": 75.0, "note": "h6(-0,019)"}
+    ],
+    "bore": [
+      {
+        "diameter_mm": 56.55,
+        "length_mm": 78.0,
+        "taper": {"kind": "ratio", "ratio": "7:24", "direction": "decreasing"}
+      },
+      {"diameter_mm": 51.0, "length_mm": 72.0},
+      {"diameter_mm": 44.0, "length_mm": 50.0, "note": "H7(+0,025)"},
+      {"diameter_mm": 51.0, "length_mm": 152.0},
+      {"diameter_mm": 50.0, "length_mm": 43.0, "note": "H7(+0,025)"},
+      {"diameter_mm": 56.0, "length_mm": 50.0},
+      {
+        "diameter_mm": 55.0,
+        "length_mm": 25.0,
+        "thread": {
+          "designation": "M54,5x2",
+          "system": "metric",
+          "nominal_diameter_mm": 54.5,
+          "pitch_mm": 2.0,
+          "length_mm": 25.0,
+          "internal": true
+        }
+      }
+    ],
+    "keyways": [
+      {"kind": "parallel", "axial_start_mm": 276.71, "length_mm": 85.0, "width_mm": 12.0, "depth_mm": 5.0},
+      {"kind": "parallel", "axial_start_mm": 370.981, "length_mm": 35.0, "width_mm": 8.0, "depth_mm": 3.5}
+    ],
+    "cross_holes": [
+      {"diameter_mm": 14.0, "axial_position_mm": 409.978, "angle_deg": 0.0, "through": false, "depth_mm": 8.0},
+      {"diameter_mm": 10.0, "axial_position_mm": 455.079, "angle_deg": 0.0, "through": false, "depth_mm": 8.5, "counterbore_diameter_mm": 24.0, "counterbore_depth_mm": 3.0},
+      {"diameter_mm": 9.0, "axial_position_mm": 455.079, "angle_deg": 180.0, "through": false, "depth_mm": 8.5}
+    ],
+    "chamfers": [
+      {"size_mm": 1.0, "angle_deg": 45.0, "location": "left_end"}
+    ]
+  },
+  "views": [
+    {"kind": "section", "body_index": 0, "label": "Г-Г"},
+    {"kind": "section", "body_index": 0, "label": "Б-Б"},
+    {"kind": "section", "body_index": 0, "label": "В-В"},
+    {"kind": "side", "body_index": 0, "label": "А"}
+  ],
+  "dimensions": [
+    {"value": "470", "applies_to": "габаритная длина"},
+    {"value": "Ø80js6", "applies_to": "подшипниковая шейка"},
+    {"value": "M75x1,5", "applies_to": "наружная резьба"},
+    {"value": "M54,5x2", "applies_to": "внутренняя резьба"},
+    {"value": "6 фасок 1x45°", "applies_to": "неразрешённые кромки"}
+  ],
+  "annotations": [
+    {"kind": "hardness", "text": "HRC 58…62"},
+    {"kind": "material", "text": "Сталь 55 ГОСТ 1050-2013"}
+  ],
+  "title_block": {
+    "name": "Шпиндель обрабатывающего центра V-10",
+    "material": "Сталь 55 ГОСТ 1050-2013",
+    "scale": "1:2"
+  },
+  "unresolved": ["указано 6 фасок, локализовано 1"],
+  "optional_unresolved": []
+}

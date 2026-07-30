@@ -45,7 +45,7 @@ GROUND_TRUTH: dict[str, dict[str, Any]] = {
         "max_diameter_mm": 102.0,
         "expect_dimension_text": "80js6",
         "expect_annotation_contains": "hrc",
-        "reference_spec": "tests/fixtures/detal_126_reference_spec_v2.json",
+        "reference_spec": "tests/fixtures/detal_126_reference_spec_v3.json",
     },
 }
 
@@ -54,30 +54,67 @@ def _norm(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
-_PARAMETER_GROUPS = {
-    "outer.diameter_mm": ("outer", "diameter_mm"),
-    "outer.length_mm": ("outer", "length_mm"),
-    "bore.diameter_mm": ("bore", "diameter_mm"),
-    "bore.length_mm": ("bore", "length_mm"),
-    "keyways.length_mm": ("keyways", "length_mm"),
-    "keyways.width_mm": ("keyways", "width_mm"),
-    "keyways.depth_mm": ("keyways", "depth_mm"),
-    "cross_holes.diameter_mm": ("cross_holes", "diameter_mm"),
-    "chamfers.size_mm": ("chamfers", "size_mm"),
-    "chamfers.angle_deg": ("chamfers", "angle_deg"),
+_PARAMETER_GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "outer.diameter_mm": ("outer", ("diameter_mm",)),
+    "outer.length_mm": ("outer", ("length_mm",)),
+    "outer.thread.nominal_diameter_mm": (
+        "outer", ("thread", "nominal_diameter_mm")
+    ),
+    "outer.thread.pitch_mm": ("outer", ("thread", "pitch_mm")),
+    "outer.thread.length_mm": ("outer", ("thread", "length_mm")),
+    "outer.thread.internal": ("outer", ("thread", "internal")),
+    "bore.diameter_mm": ("bore", ("diameter_mm",)),
+    "bore.length_mm": ("bore", ("length_mm",)),
+    "bore.taper.ratio": ("bore", ("taper", "ratio")),
+    "bore.thread.nominal_diameter_mm": (
+        "bore", ("thread", "nominal_diameter_mm")
+    ),
+    "bore.thread.pitch_mm": ("bore", ("thread", "pitch_mm")),
+    "bore.thread.length_mm": ("bore", ("thread", "length_mm")),
+    "bore.thread.internal": ("bore", ("thread", "internal")),
+    "keyways.length_mm": ("keyways", ("length_mm",)),
+    "keyways.width_mm": ("keyways", ("width_mm",)),
+    "keyways.depth_mm": ("keyways", ("depth_mm",)),
+    "cross_holes.diameter_mm": ("cross_holes", ("diameter_mm",)),
+    "cross_holes.depth_mm": ("cross_holes", ("depth_mm",)),
+    "cross_holes.angle_deg": ("cross_holes", ("angle_deg",)),
+    "cross_holes.through": ("cross_holes", ("through",)),
+    "cross_holes.counterbore_diameter_mm": (
+        "cross_holes", ("counterbore_diameter_mm",)
+    ),
+    "cross_holes.counterbore_depth_mm": (
+        "cross_holes", ("counterbore_depth_mm",)
+    ),
+    "chamfers.size_mm": ("chamfers", ("size_mm",)),
+    "chamfers.angle_deg": ("chamfers", ("angle_deg",)),
 }
 
 
-def _parameter_groups(spec: dict) -> dict[str, list[float]]:
+def _nested_value(item: dict[str, Any], path: tuple[str, ...]) -> Any:
+    value: Any = item
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    if value is None or not isinstance(value, (bool, int, float, str)):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
+def _parameter_groups(spec: dict) -> dict[str, list[Any]]:
     """Read-only manufacturing parameters, excluding constructed positions."""
     body = spec.get("main_view") or {}
-    groups: dict[str, list[float]] = {}
-    for name, (collection, field) in _PARAMETER_GROUPS.items():
-        groups[name] = [
-            float(item[field])
-            for item in (body.get(collection) or [])
-            if isinstance(item, dict) and isinstance(item.get(field), (int, float))
-        ]
+    groups: dict[str, list[Any]] = {}
+    for name, (collection, path) in _PARAMETER_GROUPS.items():
+        groups[name] = []
+        for item in body.get(collection) or []:
+            if not isinstance(item, dict):
+                continue
+            value = _nested_value(item, path)
+            if value is not None:
+                groups[name].append(value)
     return groups
 
 
@@ -92,12 +129,24 @@ def score_parameters(spec: dict, reference_spec: dict) -> dict[str, Any]:
         remaining = list(predicted.get(name) or [])
         matched = 0
         for wanted in wanted_values:
-            tolerance = max(0.05, abs(wanted) * 0.001)
+            def equivalent(value: Any) -> bool:
+                if (
+                    isinstance(wanted, (int, float))
+                    and not isinstance(wanted, bool)
+                    and isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                ):
+                    tolerance = max(0.05, abs(float(wanted)) * 0.001)
+                    return abs(float(value) - float(wanted)) <= tolerance
+                if isinstance(wanted, str) and isinstance(value, str):
+                    return _norm(value).replace(",", ".") == _norm(wanted).replace(",", ".")
+                return type(value) is type(wanted) and value == wanted
+
             candidate = next(
                 (
                     index
                     for index, value in enumerate(remaining)
-                    if abs(value - wanted) <= tolerance
+                    if equivalent(value)
                 ),
                 None,
             )
@@ -396,7 +445,7 @@ async def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     summary = summarize_results(results)
     report = {
-        "contract": "real-raster-cad-reader-v2",
+        "contract": "real-raster-cad-reader-v3",
         "case": args.case,
         "promotion_contract": {
             "parameter_accuracy": 1.0,

@@ -30,6 +30,121 @@ def test_reader_parameter_accuracy_is_one_to_one_and_micro_aggregated() -> None:
     assert score["parameter_accuracy"] == 0.5
 
 
+def test_reader_scores_external_and_internal_threads_on_their_carriers() -> None:
+    reference = {
+        "main_view": {
+            "outer": [{
+                "diameter_mm": 75,
+                "length_mm": 18,
+                "thread": {
+                    "nominal_diameter_mm": 75,
+                    "pitch_mm": 1.5,
+                    "length_mm": 18,
+                    "internal": False,
+                },
+            }],
+            "bore": [{
+                "diameter_mm": 55,
+                "length_mm": 25,
+                "thread": {
+                    "nominal_diameter_mm": 54.5,
+                    "pitch_mm": 2,
+                    "length_mm": 25,
+                    "internal": True,
+                },
+            }],
+        }
+    }
+    prediction = {
+        "main_view": {
+            "outer": [{
+                "diameter_mm": 75,
+                "length_mm": 18,
+                "thread": {
+                    "nominal_diameter_mm": 75,
+                    "pitch_mm": 1.5,
+                    "length_mm": 18,
+                    "internal": False,
+                },
+            }],
+            # The right numeric thread on the wrong (external) carrier must not
+            # satisfy the expected internal-thread groups.
+            "bore": [{"diameter_mm": 55, "length_mm": 25}],
+        }
+    }
+
+    score = score_parameters(prediction, reference)
+
+    assert score["parameter_details"]["outer.thread.pitch_mm"]["matched"] == 1
+    assert score["parameter_details"]["bore.thread.pitch_mm"]["matched"] == 0
+    assert score["parameters_matched"] == 8
+    assert score["parameters_total"] == 12
+
+
+def test_reader_scores_blind_hole_depth_and_counterbore_as_parameters() -> None:
+    reference = {
+        "main_view": {
+            "cross_holes": [{
+                "diameter_mm": 10,
+                "depth_mm": 8.5,
+                "angle_deg": 0,
+                "through": False,
+                "counterbore_diameter_mm": 24,
+                "counterbore_depth_mm": 3,
+            }]
+        }
+    }
+    prediction = {
+        "main_view": {
+            "cross_holes": [{
+                "diameter_mm": 10,
+                "depth_mm": 8.5,
+                "angle_deg": 0,
+                "through": True,
+                "counterbore_diameter_mm": 24,
+            }]
+        }
+    }
+
+    score = score_parameters(prediction, reference)
+
+    assert score["parameters_matched"] == 4
+    assert score["parameters_total"] == 6
+    assert score["parameter_details"]["cross_holes.counterbore_depth_mm"] == {
+        "matched": 0,
+        "expected": 1,
+        "predicted_values": [],
+        "expected_values": [3.0],
+    }
+
+
+def test_reader_scores_taper_ratio_as_a_semantic_parameter() -> None:
+    reference = {
+        "main_view": {
+            "bore": [{
+                "diameter_mm": 56.55,
+                "length_mm": 78,
+                "taper": {"ratio": "7:24"},
+            }]
+        }
+    }
+    prediction = {
+        "main_view": {
+            "bore": [{
+                "diameter_mm": 56.55,
+                "length_mm": 78,
+                "taper": {"ratio": "1:10"},
+            }]
+        }
+    }
+
+    score = score_parameters(prediction, reference)
+
+    assert score["parameters_matched"] == 2
+    assert score["parameters_total"] == 3
+    assert score["parameter_details"]["bore.taper.ratio"]["matched"] == 0
+
+
 def test_reader_summary_exposes_false_success_claims() -> None:
     summary = summarize_results([
         {
