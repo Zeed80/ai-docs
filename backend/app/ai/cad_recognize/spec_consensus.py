@@ -196,7 +196,10 @@ def _feature_items_agree(left: dict, right: dict) -> bool:
         a, b = left.get(key), right.get(key)
         if a is None and b is None:
             continue
-        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        if isinstance(a, bool) or isinstance(b, bool):
+            if a is not b:
+                return False
+        elif isinstance(a, (int, float)) and isinstance(b, (int, float)):
             if not _numbers_agree(a, b):
                 return False
         elif isinstance(a, dict) and isinstance(b, dict):

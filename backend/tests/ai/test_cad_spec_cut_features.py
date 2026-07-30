@@ -198,3 +198,146 @@ def test_named_holes_chamfers_and_threads_cannot_disappear():
     assert "поперечное отверстие Ø14" in "\n".join(issues)
     assert "указано 6 фасок, локализовано 1" in issues
     assert any("M54,5" in issue and "M75" in issue for issue in issues)
+
+
+@pytest.mark.asyncio
+async def test_radial_crop_maps_only_named_diameters_to_known_candidates(monkeypatch):
+    source = Image.new("RGB", (900, 700), "white")
+    evidence = {
+        "status": "ok",
+        "keyway_candidates": [],
+        "radial_opening_candidates": [
+            {
+                "id": "radial-opening-1",
+                "bbox": [400, 150, 440, 550],
+                "axial_position_mm": 410,
+                "supported_diameters_mm": [14],
+            },
+            {
+                "id": "radial-opening-2",
+                "bbox": [470, 150, 510, 550],
+                "axial_position_mm": 430,
+                "supported_diameters_mm": [14],
+            },
+        ],
+        "blockers": [],
+    }
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.turned_features.localize_turned_features",
+        lambda *_args, **_kwargs: evidence,
+    )
+
+    async def fake_ask(prompt, *_args, **_kwargs):
+        if "увеличенный правый узел" in prompt:
+            return {"radial_features": [
+                {
+                    "candidate_id": "radial-opening-2",
+                    "diameter_mm": 24,
+                    "kind": "counterbore",
+                    "side": "top",
+                },
+                {
+                    "candidate_id": "invented-axis",
+                    "diameter_mm": 14,
+                    "kind": "through",
+                    "side": "both",
+                },
+                {
+                    "candidate_id": "radial-opening-1",
+                    "diameter_mm": 999,
+                    "kind": "through",
+                    "side": "both",
+                },
+            ]}
+        return {}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    profile_evidence = {
+        "axial_map": {"overall_mm": 470, "datum_line": [100, 800]},
+        "diameter_map": {"profile_center_y_px": 350, "observations": []},
+    }
+    await _read_cut_features(
+        source,
+        [{"diameter_mm": 80, "length_mm": 470}],
+        router=object(),
+        confidential=True,
+        source_image=source,
+        callouts={"dimensions": [
+            {"value": "Ø14"}, {"value": "Ø24"}, {"value": "Ø80"},
+        ]},
+        profile_evidence=profile_evidence,
+    )
+
+    assert profile_evidence["radial_hypotheses"] == [{
+        "candidate_id": "radial-opening-2",
+        "diameter_mm": 24,
+        "kind": "counterbore",
+        "side": "top",
+        "source_crop_bbox": [240, 0, 770, 680],
+    }]
+
+
+@pytest.mark.asyncio
+async def test_opposite_to_bore_holes_get_geometry_derived_depth(monkeypatch):
+    source = Image.new("RGB", (900, 700), "white")
+    evidence = {
+        "status": "ok",
+        "keyway_candidates": [],
+        "radial_opening_candidates": [{
+            "id": "radial-opening-3",
+            "bbox": [600, 150, 630, 550],
+            "axial_position_mm": 455,
+            "supported_diameters_mm": [9, 10],
+        }],
+        "diameter_label_observations": [
+            {"value_mm": 10, "side": "top", "bbox": [700, 200, 750, 230], "raw_text": "Ø10"},
+            {"value_mm": 9, "side": "bottom", "bbox": [700, 500, 750, 530], "raw_text": "Ø9"},
+        ],
+        "blockers": [
+            "radial-opening-3: контур допускает несколько диаметров Ø9/Ø10"
+        ],
+    }
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.turned_features.localize_turned_features",
+        lambda *_args, **_kwargs: evidence,
+    )
+
+    async def fake_ask(prompt, *_args, **_kwargs):
+        if "увеличенный правый узел" in prompt:
+            return {"radial_features": [
+                {"candidate_id": "radial-opening-3", "diameter_mm": 10,
+                 "kind": "to_bore", "side": "bottom"},
+                {"candidate_id": "radial-opening-3", "diameter_mm": 9,
+                 "kind": "to_bore", "side": "bottom"},
+            ]}
+        return {}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    profile_evidence = {
+        "axial_map": {"overall_mm": 470, "datum_line": [100, 800]},
+        "diameter_map": {
+            "profile_center_y_px": 350,
+            "observations": [
+                {"role": "outer", "source": "vector_contour", "value_mm": 72,
+                 "axial_interval_mm": [400, 470]},
+                {"role": "bore", "source": "vector_contour", "value_mm": 55,
+                 "axial_interval_mm": [445, 469]},
+            ],
+        },
+    }
+    result = await _read_cut_features(
+        source,
+        [{"diameter_mm": 72, "length_mm": 470}],
+        router=object(), confidential=True, source_image=source,
+        callouts={"dimensions": [{"value": "Ø10"}, {"value": "Ø9"}]},
+        profile_evidence=profile_evidence,
+    )
+
+    assert [
+        (item["diameter_mm"], item["angle_deg"], item["depth_mm"])
+        for item in result["cross_holes"]
+    ] == [(10.0, 0.0, 8.5), (9.0, 180.0, 8.5)]
+    assert not any(
+        "несколько диаметров" in item
+        for item in profile_evidence["feature_unresolved"]
+    )

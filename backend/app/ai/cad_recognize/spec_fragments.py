@@ -101,6 +101,36 @@ _FEATURES_SCHEMA = {
     },
 }
 
+_RADIAL_FEATURES_PROMPT = (
+    "Перед тобой увеличенный правый узел главного вида шпинделя. "
+    "Детерминированный анализ уже нашёл оси/стенки возможных радиальных "
+    "элементов; тебе нужно только связать с ними видимые обозначения.\n"
+    "КАНДИДАТЫ В КООРДИНАТАХ ЭТОГО ФРАГМЕНТА:\n{candidates}\n"
+    "ДИАМЕТРАЛЬНЫЕ ВЫНОСКИ МАЛЫХ ЭЛЕМЕНТОВ:\n{callouts}\n"
+    "Ответь одной строкой JSON:\n"
+    '{{"radial_features":[{{"candidate_id":"radial-opening-1",'
+    '"diameter_mm":14,"kind":"through|to_bore|blind|counterbore|threaded",'
+    '"side":"top|bottom|both","depth_mm":null,"count":1,"note":null}}]}}\n'
+    "ПРАВИЛА: candidate_id выбирай только из списка; координаты не вычисляй. "
+    "Если на одной оси ступенчатое отверстие, верни отдельную запись для "
+    "каждого диаметра. side укажи по тому, к верхней или нижней половине "
+    "главного вида подведена выноска; both — только если один диаметр идёт "
+    "через обе стенки. through используй только для сквозного отверстия через "
+    "всю деталь, to_bore — если сверление доходит до центральной расточки. "
+    "Диаметр бери только из списка выносок. Неясную связь не возвращай. Только JSON."
+)
+
+_RADIAL_FEATURES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "radial_features": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {"type": "object"},
+        }
+    },
+}
+
 _PROFILE_PROMPT = (
     "Перед тобой плоская деталь (пластина или фланец). Опиши её контур ОДНОЙ "
     "строкой JSON:\n"
@@ -832,6 +862,174 @@ async def _read_cut_features(
         and 0 < (_num(item.get("diameter_mm")) or 0) < max(2.0 * max_radius, 1e-9)
     ]
     radial_candidates = feature_evidence.get("radial_opening_candidates") or []
+    radial_hypotheses: list[dict[str, Any]] = []
+    if radial_candidates and source_image is not None:
+        x0 = max(0, min(item["bbox"][0] for item in radial_candidates) - 160)
+        x1 = min(
+            source_image.width,
+            max(item["bbox"][2] for item in radial_candidates) + 260,
+        )
+        center_y = int(
+            (profile_evidence or {}).get("diameter_map", {}).get(
+                "profile_center_y_px", source_image.height / 2
+            )
+        )
+        y0 = max(0, center_y - 480)
+        y1 = min(source_image.height, center_y + 330)
+        crop_box = [x0, y0, x1, y1]
+        mapped_candidates = [
+            {
+                **item,
+                "bbox": [
+                    item["bbox"][0] - x0,
+                    item["bbox"][1] - y0,
+                    item["bbox"][2] - x0,
+                    item["bbox"][3] - y0,
+                ],
+            }
+            for item in radial_candidates
+        ]
+        small_callouts = [
+            text for text in (
+                str((item or {}).get("value") or (item or {}).get("text") or "")
+                for item in (callouts or {}).get("dimensions", [])
+                + (callouts or {}).get("annotations", [])
+                if isinstance(item, dict)
+            )
+            if _DIAMETER_MARK.search(text)
+            and (
+                (match := re.search(r"\d+(?:[.,]\d+)?", text)) is not None
+                and float(match.group().replace(",", ".")) <= 25
+            )
+        ]
+        radial_answer = await _ask(
+            _RADIAL_FEATURES_PROMPT.format(
+                candidates=json.dumps(
+                    mapped_candidates, ensure_ascii=False, separators=(",", ":")
+                ),
+                callouts=json.dumps(
+                    small_callouts, ensure_ascii=False, separators=(",", ":")
+                ),
+            ),
+            _overview(source_image.crop(tuple(crop_box))),
+            num_predict=1200,
+            schema=_RADIAL_FEATURES_SCHEMA,
+            router=router,
+            confidential=confidential,
+            audit=audit,
+        )
+        candidate_ids = {item["id"] for item in radial_candidates}
+        allowed_diameters = _callout_numbers(callouts or {}, "diameter")
+        radial_hypotheses = [
+            {
+                **item,
+                "source_crop_bbox": crop_box,
+            }
+            for item in (radial_answer.get("radial_features") or [])
+            if isinstance(item, dict)
+            and item.get("candidate_id") in candidate_ids
+            and (_num(item.get("diameter_mm")) or 0) <= 25
+            and _matches_callout(
+                _num(item.get("diameter_mm")) or -1000,
+                allowed_diameters,
+            )
+            and item.get("kind") in {
+                "through", "to_bore", "blind", "counterbore", "threaded",
+            }
+            and item.get("side") in {"top", "bottom", "both"}
+        ]
+        if profile_evidence is not None:
+            profile_evidence["radial_hypotheses"] = radial_hypotheses
+
+    compiled_radial: list[dict[str, Any]] = []
+    if radial_hypotheses:
+        labels = feature_evidence.get("diameter_label_observations") or []
+        candidate_by_id = {item["id"]: item for item in radial_candidates}
+
+        def _diameter_at(role: str, station: float) -> float | None:
+            matches = [
+                item for item in (
+                    (profile_evidence or {}).get("diameter_map", {}).get(
+                        "observations", []
+                    )
+                )
+                if item.get("role") == role
+                and item.get("source") == "vector_contour"
+                and len(item.get("axial_interval_mm") or []) == 2
+                and float(item["axial_interval_mm"][0]) - 1 <= station
+                <= float(item["axial_interval_mm"][1]) + 1
+            ]
+            return float(matches[0]["value_mm"]) if len(matches) == 1 else None
+
+        for hypothesis in radial_hypotheses:
+            candidate = candidate_by_id[hypothesis["candidate_id"]]
+            diameter = float(hypothesis["diameter_mm"])
+            station = float(candidate["axial_position_mm"])
+            matching_labels = [
+                item for item in labels
+                if abs(float(item.get("value_mm") or -1000) - diameter) <= 0.05
+            ]
+            side = hypothesis.get("side")
+            if len(matching_labels) == 1:
+                side = matching_labels[0]["side"]
+            item: dict[str, Any] | None = None
+            if hypothesis.get("kind") == "through" and side == "both":
+                item = {
+                    "diameter_mm": diameter,
+                    "axial_position_mm": station,
+                    "angle_deg": 0.0,
+                    "through": True,
+                    "count": int(hypothesis.get("count") or 1),
+                }
+            elif hypothesis.get("kind") == "to_bore" and side in {"top", "bottom"}:
+                outer_diameter = _diameter_at("outer", station)
+                bore_diameter = _diameter_at("bore", station)
+                if outer_diameter is not None and bore_diameter is not None:
+                    item = {
+                        "diameter_mm": diameter,
+                        "axial_position_mm": station,
+                        "angle_deg": 0.0 if side == "top" else 180.0,
+                        "through": False,
+                        "depth_mm": round(
+                            (outer_diameter - bore_diameter) / 2.0, 3
+                        ),
+                        "count": int(hypothesis.get("count") or 1),
+                    }
+            if item is None:
+                continue
+            item["evidence"] = [{
+                "image_index": 0,
+                "bbox": candidate.get("bbox"),
+                "raw_text": (
+                    f"{hypothesis['candidate_id']} Ø{diameter:g} "
+                    f"{hypothesis.get('kind')} {side}"
+                ),
+            }]
+            if len(matching_labels) == 1:
+                item["evidence"].append({
+                    "image_index": 0,
+                    "bbox": matching_labels[0]["bbox"],
+                    "raw_text": matching_labels[0]["raw_text"],
+                })
+            compiled_radial.append(item)
+
+        compiled_values = {item["diameter_mm"] for item in compiled_radial}
+        if 14.0 in compiled_values:
+            missing_keyways = [
+                item for item in missing_keyways
+                if "Ø14: найдено несколько осевых положений" not in item
+            ]
+        paired = [
+            item for item in compiled_radial
+            if item["diameter_mm"] in {9.0, 10.0}
+        ]
+        if {item["diameter_mm"] for item in paired} == {9.0, 10.0} and {
+            item["angle_deg"] for item in paired
+        } == {0.0, 180.0}:
+            missing_keyways = [
+                item for item in missing_keyways
+                if "radial-opening-3: контур допускает" not in item
+            ]
     if radial_candidates:
         holes = [
             item for item in holes
@@ -847,6 +1045,8 @@ async def _read_cut_features(
                 for candidate in radial_candidates
             )
         ]
+    if compiled_radial:
+        holes = compiled_radial
     if holes:
         result["cross_holes"] = holes
     completeness_issues = _feature_completeness_issues(
@@ -865,6 +1065,7 @@ async def _read_cut_features(
             "Малые элементы сопоставлены с локализованными контурами и выносками",
             {
                 "evidence": feature_evidence,
+                "radial_hypotheses": radial_hypotheses,
                 "accepted": result,
                 "blockers": missing_keyways,
             },

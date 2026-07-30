@@ -380,11 +380,69 @@ def localize_turned_features(
                 + ", ".join(f"{item['axial_position_mm']:g}" for item in matches)
             )
 
+    diameter_labels: list[dict[str, Any]] = []
+    if small_diameters:
+        from pytesseract import Output
+
+        label_data = pytesseract.image_to_data(
+            image,
+            lang="rus+eng",
+            config="--psm 11",
+            output_type=Output.DICT,
+        )
+        for index, raw_value in enumerate(label_data.get("text") or []):
+            raw_text = str(raw_value or "").strip()
+            digits = "".join(character for character in raw_text if character.isdigit())
+            if not digits:
+                continue
+            x = int(label_data["left"][index])
+            y = int(label_data["top"][index])
+            width = int(label_data["width"][index])
+            token_height = int(label_data["height"][index])
+            if (
+                x < right - 30
+                or x > right + 200
+                or abs(
+                    (y + token_height / 2) - float(profile_center_y_px or 0)
+                ) > 320
+            ):
+                continue
+            matches: list[float] = []
+            for value in small_diameters:
+                nominal = str(int(value)) if value.is_integer() else f"{value:g}".replace(".", "")
+                direct = nominal in digits
+                digit_iterator = iter(digits)
+                one_noise_digit = (
+                    len(digits) == len(nominal) + 1
+                    and all(character in digit_iterator for character in nominal)
+                )
+                lost_leading_one = (
+                    digits == "0" and nominal == "10" and raw_text[:1] in {"#", "Ø", "Ф"}
+                )
+                if direct or one_noise_digit or lost_leading_one:
+                    matches.append(value)
+            if len(matches) != 1:
+                continue
+            value = matches[0]
+            diameter_labels.append({
+                "value_mm": value,
+                "raw_text": raw_text,
+                "bbox": [x, y, x + width, y + token_height],
+                "side": (
+                    "top"
+                    if y + token_height / 2 < float(profile_center_y_px or 0)
+                    else "bottom"
+                ),
+                "confidence": 0.68,
+                "source": "spatial_ocr_small_diameter_callout",
+            })
+
     blockers = [] if candidates else ["замкнутые контуры шпоночных пазов не локализованы"]
     blockers.extend(radial_blockers)
     return {
         "status": "ok" if candidates else "unresolved",
         "keyway_candidates": candidates,
         "radial_opening_candidates": radial_candidates,
+        "diameter_label_observations": diameter_labels,
         "blockers": blockers,
     }

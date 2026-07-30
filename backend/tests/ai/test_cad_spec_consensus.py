@@ -182,6 +182,25 @@ def test_agreeing_cut_features_survive_consensus():
     assert spec["main_view"]["keyways"] == [keyway]
 
 
+def test_agreeing_cross_hole_boolean_survives_consensus():
+    hole = {
+        "diameter_mm": 14,
+        "axial_position_mm": 410,
+        "angle_deg": 0,
+        "through": True,
+        "count": 1,
+    }
+    reads = [
+        _read(_PROFILE, main_view={"cross_holes": [dict(hole)]})
+        for _ in range(3)
+    ]
+
+    spec = consensus_spec(reads)
+
+    assert spec["main_view"]["cross_holes"] == [hole]
+    assert spec["unresolved"] == []
+
+
 def test_disputed_cut_feature_is_not_silently_dropped():
     reads = [
         _read(_PROFILE, main_view={"cross_holes": [{
