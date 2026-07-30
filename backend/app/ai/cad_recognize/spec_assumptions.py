@@ -130,8 +130,8 @@ def _complete_lengths(
 
     With every other length known and an overall stated, the remainder is
     arithmetic, not a guess — and it is the single most common hole in a read
-    profile. Two or more missing lengths share one remainder between them, which
-    IS a guess, so they are split evenly and labelled as assumed.
+    profile. Two or more missing lengths are underdetermined and must remain
+    unresolved: labelling an invented split does not make its geometry true.
     """
     sections = [s for s in (body.get("outer") or []) if isinstance(s, dict)]
     if not sections:
@@ -140,55 +140,19 @@ def _complete_lengths(
     if not missing:
         return
     known = sum(_num(s.get("length_mm")) or 0.0 for s in sections)
-    if overall and overall > known:
+    if overall and overall > known and len(missing) == 1:
         remainder = overall - known
-        if len(missing) == 1:
-            index = missing[0]
-            sections[index]["length_mm"] = round(remainder, 3)
-            assumptions.append(Assumption(
-                path=f"{body_path}.outer.{index}",
-                field="length_mm",
-                value=round(remainder, 3),
-                rule=(
-                    f"остаток габарита {overall:g} мм за вычетом прочитанных "
-                    f"ступеней ({known:g} мм)"
-                ),
-                origin="derived",
-            ))
-            return
-        share = remainder / len(missing)
-        for index in missing:
-            sections[index]["length_mm"] = round(share, 3)
-            assumptions.append(Assumption(
-                path=f"{body_path}.outer.{index}",
-                field="length_mm",
-                value=round(share, 3),
-                rule=(
-                    f"остаток габарита {overall:g} мм разделён поровну между "
-                    f"{len(missing)} непрочитанными ступенями"
-                ),
-            ))
-        return
-
-    # No overall to work from: a step is given the average of the ones that were
-    # read, which is openly a placeholder — it keeps the part buildable and
-    # editable, and it is marked so nobody mistakes it for a measurement.
-    read_lengths = [
-        _num(s.get("length_mm")) for s in sections if _num(s.get("length_mm"))
-    ]
-    if not read_lengths:
-        return
-    average = sum(read_lengths) / len(read_lengths)
-    for index in missing:
-        sections[index]["length_mm"] = round(average, 3)
+        index = missing[0]
+        sections[index]["length_mm"] = round(remainder, 3)
         assumptions.append(Assumption(
             path=f"{body_path}.outer.{index}",
             field="length_mm",
-            value=round(average, 3),
+            value=round(remainder, 3),
             rule=(
-                "габарит не прочитан; длина принята как средняя по прочитанным "
-                f"ступеням ({average:g} мм) — уточните в редакторе"
+                f"остаток габарита {overall:g} мм за вычетом прочитанных "
+                f"ступеней ({known:g} мм)"
             ),
+            origin="derived",
         ))
 
 

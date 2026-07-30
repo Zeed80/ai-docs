@@ -125,6 +125,8 @@ _CHAIN_PROMPT = (
     "Перед тобой главный вид тела вращения. С чертежа уже прочитаны числа.\n"
     "ДИАМЕТРЫ (на чертеже помечены знаком Ø): {diameters}\n"
     "ОСЕВЫЕ РАЗМЕРЫ (без Ø): {lengths}\n\n"
+    "ЛОКАЛИЗОВАННЫЕ ОСЕВЫЕ РАЗМЕРНЫЕ ЛИНИИ (детерминированный OCR+CV):\n"
+    "{localized}\n\n"
     "Ответь ОДНОЙ строкой JSON:\n"
     '{{"diameters_mm":[],"bore_diameters_mm":[],"chain_mm":[],"overall_mm":null}}\n'
     "diameters_mm — диаметры ступеней НАРУЖНОГО контура слева направо, по "
@@ -137,6 +139,9 @@ _CHAIN_PROMPT = (
     "bore_diameters_mm — диаметры внутреннего контура слева направо.\n"
     "chain_mm — осевые размеры от ЛЕВОГО торца по возрастанию: положение конца "
     "каждой ступени. Последнее значение равно габаритной длине.\n"
+    "Для chain_mm используй station_from_left_mm только у тех локализованных "
+    "линий, чьи стрелки относятся к НАРУЖНОМУ контуру. local_interval без "
+    "station_from_left_mm нельзя превращать в накопительный размер.\n"
     "overall_mm — габаритная длина детали.\n"
     "diameters_mm и bore_diameters_mm бери ТОЛЬКО из списка ДИАМЕТРЫ. "
     "chain_mm и overall_mm бери ТОЛЬКО из списка ОСЕВЫЕ РАЗМЕРЫ. Не переноси "
@@ -842,7 +847,7 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
 
 async def _sections_from_chain(
     image, callouts: dict, *, router: Any, confidential: bool,
-    audit: list[dict[str, Any]] | None = None,
+    audit: list[dict[str, Any]] | None = None, source_image=None,
 ) -> tuple[list[dict], str | None]:
     """Step lengths as DIFFERENCES of the axial chain the sheet draws.
 
@@ -855,10 +860,43 @@ async def _sections_from_chain(
     candidates = _callout_numbers(callouts)
     if not candidates:
         return [], "выноски не прочитаны"
+    from app.ai.cad_process_log import record_cad_process_event
+    from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
+
+    axial_map = localize_axial_dimensions(source_image or image, lengths_seen)
+    await record_cad_process_event(
+        "reader.axial_dimensions",
+        "completed" if axial_map.get("status") == "ok" else "failed",
+        "Осевые размерные линии локализованы и связаны с базовыми торцами",
+        {
+            "status": axial_map.get("status"),
+            "overall_mm": axial_map.get("overall_mm"),
+            "mm_per_px": axial_map.get("mm_per_px"),
+            "observations": axial_map.get("observations") or [],
+            "blockers": axial_map.get("blockers") or [],
+        },
+    )
+    import json
+
+    localized = json.dumps(
+        [
+            {
+                key: item.get(key)
+                for key in (
+                    "id", "value_mm", "raw_text", "ocr_corrected", "relation",
+                    "station_from_left_mm", "label_bbox", "dimension_line", "confidence",
+                )
+            }
+            for item in (axial_map.get("observations") or [])
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     answer = await _ask(
         _CHAIN_PROMPT.format(
             diameters=", ".join(f"{value:g}" for value in diameters_seen[:24]) or "—",
             lengths=", ".join(f"{value:g}" for value in lengths_seen[:24]) or "—",
+            localized=localized or "[]",
         ),
         image, num_predict=900,
         schema=_CHAIN_SCHEMA, router=router, confidential=confidential,
@@ -881,6 +919,23 @@ async def _sections_from_chain(
         )
     if any(b <= a for a, b in zip(chain, chain[1:], strict=False)):
         return [], "осевые размеры не возрастают — это не размерная цепочка"
+
+    localized_stations = [
+        float(item["station_from_left_mm"])
+        for item in (axial_map.get("observations") or [])
+        if isinstance(item.get("station_from_left_mm"), (int, float))
+        and float(item.get("confidence") or 0.0) >= 0.6
+    ]
+    if axial_map.get("status") == "ok" and localized_stations:
+        unsupported = [
+            value for value in chain
+            if not _matches_callout(value, localized_stations)
+        ]
+        if unsupported:
+            return [], (
+                "осевые позиции не подтверждены локализованными размерными "
+                "линиями: " + ", ".join(f"{value:g}" for value in unsupported[:8])
+            )
 
     # An evenly spaced chain is a fabrication, not a reading. Asked for the
     # axial positions of a ten-step spindle, the reader answered 0, 45, 90,
@@ -1095,7 +1150,7 @@ async def read_spec_by_fragments(
         # Chain first: the sheet states positions, not lengths.
         outer, chain_problem = await _sections_from_chain(
             chain_view, callouts, router=router, confidential=confidential,
-            audit=fragment_answers,
+            audit=fragment_answers, source_image=image,
         )
         geometry: dict = {}
         if not outer:

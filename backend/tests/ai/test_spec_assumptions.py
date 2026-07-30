@@ -36,7 +36,7 @@ def test_one_missing_length_is_arithmetic_not_a_guess():
     assert _SHAFT["main_view"]["outer"][1]["length_mm"] is None
 
 
-def test_two_missing_lengths_share_a_remainder_and_say_so():
+def test_two_missing_lengths_remain_unresolved():
     spec = {
         "main_view": {"outer": [
             {"diameter_mm": 80.0, "length_mm": 150.0},
@@ -48,13 +48,11 @@ def test_two_missing_lengths_share_a_remainder_and_say_so():
     completed, assumptions = apply_assumptions(spec)
 
     lengths = [s["length_mm"] for s in completed["main_view"]["outer"]]
-    assert lengths == [150.0, 150.0, 150.0]
-    # Splitting a remainder between two unknowns IS a guess, and is labelled one.
-    assert all(item.origin == "assumed" for item in assumptions)
-    assert all("поровну" in item.rule for item in assumptions)
+    assert lengths == [150.0, None, None]
+    assert assumptions == []
 
 
-def test_without_an_overall_the_placeholder_says_it_is_one():
+def test_without_an_overall_missing_length_remains_unresolved():
     spec = {
         "main_view": {"outer": [
             {"diameter_mm": 80.0, "length_mm": 100.0},
@@ -64,9 +62,8 @@ def test_without_an_overall_the_placeholder_says_it_is_one():
     }
     completed, assumptions = apply_assumptions(spec)
 
-    assert completed["main_view"]["outer"][1]["length_mm"] == 100.0
-    assert assumptions[0].origin == "assumed"
-    assert "уточните в редакторе" in assumptions[0].rule
+    assert completed["main_view"]["outer"][1]["length_mm"] is None
+    assert assumptions == []
 
 
 def test_a_chamfer_the_sheet_only_named_gets_a_standard_size():

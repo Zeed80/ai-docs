@@ -231,6 +231,114 @@ async def test_dimension_chain_question_uses_the_parent_reader_audit(monkeypatch
     assert audit[0]["raw_response"].startswith('{"diameters_mm"')
 
 
+@pytest.mark.asyncio
+async def test_dimension_chain_receives_localized_datum_evidence(monkeypatch):
+    from app.ai.cad_recognize import axial_dimensions, spec_fragments as fragments
+
+    captured = {}
+
+    def fake_localize(_image, _known):
+        return {
+            "status": "ok",
+            "overall_mm": 50,
+            "mm_per_px": 0.5,
+            "blockers": [],
+            "observations": [
+                {
+                    "id": "axial-dim-1",
+                    "value_mm": 20,
+                    "raw_text": "20",
+                    "ocr_corrected": False,
+                    "relation": "from_left_datum",
+                    "station_from_left_mm": 20,
+                    "label_bbox": [10, 5, 20, 10],
+                    "dimension_line": [0, 15, 40, 15],
+                    "confidence": 0.95,
+                },
+                {
+                    "id": "axial-dim-2",
+                    "value_mm": 50,
+                    "raw_text": "50",
+                    "ocr_corrected": False,
+                    "relation": "overall",
+                    "station_from_left_mm": 50,
+                    "label_bbox": [20, 30, 30, 35],
+                    "dimension_line": [0, 40, 100, 40],
+                    "confidence": 0.95,
+                },
+            ],
+        }
+
+    async def fake_ask(prompt, *_args, **_kwargs):
+        captured["prompt"] = prompt
+        return {
+            "diameters_mm": [30, 40],
+            "chain_mm": [20, 50],
+            "overall_mm": 50,
+        }
+
+    monkeypatch.setattr(axial_dimensions, "localize_axial_dimensions", fake_localize)
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+
+    sections, problem = await fragments._sections_from_chain(
+        object(),
+        {"dimensions": [{"value": "Ø30"}, {"value": "Ø40"}, {"value": "20"}, {"value": "50"}]},
+        router=object(),
+        confidential=True,
+        source_image=object(),
+    )
+
+    assert problem is None
+    assert sections
+    assert '"relation":"from_left_datum"' in captured["prompt"]
+    assert '"station_from_left_mm":20' in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_dimension_chain_rejects_station_without_localized_line(monkeypatch):
+    from app.ai.cad_recognize import axial_dimensions, spec_fragments as fragments
+
+    monkeypatch.setattr(
+        axial_dimensions,
+        "localize_axial_dimensions",
+        lambda *_args: {
+            "status": "ok",
+            "overall_mm": 50,
+            "blockers": [],
+            "observations": [
+                {"station_from_left_mm": 20, "confidence": 0.95},
+                {"station_from_left_mm": 50, "confidence": 0.95},
+            ],
+        },
+    )
+
+    async def fake_ask(*_args, **_kwargs):
+        return {
+            "diameters_mm": [30, 35, 40],
+            "chain_mm": [20, 30, 50],
+            "overall_mm": 50,
+        }
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+
+    sections, problem = await fragments._sections_from_chain(
+        object(),
+        {
+            "dimensions": [
+                {"value": "Ø30"}, {"value": "Ø35"}, {"value": "Ø40"},
+                {"value": "20"}, {"value": "30"}, {"value": "50"},
+            ]
+        },
+        router=object(),
+        confidential=True,
+        source_image=object(),
+    )
+
+    assert sections == []
+    assert problem and "не подтверждены локализованными" in problem
+    assert "30" in problem
+
+
 def test_evenly_spaced_chain_is_refused_as_fabricated():
     """A chain whose every step is equal was invented, not read.
 
