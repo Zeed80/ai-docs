@@ -22,6 +22,14 @@ type SolidAudit = {
   blockers?: string[];
   warnings?: string[];
   build_gate?: { blockers?: string[]; warnings?: string[] };
+  verification?: Record<string, unknown>;
+  kernel_report?: {
+    bounds_mm?: Record<string, unknown>;
+    volume_mm3?: number;
+    surface_area_mm2?: number;
+    feature_operations?: Array<Record<string, unknown>>;
+    warnings?: string[];
+  };
 };
 
 export type ModelEvidence = {
@@ -137,7 +145,7 @@ export default function CadModelTracePanel({
         </details>
       )}
 
-      <div className="mt-3 grid gap-2 lg:grid-cols-2">
+      <div className="mt-3 grid gap-2 xl:grid-cols-3">
         <details className="rounded border border-white/10 bg-black/20 p-2" open>
           <summary className="cursor-pointer font-medium text-zinc-200">
             {t("vector.model_trace_reading")}
@@ -185,6 +193,33 @@ export default function CadModelTracePanel({
               {JSON.stringify(kernelInput?.payload, null, 2)}
             </pre>
           </details>
+        </details>
+
+        <details className="rounded border border-white/10 bg-black/20 p-2" open>
+          <summary className="cursor-pointer font-medium text-zinc-200">
+            {t("vector.model_trace_kernel_result")}
+          </summary>
+          {solid?.kernel_report ? (
+            <>
+              <div className="mt-2 text-[11px] text-zinc-400">
+                {t("vector.model_trace_operations")}: {solid.kernel_report.feature_operations?.length ?? 0}
+              </div>
+              <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-zinc-400">
+                {JSON.stringify(
+                  {
+                    report: solid.kernel_report,
+                    verification: solid.verification,
+                  },
+                  null,
+                  2,
+                )}
+              </pre>
+            </>
+          ) : (
+            <p className="mt-2 text-[11px] text-zinc-500">
+              {t("vector.model_trace_not_built")}
+            </p>
+          )}
         </details>
       </div>
     </section>

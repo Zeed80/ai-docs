@@ -971,6 +971,13 @@ async def _build_spec_solid(
         "volume_mm3": report.get("volume_mm3"),
         "surface_area_mm2": report.get("surface_area_mm2"),
         "bounds_mm": report.get("bounds_mm"),
+        "kernel_report": {
+            "bounds_mm": report.get("bounds_mm"),
+            "volume_mm3": report.get("volume_mm3"),
+            "surface_area_mm2": report.get("surface_area_mm2"),
+            "feature_operations": report.get("feature_operations") or [],
+            "warnings": report.get("warnings") or [],
+        },
         "mass_kg": estimate_mass_kg(report.get("volume_mm3"), material),
         "projection": projection,
         "semantics": semantics,

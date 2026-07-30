@@ -602,6 +602,8 @@ async def get_solid_input_diff(
         "warnings": gate.get("warnings") or solid.get("warnings") or [],
         "excluded": candidate.get("missing_data") or [],
         "build_status": solid.get("build_status") or "blocked",
+        "kernel_result": solid.get("kernel_report"),
+        "verification": solid.get("verification"),
     }
 
 
