@@ -52,6 +52,11 @@ def test_real_spindle_localizes_both_keyway_outlines():
         and set(item["supported_diameters_mm"]) == {9.0, 10.0}
         for item in radial
     )
+    labels = {
+        (item["value_mm"], item["side"])
+        for item in evidence["diameter_label_observations"]
+    }
+    assert {(14.0, "top"), (24.0, "top"), (10.0, "top"), (9.0, "bottom")} <= labels
     assert any("несколько" in item for item in evidence["blockers"])
 
 

@@ -204,6 +204,15 @@ def localize_axial_dimensions(
         item for item in paired
         if _matches(item["ocr_value_mm"], known)
     ]
+    # The callout VLM may miss a number that Tesseract has already tied to a
+    # real dimension line. In that case the widest paired line is the only
+    # admissible overall candidate: it spans the two extreme datum extensions,
+    # so using its own printed label is observation, not silhouette measuring.
+    if not overall_candidates:
+        overall_candidates = [
+            item for item in paired
+            if float(item.get("ocr_confidence") or 0.0) >= 0.45
+        ]
     if not overall_candidates:
         return {
             "status": "unresolved",
@@ -233,7 +242,15 @@ def localize_axial_dimensions(
         ocr_value = float(item["ocr_value_mm"])
         value = ocr_value
         corrected = False
-        if (
+        value_source = "callout"
+        ocr_span_error = abs(measured - ocr_value) / max(ocr_value, 1e-6)
+        if not _matches(ocr_value, known) and ocr_span_error <= 0.02:
+            # The printed token and its independently calibrated dimension
+            # line agree. Prefer that direct pair over a nearby VLM candidate:
+            # on detal_126 the true ``35`` otherwise snapped to an unrelated
+            # ``36`` from the angular note ``36°×2``.
+            value_source = "dimension_line_ocr"
+        elif (
             snapped is not None
             and snap_error <= 0.04
             and (
@@ -243,8 +260,32 @@ def localize_axial_dimensions(
         ):
             value = snapped
             corrected = not _matches(ocr_value, [snapped])
+            value_source = "callout_span_crosscheck"
         elif not _matches(ocr_value, known):
-            continue
+            # A missing leading digit (the real sheet's OCR ``50`` for
+            # ``150``) is recoverable from the independently calibrated span,
+            # but only when the printed token differs by that narrow OCR edit.
+            geometric = float(round(measured))
+            geometric_error = abs(measured - geometric) / max(geometric, 1e-6)
+            raw_digits = "".join(
+                character for character in item["raw_text"] if character.isdigit()
+            )
+            geometric_digits = f"{geometric:g}".replace(".", "")
+            if (
+                geometric > 0
+                and geometric_error <= 0.04
+                and len(geometric_digits) == len(raw_digits) + 1
+                and _plausible_ocr_correction(item["raw_text"], geometric)
+            ):
+                value = geometric
+                corrected = True
+                value_source = "dimension_span_ocr_correction"
+            else:
+                # The token itself is still source evidence: OCR bbox + a
+                # dimension line with two extension lines. Keep it only if its
+                # value agrees geometrically below; the confidence gate rejects
+                # labels whose span says something else.
+                value_source = "dimension_line_ocr"
 
         left_aligned = abs(line_left - datum_left) <= datum_tolerance
         right_aligned = abs(line_right - datum_right) <= datum_tolerance
@@ -272,6 +313,7 @@ def localize_axial_dimensions(
             "value_mm": round(value, 3),
             "ocr_value_mm": round(ocr_value, 3),
             "ocr_corrected": corrected,
+            "value_source": value_source,
             "relation": relation,
             "station_from_left_mm": round(station, 3) if station is not None else None,
             "label_bbox": item["label_bbox"],

@@ -590,3 +590,17 @@ def test_uppercase_hole_fit_is_a_diameter_when_ocr_lost_the_symbol():
 
     assert _callout_numbers(callouts, "diameter") == [50.0]
     assert _callout_numbers(callouts, "linear") == [470.0]
+
+
+def test_lowercase_shaft_fit_is_a_diameter_when_ocr_lost_the_symbol():
+    from app.ai.cad_recognize.spec_fragments import _callout_numbers
+
+    callouts = {
+        "dimensions": [
+            {"value": "50h7 -0.019 / -0.028"},
+            {"value": "470 h14"},
+        ]
+    }
+
+    assert _callout_numbers(callouts, "diameter") == [50.0]
+    assert _callout_numbers(callouts, "linear") == [470.0]

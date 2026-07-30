@@ -1042,7 +1042,7 @@ async def _read_cut_features(
             if any(
                 abs(float(value) - 10.0) <= 0.05
                 for value in item.get("supported_diameters_mm") or []
-            )
+            ) or abs(float(item.get("measured_axial_span_mm") or -1000) - 10.0) <= 0.8
         ]
         if (
             len(top_pilots) == 1
@@ -1182,6 +1182,12 @@ async def _read_cut_features(
                 if any(
                     abs(float(value) - diameter) <= 0.05
                     for value in item.get("supported_diameters_mm") or []
+                )
+                or (
+                    diameter == 10.0
+                    and abs(
+                        float(item.get("measured_axial_span_mm") or -1000) - 10.0
+                    ) <= 0.8
                 )
             ]
             if len(candidates) != 1 or side not in {"top", "bottom"}:
@@ -1461,18 +1467,22 @@ async def _recover_external_thread_carrier(
             for item in [*outer, *bore]
         ):
             threads.append((designation, nominal, pitch))
-    if len(threads) != 1:
+    recoverable: list[tuple[str, float, float | None, dict[str, Any]]] = []
+    for designation, nominal, pitch in threads:
+        candidates = [
+            item for item in diameter_evidence.get("outer_candidates") or []
+            if abs(float(item.get("value_mm") or -1000) - nominal) <= 0.05
+            and len(item.get("axial_interval_mm") or []) == 2
+            and len(item.get("profile_interval_px") or []) == 2
+        ]
+        if len(candidates) == 1:
+            recoverable.append((designation, nominal, pitch, candidates[0]))
+    # A sheet can also carry small tapped holes (M8 on detal_126). They must not
+    # suppress an independently measured outside carrier for M75; conversely,
+    # two matching contour candidates remain ambiguous and fail closed.
+    if len(recoverable) != 1:
         return False
-    designation, nominal, pitch = threads[0]
-    candidates = [
-        item for item in diameter_evidence.get("outer_candidates") or []
-        if abs(float(item.get("value_mm") or -1000) - nominal) <= 0.05
-        and len(item.get("axial_interval_mm") or []) == 2
-        and len(item.get("profile_interval_px") or []) == 2
-    ]
-    if len(candidates) != 1:
-        return False
-    candidate = candidates[0]
+    designation, nominal, pitch, candidate = recoverable[0]
     approx_start, approx_end = map(float, candidate["axial_interval_mm"])
 
     anchors = {0.0}
@@ -1563,6 +1573,7 @@ async def _recover_external_thread_carrier(
             "system": "metric",
             "nominal_diameter_mm": nominal,
             "pitch_mm": pitch,
+            "length_mm": round(length, 3),
             "internal": False,
             "evidence": [{
                 "image_index": 0,
@@ -1649,6 +1660,7 @@ def _assign_profile_threads(
             "system": "metric",
             "nominal_diameter_mm": nominal,
             "pitch_mm": pitch,
+            "length_mm": _num(section.get("length_mm")),
             "internal": internal,
             "evidence": [{
                 "image_index": 0,
@@ -1777,11 +1789,15 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
     for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or []):
         text = str((item or {}).get("value") or (item or {}).get("text") or "")
         text = _STANDARD_REFERENCE.sub(" ", text)
-        # Hole fits are diameter callouts even when OCR drops the leading Ø:
-        # ``50H7`` cannot be a linear size. Limit the repair to uppercase H so
-        # an overall length carrying lowercase h14 is not reclassified.
+        # Fits are diameter callouts even when OCR drops the leading Ø. The
+        # case is semantic: H is a hole and h is a shaft, so ``50h7`` must not
+        # fall into the axial-length pool. Limit the repair to common precision
+        # grades (5..9); coarse linear sizes such as ``470 h14`` stay linear.
         fit_implies_diameter = bool(
-            _re.match(r"^\s*\d+(?:[.,]\d+)?\s*H\d{1,2}\b", text)
+            _re.match(
+                r"^\s*\d+(?:[.,]\d+)?\s*[A-Za-z]{1,2}[5-9]\b",
+                text,
+            )
         )
         marked = bool(_DIAMETER_MARK.search(text)) or fit_implies_diameter
         text = _FIT_CODE.sub(" ", text)
@@ -1827,6 +1843,14 @@ async def _sections_from_chain(
     from app.ai.cad_recognize.diameter_dimensions import localize_diameter_dimensions
 
     axial_map = localize_axial_dimensions(source_image or image, lengths_seen)
+    localized_lengths = [
+        float(item["value_mm"])
+        for item in (axial_map.get("observations") or [])
+        if isinstance(item.get("value_mm"), (int, float))
+        and not isinstance(item.get("value_mm"), bool)
+    ]
+    lengths_seen = sorted({*lengths_seen, *localized_lengths}, reverse=True)
+    candidates = sorted({*candidates, *localized_lengths}, reverse=True)
     await record_cad_process_event(
         "reader.axial_dimensions",
         "completed" if axial_map.get("status") == "ok" else "failed",

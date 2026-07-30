@@ -1,16 +1,17 @@
 """Score CAD spec readers on real drawings, so the slot is picked by numbers.
 
 The reader is the whole ceiling of the redraw path: nothing downstream can
-recover a value it never read. This benchmark runs the PRODUCTION prompt and
-tiling (``_SPEC_PROMPT`` + ``_spec_images``) through the real router for each
-candidate model and scores the answer against hand-checked ground truth for
-the sheet — facts a human read off the drawing, not another model's opinion.
+recover a value it never read. This benchmark runs the production staged
+reader (bounded fragment questions, dimension/evidence localization,
+three-pass consensus and whole-sheet fallback) through the real router for
+each candidate model and scores the answer against hand-checked ground truth.
 
-Scoring is deliberately coarse and unambiguous (name, material, scale, body
-kind, hollowness, overall length, largest diameter, a fit, a hardness note)
-plus the operational questions that decide whether a user gets anything:
-did the spec validate, does it compile into a solid, and does a sheet come
-off that solid.
+Scoring publishes two denominators separately: nine coarse sheet-level facts
+and the full hand-checked manufacturing parameter set (55 for ``spindle_v10``).
+It also records the operational questions that decide whether a user gets
+anything: did the spec validate, does it compile into a solid, and does a sheet
+come off that solid. The coarse score must never be presented as geometric
+accuracy.
 
     python backend/scripts/eval_cad_readers.py \
         --image test_vector_files/detal_126.png --case spindle_v10 \
@@ -22,8 +23,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
-import io
 import json
 import pathlib
 import sys
@@ -242,44 +241,59 @@ def score_spec(spec: dict, truth: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+class _PreferredCadReaderRouter:
+    """Pin only vision-reader calls while preserving the routed OCR specialist."""
+
+    def __init__(self, router: Any, model_key: str) -> None:
+        self.router = router
+        self.model_key = model_key
+
+    async def run(self, request: Any) -> Any:
+        task = getattr(getattr(request, "task", None), "value", request.task)
+        if task in {"cad_spec_read", "drawing_analysis_vlm"}:
+            request = request.model_copy(
+                update={"preferred_model": self.model_key}
+            )
+        return await self.router.run(request)
+
+
+def reader_trace(raw_spec: dict[str, Any]) -> dict[str, Any]:
+    """Keep narrow-question and fallback attempts as separate audit trails."""
+    primary_attempts = raw_spec.get("reader_attempts") or []
+    embedded_fragment_attempts = raw_spec.get("fragment_reader_attempts") or []
+    fragment_attempts = embedded_fragment_attempts or [
+        attempt for attempt in primary_attempts
+        if isinstance(attempt, dict) and attempt.get("mode") == "fragments"
+    ]
+    whole_sheet_attempts = [
+        attempt for attempt in primary_attempts
+        if not isinstance(attempt, dict) or attempt.get("mode") != "fragments"
+    ]
+    return {
+        "fragments": raw_spec.get("fragments"),
+        "fragment_attempts": fragment_attempts,
+        "whole_sheet_attempts": whole_sheet_attempts,
+    }
+
+
 async def evaluate_model(
     model_key: str, image_bytes: bytes, truth: dict, *, single_image: bool = False
 ) -> dict:
     from pydantic import ValidationError
 
-    from app.ai.cad_recognize.spec_vectorize import (
-        _SPEC_PROMPT,
-        _coerce_spec_containers,
-        _parse_spec_json,
-        _spec_images,
-        EngineeringDrawingSpec,
-        SpecReadMalformedError,
-        SpecReadTruncatedError,
-    )
+    from app.ai.cad_recognize.spec_fragments import read_spec_best_effort
+    from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
     from app.ai.router import ai_router
-    from app.ai.schemas import AIRequest, AITask, ChatMessage
-    from PIL import Image
 
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    images, descriptions, _coverage = _spec_images(image)
+    result: dict[str, Any] = {
+        "model": model_key,
+        "reader_mode": "production_staged_consensus",
+        "passes": 3,
+    }
     if single_image:
-        # Production sends an overview plus source-resolution tiles. Several
-        # models answer that with an empty string after minutes of GPU, so this
-        # mode isolates "cannot read the drawing" from "cannot take 5 images".
-        images, descriptions = images[:1], descriptions[:1]
-    request = AIRequest(
-        task=AITask.CAD_SPEC_READ,
-        messages=[ChatMessage(
-            role="user",
-            content=_SPEC_PROMPT + "\nКАРТА ИЗОБРАЖЕНИЙ:\n" + "\n".join(descriptions),
-        )],
-        images=[base64.b64encode(value).decode() for value in images],
-        confidential=True,
-        allow_cloud=False,
-        preferred_model=model_key,
-        metadata={"num_predict": 24000},
-    )
-    result: dict[str, Any] = {"model": model_key, "images_sent": len(images)}
+        result["deprecated_option"] = (
+            "--single-image ignored: production staged reader chooses its own crops"
+        )
     reference_spec = truth.get("reference_spec_data")
     if isinstance(reference_spec, dict):
         expected_total = sum(
@@ -295,36 +309,24 @@ async def evaluate_model(
         })
     started = time.monotonic()
     try:
-        response = await ai_router.run(request)
+        raw_spec = await read_spec_best_effort(
+            image_bytes,
+            passes=3,
+            router=_PreferredCadReaderRouter(ai_router, model_key),
+            confidential=True,
+        )
     except Exception as exc:  # noqa: BLE001 — a failing candidate is a result
         result["error"] = f"{exc.__class__.__name__}: {exc}"
         result["seconds"] = round(time.monotonic() - started, 1)
         return result
     result["seconds"] = round(time.monotonic() - started, 1)
-    result["model_used"] = getattr(response, "model", None)
-    raw = response.text or ""
-    result["raw_chars"] = len(raw)
-    # Keep the raw answer: every reader failure so far was diagnosable only
-    # from the exact bytes the model produced.
-    pathlib.Path(f"/tmp/raw_{model_key}.txt").write_text(raw)
-    if not raw.strip():
-        result["error"] = "empty_response"
+    result["model_used"] = model_key
+    if not raw_spec:
+        result["error"] = "empty_staged_spec"
         return result
 
     try:
-        parsed = _coerce_spec_containers(_parse_spec_json(raw, strict=True))
-    except SpecReadTruncatedError:
-        result["error"] = "truncated_json"
-        return result
-    except SpecReadMalformedError as exc:
-        result["error"] = "malformed_json"
-        result["detail"] = str(exc)[:200]
-        return result
-    if not parsed:
-        result["error"] = "unparsable_json"
-        return result
-    try:
-        spec = EngineeringDrawingSpec.model_validate(parsed).model_dump(mode="json")
+        spec = EngineeringDrawingSpec.model_validate(raw_spec).model_dump(mode="json")
     except ValidationError as exc:
         result["error"] = "schema_invalid"
         result["invalid_fields"] = [
@@ -332,6 +334,17 @@ async def evaluate_model(
         ]
         return result
 
+    result["reader_trace"] = reader_trace(raw_spec)
+    fragment_attempts = result["reader_trace"]["fragment_attempts"]
+    whole_sheet_attempts = result["reader_trace"]["whole_sheet_attempts"]
+    result["attempts_completed"] = (
+        len(fragment_attempts) + len(whole_sheet_attempts)
+    )
+    result["fragment_questions"] = sum(
+        len((attempt.get("spec") or {}).get("fragment_answers") or [])
+        for attempt in fragment_attempts
+        if isinstance(attempt, dict)
+    )
     result["validates"] = True
     result["blocking_unresolved"] = len(spec.get("unresolved") or [])
     result["views_read"] = [v.get("kind") for v in (spec.get("views") or [])]
@@ -403,7 +416,7 @@ async def main() -> int:
     parser.add_argument("--out", default="test-results/eval_cad_readers.json")
     parser.add_argument(
         "--single-image", action="store_true",
-        help="send only the overview image (isolates multi-image failures)",
+        help="deprecated; staged production reader always chooses its own crops",
     )
     args = parser.parse_args()
 
@@ -434,6 +447,8 @@ async def main() -> int:
             f"  {result.get('seconds')}s imgs={result.get('images_sent')} "
             f"validates={result.get('validates', False)} "
             f"facts={result.get('facts_correct', 0)}/{result.get('facts_total', 0)} "
+            f"parameters={result.get('parameters_matched', 0)}/"
+            f"{result.get('parameters_total', 0)} "
             f"entities={result.get('drafted_entities', 0)} "
             f"blocking={result.get('blocking_unresolved', '-')} "
             f"{result.get('error', '')}"

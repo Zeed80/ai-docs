@@ -390,27 +390,77 @@ def localize_turned_features(
             config="--psm 11",
             output_type=Output.DICT,
         )
+        tokens: list[dict[str, Any]] = []
         for index, raw_value in enumerate(label_data.get("text") or []):
             raw_text = str(raw_value or "").strip()
-            digits = "".join(character for character in raw_text if character.isdigit())
-            if not digits:
+            if not raw_text:
                 continue
-            x = int(label_data["left"][index])
-            y = int(label_data["top"][index])
-            width = int(label_data["width"][index])
-            token_height = int(label_data["height"][index])
+            token = {
+                "raw_text": raw_text,
+                "x": int(label_data["left"][index]),
+                "y": int(label_data["top"][index]),
+                "width": int(label_data["width"][index]),
+                "height": int(label_data["height"][index]),
+            }
+            center_y = token["y"] + token["height"] / 2
             if (
-                x < right - 30
-                or x > right + 200
-                or abs(
-                    (y + token_height / 2) - float(profile_center_y_px or 0)
-                ) > 320
+                token["x"] < right - 320
+                or token["x"] > right + 200
+                or abs(center_y - float(profile_center_y_px or 0)) > 360
             ):
                 continue
+            tokens.append(token)
+
+        # Tesseract splits Ø14 into ``#`` and ``1h`` on the control raster.
+        # Join only touching tokens on the same baseline; the measured radial
+        # wall pair below must still select one unique nominal.
+        joined = list(tokens)
+        for first in tokens:
+            for second in tokens:
+                if second["x"] <= first["x"]:
+                    continue
+                gap = second["x"] - (first["x"] + first["width"])
+                if not 0 <= gap <= 12:
+                    continue
+                first_center = first["y"] + first["height"] / 2
+                second_center = second["y"] + second["height"] / 2
+                if abs(first_center - second_center) > 8:
+                    continue
+                joined.append({
+                    "raw_text": f"{first['raw_text']} {second['raw_text']}",
+                    "x": first["x"],
+                    "y": min(first["y"], second["y"]),
+                    "width": second["x"] + second["width"] - first["x"],
+                    "height": max(
+                        first["y"] + first["height"],
+                        second["y"] + second["height"],
+                    ) - min(first["y"], second["y"]),
+                })
+
+        for token in joined:
+            raw_text = token["raw_text"]
+            if (
+                token["x"] < right - 30
+                and not any(sign in raw_text for sign in ("#", "Ø", "Ф", "⌀"))
+            ):
+                continue
+            digits = "".join(character for character in raw_text if character.isdigit())
+            repaired_digits = "".join(
+                "4" if character.lower() == "h" else character
+                for character in raw_text
+                if character.isdigit() or character.lower() == "h"
+            )
+            if not digits and not repaired_digits:
+                continue
+            x, y = token["x"], token["y"]
+            width, token_height = token["width"], token["height"]
             matches: list[float] = []
-            for value in small_diameters:
+            label_candidates = set(small_diameters)
+            if digits == "0" and raw_text[:1] in {"#", "Ø", "Ф"}:
+                label_candidates.add(10.0)
+            for value in label_candidates:
                 nominal = str(int(value)) if value.is_integer() else f"{value:g}".replace(".", "")
-                direct = nominal in digits
+                direct = nominal in digits or nominal in repaired_digits
                 digit_iterator = iter(digits)
                 one_noise_digit = (
                     len(digits) == len(nominal) + 1
@@ -421,6 +471,23 @@ def localize_turned_features(
                 )
                 if direct or one_noise_digit or lost_leading_one:
                     matches.append(value)
+            if len(matches) > 1:
+                label_center_x = x + width / 2
+                geometry_matches = [
+                    value for value in matches
+                    if any(
+                        abs(
+                            float(item.get("measured_axial_span_mm") or -1000)
+                            - value
+                        ) <= max(0.8, value * 0.07)
+                        and abs(
+                            (float(item["bbox"][0]) + float(item["bbox"][2])) / 2
+                            - label_center_x
+                        ) <= 140
+                        for item in radial_candidates
+                    )
+                ]
+                matches = sorted(set(geometry_matches))
             if len(matches) != 1:
                 continue
             value = matches[0]
@@ -436,6 +503,14 @@ def localize_turned_features(
                 "confidence": 0.68,
                 "source": "spatial_ocr_small_diameter_callout",
             })
+
+        unique_labels: dict[tuple[float, str], dict[str, Any]] = {}
+        for item in diameter_labels:
+            key = (float(item["value_mm"]), str(item["side"]))
+            current = unique_labels.get(key)
+            if current is None or len(str(item["raw_text"])) > len(str(current["raw_text"])):
+                unique_labels[key] = item
+        diameter_labels = list(unique_labels.values())
 
     blockers = [] if candidates else ["замкнутые контуры шпоночных пазов не локализованы"]
     blockers.extend(radial_blockers)

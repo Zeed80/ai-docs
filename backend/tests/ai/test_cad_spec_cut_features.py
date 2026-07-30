@@ -373,6 +373,7 @@ def test_thread_is_assigned_only_to_a_unique_matching_profile_section():
         "system": "metric",
         "nominal_diameter_mm": 54.5,
         "pitch_mm": 2.0,
+        "length_mm": 25.0,
         "internal": True,
         "evidence": [{"image_index": 0, "bbox": None, "raw_text": "M54,5×2"}],
     }
@@ -439,7 +440,8 @@ async def test_external_thread_carrier_requires_exact_chain_bounds(monkeypatch):
         }],
     }
     callouts = {"dimensions": [
-        {"value": "M75×1,5"}, {"value": "25"}, {"value": "18"},
+        {"value": "M75×1,5"}, {"value": "M8"},
+        {"value": "25"}, {"value": "18"},
         {"value": "50"}, {"value": "99"},
     ]}
 
@@ -458,6 +460,7 @@ async def test_external_thread_carrier_requires_exact_chain_bounds(monkeypatch):
         (item["diameter_mm"], item["length_mm"]) for item in outer
     ] == [(102, 14), (80, 357), (72, 6.0), (75.0, 18.0), (72, 75.0)]
     assert outer[3]["thread"]["designation"] == "M75x1,5"
+    assert outer[3]["thread"]["length_mm"] == 18.0
     assert outer[3]["thread"]["internal"] is False
 
 

@@ -5,7 +5,60 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 
-from eval_cad_readers import score_parameters, summarize_results
+from eval_cad_readers import (
+    _PreferredCadReaderRouter,
+    reader_trace,
+    score_parameters,
+    summarize_results,
+)
+
+
+def test_reader_trace_keeps_fragment_and_whole_sheet_attempts_separate() -> None:
+    fragment = {
+        "pass": 1,
+        "mode": "fragments",
+        "spec": {"fragment_answers": [{"prompt": "profile"}]},
+    }
+    whole = {"pass": 1, "mode": "whole_sheet", "spec": {}}
+
+    trace = reader_trace({
+        "reader_attempts": [whole],
+        "fragment_reader_attempts": [fragment],
+        "fragments": {"geometry": True},
+    })
+
+    assert trace["fragment_attempts"] == [fragment]
+    assert trace["whole_sheet_attempts"] == [whole]
+    assert trace["fragments"] == {"geometry": True}
+
+
+def test_candidate_router_pins_reader_but_preserves_ocr_assignment() -> None:
+    import asyncio
+
+    class Request:
+        def __init__(self, task: str, preferred_model: str | None = None) -> None:
+            self.task = task
+            self.preferred_model = preferred_model
+
+        def model_copy(self, *, update: dict) -> "Request":
+            return Request(self.task, update.get("preferred_model"))
+
+    class Router:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def run(self, request):
+            self.requests.append(request)
+            return request
+
+    router = Router()
+    candidate = _PreferredCadReaderRouter(router, "candidate-vlm")
+
+    reader = asyncio.run(candidate.run(Request("cad_spec_read", "production-vlm")))
+    ocr = asyncio.run(candidate.run(Request("cad_text_ocr", "document-ocr")))
+
+    assert reader.preferred_model == "candidate-vlm"
+    assert ocr.preferred_model == "document-ocr"
 
 
 def test_reader_parameter_accuracy_is_one_to_one_and_micro_aggregated() -> None:
