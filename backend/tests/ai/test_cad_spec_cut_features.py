@@ -202,6 +202,23 @@ def test_named_holes_chamfers_and_threads_cannot_disappear():
     assert any("M54,5" in issue and "M75" in issue for issue in issues)
 
 
+def test_keyway_widths_with_no_radial_label_are_not_cross_holes():
+    issues = _feature_completeness_issues(
+        {"dimensions": [
+            {"value": "Ø12"}, {"value": "Ø8"}, {"value": "Ø14"},
+        ]},
+        {"cross_holes": [{"diameter_mm": 14, "axial_position_mm": 410}]},
+        [{"diameter_mm": 72, "length_mm": 470}],
+        {"observations": [{"role": "outer", "value_mm": 72}]},
+        feature_evidence={
+            "radial_opening_candidates": [{"id": "radial-opening-1"}],
+            "diameter_label_observations": [{"value_mm": 14}],
+        },
+    )
+
+    assert not any("Ø12" in issue or "Ø8" in issue for issue in issues)
+
+
 @pytest.mark.asyncio
 async def test_radial_crop_maps_only_named_diameters_to_known_candidates(monkeypatch):
     source = Image.new("RGB", (900, 700), "white")
@@ -440,7 +457,7 @@ async def test_external_thread_carrier_requires_exact_chain_bounds(monkeypatch):
         }],
     }
     callouts = {"dimensions": [
-        {"value": "M75×1,5"}, {"value": "M8"},
+        {"value": "M75×1,5"}, {"value": "M75×1,5"}, {"value": "M8"},
         {"value": "25"}, {"value": "18"},
         {"value": "50"}, {"value": "99"},
     ]}

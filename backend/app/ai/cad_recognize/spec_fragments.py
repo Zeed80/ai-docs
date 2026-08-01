@@ -767,10 +767,22 @@ async def _read_cut_features(
     if source_image is not None and profile_evidence is not None:
         from app.ai.cad_recognize.turned_features import localize_turned_features
 
+        feature_linear_values = {
+            *_callout_numbers(callouts or {}, "linear"),
+            *(
+                float(item["value_mm"])
+                for item in (
+                    (profile_evidence.get("axial_map") or {}).get("observations")
+                    or []
+                )
+                if isinstance(item.get("value_mm"), (int, float))
+                and not isinstance(item.get("value_mm"), bool)
+            ),
+        }
         feature_evidence = localize_turned_features(
             source_image,
             profile_evidence.get("axial_map") or {},
-            _callout_numbers(callouts or {}, "linear"),
+            sorted(feature_linear_values, reverse=True),
             profile_center_y_px=(
                 profile_evidence.get("diameter_map") or {}
             ).get("profile_center_y_px"),
@@ -1284,7 +1296,7 @@ async def _read_cut_features(
     completeness_issues = _feature_completeness_issues(
         callouts or {}, result, outer,
         (profile_evidence or {}).get("diameter_map") or {},
-        bore=bore,
+        bore=bore, feature_evidence=feature_evidence,
     )
     missing_keyways.extend(completeness_issues)
     if profile_evidence is not None:
@@ -1313,6 +1325,7 @@ def _feature_completeness_issues(
     diameter_evidence: dict[str, Any],
     *,
     bore: list[dict] | None = None,
+    feature_evidence: dict[str, Any] | None = None,
 ) -> list[str]:
     """Refuse a smooth stand-in when the sheet explicitly names cut features."""
     texts = [
@@ -1339,6 +1352,20 @@ def _feature_completeness_issues(
         value = float(nominal.group().replace(",", "."))
         if value <= 25 and not _matches_callout(value, profile_diameters):
             named_small_holes.add(value)
+    # Once the main-view radial zone has spatial evidence, only labels actually
+    # localized beside that zone are radial-hole requirements. This prevents a
+    # noisy Ø prefix on the 12/8 mm keyway widths from becoming fictitious
+    # cross-holes while keeping the older callout-only fail-closed behaviour on
+    # monochrome sheets where no spatial evidence exists.
+    if (feature_evidence or {}).get("radial_opening_candidates"):
+        named_small_holes = {
+            float(item["value_mm"])
+            for item in (feature_evidence or {}).get(
+                "diameter_label_observations", []
+            )
+            if isinstance(item.get("value_mm"), (int, float))
+            and not isinstance(item.get("value_mm"), bool)
+        }
     accepted_holes = [
         _num(item.get("diameter_mm"))
         for item in features.get("cross_holes") or []
@@ -1450,6 +1477,7 @@ async def _recover_external_thread_carrier(
         if isinstance(item, dict)
     ]
     threads: list[tuple[str, float, float | None]] = []
+    seen_threads: set[str] = set()
     for text in texts:
         match = re.search(
             r"\bM\s*(\d+(?:[.,]\d+)?)(?:\s*[xх×]\s*(\d+(?:[.,]\d+)?))?",
@@ -1461,6 +1489,10 @@ async def _recover_external_thread_carrier(
         nominal = float(match.group(1).replace(",", "."))
         pitch = float(match.group(2).replace(",", ".")) if match.group(2) else None
         designation = f"M{match.group(1)}" + (f"x{match.group(2)}" if pitch else "")
+        normalized = designation.replace(",", ".").lower()
+        if normalized in seen_threads:
+            continue
+        seen_threads.add(normalized)
         if not any(
             abs(float(item.get("diameter_mm") or -1000) - nominal)
             <= max(0.6, nominal * 0.01)
