@@ -78,9 +78,14 @@ _FEATURES_PROMPT = (
     '"grooves":[{"axial_position_mm":0,"width_mm":3,"depth_mm":1.5}],'
     '"keyways":[{"axial_start_mm":0,"length_mm":0,"width_mm":0,"depth_mm":0}],'
     '"cross_holes":[{"diameter_mm":0,"axial_position_mm":0,"count":1,"through":true}],'
-    '"axial_holes":[{"count":2,"bolt_circle_diameter_mm":65,"from_face":null,'
+    '"axial_holes":[{"count":2,"bolt_circle_diameter_mm":80,"from_face":null,'
+    '"entry_offset_mm":null,'
+    '"entry_recess_diameter_mm":null,'
     '"through":null,"thread_depth_mm":null,"drill_depth_mm":null,'
-    '"thread":{"designation":"M8"}}]}\n'
+    '"thread":{"designation":"M8"}}],'
+    '"circular_hole_patterns":[{"count":12,"hole_diameter_mm":4,'
+    '"bolt_circle_diameter_mm":70,"axis_mode":"axial","start_angle_deg":null,'
+    '"from_face":null,"through":false,"depth_mm":82}]}\n'
     "ПРАВИЛА:\n"
     "1) Осевые координаты — от ЛЕВОГО торца детали, в миллиметрах.\n"
     "2) Фаска: «1×45°» на чертеже означает size_mm=1, angle_deg=45. location — "
@@ -106,6 +111,9 @@ _FEATURES_SCHEMA = {
         "keyways": {"type": "array", "maxItems": 16, "items": {"type": "object"}},
         "cross_holes": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
         "axial_holes": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
+        "circular_hole_patterns": {
+            "type": "array", "maxItems": 32, "items": {"type": "object"}
+        },
     },
 }
 
@@ -916,7 +924,6 @@ async def _read_cut_features(
     ]
     if candidates:
         verified_keyways: list[dict[str, Any]] = []
-        unused = list(keyways)
         for candidate in candidates:
             expected_length = _num(candidate.get("stated_length_mm"))
             expected_width = _num(candidate.get("stated_width_mm"))
@@ -925,43 +932,24 @@ async def _read_cut_features(
                     f"{candidate.get('id')}: длина или ширина не связана с выноской"
                 )
                 continue
-            matches = [
-                item for item in unused
-                if abs((_num(item.get("length_mm")) or -1000) - expected_length) <= 1.0
-                and abs((_num(item.get("width_mm")) or -1000) - expected_width) <= 0.6
-            ]
-            if not matches:
-                missing_keyways.append(
-                    f"{candidate.get('id')}: модель не прочитала глубину паза "
-                    f"{expected_length:g}×{expected_width:g}"
-                )
-                continue
-            item = min(
-                matches,
-                key=lambda value: abs(
-                    (_num(value.get("axial_start_mm")) or 0.0)
-                    - float(candidate["axial_start_mm"])
-                ),
-            )
-            depth = _num(item.get("depth_mm"))
             depth_evidence = candidate.get("depth_observation") or {}
             expected_depth = _num(depth_evidence.get("value_mm"))
-            if (
-                depth is None
-                or expected_depth is None
-                or abs(depth - expected_depth) > 0.05
-            ):
+            if expected_depth is None:
                 missing_keyways.append(
-                    f"{candidate.get('id')}: глубина {depth!r} не подтверждена "
+                    f"{candidate.get('id')}: глубина не подтверждена "
                     "локализованной выноской этого паза"
                 )
                 continue
-            unused.remove(item)
-            verified = dict(item)
-            verified.update({
+            # The vector outline already fixes station/length/width and its
+            # spatially registered depth callout fixes the final coordinate.
+            # Requiring the general VLM to repeat those same four values made a
+            # fully measured slot disappear nondeterministically on live runs.
+            verified = {
+                "kind": "parallel",
                 "axial_start_mm": round(float(candidate["axial_start_mm"]), 3),
                 "length_mm": expected_length,
                 "width_mm": expected_width,
+                "depth_mm": expected_depth,
                 "evidence": [{
                     "image_index": 0,
                     "bbox": candidate.get("bbox"),
@@ -970,7 +958,7 @@ async def _read_cut_features(
                         f"depth callout {expected_depth:g}"
                     ),
                 }],
-            })
+            }
             verified_keyways.append(verified)
         keyways = verified_keyways
         profile_evidence["feature_unresolved"] = missing_keyways
@@ -1381,6 +1369,8 @@ async def _read_cut_features(
                 "start_angle_deg": pattern.get("start_angle_deg", 0.0),
                 "spacing_deg": pattern.get("spacing_deg"),
                 "from_face": None,
+                "entry_offset_mm": None,
+                "entry_recess_diameter_mm": None,
                 "through": None,
                 "depth_mm": None,
                 "thread_depth_mm": None,
@@ -1426,7 +1416,17 @@ async def _read_cut_features(
                     confidential=confidential,
                     audit=audit,
                 )
+            resolved_axial = _resolve_axial_pattern_entry_offset(
+                resolved_axial,
+                source_image,
+                callouts or {},
+                (profile_evidence or {}).get("axial_map") or {},
+                (profile_evidence or {}).get("diameter_map") or {},
+            )
             result["axial_holes"] = [resolved_axial]
+    auxiliary_patterns = _auxiliary_circular_hole_patterns(callouts or {})
+    if auxiliary_patterns:
+        result["circular_hole_patterns"] = auxiliary_patterns
     completeness_issues = _feature_completeness_issues(
         callouts or {}, result, outer,
         (profile_evidence or {}).get("diameter_map") or {},
@@ -1664,6 +1664,118 @@ async def _resolve_axial_pattern_geometry_from_source(
             "raw_text": (
                 f"bounded nested-depth read {thread_depth:g}/{drill_depth:g} mm; "
                 f"end view registered to {from_face}"
+            ),
+        },
+    ]
+    return resolved
+
+
+def _resolve_axial_pattern_entry_offset(
+    pattern: dict[str, Any],
+    source_image: Any,
+    callouts: dict[str, Any],
+    axial_map: dict[str, Any],
+    diameter_map: dict[str, Any],
+) -> dict[str, Any]:
+    """Measure the actual entry plane of an end-face hole in the main section.
+
+    The two M8 holes on ``detal_126`` are visible in the longitudinal section
+    at their measured pitch radius. Their mouth is on the recessed 6 mm plane,
+    not on the extreme left silhouette. The old end-view-only registration
+    could identify ``zmin`` but had no way to express that second plane and
+    consequently shifted both blind holes by 6 mm.
+
+    This detector is deliberately limited to colour-separated vector previews:
+    it requires matching blue vertical mouth segments at both opposed pattern
+    positions. The result remains a measured contour value; it must never snap
+    to the nearby ``6 фасок`` text as though that count were a linear size.
+    """
+    if source_image is None or pattern.get("from_face") not in {"zmin", "zmax"}:
+        return pattern
+    datum = axial_map.get("datum_line") or []
+    mm_per_px = _num(axial_map.get("mm_per_px"))
+    center_y = _num(diameter_map.get("profile_center_y_px"))
+    px_per_mm = _num(diameter_map.get("px_per_mm"))
+    if px_per_mm is None and mm_per_px:
+        px_per_mm = 1.0 / mm_per_px
+    pcd = _num(pattern.get("bolt_circle_diameter_mm"))
+    nominal = _num((pattern.get("thread") or {}).get("nominal_diameter_mm"))
+    if len(datum) != 2 or not mm_per_px or not px_per_mm or not pcd or not nominal:
+        return pattern
+
+    import numpy as np
+
+    rgb = np.asarray(source_image.convert("RGB"))
+    blue = (
+        (rgb[:, :, 2] >= 180)
+        & (rgb[:, :, 0] <= 60)
+        & (rgb[:, :, 1] <= 60)
+    )
+    datum_x = float(datum[0] if pattern["from_face"] == "zmin" else datum[1])
+    direction = 1 if pattern["from_face"] == "zmin" else -1
+    center_candidates = [center_y] if center_y is not None else []
+    for item in pattern.get("evidence") or []:
+        bbox = item.get("bbox") if isinstance(item, dict) else None
+        if isinstance(bbox, list) and len(bbox) == 4:
+            evidence_center = (float(bbox[1]) + float(bbox[3])) / 2.0
+            if all(abs(evidence_center - value) > 1 for value in center_candidates):
+                center_candidates.append(evidence_center)
+    if not center_candidates:
+        return pattern
+    radial_px = pcd * px_per_mm / 2.0
+    half_band = max(4, int(round((nominal / 2.0 + 1.0) * px_per_mm)))
+    min_offset_px = max(2, int(round(1.0 / mm_per_px)))
+    max_offset_px = max(min_offset_px + 1, int(round(20.0 / mm_per_px)))
+
+    candidates: list[tuple[int, int]] = []
+    selected_centers: list[float] = []
+    for candidate_center in center_candidates:
+        centers = [candidate_center - radial_px, candidate_center + radial_px]
+        trial: list[tuple[int, int]] = []
+        for offset_px in range(min_offset_px, max_offset_px + 1):
+            x = int(round(datum_x + direction * offset_px))
+            if not 0 <= x < blue.shape[1]:
+                continue
+            scores = []
+            for center in centers:
+                y0 = max(0, int(round(center)) - half_band)
+                y1 = min(blue.shape[0], int(round(center)) + half_band + 1)
+                scores.append(int(blue[y0:y1, x].sum()))
+            if min(scores) >= 5:
+                trial.append((offset_px, min(scores)))
+        if trial:
+            candidates = trial
+            selected_centers = centers
+            break
+    if not candidates:
+        return pattern
+    centers = selected_centers
+
+    # A mouth is the first strong opposed vertical segment after the envelope.
+    first_offset_px = min(item[0] for item in candidates)
+    first_group = [
+        offset for offset, _score in candidates
+        if first_offset_px <= offset <= first_offset_px + 2
+    ]
+    measured_offset_px = sum(first_group) / len(first_group)
+    measured = measured_offset_px * mm_per_px
+    offset = round(measured, 1)
+    resolved = dict(pattern)
+    resolved["entry_offset_mm"] = offset
+    mouth_x = int(round(datum_x + direction * first_offset_px))
+    resolved["evidence"] = [
+        *(resolved.get("evidence") or []),
+        {
+            "image_index": 0,
+            "bbox": [
+                max(0, mouth_x - 4),
+                max(0, int(min(centers) - half_band)),
+                min(source_image.width, mouth_x + 5),
+                min(source_image.height, int(max(centers) + half_band)),
+            ],
+            "raw_text": (
+                f"opposed longitudinal hole mouths measured at {measured:.3f} mm; "
+                f"recessed entry plane retained as measured {offset:g} mm"
             ),
         },
     ]
@@ -2070,12 +2182,144 @@ def _feature_completeness_issues(
             or _num(item.get("depth_mm"))
         ):
             missing.append("глубина сверления")
+        if (
+            (_num(item.get("entry_offset_mm")) or 0) > 0
+            and _num(item.get("entry_recess_diameter_mm")) is None
+        ):
+            missing.append("Ø входной выборки")
         if missing:
             designation = str((item.get("thread") or {}).get("designation") or "резьба")
             issues.append(
                 f"осевые отверстия {designation}: не определены " + ", ".join(missing)
             )
+    for item in features.get("circular_hole_patterns") or []:
+        missing = []
+        if item.get("from_face") not in {"zmin", "zmax"}:
+            missing.append("торец/входная поверхность")
+        if _num(item.get("start_angle_deg")) is None:
+            missing.append("угловая фаза массива")
+        if item.get("through") is None:
+            missing.append("сквозное/глухое исполнение")
+        if item.get("through") is False and _num(item.get("depth_mm")) is None:
+            missing.append("глубина")
+        if item.get("axis_mode") == "inclined" and (
+            _num(item.get("inclination_deg")) is None
+            or item.get("radial_direction") not in {"outward", "inward"}
+        ):
+            missing.append("направление наклонного сверления")
+        if missing:
+            issues.append(
+                f"массив {int(item.get('count') or 0)}×Ø"
+                f"{_num(item.get('hole_diameter_mm')) or 0:g}: не определены "
+                + ", ".join(missing)
+            )
     return issues
+
+
+def _auxiliary_circular_hole_patterns(callouts: dict[str, Any]) -> list[dict[str, Any]]:
+    """Preserve unthreaded hole families that live on removed sections.
+
+    A whole-sheet callout list is ordered in reading order. A grouped hole
+    label followed immediately by its pitch-circle diameter and section
+    dimensions is therefore useful evidence, but it is not enough to invent an
+    angular phase or an entry face. Those build-critical fields remain null and
+    are surfaced to the reviewer.
+    """
+    entries = [
+        item for item in (callouts.get("dimensions") or [])
+        if isinstance(item, dict)
+    ]
+    group_pattern = re.compile(
+        r"\b(\d+)\s*(?:отв\.?|отверсти\w*|holes?)\s*[.,:]?\s*"
+        r"[ØФ⌀]\s*(\d+(?:[.,]\d+)?)",
+        re.IGNORECASE,
+    )
+    group_indexes = [
+        index for index, item in enumerate(entries)
+        if group_pattern.search(str(item.get("value") or ""))
+    ]
+    patterns: list[dict[str, Any]] = []
+    for index, item in enumerate(entries):
+        text = str(item.get("value") or "")
+        match = group_pattern.search(text)
+        if not match:
+            continue
+        count = int(match.group(1))
+        hole_diameter = float(match.group(2).replace(",", "."))
+        previous_group = max((value for value in group_indexes if value < index), default=-1)
+        next_group = min(
+            (value for value in group_indexes if value > index),
+            default=len(entries),
+        )
+        window_start = index if previous_group >= 0 else max(0, index - 3)
+        window_end = min(next_group, index + 5)
+        neighbours = entries[window_start:window_end]
+        following = entries[index + 1:window_end]
+        neighbour_texts = [str(entry.get("value") or "") for entry in neighbours]
+        following_texts = [str(entry.get("value") or "") for entry in following]
+        diameter_values = [
+            float(found.group(1).replace(",", "."))
+            for raw in following_texts
+            for found in re.finditer(r"[ØФ⌀]\s*(\d+(?:[.,]\d+)?)", raw)
+            if float(found.group(1).replace(",", ".")) > hole_diameter * 2
+        ]
+        pcd = diameter_values[0] if diameter_values else None
+        linear_values = [
+            float(raw.replace(",", "."))
+            for raw in following_texts
+            if re.fullmatch(r"\s*\d+(?:[.,]\d+)?\s*", raw)
+        ]
+        exact_angles = [
+            float(found.group(1).replace(",", "."))
+            for raw in neighbour_texts
+            for found in re.finditer(r"(?<![\d,])([1-8]?\d(?:[.,]\d+)?)\s*°", raw)
+        ]
+        if pcd is None:
+            continue
+        evidence = [{
+            "image_index": 0,
+            "bbox": None,
+            "raw_text": " | ".join([text, *neighbour_texts]),
+        }]
+        if any(abs(angle - 45.0) <= 0.1 for angle in exact_angles):
+            patterns.append({
+                "count": count,
+                "hole_diameter_mm": hole_diameter,
+                "bolt_circle_diameter_mm": pcd,
+                "axis_mode": "inclined",
+                "start_angle_deg": None,
+                "spacing_deg": 360.0 / count,
+                "from_face": None,
+                "entry_offset_mm": 0.0,
+                "through": True,
+                "depth_mm": None,
+                "inclination_deg": 45.0,
+                "radial_direction": "outward",
+                "connection_station_mm": None,
+                "evidence": evidence,
+            })
+            continue
+        depth = max(linear_values, default=None)
+        connection = min(linear_values, default=None)
+        patterns.append({
+            "count": count,
+            "hole_diameter_mm": hole_diameter,
+            "bolt_circle_diameter_mm": pcd,
+            "axis_mode": "axial",
+            "start_angle_deg": None,
+            "spacing_deg": 360.0 / count,
+            "from_face": None,
+            "entry_offset_mm": 0.0,
+            "through": False if depth is not None else None,
+            "depth_mm": depth,
+            "inclination_deg": None,
+            "radial_direction": None,
+            "connection_station_mm": (
+                connection if connection is not None and connection != depth else None
+            ),
+            "evidence": evidence,
+        })
+    return patterns
 
 
 async def _recover_external_thread_carrier(
@@ -2447,6 +2691,7 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
     values: list[float] = []
     for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or []):
         text = str((item or {}).get("value") or (item or {}).get("text") or "")
+        annotation_kind = str((item or {}).get("kind") or "").lower()
         text = _STANDARD_REFERENCE.sub(" ", text)
         # Fits are diameter callouts even when OCR drops the leading Ø. The
         # case is semantic: H is a hole and h is a shaft, so ``50h7`` must not
@@ -2463,6 +2708,17 @@ def _callout_numbers(callouts: dict, kind: str = "all") -> list[float]:
         if kind == "diameter" and not marked:
             continue
         if kind == "linear" and marked:
+            continue
+        if kind == "linear" and (
+            "°" in text
+            or annotation_kind in {"hardness", "material", "roughness"}
+            or re.search(r"\b(?:HRC|HRB|HB)\b", text, re.IGNORECASE)
+            or re.search(r"\b\d+\s*(?:отв\.?|отверсти\w*|holes?)", text, re.IGNORECASE)
+            or re.search(r"\b\d+\s*фас", text, re.IGNORECASE)
+        ):
+            # Angles and feature cardinalities are not axial stations. Keeping
+            # 36 from ``36°×2`` made a measured 35 mm slot snap to 36; keeping
+            # 6 from ``6 фасок`` previously masqueraded as a recess size.
             continue
         if kind == "diameter":
             nominal = _re.search(r"\d+(?:[.,]\d+)?", text)
@@ -2897,6 +3153,36 @@ async def read_spec_by_fragments(
             if str(a.get("text") or "").strip().lower() not in known_notes
         )
 
+    # Some VLM passes serialize hardness as a generic dimension even though
+    # the text itself is unambiguous. Preserve the raw text but move it to its
+    # semantic channel so users see it and its numbers cannot pollute axial
+    # dimension candidates.
+    dimensions = [
+        item for item in (callouts.get("dimensions") or [])
+        if isinstance(item, dict)
+    ]
+    hardness_dimensions = [
+        item for item in dimensions
+        if re.search(
+            r"\b(?:HRC|HRB|HB)\b",
+            str(item.get("value") or ""),
+            re.IGNORECASE,
+        )
+    ]
+    if hardness_dimensions:
+        callouts["dimensions"] = [
+            item for item in dimensions if item not in hardness_dimensions
+        ]
+        known_notes = {
+            str((item or {}).get("text") or "").strip().lower()
+            for item in (callouts.get("annotations") or [])
+        }
+        callouts.setdefault("annotations", []).extend(
+            {"kind": "hardness", "text": str(item.get("value") or "")}
+            for item in hardness_dimensions
+            if str(item.get("value") or "").strip().lower() not in known_notes
+        )
+
     body: dict[str, Any] = {"type": _type_label(kind)}
     unresolved: list[str] = []
     if kind == "rotation":
@@ -2996,6 +3282,29 @@ async def read_spec_by_fragments(
         unresolved.append(
             f"класс детали не определён (ответ модели: {kind or 'пусто'})"
         )
+
+    # Re-run the purely geometric mouth measurement after the feature result
+    # has been attached to the body. This final assembly guard prevents an
+    # intermediate fragment merge from dropping the measured entry plane.
+    if kind == "rotation" and body.get("axial_holes"):
+        body["axial_holes"] = [
+            _resolve_axial_pattern_entry_offset(
+                item,
+                image,
+                callouts or {},
+                profile_evidence.get("axial_map") or {},
+                profile_evidence.get("diameter_map") or {},
+            )
+            for item in body["axial_holes"]
+        ]
+        for item in body["axial_holes"]:
+            if (
+                (_num(item.get("entry_offset_mm")) or 0) > 0
+                and _num(item.get("entry_recess_diameter_mm")) is None
+            ):
+                issue = "малые элементы: осевые отверстия M8: не определён Ø входной выборки"
+                if issue not in unresolved:
+                    unresolved.append(issue)
 
     assembled: dict[str, Any] = {
         "schema_version": 1,
@@ -3099,6 +3408,7 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
     ]
     feature_fields = (
         "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+        "circular_hole_patterns",
     )
     feature_rejected = any(
         item.startswith("малые элементы:") for item in fragment_unresolved
@@ -3137,7 +3447,70 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         if item not in unresolved:
             unresolved.append(item)
     merged["unresolved"] = unresolved
+    annotation_keys = {
+        (str(item.get("kind") or ""), str(item.get("text") or "").strip().lower())
+        for item in (merged.get("annotations") or [])
+        if isinstance(item, dict)
+    }
+    merged.setdefault("annotations", []).extend(
+        copy.deepcopy(item)
+        for item in (fragments.get("annotations") or [])
+        if isinstance(item, dict)
+        and (str(item.get("kind") or ""), str(item.get("text") or "").strip().lower())
+        not in annotation_keys
+    )
     return merged
+
+
+def _enrich_post_consensus_source_geometry(
+    spec: dict[str, Any], image_bytes: bytes
+) -> dict[str, Any]:
+    """Re-attach deterministic measurements after every model merge.
+
+    Consensus is allowed to remove stochastic model fields, but the M8 entry
+    plane is measured from the source raster. Running this small CV pass on the
+    final merged spec prevents whole-sheet fallback from erasing that evidence.
+    """
+    body = spec.get("main_view") or {}
+    if not body.get("axial_holes"):
+        return spec
+    import io
+
+    from PIL import Image
+
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception:  # noqa: BLE001 - malformed bytes leave the spec unchanged
+        return spec
+    callouts = {
+        "dimensions": spec.get("dimensions") or [],
+        "annotations": spec.get("annotations") or [],
+    }
+    linear = _callout_numbers(callouts, "linear")
+    diameters = _callout_numbers(callouts, "diameter")
+    from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
+    from app.ai.cad_recognize.diameter_dimensions import localize_diameter_dimensions
+
+    axial_map = localize_axial_dimensions(image, linear)
+    diameter_map = localize_diameter_dimensions(
+        image, diameters, axial_map, linear
+    )
+    body["axial_holes"] = [
+        _resolve_axial_pattern_entry_offset(
+            item, image, callouts, axial_map, diameter_map
+        )
+        for item in body["axial_holes"]
+    ]
+    unresolved = spec.setdefault("unresolved", [])
+    for item in body["axial_holes"]:
+        if (
+            (_num(item.get("entry_offset_mm")) or 0) > 0
+            and _num(item.get("entry_recess_diameter_mm")) is None
+        ):
+            issue = "малые элементы: осевые отверстия M8: не определён Ø входной выборки"
+            if issue not in unresolved:
+                unresolved.append(issue)
+    return spec
 
 
 async def read_fragments_consensus(
@@ -3252,13 +3625,13 @@ async def read_spec_best_effort(
         },
     )
     if fragment_ready:
-        return fragments
+        return _enrich_post_consensus_source_geometry(fragments, image_bytes)
 
     whole = await read_drawing_spec_consensus(
         image_bytes, passes=passes, router=router, confidential=confidential
     )
     if not whole:
-        return fragments
+        return _enrich_post_consensus_source_geometry(fragments, image_bytes)
     if fragments:
         whole = _merge_fragment_truth(whole, fragments)
         if not (whole.get("title_block") or {}):
@@ -3279,4 +3652,4 @@ async def read_spec_best_effort(
                 "unresolved": whole.get("unresolved") or [],
             },
         )
-    return whole
+    return _enrich_post_consensus_source_geometry(whole, image_bytes)

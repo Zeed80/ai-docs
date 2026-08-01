@@ -2,14 +2,43 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.ai.cad_recognize.spec_fragments import (
     _has_geometry,
+    _enrich_post_consensus_source_geometry,
     _stamp_crop,
     _type_label,
     read_spec_best_effort,
 )
+
+
+def test_post_consensus_restores_measured_m8_entry_plane_from_source():
+    image = (
+        Path(__file__).resolve().parents[3]
+        / "test_vector_files" / "detal_126.png"
+    ).read_bytes()
+    spec = {
+        "main_view": {"axial_holes": [{
+            "count": 2,
+            "bolt_circle_diameter_mm": 80,
+            "from_face": "zmin",
+            "entry_offset_mm": None,
+            "entry_recess_diameter_mm": None,
+            "thread": {"nominal_diameter_mm": 8},
+            "evidence": [{"bbox": [2126, 465, 2146, 722]}],
+        }]},
+        "dimensions": [{"value": "470"}, {"value": "Ø80"}],
+        "annotations": [],
+        "unresolved": [],
+    }
+
+    result = _enrich_post_consensus_source_geometry(spec, image)
+
+    assert result["main_view"]["axial_holes"][0]["entry_offset_mm"] == 5.6
+    assert any("Ø входной выборки" in item for item in result["unresolved"])
 
 
 def test_the_stamp_crop_is_the_bottom_right_corner():
@@ -463,6 +492,7 @@ def test_whole_fallback_cannot_overwrite_verified_fragment_outer_or_restore_bore
         "unresolved": [
             "расточка: диаметры расточки не подтверждены локализованным внутренним контуром: Ø12"
         ],
+        "annotations": [{"kind": "hardness", "text": "HRC 58...62"}],
     }
     whole = {
         "main_view": {
@@ -470,6 +500,7 @@ def test_whole_fallback_cannot_overwrite_verified_fragment_outer_or_restore_bore
             "bore": [{"diameter_mm": 12, "length_mm": 35}],
         },
         "unresolved": ["whole-sheet неполон"],
+        "annotations": [{"kind": "material", "text": "Сталь 55"}],
     }
 
     merged = _merge_fragment_truth(whole, fragments)
@@ -481,6 +512,10 @@ def test_whole_fallback_cannot_overwrite_verified_fragment_outer_or_restore_bore
         "расточка: диаметры расточки не подтверждены локализованным внутренним контуром: Ø12",
     ]
     assert whole["main_view"]["outer"][0]["diameter_mm"] == 65
+    assert merged["annotations"] == [
+        {"kind": "material", "text": "Сталь 55"},
+        {"kind": "hardness", "text": "HRC 58...62"},
+    ]
 
 
 def test_whole_fallback_cannot_overwrite_verified_fragment_bore():

@@ -7,7 +7,7 @@ three-pass consensus and whole-sheet fallback) through the real router for
 each candidate model and scores the answer against hand-checked ground truth.
 
 Scoring publishes two denominators separately: nine coarse sheet-level facts
-and the full hand-checked manufacturing parameter set (63 for ``spindle_v10``).
+and the full hand-checked manufacturing parameter set (77 for ``spindle_v10``).
 It also records the operational questions that decide whether a user gets
 anything: did the spec validate, does it compile into a solid, and does a sheet
 come off that solid. The coarse score must never be presented as geometric
@@ -96,11 +96,38 @@ _PARAMETER_GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
     "axial_holes.drill_depth_mm": (
         "axial_holes", ("drill_depth_mm",)
     ),
+    "axial_holes.entry_offset_mm": (
+        "axial_holes", ("entry_offset_mm",)
+    ),
     "axial_holes.thread.nominal_diameter_mm": (
         "axial_holes", ("thread", "nominal_diameter_mm")
     ),
     "axial_holes.thread.internal": (
         "axial_holes", ("thread", "internal")
+    ),
+    "circular_hole_patterns.count": (
+        "circular_hole_patterns", ("count",)
+    ),
+    "circular_hole_patterns.hole_diameter_mm": (
+        "circular_hole_patterns", ("hole_diameter_mm",)
+    ),
+    "circular_hole_patterns.bolt_circle_diameter_mm": (
+        "circular_hole_patterns", ("bolt_circle_diameter_mm",)
+    ),
+    "circular_hole_patterns.axis_mode": (
+        "circular_hole_patterns", ("axis_mode",)
+    ),
+    "circular_hole_patterns.through": (
+        "circular_hole_patterns", ("through",)
+    ),
+    "circular_hole_patterns.depth_mm": (
+        "circular_hole_patterns", ("depth_mm",)
+    ),
+    "circular_hole_patterns.inclination_deg": (
+        "circular_hole_patterns", ("inclination_deg",)
+    ),
+    "circular_hole_patterns.connection_station_mm": (
+        "circular_hole_patterns", ("connection_station_mm",)
     ),
     "chamfers.size_mm": ("chamfers", ("size_mm",)),
     "chamfers.angle_deg": ("chamfers", ("angle_deg",)),

@@ -84,6 +84,7 @@ def solid_build_gate(
             f"main_view.{group}.{index}"
             for group in (
                 "outer", "bore", "keyways", "cross_holes", "axial_holes",
+                "circular_hole_patterns",
                 "grooves", "chamfers",
             )
             for index, item in enumerate(body.get(group) or [])
@@ -646,6 +647,8 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
         pcd = _num(pattern.get("bolt_circle_diameter_mm"))
         pilot = _num(pattern.get("pilot_diameter_mm"))
         from_face = pattern.get("from_face")
+        entry_offset = _num(pattern.get("entry_offset_mm")) or 0.0
+        entry_recess_diameter = _num(pattern.get("entry_recess_diameter_mm"))
         through = pattern.get("through")
         legacy_depth = _num(pattern.get("depth_mm"))
         drill_depth = _num(pattern.get("drill_depth_mm")) or legacy_depth
@@ -663,6 +666,8 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             incomplete.append("сквозное/глухое исполнение")
         if through is False and drill_depth is None:
             incomplete.append("глубина сверления")
+        if entry_offset > 0 and entry_recess_diameter is None:
+            incomplete.append("Ø входной выборки")
         if not designation or nominal is None:
             incomplete.append("резьба")
         if pilot is None and thread_geometry is None:
@@ -695,6 +700,32 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             radius = pcd / 2.0
             center_x = radius * math.cos(math.radians(angle))
             center_y = radius * math.sin(math.radians(angle))
+            if entry_offset > 0 and entry_recess_diameter is not None:
+                features.append(Feature3D(
+                    kind="hole",
+                    params={
+                        "axis": "z",
+                        "diameter_mm": entry_recess_diameter,
+                        "center_x_mm": round(center_x, 6),
+                        "center_y_mm": round(center_y, 6),
+                        "through": False,
+                        "from_face": from_face,
+                        "entry_offset_mm": 0.0,
+                        "depth_mm": entry_offset,
+                        "role": "entry_recess",
+                    },
+                    param_provenance={
+                        "diameter_mm": ParamProvenance(
+                            origin="stated",
+                            detail="Ø входной выборки перед осевым резьбовым отверстием",
+                        ),
+                        "depth_mm": ParamProvenance(
+                            origin="measured",
+                            detail="глубина выборки измерена по продольному векторному контуру",
+                        ),
+                    },
+                    confidence=0.78,
+                ))
             params: dict[str, Any] = {
                 "axis": "z",
                 "diameter_mm": cut_diameter,
@@ -702,6 +733,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 "center_y_mm": round(center_y, 6),
                 "through": bool(through),
                 "from_face": from_face,
+                "entry_offset_mm": entry_offset,
             }
             if through is False:
                 params["depth_mm"] = drill_depth
@@ -721,6 +753,13 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                         origin="propagated",
                         detail="координата из прочитанной делительной окружности",
                     ),
+                    "entry_offset_mm": ParamProvenance(
+                        origin="measured" if entry_offset else "propagated",
+                        detail=(
+                            "смещённая входная плоскость измерена по векторному контуру продольного разреза"
+                            if entry_offset else "вход на крайнем торце"
+                        ),
+                    ),
                 },
                 confidence=0.82,
             ))
@@ -731,6 +770,7 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 "center_x_mm": round(center_x, 6),
                 "center_y_mm": round(center_y, 6),
                 "from_face": from_face,
+                "entry_offset_mm": entry_offset,
             }
             if pitch is not None:
                 thread_params["pitch_mm"] = pitch
@@ -763,6 +803,85 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                     ),
                 },
                 confidence=0.82,
+            ))
+
+    for pattern in body.get("circular_hole_patterns") or []:
+        count = int(pattern.get("count") or 0)
+        diameter = _num(pattern.get("hole_diameter_mm"))
+        pcd = _num(pattern.get("bolt_circle_diameter_mm"))
+        start_angle = _num(pattern.get("start_angle_deg"))
+        spacing = _num(pattern.get("spacing_deg"))
+        from_face = pattern.get("from_face")
+        through = pattern.get("through")
+        depth = _num(pattern.get("depth_mm"))
+        entry_offset = _num(pattern.get("entry_offset_mm")) or 0.0
+        axis_mode = pattern.get("axis_mode")
+        inclination = _num(pattern.get("inclination_deg"))
+        radial_direction = pattern.get("radial_direction")
+        incomplete = []
+        if count < 1 or diameter is None or pcd is None:
+            incomplete.append("количество/Ø/делительная окружность")
+        if start_angle is None:
+            incomplete.append("угловая фаза")
+        if from_face not in {"zmin", "zmax"}:
+            incomplete.append("торец")
+        if through is None:
+            incomplete.append("сквозное/глухое исполнение")
+        if through is False and depth is None:
+            incomplete.append("глубина")
+        if axis_mode == "inclined" and (
+            inclination is None or radial_direction not in {"outward", "inward"}
+        ):
+            incomplete.append("наклон/радиальное направление")
+        if axis_mode not in {"axial", "inclined"}:
+            incomplete.append("тип оси")
+        if incomplete:
+            missing.append(
+                f"массив {count}×Ø{diameter or 0:g} прочитан не полностью ("
+                + ", ".join(incomplete)
+                + ") — не построен"
+            )
+            continue
+        import math
+
+        step = spacing if spacing is not None else 360.0 / count
+        for index in range(count):
+            angle = float(start_angle) + index * step
+            radius = float(pcd) / 2.0
+            center_x = radius * math.cos(math.radians(angle))
+            center_y = radius * math.sin(math.radians(angle))
+            params: dict[str, Any] = {
+                "axis": "z" if axis_mode == "axial" else "inclined",
+                "diameter_mm": diameter,
+                "center_x_mm": round(center_x, 6),
+                "center_y_mm": round(center_y, 6),
+                "through": bool(through),
+                "from_face": from_face,
+                "entry_offset_mm": entry_offset,
+                "pattern_angle_deg": angle,
+            }
+            if through is False:
+                params["depth_mm"] = depth
+            if axis_mode == "inclined":
+                params.update({
+                    "inclination_deg": inclination,
+                    "radial_direction": radial_direction,
+                })
+            features.append(Feature3D(
+                kind="hole",
+                params=params,
+                param_provenance={
+                    "diameter_mm": ParamProvenance(
+                        origin="stated", detail="Ø группового отверстия с разреза"
+                    ),
+                    "center_x_mm": ParamProvenance(
+                        origin="propagated", detail="координата из PCD и угловой фазы"
+                    ),
+                    "center_y_mm": ParamProvenance(
+                        origin="propagated", detail="координата из PCD и угловой фазы"
+                    ),
+                },
+                confidence=0.78,
             ))
 
     features.extend(_edge_features(body, outer, starts, total_length, missing))

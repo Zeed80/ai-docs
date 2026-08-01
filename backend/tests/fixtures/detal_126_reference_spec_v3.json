@@ -3,7 +3,8 @@
     "Hand-checked reader benchmark truth for test_vector_files/detal_126.png.",
     "Only source-supported manufacturing values are scored. Unlike v2, this",
     "does not contain constructed axial positions or invented chamfer edges.",
-    "The M8 end view matches the left Ø80 face; the paired axial dimensions",
+    "The M8 end view is dimensioned on PCD Ø80; Ø65 belongs to 8 holes Ø1.",
+    "The paired axial dimensions",
     "state 15 mm of thread and 17 mm of drilling. A tap-drill diameter is not",
     "specified and is deliberately absent from reader truth.",
     "The sheet states six 1x45 degree chamfers, but only one edge is currently",
@@ -17,7 +18,8 @@
     "type": "тело вращения",
     "outer": [
       {"diameter_mm": 102.0, "length_mm": 14.0, "note": "h6(-0,022)"},
-      {"diameter_mm": 80.0, "length_mm": 357.0, "note": "js6(±0,0095)"},
+      {"diameter_mm": 98.0, "length_mm": 13.0},
+      {"diameter_mm": 80.0, "length_mm": 344.0, "note": "js6(±0,0095)"},
       {"diameter_mm": 72.0, "length_mm": 6.0, "note": "h6(-0,019)"},
       {
         "diameter_mm": 75.0,
@@ -69,10 +71,11 @@
     "axial_holes": [
       {
         "count": 2,
-        "bolt_circle_diameter_mm": 65.0,
+        "bolt_circle_diameter_mm": 80.0,
         "start_angle_deg": 90.0,
         "spacing_deg": 180.0,
         "from_face": "zmin",
+        "entry_offset_mm": 5.6,
         "through": false,
         "depth_mm": 17.0,
         "thread_depth_mm": 15.0,
@@ -88,9 +91,31 @@
         }
       }
     ],
-    "chamfers": [
-      {"size_mm": 1.0, "angle_deg": 45.0, "location": "left_end"}
-    ]
+    "circular_hole_patterns": [
+      {
+        "count": 8,
+        "hole_diameter_mm": 1.0,
+        "bolt_circle_diameter_mm": 65.0,
+        "axis_mode": "inclined",
+        "start_angle_deg": null,
+        "from_face": null,
+        "through": true,
+        "inclination_deg": 45.0,
+        "radial_direction": "outward"
+      },
+      {
+        "count": 12,
+        "hole_diameter_mm": 4.0,
+        "bolt_circle_diameter_mm": 70.0,
+        "axis_mode": "axial",
+        "start_angle_deg": null,
+        "from_face": null,
+        "through": false,
+        "depth_mm": 82.0,
+        "connection_station_mm": 18.0
+      }
+    ],
+    "chamfers": []
   },
   "views": [
     {"kind": "section", "body_index": 0, "label": "Г-Г"},
@@ -114,6 +139,10 @@
     "material": "Сталь 55 ГОСТ 1050-2013",
     "scale": "1:2"
   },
-  "unresolved": ["указано 6 фасок, локализовано 1"],
-  "optional_unresolved": []
+  "unresolved": ["указано 6 фасок, локализовано 0"],
+  "optional_unresolved": [
+    "2×M8: не определён Ø входной выборки перед утопленной плоскостью",
+    "8×Ø1: не определены входная поверхность и угловая фаза",
+    "12×Ø4: не определены входная поверхность и угловая фаза"
+  ]
 }

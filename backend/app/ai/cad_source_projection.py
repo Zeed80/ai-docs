@@ -21,6 +21,7 @@ def evaluate_source_projection(
     evidence_items: list[dict[str, Any]] = []
     for group in (
         "outer", "bore", "keyways", "cross_holes", "axial_holes",
+        "circular_hole_patterns",
         "grooves", "chamfers",
     ):
         for index, item in enumerate(body.get(group) or []):

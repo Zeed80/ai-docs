@@ -200,14 +200,14 @@ def test_reader_scores_only_source_supported_axial_pattern_fields() -> None:
     assert score["parameter_accuracy"] == 1.0
 
 
-def test_detal_126_reference_has_63_independent_source_parameters() -> None:
+def test_detal_126_reference_has_corrected_independent_source_parameters() -> None:
     fixture = pathlib.Path(__file__).parents[1] / "fixtures" / "detal_126_reference_spec_v3.json"
     reference = json.loads(fixture.read_text(encoding="utf-8"))
 
     score = score_parameters(reference, reference)
 
-    assert score["parameters_matched"] == 63
-    assert score["parameters_total"] == 63
+    assert score["parameters_matched"] == 77
+    assert score["parameters_total"] == 77
 
 
 def test_reader_scores_taper_ratio_as_a_semantic_parameter() -> None:

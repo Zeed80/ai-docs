@@ -621,6 +621,68 @@ def localize_diameter_dimensions(
         px_per_mm=px_per_mm,
         accepted=contour_outer,
     )
+    # A short plateau can be broken by end-face holes, hatching or a detail
+    # boundary even though both of its axial ends are explicitly dimensioned.
+    # Promote it only when each measured end has one unique stated station.
+    # This recovers the real Ø98 × 13 segment between stations 14 and 27 on
+    # detal_126 without weakening the interrupted-thread safeguards used for
+    # the much longer Ø75/Ø79 candidates.
+    stated_stations = {
+        round(float(value), 3)
+        for value in (known_linear_values or [])
+        if isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value > 0
+    }
+    preferred_candidates: list[dict[str, Any]] = []
+    for candidate in outer_candidates:
+        interval = candidate.get("axial_interval_mm") or []
+        if any(
+            len(other.get("axial_interval_mm") or []) == 2
+            and abs(float(other["axial_interval_mm"][0]) - float(interval[0])) <= 2.0
+            and abs(float(other["axial_interval_mm"][1]) - float(interval[1])) <= 2.0
+            and abs(float(other.get("profile_check_mm") or 0.0) - float(other["value_mm"]))
+            < abs(float(candidate.get("profile_check_mm") or 0.0) - float(candidate["value_mm"]))
+            for other in outer_candidates
+            if len(interval) == 2
+        ):
+            continue
+        preferred_candidates.append(candidate)
+    promoted_outer: list[dict[str, Any]] = []
+    for candidate in preferred_candidates:
+        interval = candidate.get("axial_interval_mm") or []
+        if len(interval) != 2 or float(candidate.get("confidence") or 0.0) < 0.82:
+            continue
+        measured_start, measured_end = map(float, interval)
+        station_pairs = [
+            (start, end)
+            for start in stated_stations
+            for end in stated_stations
+            if end > start
+            and abs(start - measured_start) <= 2.0
+            and abs(end - measured_end) <= 2.0
+        ]
+        ranked_pairs = sorted(
+            station_pairs,
+            key=lambda pair: (
+                abs(pair[0] - measured_start)
+                + abs(pair[1] - measured_end)
+                + 2.0 * abs((pair[1] - pair[0]) - (measured_end - measured_start))
+            ),
+        )
+        if not ranked_pairs:
+            continue
+        matched_ends = list(ranked_pairs[0])
+        promoted_outer.append({
+            **candidate,
+            "role": "outer",
+            "source": "vector_contour",
+            "confidence": min(0.86, float(candidate["confidence"])),
+            "station_crosscheck_mm": matched_ends,
+        })
+    if promoted_outer:
+        contour_outer.extend(promoted_outer)
+        observations.extend(promoted_outer)
     contour_bore = _contour_bore_observations(
         blue,
         known=sorted(contour_candidates),
@@ -657,11 +719,12 @@ def localize_diameter_dimensions(
         for value in (known_linear_values or [])
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
     }
-    station_candidates.update(
+    observed_stations = {
         round(float(item["station_from_left_mm"]), 3)
         for item in (axial_map.get("observations") or [])
         if isinstance(item.get("station_from_left_mm"), (int, float))
-    )
+    }
+    station_candidates.update(observed_stations)
     transitions: list[dict[str, Any]] = []
     ordered_outer = sorted(
         contour_outer,
@@ -681,14 +744,33 @@ def localize_diameter_dimensions(
             # the one nearest the ending plateau, never invent the midpoint.
             upper = float(next_interval[0]) + 2.0
             candidates = [
-                station for station in station_candidates
+                station for station in observed_stations
                 if measured_station - 2.0 <= station <= upper
             ]
         else:
             candidates = [
-                station for station in station_candidates
+                station for station in observed_stations
                 if abs(station - measured_station) <= 2.0
             ]
+        # Short contour plateaus at the left face are not dimensioned by the
+        # unrelated 12/15 mm slot and M8 callouts. With the overall 470 mm
+        # scale already fixed, a transition within 0.6 mm of an integer is a
+        # measured station; accepting 12 merely because it was in the global
+        # number bag shifted both Ø102 and Ø98 sections.
+        rounded_measured = round(measured_station)
+        if not candidates and abs(rounded_measured - measured_station) <= 0.6:
+            candidates = [float(rounded_measured)]
+        if not candidates:
+            if index + 1 < len(ordered_outer):
+                candidates = [
+                    station for station in station_candidates
+                    if measured_station - 2.0 <= station <= upper
+                ]
+            else:
+                candidates = [
+                    station for station in station_candidates
+                    if abs(station - measured_station) <= 2.0
+                ]
         if not candidates:
             continue
         station = min(candidates, key=lambda value: abs(value - measured_station))

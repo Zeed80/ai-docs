@@ -18,6 +18,8 @@ type AxialHolePattern = {
   start_angle_deg?: number | null;
   spacing_deg?: number | null;
   from_face?: "zmin" | "zmax" | null;
+  entry_offset_mm?: number | null;
+  entry_recess_diameter_mm?: number | null;
   through?: boolean | null;
   depth_mm?: number | null;
   thread_depth_mm?: number | null;
@@ -38,6 +40,23 @@ type Chamfer = {
   location?: "left_end" | "right_end" | "shoulder" | "bore_mouth";
   at_z_mm?: number | null;
   at_diameter_mm?: number | null;
+  [key: string]: unknown;
+};
+
+type CircularHolePattern = {
+  count?: number | null;
+  hole_diameter_mm?: number | null;
+  bolt_circle_diameter_mm?: number | null;
+  axis_mode?: "axial" | "inclined";
+  start_angle_deg?: number | null;
+  spacing_deg?: number | null;
+  from_face?: "zmin" | "zmax" | null;
+  entry_offset_mm?: number | null;
+  through?: boolean | null;
+  depth_mm?: number | null;
+  inclination_deg?: number | null;
+  radial_direction?: "outward" | "inward" | null;
+  connection_station_mm?: number | null;
   [key: string]: unknown;
 };
 
@@ -111,12 +130,21 @@ export default function SpecEditorPanel({
     () => ((body.chamfers ?? []) as Chamfer[]).map((item) => ({ ...item })),
     [body.chamfers],
   );
+  const readCircularPatterns = useMemo(
+    () =>
+      ((body.circular_hole_patterns ?? []) as CircularHolePattern[]).map(
+        (item) => ({ ...item }),
+      ),
+    [body.circular_hole_patterns],
+  );
 
   const [outer, setOuter] = useState<Section[]>(readOuter);
   const [bore, setBore] = useState<Section[]>(readBore);
   const [axialHoles, setAxialHoles] =
     useState<AxialHolePattern[]>(readAxialHoles);
   const [chamfers, setChamfers] = useState<Chamfer[]>(readChamfers);
+  const [circularPatterns, setCircularPatterns] =
+    useState<CircularHolePattern[]>(readCircularPatterns);
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
 
@@ -124,6 +152,10 @@ export default function SpecEditorPanel({
   useEffect(() => setBore(readBore), [readBore]);
   useEffect(() => setAxialHoles(readAxialHoles), [readAxialHoles]);
   useEffect(() => setChamfers(readChamfers), [readChamfers]);
+  useEffect(
+    () => setCircularPatterns(readCircularPatterns),
+    [readCircularPatterns],
+  );
 
   const assumedFields = useMemo(() => {
     const marked = new Set<string>();
@@ -136,7 +168,8 @@ export default function SpecEditorPanel({
     (!readOuter.length &&
       !readBore.length &&
       !readAxialHoles.length &&
-      !readChamfers.length)
+      !readChamfers.length &&
+      !readCircularPatterns.length)
   ) {
     return null;
   }
@@ -146,7 +179,10 @@ export default function SpecEditorPanel({
   const axialDirty =
     JSON.stringify(axialHoles) !== JSON.stringify(readAxialHoles);
   const chamfersDirty = JSON.stringify(chamfers) !== JSON.stringify(readChamfers);
-  const dirty = outerDirty || boreDirty || axialDirty || chamfersDirty;
+  const circularDirty =
+    JSON.stringify(circularPatterns) !== JSON.stringify(readCircularPatterns);
+  const dirty =
+    outerDirty || boreDirty || axialDirty || chamfersDirty || circularDirty;
   const expectedChamfers = Math.max(
     expectedChamferCount(spec),
     readChamfers.length,
@@ -156,6 +192,9 @@ export default function SpecEditorPanel({
     (item) =>
       (item.from_face === "zmin" || item.from_face === "zmax") &&
       typeof item.through === "boolean" &&
+      (!(Number(item.entry_offset_mm) > 0) ||
+        Number(item.entry_recess_diameter_mm) >
+          Number(item.thread?.nominal_diameter_mm)) &&
       (item.through === true ||
         (Number(item.drill_depth_mm ?? item.depth_mm) > 0 &&
           Number(item.thread_depth_mm ?? item.depth_mm) > 0 &&
@@ -175,7 +214,17 @@ export default function SpecEditorPanel({
           Number(item.at_diameter_mm) > 0
         ),
     );
-  const rebuildReady = axialComplete && chamfersComplete;
+  const circularComplete = circularPatterns.every(
+    (item) =>
+      (item.from_face === "zmin" || item.from_face === "zmax") &&
+      Number.isFinite(Number(item.start_angle_deg)) &&
+      typeof item.through === "boolean" &&
+      (item.through || Number(item.depth_mm) > 0) &&
+      (item.axis_mode !== "inclined" ||
+        (Number(item.inclination_deg) > 0 &&
+          Boolean(item.radial_direction))),
+  );
+  const rebuildReady = axialComplete && chamfersComplete && circularComplete;
 
   function updateSection(
     group: "outer" | "bore",
@@ -224,6 +273,18 @@ export default function SpecEditorPanel({
     );
   }
 
+  function updateCircular(
+    index: number,
+    field: keyof CircularHolePattern,
+    value: unknown,
+  ) {
+    setCircularPatterns((current) =>
+      current.map((item, position) =>
+        position === index ? { ...item, [field]: value } : item,
+      ),
+    );
+  }
+
   function addChamfer() {
     const exemplar = chamfers[0] ?? readChamfers[0];
     setChamfers((current) => [
@@ -244,6 +305,7 @@ export default function SpecEditorPanel({
     if (boreDirty) correction.bore = bore;
     if (axialDirty) correction.axial_holes = axialHoles;
     if (chamfersDirty) correction.chamfers = chamfers;
+    if (circularDirty) correction.circular_hole_patterns = circularPatterns;
     setSaving(true);
     try {
       await correctSpec(generationId, correction, { rebuild });
@@ -367,7 +429,7 @@ export default function SpecEditorPanel({
                       {shown(item.bolt_circle_diameter_mm)}
                     </span>
                   </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+                  <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-6">
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_from_face")}
                       <select
@@ -386,6 +448,27 @@ export default function SpecEditorPanel({
                         <option value="zmin">{t("vector.spec_editor_zmin")}</option>
                         <option value="zmax">{t("vector.spec_editor_zmax")}</option>
                       </select>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_entry_offset")}
+                      <div className="mt-1">
+                        {numericInput(
+                          item.entry_offset_mm,
+                          (value) => updateAxial(index, "entry_offset_mm", value),
+                          "w-full",
+                        )}
+                      </div>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_entry_recess_diameter")}
+                      <div className="mt-1">
+                        {numericInput(
+                          item.entry_recess_diameter_mm,
+                          (value) =>
+                            updateAxial(index, "entry_recess_diameter_mm", value),
+                          "w-full",
+                        )}
+                      </div>
                     </label>
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_execution")}
@@ -446,6 +529,102 @@ export default function SpecEditorPanel({
                       {t("vector.spec_editor_m8_geometry")}
                     </p>
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {circularPatterns.length > 0 && (
+            <div className="mt-4 border-t border-white/10 pt-3">
+              <h4 className="font-medium text-zinc-200">
+                {t("vector.spec_editor_circular_patterns_title")}
+              </h4>
+              <p className="mt-1 text-[11px] text-amber-300/80">
+                {t("vector.spec_editor_circular_patterns_hint")}
+              </p>
+              {circularPatterns.map((item, index) => (
+                <div
+                  key={index}
+                  className="mt-2 rounded border border-white/10 bg-black/20 p-2"
+                >
+                  <div className="text-zinc-300">
+                    {shown(item.count)}×⌀{shown(item.hole_diameter_mm)} · PCD ⌀
+                    {shown(item.bolt_circle_diameter_mm)} · {String(item.axis_mode ?? "—")}
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-5">
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_from_face")}
+                      <select
+                        value={item.from_face ?? ""}
+                        onChange={(event) =>
+                          updateCircular(
+                            index,
+                            "from_face",
+                            event.target.value || null,
+                          )
+                        }
+                        disabled={busy || saving}
+                        className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
+                      >
+                        <option value="">{t("vector.spec_editor_unknown")}</option>
+                        <option value="zmin">{t("vector.spec_editor_zmin")}</option>
+                        <option value="zmax">{t("vector.spec_editor_zmax")}</option>
+                      </select>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_start_angle")}
+                      <div className="mt-1">
+                        {numericInput(
+                          item.start_angle_deg,
+                          (value) => updateCircular(index, "start_angle_deg", value),
+                          "w-full",
+                        )}
+                      </div>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_depth")}
+                      <div className="mt-1">
+                        {numericInput(
+                          item.depth_mm,
+                          (value) => updateCircular(index, "depth_mm", value),
+                          "w-full",
+                        )}
+                      </div>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_inclination")}
+                      <div className="mt-1">
+                        {numericInput(
+                          item.inclination_deg,
+                          (value) => updateCircular(index, "inclination_deg", value),
+                          "w-full",
+                        )}
+                      </div>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_radial_direction")}
+                      <select
+                        value={item.radial_direction ?? ""}
+                        onChange={(event) =>
+                          updateCircular(
+                            index,
+                            "radial_direction",
+                            event.target.value || null,
+                          )
+                        }
+                        disabled={busy || saving || item.axis_mode !== "inclined"}
+                        className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200 disabled:opacity-40"
+                      >
+                        <option value="">{t("vector.spec_editor_unknown")}</option>
+                        <option value="outward">
+                          {t("vector.spec_editor_outward")}
+                        </option>
+                        <option value="inward">
+                          {t("vector.spec_editor_inward")}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
                 </div>
               ))}
             </div>

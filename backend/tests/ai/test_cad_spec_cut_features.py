@@ -20,7 +20,10 @@ from PIL import Image
 from app.ai.cad_recognize.spec_fragments import _read_cut_features
 from app.ai.cad_recognize.spec_fragments import _feature_completeness_issues
 from app.ai.cad_recognize.spec_fragments import _assign_profile_threads
+from app.ai.cad_recognize.spec_fragments import _auxiliary_circular_hole_patterns
+from app.ai.cad_recognize.spec_fragments import _callout_numbers
 from app.ai.cad_recognize.spec_fragments import _recover_external_thread_carrier
+from app.ai.cad_recognize.spec_fragments import _resolve_axial_pattern_entry_offset
 from app.ai.cad_recognize.spec_fragments import _resolve_axial_pattern_geometry
 from app.ai.cad_recognize.spec_fragments import _resolve_axial_pattern_geometry_from_source
 from app.ai.cad_recognize.spec_fragments import _resolve_grouped_chamfers
@@ -32,6 +35,90 @@ _OUTER = [
     {"diameter_mm": 102.0, "length_mm": 200.0},
     {"diameter_mm": 60.0, "length_mm": 120.0},
 ]  # 470 mm long, biggest radius 51 mm
+
+
+def test_angles_and_feature_counts_are_not_linear_dimensions():
+    callouts = {"dimensions": [
+        {"value": "35"},
+        {"value": "36°×2=72°"},
+        {"value": "6 фасок 1×45°"},
+        {"value": "8 отв. Ø1"},
+        {"value": "HRC 58...62"},
+        {"kind": "material", "text": "Сталь 55"},
+    ]}
+
+    assert _callout_numbers(callouts, "linear") == [35.0]
+
+
+def test_removed_sections_preserve_both_unthreaded_hole_families():
+    patterns = _auxiliary_circular_hole_patterns({"dimensions": [
+        {"value": "8 отв. Ø1"},
+        {"value": "Ø65"},
+        {"value": "45°"},
+        {"value": "12 отв. Ø4"},
+        {"value": "Ø70"},
+        {"value": "18"},
+        {"value": "82"},
+    ]})
+
+    assert patterns == [
+        {
+            "count": 8,
+            "hole_diameter_mm": 1.0,
+            "bolt_circle_diameter_mm": 65.0,
+            "axis_mode": "inclined",
+            "start_angle_deg": None,
+            "spacing_deg": 45.0,
+            "from_face": None,
+            "entry_offset_mm": 0.0,
+            "through": True,
+            "depth_mm": None,
+            "inclination_deg": 45.0,
+            "radial_direction": "outward",
+            "connection_station_mm": None,
+            "evidence": patterns[0]["evidence"],
+        },
+        {
+            "count": 12,
+            "hole_diameter_mm": 4.0,
+            "bolt_circle_diameter_mm": 70.0,
+            "axis_mode": "axial",
+            "start_angle_deg": None,
+            "spacing_deg": 30.0,
+            "from_face": None,
+            "entry_offset_mm": 0.0,
+            "through": False,
+            "depth_mm": 82.0,
+            "inclination_deg": None,
+            "radial_direction": None,
+            "connection_station_mm": 18.0,
+            "evidence": patterns[1]["evidence"],
+        },
+    ]
+
+
+def test_real_m8_mouth_measures_recess_without_using_six_chamfers_as_size():
+    from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
+
+    source = Path(__file__).resolve().parents[3] / "test_vector_files" / "detal_126.png"
+    image = Image.open(source).convert("RGB")
+    axial = localize_axial_dimensions(image, [6, 14, 15, 17, 470])
+    resolved = _resolve_axial_pattern_entry_offset(
+        {
+            "count": 2,
+            "bolt_circle_diameter_mm": 80,
+            "from_face": "zmin",
+            "thread": {"nominal_diameter_mm": 8},
+            "evidence": [{"bbox": [2126, 465, 2146, 722], "raw_text": "end view"}],
+        },
+        image,
+        {"dimensions": [{"value": "6"}, {"value": "15"}, {"value": "17"}]},
+        axial,
+        {"profile_center_y_px": 900, "px_per_mm": 2.948939},
+    )
+
+    assert resolved["entry_offset_mm"] == 5.6
+    assert "measured" in resolved["evidence"][-1]["raw_text"]
 
 
 def test_spec_keeps_source_visible_axial_pattern_with_unknown_build_fields():
@@ -372,10 +459,13 @@ async def test_local_slot_depth_cannot_be_replaced_by_unrelated_sheet_number(mon
         / "test_vector_files" / "detal_126.png"
     )
     image = Image.open(source).convert("RGB")
-    values = [470, 270, 240, 150, 99, 85, 78, 50, 35, 26, 25, 20, 18, 15, 14, 12, 8, 5, 4, 3.2]
+    values = [470, 270, 240, 150, 99, 85, 78, 50, 35, 26, 25, 20, 18, 15, 14, 12, 8, 5, 4, 3.5, 3.2]
     profile_evidence = {
         "axial_map": localize_axial_dimensions(image, values),
-        "diameter_map": {"profile_center_y_px": 593},
+        "diameter_map": {
+            "profile_center_y_px": 593,
+            "observations": [{"role": "outer", "value_mm": 72}],
+        },
     }
 
     async def fake_ask(*_args, **_kwargs):
@@ -393,14 +483,18 @@ async def test_local_slot_depth_cannot_be_replaced_by_unrelated_sheet_number(mon
         router=object(),
         confidential=True,
         source_image=image,
-        callouts={"dimensions": [{"value": str(value)} for value in values]},
+        callouts={"dimensions": [
+            *({"value": str(value)} for value in values),
+            {"value": "Ø72"},
+        ]},
         profile_evidence=profile_evidence,
     )
 
-    assert "keyways" not in result
-    blockers = profile_evidence["feature_unresolved"]
-    assert "3.2" in blockers[0]
-    assert "keyway-2" in blockers[1]
+    assert [
+        (item["length_mm"], item["width_mm"], item["depth_mm"])
+        for item in result["keyways"]
+    ] == [(85.0, 12.0, 5.0), (35.0, 8.0, 3.5)]
+    assert all("vector contour" in item["evidence"][0]["raw_text"] for item in result["keyways"])
 
 
 @pytest.mark.asyncio
@@ -414,7 +508,10 @@ async def test_end_view_pattern_is_recorded_without_inventing_hole_depth(monkeyp
         "axial_map": localize_axial_dimensions(image, linear),
         "diameter_map": {
             "profile_center_y_px": 593,
-            "observations": [{"role": "outer", "value_mm": 80}],
+            "observations": [
+                {"role": "outer", "value_mm": 102},
+                {"role": "outer", "value_mm": 80},
+            ],
         },
     }
 
@@ -436,6 +533,8 @@ async def test_end_view_pattern_is_recorded_without_inventing_hole_depth(monkeyp
         source_image=image,
         callouts={"dimensions": [
             *({"value": str(value)} for value in linear),
+            {"value": "Ø102"},
+            {"value": "Ø80"},
             {"value": "Ø65"},
             {"value": "2 отв. M8"},
             {"value": "6 фасок 1×45°"},
@@ -445,7 +544,7 @@ async def test_end_view_pattern_is_recorded_without_inventing_hole_depth(monkeyp
 
     pattern, = result["axial_holes"]
     assert pattern["count"] == 2
-    assert pattern["bolt_circle_diameter_mm"] == 65
+    assert pattern["bolt_circle_diameter_mm"] == 80
     assert pattern["thread"]["designation"] == "M8"
     assert pattern["from_face"] is None
     assert pattern["through"] is None

@@ -849,6 +849,7 @@ class SpecCorrectionRequest(BaseModel):
     keyways: list[dict[str, Any]] | None = None
     cross_holes: list[dict[str, Any]] | None = None
     axial_holes: list[dict[str, Any]] | None = None
+    circular_hole_patterns: list[dict[str, Any]] | None = None
     # Rebuild the part and the sheet from the corrected reading. Off by default:
     # a correction is worth recording even when the person is not ready to see
     # the consequences of it yet.

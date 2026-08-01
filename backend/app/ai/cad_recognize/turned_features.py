@@ -101,10 +101,17 @@ def _axial_circle_patterns(
 
     matches: list[tuple[float, float, float, float]] = []
     known = [float(value) for value in known_diameters if 1 < float(value) < 500]
-    for outer in {
+    outer_candidates = {
         float(value) for value in outer_diameters
         if isinstance(value, (int, float)) and 1 < float(value) < 500
-    }:
+    }
+    # An end view is scaled by its visible outer silhouette, i.e. by the
+    # largest coaxial diameter of the part. Trying every profile diameter made
+    # detal_126 reconcile the same measured pair as PCD 65 on an imaginary
+    # Ø80 outline, although the two large M8 circles visibly lie on the stated
+    # Ø80 pitch circle inside the Ø102 silhouette. Smaller diameters belong to
+    # inner circles/details and are not valid scale references for this view.
+    for outer in ([max(outer_candidates)] if outer_candidates else []):
         # Both quantities are radii in pixels. Scaling their ratio by the
         # stated outer *diameter* directly yields the pitch-circle diameter;
         # multiplying by two here would count the radius-to-diameter

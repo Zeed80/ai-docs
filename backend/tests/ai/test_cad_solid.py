@@ -151,6 +151,105 @@ def test_metric_thread_uses_finished_standard_minor_diameter_not_tap_drill():
     assert threads[0].param_provenance["pitch_mm"].origin == "standard"
 
 
+def test_recessed_axial_pattern_preserves_entry_plane_for_hole_and_thread():
+    spec = _shaft_spec(main_view={"axial_holes": [{
+        "count": 2,
+        "bolt_circle_diameter_mm": 40,
+        "from_face": "zmin",
+        "entry_offset_mm": 6,
+        "entry_recess_diameter_mm": 12,
+        "through": False,
+        "thread_depth_mm": 15,
+        "drill_depth_mm": 17,
+        "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+    }]})
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    holes = [feature for feature in candidate.features if feature.kind == "hole"]
+    threads = [feature for feature in candidate.features if feature.kind == "thread"]
+    assert len(holes) == 4
+    assert len(threads) == 2
+    recesses = [hole for hole in holes if hole.params.get("role") == "entry_recess"]
+    pilots = [hole for hole in holes if hole.params.get("role") != "entry_recess"]
+    assert len(recesses) == len(pilots) == 2
+    assert all(recess.params["diameter_mm"] == 12 for recess in recesses)
+    assert all(feature.params["entry_offset_mm"] == 6 for feature in [*pilots, *threads])
+    assert pilots[0].param_provenance["entry_offset_mm"].origin == "measured"
+
+
+def test_recessed_axial_pattern_without_recess_diameter_is_not_built():
+    spec = _shaft_spec(main_view={"axial_holes": [{
+        "count": 2,
+        "bolt_circle_diameter_mm": 40,
+        "from_face": "zmin",
+        "entry_offset_mm": 5.6,
+        "through": False,
+        "thread_depth_mm": 15,
+        "drill_depth_mm": 17,
+        "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+    }]})
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    assert not any(feature.kind in {"hole", "thread"} for feature in candidate.features)
+    assert any("Ø входной выборки" in item for item in candidate.missing_data)
+
+
+def test_complete_circular_patterns_expand_to_axial_and_inclined_holes():
+    spec = _shaft_spec(main_view={"circular_hole_patterns": [
+        {
+            "count": 4,
+            "hole_diameter_mm": 4,
+            "bolt_circle_diameter_mm": 30,
+            "axis_mode": "axial",
+            "start_angle_deg": 0,
+            "from_face": "zmin",
+            "through": False,
+            "depth_mm": 20,
+        },
+        {
+            "count": 2,
+            "hole_diameter_mm": 1,
+            "bolt_circle_diameter_mm": 20,
+            "axis_mode": "inclined",
+            "start_angle_deg": 90,
+            "from_face": "zmax",
+            "through": True,
+            "inclination_deg": 45,
+            "radial_direction": "outward",
+        },
+    ]})
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    holes = [feature for feature in candidate.features if feature.kind == "hole"]
+    assert len(holes) == 6
+    assert [hole.params["axis"] for hole in holes] == ["z"] * 4 + ["inclined"] * 2
+    assert holes[0].params["depth_mm"] == 20
+    assert holes[-1].params["inclination_deg"] == 45
+    assert not any("массив" in item for item in candidate.missing_data)
+
+
+def test_incomplete_circular_pattern_is_a_visible_build_blocker():
+    spec = _shaft_spec(main_view={"circular_hole_patterns": [{
+        "count": 12,
+        "hole_diameter_mm": 4,
+        "bolt_circle_diameter_mm": 70,
+        "axis_mode": "axial",
+        "start_angle_deg": None,
+        "from_face": None,
+        "through": False,
+        "depth_mm": 82,
+    }]})
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    assert not any(feature.kind == "hole" for feature in candidate.features)
+    assert any("массив 12×Ø4" in item for item in candidate.missing_data)
+    assert solid_build_gate(spec, candidate)["allowed"] is False
+
+
 def test_missing_tap_drill_alone_is_a_warning_not_a_geometry_blocker():
     spec = _shaft_spec(
         main_view={"axial_holes": [{

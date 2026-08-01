@@ -16,7 +16,7 @@ from app.ai.cad_recognize.diameter_dimensions import bore_sections_from_diameter
 def test_detal_126_diameters_are_classified_against_the_main_profile():
     source = Path(__file__).resolve().parents[3] / "test_vector_files" / "detal_126.png"
     image = Image.open(source).convert("RGB")
-    linear = [14, 15, 17, 18, 20, 25, 26, 35, 50, 78, 85, 99, 150, 240, 270, 470]
+    linear = [14, 15, 17, 18, 20, 25, 26, 27, 35, 50, 78, 85, 99, 150, 240, 270, 470]
     diameters = [9, 10, 14, 24, 26, 44, 50, 51, 55, 56, 56.55, 65, 70, 71, 72, 75, 79, 80, 98, 102]
 
     axial = localize_axial_dimensions(image, linear)
@@ -42,7 +42,12 @@ def test_detal_126_diameters_are_classified_against_the_main_profile():
     sections = outer_sections_from_diameter_evidence(result)
     assert [
         (item["diameter_mm"], item["length_mm"]) for item in sections
-    ] == [(102.0, 14.0), (80.0, 357.0), (72.0, 99.0)]
+    ] == [
+        (102.0, 14.0),
+        (98.0, 13.0),
+        (80.0, 344.0),
+        (72.0, 99.0),
+    ]
     assert all(item["evidence"][0]["bbox"] for item in sections)
     assert all("vector outer contour" in item["evidence"][0]["raw_text"] for item in sections)
     thread_candidate = next(

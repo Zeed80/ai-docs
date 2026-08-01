@@ -193,6 +193,7 @@ def _body_consensus(
 
     for field in (
         "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+        "circular_hole_patterns",
     ):
         feature_reads = [body.get(field) or [] for body in bodies]
         accepted = _agreed_feature_items(feature_reads, minimum=minimum)

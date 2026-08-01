@@ -51,6 +51,7 @@ _LIST_FIELDS = (
     ("keyways", ("main_view", "keyways")),
     ("cross_holes", ("main_view", "cross_holes")),
     ("axial_holes", ("main_view", "axial_holes")),
+    ("circular_hole_patterns", ("main_view", "circular_hole_patterns")),
 )
 
 

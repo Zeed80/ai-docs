@@ -198,6 +198,12 @@ class SpecAxialHolePattern(BaseModel):
     # The end view proves the pattern but does not, by itself, identify which
     # physical end face is shown. Keep that fact explicitly unknown.
     from_face: Literal["zmin", "zmax"] | None = None
+    # Some tapped holes start on a recessed end-face pocket rather than on the
+    # extreme envelope. This offset is measured inward from ``from_face``;
+    # keeping it separate prevents the recess depth from being silently added
+    # to, or subtracted from, the stated thread/drill depths.
+    entry_offset_mm: float | None = Field(default=None, ge=0)
+    entry_recess_diameter_mm: float | None = Field(default=None, gt=0)
     through: bool | None = None
     # A blind tapped hole has two different lengths on a real drawing: the
     # complete thread and the deeper drill point. ``depth_mm`` remains as a
@@ -225,6 +231,43 @@ class SpecAxialHolePattern(BaseModel):
         drill_depth = self.drill_depth_mm or self.depth_mm
         if thread_depth and drill_depth and thread_depth > drill_depth:
             raise ValueError("thread_depth_mm cannot exceed drill_depth_mm")
+        if (
+            self.entry_recess_diameter_mm is not None
+            and self.entry_recess_diameter_mm <= self.thread.nominal_diameter_mm
+        ):
+            raise ValueError("entry recess diameter must exceed thread diameter")
+        return self
+
+
+class SpecCircularHolePattern(BaseModel):
+    """A repeated unthreaded hole family resolved across end/section views."""
+
+    count: int = Field(ge=1, le=128)
+    hole_diameter_mm: float = Field(gt=0)
+    bolt_circle_diameter_mm: float = Field(gt=0)
+    axis_mode: Literal["axial", "inclined"]
+    start_angle_deg: float | None = None
+    spacing_deg: float | None = Field(default=None, gt=0, le=360)
+    from_face: Literal["zmin", "zmax"] | None = None
+    entry_offset_mm: float = Field(default=0.0, ge=0)
+    through: bool | None = None
+    depth_mm: float | None = Field(default=None, gt=0)
+    inclination_deg: float | None = Field(default=None, gt=0, lt=90)
+    radial_direction: Literal["outward", "inward"] | None = None
+    connection_station_mm: float | None = Field(default=None, ge=0)
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _mode_has_build_geometry(self) -> "SpecCircularHolePattern":
+        if self.through is True and self.depth_mm is not None:
+            raise ValueError("through circular pattern cannot also have blind depth")
+        if self.axis_mode == "axial":
+            if self.inclination_deg is not None or self.radial_direction is not None:
+                raise ValueError("axial pattern cannot carry inclined-hole direction")
+            if self.through is False and self.depth_mm is None:
+                raise ValueError("blind axial pattern requires depth_mm")
+        elif self.inclination_deg is None or self.radial_direction is None:
+            raise ValueError("inclined pattern requires inclination and radial direction")
         return self
 
 
@@ -330,6 +373,7 @@ class SpecBody(BaseModel):
     keyways: list[SpecKeyway] = Field(default_factory=list)
     cross_holes: list[SpecCrossHole] = Field(default_factory=list)
     axial_holes: list[SpecAxialHolePattern] = Field(default_factory=list)
+    circular_hole_patterns: list[SpecCircularHolePattern] = Field(default_factory=list)
     # Accepted only for compatibility with already stored prototype responses.
     # The deterministic drafter still requires explicit, complete outer[] data.
     features: list[dict[str, Any]] = Field(default_factory=list)
@@ -1116,7 +1160,7 @@ _LIST_FIELDS_TOP = (
 )
 _LIST_FIELDS_BODY = (
     "outer", "bore", "features", "chamfers", "fillets", "grooves",
-    "keyways", "cross_holes", "axial_holes",
+    "keyways", "cross_holes", "axial_holes", "circular_hole_patterns",
 )
 _LIST_FIELDS_PROFILE = ("holes", "hole_patterns", "slots")
 _ANNOTATION_KINDS = frozenset(
@@ -1587,6 +1631,7 @@ def _rotation_parts(spec: dict) -> list[dict]:
 # and has no way to know something was left behind.
 _BODY_FEATURE_FIELDS = (
     "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+    "circular_hole_patterns",
 )
 
 

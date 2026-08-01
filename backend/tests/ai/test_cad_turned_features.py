@@ -60,9 +60,9 @@ def test_real_spindle_localizes_both_keyway_outlines():
     assert any("несколько" in item for item in evidence["blockers"])
     axial_pattern, = evidence["axial_hole_patterns"]
     assert axial_pattern["count"] == 2
-    assert axial_pattern["view_outer_diameter_mm"] == 80.0
-    assert axial_pattern["bolt_circle_diameter_mm"] == 65.0
-    assert axial_pattern["measured_bolt_circle_diameter_mm"] == pytest.approx(64.054)
+    assert axial_pattern["view_outer_diameter_mm"] == 102.0
+    assert axial_pattern["bolt_circle_diameter_mm"] == 80.0
+    assert axial_pattern["measured_bolt_circle_diameter_mm"] == pytest.approx(81.669)
     assert axial_pattern["view_center_px"] == pytest.approx([2136.5, 592.5])
     assert axial_pattern["hole_centers_px"] == [
         [2136.5, 475.5], [2136.5, 712.5]

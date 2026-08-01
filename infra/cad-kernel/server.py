@@ -783,6 +783,71 @@ def _build_shape(
                 **_operation_localization(previous, shape, mode="cut", expected_tool=cutter),
             })
             continue
+        if feature.params.get("axis") == "inclined":
+            raw_inclination = feature.params.get("inclination_deg")
+            if (
+                isinstance(raw_inclination, bool)
+                or not isinstance(raw_inclination, (int, float))
+                or not 0 < float(raw_inclination) < 90
+            ):
+                raise HTTPException(422, "Inclined hole requires inclination_deg in (0, 90)")
+            direction_mode = feature.params.get("radial_direction")
+            if direction_mode not in {"outward", "inward"}:
+                raise HTTPException(422, "Inclined hole requires radial_direction")
+            radial_length = math.hypot(x, y)
+            if radial_length <= 1e-9:
+                raise HTTPException(422, "Inclined hole entry cannot lie on the axis")
+            radial_sign = 1.0 if direction_mode == "outward" else -1.0
+            inclination_rad = math.radians(float(raw_inclination))
+            axial_sign = 1.0 if feature.params.get("from_face") == "zmin" else -1.0
+            direction = App.Vector(
+                radial_sign * x / radial_length * math.sin(inclination_rad),
+                radial_sign * y / radial_length * math.sin(inclination_rad),
+                axial_sign * math.cos(inclination_rad),
+            )
+            face_z = (
+                _bottom_z_at(shape, x, y)
+                if axial_sign > 0
+                else _top_z_at(shape, x, y)
+            )
+            raw_entry_offset = feature.params.get("entry_offset_mm", 0.0)
+            if (
+                isinstance(raw_entry_offset, bool)
+                or not isinstance(raw_entry_offset, (int, float))
+                or float(raw_entry_offset) < 0
+            ):
+                raise HTTPException(422, "Hole entry_offset_mm must be non-negative")
+            origin = App.Vector(
+                x, y, face_z + axial_sign * float(raw_entry_offset)
+            )
+            if through is True:
+                tool_length = max(
+                    shape.BoundBox.XLength,
+                    shape.BoundBox.YLength,
+                    shape.BoundBox.ZLength,
+                ) * 3.0
+            elif through is False:
+                tool_length = _number(feature.params, "depth_mm")
+            else:
+                raise HTTPException(409, "Unknown inclined-hole depth requires explicit confirmation")
+            cutter = Part.makeCylinder(
+                radius,
+                tool_length + 1.0,
+                App.Vector(
+                    origin.x - direction.x,
+                    origin.y - direction.y,
+                    origin.z - direction.z,
+                ),
+                direction,
+            )
+            previous = shape
+            shape = _cut_feature(shape, cutter, f"inclined hole Ø{diameter:g}", warnings)
+            operation_audit.append({
+                "feature_index": feature_index,
+                "kind": feature.kind,
+                **_operation_localization(previous, shape, mode="cut", expected_tool=cutter),
+            })
+            continue
         if through is True:
             cutter = Part.makeCylinder(
                 radius,
@@ -794,27 +859,38 @@ def _build_shape(
             # right-hand face was previously impossible to state, so it came out
             # of the wrong end of the part with every dimension still correct.
             from_face = feature.params.get("from_face") or "zmax"
+            raw_entry_offset = feature.params.get("entry_offset_mm", 0.0)
+            if (
+                isinstance(raw_entry_offset, bool)
+                or not isinstance(raw_entry_offset, (int, float))
+                or not math.isfinite(float(raw_entry_offset))
+                or float(raw_entry_offset) < 0
+            ):
+                raise HTTPException(422, "Hole entry_offset_mm must be non-negative")
+            entry_offset = float(raw_entry_offset)
             if from_face == "zmin":
                 bottom_z = _bottom_z_at(shape, x, y)
                 available_depth = shape.BoundBox.ZMax - bottom_z
                 hole_depth = _number(feature.params, "depth_mm", maximum=available_depth)
-                if hole_depth >= available_depth - 1e-6:
+                total_cut_depth = entry_offset + hole_depth
+                if total_cut_depth >= available_depth - 1e-6:
                     raise HTTPException(
                         422, "Blind hole depth must be smaller than local material depth"
                     )
                 cutter = Part.makeCylinder(
-                    radius, hole_depth + 1.0, App.Vector(x, y, bottom_z - 1.0)
+                    radius, total_cut_depth + 1.0, App.Vector(x, y, bottom_z - 1.0)
                 )
             else:
                 top_z = _top_z_at(shape, x, y)
                 available_depth = top_z - shape.BoundBox.ZMin
                 hole_depth = _number(feature.params, "depth_mm", maximum=available_depth)
-                if hole_depth >= available_depth - 1e-6:
+                total_cut_depth = entry_offset + hole_depth
+                if total_cut_depth >= available_depth - 1e-6:
                     raise HTTPException(422, "Blind hole depth must be smaller than local material depth")
                 cutter = Part.makeCylinder(
                     radius,
-                    hole_depth + 1.0,
-                    App.Vector(x, y, top_z - hole_depth),
+                    total_cut_depth + 1.0,
+                    App.Vector(x, y, top_z - total_cut_depth),
                 )
         else:
             if not request.confirm_assumptions:
@@ -968,6 +1044,17 @@ def _cosmetic_threads(request: CompileRequest) -> list[dict[str, Any]]:
                 entry[coordinate] = _coordinate(feature.params, coordinate)
         if feature.params.get("from_face") in {"zmin", "zmax"}:
             entry["from_face"] = feature.params["from_face"]
+        if feature.params.get("entry_offset_mm") is not None:
+            raw_offset = feature.params["entry_offset_mm"]
+            if (
+                isinstance(raw_offset, bool)
+                or not isinstance(raw_offset, (int, float))
+                or not math.isfinite(float(raw_offset))
+                or float(raw_offset) < 0
+                or float(raw_offset) > 100_000
+            ):
+                raise HTTPException(422, "thread entry_offset_mm is outside supported bounds")
+            entry["entry_offset_mm"] = float(raw_offset)
         entry["internal"] = bool(feature.params.get("internal"))
         threads.append(entry)
     return threads
