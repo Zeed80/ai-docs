@@ -19,7 +19,10 @@ def evaluate_source_projection(
 ) -> dict[str, Any]:
     body = spec.get("main_view") or {}
     evidence_items: list[dict[str, Any]] = []
-    for group in ("outer", "bore", "keyways", "cross_holes", "grooves", "chamfers"):
+    for group in (
+        "outer", "bore", "keyways", "cross_holes", "axial_holes",
+        "grooves", "chamfers",
+    ):
         for index, item in enumerate(body.get(group) or []):
             if not isinstance(item, dict):
                 continue

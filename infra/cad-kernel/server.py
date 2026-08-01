@@ -963,6 +963,11 @@ def _cosmetic_threads(request: CompileRequest) -> list[dict[str, Any]]:
             entry["length_mm"] = _number(
                 feature.params, "length_mm", maximum=100_000
             )
+        for coordinate in ("center_x_mm", "center_y_mm"):
+            if coordinate in feature.params:
+                entry[coordinate] = _coordinate(feature.params, coordinate)
+        if feature.params.get("from_face") in {"zmin", "zmax"}:
+            entry["from_face"] = feature.params["from_face"]
         entry["internal"] = bool(feature.params.get("internal"))
         threads.append(entry)
     return threads

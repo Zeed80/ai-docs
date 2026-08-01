@@ -68,7 +68,10 @@ def solid_build_gate(
         body = spec.get("main_view") or {}
         missing_evidence = [
             f"main_view.{group}.{index}"
-            for group in ("outer", "bore", "keyways", "cross_holes", "grooves", "chamfers")
+            for group in (
+                "outer", "bore", "keyways", "cross_holes", "axial_holes",
+                "grooves", "chamfers",
+            )
             for index, item in enumerate(body.get(group) or [])
             if isinstance(item, dict) and not item.get("evidence")
         ]
@@ -578,6 +581,105 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                     },
                     confidence=0.8,
                 ))
+
+    for pattern in body.get("axial_holes") or []:
+        count = int(pattern.get("count") or 0)
+        pcd = _num(pattern.get("bolt_circle_diameter_mm"))
+        pilot = _num(pattern.get("pilot_diameter_mm"))
+        from_face = pattern.get("from_face")
+        through = pattern.get("through")
+        depth = _num(pattern.get("depth_mm"))
+        thread = pattern.get("thread") or {}
+        designation = str(thread.get("designation") or "")
+        nominal = _num(thread.get("nominal_diameter_mm"))
+        incomplete = []
+        if count < 1 or pcd is None:
+            incomplete.append("количество/делительная окружность")
+        if from_face not in {"zmin", "zmax"}:
+            incomplete.append("торец")
+        if through is None:
+            incomplete.append("сквозное/глухое исполнение")
+        if through is False and depth is None:
+            incomplete.append("глубина")
+        if pilot is None:
+            incomplete.append("Ø подготовительного отверстия")
+        if not designation or nominal is None:
+            incomplete.append("резьба")
+        if incomplete:
+            missing.append(
+                "осевой шаблон отверстий прочитан не полностью ("
+                + ", ".join(incomplete)
+                + ") — не построен"
+            )
+            continue
+        spacing = _num(pattern.get("spacing_deg"))
+        start_angle = _num(pattern.get("start_angle_deg")) or 0.0
+        step = spacing if spacing is not None else 360.0 / count
+        import math
+
+        for index in range(count):
+            angle = start_angle + index * step
+            radius = pcd / 2.0
+            center_x = radius * math.cos(math.radians(angle))
+            center_y = radius * math.sin(math.radians(angle))
+            params: dict[str, Any] = {
+                "axis": "z",
+                "diameter_mm": pilot,
+                "center_x_mm": round(center_x, 6),
+                "center_y_mm": round(center_y, 6),
+                "through": bool(through),
+                "from_face": from_face,
+            }
+            if through is False:
+                params["depth_mm"] = depth
+            features.append(Feature3D(
+                kind="hole",
+                params=params,
+                param_provenance={
+                    "diameter_mm": ParamProvenance(
+                        origin="stated",
+                        detail="Ø подготовки осевого резьбового отверстия",
+                    ),
+                    "center_x_mm": ParamProvenance(
+                        origin="propagated",
+                        detail="координата из прочитанной делительной окружности",
+                    ),
+                    "center_y_mm": ParamProvenance(
+                        origin="propagated",
+                        detail="координата из прочитанной делительной окружности",
+                    ),
+                },
+                confidence=0.82,
+            ))
+            thread_params: dict[str, Any] = {
+                "spec": designation,
+                "diameter_mm": nominal,
+                "internal": True,
+                "center_x_mm": round(center_x, 6),
+                "center_y_mm": round(center_y, 6),
+                "from_face": from_face,
+            }
+            pitch = _num(thread.get("pitch_mm"))
+            if pitch is not None:
+                thread_params["pitch_mm"] = pitch
+            if depth is not None:
+                thread_params["length_mm"] = depth
+            features.append(Feature3D(
+                kind="thread",
+                params=thread_params,
+                param_provenance={
+                    "spec": ParamProvenance(
+                        origin="stated", detail="обозначение резьбы с торцевого вида"
+                    ),
+                    "center_x_mm": ParamProvenance(
+                        origin="propagated", detail="центр на прочитанной делительной окружности"
+                    ),
+                    "center_y_mm": ParamProvenance(
+                        origin="propagated", detail="центр на прочитанной делительной окружности"
+                    ),
+                },
+                confidence=0.82,
+            ))
 
     features.extend(_edge_features(body, outer, starts, total_length, missing))
     return features

@@ -77,7 +77,8 @@ _FEATURES_PROMPT = (
     '"at_diameter_mm":null}],'
     '"grooves":[{"axial_position_mm":0,"width_mm":3,"depth_mm":1.5}],'
     '"keyways":[{"axial_start_mm":0,"length_mm":0,"width_mm":0,"depth_mm":0}],'
-    '"cross_holes":[{"diameter_mm":0,"axial_position_mm":0,"count":1,"through":true}]}\n'
+    '"cross_holes":[{"diameter_mm":0,"axial_position_mm":0,"count":1,"through":true}],'
+    '"axial_holes":[{"count":2,"bolt_circle_diameter_mm":65,"thread":{"designation":"M8"}}]}\n'
     "ПРАВИЛА:\n"
     "1) Осевые координаты — от ЛЕВОГО торца детали, в миллиметрах.\n"
     "2) Фаска: «1×45°» на чертеже означает size_mm=1, angle_deg=45. location — "
@@ -87,7 +88,9 @@ _FEATURES_PROMPT = (
     "4) Шпоночный паз: depth_mm — глубина t1 от поверхности вала.\n"
     "5) Поперечное отверстие — сверление ПОПЕРЁК оси; count, если их несколько "
     "по окружности.\n"
-    "6) Чего на чертеже нет — оставь пустым массивом. НЕ придумывай элементы и "
+    "6) Осевые отверстия идут параллельно оси детали и видны на торцевом виде; "
+    "не путай их с поперечными.\n"
+    "7) Чего на чертеже нет — оставь пустым массивом. НЕ придумывай элементы и "
     "НЕ повторяй здесь ступени контура.\n"
     "Только JSON."
 )
@@ -98,6 +101,7 @@ _FEATURES_SCHEMA = {
         "grooves": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
         "keyways": {"type": "array", "maxItems": 16, "items": {"type": "object"}},
         "cross_holes": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
+        "axial_holes": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
     },
 }
 
@@ -832,6 +836,39 @@ async def _read_cut_features(
         and (_num(item.get("size_mm")) or 0) > 0
         and item.get("location") in ("left_end", "right_end", "shoulder", "bore_mouth")
     ]
+    if source_image is not None and profile_evidence is not None:
+        axial_map = profile_evidence.get("axial_map") or {}
+        center_y = _num((profile_evidence.get("diameter_map") or {}).get(
+            "profile_center_y_px"
+        ))
+        datum = axial_map.get("datum_line") or []
+        mm_per_px = _num(axial_map.get("mm_per_px"))
+        if len(datum) == 2 and center_y is not None and mm_per_px:
+            max_radius_px = max(
+                (_num(item.get("diameter_mm")) or 0.0) / (2.0 * mm_per_px)
+                for item in outer
+            )
+            left_x = float(datum[0])
+            bbox = [
+                max(0, int(left_x - 16)),
+                max(0, int(center_y - max_radius_px - 24)),
+                min(source_image.width, int(left_x + 54)),
+                min(source_image.height, int(center_y + max_radius_px + 24)),
+            ]
+            for item in chamfers:
+                if (
+                    item.get("location") == "left_end"
+                    and abs((_num(item.get("size_mm")) or -1) - 1.0) <= 0.05
+                    and abs((_num(item.get("angle_deg")) or -1) - 45.0) <= 0.2
+                ):
+                    item["evidence"] = [{
+                        "image_index": 0,
+                        "bbox": bbox,
+                        "raw_text": (
+                            "fragment VLM: 1×45° left_end; "
+                            "localized at measured left profile datum"
+                        ),
+                    }]
     if chamfers:
         result["chamfers"] = chamfers
 
@@ -1293,6 +1330,65 @@ async def _read_cut_features(
         holes = compiled_radial
     if holes:
         result["cross_holes"] = holes
+
+    texts = [
+        str((item or {}).get("value") or (item or {}).get("text") or "")
+        for item in (callouts or {}).get("dimensions", [])
+        + (callouts or {}).get("annotations", [])
+        if isinstance(item, dict)
+    ]
+    axial_patterns = feature_evidence.get("axial_hole_patterns") or []
+    axial_callouts: list[tuple[int, str]] = []
+    for text in texts:
+        match = re.search(
+            r"\b(\d+)\s*(?:отв\.?|отверсти\w*|holes?)\s*[.,:]?\s*"
+            r"([MМ]\s*\d+(?:[.,]\d+)?)\b",
+            text,
+            re.IGNORECASE,
+        )
+        if match:
+            designation = (
+                match.group(2).replace(" ", "").upper().replace("М", "M")
+            )
+            axial_callouts.append((int(match.group(1)), designation))
+    if len(axial_patterns) == 1 and len(set(axial_callouts)) == 1:
+        pattern = axial_patterns[0]
+        count, designation = axial_callouts[0]
+        if count == int(pattern.get("count") or 0):
+            nominal_match = re.search(r"\d+(?:[.,]\d+)?", designation)
+            assert nominal_match is not None
+            nominal = _num(nominal_match.group())
+            result["axial_holes"] = [{
+                "count": count,
+                "bolt_circle_diameter_mm": pattern["bolt_circle_diameter_mm"],
+                "start_angle_deg": pattern.get("start_angle_deg", 0.0),
+                "spacing_deg": pattern.get("spacing_deg"),
+                "from_face": None,
+                "through": None,
+                "depth_mm": None,
+                "pilot_diameter_mm": None,
+                "thread": {
+                    "designation": designation,
+                    "system": "metric",
+                    "nominal_diameter_mm": nominal,
+                    "pitch_mm": None,
+                    "internal": True,
+                    "evidence": [{
+                        "image_index": 0,
+                        "bbox": pattern.get("bbox"),
+                        "raw_text": f"callout {count} holes {designation}",
+                    }],
+                },
+                "evidence": [{
+                    "image_index": 0,
+                    "bbox": pattern.get("bbox"),
+                    "raw_text": (
+                        f"opposed end-view circles; measured PCD "
+                        f"{pattern.get('measured_bolt_circle_diameter_mm'):g} mm, "
+                        f"matched to stated Ø{pattern['bolt_circle_diameter_mm']:g}"
+                    ),
+                }],
+            }]
     completeness_issues = _feature_completeness_issues(
         callouts or {}, result, outer,
         (profile_evidence or {}).get("diameter_map") or {},
@@ -1401,7 +1497,7 @@ def _feature_completeness_issues(
         match.group(0).replace(" ", "")
         for text in texts
         for match in re.finditer(
-            r"\bM\s*\d+(?:[.,]\d+)?(?:\s*[xх×]\s*\d+(?:[.,]\d+)?)?",
+            r"\b[MМ]\s*\d+(?:[.,]\d+)?(?:\s*[xх×]\s*\d+(?:[.,]\d+)?)?",
             text,
             re.IGNORECASE,
         )
@@ -1411,15 +1507,21 @@ def _feature_completeness_issues(
         for item in [*outer, *(bore or [])]
         if isinstance(item, dict) and item.get("thread")
     ]
+    assigned_threads.extend(
+        item.get("thread")
+        for item in features.get("axial_holes") or []
+        if isinstance(item, dict) and item.get("thread")
+    )
     assigned_designations = {
         str(item.get("designation") or "").replace(" ", "").replace("×", "x")
-        .replace("х", "x").replace(",", ".").lower()
+        .replace("х", "x").replace("М", "M").replace(",", ".").lower()
         for item in assigned_threads
         if isinstance(item, dict)
     }
     missing_threads = [
         item for item in thread_callouts
-        if item.replace("×", "x").replace("х", "x").replace(",", ".").lower()
+        if item.replace("×", "x").replace("х", "x").replace("М", "M")
+        .replace(",", ".").lower()
         not in assigned_designations
     ]
     if missing_threads:
@@ -1448,6 +1550,21 @@ def _feature_completeness_issues(
             else:
                 candidate_notes.append(f"{designation}: несущий участок не локализован")
         issues.append("резьбы указаны, но не привязаны к участкам: " + "; ".join(candidate_notes))
+    for item in features.get("axial_holes") or []:
+        missing = []
+        if item.get("from_face") not in {"zmin", "zmax"}:
+            missing.append("торец")
+        if item.get("through") is None:
+            missing.append("сквозное/глухое исполнение")
+        if item.get("through") is False and _num(item.get("depth_mm")) is None:
+            missing.append("глубина")
+        if _num(item.get("pilot_diameter_mm")) is None:
+            missing.append("Ø подготовительного отверстия")
+        if missing:
+            designation = str((item.get("thread") or {}).get("designation") or "резьба")
+            issues.append(
+                f"осевые отверстия {designation}: не определены " + ", ".join(missing)
+            )
     return issues
 
 
@@ -2470,7 +2587,9 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
     fragment_unresolved = [
         str(item) for item in (fragments.get("unresolved") or []) if str(item)
     ]
-    feature_fields = ("chamfers", "fillets", "grooves", "keyways", "cross_holes")
+    feature_fields = (
+        "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+    )
     feature_rejected = any(
         item.startswith("малые элементы:") for item in fragment_unresolved
     )

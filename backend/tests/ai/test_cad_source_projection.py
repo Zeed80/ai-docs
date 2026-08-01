@@ -43,3 +43,15 @@ def test_source_projection_rejects_an_independent_raster_error():
     )
     assert result["ok"] is False
     assert result["crosscheck_errors"] == ["силуэт не совпадает"]
+
+
+def test_source_projection_audits_axial_hole_pattern_evidence():
+    result = evaluate_source_projection(
+        {"main_view": {"axial_holes": [{
+            "count": 2, "bolt_circle_diameter_mm": 65, "evidence": []
+        }]}},
+        {"raster_check": "checked", "findings": []},
+        _solid(),
+    )
+    assert result["ok"] is False
+    assert result["missing_evidence"] == ["main_view.axial_holes.0"]

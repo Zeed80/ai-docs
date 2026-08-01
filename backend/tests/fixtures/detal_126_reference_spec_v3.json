@@ -63,6 +63,25 @@
       {"diameter_mm": 10.0, "axial_position_mm": 455.079, "angle_deg": 0.0, "through": false, "depth_mm": 8.5, "counterbore_diameter_mm": 24.0, "counterbore_depth_mm": 3.0},
       {"diameter_mm": 9.0, "axial_position_mm": 455.079, "angle_deg": 180.0, "through": false, "depth_mm": 8.5}
     ],
+    "axial_holes": [
+      {
+        "count": 2,
+        "bolt_circle_diameter_mm": 65.0,
+        "start_angle_deg": 90.0,
+        "spacing_deg": 180.0,
+        "from_face": null,
+        "through": null,
+        "depth_mm": null,
+        "pilot_diameter_mm": null,
+        "thread": {
+          "designation": "M8",
+          "system": "metric",
+          "nominal_diameter_mm": 8.0,
+          "pitch_mm": null,
+          "internal": true
+        }
+      }
+    ],
     "chamfers": [
       {"size_mm": 1.0, "angle_deg": 45.0, "location": "left_end"}
     ]

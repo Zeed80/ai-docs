@@ -283,6 +283,29 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
                         f"cross_holes[{index}] Ø{feature_diameter or 0:g} не помещается в локальный диаметр Ø{local_diameter or 0:g}"
                     )
 
+    outer_diameters = [
+        value for item in outer
+        if (value := _number(item.get("diameter_mm", item.get("d")))) is not None
+    ]
+    for index, pattern in enumerate(body.get("axial_holes") or []):
+        pcd = _number(pattern.get("bolt_circle_diameter_mm"))
+        pilot = _number(pattern.get("pilot_diameter_mm")) or 0.0
+        envelope = max(outer_diameters, default=0.0)
+        fits = pcd is not None and pcd + pilot <= envelope + 0.05
+        constraints.append({
+            "kind": "pitch_circle_inside",
+            "feature": f"main_view.axial_holes.{index}",
+            "bolt_circle_diameter_mm": pcd,
+            "pilot_diameter_mm": pilot or None,
+            "outer_envelope_diameter_mm": envelope or None,
+            "ok": fits,
+        })
+        if not fits:
+            errors.append(
+                f"axial_holes[{index}] делительная окружность Ø{pcd or 0:g} "
+                f"с отверстиями Ø{pilot:g} не помещается в наружный контур Ø{envelope:g}"
+            )
+
     # A shoulder fillet must fit both the radial step and the two adjacent
     # axial runs. This is known before OpenCascade and is therefore a graph
     # contradiction, not a kernel warning to discover after the build.

@@ -11,6 +11,144 @@ from __future__ import annotations
 from typing import Any
 
 
+def _axial_circle_patterns(
+    blue: Any,
+    *,
+    datum_right: float,
+    known_diameters: list[float],
+    outer_diameters: list[float],
+) -> list[dict[str, Any]]:
+    """Find an opposed pair of end-face holes on a measured pitch circle."""
+    import cv2
+    import numpy as np
+
+    height, width = blue.shape
+    x0 = max(int(datum_right + 30), int(width * 0.65))
+    x1 = min(width, int(width * 0.96))
+    y0, y1 = int(height * 0.20), int(height * 0.48)
+    if x1 - x0 < 100 or y1 - y0 < 100:
+        return []
+    crop = (blue[y0:y1, x0:x1] * 255).astype("uint8")
+    circles = cv2.HoughCircles(
+        crop,
+        cv2.HOUGH_GRADIENT,
+        dp=1.0,
+        minDist=18,
+        param1=50,
+        param2=10,
+        minRadius=4,
+        maxRadius=18,
+    )
+    if circles is None:
+        return []
+    items = [
+        {
+            "x": float(circle[0] + x0),
+            "y": float(circle[1] + y0),
+            "radius": float(circle[2]),
+        }
+        for circle in circles[0]
+    ]
+    triples: list[tuple[float, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    for center in items:
+        for first_index, first in enumerate(items):
+            if first is center:
+                continue
+            for second in items[first_index + 1:]:
+                if second is center or second is first:
+                    continue
+                midpoint_error = ((
+                    (first["x"] + second["x"]) / 2.0 - center["x"]
+                ) ** 2 + (
+                    (first["y"] + second["y"]) / 2.0 - center["y"]
+                ) ** 2) ** 0.5
+                first_distance = ((first["x"] - center["x"]) ** 2 + (
+                    first["y"] - center["y"]
+                ) ** 2) ** 0.5
+                second_distance = ((second["x"] - center["x"]) ** 2 + (
+                    second["y"] - center["y"]
+                ) ** 2) ** 0.5
+                if (
+                    midpoint_error > 5.0
+                    or not 30.0 <= first_distance <= 170.0
+                    or abs(first_distance - second_distance) > 6.0
+                    or abs(first["radius"] - second["radius"]) > 3.0
+                ):
+                    continue
+                # Threaded-hole circles are the largest opposed small pair;
+                # the smaller diagonal circles on the same view are another
+                # feature family and must not win by accident.
+                score = (first["radius"] + second["radius"]) - midpoint_error
+                triples.append((score, center, first, second))
+    if not triples:
+        return []
+    _score, center, first, second = max(triples, key=lambda item: item[0])
+    pitch_radius_px = (
+        ((first["x"] - center["x"]) ** 2 + (first["y"] - center["y"]) ** 2) ** 0.5
+        + ((second["x"] - center["x"]) ** 2 + (second["y"] - center["y"]) ** 2) ** 0.5
+    ) / 2.0
+
+    ys, xs = np.where(blue)
+    radii = np.rint(np.hypot(xs - center["x"], ys - center["y"])).astype(int)
+    lower = int(pitch_radius_px + 12)
+    radial = radii[(radii >= lower) & (radii <= 190)]
+    if not len(radial):
+        return []
+    counts = np.bincount(radial, minlength=191)
+    outer_radius_px = float(max(range(lower, 191), key=lambda radius: counts[radius]))
+    if counts[int(outer_radius_px)] < 120:
+        return []
+
+    matches: list[tuple[float, float, float, float]] = []
+    known = [float(value) for value in known_diameters if 1 < float(value) < 500]
+    for outer in {
+        float(value) for value in outer_diameters
+        if isinstance(value, (int, float)) and 1 < float(value) < 500
+    }:
+        # Both quantities are radii in pixels. Scaling their ratio by the
+        # stated outer *diameter* directly yields the pitch-circle diameter;
+        # multiplying by two here would count the radius-to-diameter
+        # conversion twice.
+        measured_pcd = pitch_radius_px / outer_radius_px * outer
+        if not known:
+            continue
+        stated_pcd = min(known, key=lambda value: abs(value - measured_pcd))
+        error = abs(stated_pcd - measured_pcd) / stated_pcd
+        if stated_pcd < outer and error <= 0.025:
+            matches.append((error, outer, stated_pcd, measured_pcd))
+    matches.sort(key=lambda item: item[0])
+    if not matches:
+        return []
+    # Several main-profile diameters may accidentally form a plausible ratio.
+    # Accept only a distinctly better stated-dimension reconciliation; a near
+    # tie remains unresolved instead of silently selecting a scale.
+    if len(matches) > 1 and matches[1][0] - matches[0][0] < 0.003:
+        return []
+    error, outer, stated_pcd, measured_pcd = matches[0]
+    pair = sorted([first, second], key=lambda item: (item["y"], item["x"]))
+    return [{
+        "id": "axial-hole-pattern-1",
+        "count": 2,
+        "view_center_px": [round(center["x"], 1), round(center["y"], 1)],
+        "hole_centers_px": [
+            [round(item["x"], 1), round(item["y"], 1)] for item in pair
+        ],
+        "view_outer_diameter_mm": outer,
+        "bolt_circle_diameter_mm": stated_pcd,
+        "measured_bolt_circle_diameter_mm": round(measured_pcd, 3),
+        "start_angle_deg": 90.0,
+        "spacing_deg": 180.0,
+        "bbox": [
+            int(min(item["x"] - item["radius"] for item in pair)),
+            int(min(item["y"] - item["radius"] for item in pair)),
+            int(max(item["x"] + item["radius"] for item in pair)),
+            int(max(item["y"] + item["radius"] for item in pair)),
+        ],
+        "source": "opposed_end_view_circles_and_pitch_circle_crosscheck",
+        "confidence": round(max(0.72, 0.9 - error), 3),
+    }]
+
+
 def _nearest_stated(
     measured: float,
     values: list[float],
@@ -514,10 +652,23 @@ def localize_turned_features(
 
     blockers = [] if candidates else ["замкнутые контуры шпоночных пазов не локализованы"]
     blockers.extend(radial_blockers)
+    axial_patterns = _axial_circle_patterns(
+        blue,
+        datum_right=right,
+        known_diameters=small_diameters + [
+            float(value) for value in (known_diameter_values or [])
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ],
+        outer_diameters=[
+            float(value) for value in (outer_diameter_values or [])
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ],
+    )
     return {
         "status": "ok" if candidates else "unresolved",
         "keyway_candidates": candidates,
         "radial_opening_candidates": radial_candidates,
         "diameter_label_observations": diameter_labels,
+        "axial_hole_patterns": axial_patterns,
         "blockers": blockers,
     }

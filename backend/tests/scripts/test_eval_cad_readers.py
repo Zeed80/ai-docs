@@ -171,6 +171,28 @@ def test_reader_scores_blind_hole_depth_and_counterbore_as_parameters() -> None:
     }
 
 
+def test_reader_scores_only_source_supported_axial_pattern_fields() -> None:
+    reference = {"main_view": {"axial_holes": [{
+        "count": 2,
+        "bolt_circle_diameter_mm": 65,
+        "thread": {"nominal_diameter_mm": 8, "internal": True},
+    }]}}
+    prediction = {"main_view": {"axial_holes": [{
+        "count": 2,
+        "bolt_circle_diameter_mm": 65,
+        "from_face": None,
+        "through": None,
+        "pilot_diameter_mm": None,
+        "thread": {"nominal_diameter_mm": 8, "internal": True},
+    }]}}
+
+    score = score_parameters(prediction, reference)
+
+    assert score["parameters_matched"] == 4
+    assert score["parameters_total"] == 4
+    assert score["parameter_accuracy"] == 1.0
+
+
 def test_reader_scores_taper_ratio_as_a_semantic_parameter() -> None:
     reference = {
         "main_view": {

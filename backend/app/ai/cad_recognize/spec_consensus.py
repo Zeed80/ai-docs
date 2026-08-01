@@ -191,7 +191,9 @@ def _body_consensus(
         elif profile_problem:
             disagreements.append(f"{label} (контур): {profile_problem}")
 
-    for field in ("chamfers", "fillets", "grooves", "keyways", "cross_holes"):
+    for field in (
+        "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+    ):
         feature_reads = [body.get(field) or [] for body in bodies]
         accepted = _agreed_feature_items(feature_reads, minimum=minimum)
         if accepted:

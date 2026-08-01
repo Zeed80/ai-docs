@@ -193,7 +193,7 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
     ):
         # A turned part with cross features needs the end view to show them.
         body = (spec.get("main_view") or {})
-        if body.get("keyways") or body.get("cross_holes"):
+        if body.get("keyways") or body.get("cross_holes") or body.get("axial_holes"):
             views.append({"kind": "side"})
     return views
 
@@ -210,8 +210,10 @@ def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> l
         reason = "основная проекция детали"
         if kind == "section":
             reason = "показ внутреннего профиля" if body.get("bore") else "разрез прочитан на исходном листе"
-        elif kind == "side" and (body.get("keyways") or body.get("cross_holes")):
-            reason = "показ радиальных отверстий и пазов"
+        elif kind == "side" and (
+            body.get("keyways") or body.get("cross_holes") or body.get("axial_holes")
+        ):
+            reason = "показ радиальных, осевых отверстий и пазов"
         elif kind == "detail":
             reason = "увеличенный местный вид, прочитанный на исходном листе"
         elif kind in source_kinds:
@@ -241,7 +243,7 @@ def verify_view_coverage(plan: SheetPlan, spec: dict) -> dict[str, Any]:
     required: list[dict[str, str]] = []
     if body.get("bore"):
         required.append({"feature": "bore", "view": "section"})
-    if body.get("keyways") or body.get("cross_holes"):
+    if body.get("keyways") or body.get("cross_holes") or body.get("axial_holes"):
         required.append({"feature": "radial_features", "view": "side"})
     for source_view in spec.get("views") or []:
         if not isinstance(source_view, dict):

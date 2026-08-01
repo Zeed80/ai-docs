@@ -188,6 +188,31 @@ class SpecCrossHole(BaseModel):
         return self
 
 
+class SpecAxialHolePattern(BaseModel):
+    """Holes drilled from an end face, parallel to the rotation axis."""
+
+    count: int = Field(ge=1, le=64)
+    bolt_circle_diameter_mm: float = Field(gt=0)
+    start_angle_deg: float = 0.0
+    spacing_deg: float | None = None
+    # The end view proves the pattern but does not, by itself, identify which
+    # physical end face is shown. Keep that fact explicitly unknown.
+    from_face: Literal["zmin", "zmax"] | None = None
+    through: bool | None = None
+    depth_mm: float | None = Field(default=None, gt=0)
+    pilot_diameter_mm: float | None = Field(default=None, gt=0)
+    thread: SpecThread
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _depth_matches_through_state(self) -> "SpecAxialHolePattern":
+        if self.through is True and self.depth_mm is not None:
+            raise ValueError("through axial holes cannot also have depth_mm")
+        if self.through is False and self.depth_mm is None:
+            raise ValueError("blind axial holes require depth_mm")
+        return self
+
+
 class SpecSection(BaseModel):
     diameter_mm: float = Field(gt=0)
     length_mm: float | None = Field(default=None, gt=0)
@@ -289,6 +314,7 @@ class SpecBody(BaseModel):
     grooves: list[SpecGroove] = Field(default_factory=list)
     keyways: list[SpecKeyway] = Field(default_factory=list)
     cross_holes: list[SpecCrossHole] = Field(default_factory=list)
+    axial_holes: list[SpecAxialHolePattern] = Field(default_factory=list)
     # Accepted only for compatibility with already stored prototype responses.
     # The deterministic drafter still requires explicit, complete outer[] data.
     features: list[dict[str, Any]] = Field(default_factory=list)
@@ -1073,7 +1099,10 @@ _LIST_FIELDS_TOP = (
     "parts", "views", "dimensions", "annotations", "unresolved",
     "optional_unresolved",
 )
-_LIST_FIELDS_BODY = ("outer", "bore", "features")
+_LIST_FIELDS_BODY = (
+    "outer", "bore", "features", "chamfers", "fillets", "grooves",
+    "keyways", "cross_holes", "axial_holes",
+)
 _LIST_FIELDS_PROFILE = ("holes", "hole_patterns", "slots")
 _ANNOTATION_KINDS = frozenset(
     {
@@ -1182,6 +1211,25 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
                     continue
                 if "evidence" in item:
                     item["evidence"] = clean_evidence(item["evidence"])
+                thread = item.get("thread")
+                if isinstance(thread, dict):
+                    if "evidence" in thread:
+                        thread["evidence"] = clean_evidence(thread["evidence"])
+                    # A metric designation already states its nominal. Models
+                    # often repeat only "M8" in the nested object even though
+                    # the same callout was read correctly. This is parsing the
+                    # designation, not supplying a drill diameter or pitch.
+                    if thread.get("nominal_diameter_mm") is None:
+                        designation = str(thread.get("designation") or "")
+                        nominal = re.search(
+                            r"[MМ]\s*(\d+(?:[.,]\d+)?)",
+                            designation,
+                            re.IGNORECASE,
+                        )
+                        if nominal:
+                            thread["nominal_diameter_mm"] = float(
+                                nominal.group(1).replace(",", ".")
+                            )
                 taper = item.get("taper")
                 if isinstance(taper, dict) and not taper.get("kind"):
                     stated = [
@@ -1522,7 +1570,9 @@ def _rotation_parts(spec: dict) -> list[dict]:
 # Features cut into a turned body. They ride along with the profile because a
 # consumer that receives the silhouette without them builds a smooth stand-in
 # and has no way to know something was left behind.
-_BODY_FEATURE_FIELDS = ("chamfers", "fillets", "grooves", "keyways", "cross_holes")
+_BODY_FEATURE_FIELDS = (
+    "chamfers", "fillets", "grooves", "keyways", "cross_holes", "axial_holes",
+)
 
 
 def _rotation_body(node: dict, outer: list[dict], body_index: int) -> dict:

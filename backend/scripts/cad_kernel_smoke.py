@@ -422,6 +422,56 @@ def main() -> int:
             f"HTTP {status}: {payload}",
         )
 
+    # End-face threaded patterns carry per-hole XY localization. The pilot is
+    # real cut geometry; the thread stays cosmetic but must retain the same
+    # centre and source face in report.json.
+    axial_features = [_base()]
+    for center_y in (20.0, -20.0):
+        axial_features.extend([
+            _feature(
+                "hole", axis="z", diameter_mm=6.8,
+                center_x_mm=0.0, center_y_mm=center_y,
+                through=False, depth_mm=12.0, from_face="zmax",
+            ),
+            _feature(
+                "thread", spec="M8", diameter_mm=8.0, pitch_mm=1.25,
+                center_x_mm=0.0, center_y_mm=center_y,
+                from_face="zmax", length_mm=12.0, internal=True,
+            ),
+        ])
+    status, payload = _compile(_candidate(*axial_features))
+    if status == 200:
+        report = _report_from_zip(payload)
+        holes = [
+            item for item in report.get("feature_results", [])
+            if item.get("kind") == "hole"
+        ]
+        expected_threads = [
+            {
+                "spec": "M8", "diameter_mm": 8.0, "pitch_mm": 1.25,
+                "length_mm": 12.0, "center_x_mm": 0.0,
+                "center_y_mm": center_y, "from_face": "zmax", "internal": True,
+            }
+            for center_y in (20.0, -20.0)
+        ]
+        check(
+            "axial M8 pattern keeps pilot cuts and per-hole thread localization",
+            report["brep_valid"]
+            and len(holes) == 2
+            and all(
+                item.get("status") == "built" and item.get("localization_ok") is True
+                for item in holes
+            )
+            and report.get("cosmetic_threads") == expected_threads,
+            f"holes={len(holes)}, threads={report.get('cosmetic_threads')}",
+        )
+    else:
+        check(
+            "axial M8 pattern keeps pilot cuts and per-hole thread localization",
+            False,
+            f"HTTP {status}: {payload}",
+        )
+
     # 4. A chamfer picked by WHAT IT IS, not by a hash nobody can know in advance.
     status, payload = _compile(
         _candidate(

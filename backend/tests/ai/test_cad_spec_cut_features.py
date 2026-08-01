@@ -21,12 +21,56 @@ from app.ai.cad_recognize.spec_fragments import _read_cut_features
 from app.ai.cad_recognize.spec_fragments import _feature_completeness_issues
 from app.ai.cad_recognize.spec_fragments import _assign_profile_threads
 from app.ai.cad_recognize.spec_fragments import _recover_external_thread_carrier
+from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
+from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
 
 _OUTER = [
     {"diameter_mm": 80.0, "length_mm": 150.0},
     {"diameter_mm": 102.0, "length_mm": 200.0},
     {"diameter_mm": 60.0, "length_mm": 120.0},
 ]  # 470 mm long, biggest radius 51 mm
+
+
+def test_spec_keeps_source_visible_axial_pattern_with_unknown_build_fields():
+    spec = EngineeringDrawingSpec.model_validate({
+        "main_view": {
+            "type": "тело вращения",
+            "outer": [{"diameter_mm": 80, "length_mm": 470}],
+            "axial_holes": [{
+                "count": 2,
+                "bolt_circle_diameter_mm": 65,
+                "start_angle_deg": 90,
+                "spacing_deg": 180,
+                "from_face": None,
+                "through": None,
+                "pilot_diameter_mm": None,
+                "thread": {
+                    "designation": "M8",
+                    "nominal_diameter_mm": 8,
+                    "internal": True,
+                },
+            }],
+        }
+    })
+    pattern = spec.main_view.axial_holes[0]
+    assert pattern.from_face is None
+    assert pattern.through is None
+
+
+def test_metric_nominal_is_parsed_from_partial_axial_thread_designation():
+    raw = _coerce_spec_containers({
+        "main_view": {
+            "type": "тело вращения",
+            "outer": [{"diameter_mm": 80, "length_mm": 470}],
+            "axial_holes": {
+                "count": 2,
+                "bolt_circle_diameter_mm": 65,
+                "thread": {"designation": "М8", "internal": True},
+            },
+        }
+    })
+    spec = EngineeringDrawingSpec.model_validate(raw)
+    assert spec.main_view.axial_holes[0].thread.nominal_diameter_mm == 8
 
 
 async def _read(monkeypatch, answer: dict) -> dict:
@@ -172,6 +216,61 @@ async def test_local_slot_depth_cannot_be_replaced_by_unrelated_sheet_number(mon
     blockers = profile_evidence["feature_unresolved"]
     assert "3.2" in blockers[0]
     assert "keyway-2" in blockers[1]
+
+
+@pytest.mark.asyncio
+async def test_end_view_pattern_is_recorded_without_inventing_hole_depth(monkeypatch):
+    from app.ai.cad_recognize.axial_dimensions import localize_axial_dimensions
+
+    source = Path(__file__).resolve().parents[3] / "test_vector_files" / "detal_126.png"
+    image = Image.open(source).convert("RGB")
+    linear = [470, 270, 240, 150, 99, 85, 78, 50, 35, 26, 25, 20, 18, 15, 14, 12, 8, 5, 4, 3]
+    profile_evidence = {
+        "axial_map": localize_axial_dimensions(image, linear),
+        "diameter_map": {
+            "profile_center_y_px": 593,
+            "observations": [{"role": "outer", "value_mm": 80}],
+        },
+    }
+
+    async def fake_ask(prompt, *_args, **_kwargs):
+        if "ТОЛЬКО мелкие элементы" in prompt:
+            return {
+                "chamfers": [
+                    {"size_mm": 1, "angle_deg": 45, "location": "left_end"}
+                ]
+            }
+        return {}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    result = await _read_cut_features(
+        image,
+        [{"diameter_mm": 80, "length_mm": 470}],
+        router=object(),
+        confidential=True,
+        source_image=image,
+        callouts={"dimensions": [
+            *({"value": str(value)} for value in linear),
+            {"value": "Ø65"},
+            {"value": "2 отв. M8"},
+            {"value": "6 фасок 1×45°"},
+        ]},
+        profile_evidence=profile_evidence,
+    )
+
+    pattern, = result["axial_holes"]
+    assert pattern["count"] == 2
+    assert pattern["bolt_circle_diameter_mm"] == 65
+    assert pattern["thread"]["designation"] == "M8"
+    assert pattern["from_face"] is None
+    assert pattern["through"] is None
+    assert pattern["pilot_diameter_mm"] is None
+    assert pattern["evidence"][0]["bbox"]
+    assert result["chamfers"][0]["evidence"][0]["bbox"]
+    blockers = "\n".join(profile_evidence["feature_unresolved"])
+    assert "несущий участок" not in blockers
+    assert "осевые отверстия M8" in blockers
+    assert "указано 6 фасок, локализовано 1" in blockers
 
 
 def test_named_holes_chamfers_and_threads_cannot_disappear():

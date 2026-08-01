@@ -186,6 +186,24 @@ def test_a_shaft_with_cross_features_gets_the_end_view_that_shows_them():
     assert verify_view_coverage(plan, spec)["ok"] is True
 
 
+def test_a_shaft_with_axial_holes_gets_the_end_view_that_shows_the_pattern():
+    spec = {
+        "main_view": {
+            **_SHAFT["main_view"],
+            "axial_holes": [{
+                "count": 2,
+                "bolt_circle_diameter_mm": 40,
+                "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+            }],
+        }
+    }
+    plan = plan_sheet(spec, _SHAFT_REPORT)
+    assert "side" in [view["kind"] for view in plan.views]
+    assert verify_view_coverage(plan, spec)["ok"] is True
+    reason = next(item for item in plan.view_reasons if item["kind"] == "side")
+    assert "осевых" in reason["reason"]
+
+
 def test_view_coverage_requires_a_section_for_a_read_bore():
     plan = plan_sheet(_HOLLOW, _SHAFT_REPORT)
     assert verify_view_coverage(plan, _HOLLOW)["ok"] is True

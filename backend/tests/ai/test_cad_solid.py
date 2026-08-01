@@ -70,6 +70,56 @@ def test_read_thread_is_carried_to_the_kernel_feature_tree():
     assert thread.params["pitch_mm"] == 1.5
 
 
+def test_incomplete_axial_thread_pattern_is_visible_but_not_built():
+    spec = _shaft_spec(main_view={"axial_holes": [{
+        "count": 2,
+        "bolt_circle_diameter_mm": 40,
+        "start_angle_deg": 90,
+        "spacing_deg": 180,
+        "from_face": None,
+        "through": None,
+        "pilot_diameter_mm": None,
+        "thread": {"designation": "M8", "nominal_diameter_mm": 8, "internal": True},
+    }]})
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    assert not any(feature.kind == "hole" for feature in candidate.features)
+    assert any("осевой шаблон" in item and "не построен" in item for item in candidate.missing_data)
+    assert solid_build_gate(spec, candidate)["allowed"] is False
+
+
+def test_complete_axial_thread_pattern_expands_to_exact_holes_and_threads():
+    spec = _shaft_spec(main_view={"axial_holes": [{
+        "count": 2,
+        "bolt_circle_diameter_mm": 40,
+        "start_angle_deg": 90,
+        "spacing_deg": 180,
+        "from_face": "zmax",
+        "through": False,
+        "depth_mm": 12,
+        "pilot_diameter_mm": 6.8,
+        "thread": {
+            "designation": "M8",
+            "nominal_diameter_mm": 8,
+            "pitch_mm": 1.25,
+            "internal": True,
+        },
+    }]})
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    holes = [feature for feature in candidate.features if feature.kind == "hole"]
+    threads = [feature for feature in candidate.features if feature.kind == "thread"]
+    assert len(holes) == len(threads) == 2
+    assert [(hole.params["center_x_mm"], hole.params["center_y_mm"]) for hole in holes] == [
+        (0.0, 20.0), (-0.0, -20.0)
+    ]
+    assert all(hole.params["diameter_mm"] == 6.8 for hole in holes)
+    assert all(hole.params["depth_mm"] == 12 for hole in holes)
+    assert all(thread.params["spec"] == "M8" for thread in threads)
+
+
 def test_bore_becomes_a_coaxial_cut_not_a_guess():
     spec = _shaft_spec(main_view={"bore": [{"diameter_mm": 16, "length_mm": 90}]})
     candidate = feature_tree_from_spec(spec)

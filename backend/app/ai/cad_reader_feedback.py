@@ -49,6 +49,7 @@ _LIST_FIELDS = (
     ("grooves", ("main_view", "grooves")),
     ("keyways", ("main_view", "keyways")),
     ("cross_holes", ("main_view", "cross_holes")),
+    ("axial_holes", ("main_view", "axial_holes")),
 )
 
 

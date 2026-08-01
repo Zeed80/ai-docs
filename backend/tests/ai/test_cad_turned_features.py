@@ -25,7 +25,7 @@ def test_real_spindle_localizes_both_keyway_outlines():
             15, 14, 12, 8, 5, 4, 3,
         ],
         profile_center_y_px=593,
-        known_diameter_values=[102, 80, 72, 56.55, 56, 55, 51, 50, 44, 24, 14, 10, 9],
+        known_diameter_values=[102, 80, 72, 65, 56.55, 56, 55, 51, 50, 44, 24, 14, 10, 9],
         outer_diameter_values=[102, 80, 72],
     )
 
@@ -58,6 +58,15 @@ def test_real_spindle_localizes_both_keyway_outlines():
     }
     assert {(14.0, "top"), (24.0, "top"), (10.0, "top"), (9.0, "bottom")} <= labels
     assert any("несколько" in item for item in evidence["blockers"])
+    axial_pattern, = evidence["axial_hole_patterns"]
+    assert axial_pattern["count"] == 2
+    assert axial_pattern["view_outer_diameter_mm"] == 80.0
+    assert axial_pattern["bolt_circle_diameter_mm"] == 65.0
+    assert axial_pattern["measured_bolt_circle_diameter_mm"] == pytest.approx(64.054)
+    assert axial_pattern["view_center_px"] == pytest.approx([2136.5, 592.5])
+    assert axial_pattern["hole_centers_px"] == [
+        [2136.5, 475.5], [2136.5, 712.5]
+    ]
 
 
 def test_monochrome_feature_detection_fails_closed():
