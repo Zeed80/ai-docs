@@ -2,6 +2,7 @@ import { expect, test, type BrowserContext, type Page, type Route } from "@playw
 
 const generationId = "44444444-4444-4444-8444-444444444444";
 let compilePayload: Record<string, unknown> | null = null;
+let specCorrectionPayload: Record<string, unknown> | null = null;
 
 const generation = {
   id: generationId,
@@ -15,6 +16,26 @@ const generation = {
     full_check_revision: 3,
     cad_artifact_revision: 3,
     cad_candidate_index: 0,
+    spec: {
+      main_view: {
+        outer: [{ diameter_mm: 80, length_mm: 100 }],
+        axial_holes: [{
+          count: 2,
+          bolt_circle_diameter_mm: 65,
+          from_face: null,
+          through: null,
+          depth_mm: null,
+          pilot_diameter_mm: null,
+          thread: { designation: "M8", nominal_diameter_mm: 8 },
+        }],
+        chamfers: [{ size_mm: 1, angle_deg: 45, location: "left_end" }],
+      },
+      dimensions: [{ value: "6 фасок 1×45°" }],
+      unresolved: [
+        "малые элементы: осевые отверстия M8: не определены торец",
+        "малые элементы: указано 6 фасок, локализовано 1",
+      ],
+    },
     cad_report: {
       valid: true,
       solid_count: 1,
@@ -166,6 +187,13 @@ async function mockApi(page: Page) {
       return route.fulfill({ json: { items: [generation] } });
     }
     if (url.pathname === `/api/image-gen/${generationId}`) return route.fulfill({ json: generation });
+    if (
+      url.pathname === `/api/image-gen/${generationId}/spec-correction` &&
+      request.method() === "POST"
+    ) {
+      specCorrectionPayload = request.postDataJSON() as Record<string, unknown>;
+      return route.fulfill({ json: { ok: true, diff: {}, rebuild_task_id: null } });
+    }
     if (url.pathname === `/api/image-gen/${generationId}/ir`) {
       return route.fulfill({ json: { revision: 3, origin: "editor", summary: {}, ir } });
     }
@@ -207,6 +235,49 @@ async function mockApi(page: Page) {
     return route.fulfill({ json: { items: [] } });
   });
 }
+
+test("CAD blocker editor saves explicit M8 fields without guessing chamfers", async ({ page, context }) => {
+  specCorrectionPayload = null;
+  await setAuthCookie(context);
+  await mockApi(page);
+  await page.goto(`/cad/${generationId}`);
+
+  await page
+    .getByRole("button", { name: "Прочитанная спецификация (можно исправить)" })
+    .click();
+  await expect(page.getByText("Осевые резьбовые отверстия")).toBeVisible();
+  await expect(page.getByText("Локализовано 1 из 6")).toBeVisible();
+  await expect(page.getByText(/Справка, не подстановка/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Сохранить и пересобрать" }),
+  ).toBeDisabled();
+  await page
+    .getByText("Осевые резьбовые отверстия")
+    .locator("xpath=ancestor::section")
+    .screenshot({ path: "../test-results/cad-blocker-editor.png" });
+
+  await page.getByLabel("С какого торца").selectOption("zmax");
+  await page.getByLabel("Исполнение").selectOption("blind");
+  await page.getByLabel("Глубина, мм").fill("12");
+  await page.getByLabel("Ø отверстия под резьбу, мм").fill("6,8");
+  await page
+    .getByRole("button", { name: "Только сохранить исправление" })
+    .click();
+
+  await expect.poll(() => specCorrectionPayload).not.toBeNull();
+  expect(specCorrectionPayload).toEqual({
+    axial_holes: [{
+      count: 2,
+      bolt_circle_diameter_mm: 65,
+      from_face: "zmax",
+      through: false,
+      depth_mm: 12,
+      pilot_diameter_mm: 6.8,
+      thread: { designation: "M8", nominal_diameter_mm: 8 },
+    }],
+    rebuild: false,
+  });
+});
 
 test("CAD feature tree rebuild sends only editable 3D parameters", async ({ page, context }) => {
   compilePayload = null;

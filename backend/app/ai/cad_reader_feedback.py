@@ -21,6 +21,7 @@ human states it.
 from __future__ import annotations
 
 import copy
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -137,6 +138,107 @@ def merge_correction(read_spec: dict, correction: dict) -> dict:
             node = child
         node[path[-1]] = value
     return merged
+
+
+def reconcile_corrected_feature_blockers(
+    spec: dict,
+    corrected_fields: set[str],
+) -> dict:
+    """Re-derive only blockers for feature families a human edited.
+
+    A correction is authoritative for the supplied family, but it must not
+    erase unrelated reader failures. This is deliberately narrower than a
+    whole-spec cleanup: editing M8 cannot make an unresolved bore disappear.
+    """
+    reconciled = copy.deepcopy(spec or {})
+    unresolved = [str(item) for item in reconciled.get("unresolved") or [] if str(item)]
+    body = reconciled.get("main_view") or {}
+
+    def positive_number(value: Any) -> bool:
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value > 0
+        )
+
+    if "axial_holes" in corrected_fields:
+        unresolved = [
+            item for item in unresolved
+            if not (
+                "осевые отверстия" in item
+                or "осевой шаблон отверстий" in item
+            )
+        ]
+        for pattern in body.get("axial_holes") or []:
+            if not isinstance(pattern, dict):
+                continue
+            missing: list[str] = []
+            if pattern.get("from_face") not in {"zmin", "zmax"}:
+                missing.append("торец")
+            through = pattern.get("through")
+            if through is None:
+                missing.append("сквозное/глухое исполнение")
+            if through is False and not positive_number(pattern.get("depth_mm")):
+                missing.append("глубина")
+            if not positive_number(pattern.get("pilot_diameter_mm")):
+                missing.append("Ø подготовительного отверстия")
+            if missing:
+                designation = str(
+                    ((pattern.get("thread") or {}).get("designation")) or "резьба"
+                )
+                unresolved.append(
+                    f"малые элементы: осевые отверстия {designation}: не определены "
+                    + ", ".join(missing)
+                )
+
+    if "chamfers" in corrected_fields:
+        count_blockers = [
+            item for item in unresolved
+            if re.search(r"указано\s+\d+\s+фас", item, re.IGNORECASE)
+        ]
+        unresolved = [
+            item for item in unresolved
+            if not (
+                re.search(r"указано\s+\d+\s+фас", item, re.IGNORECASE)
+                or re.search(r"фаска\s+\d+:\s+не задан", item, re.IGNORECASE)
+            )
+        ]
+        texts = [
+            str((item or {}).get("value") or (item or {}).get("text") or "")
+            for item in [
+                *(reconciled.get("dimensions") or []),
+                *(reconciled.get("annotations") or []),
+            ]
+            if isinstance(item, dict)
+        ] + count_blockers
+        expected = max(
+            (
+                int(match.group(1))
+                for text in texts
+                for match in [re.search(r"\b(\d+)\s*фас", text, re.IGNORECASE)]
+                if match
+            ),
+            default=0,
+        )
+        actual = len(body.get("chamfers") or [])
+        if expected and actual < expected:
+            unresolved.append(
+                f"малые элементы: указано {expected} фасок, локализовано {actual}"
+            )
+        for index, chamfer in enumerate(body.get("chamfers") or [], start=1):
+            if not isinstance(chamfer, dict):
+                continue
+            location = chamfer.get("location")
+            if location in {"shoulder", "bore_mouth"} and not (
+                isinstance(chamfer.get("at_z_mm"), (int, float))
+                or positive_number(chamfer.get("at_diameter_mm"))
+            ):
+                unresolved.append(
+                    f"малые элементы: фаска {index}: не задано положение по Z или Ø"
+                )
+
+    reconciled["unresolved"] = list(dict.fromkeys(unresolved))
+    return reconciled
 
 
 def corpus_summary(records: list[dict]) -> dict[str, Any]:

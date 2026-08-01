@@ -1539,7 +1539,11 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
 
       <SpecEditorPanel
         generationId={gen.id}
-        spec={gen.params?.spec as Record<string, unknown> | undefined}
+        spec={
+          (gen.params?.spec_corrected ?? gen.params?.spec) as
+            | Record<string, unknown>
+            | undefined
+        }
         assumptions={specAssumptions}
         busy={busy}
         onDone={() => window.location.reload()}

@@ -7,6 +7,7 @@ from app.ai.cad_reader_feedback import (
     corpus_summary,
     diff_spec,
     merge_correction,
+    reconcile_corrected_feature_blockers,
 )
 
 
@@ -110,3 +111,133 @@ def test_a_correction_does_not_rewrite_the_spec_it_corrects():
     # The original is untouched, so the diff still has something to compare.
     assert read["main_view"]["profile"]["diameter_mm"] == 560
     assert diff_spec(read, merged)["changed_count"] == 1
+
+
+def test_later_correction_can_build_on_the_previous_human_state():
+    read = {
+        "main_view": {
+            "outer": [{"diameter_mm": 90, "length_mm": 100}],
+            "axial_holes": [],
+        }
+    }
+    first = merge_correction(
+        read, {"outer": [{"diameter_mm": 102, "length_mm": 100}]}
+    )
+    second = merge_correction(
+        first,
+        {
+            "axial_holes": [
+                {
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 65,
+                    "thread": {"designation": "M8"},
+                }
+            ]
+        },
+    )
+
+    assert second["main_view"]["outer"][0]["diameter_mm"] == 102
+    assert len(second["main_view"]["axial_holes"]) == 1
+    assert read["main_view"]["outer"][0]["diameter_mm"] == 90
+
+
+def test_completed_axial_pattern_removes_only_its_own_blocker():
+    spec = {
+        "main_view": {
+            "axial_holes": [{
+                "count": 2,
+                "bolt_circle_diameter_mm": 65,
+                "from_face": "zmax",
+                "through": False,
+                "depth_mm": 12,
+                "pilot_diameter_mm": 6.8,
+                "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+            }],
+        },
+        "unresolved": [
+            "малые элементы: осевые отверстия M8: не определены торец",
+            "расточка: не прочитана",
+        ],
+    }
+
+    result = reconcile_corrected_feature_blockers(spec, {"axial_holes"})
+
+    assert result["unresolved"] == ["расточка: не прочитана"]
+
+
+def test_partial_axial_correction_keeps_precise_missing_fields():
+    spec = {
+        "main_view": {"axial_holes": [{
+            "count": 2,
+            "bolt_circle_diameter_mm": 65,
+            "from_face": "zmax",
+            "through": False,
+            "depth_mm": None,
+            "pilot_diameter_mm": None,
+            "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+        }]},
+        "unresolved": ["малые элементы: осевые отверстия M8: старый текст"],
+    }
+
+    result = reconcile_corrected_feature_blockers(spec, {"axial_holes"})
+
+    assert len(result["unresolved"]) == 1
+    assert "глубина" in result["unresolved"][0]
+    assert "подготовительного" in result["unresolved"][0]
+
+
+def test_six_corrected_chamfers_remove_count_blocker():
+    spec = {
+        "main_view": {
+            "chamfers": [
+                {
+                    "size_mm": 1,
+                    "angle_deg": 45,
+                    "location": "shoulder",
+                    "at_z_mm": index * 10,
+                }
+                for index in range(6)
+            ]
+        },
+        "dimensions": [{"value": "6 фасок 1×45°"}],
+        "unresolved": ["малые элементы: указано 6 фасок, локализовано 1"],
+    }
+
+    result = reconcile_corrected_feature_blockers(spec, {"chamfers"})
+
+    assert result["unresolved"] == []
+
+
+def test_chamfer_count_survives_when_only_the_blocker_had_the_count():
+    spec = {
+        "main_view": {
+            "chamfers": [
+                {"size_mm": 1, "angle_deg": 45, "location": "left_end"}
+            ]
+        },
+        "dimensions": [],
+        "unresolved": ["малые элементы: указано 6 фасок, локализовано 1"],
+    }
+
+    result = reconcile_corrected_feature_blockers(spec, {"chamfers"})
+
+    assert result["unresolved"] == [
+        "малые элементы: указано 6 фасок, локализовано 1"
+    ]
+
+
+def test_unlocated_shoulder_chamfer_gets_an_actionable_blocker():
+    spec = {
+        "main_view": {
+            "chamfers": [
+                {"size_mm": 1, "angle_deg": 45, "location": "shoulder"}
+            ]
+        },
+        "unresolved": [],
+    }
+
+    result = reconcile_corrected_feature_blockers(spec, {"chamfers"})
+
+    assert result["unresolved"] == [
+        "малые элементы: фаска 1: не задано положение по Z или Ø"
+    ]

@@ -848,6 +848,7 @@ class SpecCorrectionRequest(BaseModel):
     grooves: list[dict[str, Any]] | None = None
     keyways: list[dict[str, Any]] | None = None
     cross_holes: list[dict[str, Any]] | None = None
+    axial_holes: list[dict[str, Any]] | None = None
     # Rebuild the part and the sheet from the corrected reading. Off by default:
     # a correction is worth recording even when the person is not ready to see
     # the consequences of it yet.
@@ -867,15 +868,23 @@ async def correct_vectorize_spec(
     the pair IS the training signal, and keeping only the corrected version
     would throw away the half that says what to learn.
     """
-    from app.ai.cad_reader_feedback import build_correction_record, merge_correction
+    from app.ai.cad_reader_feedback import (
+        build_correction_record,
+        merge_correction,
+        reconcile_corrected_feature_blockers,
+    )
 
     gen = await db.get(ImageGeneration, generation_id)
     if not _owns(gen, user):
         raise HTTPException(404, "Не найдено")
     params = dict(gen.params or {})
-    read_spec = params.get("spec")
-    if not read_spec:
+    original_read_spec = params.get("spec")
+    if not original_read_spec:
         raise HTTPException(400, "У этой оцифровки нет прочитанного спека")
+    # Corrections are cumulative. The immutable original remains the left side
+    # of the training pair, while a later edit starts from the last corrected
+    # state instead of silently undoing an earlier human decision.
+    correction_base = params.get("spec_corrected") or original_read_spec
 
     payload = body.model_dump()
     rebuild = bool(payload.pop("rebuild", False))
@@ -885,11 +894,30 @@ async def correct_vectorize_spec(
 
     record = params.get("spec_correction_record") or {"diff": []}
     if supplied:
-        corrected = merge_correction(read_spec, supplied)
+        corrected = merge_correction(correction_base, supplied)
+        corrected = reconcile_corrected_feature_blockers(corrected, set(supplied))
+        from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
+        from pydantic import ValidationError
+
+        try:
+            corrected = EngineeringDrawingSpec.model_validate(corrected).model_dump(
+                mode="json"
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                422,
+                {
+                    "message": "Исправленная спецификация не прошла проверку",
+                    "fields": [
+                        ".".join(str(part) for part in error["loc"])
+                        for error in exc.errors()[:12]
+                    ],
+                },
+            ) from exc
         record = build_correction_record(
             generation_id=str(generation_id),
             source_path=params.get("normalized_source_path"),
-            read_spec=read_spec,
+            read_spec=original_read_spec,
             corrected_spec=corrected,
             corrected_by=getattr(user, "sub", None),
             reader_models=(
