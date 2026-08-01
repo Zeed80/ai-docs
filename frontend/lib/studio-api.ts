@@ -911,7 +911,7 @@ export interface IrEnvelope {
 }
 
 export interface ParamProvenance {
-  origin: "measured" | "stated" | "guessed" | "propagated";
+  origin: "measured" | "stated" | "standard" | "guessed" | "propagated";
   detail: string;
   source_entity_id?: string | null;
   source_parameter?: string | null;

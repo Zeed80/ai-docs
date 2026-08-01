@@ -199,17 +199,32 @@ class SpecAxialHolePattern(BaseModel):
     # physical end face is shown. Keep that fact explicitly unknown.
     from_face: Literal["zmin", "zmax"] | None = None
     through: bool | None = None
+    # A blind tapped hole has two different lengths on a real drawing: the
+    # complete thread and the deeper drill point. ``depth_mm`` remains as a
+    # compatibility alias for old records, but new reads keep both facts.
     depth_mm: float | None = Field(default=None, gt=0)
+    thread_depth_mm: float | None = Field(default=None, gt=0)
+    drill_depth_mm: float | None = Field(default=None, gt=0)
+    # Manufacturing drill choice is NOT required geometry. When absent the
+    # compiler derives the finished internal-thread minor diameter from the
+    # metric thread standard and records that provenance explicitly.
     pilot_diameter_mm: float | None = Field(default=None, gt=0)
+    # Diameter used to register the observed end view with a physical face.
+    view_outer_diameter_mm: float | None = Field(default=None, gt=0)
     thread: SpecThread
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _depth_matches_through_state(self) -> "SpecAxialHolePattern":
-        if self.through is True and self.depth_mm is not None:
-            raise ValueError("through axial holes cannot also have depth_mm")
-        if self.through is False and self.depth_mm is None:
-            raise ValueError("blind axial holes require depth_mm")
+        depths = (self.depth_mm, self.thread_depth_mm, self.drill_depth_mm)
+        if self.through is True and any(value is not None for value in depths):
+            raise ValueError("through axial holes cannot also have blind depths")
+        if self.through is False and not (self.drill_depth_mm or self.depth_mm):
+            raise ValueError("blind axial holes require drill_depth_mm or depth_mm")
+        thread_depth = self.thread_depth_mm or self.depth_mm
+        drill_depth = self.drill_depth_mm or self.depth_mm
+        if thread_depth and drill_depth and thread_depth > drill_depth:
+            raise ValueError("thread_depth_mm cannot exceed drill_depth_mm")
         return self
 
 

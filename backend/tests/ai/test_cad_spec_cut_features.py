@@ -21,6 +21,9 @@ from app.ai.cad_recognize.spec_fragments import _read_cut_features
 from app.ai.cad_recognize.spec_fragments import _feature_completeness_issues
 from app.ai.cad_recognize.spec_fragments import _assign_profile_threads
 from app.ai.cad_recognize.spec_fragments import _recover_external_thread_carrier
+from app.ai.cad_recognize.spec_fragments import _resolve_axial_pattern_geometry
+from app.ai.cad_recognize.spec_fragments import _resolve_axial_pattern_geometry_from_source
+from app.ai.cad_recognize.spec_fragments import _resolve_grouped_chamfers
 from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
 from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
 
@@ -55,6 +58,188 @@ def test_spec_keeps_source_visible_axial_pattern_with_unknown_build_fields():
     pattern = spec.main_view.axial_holes[0]
     assert pattern.from_face is None
     assert pattern.through is None
+
+
+def test_end_view_and_nested_depths_resolve_blind_m8_without_drill_diameter():
+    pattern = {
+        "count": 2,
+        "bolt_circle_diameter_mm": 65,
+        "view_outer_diameter_mm": 80,
+        "from_face": None,
+        "through": None,
+        "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+    }
+    outer = [
+        {"diameter_mm": 102, "length_mm": 14},
+        {"diameter_mm": 80, "length_mm": 357},
+        {"diameter_mm": 72, "length_mm": 6},
+        {"diameter_mm": 75, "length_mm": 18},
+        {"diameter_mm": 72, "length_mm": 75},
+    ]
+    callouts = {"dimensions": [{"value": "15"}, {"value": "17"}]}
+    axial_map = {
+        "observations": [{
+            "value_mm": 17,
+            "relation": "from_left_datum",
+            "station_from_left_mm": 17,
+        }]
+    }
+
+    resolved = _resolve_axial_pattern_geometry(pattern, outer, callouts, axial_map)
+
+    assert resolved["from_face"] == "zmin"
+    assert resolved["through"] is False
+    assert resolved["thread_depth_mm"] == 15
+    assert resolved["drill_depth_mm"] == 17
+    assert resolved.get("pilot_diameter_mm") is None
+
+
+def test_blind_axial_thread_rejects_thread_deeper_than_drilling():
+    with pytest.raises(ValueError, match="thread_depth_mm"):
+        EngineeringDrawingSpec.model_validate({
+            "main_view": {
+                "type": "тело вращения",
+                "outer": [{"diameter_mm": 80, "length_mm": 470}],
+                "axial_holes": [{
+                    "count": 2,
+                    "bolt_circle_diameter_mm": 65,
+                    "from_face": "zmin",
+                    "through": False,
+                    "thread_depth_mm": 18,
+                    "drill_depth_mm": 17,
+                    "thread": {
+                        "designation": "M8",
+                        "nominal_diameter_mm": 8,
+                        "internal": True,
+                    },
+                }],
+            }
+        })
+
+
+@pytest.mark.asyncio
+async def test_bounded_depth_read_selects_only_a_source_supported_pair(monkeypatch):
+    async def fake_ask(_prompt, image, **_kwargs):
+        assert image.width < 250
+        assert image.height < 250
+        return {"thread_depth_mm": 15, "drill_depth_mm": 17}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    source = Image.new("RGB", (1000, 800), "white")
+    resolved = await _resolve_axial_pattern_geometry_from_source(
+        {
+            "view_outer_diameter_mm": 80,
+            "from_face": None,
+            "through": None,
+            "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+        },
+        [
+            {"diameter_mm": 102, "length_mm": 14},
+            {"diameter_mm": 80, "length_mm": 357},
+            {"diameter_mm": 75, "length_mm": 18},
+            {"diameter_mm": 72, "length_mm": 81},
+        ],
+        source,
+        {"dimensions": [{"value": "15"}, {"value": "16"}, {"value": "17"}]},
+        {"observations": [{
+            "value_mm": 17,
+            "relation": "from_left_datum",
+            "label_bbox": [300, 300, 335, 335],
+            "dimension_line": [275, 350, 345, 350],
+        }]},
+        router=object(),
+        confidential=True,
+        audit=[],
+    )
+
+    assert resolved["from_face"] == "zmin"
+    assert resolved["thread_depth_mm"] == 15
+    assert resolved["drill_depth_mm"] == 17
+    assert resolved.get("pilot_diameter_mm") is None
+
+
+@pytest.mark.asyncio
+async def test_bounded_depth_read_rejects_numbers_outside_candidate_pairs(monkeypatch):
+    async def fake_ask(*_args, **_kwargs):
+        return {"thread_depth_mm": 14, "drill_depth_mm": 17}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    unresolved = await _resolve_axial_pattern_geometry_from_source(
+        {"view_outer_diameter_mm": 80, "from_face": None},
+        [
+            {"diameter_mm": 102}, {"diameter_mm": 80},
+            {"diameter_mm": 75}, {"diameter_mm": 72},
+        ],
+        Image.new("RGB", (1000, 800), "white"),
+        {"dimensions": [{"value": "15"}, {"value": "16"}, {"value": "17"}]},
+        {"observations": [{
+            "value_mm": 17,
+            "relation": "from_left_datum",
+            "label_bbox": [300, 300, 335, 335],
+            "dimension_line": [275, 350, 345, 350],
+        }]},
+        router=object(),
+        confidential=True,
+        audit=[],
+    )
+
+    assert unresolved["from_face"] is None
+
+
+@pytest.mark.asyncio
+async def test_grouped_chamfer_callout_can_only_select_real_catalogued_edges(
+    monkeypatch,
+):
+    async def fake_ask(*_args, **_kwargs):
+        return {
+            "candidate_ids": ["outer-z0-d100", "outer-z10-d80"],
+        }
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    resolved, audit = await _resolve_grouped_chamfers(
+        object(),
+        {"dimensions": [{"value": "2 фаски 1×45°"}]},
+        [{"size_mm": 1, "angle_deg": 45, "location": "left_end"}],
+        [
+            {"diameter_mm": 100, "length_mm": 10},
+            {"diameter_mm": 80, "length_mm": 10},
+        ],
+        [],
+        router=object(),
+        confidential=True,
+        audit=[],
+    )
+
+    assert audit["status"] == "resolved"
+    assert [(item["at_z_mm"], item["at_diameter_mm"]) for item in resolved] == [
+        (0.0, 100.0),
+        (10.0, 80.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_incomplete_grouped_chamfer_selection_stays_blocked(monkeypatch):
+    async def fake_ask(*_args, **_kwargs):
+        return {"candidate_ids": ["outer-z0-d100"]}
+
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._ask", fake_ask)
+    localized = [{"size_mm": 1, "angle_deg": 45, "location": "left_end"}]
+    resolved, audit = await _resolve_grouped_chamfers(
+        object(),
+        {"dimensions": [{"value": "2 фаски 1×45°"}]},
+        localized,
+        [
+            {"diameter_mm": 100, "length_mm": 10},
+            {"diameter_mm": 80, "length_mm": 10},
+        ],
+        [],
+        router=object(),
+        confidential=True,
+        audit=[],
+    )
+
+    assert resolved == localized
+    assert audit["status"] == "ambiguous_source"
 
 
 def test_metric_nominal_is_parsed_from_partial_axial_thread_designation():

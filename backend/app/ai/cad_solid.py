@@ -17,6 +17,7 @@ never stated a length produces no solid, exactly like the 2D drafter.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.ai.cad_ir.feature_tree import Feature3D, FeatureTreeCandidate, ParamProvenance
@@ -60,7 +61,20 @@ def solid_build_gate(
     blocker when the drawing explicitly contains a section, otherwise it stays
     a visible warning for a potentially solid shaft.
     """
-    blockers = [str(item) for item in spec.get("unresolved") or [] if str(item)]
+    unresolved = [str(item) for item in spec.get("unresolved") or [] if str(item)]
+    non_geometric = [
+        item for item in unresolved
+        if (
+            "подготовительного отверстия" in item.lower()
+            and not any(
+                marker in item.lower()
+                for marker in (
+                    "торец", "сквозное", "глухое", "глубин", "резьба/шаг",
+                )
+            )
+        )
+    ]
+    blockers = [item for item in unresolved if item not in non_geometric]
     from app.ai.cad_dimension_graph import build_dimension_graph
 
     blockers.extend(build_dimension_graph(spec)["errors"])
@@ -81,7 +95,10 @@ def solid_build_gate(
                 + ", ".join(missing_evidence[:8])
                 + (f" и ещё {len(missing_evidence) - 8}" if len(missing_evidence) > 8 else "")
             )
-    warnings: list[str] = []
+    warnings: list[str] = [
+        item + " (не блокирует: это технологический параметр, геометрия резьбы из стандарта)"
+        for item in non_geometric
+    ]
     has_section = any(
         str(view.get("kind") or "").lower() in {"section", "cut", "разрез", "сечение"}
         for view in spec.get("views") or []
@@ -446,6 +463,48 @@ def _section_starts(outer: list[dict]) -> list[float]:
     return starts
 
 
+_METRIC_COARSE_PITCH_MM = {
+    1.0: 0.25, 1.2: 0.25, 1.4: 0.3, 1.6: 0.35, 1.8: 0.35,
+    2.0: 0.4, 2.5: 0.45, 3.0: 0.5, 3.5: 0.6, 4.0: 0.7,
+    5.0: 0.8, 6.0: 1.0, 8.0: 1.25, 10.0: 1.5, 12.0: 1.75,
+    14.0: 2.0, 16.0: 2.0, 18.0: 2.5, 20.0: 2.5, 22.0: 2.5,
+    24.0: 3.0, 27.0: 3.0, 30.0: 3.5, 33.0: 3.5, 36.0: 4.0,
+}
+
+
+def metric_thread_geometry(thread: dict) -> dict[str, float | str] | None:
+    """Finished ISO metric internal-thread geometry, not a tap-drill guess.
+
+    A drawing designation such as M8 defines the basic thread profile even
+    when a workshop drill size is intentionally absent. For the deterministic
+    B-Rep cut we use the ISO basic internal minor diameter D1 = D - 1.082532P.
+    The drill selected by manufacturing may differ and is outside this model.
+    """
+    designation = str(thread.get("designation") or "").replace("М", "M")
+    nominal = _num(thread.get("nominal_diameter_mm"))
+    if nominal is None:
+        match = re.search(r"M\s*(\d+(?:[.,]\d+)?)", designation, re.IGNORECASE)
+        nominal = _num(match.group(1)) if match else None
+    if nominal is None or not designation.upper().startswith("M"):
+        return None
+    pitch = _num(thread.get("pitch_mm"))
+    pitch_source = "stated"
+    if pitch is None:
+        pitch = _METRIC_COARSE_PITCH_MM.get(float(nominal))
+        pitch_source = "standard"
+    if pitch is None:
+        return None
+    minor = nominal - 1.082532 * pitch
+    if minor <= 0:
+        return None
+    return {
+        "nominal_diameter_mm": nominal,
+        "pitch_mm": pitch,
+        "minor_diameter_mm": round(minor, 6),
+        "pitch_source": pitch_source,
+    }
+
+
 def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Feature3D]:
     """Grooves, keyways, cross holes and edge work, as kernel operations.
 
@@ -588,10 +647,13 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
         pilot = _num(pattern.get("pilot_diameter_mm"))
         from_face = pattern.get("from_face")
         through = pattern.get("through")
-        depth = _num(pattern.get("depth_mm"))
+        legacy_depth = _num(pattern.get("depth_mm"))
+        drill_depth = _num(pattern.get("drill_depth_mm")) or legacy_depth
+        thread_depth = _num(pattern.get("thread_depth_mm")) or legacy_depth
         thread = pattern.get("thread") or {}
         designation = str(thread.get("designation") or "")
         nominal = _num(thread.get("nominal_diameter_mm"))
+        thread_geometry = metric_thread_geometry(thread)
         incomplete = []
         if count < 1 or pcd is None:
             incomplete.append("количество/делительная окружность")
@@ -599,12 +661,12 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             incomplete.append("торец")
         if through is None:
             incomplete.append("сквозное/глухое исполнение")
-        if through is False and depth is None:
-            incomplete.append("глубина")
-        if pilot is None:
-            incomplete.append("Ø подготовительного отверстия")
+        if through is False and drill_depth is None:
+            incomplete.append("глубина сверления")
         if not designation or nominal is None:
             incomplete.append("резьба")
+        if pilot is None and thread_geometry is None:
+            incomplete.append("профиль резьбы/шаг")
         if incomplete:
             missing.append(
                 "осевой шаблон отверстий прочитан не полностью ("
@@ -617,6 +679,17 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
         step = spacing if spacing is not None else 360.0 / count
         import math
 
+        cut_diameter = pilot or float(thread_geometry["minor_diameter_mm"])
+        pitch = _num(thread.get("pitch_mm"))
+        if pitch is None and thread_geometry is not None:
+            pitch = float(thread_geometry["pitch_mm"])
+        diameter_origin = "stated" if pilot is not None else "standard"
+        diameter_detail = (
+            "Ø подготовки явно указан на чертеже"
+            if pilot is not None
+            else "основной внутренний диаметр D1 выведен из стандартного профиля резьбы"
+        )
+
         for index in range(count):
             angle = start_angle + index * step
             radius = pcd / 2.0
@@ -624,21 +697,21 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
             center_y = radius * math.sin(math.radians(angle))
             params: dict[str, Any] = {
                 "axis": "z",
-                "diameter_mm": pilot,
+                "diameter_mm": cut_diameter,
                 "center_x_mm": round(center_x, 6),
                 "center_y_mm": round(center_y, 6),
                 "through": bool(through),
                 "from_face": from_face,
             }
             if through is False:
-                params["depth_mm"] = depth
+                params["depth_mm"] = drill_depth
             features.append(Feature3D(
                 kind="hole",
                 params=params,
                 param_provenance={
                     "diameter_mm": ParamProvenance(
-                        origin="stated",
-                        detail="Ø подготовки осевого резьбового отверстия",
+                        origin=diameter_origin,
+                        detail=diameter_detail,
                     ),
                     "center_x_mm": ParamProvenance(
                         origin="propagated",
@@ -659,17 +732,28 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                 "center_y_mm": round(center_y, 6),
                 "from_face": from_face,
             }
-            pitch = _num(thread.get("pitch_mm"))
             if pitch is not None:
                 thread_params["pitch_mm"] = pitch
-            if depth is not None:
-                thread_params["length_mm"] = depth
+            if thread_depth is not None:
+                thread_params["length_mm"] = thread_depth
             features.append(Feature3D(
                 kind="thread",
                 params=thread_params,
                 param_provenance={
                     "spec": ParamProvenance(
                         origin="stated", detail="обозначение резьбы с торцевого вида"
+                    ),
+                    "pitch_mm": ParamProvenance(
+                        origin=(
+                            "stated"
+                            if _num(thread.get("pitch_mm")) is not None
+                            else "standard"
+                        ),
+                        detail=(
+                            "шаг указан в обозначении"
+                            if _num(thread.get("pitch_mm")) is not None
+                            else "крупный шаг метрической резьбы по стандарту"
+                        ),
                     ),
                     "center_x_mm": ParamProvenance(
                         origin="propagated", detail="центр на прочитанной делительной окружности"

@@ -178,10 +178,11 @@ def reconcile_corrected_feature_blockers(
             through = pattern.get("through")
             if through is None:
                 missing.append("сквозное/глухое исполнение")
-            if through is False and not positive_number(pattern.get("depth_mm")):
-                missing.append("глубина")
-            if not positive_number(pattern.get("pilot_diameter_mm")):
-                missing.append("Ø подготовительного отверстия")
+            if through is False and not (
+                positive_number(pattern.get("drill_depth_mm"))
+                or positive_number(pattern.get("depth_mm"))
+            ):
+                missing.append("глубина сверления")
             if missing:
                 designation = str(
                     ((pattern.get("thread") or {}).get("designation")) or "резьба"

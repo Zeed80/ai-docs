@@ -25,6 +25,8 @@ const generation = {
           from_face: null,
           through: null,
           depth_mm: null,
+          thread_depth_mm: null,
+          drill_depth_mm: null,
           pilot_diameter_mm: null,
           thread: { designation: "M8", nominal_diameter_mm: 8 },
         }],
@@ -247,7 +249,7 @@ test("CAD blocker editor saves explicit M8 fields without guessing chamfers", as
     .click();
   await expect(page.getByText("Осевые резьбовые отверстия")).toBeVisible();
   await expect(page.getByText("Локализовано 1 из 6")).toBeVisible();
-  await expect(page.getByText(/Справка, не подстановка/)).toBeVisible();
+  await expect(page.getByText(/Геометрия из стандарта/)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Сохранить и пересобрать" }),
   ).toBeDisabled();
@@ -258,8 +260,8 @@ test("CAD blocker editor saves explicit M8 fields without guessing chamfers", as
 
   await page.getByLabel("С какого торца").selectOption("zmax");
   await page.getByLabel("Исполнение").selectOption("blind");
-  await page.getByLabel("Глубина, мм").fill("12");
-  await page.getByLabel("Ø отверстия под резьбу, мм").fill("6,8");
+  await page.getByLabel("Глубина резьбы, мм").fill("15");
+  await page.getByLabel("Глубина сверления, мм").fill("17");
   await page
     .getByRole("button", { name: "Только сохранить исправление" })
     .click();
@@ -271,8 +273,10 @@ test("CAD blocker editor saves explicit M8 fields without guessing chamfers", as
       bolt_circle_diameter_mm: 65,
       from_face: "zmax",
       through: false,
-      depth_mm: 12,
-      pilot_diameter_mm: 6.8,
+      depth_mm: null,
+      thread_depth_mm: 15,
+      drill_depth_mm: 17,
+      pilot_diameter_mm: null,
       thread: { designation: "M8", nominal_diameter_mm: 8 },
     }],
     rebuild: false,

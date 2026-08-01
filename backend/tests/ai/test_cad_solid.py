@@ -120,6 +120,61 @@ def test_complete_axial_thread_pattern_expands_to_exact_holes_and_threads():
     assert all(thread.params["spec"] == "M8" for thread in threads)
 
 
+def test_metric_thread_uses_finished_standard_minor_diameter_not_tap_drill():
+    spec = _shaft_spec(main_view={"axial_holes": [{
+        "count": 2,
+        "bolt_circle_diameter_mm": 40,
+        "from_face": "zmin",
+        "through": False,
+        "thread_depth_mm": 15,
+        "drill_depth_mm": 17,
+        "pilot_diameter_mm": None,
+        "thread": {
+            "designation": "M8",
+            "nominal_diameter_mm": 8,
+            "pitch_mm": None,
+            "internal": True,
+        },
+    }]})
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    holes = [feature for feature in candidate.features if feature.kind == "hole"]
+    threads = [feature for feature in candidate.features if feature.kind == "thread"]
+
+    assert len(holes) == len(threads) == 2
+    assert all(hole.params["diameter_mm"] == pytest.approx(6.646835) for hole in holes)
+    assert all(hole.params["depth_mm"] == 17 for hole in holes)
+    assert all(thread.params["pitch_mm"] == 1.25 for thread in threads)
+    assert all(thread.params["length_mm"] == 15 for thread in threads)
+    assert holes[0].param_provenance["diameter_mm"].origin == "standard"
+    assert threads[0].param_provenance["pitch_mm"].origin == "standard"
+
+
+def test_missing_tap_drill_alone_is_a_warning_not_a_geometry_blocker():
+    spec = _shaft_spec(
+        main_view={"axial_holes": [{
+            "count": 2,
+            "bolt_circle_diameter_mm": 40,
+            "from_face": "zmin",
+            "through": False,
+            "thread_depth_mm": 15,
+            "drill_depth_mm": 17,
+            "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+        }]},
+        unresolved=[
+            "осевые отверстия M8: не определены Ø подготовительного отверстия"
+        ],
+    )
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+
+    gate = solid_build_gate(spec, candidate)
+
+    assert gate["allowed"] is True
+    assert "технологический параметр" in gate["warnings"][0]
+
+
 def test_bore_becomes_a_coaxial_cut_not_a_guess():
     spec = _shaft_spec(main_view={"bore": [{"diameter_mm": 16, "length_mm": 90}]})
     candidate = feature_tree_from_spec(spec)

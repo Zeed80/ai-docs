@@ -39,7 +39,7 @@ class ParamProvenance(BaseModel):
     """D2: where a 3D parameter's value came from — the explicit origin of
     every 3D dimension, so nothing reads as fact without a traceable source."""
 
-    origin: Literal["measured", "stated", "guessed", "propagated"]
+    origin: Literal["measured", "stated", "standard", "guessed", "propagated"]
     detail: str
     # 2D IR entity the value was read/measured from
     source_entity_id: str | None = None

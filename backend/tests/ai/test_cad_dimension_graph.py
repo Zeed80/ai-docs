@@ -206,6 +206,28 @@ def test_dimension_graph_checks_flat_profile_corner_radius():
     assert "максимум R20" in graph["errors"][0]
 
 
+def test_axial_thread_fit_uses_finished_nominal_when_tap_drill_is_absent():
+    graph = build_dimension_graph({
+        "main_view": {
+            "outer": [{"diameter_mm": 80, "length_mm": 40}],
+            "axial_holes": [{
+                "count": 2,
+                "bolt_circle_diameter_mm": 65,
+                "pilot_diameter_mm": None,
+                "thread": {"designation": "M8", "nominal_diameter_mm": 8},
+            }],
+        }
+    })
+    constraint = next(
+        item for item in graph["constraints"]
+        if item["kind"] == "pitch_circle_inside"
+    )
+
+    assert graph["status"] == "ok"
+    assert constraint["diameter_source"] == "thread_nominal"
+    assert constraint["finished_hole_envelope_diameter_mm"] == 8
+
+
 def test_hole_must_fit_inside_the_rounded_corner_not_only_the_bounding_box():
     graph = build_dimension_graph({
         "main_view": {"profile": {

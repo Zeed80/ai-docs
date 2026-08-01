@@ -20,6 +20,8 @@ type AxialHolePattern = {
   from_face?: "zmin" | "zmax" | null;
   through?: boolean | null;
   depth_mm?: number | null;
+  thread_depth_mm?: number | null;
+  drill_depth_mm?: number | null;
   pilot_diameter_mm?: number | null;
   thread?: {
     designation?: string;
@@ -154,8 +156,11 @@ export default function SpecEditorPanel({
     (item) =>
       (item.from_face === "zmin" || item.from_face === "zmax") &&
       typeof item.through === "boolean" &&
-      Number(item.pilot_diameter_mm) > 0 &&
-      (item.through === true || Number(item.depth_mm) > 0),
+      (item.through === true ||
+        (Number(item.drill_depth_mm ?? item.depth_mm) > 0 &&
+          Number(item.thread_depth_mm ?? item.depth_mm) > 0 &&
+          Number(item.thread_depth_mm ?? item.depth_mm) <=
+            Number(item.drill_depth_mm ?? item.depth_mm))),
   );
   const chamfersComplete =
     chamfers.length >= expectedChamfers &&
@@ -198,7 +203,13 @@ export default function SpecEditorPanel({
       current.map((item, position) => {
         if (position !== index) return item;
         if (field === "through" && value === true) {
-          return { ...item, through: true, depth_mm: null };
+          return {
+            ...item,
+            through: true,
+            depth_mm: null,
+            thread_depth_mm: null,
+            drill_depth_mm: null,
+          };
         }
         return { ...item, [field]: value };
       }),
@@ -408,22 +419,23 @@ export default function SpecEditorPanel({
                       </select>
                     </label>
                     <label className="text-zinc-500">
-                      {t("vector.spec_editor_depth")}
+                      {t("vector.spec_editor_thread_depth")}
                       <div className="mt-1">
                         {numericInput(
-                          item.depth_mm,
-                          (value) => updateAxial(index, "depth_mm", value),
+                          item.thread_depth_mm ?? item.depth_mm,
+                          (value) =>
+                            updateAxial(index, "thread_depth_mm", value),
                           "w-full",
                         )}
                       </div>
                     </label>
                     <label className="text-zinc-500">
-                      {t("vector.spec_editor_pilot")}
+                      {t("vector.spec_editor_drill_depth")}
                       <div className="mt-1">
                         {numericInput(
-                          item.pilot_diameter_mm,
+                          item.drill_depth_mm ?? item.depth_mm,
                           (value) =>
-                            updateAxial(index, "pilot_diameter_mm", value),
+                            updateAxial(index, "drill_depth_mm", value),
                           "w-full",
                         )}
                       </div>
@@ -431,7 +443,7 @@ export default function SpecEditorPanel({
                   </div>
                   {Number(item.thread?.nominal_diameter_mm) === 8 && (
                     <p className="mt-2 text-[11px] text-amber-300/80">
-                      {t("vector.spec_editor_m8_reference")}
+                      {t("vector.spec_editor_m8_geometry")}
                     </p>
                   )}
                 </div>

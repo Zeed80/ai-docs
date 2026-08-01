@@ -289,21 +289,29 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
     ]
     for index, pattern in enumerate(body.get("axial_holes") or []):
         pcd = _number(pattern.get("bolt_circle_diameter_mm"))
-        pilot = _number(pattern.get("pilot_diameter_mm")) or 0.0
+        pilot = _number(pattern.get("pilot_diameter_mm"))
+        # The finished threaded-hole envelope is its nominal major diameter.
+        # A tap-drill diameter is a manufacturing choice and may be absent.
+        thread_nominal = _number(
+            (pattern.get("thread") or {}).get("nominal_diameter_mm")
+        )
+        hole_envelope = pilot or thread_nominal or 0.0
         envelope = max(outer_diameters, default=0.0)
-        fits = pcd is not None and pcd + pilot <= envelope + 0.05
+        fits = pcd is not None and pcd + hole_envelope <= envelope + 0.05
         constraints.append({
             "kind": "pitch_circle_inside",
             "feature": f"main_view.axial_holes.{index}",
             "bolt_circle_diameter_mm": pcd,
             "pilot_diameter_mm": pilot or None,
+            "finished_hole_envelope_diameter_mm": hole_envelope or None,
+            "diameter_source": "stated_pilot" if pilot else "thread_nominal",
             "outer_envelope_diameter_mm": envelope or None,
             "ok": fits,
         })
         if not fits:
             errors.append(
                 f"axial_holes[{index}] делительная окружность Ø{pcd or 0:g} "
-                f"с отверстиями Ø{pilot:g} не помещается в наружный контур Ø{envelope:g}"
+                f"с отверстиями Ø{hole_envelope:g} не помещается в наружный контур Ø{envelope:g}"
             )
 
     # A shoulder fillet must fit both the radial step and the two adjacent

@@ -182,8 +182,8 @@ def test_partial_axial_correction_keeps_precise_missing_fields():
     result = reconcile_corrected_feature_blockers(spec, {"axial_holes"})
 
     assert len(result["unresolved"]) == 1
-    assert "глубина" in result["unresolved"][0]
-    assert "подготовительного" in result["unresolved"][0]
+    assert "глубина сверления" in result["unresolved"][0]
+    assert "подготовительного" not in result["unresolved"][0]
 
 
 def test_six_corrected_chamfers_remove_count_blocker():

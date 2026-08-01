@@ -7,7 +7,7 @@ three-pass consensus and whole-sheet fallback) through the real router for
 each candidate model and scores the answer against hand-checked ground truth.
 
 Scoring publishes two denominators separately: nine coarse sheet-level facts
-and the full hand-checked manufacturing parameter set (59 for ``spindle_v10``).
+and the full hand-checked manufacturing parameter set (63 for ``spindle_v10``).
 It also records the operational questions that decide whether a user gets
 anything: did the spec validate, does it compile into a solid, and does a sheet
 come off that solid. The coarse score must never be presented as geometric
@@ -87,6 +87,14 @@ _PARAMETER_GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
     "axial_holes.count": ("axial_holes", ("count",)),
     "axial_holes.bolt_circle_diameter_mm": (
         "axial_holes", ("bolt_circle_diameter_mm",)
+    ),
+    "axial_holes.from_face": ("axial_holes", ("from_face",)),
+    "axial_holes.through": ("axial_holes", ("through",)),
+    "axial_holes.thread_depth_mm": (
+        "axial_holes", ("thread_depth_mm",)
+    ),
+    "axial_holes.drill_depth_mm": (
+        "axial_holes", ("drill_depth_mm",)
     ),
     "axial_holes.thread.nominal_diameter_mm": (
         "axial_holes", ("thread", "nominal_diameter_mm")
@@ -371,7 +379,11 @@ async def evaluate_model(
 async def _buildability(spec: dict) -> dict:
     """Does this reading compile into a solid, and does a sheet come off it?"""
     from app.ai.cad_ir.sheet_from_solid import build_sheet_from_solid
-    from app.ai.cad_solid import feature_tree_from_spec, solid_build_gate
+    from app.ai.cad_solid import (
+        feature_tree_from_spec,
+        solid_build_gate,
+        verify_solid_against_spec,
+    )
     from app.services.cad_kernel import compile_candidate
 
     candidate = feature_tree_from_spec(spec)
@@ -394,9 +406,20 @@ async def _buildability(spec: dict) -> dict:
     except Exception as exc:  # noqa: BLE001 — a failed build is a result
         return {"solid_built": False, "sheet_drawn": False,
                 "build_error": f"{exc.__class__.__name__}: {exc}"[:200]}
+    verification = verify_solid_against_spec(artifacts.report or {}, spec, candidate)
+    if not verification.ok:
+        return {
+            "solid_built": False,
+            "solid_compiled": True,
+            "solid_valid": bool((artifacts.report or {}).get("brep_valid")),
+            "sheet_drawn": False,
+            "build_error": "compiled B-Rep failed semantic feature verification",
+            "solid_verification": verification.as_dict(),
+        }
     out: dict[str, Any] = {
         "solid_built": True,
         "solid_valid": bool((artifacts.report or {}).get("brep_valid")),
+        "solid_verification": verification.as_dict(),
         "features_built": [feature.kind for feature in candidate.features],
         "features_declared_missing": list(candidate.missing_data),
     }

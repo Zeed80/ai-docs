@@ -898,6 +898,36 @@ async def _build_spec_solid(
         },
     )
     verification = verify_solid_against_spec(report, spec, candidate)
+    await record_cad_process_event(
+        "kernel.verify",
+        "completed" if verification.ok else "failed",
+        (
+            "B-Rep прошёл проверку размеров, топологии и всех операций"
+            if verification.ok
+            else "B-Rep отклонён: размеры, топология или операции не совпали с feature tree"
+        ),
+        verification.as_dict(),
+    )
+    if not verification.ok:
+        failed = verification.as_dict().get("failed_features") or []
+        return {
+            "built": False,
+            "build_status": "blocked",
+            "error": (
+                "CAD-ядро не подтвердило всю геометрию"
+                + (": " + "; ".join(str(item) for item in failed[:4]) if failed else "")
+            )[:400],
+            "label": candidate.label,
+            "feature_tree": candidate.model_dump(mode="json"),
+            "kernel_input": kernel_input,
+            "verification": verification.as_dict(),
+            "kernel_report": {
+                "bounds_mm": report.get("bounds_mm"),
+                "volume_mm3": report.get("volume_mm3"),
+                "feature_results": report.get("feature_results") or [],
+                "warnings": report.get("warnings") or [],
+            },
+        }
     # The sheet itself: views, sections and dimensions all measured off this
     # solid. A kernel too old to draw returns nothing, and the caller says so
     # rather than substituting a drawing made some other way.

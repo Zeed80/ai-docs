@@ -20,6 +20,7 @@ import {
 const PROV_STYLE: Record<string, string> = {
   stated: "bg-emerald-500/15 text-emerald-300",
   measured: "bg-emerald-500/15 text-emerald-300",
+  standard: "bg-violet-500/15 text-violet-300",
   propagated: "bg-sky-500/15 text-sky-300",
   guessed: "bg-amber-500/15 text-amber-300",
 };

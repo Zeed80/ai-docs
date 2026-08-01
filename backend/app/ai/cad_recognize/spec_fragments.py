@@ -78,7 +78,9 @@ _FEATURES_PROMPT = (
     '"grooves":[{"axial_position_mm":0,"width_mm":3,"depth_mm":1.5}],'
     '"keyways":[{"axial_start_mm":0,"length_mm":0,"width_mm":0,"depth_mm":0}],'
     '"cross_holes":[{"diameter_mm":0,"axial_position_mm":0,"count":1,"through":true}],'
-    '"axial_holes":[{"count":2,"bolt_circle_diameter_mm":65,"thread":{"designation":"M8"}}]}\n'
+    '"axial_holes":[{"count":2,"bolt_circle_diameter_mm":65,"from_face":null,'
+    '"through":null,"thread_depth_mm":null,"drill_depth_mm":null,'
+    '"thread":{"designation":"M8"}}]}\n'
     "ПРАВИЛА:\n"
     "1) Осевые координаты — от ЛЕВОГО торца детали, в миллиметрах.\n"
     "2) Фаска: «1×45°» на чертеже означает size_mm=1, angle_deg=45. location — "
@@ -89,7 +91,9 @@ _FEATURES_PROMPT = (
     "5) Поперечное отверстие — сверление ПОПЕРЁК оси; count, если их несколько "
     "по окружности.\n"
     "6) Осевые отверстия идут параллельно оси детали и видны на торцевом виде; "
-    "не путай их с поперечными.\n"
+    "не путай их с поперечными. Для глухой резьбы thread_depth_mm — длина "
+    "полной резьбы, drill_depth_mm — более глубокая длина сверления. "
+    "pilot_diameter_mm не угадывай: технологическое сверло может не быть указано.\n"
     "7) Чего на чертеже нет — оставь пустым массивом. НЕ придумывай элементы и "
     "НЕ повторяй здесь ступени контура.\n"
     "Только JSON."
@@ -869,6 +873,19 @@ async def _read_cut_features(
                             "localized at measured left profile datum"
                         ),
                     }]
+    chamfers, chamfer_resolution = await _resolve_grouped_chamfers(
+        source_image,
+        callouts or {},
+        chamfers,
+        outer,
+        bore or [],
+        profile_evidence=profile_evidence,
+        router=router,
+        confidential=confidential,
+        audit=audit,
+    )
+    if chamfer_resolution and profile_evidence is not None:
+        profile_evidence["grouped_chamfer_resolution"] = chamfer_resolution
     if chamfers:
         result["chamfers"] = chamfers
 
@@ -1358,7 +1375,7 @@ async def _read_cut_features(
             nominal_match = re.search(r"\d+(?:[.,]\d+)?", designation)
             assert nominal_match is not None
             nominal = _num(nominal_match.group())
-            result["axial_holes"] = [{
+            axial_hole = {
                 "count": count,
                 "bolt_circle_diameter_mm": pattern["bolt_circle_diameter_mm"],
                 "start_angle_deg": pattern.get("start_angle_deg", 0.0),
@@ -1366,7 +1383,10 @@ async def _read_cut_features(
                 "from_face": None,
                 "through": None,
                 "depth_mm": None,
+                "thread_depth_mm": None,
+                "drill_depth_mm": None,
                 "pilot_diameter_mm": None,
+                "view_outer_diameter_mm": pattern.get("view_outer_diameter_mm"),
                 "thread": {
                     "designation": designation,
                     "system": "metric",
@@ -1388,7 +1408,25 @@ async def _read_cut_features(
                         f"matched to stated Ø{pattern['bolt_circle_diameter_mm']:g}"
                     ),
                 }],
-            }]
+            }
+            resolved_axial = _resolve_axial_pattern_geometry(
+                axial_hole,
+                outer,
+                callouts or {},
+                (profile_evidence or {}).get("axial_map") or {},
+            )
+            if resolved_axial.get("from_face") is None:
+                resolved_axial = await _resolve_axial_pattern_geometry_from_source(
+                    resolved_axial,
+                    outer,
+                    source_image,
+                    callouts or {},
+                    (profile_evidence or {}).get("axial_map") or {},
+                    router=router,
+                    confidential=confidential,
+                    audit=audit,
+                )
+            result["axial_holes"] = [resolved_axial]
     completeness_issues = _feature_completeness_issues(
         callouts or {}, result, outer,
         (profile_evidence or {}).get("diameter_map") or {},
@@ -1406,12 +1444,483 @@ async def _read_cut_features(
             "Малые элементы сопоставлены с локализованными контурами и выносками",
             {
                 "evidence": feature_evidence,
+                "grouped_chamfer_resolution": chamfer_resolution,
                 "radial_hypotheses": radial_hypotheses,
                 "accepted": result,
                 "blockers": missing_keyways,
             },
         )
     return result
+
+
+def _resolve_axial_pattern_geometry(
+    pattern: dict[str, Any],
+    outer: list[dict],
+    callouts: dict[str, Any],
+    axial_map: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind an end-view thread pattern to depths already drawn in profile.
+
+    On a conventional blind tapped hole the profile carries two nested axial
+    dimensions: thread depth and a slightly deeper drill depth. They are not a
+    tap-drill diameter and must not be confused with one. Acceptance requires
+    three independent constraints: a unique end face from the visible end-view
+    diameter, a localized from-face dimension, and the smaller paired callout.
+    """
+    resolved = dict(pattern)
+    observed_outer = _num(resolved.get("view_outer_diameter_mm"))
+    face = _axial_pattern_face(resolved, outer)
+    if observed_outer is None or face is None:
+        return resolved
+    from_face, relation = face
+
+    localized_depths = sorted({
+        float(item["value_mm"])
+        for item in axial_map.get("observations") or []
+        if isinstance(item, dict)
+        and item.get("relation") == relation
+        and isinstance(item.get("value_mm"), (int, float))
+        and not isinstance(item.get("value_mm"), bool)
+        and 2.0 <= float(item["value_mm"]) <= 80.0
+    })
+    stated_depths = sorted({
+        float(value)
+        for value in _callout_numbers(callouts, "linear")
+        if 2.0 <= float(value) <= 80.0
+    })
+    pairs: list[tuple[float, float]] = []
+    for drill_depth in localized_depths:
+        smaller = [
+            value for value in stated_depths
+            if 0.5 <= drill_depth - value <= 3.0
+        ]
+        if smaller:
+            pairs.append((max(smaller), drill_depth))
+    # Several plausible pairs mean the dimensions have not been associated
+    # uniquely enough; preserving null is safer than choosing the nearest.
+    unique_pairs = list(dict.fromkeys(pairs))
+    if len(unique_pairs) != 1:
+        return resolved
+    thread_depth, drill_depth = unique_pairs[0]
+    resolved.update({
+        "from_face": from_face,
+        "through": False,
+        "depth_mm": drill_depth,
+        "thread_depth_mm": thread_depth,
+        "drill_depth_mm": drill_depth,
+    })
+    resolved["evidence"] = [
+        *(resolved.get("evidence") or []),
+        {
+            "image_index": 0,
+            "bbox": None,
+            "raw_text": (
+                f"end view Ø{observed_outer:g} uniquely registered to {from_face}; "
+                f"nested thread/drill depths {thread_depth:g}/{drill_depth:g} mm"
+            ),
+        },
+    ]
+    return resolved
+
+
+def _axial_pattern_face(
+    pattern: dict[str, Any], outer: list[dict]
+) -> tuple[str, str] | None:
+    """Uniquely register an observed end-view envelope with one profile end."""
+    if len(outer) < 2:
+        return None
+    observed_outer = _num(pattern.get("view_outer_diameter_mm"))
+    if observed_outer is None:
+        return None
+
+    def matches(items: list[dict]) -> bool:
+        return any(
+            value is not None and abs(value - observed_outer) <= 0.1
+            for item in items
+            for value in [_num(item.get("diameter_mm"))]
+        )
+
+    left_match = matches(outer[:2])
+    right_match = matches(outer[-2:])
+    if left_match == right_match:
+        return None
+    return (
+        ("zmin", "from_left_datum")
+        if left_match
+        else ("zmax", "from_right_datum")
+    )
+
+
+async def _resolve_axial_pattern_geometry_from_source(
+    pattern: dict[str, Any],
+    outer: list[dict],
+    source_image: Any,
+    callouts: dict[str, Any],
+    axial_map: dict[str, Any],
+    *,
+    router: Any,
+    confidential: bool,
+    audit: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Disambiguate nested tapped-hole depths in a small, bounded source crop.
+
+    The broad callout bag contains unrelated values such as roughness ``1,6``
+    and a 78 mm profile station. The model is therefore not allowed to return
+    arbitrary geometry: it only identifies two printed labels in the crop.
+    The face comes from end-view registration, the drill depth must already be
+    a localized datum-relative dimension, and both returned numbers must exist
+    in the independently read source callouts.
+    """
+    face = _axial_pattern_face(pattern, outer)
+    if face is None or source_image is None:
+        return pattern
+    from_face, relation = face
+    observations = [
+        item for item in axial_map.get("observations") or []
+        if isinstance(item, dict)
+        and item.get("relation") == relation
+        and isinstance(item.get("value_mm"), (int, float))
+        and not isinstance(item.get("value_mm"), bool)
+        and 2.0 <= float(item["value_mm"]) <= 40.0
+        and isinstance(item.get("label_bbox"), list)
+        and len(item["label_bbox"]) == 4
+    ]
+    stated = sorted({
+        float(value)
+        for value in _callout_numbers(callouts, "linear")
+        if 2.0 <= float(value) <= 40.0
+    })
+    plausible = [
+        (thread, float(item["value_mm"]), item)
+        for item in observations
+        for thread in stated
+        if 0.5 <= float(item["value_mm"]) - thread <= 3.0
+    ]
+    if not plausible:
+        return pattern
+
+    x0 = min(float(item["label_bbox"][0]) for _t, _d, item in plausible)
+    y0 = min(float(item["label_bbox"][1]) for _t, _d, item in plausible)
+    x1 = max(float(item["label_bbox"][2]) for _t, _d, item in plausible)
+    y1 = max(
+        float((item.get("dimension_line") or item["label_bbox"])[1])
+        for _t, _d, item in plausible
+    )
+    pad_x, pad_top, pad_bottom = 80, 35, 115
+    crop_box = [
+        max(0, int(x0 - pad_x)),
+        max(0, int(y0 - pad_top)),
+        min(source_image.width, int(x1 + pad_x)),
+        min(source_image.height, int(y1 + pad_bottom)),
+    ]
+    crop = source_image.crop(tuple(crop_box))
+    candidate_pairs = sorted({(thread, drill) for thread, drill, _item in plausible})
+    prompt = (
+        "На фрагменте показаны вложенные осевые размеры глухого резьбового "
+        "отверстия. Выбери ровно одну НАПЕЧАТАННУЮ пару: меньшая длина полной "
+        "резьбы thread_depth_mm и большая глубина сверления drill_depth_mm. "
+        "Верни только одну пару из candidate_pairs; если подписи не видны "
+        "однозначно, верни null/null. Нельзя исправлять или придумывать числа.\n"
+        f"candidate_pairs={candidate_pairs}"
+    )
+    answer = await _ask(
+        prompt,
+        crop,
+        num_predict=180,
+        schema={
+            "type": "object",
+            "properties": {
+                "thread_depth_mm": {"type": ["number", "null"]},
+                "drill_depth_mm": {"type": ["number", "null"]},
+            },
+            "required": ["thread_depth_mm", "drill_depth_mm"],
+            "additionalProperties": False,
+        },
+        router=router,
+        confidential=confidential,
+        audit=audit,
+    )
+    selected = (
+        _num((answer or {}).get("thread_depth_mm")),
+        _num((answer or {}).get("drill_depth_mm")),
+    )
+    if selected not in candidate_pairs:
+        return pattern
+    thread_depth, drill_depth = selected
+    assert thread_depth is not None and drill_depth is not None
+    resolved = dict(pattern)
+    resolved.update({
+        "from_face": from_face,
+        "through": False,
+        "depth_mm": drill_depth,
+        "thread_depth_mm": thread_depth,
+        "drill_depth_mm": drill_depth,
+    })
+    resolved["evidence"] = [
+        *(resolved.get("evidence") or []),
+        {
+            "image_index": 0,
+            "bbox": crop_box,
+            "raw_text": (
+                f"bounded nested-depth read {thread_depth:g}/{drill_depth:g} mm; "
+                f"end view registered to {from_face}"
+            ),
+        },
+    ]
+    return resolved
+
+
+def _chamfer_edge_candidates(
+    outer: list[dict], bore: list[dict]
+) -> list[dict[str, Any]]:
+    """Finite B-Rep edge vocabulary offered to the grouped-callout reader."""
+    candidates: list[dict[str, Any]] = []
+
+    def add(profile: str, location: str, z: float, diameter: float | None) -> None:
+        if diameter is None or diameter <= 0:
+            return
+        key = f"{profile}-z{z:g}-d{diameter:g}"
+        if any(item["id"] == key for item in candidates):
+            return
+        candidates.append({
+            "id": key,
+            "profile": profile,
+            "location": location,
+            "at_z_mm": round(z, 6),
+            "at_diameter_mm": round(diameter, 6),
+        })
+
+    if outer:
+        add("outer", "left_end", 0.0, _num(outer[0].get("diameter_mm")))
+        z = 0.0
+        for index, section in enumerate(outer):
+            z += _num(section.get("length_mm")) or 0.0
+            if index + 1 < len(outer):
+                add("outer", "shoulder", z, _num(section.get("diameter_mm")))
+                add(
+                    "outer", "shoulder", z,
+                    _num(outer[index + 1].get("diameter_mm")),
+                )
+        add("outer", "right_end", z, _num(outer[-1].get("diameter_mm")))
+
+    if bore:
+        add("bore", "bore_mouth", 0.0, _num(bore[0].get("diameter_mm")))
+        z = 0.0
+        for index, section in enumerate(bore):
+            z += _num(section.get("length_mm")) or 0.0
+            if index + 1 < len(bore):
+                add("bore", "bore_mouth", z, _num(section.get("diameter_mm")))
+                add(
+                    "bore", "bore_mouth", z,
+                    _num(bore[index + 1].get("diameter_mm")),
+                )
+        add("bore", "bore_mouth", z, _num(bore[-1].get("diameter_mm")))
+    return candidates
+
+
+def _chamfer_candidate_contact_sheet(
+    source_image: Any,
+    candidates: list[dict[str, Any]],
+    profile_evidence: dict[str, Any] | None,
+) -> tuple[Any, dict[str, str]]:
+    """Show each real edge as a labelled profile crop, not an abstract id.
+
+    A VLM looking at a full A3 sheet cannot reliably translate ``z=377, Ø75``
+    back to one tiny diagonal. The deterministic dimension maps already know
+    the drawing coordinate system, so they crop the upper and lower profile
+    representation of every circular B-Rep candidate. The model still decides
+    only what is visible; it cannot move or create an edge.
+    """
+    axial_map = (profile_evidence or {}).get("axial_map") or {}
+    diameter_map = (profile_evidence or {}).get("diameter_map") or {}
+    datum = axial_map.get("datum_line") or []
+    mm_per_px = _num(axial_map.get("mm_per_px"))
+    center_y = _num(diameter_map.get("profile_center_y_px"))
+    px_per_mm = _num(diameter_map.get("px_per_mm"))
+    if (
+        source_image is None
+        or len(datum) != 2
+        or not mm_per_px
+        or center_y is None
+        or not px_per_mm
+    ):
+        return source_image, {}
+
+    from PIL import Image, ImageDraw
+
+    columns = 4
+    tile_width, tile_height = 300, 150
+    rows = (len(candidates) + columns - 1) // columns
+    sheet = Image.new("RGB", (columns * tile_width, rows * tile_height), "white")
+    draw = ImageDraw.Draw(sheet)
+    token_map: dict[str, str] = {}
+    half_width, half_height = 72, 25
+    for index, item in enumerate(candidates):
+        token = f"C{index + 1:02d}"
+        token_map[token] = item["id"]
+        column, row = index % columns, index // columns
+        tile_x, tile_y = column * tile_width, row * tile_height
+        z = float(item["at_z_mm"])
+        diameter = float(item["at_diameter_mm"])
+        source_x = float(datum[0]) + z / mm_per_px
+        radial_px = diameter * px_per_mm / 2.0
+        draw.text(
+            (tile_x + 4, tile_y + 3),
+            f"{token}  z={z:g}  d={diameter:g}  {item['profile']}",
+            fill="black",
+        )
+        for position, source_y in enumerate(
+            (center_y - radial_px, center_y + radial_px)
+        ):
+            crop_box = (
+                max(0, int(source_x - half_width)),
+                max(0, int(source_y - half_height)),
+                min(source_image.width, int(source_x + half_width)),
+                min(source_image.height, int(source_y + half_height)),
+            )
+            crop = source_image.crop(crop_box).resize((288, 55))
+            sheet.paste(crop, (tile_x + 6, tile_y + 23 + position * 60))
+            marker_y = tile_y + 50 + position * 60
+            draw.ellipse(
+                (tile_x + 142, marker_y - 8, tile_x + 158, marker_y + 8),
+                outline=(220, 0, 0),
+                width=2,
+            )
+        draw.rectangle(
+            (tile_x, tile_y, tile_x + tile_width - 1, tile_y + tile_height - 1),
+            outline=(160, 160, 160),
+        )
+    return sheet, token_map
+
+
+async def _resolve_grouped_chamfers(
+    source_image: Any,
+    callouts: dict[str, Any],
+    localized: list[dict],
+    outer: list[dict],
+    bore: list[dict],
+    profile_evidence: dict[str, Any] | None = None,
+    *,
+    router: Any,
+    confidential: bool,
+    audit: list[dict[str, Any]] | None,
+) -> tuple[list[dict], dict[str, Any]]:
+    """Resolve ``6 chamfers 1x45`` against a finite set of real profile edges.
+
+    The VLM may point at candidates but may not create coordinates. A result is
+    accepted only as a complete set of the stated cardinality, with every id
+    belonging to the deterministic profile catalogue. Otherwise the original
+    localized subset and a precise ambiguity record are preserved.
+    """
+    texts = [
+        str((item or {}).get("value") or (item or {}).get("text") or "")
+        for item in (callouts.get("dimensions") or [])
+        + (callouts.get("annotations") or [])
+        if isinstance(item, dict)
+    ]
+    counts = [
+        int(match.group(1))
+        for text in texts
+        for match in [re.search(r"\b(\d+)\s*фас", text, re.IGNORECASE)]
+        if match
+    ]
+    expected = max(counts, default=0)
+    if not expected or len(localized) >= expected or source_image is None:
+        return localized, {
+            "status": "not_needed" if expected <= len(localized) else "no_source",
+            "expected": expected,
+            "localized": len(localized),
+        }
+    candidates = _chamfer_edge_candidates(outer, bore)
+    if len(candidates) < expected:
+        return localized, {
+            "status": "insufficient_geometric_candidates",
+            "expected": expected,
+            "candidate_count": len(candidates),
+        }
+
+    import json
+
+    reader_image, token_map = _chamfer_candidate_contact_sheet(
+        source_image, candidates, profile_evidence
+    )
+    offered = (
+        [{"token": token, "candidate_id": candidate_id}
+         for token, candidate_id in token_map.items()]
+        if token_map
+        else candidates
+    )
+    prompt = (
+        "На исходном продольном разрезе указано групповое требование "
+        f"ровно {expected} фасок. Ниже конечный список реальных круговых "
+        "кромок будущего тела. На контактном листе каждый token показывает "
+        "верхний и нижний фрагмент одной физической круговой кромки; точное "
+        "место кромки обведено красным. Верни "
+        "candidate_ids как token ТОЛЬКО для кромок, где на фрагменте видна "
+        "диагональ фаски или к ним явно относится выноска. "
+        "Не выбирай по симметрии и не создавай координаты. Если доказательств "
+        f"не хватает ровно на {expected} кромок, верни пустой список.\n"
+        + json.dumps(offered, ensure_ascii=False, separators=(",", ":"))
+    )
+    answer = await _ask(
+        prompt,
+        reader_image,
+        num_predict=700,
+        schema={
+            "type": "object",
+            "properties": {
+                "candidate_ids": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {"type": "string"},
+                }
+            },
+            "required": ["candidate_ids"],
+            "additionalProperties": False,
+        },
+        router=router,
+        confidential=confidential,
+        audit=audit,
+    )
+    selected_ids = list(dict.fromkeys(
+        str(item) for item in (answer or {}).get("candidate_ids") or []
+    ))
+    by_id = {item["id"]: item for item in candidates}
+    resolved_ids = [token_map.get(item, item) for item in selected_ids]
+    valid = [by_id[item] for item in resolved_ids if item in by_id]
+    if len(valid) != expected or len(valid) != len(selected_ids):
+        return localized, {
+            "status": "ambiguous_source",
+            "expected": expected,
+            "candidate_count": len(candidates),
+            "model_selected": selected_ids,
+            "resolved_candidate_ids": resolved_ids,
+            "accepted": [],
+        }
+
+    exemplar = localized[0] if localized else {"size_mm": 1.0, "angle_deg": 45.0}
+    resolved = [{
+        "size_mm": _num(exemplar.get("size_mm")) or 1.0,
+        "angle_deg": _num(exemplar.get("angle_deg")) or 45.0,
+        "location": item["location"],
+        "at_z_mm": item["at_z_mm"],
+        "at_diameter_mm": item["at_diameter_mm"],
+        "evidence": [{
+            "image_index": 0,
+            "bbox": None,
+            "raw_text": (
+                f"group callout {expected} chamfers; source-visible edge "
+                f"{item['id']} selected from deterministic B-Rep catalogue"
+            ),
+        }],
+    } for item in valid]
+    return resolved, {
+        "status": "resolved",
+        "expected": expected,
+        "candidate_count": len(candidates),
+        "model_selected": selected_ids,
+        "accepted": resolved_ids,
+    }
 
 
 def _feature_completeness_issues(
@@ -1556,10 +2065,11 @@ def _feature_completeness_issues(
             missing.append("торец")
         if item.get("through") is None:
             missing.append("сквозное/глухое исполнение")
-        if item.get("through") is False and _num(item.get("depth_mm")) is None:
-            missing.append("глубина")
-        if _num(item.get("pilot_diameter_mm")) is None:
-            missing.append("Ø подготовительного отверстия")
+        if item.get("through") is False and not (
+            _num(item.get("drill_depth_mm"))
+            or _num(item.get("depth_mm"))
+        ):
+            missing.append("глубина сверления")
         if missing:
             designation = str((item.get("thread") or {}).get("designation") or "резьба")
             issues.append(

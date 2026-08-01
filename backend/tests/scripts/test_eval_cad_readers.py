@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 
@@ -175,22 +176,38 @@ def test_reader_scores_only_source_supported_axial_pattern_fields() -> None:
     reference = {"main_view": {"axial_holes": [{
         "count": 2,
         "bolt_circle_diameter_mm": 65,
+        "from_face": "zmin",
+        "through": False,
+        "thread_depth_mm": 15,
+        "drill_depth_mm": 17,
         "thread": {"nominal_diameter_mm": 8, "internal": True},
     }]}}
     prediction = {"main_view": {"axial_holes": [{
         "count": 2,
         "bolt_circle_diameter_mm": 65,
-        "from_face": None,
-        "through": None,
+        "from_face": "zmin",
+        "through": False,
+        "thread_depth_mm": 15,
+        "drill_depth_mm": 17,
         "pilot_diameter_mm": None,
         "thread": {"nominal_diameter_mm": 8, "internal": True},
     }]}}
 
     score = score_parameters(prediction, reference)
 
-    assert score["parameters_matched"] == 4
-    assert score["parameters_total"] == 4
+    assert score["parameters_matched"] == 8
+    assert score["parameters_total"] == 8
     assert score["parameter_accuracy"] == 1.0
+
+
+def test_detal_126_reference_has_63_independent_source_parameters() -> None:
+    fixture = pathlib.Path(__file__).parents[1] / "fixtures" / "detal_126_reference_spec_v3.json"
+    reference = json.loads(fixture.read_text(encoding="utf-8"))
+
+    score = score_parameters(reference, reference)
+
+    assert score["parameters_matched"] == 63
+    assert score["parameters_total"] == 63
 
 
 def test_reader_scores_taper_ratio_as_a_semantic_parameter() -> None:
