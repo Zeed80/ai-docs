@@ -154,6 +154,20 @@ def _asset_metadata(profile: str, relative_path: str, asset_format: str) -> dict
     }
 
 
+def _buildingsmart_source_group(source_id: str, relative_path: str) -> str:
+    """Group schema-version variants of the same official scene together."""
+
+    normalized = relative_path.replace("\\", "/")
+    marker = "/PCERT-Sample-Scene/"
+    if marker in normalized:
+        logical_path = f"pcert/{normalized.split(marker, 1)[1]}"
+    else:
+        # Specification snippets are identified by filename. Directory names
+        # commonly contain only the IFC schema/release variant.
+        logical_path = f"spec/{pathlib.PurePosixPath(normalized).name}"
+    return f"{source_id}:{logical_path.lower()}"
+
+
 def _entity_count(path: pathlib.Path) -> int:
     import ezdxf
 
@@ -421,7 +435,7 @@ def acquire_buildingsmart_samples(
         destination = output / "ifc" / source["id"] / f"{safe_name}_{digest[:12]}.ifc"
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
-        group = f"{source['id']}:{relative}"
+        group = _buildingsmart_source_group(source["id"], relative)
         assets.append(
             Asset(
                 source_id=source["id"],

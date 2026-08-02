@@ -105,7 +105,7 @@
 
 ## 6. Последовательность реализации
 
-- [x] Инвентаризировать источники и построить manifest v2 с доменом, классом, лицензией, truth layers и source group. Первый reproducible snapshot: `239` assets (`127 mechanical`, `102 construction`, `10 mixed`), включая `181 STEP`, `35 DXF`, `23 IFC`; validator подтвердил `239/239`, source-group leakage отсутствует.
+- [x] Инвентаризировать источники и построить manifest v2 с доменом, классом, лицензией, truth layers и source group. Первый reproducible snapshot: `239` assets в `230` логических source groups (`127 mechanical`, `102 construction`, `10 mixed`), включая `181 STEP`, `35 DXF`, `23 IFC`; IFC4/IFC4X3 варианты одной сцены принудительно находятся в одном split, validator подтвердил отсутствие leakage.
 - [x] Добавить production IFC parser/evaluator: `23/23` файлов разобраны, `11445` IFC entities, `984` products, `717` represented products, `40` storeys, `4` spaces, `55` distribution elements.
 - [ ] Сформировать минимальный balanced baseline по каждому классу.
 - [ ] Добавить mechanical B-Rep evaluator и construction IFC evaluator.

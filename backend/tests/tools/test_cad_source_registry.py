@@ -81,3 +81,11 @@ def test_classes_keep_mechanical_and_construction_separate() -> None:
     assert MODULE._drawing_class(
         "construction", "IFC 4.3/Structural/beam.ifc", "ifc"
     ) == "structural"
+
+
+def test_buildingsmart_schema_variants_share_source_group() -> None:
+    ifc4 = "IFC 4.0.2.1 (IFC 4)/PCERT-Sample-Scene/Building-Architecture.ifc"
+    ifc4x3 = "IFC 4.3.2.0 (IFC4X3_ADD2)/PCERT-Sample-Scene/Building-Architecture.ifc"
+    assert MODULE._buildingsmart_source_group("building", ifc4) == (
+        MODULE._buildingsmart_source_group("building", ifc4x3)
+    )
