@@ -114,6 +114,7 @@
 - [x] Удалить coplanar mesh diagonals и оставить boundary/feature/silhouette edges: объём IFC observations снижен с `420565` до `142699` сегментов без geometry failures.
 - [x] Сформировать source-grouped IFC raster corpus по пространственным контейнерам: одна каноническая версия на логическую сцену, `177` листов, `40286` сущностей, split `153/12/12`; все листы одного здания остаются в одном split.
 - [x] Снять construction baseline: holdout `12` листов, precision `0,230461`, recall `0,082378`, F1 `0,121372`, exact sheet `25%`, false exact `75%`; promotion запрещён низкой полнотой и ложным exact.
+- [~] Реализовать корректное строительное представление: добавлены ray-cast hidden-line classification по общей IFC-сцене, три независимых прогона видимости на ребро, сечение каждого этажа на `+1,2 м`, объединение коллинеарных граней сечения и семантические стили IFC-классов. Обычная проекция сверху больше не принимается за план этажа при наличии `plan_section`. Unit/contract проверки: `22 passed`; полный corpus rebuild и новые метрики остаются обязательными до отметки `[x]`.
 - [ ] Сформировать минимальный balanced baseline по каждому классу.
 - [ ] Добавить mechanical B-Rep evaluator и construction IFC evaluator.
 - [ ] Прогнать текущий live stack без подстройки и сохранить исходный baseline.

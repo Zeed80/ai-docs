@@ -12,6 +12,24 @@ import sys
 from collections import Counter, defaultdict
 
 
+def _line_style(ifc_class: str, edge_kind: str, visibility: str) -> tuple[str, str]:
+    if visibility == "hidden":
+        return "hidden", "thin"
+    if edge_kind == "section":
+        return "contour", "main"
+    if ifc_class in {"IfcGrid", "IfcVirtualElement"}:
+        return "axis", "thin"
+    if ifc_class in {"IfcSpace", "IfcOpeningElement", "IfcAnnotation"}:
+        return "thin", "thin"
+    service_tokens = (
+        "Distribution", "Flow", "Pipe", "Duct", "Cable", "Pump", "Fan", "Boiler",
+        "Chiller", "Valve", "Sanitary", "Outlet", "Controller", "Sensor", "Actuator",
+    )
+    if any(token in ifc_class for token in service_tokens):
+        return "thin", "thin"
+    return "contour", "main"
+
+
 def _canonical_assets_and_splits(source_assets: list[dict]) -> tuple[list[dict], dict[str, str]]:
     by_group: dict[str, list[dict]] = defaultdict(list)
     for row in source_assets:
@@ -61,6 +79,7 @@ def build(
     *,
     repo: pathlib.Path | None = None,
     max_entities: int = 2000,
+    include_hidden: bool = False,
 ) -> dict:
     repo = repo or pathlib.Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(repo / "backend"))
@@ -85,10 +104,26 @@ def build(
         payload = json.loads(projection_path.read_text())
         element_map = {item["guid"]: item for item in payload["elements"]}
         for view_name, primitives in payload["views"].items():
+            # A top projection of the complete building usually shows its roof,
+            # not a floor plan. Once a cut-plane view exists it is the only
+            # truthful plan representation admitted into the corpus.
+            if view_name == "plan" and payload["views"].get("plan_section"):
+                continue
+            if not include_hidden:
+                primitives = [
+                    item
+                    for item in primitives
+                    if item.get("visibility", "visible") == "visible"
+                ]
             groups: dict[str, list[dict]] = defaultdict(list)
             for primitive in primitives:
                 element = element_map.get(primitive["element_guid"], {})
-                groups[element.get("container_guid") or "root"].append(primitive)
+                if view_name == "plan_section":
+                    group_guid = primitive.get("storey_guid") or element.get("storey_guid")
+                else:
+                    group_guid = element.get("container_guid")
+                group_guid = group_guid or "root"
+                groups[group_guid].append(primitive)
             for container_guid, selected in sorted(groups.items()):
                 coordinates = [point for item in selected for point in (item["p1"], item["p2"])]
                 min_x, max_x = min(p[0] for p in coordinates), max(p[0] for p in coordinates)
@@ -121,6 +156,11 @@ def build(
                         continue
                     guid = primitive["element_guid"]
                     ifc_class = primitive["ifc_class"]
+                    line_class, width_class = _line_style(
+                        ifc_class,
+                        primitive.get("edge_kind", "feature"),
+                        primitive.get("visibility", "visible"),
+                    )
                     included_guids.add(guid)
                     class_counts[ifc_class] += 1
                     entities.append(Segment(
@@ -129,7 +169,14 @@ def build(
                         confidence=1.0,
                         origin="spec",
                         assurance="constraint_validated",
-                        evidence=[f"ifc-guid:{guid}", f"ifc-class:{ifc_class}"],
+                        line_class=line_class,
+                        width_class=width_class,
+                        evidence=[
+                            f"ifc-guid:{guid}",
+                            f"ifc-class:{ifc_class}",
+                            f"edge-kind:{primitive.get('edge_kind', 'feature')}",
+                            f"visibility:{primitive.get('visibility', 'visible')}",
+                        ],
                     ))
                 if len(entities) < 3:
                     rejected.append({"id": identifier, "reason": "too_few_visible_entities"})
@@ -157,7 +204,11 @@ def build(
                     "domain": "construction",
                     "drawing_class": asset["drawing_class"],
                     "kind": "ifc_container_exact_projection",
-                    "truth_kind": "ifc_semantic_orthographic_projection",
+                    "truth_kind": (
+                        "ifc_semantic_storey_section"
+                        if view_name == "plan_section"
+                        else "ifc_semantic_hidden_line_projection"
+                    ),
                     "truth_layers": ["vector_drawing_geometry", "ifc_semantics", "ifc_geometry"],
                     "source_group_id": asset["source_group_id"],
                     "split": benchmark_split[asset["source_group_id"]],
@@ -167,6 +218,7 @@ def build(
                     "ir": str(ir_path.resolve()),
                     "model": asset["output_path"],
                     "view": view_name,
+                    "projection_contract": payload.get("projection", {}),
                     "container_guid": container_guid,
                     "element_guids": sorted(included_guids),
                     "ifc_class_counts": dict(sorted(class_counts.items())),
@@ -197,8 +249,15 @@ def main() -> int:
     parser.add_argument("--projections", required=True, type=pathlib.Path)
     parser.add_argument("--out", required=True, type=pathlib.Path)
     parser.add_argument("--max-entities", type=int, default=2000)
+    parser.add_argument("--include-hidden", action="store_true")
     args = parser.parse_args()
-    summary = build(args.assets, args.projections, args.out, max_entities=args.max_entities)
+    summary = build(
+        args.assets,
+        args.projections,
+        args.out,
+        max_entities=args.max_entities,
+        include_hidden=args.include_hidden,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["sheets"] else 1
 

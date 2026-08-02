@@ -34,3 +34,12 @@ def test_group_split_keeps_validation_and_holdout_for_small_corpus():
     assert list(splits.values()).count("train") == 10
     assert list(splits.values()).count("val") == 2
     assert list(splits.values()).count("holdout") == 2
+
+
+def test_ifc_line_styles_preserve_visibility_section_and_semantic_weight():
+    assert MODULE._line_style("IfcWall", "section", "visible") == ("contour", "main")
+    assert MODULE._line_style("IfcWall", "feature", "hidden") == ("hidden", "thin")
+    assert MODULE._line_style("IfcGrid", "feature", "visible") == ("axis", "thin")
+    assert MODULE._line_style("IfcSpace", "boundary", "visible") == ("thin", "thin")
+    assert MODULE._line_style("IfcDistributionElement", "feature", "visible") == ("thin", "thin")
+    assert MODULE._line_style("IfcPipeSegment", "feature", "visible") == ("thin", "thin")

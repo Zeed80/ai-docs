@@ -6,7 +6,13 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 
-from project_ifc_views import _drawing_edges, _edge_indices, _round_point
+from project_ifc_views import (
+    _drawing_edges,
+    _edge_indices,
+    _section_segments,
+    _visible_edge_parts,
+    _round_point,
+)
 
 
 def test_edge_indices_prefers_explicit_topology():
@@ -44,3 +50,30 @@ def test_drawing_edges_keep_sharp_feature():
     ]
     edges = _drawing_edges(vertices, [0, 1, 2, 0, 3, 1], (0, 1, 0))
     assert edges[(0, 1)] in {"feature", "silhouette"}
+
+
+def test_section_segments_cut_vertical_faces_without_coplanar_diagonals():
+    vertices = [
+        0, 0, 0,
+        1, 0, 0,
+        1, 0, 2,
+        0, 0, 2,
+    ]
+    segments = _section_segments(vertices, [0, 1, 2, 0, 2, 3], 1.2)
+    assert segments == [((0.0, 0.0, 1.2), (1.0, 0.0, 1.2))]
+
+
+def test_visible_edge_parts_keep_visibility_per_span():
+    class AlternatingTree:
+        calls = 0
+
+        def select_ray(self, origin, direction, length):
+            self.calls += 1
+            distance = 10.0 if self.calls == 2 else 20.0
+            return [SimpleNamespace(position=(origin[0], origin[1], origin[2] - distance))]
+
+    parts = _visible_edge_parts(
+        AlternatingTree(), (0, 0, 0), (3, 0, 0), (0, 0, 1), 20, 1e-6
+    )
+    assert [part[2] for part in parts] == ["visible", "hidden", "visible"]
+    assert parts[0][:2] == ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
