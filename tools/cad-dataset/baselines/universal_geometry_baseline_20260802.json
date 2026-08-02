@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-08-02",
+  "corpus": {
+    "source_manifest_schema": 2,
+    "source_assets": 239,
+    "source_groups": 230,
+    "step_assets": 181,
+    "step_projected": 176,
+    "step_projection_failures": 5,
+    "drawing_sheets": 518,
+    "drawing_source_groups": 175,
+    "drawing_entities": 71153,
+    "holdout_sheets": 45
+  },
+  "recognizer": "cv",
+  "truth_kind": "step_brep_orthographic_projection",
+  "metric_contract": "semantic_entity_level",
+  "holdout": {
+    "files": 45,
+    "evaluated_files": 45,
+    "errors": 0,
+    "entity_precision": 0.190324,
+    "entity_recall": 0.094941,
+    "entity_f1": 0.126686,
+    "exact_sheet_rate": 0.0,
+    "false_exact_rate": 1.0,
+    "by_domain": {
+      "construction": {"files": 15, "entity_f1": 0.212648},
+      "mechanical": {"files": 30, "entity_f1": 0.115228}
+    },
+    "by_class": {
+      "architectural_component": {"files": 12, "entity_f1": 0.219622},
+      "bearing": {"files": 9, "entity_f1": 0.038371},
+      "power_transmission": {"files": 6, "entity_f1": 0.149778},
+      "standard_fastener": {"files": 15, "entity_f1": 0.151307},
+      "structural": {"files": 3, "entity_f1": 0.189024}
+    }
+  },
+  "promotion_eligible": false,
+  "notes": [
+    "Pixel coverage is diagnostic only and did not promote any sheet.",
+    "This baseline measures exact projected geometry, not dimensions or PMI.",
+    "Five STEP imports and ten unusable views were rejected rather than scored as partial truth."
+  ]
+}

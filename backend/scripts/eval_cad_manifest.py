@@ -112,6 +112,8 @@ def evaluate(
                     "id": row["id"],
                     "source_group_id": row["source_group_id"],
                     "truth_kind": row.get("truth_kind"),
+                    "domain": row.get("domain", row.get("profile", "unknown")),
+                    "drawing_class": row.get("drawing_class", "unclassified"),
                 }
             )
         except Exception as exc:  # noqa: BLE001 - keep the benchmark exhaustive
@@ -121,6 +123,19 @@ def evaluate(
                 "error": f"{type(exc).__name__}: {str(exc)[:300]}",
             }
         records.append(record)
+    summary = aggregate(records)
+    summary["by_domain"] = {
+        domain: aggregate([record for record in records if record.get("domain") == domain])
+        for domain in sorted({record.get("domain", "unknown") for record in records})
+    }
+    summary["by_class"] = {
+        drawing_class: aggregate([
+            record for record in records if record.get("drawing_class") == drawing_class
+        ])
+        for drawing_class in sorted({
+            record.get("drawing_class", "unclassified") for record in records
+        })
+    }
     return {
         "schema_version": 1,
         "manifest": str(manifest_path),
@@ -133,7 +148,7 @@ def evaluate(
             "promotion_exact_sheet_rate": 0.99,
             "pixel_coverage_can_promote": False,
         },
-        "summary": aggregate(records),
+        "summary": summary,
         "records": records,
     }
 

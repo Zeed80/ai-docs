@@ -54,3 +54,13 @@ def test_declines_cannot_disappear_from_file_count() -> None:
     assert summary["files"] == 2
     assert summary["evaluated_files"] == 1
     assert summary["declined_files"] == 1
+
+
+def test_aggregate_preserves_zero_exact_rate_for_weak_geometry() -> None:
+    summary = aggregate([
+        _record(tp=2, fp=8, fn=18, exact=False, false_exact=True),
+        _record(tp=1, fp=9, fn=9, exact=False, false_exact=True),
+    ])
+    assert summary["entity_f1"] < 0.2
+    assert summary["exact_sheet_rate"] == 0.0
+    assert summary["false_exact_rate"] == 1.0

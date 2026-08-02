@@ -144,14 +144,21 @@ def build(
             control_path.write_bytes(exact_png)
             rows.append(
                 {
+                    "schema_version": 2,
                     "id": stem,
                     "profile": asset["profile"],
+                    "domain": asset.get("domain", asset["profile"]),
+                    "drawing_class": asset.get("drawing_class", "unclassified"),
                     "kind": "web_step_exact_projection",
+                    "truth_kind": "step_brep_orthographic_projection",
+                    "truth_layers": ["vector_drawing_geometry", "brep_geometry"],
                     "source_group_id": asset["source_group_id"],
+                    "source_sha256": asset["sha256"],
                     "split": asset["split"],
                     "image": str(image_path.resolve()),
                     "control_images": [str(control_path.resolve())],
                     "ir": str(ir_path.resolve()),
+                    "model": asset["output_path"],
                     "license": asset["license"],
                     "attribution": asset.get("attribution"),
                     "view": view_name,
@@ -169,6 +176,10 @@ def build(
         "profiles": {
             profile: sum(row["profile"] == profile for row in rows)
             for profile in ("mechanical", "construction")
+        },
+        "classes": {
+            drawing_class: sum(row["drawing_class"] == drawing_class for row in rows)
+            for drawing_class in sorted({row["drawing_class"] for row in rows})
         },
         "splits": {
             split: sum(row["split"] == split for row in rows)

@@ -107,6 +107,10 @@
 
 - [x] Инвентаризировать источники и построить manifest v2 с доменом, классом, лицензией, truth layers и source group. Первый reproducible snapshot: `239` assets в `230` логических source groups (`127 mechanical`, `102 construction`, `10 mixed`), включая `181 STEP`, `35 DXF`, `23 IFC`; IFC4/IFC4X3 варианты одной сцены принудительно находятся в одном split, validator подтвердил отсутствие leakage.
 - [x] Добавить production IFC parser/evaluator: `23/23` файлов разобраны, `11445` IFC entities, `984` products, `717` represented products, `40` storeys, `4` spaces, `55` distribution elements.
+- [x] Спроецировать STEP ground truth в ортогональные листы: `176/181` моделей, `518` листов из `175` source groups, `71153` семантических сущности; 5 импортов и 10 непригодных видов отклонены.
+- [x] Снять честный исходный CV baseline на 45 holdout-листах: precision `0,190324`, recall `0,094941`, entity F1 `0,126686`, exact sheet `0%`, false exact `100%`. Этот результат запрещает promotion текущего распознавателя.
+- [x] Добавить разрез baseline по доменам и классам: `mechanical F1=0,115228`, `construction components F1=0,212648`; худший измеренный класс — bearings `F1=0,038371`.
+- [x] Построить IFC semantic projections с сохранением GUID и IFC-класса каждого ребра: `23/23` сцен, `717` геометрических products, geometry failures `0`; получены plan/front/side ground-truth observations. Треугольные рёбра пока не являются готовым чертёжным представлением и должны пройти hidden-line/silhouette reduction до raster benchmark.
 - [ ] Сформировать минимальный balanced baseline по каждому классу.
 - [ ] Добавить mechanical B-Rep evaluator и construction IFC evaluator.
 - [ ] Прогнать текущий live stack без подстройки и сохранить исходный baseline.
