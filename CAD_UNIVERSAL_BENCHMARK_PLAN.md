@@ -111,6 +111,9 @@
 - [x] Снять честный исходный CV baseline на 45 holdout-листах: precision `0,190324`, recall `0,094941`, entity F1 `0,126686`, exact sheet `0%`, false exact `100%`. Этот результат запрещает promotion текущего распознавателя.
 - [x] Добавить разрез baseline по доменам и классам: `mechanical F1=0,115228`, `construction components F1=0,212648`; худший измеренный класс — bearings `F1=0,038371`.
 - [x] Построить IFC semantic projections с сохранением GUID и IFC-класса каждого ребра: `23/23` сцен, `717` геометрических products, geometry failures `0`; получены plan/front/side ground-truth observations. Треугольные рёбра пока не являются готовым чертёжным представлением и должны пройти hidden-line/silhouette reduction до raster benchmark.
+- [x] Удалить coplanar mesh diagonals и оставить boundary/feature/silhouette edges: объём IFC observations снижен с `420565` до `142699` сегментов без geometry failures.
+- [x] Сформировать source-grouped IFC raster corpus по пространственным контейнерам: одна каноническая версия на логическую сцену, `177` листов, `40286` сущностей, split `153/12/12`; все листы одного здания остаются в одном split.
+- [x] Снять construction baseline: holdout `12` листов, precision `0,230461`, recall `0,082378`, F1 `0,121372`, exact sheet `25%`, false exact `75%`; promotion запрещён низкой полнотой и ложным exact.
 - [ ] Сформировать минимальный balanced baseline по каждому классу.
 - [ ] Добавить mechanical B-Rep evaluator и construction IFC evaluator.
 - [ ] Прогнать текущий live stack без подстройки и сохранить исходный baseline.

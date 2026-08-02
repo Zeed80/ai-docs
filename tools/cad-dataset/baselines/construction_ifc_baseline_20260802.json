@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-08-02",
+  "corpus": {
+    "ifc_source_assets": 23,
+    "logical_source_groups": 14,
+    "canonical_ifc_assets": 14,
+    "projected_products": 285,
+    "sheets": 177,
+    "entities": 40286,
+    "rejected_views": 9,
+    "train_sheets": 153,
+    "validation_sheets": 12,
+    "holdout_sheets": 12
+  },
+  "recognizer": "cv",
+  "truth_kind": "ifc_semantic_orthographic_projection",
+  "holdout": {
+    "files": 12,
+    "entity_precision": 0.230461,
+    "entity_recall": 0.082378,
+    "entity_f1": 0.121372,
+    "exact_sheet_rate": 0.25,
+    "false_exact_rate": 0.75,
+    "by_class": {
+      "architectural_bim": {"files": 3, "entity_f1": 0.227273},
+      "building_services": {"files": 9, "entity_f1": 0.118855}
+    }
+  },
+  "promotion_eligible": false,
+  "notes": [
+    "IFC4 and IFC4X3 variants of one logical scene are kept in one group and only one is scored.",
+    "Sheets are grouped by IFC spatial container and retain source product GUIDs.",
+    "Exact rates on tiny views do not compensate for low micro entity recall."
+  ]
+}

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 
-from project_ifc_views import _edge_indices, _round_point
+from project_ifc_views import _drawing_edges, _edge_indices, _round_point
 
 
 def test_edge_indices_prefers_explicit_topology():
@@ -21,3 +21,26 @@ def test_edge_indices_falls_back_to_triangle_topology():
 
 def test_round_point_selects_projection_axes():
     assert _round_point([1.1234567, 2.0, 3.5], 0, (0, 2)) == [1.123457, 3.5]
+
+
+def test_drawing_edges_remove_coplanar_triangle_diagonal():
+    vertices = [
+        0, 0, 0,
+        1, 0, 0,
+        1, 1, 0,
+        0, 1, 0,
+    ]
+    edges = _drawing_edges(vertices, [0, 1, 2, 0, 2, 3], (0, 0, 1))
+    assert set(edges) == {(0, 1), (1, 2), (2, 3), (0, 3)}
+    assert set(edges.values()) == {"boundary"}
+
+
+def test_drawing_edges_keep_sharp_feature():
+    vertices = [
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+    ]
+    edges = _drawing_edges(vertices, [0, 1, 2, 0, 3, 1], (0, 1, 0))
+    assert edges[(0, 1)] in {"feature", "silhouette"}
