@@ -30,6 +30,7 @@ import {
   revertIr,
   runFullCheck,
   solveIr,
+  solidPreviewUrl,
   sourceUrl,
 } from "@/lib/studio-api";
 
@@ -47,6 +48,7 @@ import StatusBar from "@/components/cad/StatusBar";
 import AnnotationsPanel from "@/components/cad/AnnotationsPanel";
 import TitleBlockPanel from "@/components/cad/TitleBlockPanel";
 import ValidationPanel from "@/components/cad/ValidationPanel";
+import CadModelViewer from "@/components/studio/CadModelViewer";
 import {
   DIM_TOOL_KIND,
   Tool,
@@ -1511,6 +1513,44 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         solid={solidSummary}
         t={t}
       />
+
+      {solidSummary?.build_status === "preview_review_required" &&
+        solidSummary.paths?.stl && (
+          <section className="rounded border border-amber-400/30 bg-amber-950/15 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-medium text-amber-100">
+                  {t("vector.solid_preview_title")}
+                </h3>
+                <p className="mt-1 max-w-3xl text-[11px] text-amber-200/75">
+                  {t("vector.solid_preview_hint")}
+                </p>
+              </div>
+              <span className="rounded bg-amber-400/15 px-2 py-1 text-[10px] font-medium uppercase text-amber-200">
+                {t("vector.solid_preview_badge")}
+              </span>
+            </div>
+            <div className="mt-3 overflow-hidden rounded border border-white/10 bg-zinc-950">
+              <CadModelViewer
+                url={solidPreviewUrl(gen.id)}
+                loadingLabel={t("vector.cad_preview_loading")}
+                errorLabel={t("vector.cad_preview_error")}
+              />
+            </div>
+            {(solidSummary.excluded_geometry ?? []).length > 0 && (
+              <div className="mt-3">
+                <div className="text-[11px] font-medium text-amber-200">
+                  {t("vector.solid_preview_excluded")}
+                </div>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-zinc-400">
+                  {(solidSummary.excluded_geometry ?? []).map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+        )}
 
       <CadModelTracePanel
         reading={cadReading}

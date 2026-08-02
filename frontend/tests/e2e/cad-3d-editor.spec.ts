@@ -244,17 +244,20 @@ test("CAD blocker editor saves explicit M8 fields without guessing chamfers", as
   await mockApi(page);
   await page.goto(`/cad/${generationId}`);
 
-  await page
-    .getByRole("button", { name: "Прочитанная спецификация (можно исправить)" })
-    .click();
-  await expect(page.getByText("Осевые резьбовые отверстия")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Прочитанная спецификация (можно исправить)" }),
+  ).toBeVisible();
+  await expect(page.getByText("Готовность полной модели: 2 из 4")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Осевые резьбовые отверстия" }),
+  ).toBeVisible();
   await expect(page.getByText("Локализовано 1 из 6")).toBeVisible();
   await expect(page.getByText(/Геометрия из стандарта/)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Сохранить и пересобрать" }),
+    page.getByRole("button", { name: "Сохранить и обновить 3D-черновик" }),
   ).toBeDisabled();
   await page
-    .getByText("Осевые резьбовые отверстия")
+    .getByRole("heading", { name: "Осевые резьбовые отверстия" })
     .locator("xpath=ancestor::section")
     .screenshot({ path: "../test-results/cad-blocker-editor.png" });
 
@@ -262,6 +265,9 @@ test("CAD blocker editor saves explicit M8 fields without guessing chamfers", as
   await page.getByLabel("Исполнение").selectOption("blind");
   await page.getByLabel("Глубина резьбы, мм").fill("15");
   await page.getByLabel("Глубина сверления, мм").fill("17");
+  await expect(
+    page.getByRole("button", { name: "Сохранить и обновить 3D-черновик" }),
+  ).toBeEnabled();
   await page
     .getByRole("button", { name: "Только сохранить исправление" })
     .click();

@@ -122,6 +122,40 @@ def solid_build_gate(
     return {"allowed": not blockers, "blockers": blockers, "warnings": warnings}
 
 
+_PREVIEW_EXCLUDABLE_MARKERS = (
+    "— не построен",
+    "фасок, локализовано",
+    "малые элементы: осевые отверстия",
+    "малые элементы: массив",
+    "малые элементы: указано ",
+    "малые элементы: круговой массив",
+    "малые элементы: группа отверстий",
+)
+
+
+def solid_preview_gate(build_gate: dict[str, Any]) -> dict[str, Any]:
+    """Decide whether the proven subset may be compiled as a review preview.
+
+    A final model is still governed by :func:`solid_build_gate`.  This second
+    gate only permits omissions that are already explicit feature-level cuts
+    (a hole, keyway, groove or chamfer which the compiler skipped).  Profile,
+    dimension-chain and evidence failures remain hard blockers: a preview with
+    the wrong base body would be more misleading than no preview at all.
+    """
+    blockers = [str(item) for item in build_gate.get("blockers") or []]
+    excluded = [
+        item
+        for item in blockers
+        if any(marker in item.lower() for marker in _PREVIEW_EXCLUDABLE_MARKERS)
+    ]
+    hard_blockers = [item for item in blockers if item not in excluded]
+    return {
+        "allowed": bool(blockers) and not hard_blockers,
+        "hard_blockers": hard_blockers,
+        "excluded": excluded,
+    }
+
+
 def _profile_points(sections: list[dict]) -> list[dict[str, float]]:
     """Ordered (r, z) polyline of a stepped profile, in millimetres.
 

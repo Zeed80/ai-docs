@@ -10,6 +10,7 @@ from app.ai.cad_solid import (
     estimate_mass_kg,
     feature_tree_from_spec,
     solid_build_gate,
+    solid_preview_gate,
     verify_solid_against_spec,
 )
 
@@ -330,6 +331,48 @@ def test_reader_unresolved_always_blocks_the_3d_boundary():
     gate = solid_build_gate(spec, candidate)
     assert gate["allowed"] is False
     assert gate["blockers"] == ["размерная цепочка не сходится"]
+
+
+def test_review_preview_allows_only_explicitly_omitted_cut_features():
+    spec = _shaft_spec(
+        main_view={"chamfers": []},
+        unresolved=["указано 6 фасок, локализовано 0"],
+    )
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+
+    preview = solid_preview_gate(solid_build_gate(spec, candidate))
+
+    assert preview["allowed"] is True
+    assert preview["hard_blockers"] == []
+    assert preview["excluded"] == ["указано 6 фасок, локализовано 0"]
+
+
+def test_review_preview_accepts_live_small_feature_blocker_wording():
+    spec = _shaft_spec(unresolved=[
+        "малые элементы: массив 8×Ø1: не определены торец/входная поверхность, угловая фаза массива",
+        "малые элементы: осевые отверстия M8: не определён Ø входной выборки",
+        "малые элементы: указано 6 фасок, локализовано 0",
+    ])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+
+    preview = solid_preview_gate(solid_build_gate(spec, candidate))
+
+    assert preview["allowed"] is True
+    assert preview["hard_blockers"] == []
+    assert len(preview["excluded"]) == 3
+
+
+def test_review_preview_still_refuses_a_dimension_chain_failure():
+    spec = _shaft_spec(unresolved=["размерная цепочка не сходится"])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+
+    preview = solid_preview_gate(solid_build_gate(spec, candidate))
+
+    assert preview["allowed"] is False
+    assert preview["hard_blockers"] == ["размерная цепочка не сходится"]
 
 
 def test_raster_redraw_requires_localized_geometry_evidence_before_kernel():

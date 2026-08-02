@@ -744,6 +744,11 @@ export function artifactUrl(id: string, kind: ArtifactKind): string {
   return `${BASE}/${id}/artifact?kind=${encodeURIComponent(kind)}`;
 }
 
+/** Incomplete, non-releasable solid produced only for visual review. */
+export function solidPreviewUrl(id: string, kind: "stl" | "step" | "iges" = "stl"): string {
+  return `${BASE}/${id}/solid-preview?kind=${encodeURIComponent(kind)}`;
+}
+
 // ── CAD IR (vectorize / manual drafting) ─────────────────────────────────────
 
 export type IrLineClass =
@@ -977,6 +982,9 @@ export interface SpecConsensus {
 export interface Solid3dSummary {
   built: boolean;
   build_status?: "blocked" | "built_unverified" | "verified" | string;
+  complete?: boolean;
+  preview?: boolean;
+  excluded_geometry?: string[];
   blockers?: string[];
   warnings?: string[];
   build_gate?: { allowed?: boolean; blockers?: string[]; warnings?: string[] };

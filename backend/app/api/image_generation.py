@@ -668,6 +668,42 @@ _ARTIFACT_MEDIA_TYPES = {
 }
 
 
+@router.get("/{generation_id}/solid-preview")
+async def get_solid_preview(
+    generation_id: uuid.UUID,
+    kind: Literal["step", "iges", "stl"] = "stl",
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> Response:
+    """Serve the explicitly incomplete 3D draft for visual review.
+
+    This endpoint is intentionally separate from ``/artifact``: preview files
+    may be inspected before approval, but are never release artifacts and must
+    not bypass the accepted-revision gate.
+    """
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    solid = dict((gen.params or {}).get("solid_3d") or {})
+    if not solid.get("built") or solid.get("build_status") != "preview_review_required":
+        raise HTTPException(409, "Проверочный 3D-черновик для этой генерации отсутствует.")
+    path = (solid.get("paths") or {}).get(kind)
+    if not path:
+        raise HTTPException(404, "Файл проверочного 3D-черновика не найден")
+    try:
+        data = download_file(path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(404, "Файл проверочного 3D-черновика недоступен") from exc
+    return Response(
+        content=data,
+        media_type=_ARTIFACT_MEDIA_TYPES[kind],
+        headers={
+            "Cache-Control": "no-store",
+            "X-CAD-Artifact-Status": "preview-review-required",
+        },
+    )
+
+
 @router.get("/{generation_id}/artifact")
 async def get_artifact(
     generation_id: uuid.UUID,

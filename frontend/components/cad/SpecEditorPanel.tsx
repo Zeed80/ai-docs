@@ -146,7 +146,7 @@ export default function SpecEditorPanel({
   const [circularPatterns, setCircularPatterns] =
     useState<CircularHolePattern[]>(readCircularPatterns);
   const [saving, setSaving] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
 
   useEffect(() => setOuter(readOuter), [readOuter]);
   useEffect(() => setBore(readBore), [readBore]);
@@ -188,8 +188,14 @@ export default function SpecEditorPanel({
     readChamfers.length,
   );
 
+  const profilesComplete = [...outer, ...bore].every(
+    (item) => Number(item.diameter_mm) > 0 && Number(item.length_mm) > 0,
+  );
+
   const axialComplete = axialHoles.every(
     (item) =>
+      Number(item.count) > 0 &&
+      Number(item.bolt_circle_diameter_mm) > 0 &&
       (item.from_face === "zmin" || item.from_face === "zmax") &&
       typeof item.through === "boolean" &&
       (!(Number(item.entry_offset_mm) > 0) ||
@@ -216,6 +222,10 @@ export default function SpecEditorPanel({
     );
   const circularComplete = circularPatterns.every(
     (item) =>
+      Number(item.count) > 0 &&
+      Number(item.hole_diameter_mm) > 0 &&
+      Number(item.bolt_circle_diameter_mm) > 0 &&
+      (item.axis_mode === "axial" || item.axis_mode === "inclined") &&
       (item.from_face === "zmin" || item.from_face === "zmax") &&
       Number.isFinite(Number(item.start_angle_deg)) &&
       typeof item.through === "boolean" &&
@@ -224,7 +234,15 @@ export default function SpecEditorPanel({
         (Number(item.inclination_deg) > 0 &&
           Boolean(item.radial_direction))),
   );
-  const rebuildReady = axialComplete && chamfersComplete && circularComplete;
+  const rebuildReady =
+    profilesComplete && axialComplete && chamfersComplete && circularComplete;
+  const readiness = [
+    { label: t("vector.spec_editor_check_profile"), ok: profilesComplete },
+    { label: t("vector.spec_editor_check_axial"), ok: axialComplete },
+    { label: t("vector.spec_editor_check_patterns"), ok: circularComplete },
+    { label: t("vector.spec_editor_check_chamfers"), ok: chamfersComplete },
+  ];
+  const readyCount = readiness.filter((item) => item.ok).length;
 
   function updateSection(
     group: "outer" | "bore",
@@ -384,8 +402,40 @@ export default function SpecEditorPanel({
             {t("vector.spec_editor_hint")}
           </p>
 
-          {(outer.length > 0 || bore.length > 0) && (
-            <table className="mt-2 w-full">
+          <div className="mt-3 rounded border border-white/10 bg-black/20 p-2">
+            <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-300">
+              <span>
+                {t("vector.spec_editor_progress", {
+                  done: readyCount,
+                  total: readiness.length,
+                })}
+              </span>
+              <span className={rebuildReady ? "text-emerald-300" : "text-amber-300"}>
+                {Math.round((readyCount / readiness.length) * 100)}%
+              </span>
+            </div>
+            <div className="mt-2 grid gap-1 sm:grid-cols-2">
+              {readiness.map((item) => (
+                <div
+                  key={item.label}
+                  className={`rounded px-2 py-1 text-[11px] ${
+                    item.ok
+                      ? "bg-emerald-500/10 text-emerald-300"
+                      : "bg-amber-500/10 text-amber-200"
+                  }`}
+                >
+                  {item.ok ? "✓" : "○"} {item.label}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {outer.length > 0 && (
+            <div className="mt-4">
+              <h4 className="mb-1 font-medium text-zinc-200">
+                {t("vector.spec_editor_outer_title")}
+              </h4>
+              <table className="w-full">
               <thead className="text-[11px] text-zinc-500">
                 <tr>
                   <th className="w-8 text-left font-normal">#</th>
@@ -402,9 +452,28 @@ export default function SpecEditorPanel({
               </thead>
               <tbody>
                 {rows("outer", outer)}
-                {rows("bore", bore)}
               </tbody>
-            </table>
+              </table>
+            </div>
+          )}
+
+          {bore.length > 0 && (
+            <div className="mt-4">
+              <h4 className="mb-1 font-medium text-zinc-200">
+                {t("vector.spec_editor_bore_title")}
+              </h4>
+              <table className="w-full">
+                <thead className="text-[11px] text-zinc-500">
+                  <tr>
+                    <th className="w-8 text-left font-normal">#</th>
+                    <th className="text-left font-normal">{t("vector.spec_editor_diameter")}</th>
+                    <th className="text-left font-normal">{t("vector.spec_editor_length")}</th>
+                    <th className="text-left font-normal">{t("vector.spec_editor_tolerance")}</th>
+                  </tr>
+                </thead>
+                <tbody>{rows("bore", bore)}</tbody>
+              </table>
+            </div>
           )}
 
           {axialHoles.length > 0 && (
@@ -429,7 +498,19 @@ export default function SpecEditorPanel({
                       {shown(item.bolt_circle_diameter_mm)}
                     </span>
                   </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-6">
+                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_count")}
+                      <div className="mt-1">
+                        {numericInput(item.count, (value) => updateAxial(index, "count", value), "w-full")}
+                      </div>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_pcd")}
+                      <div className="mt-1">
+                        {numericInput(item.bolt_circle_diameter_mm, (value) => updateAxial(index, "bolt_circle_diameter_mm", value), "w-full")}
+                      </div>
+                    </label>
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_from_face")}
                       <select
@@ -551,7 +632,40 @@ export default function SpecEditorPanel({
                     {shown(item.count)}×⌀{shown(item.hole_diameter_mm)} · PCD ⌀
                     {shown(item.bolt_circle_diameter_mm)} · {String(item.axis_mode ?? "—")}
                   </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-5">
+                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_count")}
+                      <div className="mt-1">
+                        {numericInput(item.count, (value) => updateCircular(index, "count", value), "w-full")}
+                      </div>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_diameter")}
+                      <div className="mt-1">
+                        {numericInput(item.hole_diameter_mm, (value) => updateCircular(index, "hole_diameter_mm", value), "w-full")}
+                      </div>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_pcd")}
+                      <div className="mt-1">
+                        {numericInput(item.bolt_circle_diameter_mm, (value) => updateCircular(index, "bolt_circle_diameter_mm", value), "w-full")}
+                      </div>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_axis_mode")}
+                      <select
+                        value={item.axis_mode ?? ""}
+                        onChange={(event) =>
+                          updateCircular(index, "axis_mode", event.target.value || undefined)
+                        }
+                        disabled={busy || saving}
+                        className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
+                      >
+                        <option value="">{t("vector.spec_editor_unknown")}</option>
+                        <option value="axial">{t("vector.spec_editor_axis_axial")}</option>
+                        <option value="inclined">{t("vector.spec_editor_axis_inclined")}</option>
+                      </select>
+                    </label>
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_from_face")}
                       <select
@@ -580,6 +694,25 @@ export default function SpecEditorPanel({
                           "w-full",
                         )}
                       </div>
+                    </label>
+                    <label className="text-zinc-500">
+                      {t("vector.spec_editor_execution")}
+                      <select
+                        value={typeof item.through === "boolean" ? (item.through ? "through" : "blind") : ""}
+                        onChange={(event) =>
+                          updateCircular(
+                            index,
+                            "through",
+                            event.target.value === "" ? null : event.target.value === "through",
+                          )
+                        }
+                        disabled={busy || saving}
+                        className="mt-1 w-full rounded border border-white/10 bg-zinc-900 px-1.5 py-1 text-zinc-200"
+                      >
+                        <option value="">{t("vector.spec_editor_unknown")}</option>
+                        <option value="through">{t("vector.spec_editor_through")}</option>
+                        <option value="blind">{t("vector.spec_editor_blind")}</option>
+                      </select>
                     </label>
                     <label className="text-zinc-500">
                       {t("vector.spec_editor_depth")}
@@ -624,6 +757,18 @@ export default function SpecEditorPanel({
                         </option>
                       </select>
                     </label>
+                    {item.axis_mode === "inclined" && (
+                      <label className="text-zinc-500">
+                        {t("vector.spec_editor_connection_station")}
+                        <div className="mt-1">
+                          {numericInput(
+                            item.connection_station_mm,
+                            (value) => updateCircular(index, "connection_station_mm", value),
+                            "w-full",
+                          )}
+                        </div>
+                      </label>
+                    )}
                   </div>
                 </div>
               ))}
@@ -652,7 +797,7 @@ export default function SpecEditorPanel({
               {chamfers.map((item, index) => (
                 <div
                   key={index}
-                  className="mt-2 grid grid-cols-2 gap-2 rounded border border-white/10 bg-black/20 p-2 md:grid-cols-6"
+                  className="mt-2 grid grid-cols-1 gap-2 rounded border border-white/10 bg-black/20 p-2 sm:grid-cols-2 lg:grid-cols-3"
                 >
                   <label className="text-zinc-500">
                     {t("vector.spec_editor_size")}
@@ -755,13 +900,19 @@ export default function SpecEditorPanel({
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={!dirty || !rebuildReady || busy || saving}
+              disabled={!dirty || busy || saving}
               onClick={() => save(true)}
-              className="rounded bg-emerald-600 px-2 py-1 text-white hover:bg-emerald-500 disabled:opacity-40"
+              className={`rounded px-2 py-1 text-white disabled:opacity-40 ${
+                rebuildReady
+                  ? "bg-emerald-600 hover:bg-emerald-500"
+                  : "bg-amber-600 hover:bg-amber-500"
+              }`}
             >
               {saving
                 ? t("vector.spec_editor_saving")
-                : t("vector.spec_editor_rebuild")}
+                : rebuildReady
+                  ? t("vector.spec_editor_rebuild")
+                  : t("vector.spec_editor_rebuild_preview")}
             </button>
             <button
               type="button"

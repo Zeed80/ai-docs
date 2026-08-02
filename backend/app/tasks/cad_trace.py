@@ -773,6 +773,7 @@ async def _build_spec_solid(
         estimate_mass_kg,
         feature_tree_from_spec,
         solid_build_gate,
+        solid_preview_gate,
         verify_solid_against_spec,
     )
     from app.ai.cad_process_log import record_cad_process_event
@@ -809,11 +810,20 @@ async def _build_spec_solid(
     build_gate = solid_build_gate(
         spec, candidate, require_source_evidence=require_source_evidence
     )
-    confirm_assumptions = bool(build_gate["warnings"])
+    preview_gate = solid_preview_gate(build_gate)
+    preview_mode = not bool(build_gate["allowed"]) and bool(preview_gate["allowed"])
+    confirm_assumptions = bool(build_gate["warnings"]) or preview_mode
     kernel_input = candidate_compile_payload(
         candidate,
         confirm_assumptions=confirm_assumptions,
-        metadata={"generation_id": generation_id, "source": "spec_reader"},
+        metadata={
+            "generation_id": generation_id,
+            "source": "spec_reader",
+            "preview_review_required": preview_mode,
+            "excluded_geometry": (
+                " | ".join(preview_gate["excluded"]) if preview_mode else ""
+            ),
+        },
     )
     await record_cad_process_event(
         "solid.gate",
@@ -827,11 +837,12 @@ async def _build_spec_solid(
             "label": candidate.label,
             "blockers": build_gate["blockers"],
             "warnings": build_gate["warnings"],
+            "preview_gate": preview_gate,
             "kernel_payload_sha256": kernel_input.get("sha256"),
             "confirm_assumptions": confirm_assumptions,
         },
     )
-    if not build_gate["allowed"]:
+    if not build_gate["allowed"] and not preview_mode:
         await record_cad_process_event(
             "kernel.compile",
             "skipped",
@@ -844,6 +855,7 @@ async def _build_spec_solid(
             "error": "критические данные чертежа не подтверждены",
             "blockers": build_gate["blockers"],
             "warnings": build_gate["warnings"],
+            "preview_gate": preview_gate,
             "label": candidate.label,
             "feature_tree": candidate.model_dump(mode="json"),
             "kernel_input": kernel_input,
@@ -851,7 +863,11 @@ async def _build_spec_solid(
     await record_cad_process_event(
         "kernel.compile",
         "started",
-        "Точный payload передан в CAD-ядро",
+        (
+            "Доказанная часть feature tree передана в CAD-ядро как проверочный черновик"
+            if preview_mode
+            else "Точный payload передан в CAD-ядро"
+        ),
         {
             "kernel_payload_sha256": kernel_input.get("sha256"),
             "candidate_kind": candidate.features[0].kind if candidate.features else None,
@@ -864,7 +880,14 @@ async def _build_spec_solid(
             # items are explicit review warnings (for example a drawing that
             # contains no section and may legitimately describe a solid shaft).
             confirm_assumptions=confirm_assumptions,
-            metadata={"generation_id": generation_id, "source": "spec_reader"},
+            metadata={
+                "generation_id": generation_id,
+                "source": "spec_reader",
+                "preview_review_required": preview_mode,
+                "excluded_geometry": (
+                    " | ".join(preview_gate["excluded"]) if preview_mode else ""
+                ),
+            },
         )
     except CadKernelError as exc:
         logger.warning("cad_solid_failed", generation_id=generation_id, error=str(exc))
@@ -902,7 +925,12 @@ async def _build_spec_solid(
         "kernel.verify",
         "completed" if verification.ok else "failed",
         (
-            "B-Rep прошёл проверку размеров, топологии и всех операций"
+            (
+                "B-Rep проверочного черновика прошёл проверку только включённых операций; "
+                "исключённая геометрия остаётся блокером"
+                if preview_mode
+                else "B-Rep прошёл проверку размеров, топологии и всех операций"
+            )
             if verification.ok
             else "B-Rep отклонён: размеры, топология или операции не совпали с feature tree"
         ),
@@ -987,12 +1015,23 @@ async def _build_spec_solid(
         # Geometry-vs-spec is necessary but not sufficient: the spec itself was
         # read by a model.  Until an independent source-projection comparison
         # passes, a compiled body is explicitly unverified.
-        "build_status": "built_unverified",
+        "build_status": (
+            "preview_review_required" if preview_mode else "built_unverified"
+        ),
+        "complete": not preview_mode,
+        "preview": preview_mode,
+        "blockers": build_gate["blockers"],
+        "excluded_geometry": preview_gate["excluded"] if preview_mode else [],
         "label": candidate.label,
         "paths": paths,
         "assumptions": candidate.missing_data,
         "build_gate": build_gate,
-        "verification": verification.as_dict(),
+        "preview_gate": preview_gate,
+        "verification": {
+            **verification.as_dict(),
+            "feature_complete": not preview_mode,
+            "preview_only": preview_mode,
+        },
         "source_projection_verification": {
             "ok": False,
             "status": "not_run",

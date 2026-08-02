@@ -409,6 +409,7 @@ async def _buildability(spec: dict) -> dict:
     from app.ai.cad_solid import (
         feature_tree_from_spec,
         solid_build_gate,
+        solid_preview_gate,
         verify_solid_against_spec,
     )
     from app.services.cad_kernel import compile_candidate
@@ -418,17 +419,25 @@ async def _buildability(spec: dict) -> dict:
         return {"solid_built": False, "sheet_drawn": False,
                 "build_error": "no supported body in the reading"}
     gate = solid_build_gate(spec, candidate, require_source_evidence=True)
+    preview = solid_preview_gate(gate)
     if not gate["allowed"]:
-        return {
-            "solid_built": False,
-            "sheet_drawn": False,
-            "build_blocked": True,
-            "build_blockers": gate["blockers"],
-            "build_warnings": gate["warnings"],
-        }
+        if not preview["allowed"]:
+            return {
+                "solid_built": False,
+                "sheet_drawn": False,
+                "build_blocked": True,
+                "build_blockers": gate["blockers"],
+                "build_warnings": gate["warnings"],
+            }
     try:
         artifacts = await compile_candidate(
-            candidate, confirm_assumptions=False, metadata={"source": "eval_readers"}
+            candidate,
+            confirm_assumptions=bool(preview["allowed"]),
+            metadata={
+                "source": "eval_readers",
+                "preview_review_required": bool(preview["allowed"]),
+                "excluded_geometry": " | ".join(preview["excluded"]),
+            },
         )
     except Exception as exc:  # noqa: BLE001 — a failed build is a result
         return {"solid_built": False, "sheet_drawn": False,
@@ -444,7 +453,13 @@ async def _buildability(spec: dict) -> dict:
             "solid_verification": verification.as_dict(),
         }
     out: dict[str, Any] = {
-        "solid_built": True,
+        "solid_built": bool(gate["allowed"]),
+        "preview_built": bool(preview["allowed"]),
+        "build_status": (
+            "preview_review_required" if preview["allowed"] else "built_unverified"
+        ),
+        "build_blockers": gate["blockers"],
+        "preview_excluded": preview["excluded"],
         "solid_valid": bool((artifacts.report or {}).get("brep_valid")),
         "solid_verification": verification.as_dict(),
         "features_built": [feature.kind for feature in candidate.features],
