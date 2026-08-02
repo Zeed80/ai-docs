@@ -116,7 +116,7 @@
 - [x] Снять construction baseline: holdout `12` листов, precision `0,230461`, recall `0,082378`, F1 `0,121372`, exact sheet `25%`, false exact `75%`; promotion запрещён низкой полнотой и ложным exact.
 - [~] Реализовать корректное строительное представление: добавлены ray-cast hidden-line classification по общей IFC-сцене, три независимых прогона видимости на ребро, сечение каждого этажа на `+1,2 м`, объединение коллинеарных граней сечения и семантические стили IFC-классов. Обычная проекция сверху больше не принимается за план этажа при наличии `plan_section`. Unit/contract проверки: `22 passed`; полный corpus rebuild и новые метрики остаются обязательными до отметки `[x]`.
 - [ ] Сформировать минимальный balanced baseline по каждому классу.
-- [ ] Добавить mechanical B-Rep evaluator и construction IFC evaluator.
+- [~] Добавить mechanical B-Rep evaluator и construction IFC evaluator. Mechanical pair evaluator реализован: B-Rep validity, topology, bounding box, volume/area, exact boolean volume IoU и двунаправленное surface sampling имеют независимые release gates; orientation normalization и парный construction IFC evaluator ещё не завершены.
 - [ ] Прогнать текущий live stack без подстройки и сохранить исходный baseline.
 - [ ] Дорабатывать reader/schema/generator/editor по классам ошибок, а не по именам файлов.
 - [ ] После каждой итерации прогонять dev; final holdout запускать только на promotion-кандидате.
