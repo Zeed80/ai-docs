@@ -49,6 +49,7 @@
       "license": "CC BY 4.0",
       "commercial_training": true,
       "status": "approved_staged",
+      "max_assets": 80,
       "notes": "Official IFC sample/test models. Stage separately until deterministic IFC-to-drawing projection and source-group leakage tests are in place."
     },
     {
@@ -71,6 +72,17 @@
       "commercial_training": true,
       "status": "approved_holdout",
       "notes": "210 images but only five base parts. Split/group by part_number; never treat fault variants as independent source drawings."
+    },
+    {
+      "id": "triview_cad",
+      "profile": "mechanical",
+      "kind": "view_consistency_benchmark",
+      "url": "https://doi.org/10.17632/ynyjsmcjd6.1",
+      "revision": "1",
+      "license": "CC BY 4.0",
+      "commercial_training": true,
+      "status": "approved_staged",
+      "notes": "Use only for orthographic view-consistency evaluation. It has consistency labels but no verified B-Rep, so it must never be scored as 3D reconstruction truth."
     },
     {
       "id": "floorplancad",

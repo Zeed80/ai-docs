@@ -40,6 +40,8 @@ dependencies = [
     "pytesseract>=0.3.13,<1",
     "shapely>=2.0,<3",
     "scipy>=1.15,<2",
+    # Parse and validate construction/BIM ground truth instead of treating IFC as text.
+    "ifcopenshell==0.8.5",
     # ezdxf's matplotlib drawing backend (LoRA dataset DXF/DWG target renders)
     "matplotlib>=3.8,<4",
 ]

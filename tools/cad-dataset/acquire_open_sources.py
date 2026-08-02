@@ -56,6 +56,10 @@ class Asset:
     split: str
     asset_format: str = "dxf"
     attribution: str | None = None
+    schema_version: int = 2
+    domain: str = "mixed"
+    drawing_class: str = "unclassified"
+    truth_layers: tuple[str, ...] = ()
 
 
 def _sha256(path: pathlib.Path) -> str:
@@ -103,6 +107,51 @@ def _profile_for(relative: pathlib.Path) -> str:
     if "mechanic" in lowered or "gear" in lowered or "screw" in lowered or "flange" in lowered:
         return "mechanical"
     return "mixed"
+
+
+def _drawing_class(profile: str, relative_path: str, asset_format: str) -> str:
+    """Return a conservative corpus class; never infer more truth than the asset has."""
+
+    lowered = relative_path.lower().replace("\\", "/")
+    if profile == "construction":
+        if any(token in lowered for token in ("mep", "hvac", "duct", "pipe", "plumb")):
+            return "building_services"
+        if any(token in lowered for token in ("struct", "beam", "column", "reinfor")):
+            return "structural"
+        if any(token in lowered for token in ("road", "bridge", "rail", "alignment")):
+            return "infrastructure"
+        if asset_format == "ifc":
+            return "architectural_bim"
+        return "architectural_component"
+    if profile == "mechanical":
+        if any(token in lowered for token in ("fastener", "screw", "bolt", "nut", "washer")):
+            return "standard_fastener"
+        if "bearing" in lowered:
+            return "bearing"
+        if any(token in lowered for token in ("pulley", "coupling", "gear", "sprocket")):
+            return "power_transmission"
+        if any(token in lowered for token in ("sheet", "bracket", "plate", "profile")):
+            return "prismatic_or_sheet"
+        return "mechanical_component"
+    return "mixed_drawing"
+
+
+def _truth_layers(asset_format: str) -> tuple[str, ...]:
+    if asset_format == "step":
+        return ("brep_geometry",)
+    if asset_format == "ifc":
+        return ("ifc_semantics", "ifc_geometry", "spatial_relations")
+    if asset_format == "dxf":
+        return ("vector_drawing_geometry",)
+    return ()
+
+
+def _asset_metadata(profile: str, relative_path: str, asset_format: str) -> dict[str, Any]:
+    return {
+        "domain": profile,
+        "drawing_class": _drawing_class(profile, relative_path, asset_format),
+        "truth_layers": _truth_layers(asset_format),
+    }
 
 
 def _entity_count(path: pathlib.Path) -> int:
@@ -187,6 +236,7 @@ def acquire_qcad(
                 sha256=digest,
                 entity_count=entity_count,
                 split=_stable_split(group),
+                **_asset_metadata(profile, str(relative), "dxf"),
             )
         )
     return assets, rejected
@@ -316,6 +366,76 @@ def acquire_freecad_library(
                 split=_stable_split(group),
                 asset_format="step",
                 attribution=f"FreeCAD Parts Library contributor; source path: {relative}",
+                **_asset_metadata(
+                    "construction" if relative.startswith("Architectural Parts/") else "mechanical",
+                    relative,
+                    "step",
+                ),
+            )
+        )
+    return assets, rejected
+
+
+def acquire_buildingsmart_samples(
+    source: dict[str, Any],
+    output: pathlib.Path,
+) -> tuple[list[Asset], list[dict[str, str]]]:
+    """Download pinned official IFC samples with exact file provenance."""
+
+    repo = "buildingSMART/Sample-Test-Files"
+    candidates = [
+        item
+        for item in _github_tree(repo, source["revision"])
+        if item.get("type") == "blob" and item["path"].lower().endswith(".ifc")
+    ]
+    candidates = sorted(
+        candidates,
+        key=lambda item: hashlib.sha256(item["path"].encode()).hexdigest(),
+    )[: int(source.get("max_assets", 80))]
+    assets: list[Asset] = []
+    rejected: list[dict[str, str]] = []
+    for item in candidates:
+        relative = item["path"]
+        quoted = urllib.parse.quote(relative, safe="/")
+        url = f"https://raw.githubusercontent.com/{repo}/{source['revision']}/{quoted}"
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "cad-corpus-builder/2"})
+            with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+                content = response.read(50 * 1024 * 1024 + 1)
+        except Exception as exc:  # noqa: BLE001
+            rejected.append({"path": relative, "reason": f"download_failed:{type(exc).__name__}"})
+            continue
+        if len(content) > 50 * 1024 * 1024:
+            rejected.append({"path": relative, "reason": "file_too_large"})
+            continue
+        upper = content[:8192].upper()
+        if b"ISO-10303-21" not in upper or b"FILE_SCHEMA" not in upper:
+            rejected.append({"path": relative, "reason": "invalid_ifc_header"})
+            continue
+        entity_count = content.count(b"#")
+        if entity_count < 10:
+            rejected.append({"path": relative, "reason": "too_few_ifc_entities"})
+            continue
+        digest = hashlib.sha256(content).hexdigest()
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", str(pathlib.PurePosixPath(relative).with_suffix("")))[:150]
+        destination = output / "ifc" / source["id"] / f"{safe_name}_{digest[:12]}.ifc"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+        group = f"{source['id']}:{relative}"
+        assets.append(
+            Asset(
+                source_id=source["id"],
+                source_group_id=group,
+                profile="construction",
+                relative_path=relative,
+                output_path=str(destination.resolve()),
+                license=source["license"],
+                sha256=digest,
+                entity_count=entity_count,
+                split=_stable_split(group),
+                asset_format="ifc",
+                attribution=f"buildingSMART Sample-Test-Files; source path: {relative}",
+                **_asset_metadata("construction", relative, "ifc"),
             )
         )
     return assets, rejected
@@ -342,6 +462,12 @@ def main() -> int:
     )
     assets.extend(freecad_assets)
     rejected.extend(freecad_rejected)
+    ifc_assets, ifc_rejected = acquire_buildingsmart_samples(
+        sources["buildingsmart_sample_test_files"],
+        args.out,
+    )
+    assets.extend(ifc_assets)
+    rejected.extend(ifc_rejected)
 
     args.out.mkdir(parents=True, exist_ok=True)
     manifest = args.out / "assets.jsonl"
@@ -366,6 +492,14 @@ def main() -> int:
         "formats": {
             asset_format: sum(asset.asset_format == asset_format for asset in assets)
             for asset_format in ("dxf", "step", "ifc")
+        },
+        "classes": {
+            drawing_class: sum(asset.drawing_class == drawing_class for asset in assets)
+            for drawing_class in sorted({asset.drawing_class for asset in assets})
+        },
+        "truth_layers": {
+            truth_layer: sum(truth_layer in asset.truth_layers for asset in assets)
+            for truth_layer in sorted({layer for asset in assets for layer in asset.truth_layers})
         },
         "splits": {
             split: sum(asset.split == split for asset in assets)

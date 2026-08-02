@@ -46,7 +46,10 @@ def test_qcad_assets_require_allowlisted_sidecar_license(tmp_path: Path) -> None
 def test_registry_is_machine_readable() -> None:
     payload = json.loads(SCRIPT.with_name("source_registry.json").read_text())
     assert payload["schema_version"] == 1
-    assert len(payload["sources"]) >= 8
+    assert len(payload["sources"]) >= 9
+    triview = next(item for item in payload["sources"] if item["id"] == "triview_cad")
+    assert triview["status"] == "approved_staged"
+    assert "no verified B-Rep" in triview["notes"]
 
 
 def test_step_geometry_requires_real_step_topology() -> None:
@@ -58,3 +61,23 @@ def test_step_geometry_requires_real_step_topology() -> None:
     )
     assert MODULE._step_geometry_count(valid) == 12
     assert MODULE._step_geometry_count(b"not a STEP file") == 0
+
+
+def test_manifest_v2_truth_is_format_specific() -> None:
+    assert MODULE._truth_layers("step") == ("brep_geometry",)
+    assert MODULE._truth_layers("dxf") == ("vector_drawing_geometry",)
+    assert MODULE._truth_layers("ifc") == (
+        "ifc_semantics",
+        "ifc_geometry",
+        "spatial_relations",
+    )
+    assert "brep_geometry" not in MODULE._truth_layers("ifc")
+
+
+def test_classes_keep_mechanical_and_construction_separate() -> None:
+    assert MODULE._drawing_class(
+        "mechanical", "Mechanical Parts/Fasteners/Bolts/a.step", "step"
+    ) == "standard_fastener"
+    assert MODULE._drawing_class(
+        "construction", "IFC 4.3/Structural/beam.ifc", "ifc"
+    ) == "structural"
