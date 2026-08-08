@@ -51,7 +51,15 @@
     "invented_pmi_rate": 0.875,
     "reader_errors": 0,
     "observation_only": true,
-    "geometry_blocker": "geometry_input_incomplete:main_view.profile:shape requires its measured build dimensions"
+    "geometry_blocker": "geometry_input_incomplete:main_view.profile:shape requires its measured build dimensions",
+    "locator_regression_guard": {
+      "localized_regions": 2,
+      "coverage_accepted": false,
+      "localized_candidates_discarded": true,
+      "fallback": "whole-view structured PMI observation",
+      "annotations_with_bbox": 0,
+      "reason": "partial localization may not be presented as complete drawing evidence"
+    }
   },
   "after_structured_pmi_full_truth_linked_run": {
     "source_pages_available": 30,

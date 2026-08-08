@@ -53,7 +53,7 @@
 - [x] Добавить возобновляемый live evaluator с checkpoint после каждого листа и возможностью закрепить reader model.
 - [x] Разделить в evaluator кандидаты `dimension`/`annotation`, сохранив основной строгий all-candidate score неизменным.
 - [x] Нормализовать неполные profile/hole-pattern inputs в точные `geometry_input_incomplete:*` причины до общей schema validation. Production smoke больше не дал общего schema reject: observations сохранены, `profile=null`, `observation_only=true`, точный blocker доступен пользователю; single-page strict F1 вырос с `0,071429` до `0,153846` за счёт structured PMI.
-- [ ] Сегментировать/локализовать реальные feature-control frames до VLM и требовать evidence bbox: текущий whole-drawing structured pass всё ещё выдумывает `205/212` annotation-кандидатов.
+- [-] Сегментировать/локализовать реальные feature-control frames до VLM и требовать evidence bbox: добавлены locator → numbered contact sheet → semantic reader, проверка `frame_id`, исходный bbox и rejection дубликатов/плохих регионов. На первом live-листе locator нашёл лишь `2` неполных региона, поэтому regression gate честно отбросил их и вернулся к observation без bbox; итог сохранён без деградации (`2/10`, F1 `0,153846`). Нужен детерминированный CV/vector locator с достаточным coverage, прежде чем bbox станет evidence.
 - [ ] Добавить отдельные semantic adapters для basic/reference dimensions, datum features/targets, dimension symbols и notes вместо приравнивания любого обычного размера к PMI.
 
 **Готово, когда:** любой PMI score прослеживается до официальной строки NIST и evidence; неподтверждённая привязка не становится verified.

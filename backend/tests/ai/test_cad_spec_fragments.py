@@ -12,6 +12,7 @@ from app.ai.cad_recognize.spec_fragments import (
     _has_geometry,
     _is_sheet_metadata_line,
     _mark_observation_only_if_no_geometry,
+    _pmi_contact_sheet,
     _structured_pmi_annotations,
     _enrich_post_consensus_source_geometry,
     _stamp_crop,
@@ -127,6 +128,59 @@ def test_structured_pmi_preserves_characteristic_value_and_datum_order():
         },
     ]
     assert unresolved == 1
+
+
+def test_pmi_contact_sheet_maps_normalized_box_to_original_evidence():
+    from PIL import Image
+
+    image = Image.new("RGB", (1000, 500), "white")
+    sheet, evidence = _pmi_contact_sheet(
+        image,
+        {"frames": [{"bbox": [100, 200, 300, 400]}]},
+        (50, 20, 950, 420),
+    )
+
+    assert sheet is not None
+    assert evidence[1]["bbox"] == [140.0, 100.0, 320.0, 180.0]
+
+    annotations, unresolved = _structured_pmi_annotations(
+        {"frames": [
+            {
+                "frame_id": 1,
+                "characteristic": "flatness",
+                "tolerance_text": "0.2",
+                "datum_refs": [],
+            },
+            {
+                "frame_id": 99,
+                "characteristic": "position",
+                "tolerance_text": "Ø0.5",
+                "datum_refs": ["A"],
+            },
+        ]},
+        evidence,
+    )
+
+    assert annotations[0]["text"] == "▱ | 0.2"
+    assert annotations[0]["evidence"] == [evidence[1]]
+    assert unresolved == 1
+
+
+def test_pmi_contact_sheet_rejects_degenerate_locator_boxes():
+    from PIL import Image
+
+    sheet, evidence = _pmi_contact_sheet(
+        Image.new("RGB", (1000, 500), "white"),
+        {"frames": [
+            {"bbox": [100, 100, 100, 200]},
+            {"bbox": [200, 200, 204, 202]},
+            {"bbox": ["bad", 0, 10, 10]},
+        ]},
+        (0, 0, 1000, 500),
+    )
+
+    assert sheet is None
+    assert evidence == {}
 
 
 def test_invalid_geometry_preserves_pmi_as_unresolved_observations():

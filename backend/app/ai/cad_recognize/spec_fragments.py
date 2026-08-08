@@ -464,13 +464,51 @@ _PMI_SYMBOLS = {
     "parallelism": "⫽",
 }
 _PMI_PROMPT = (
+    "Перед тобой контактный лист уже локализованных рамок геометрических "
+    "допусков. Каждая вырезка подписана FRAME N. Для каждой реальной рамки "
+    "верни тот же frame_id, определи знак по форме, перепиши tolerance_text "
+    "ровно как в ячейке допуска (включая Ø и модификаторы) и базы слева "
+    "направо. Не превращай обычный размер или текст в рамку. Если знак или "
+    "значение неразличимы, characteristic=unknown; ничего не угадывай. Только JSON."
+)
+_PMI_LOCATOR_PROMPT = (
+    "Найди на техническом чертеже только прямоугольные многосекционные рамки "
+    "геометрических допусков (feature-control frames). Не включай обычные "
+    "размеры, обозначения баз в одиночной рамке, штамп и рамку листа. Для "
+    "каждой найденной рамки верни bbox=[x0,y0,x1,y1] в нормированных "
+    "координатах 0..1000 относительно изображения. Захвати всю рамку, но "
+    "минимум соседнего текста. Только JSON."
+)
+_PMI_LOCATOR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "frames": {
+            "type": "array",
+            "maxItems": 24,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "bbox": {
+                        "type": "array", "minItems": 4, "maxItems": 4,
+                        "items": {"type": "number"},
+                    },
+                },
+                "required": ["bbox"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["frames"],
+    "additionalProperties": False,
+}
+_PMI_DIRECT_PROMPT = (
     "Найди только рамки геометрических допусков на техническом чертеже. "
     "Для каждой рамки определи знак по форме, перепиши tolerance_text ровно "
     "как в ячейке допуска (включая Ø и модификаторы) и базы слева направо. "
     "Не включай обычные размеры, обозначения видов и штамп. Если знак не "
     "различим, characteristic=unknown; ничего не угадывай. Только JSON."
 )
-_PMI_SCHEMA = {
+_PMI_DIRECT_SCHEMA = {
     "type": "object",
     "properties": {
         "frames": {
@@ -488,6 +526,30 @@ _PMI_SCHEMA = {
                 "required": ["characteristic", "tolerance_text", "datum_refs"],
                 "additionalProperties": False,
             },
+        },
+    },
+    "required": ["frames"],
+    "additionalProperties": False,
+}
+_PMI_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "frames": {
+            "type": "array",
+            "maxItems": 40,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "frame_id": {"type": "integer"},
+                    "characteristic": {"type": "string", "enum": list(_PMI_CHARACTERISTICS)},
+                    "tolerance_text": {"type": "string"},
+                    "datum_refs": {
+                        "type": "array", "maxItems": 8, "items": {"type": "string"}
+                    },
+                },
+                "required": ["frame_id", "characteristic", "tolerance_text", "datum_refs"],
+                "additionalProperties": False,
+            },
         }
     },
     "required": ["frames"],
@@ -495,12 +557,17 @@ _PMI_SCHEMA = {
 }
 
 
-def _structured_pmi_annotations(answer: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
+def _structured_pmi_annotations(
+    answer: dict[str, Any],
+    evidence_by_frame: dict[int, dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     annotations = []
     unresolved = 0
+    used_frame_ids: set[int] = set()
     for frame in answer.get("frames") or []:
         if not isinstance(frame, dict):
             continue
+        frame_id = frame.get("frame_id")
         characteristic = str(frame.get("characteristic") or "unknown")
         tolerance = str(frame.get("tolerance_text") or "").strip()
         datum_refs = [
@@ -523,15 +590,96 @@ def _structured_pmi_annotations(answer: dict[str, Any]) -> tuple[list[dict[str, 
         if not symbol or not tolerance:
             unresolved += 1
             continue
+        evidence = (evidence_by_frame or {}).get(frame_id)
+        if evidence_by_frame is not None and evidence is None:
+            unresolved += 1
+            continue
+        if evidence_by_frame is not None and frame_id in used_frame_ids:
+            unresolved += 1
+            continue
+        if evidence_by_frame is not None:
+            used_frame_ids.add(frame_id)
         text = " | ".join([symbol, tolerance, *datum_refs])
-        annotations.append({
+        annotation = {
             "kind": "tolerance",
             "text": text,
             "value": tolerance,
             "symbol": characteristic,
             "datum_refs": datum_refs,
-        })
+        }
+        if evidence:
+            annotation["evidence"] = [evidence]
+        annotations.append(annotation)
     return annotations, unresolved
+
+
+def _pmi_contact_sheet(
+    image,
+    locator_answer: dict[str, Any],
+    source_box: tuple[int, int, int, int],
+):
+    """Turn locator boxes into labelled crops and original-image evidence."""
+
+    from PIL import Image, ImageDraw
+
+    width, height = image.size
+    source_left, source_top, source_right, source_bottom = source_box
+    source_width = source_right - source_left
+    source_height = source_bottom - source_top
+    regions: list[tuple[int, tuple[int, int, int, int], dict[str, Any]]] = []
+    for item in locator_answer.get("frames") or []:
+        bbox = item.get("bbox") if isinstance(item, dict) else None
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            continue
+        try:
+            x0, y0, x1, y1 = [max(0.0, min(1000.0, float(value))) for value in bbox]
+        except (TypeError, ValueError):
+            continue
+        if x1 <= x0 or y1 <= y0 or x1 - x0 < 8 or y1 - y0 < 5:
+            continue
+        left = int(x0 / 1000 * width)
+        top = int(y0 / 1000 * height)
+        right = int(x1 / 1000 * width)
+        bottom = int(y1 / 1000 * height)
+        pad_x = max(8, int((right - left) * 0.25))
+        pad_y = max(8, int((bottom - top) * 0.45))
+        crop_box = (
+            max(0, left - pad_x), max(0, top - pad_y),
+            min(width, right + pad_x), min(height, bottom + pad_y),
+        )
+        original_bbox = [
+            source_left + x0 / 1000 * source_width,
+            source_top + y0 / 1000 * source_height,
+            source_left + x1 / 1000 * source_width,
+            source_top + y1 / 1000 * source_height,
+        ]
+        frame_id = len(regions) + 1
+        regions.append((
+            frame_id,
+            crop_box,
+            {
+                "image_index": 0,
+                "bbox": [round(value, 1) for value in original_bbox],
+                "raw_text": f"localized feature-control frame {frame_id}",
+            },
+        ))
+    if not regions:
+        return None, {}
+
+    cell_width, cell_height, columns = 640, 220, 2
+    rows = (len(regions) + columns - 1) // columns
+    sheet = Image.new("RGB", (cell_width * columns, cell_height * rows), "white")
+    draw = ImageDraw.Draw(sheet)
+    evidence_by_frame = {}
+    for index, (frame_id, crop_box, evidence) in enumerate(regions):
+        crop = image.crop(crop_box).convert("RGB")
+        crop.thumbnail((cell_width - 24, cell_height - 36))
+        cell_x = (index % columns) * cell_width
+        cell_y = (index // columns) * cell_height
+        draw.text((cell_x + 8, cell_y + 5), f"FRAME {frame_id}", fill="black")
+        sheet.paste(crop, (cell_x + 8, cell_y + 28))
+        evidence_by_frame[frame_id] = evidence
+    return sheet, evidence_by_frame
 
 
 def _dominant_view_crop(image):
@@ -573,6 +721,34 @@ def _dominant_view_crop(image):
     ))
 
 
+def _main_view_crop_box(image) -> tuple[int, int, int, int]:
+    """Pixel bounds of the drawing area used by the fragment readers."""
+
+    import numpy as np
+
+    width, height = image.size
+    grayscale = np.asarray(image.convert("L"))
+    ink = grayscale < 200
+    margin_x = max(int(width * 0.03), 4)
+    margin_y = max(int(height * 0.03), 4)
+    mask = np.zeros_like(ink)
+    mask[margin_y : height - margin_y, margin_x : width - margin_x] = True
+    mask[int(height * 0.70) :, int(width * 0.50) :] = False
+    ink = ink & mask
+    rows = np.flatnonzero(ink.any(axis=1))
+    cols = np.flatnonzero(ink.any(axis=0))
+    if rows.size == 0 or cols.size == 0:
+        return (0, 0, width, height)
+    pad_x, pad_y = int(width * 0.02), int(height * 0.02)
+    box = (
+        max(int(cols[0]) - pad_x, 0), max(int(rows[0]) - pad_y, 0),
+        min(int(cols[-1]) + pad_x, width), min(int(rows[-1]) + pad_y, height),
+    )
+    if box[2] - box[0] < width * 0.15 or box[3] - box[1] < height * 0.15:
+        return (0, 0, width, height)
+    return box
+
+
 def _main_view_crop(image):
     """The drawing itself, without the stamp, the notes column or the margins.
 
@@ -586,34 +762,7 @@ def _main_view_crop(image):
     is the bounding box of the ink left after the stamp band and the margins
     are removed, so it follows whatever the sheet actually contains.
     """
-    import numpy as np
-
-    width, height = image.size
-    grayscale = np.asarray(image.convert("L"))
-    ink = grayscale < 200
-
-    # Blank out the ГОСТ frame margins and the bottom-right stamp band before
-    # looking for the drawing, or the frame's own rectangle becomes the answer.
-    margin_x = max(int(width * 0.03), 4)
-    margin_y = max(int(height * 0.03), 4)
-    mask = np.zeros_like(ink)
-    mask[margin_y : height - margin_y, margin_x : width - margin_x] = True
-    mask[int(height * 0.70) :, int(width * 0.50) :] = False
-    ink = ink & mask
-
-    rows = np.flatnonzero(ink.any(axis=1))
-    cols = np.flatnonzero(ink.any(axis=0))
-    if rows.size == 0 or cols.size == 0:
-        return image
-    pad_x, pad_y = int(width * 0.02), int(height * 0.02)
-    left = max(int(cols[0]) - pad_x, 0)
-    right = min(int(cols[-1]) + pad_x, width)
-    top = max(int(rows[0]) - pad_y, 0)
-    bottom = min(int(rows[-1]) + pad_y, height)
-    if right - left < width * 0.15 or bottom - top < height * 0.15:
-        # A crop that small is a detection failure, not a drawing.
-        return image
-    return image.crop((left, top, right, bottom))
+    return image.crop(_main_view_crop_box(image))
 
 
 async def _ask(
@@ -3272,11 +3421,53 @@ async def read_spec_by_fragments(
     # second time, which is what let a flange come back as a "rectangle" whose
     # diameter was actually its bore.
     callouts = await _ask(_CALLOUT_PROMPT, overview, num_predict=3000, schema=_CALLOUT_SCHEMA, **ask)
-    pmi_view = _overview(_main_view_crop(image), side=2200)
-    pmi_answer = await _ask(
-        _PMI_PROMPT, pmi_view, num_predict=1600, schema=_PMI_SCHEMA, **ask
+    pmi_source_box = _main_view_crop_box(image)
+    pmi_view = _overview(image.crop(pmi_source_box), side=2200)
+    pmi_locator = await _ask(
+        _PMI_LOCATOR_PROMPT,
+        pmi_view,
+        num_predict=1000,
+        schema=_PMI_LOCATOR_SCHEMA,
+        **ask,
     )
-    structured_pmi, unresolved_pmi_count = _structured_pmi_annotations(pmi_answer)
+    pmi_sheet, pmi_evidence = _pmi_contact_sheet(
+        pmi_view, pmi_locator, pmi_source_box
+    )
+    pmi_answer = {}
+    if pmi_sheet is not None:
+        pmi_answer = await _ask(
+            _PMI_PROMPT,
+            _overview(pmi_sheet, side=2200),
+            num_predict=1600,
+            schema=_PMI_SCHEMA,
+            **ask,
+        )
+    structured_pmi, unresolved_pmi_count = _structured_pmi_annotations(
+        pmi_answer, pmi_evidence
+    )
+    generic_tolerance_count = sum(
+        isinstance(item, dict) and item.get("kind") == "tolerance"
+        for item in (callouts.get("annotations") or [])
+    )
+    # A locator miss must not erase a better whole-view read.  The direct pass
+    # remains observation-only (no bbox); localized matches take precedence
+    # and supply evidence.  This fallback is triggered only when the number of
+    # accepted regions is implausibly below the broad callout observation.
+    if len(structured_pmi) < max(3, generic_tolerance_count):
+        direct_answer = await _ask(
+            _PMI_DIRECT_PROMPT,
+            pmi_view,
+            num_predict=1600,
+            schema=_PMI_DIRECT_SCHEMA,
+            **ask,
+        )
+        direct_pmi, direct_unresolved = _structured_pmi_annotations(direct_answer)
+        unresolved_pmi_count += direct_unresolved
+        # The fallback condition itself says localization coverage is
+        # insufficient.  Do not mix its untrusted partial crops into the
+        # direct observation set: the first live version did so and added one
+        # false candidate while recovering the same two correct records.
+        structured_pmi = direct_pmi
     if structured_pmi:
         # The bounded symbol question supersedes generic tolerance strings from
         # the broad callout pass. Keep other annotation classes unchanged.
@@ -3493,6 +3684,7 @@ async def read_spec_by_fragments(
             "kind": bool(kind_answer), "stamp": bool(stamp),
             "geometry": bool(body.get("outer") or body.get("profile")),
             "callouts": bool(callouts),
+            "pmi_regions": len(pmi_evidence),
             "structured_pmi": bool(structured_pmi),
         },
         "fragment_answers": fragment_answers,
