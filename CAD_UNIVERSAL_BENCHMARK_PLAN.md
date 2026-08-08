@@ -3,6 +3,8 @@
 **Статус:** выполняется.  
 **Цель:** доказуемо восстанавливать редактируемую геометрию из машиностроительных и строительных чертежей, строить проверяемую 3D/BIM-модель и выпускать необходимые 2D-виды без ложных заявлений точности.
 
+> Подробный последовательный список оставшихся работ, критериев и evidence находится в [`CAD_UNIVERSAL_REMAINING_TODO.md`](./CAD_UNIVERSAL_REMAINING_TODO.md).
+
 Обозначения: `[x]` завершено и проверено, `[-]` выполняется/частично, `[ ]` не начато.
 
 ## 1. Граница задачи
@@ -29,7 +31,7 @@
 - [ ] Сборочные чертежи: позиции, состав, сопряжения и деталировка без слияния компонентов в одно тело.
 - [ ] Стандартные изделия: резьбовые соединения, подшипники, шпонки, стопорные элементы.
 - [ ] Виды: основные, дополнительные, местные, разрезы, сечения, обрывы и выносные элементы.
-- [ ] PMI: размеры, посадки, допуски формы/расположения, базы, шероховатость, покрытие, материал и технические требования.
+- [-] PMI: из официальных NIST CTC/FTC workbook построено `100` semantic records по `11` деталям, сохранены точное написание и `98/100` page-membership кандидатов. Все приложенные STEP прямо помечены `geometry only`, поэтому topology association и точный drawing bbox честно остаются unresolved, а promotion закрыт.
 
 ### Mechanical ground truth
 
@@ -118,6 +120,7 @@
 - [x] Пересобрать construction corpus и baseline после HLR: `169` листов, `23516` сущностей, split `147/12/10`; holdout precision `0,419580`, recall `0,058309`, F1 `0,102389`, false exact `70%`. Promotion по-прежнему запрещён.
 - [ ] Сформировать минимальный balanced baseline по каждому классу.
 - [x] Добавить mechanical B-Rep evaluator и construction IFC evaluator. Mechanical pair evaluator проверяет B-Rep validity, topology, bounding box, volume/area, exact boolean volume IoU и двунаправленное surface sampling; production segfault в `Part.makeCompound` устранён. Добавлен перебор 24 proper axis orientations с topology-preserving `transformShape`: живой повёрнутый STEP восстановлен с bbox error `0`, IoU `1,0` и совпавшей topology. Construction pair evaluator проверяет IFC validity, multiset классов, этажи/пространства, containment, geometry failures, axis-invariant bbox и агрегированный объём; self-pair прошёл, чужая модель отклонена четырьмя независимыми gates.
+- [x] Добавить NIST PMI truth builder и evaluator: официальные workbook дали `100` записей (`50 CTC`, `50 FTC`), semantic self-pair F1 `1,0`; evaluator отдельно считает missing/invented/false-exact и fail-closed блокирует promotion из-за отсутствующих topology/exact-region associations.
 - [ ] Прогнать текущий live stack без подстройки и сохранить исходный baseline.
 - [ ] Дорабатывать reader/schema/generator/editor по классам ошибок, а не по именам файлов.
 - [ ] После каждой итерации прогонять dev; final holdout запускать только на promotion-кандидате.

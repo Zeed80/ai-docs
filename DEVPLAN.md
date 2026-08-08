@@ -3,6 +3,7 @@
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
 > Исполнимый roadmap `чертёж → EngineeringDrawingGraph → CadIR/DXF` находится в [`CAD_DRAWING_GRAPH_PLAN.md`](./CAD_DRAWING_GRAPH_PLAN.md).
 > Актуальный TODO исправления точности `чертёж → чтение → 3D → виды → DXF` находится в [`CAD_REDRAW_ACCURACY_TODO.md`](./CAD_REDRAW_ACCURACY_TODO.md).
+> Последовательный TO DO оставшихся mechanical/construction работ находится в [`CAD_UNIVERSAL_REMAINING_TODO.md`](./CAD_UNIVERSAL_REMAINING_TODO.md).
 
 ## Контекст
 

@@ -1,0 +1,27 @@
+{
+  "schema_version": "nist-pmi-truth/1.0",
+  "source": "NIST MBE PMI CTC/FTC Definitions",
+  "snapshot_date": "2026-08-08",
+  "records": 100,
+  "suites": {
+    "ctc": 50,
+    "ftc": 50
+  },
+  "cases": 11,
+  "drawing_page_candidates": 98,
+  "drawing_page_candidate_links": 105,
+  "geometry_only_step_records": 100,
+  "geometry_linked": 0,
+  "drawing_located": 0,
+  "semantic_self_pair_f1": 1.0,
+  "promotion_ready": false,
+  "promotion_failures": [
+    "reference_geometry_links_incomplete",
+    "reference_drawing_locations_incomplete"
+  ],
+  "notes": [
+    "Workbook rows are authoritative semantic definitions.",
+    "Official drawing pages identify atomic test-case membership, but not exact annotation bounding boxes.",
+    "Every supplied STEP file describes itself as geometry only, so topology associations must not be inferred."
+  ]
+}

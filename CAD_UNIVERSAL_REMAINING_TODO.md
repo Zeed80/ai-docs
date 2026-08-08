@@ -1,0 +1,199 @@
+# Оставшийся TO DO: универсальное чтение чертежей, 3D/BIM и выпуск 2D
+
+**Статус:** выполняется последовательно.  
+**Главный план:** [`CAD_UNIVERSAL_BENCHMARK_PLAN.md`](./CAD_UNIVERSAL_BENCHMARK_PLAN.md).  
+**Область:** машиностроительные и строительные чертежи; чтение, semantic truth, восстановление 3D/BIM, обязательные 2D-виды, проверка и редактор.  
+**Не входит:** оформление рамки и основной надписи, если они не нужны для связи листов или масштаба.
+
+Обозначения: `[x]` завершено и проверено, `[-]` выполняется/частично, `[ ]` не начато, `[!]` заблокировано внешним условием.
+
+## 0. Неподвижные правила приёмки
+
+- [x] Не принимать визуально похожую картинку за точную геометрию.
+- [x] Считать источником истины STEP/B-Rep, IFC и официальные semantic definitions; raster/vector PDF — evidence, но не замена семантике.
+- [x] Разделять `mechanical` и `construction` схемы, валидаторы и promotion gates.
+- [x] Делить train/dev/holdout по `source_group` до растеризации и дефектов.
+- [x] Публиковать precision, recall, F1, missing/invented и false-exact по каждому классу, а не только среднее.
+- [x] Неполный граф, неизвестный класс или неоднозначная геометрия завершаются `blocked`/`review_required`, а не выдуманным exact-результатом.
+- [x] В production выпускать только модель и виды, прошедшие соответствующий доменный валидатор.
+
+## 1. Зафиксировать управляемый план и исходную точку
+
+- [x] Создать этот исполнимый TO DO с зависимостями, артефактами и критериями готовности.
+- [x] Связать его с `PLAN.md`, `DEVPLAN.md` и главным benchmark-планом.
+- [ ] Снять воспроизводимый snapshot версий кода, manifest, моделей и runtime-конфигурации.
+- [ ] Прогнать текущий live stack без подстройки на фиксированном наборе mechanical/construction кейсов.
+- [ ] Сохранить исходные API payload, audit trace, 3D/BIM, 2D и метрики как immutable baseline.
+
+**Готово, когда:** baseline можно повторить одной командой, а отчёт содержит commit, config hash, source-group hashes и ссылки на артефакты.
+
+## 2. Семантическая PMI-истина — текущий блок
+
+### 2.1. NIST source truth
+
+- [x] Разобрать официальные `NIST-CTC-PMI-Definitions.xlsx` и `NIST-FTC-PMI-Definitions.xlsx` как первичный semantic truth: получено `100` записей (`50 CTC`, `50 FTC`) по `11` деталям.
+- [x] Нормализовать идентификаторы CTC/FTC/ATC без потери исходных значений.
+- [x] Сохранить для каждой записи категорию, описание test case, specification, measurand/comments и standards mapping.
+- [x] Связать semantic record с исходным STEP, PDF, листами IR и element-ID приложениями; официальное page membership найдено для `98/100` записей (`105` связей-кандидатов).
+- [x] Не объявлять связь PMI с гранью/кромкой без подтверждения: все `100/100` NIST STEP явно маркированы авторами как `geometry only`.
+- [x] Пометить уровень доказательства: сейчас `source_defined`; topology и точный drawing bbox остаются `unresolved`.
+- [x] Сформировать воспроизводимые JSONL truth и summary по suite, case и PMI category.
+
+### 2.2. PMI evaluator
+
+- [x] Добавить schema validator с fail-closed проверкой обязательных полей и уникальности semantic ID.
+- [x] Сравнивать exact source spelling и отдельное нормализованное представление.
+- [x] Считать precision/recall/F1 по semantic record и отдельно topology/drawing associations.
+- [x] Считать `invented_pmi_rate`, `missing_pmi_rate`, attachment metrics и `false_exact_rate`.
+- [x] Запрещать promotion при пустой истине, дубликатах, неизвестной связи или ложном `verified`.
+- [x] Добавить unit/CLI tests, self-pair semantic pass и deliberate-corruption rejection; `18` смежных тестов проходят.
+- [ ] Зафиксировать честный PMI baseline текущего reader.
+
+**Готово, когда:** любой PMI score прослеживается до официальной строки NIST и evidence; неподтверждённая привязка не становится verified.
+
+## 3. Balanced mechanical corpus и feature truth
+
+### 3.1. Покрытие классов
+
+- [ ] Тела вращения: валы, оси, втулки, ступицы, ролики, шпиндели, штуцеры.
+- [ ] Призматические детали: плиты, корпуса, кронштейны, траверсы, крышки.
+- [ ] Фланцы и круговые массивы.
+- [ ] Листовые детали: гибы, отбортовки, вырезы, развёртки, линии сгиба.
+- [ ] Литые/кованые детали: уклоны, бобышки, рёбра, переходы, радиусы.
+- [ ] Сварные конструкции: профили, швы, разделка, сборочные базы.
+- [ ] Advanced: шестерни, шлицы, звёздочки, кулачки, пружины.
+- [ ] Сборки: позиции, BOM, отдельные компоненты и сопряжения.
+- [ ] Стандартные изделия: резьба, подшипники, шпонки, стопорные элементы.
+- [ ] Виды: основные/дополнительные/местные, разрезы, сечения, обрывы, выносные элементы.
+
+### 3.2. Истина и генерация листов
+
+- [ ] Для каждого класса собрать минимум dev и sealed-holdout source groups с ясной лицензией.
+- [ ] Извлечь B-Rep topology signature, bbox, area, volume и component structure.
+- [ ] Построить feature truth с параметрами, зависимостями и привязками к topology IDs.
+- [ ] Детерминированно выпустить ортогональные/аксонометрические виды, HLR и необходимые разрезы.
+- [ ] Связать размерные объекты с feature/topology targets.
+- [ ] Добавить контролируемые raster/degradation варианты только после source-group split.
+- [ ] Сформировать class-balanced manifest; не позволять массовому простому классу скрывать провал редкого.
+
+### 3.3. Mechanical promotion gates
+
+- [ ] B-Rep повторно открывается, manifold/solid/shell status соответствует эталону.
+- [ ] Bbox, area, volume, boolean IoU и surface distance проходят class-specific допуски.
+- [ ] Feature precision/recall и invented-feature rate проходят пороги.
+- [ ] Обязательные виды/разрезы полны и геометрически согласованы с одной 3D-ревизией.
+- [ ] Размеры и PMI относятся к правильным topology/feature объектам.
+- [ ] Сборка сохраняет компоненты, позиции и сопряжения без слияния.
+
+## 4. Balanced construction corpus и BIM truth
+
+### 4.1. Покрытие классов
+
+- [ ] Архитектура: планы, фасады, разрезы, кровля, помещения, проёмы, лестницы, отделка.
+- [ ] Конструкции: оси, фундаменты, колонны, балки, стены, плиты, фермы, армирование, узлы.
+- [ ] Генплан: здания, дороги, площадки, отметки, координационные оси.
+- [ ] ОВ/ВК: оборудование, воздуховоды, трубы, фитинги, стояки, уклоны, подключения.
+- [ ] Электрика/СС: устройства, трассы, цепи, щиты, кабели, условные обозначения.
+- [ ] Потолки, полы, кладочные планы и спецификации.
+- [ ] Многолистовые ссылки, продолжения сетей и марки узлов.
+- [ ] Реконструкция: существующее/демонтаж/новое как отдельные фазы.
+
+### 4.2. Источники и истина
+
+- [ ] Добавить открытые IFC + PDF/DWG комплекты с проверяемой лицензией и общей ревизией.
+- [ ] Зафиксировать IFC GUID, class, type, placement, geometry, storey, space, system и containment.
+- [ ] Извлечь openings, MEP ports, connectivity graph и phase/status.
+- [ ] Получить независимые quantity truth: counts, lengths, areas, volumes.
+- [ ] Детерминированно выпустить планы этажей, фасады, разрезы и узлы с GUID evidence.
+- [ ] Валидировать межлистовые ссылки и принадлежность одной BIM-ревизии.
+- [ ] Исключить unclear-rights, generic-proxy-only и неполные источники из promotion.
+
+### 4.3. Construction promotion gates
+
+- [ ] IFC schema/STEP повторно открывается без GUID duplicates и geometry failures.
+- [ ] Совпадают class/type counts без подмены generic proxy.
+- [ ] Совпадают site/building/storey/space/opening и containment.
+- [ ] Совпадают MEP systems, ports и graph connectivity.
+- [ ] Placement, bbox, area/volume и projections проходят допуски.
+- [ ] Обязательный drawing set полный и ссылается на одну BIM revision.
+
+## 5. Runtime: чтение и строгие графовые контракты
+
+- [ ] Добавить domain router с confidence, evidence и исходами `mechanical/construction/mixed/unknown`.
+- [ ] Для mixed/unknown запрещать запуск неподходящего генератора без review.
+- [ ] Принимать mechanical input только как полный валидный `EngineeringDrawingGraph`.
+- [ ] Принимать construction input только как полный валидный BIM/drawing graph.
+- [ ] Ввести стабильные entity IDs, связи видов, topology targets, provenance bbox/page и alternatives.
+- [ ] Валидировать единицы, масштаб, систему координат, обязательные виды и противоречия размеров.
+- [ ] Документировать каждый этап: вход, модель/версия, thinking flag, prompt/config hash, raw/parsed output, validation errors, retry и итоговый generator payload.
+- [ ] Вернуть для назначений модели явный `thinking=false` и проверить, что провайдер действительно его получает.
+- [ ] Не запускать 3D/BIM при missing critical parameters; вернуть точный список вопросов/блокеров.
+
+## 6. Генерация 3D/BIM и обязательного 2D
+
+### 6.1. Mechanical
+
+- [ ] Генерировать параметрические операции из validated graph, а не из свободного текста.
+- [ ] Поддержать revolve/extrude/cut/hole/pattern/fillet/chamfer/sweep/loft/sheet-metal и assembly components по class roadmap.
+- [ ] После каждой операции сохранять topology mapping и проверять инварианты.
+- [ ] Выпускать front/top/side по необходимости, sections/details и HLR из фактического B-Rep.
+- [ ] Размеры и PMI размещать из semantic graph, не дорисовывать отсутствующие значения.
+
+### 6.2. Construction
+
+- [ ] Генерировать IFC classes/types/relations из BIM graph без generic proxy fallback для verified объектов.
+- [ ] Сохранять storeys, spaces, openings, systems, ports, phases и containment.
+- [ ] Выпускать планы/фасады/разрезы/узлы из одной сохранённой BIM revision.
+- [ ] Проверять межлистовую согласованность и quantity truth после генерации.
+
+### 6.3. Общий выпуск
+
+- [ ] Сохранять STEP/IFC, preview, DXF/SVG/PDF видов, validation report и audit trace.
+- [ ] Не маркировать результат `verified`, пока доменные gates не пройдены.
+- [ ] Добавить regression tests на прежние блокеры `detal_126.png` и минимум по одному кейсу каждого поддержанного класса.
+
+## 7. Редактор и прозрачность процесса
+
+- [ ] Экран «Что прочитала модель»: сущности, размеры, PMI, виды/уровни, связи и confidence.
+- [ ] Экран «Что передаётся в генератор»: точный validated JSON с версией schema.
+- [ ] Side-by-side связь entity ↔ bbox/page ↔ view/topology/BIM object.
+- [ ] Отдельно показывать observed, inferred, user-corrected и unresolved.
+- [ ] Показать блокеры, альтернативы и влияние каждой неопределённости на 3D/виды.
+- [ ] Дать безопасное редактирование параметров и связей с повторной локальной валидацией.
+- [ ] После правки пересчитывать только зависимые узлы и сохранять audit diff/author/time.
+- [ ] Добавить фильтры ошибок, навигацию клавиатурой, масштабирование и удобный выбор мелкой геометрии.
+- [ ] Показывать историю этапов, raw/parsed model output и generator logs без секретов.
+- [ ] Добавить download всех диагностических артефактов одним пакетом.
+
+## 8. Итерационный цикл качества
+
+- [ ] Сформировать минимальное число source groups на каждый класс и уровень сложности.
+- [ ] Снять class-balanced baseline reader → graph → 3D/BIM → 2D.
+- [ ] Кластеризовать ошибки: routing, OCR/symbol, view association, parameter, feature, topology, BIM relation, connectivity, projection, editor.
+- [ ] Исправлять общий класс ошибки; запрещена подгонка по имени файла/fixture.
+- [ ] После изменения прогонять unit + domain dev + corruption tests.
+- [ ] Публиковать before/after по каждому классу и regression delta.
+- [ ] Отклонять изменение, улучшающее среднее ценой invented geometry или деградации критического класса.
+- [ ] Не запускать sealed holdout до promotion-кандидата.
+
+## 9. Финальная приёмка и production
+
+- [ ] Заморозить candidate commit, config/model hashes и manifests.
+- [ ] Однократно прогнать sealed mechanical и construction holdout.
+- [ ] Проверить leakage и отсутствие holdout в prompt examples/manual tuning.
+- [ ] Проверить все promotion gates и честные `blocked/review_required` исходы.
+- [ ] Выполнить `make prod-build`, перезапустить stack и дождаться устойчивого `/health`.
+- [ ] Прогнать публичный рабочий URL, а не только health endpoint.
+- [ ] Для live-кейсов сохранить исходник, audit trace, прочитанный graph, generator payload, 3D/BIM, 2D и validation report.
+- [ ] Дать пользователю живые URL и точные шаги самостоятельной проверки.
+- [ ] Зафиксировать итоговый before/after отчёт, commit и push без generated/local noise.
+
+## Definition of Done
+
+- [ ] Оба домена имеют лицензированный source-grouped воспроизводимый корпус и class-balanced отчёт.
+- [ ] Каждый promotion-кейс имеет geometry/semantic/drawing truth достаточной силы.
+- [ ] Runtime не принимает неполный граф и не заявляет точность без evidence.
+- [ ] Пользователь видит, что модель прочитала и что именно передано генератору.
+- [ ] Поддерживаемые классы дают валидную 3D/BIM и полный необходимый 2D-комплект.
+- [ ] Неподдерживаемые или неоднозначные случаи честно останавливаются с конкретными блокерами.
+- [ ] Production-проверка воспроизводима по живым URL и сохранённым артефактам.

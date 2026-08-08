@@ -6,7 +6,7 @@
         migrate migrate-new seed \
         test test-cov e2e regression agent-regression agent-test agent-ws-smoke \
         studio-queue-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval \
-        cad-corpus-acquire cad-corpus-generate \
+        cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
         turboquant-benchmark turboquant-quality \
         lint lint-fix \
         skills aiagent-contract \
@@ -69,6 +69,7 @@ help:
 	@echo "    make cad-drawing-graph-eval — exact EngineeringDrawingGraph → DXF contract benchmark"
 	@echo "    make cad-corpus-acquire — лицензированный внешний CAD-корпус"
 	@echo "    make cad-corpus-generate — 300 mechanical + 300 construction эталонов"
+	@echo "    make cad-pmi-truth      — official NIST PMI semantic truth + fail-closed self-check"
 	@echo "    make agent-test       — AiAgent scenario tests"
 	@echo "    make studio-queue-smoke — read-only concurrent studio queue API smoke"
 	@echo "    make lint             — ruff + eslint"
@@ -252,6 +253,17 @@ cad-corpus-acquire:
 	python3 tools/cad-dataset/acquire_open_sources.py \
 		--registry tools/cad-dataset/source_registry.json \
 		--out cad-dataset-out/open-sources
+
+cad-pmi-truth:
+	python3 tools/cad-dataset/build_nist_pmi_truth.py \
+		--source-root cad-dataset-out/open-sources/holdout/nist_mbe_pmi/extracted \
+		--ir-root cad-dataset-out/nist-pmi-holdout/ir \
+		--output cad-dataset-out/nist-pmi-holdout/pmi_truth.jsonl \
+		--summary cad-dataset-out/nist-pmi-holdout/pmi_truth_summary.json
+	python3 backend/scripts/eval_pmi_manifest.py \
+		--reference cad-dataset-out/nist-pmi-holdout/pmi_truth.jsonl \
+		--candidate cad-dataset-out/nist-pmi-holdout/pmi_truth.jsonl \
+		--output cad-dataset-out/nist-pmi-holdout/pmi_truth_self_eval.json
 
 # --- B5 active-learning flywheel: production accepted edits ---
 # Export accepted (image, human-corrected IR) pairs from the prod DB (needs DB
