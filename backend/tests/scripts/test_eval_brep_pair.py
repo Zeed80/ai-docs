@@ -5,7 +5,14 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 
-from eval_brep_pair import _combine_shapes, _count_score, _promotion_decision, _relative_error
+from eval_brep_pair import (
+    _axis_orientations,
+    _combine_shapes,
+    _count_score,
+    _determinant3,
+    _promotion_decision,
+    _relative_error,
+)
 
 
 def _passing_metrics():
@@ -59,3 +66,14 @@ def test_single_shape_is_not_wrapped_in_crashing_compound_helper():
 
     assert _combine_shapes(FakePart, [shape]) is shape
     assert _combine_shapes(FakePart, [shape, shape]) == ("compound", [shape, shape])
+
+
+def test_axis_orientations_are_24_unique_proper_rotations():
+    orientations = _axis_orientations()
+    assert len(orientations) == 24
+    assert len(set(orientations)) == 24
+    assert orientations[0] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
+    assert {_determinant3(matrix) for matrix in orientations} == {1}
+    for matrix in orientations:
+        assert all(sum(abs(value) for value in row) == 1 for row in matrix)
+        assert all(sum(abs(matrix[row][column]) for row in range(3)) == 1 for column in range(3))
