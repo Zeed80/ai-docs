@@ -21,9 +21,9 @@
 
 - [x] Создать этот исполнимый TO DO с зависимостями, артефактами и критериями готовности.
 - [x] Связать его с `PLAN.md`, `DEVPLAN.md` и главным benchmark-планом.
-- [ ] Снять воспроизводимый snapshot версий кода, manifest, моделей и runtime-конфигурации.
-- [ ] Прогнать текущий live stack без подстройки на фиксированном наборе mechanical/construction кейсов.
-- [ ] Сохранить исходные API payload, audit trace, 3D/BIM, 2D и метрики как immutable baseline.
+- [-] Снять воспроизводимый snapshot версий кода, manifest, моделей и runtime-конфигурации: NIST PMI baseline сохраняет фактическое production assignment, thinking flag, passes и метрики; commit/config/source hashes для общего multi-domain snapshot ещё нужны.
+- [-] Прогнать текущий live stack без подстройки на фиксированном наборе mechanical/construction кейсов: завершён truth-linked NIST PMI прогон `27/27` листов; общий mechanical/construction API-набор ещё не завершён.
+- [-] Сохранить исходные API payload, audit trace, 3D/BIM, 2D и метрики как immutable baseline: сохранён компактный PMI baseline и полный checkpoint-отчёт; единый immutable bundle для всех доменов ещё нужен.
 
 **Готово, когда:** baseline можно повторить одной командой, а отчёт содержит commit, config hash, source-group hashes и ссылки на артефакты.
 
@@ -47,7 +47,14 @@
 - [x] Считать `invented_pmi_rate`, `missing_pmi_rate`, attachment metrics и `false_exact_rate`.
 - [x] Запрещать promotion при пустой истине, дубликатах, неизвестной связи или ложном `verified`.
 - [x] Добавить unit/CLI tests, self-pair semantic pass и deliberate-corruption rejection; `18` смежных тестов проходят.
-- [-] Зафиксировать честный PMI baseline текущего reader: первый live CTC-лист без подстройки дал до исправления `0/10` и потерю всех observations из-за geometry schema reject; после разделения observation/build gate сохранено `18` кандидатов, semantic F1 `0,071429`, missing `90%`, invented `94,44%`. Полный набор ещё не прогнан.
+- [x] Зафиксировать честный PMI baseline текущего reader: полный production-прогон обработал все `27` truth-linked листов (`98` официальных записей) без runtime errors. Получено `440` кандидатов, `7` точных записей, semantic precision `0,015909`, recall `0,071429`, F1 `0,026022`, missing `92,86%`, invented `98,41%`, false-exact `0%`; promotion запрещён. Диагностика источников показала `0/228` точных dimension-кандидатов и `7/212` annotation-кандидатов (annotation-only F1 `0,045161`).
+- [x] Добавить специализированный structured-PMI проход с явным characteristic, tolerance text и упорядоченными datum refs; пустые/unknown рамки остаются unresolved.
+- [x] Исключить заголовок, номер test model, формат/масштаб и пустые annotation из PMI observations.
+- [x] Добавить возобновляемый live evaluator с checkpoint после каждого листа и возможностью закрепить reader model.
+- [x] Разделить в evaluator кандидаты `dimension`/`annotation`, сохранив основной строгий all-candidate score неизменным.
+- [x] Нормализовать неполные profile/hole-pattern inputs в точные `geometry_input_incomplete:*` причины до общей schema validation. Production smoke больше не дал общего schema reject: observations сохранены, `profile=null`, `observation_only=true`, точный blocker доступен пользователю; single-page strict F1 вырос с `0,071429` до `0,153846` за счёт structured PMI.
+- [ ] Сегментировать/локализовать реальные feature-control frames до VLM и требовать evidence bbox: текущий whole-drawing structured pass всё ещё выдумывает `205/212` annotation-кандидатов.
+- [ ] Добавить отдельные semantic adapters для basic/reference dimensions, datum features/targets, dimension symbols и notes вместо приравнивания любого обычного размера к PMI.
 
 **Готово, когда:** любой PMI score прослеживается до официальной строки NIST и evidence; неподтверждённая привязка не становится verified.
 
@@ -125,7 +132,7 @@
 - [ ] Принимать construction input только как полный валидный BIM/drawing graph.
 - [ ] Ввести стабильные entity IDs, связи видов, topology targets, provenance bbox/page и alternatives.
 - [ ] Валидировать единицы, масштаб, систему координат, обязательные виды и противоречия размеров.
-- [ ] Документировать каждый этап: вход, модель/версия, thinking flag, prompt/config hash, raw/parsed output, validation errors, retry и итоговый generator payload.
+- [-] Документировать каждый этап: production reader уже сохраняет per-question audit, фактическую модель, thinking flag, raw/parsed validation failures и checkpoint; остаются стабильные prompt/config hashes и единый generator-payload trace.
 - [ ] Вернуть для назначений модели явный `thinking=false` и проверить, что провайдер действительно его получает.
 - [ ] Не запускать 3D/BIM при missing critical parameters; вернуть точный список вопросов/блокеров.
 

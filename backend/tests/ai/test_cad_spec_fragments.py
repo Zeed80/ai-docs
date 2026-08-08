@@ -7,8 +7,12 @@ from pathlib import Path
 import pytest
 
 from app.ai.cad_recognize.spec_fragments import (
+    _clean_callout_observations,
     _observation_only_spec,
     _has_geometry,
+    _is_sheet_metadata_line,
+    _mark_observation_only_if_no_geometry,
+    _structured_pmi_annotations,
     _enrich_post_consensus_source_geometry,
     _stamp_crop,
     _type_label,
@@ -63,6 +67,66 @@ def test_geometry_presence_covers_both_supported_classes():
     assert _has_geometry({"main_view": {"profile": {"shape": "circle"}}})
     assert not _has_geometry({"main_view": {"profile": {}}})
     assert not _has_geometry({"main_view": {}})
+
+
+def test_sheet_metadata_is_not_a_dimension_and_empty_pmi_does_not_kill_reading():
+    callouts, dropped = _clean_callout_observations({
+        "dimensions": [
+            {"value": "Ø25 ±0.15"},
+            {"value": "NIST PMI Test Models - 2012"},
+            {"value": "Test Model 1"},
+            {"value": "Масштаб 1:2"},
+        ],
+        "annotations": [
+            {"kind": "tolerance", "text": "", "datum_refs": ["A"]},
+            {"kind": "tolerance", "text": "0.75 | A | B | C"},
+        ],
+    })
+    assert [item["value"] for item in callouts["dimensions"]] == ["Ø25 ±0.15"]
+    assert [item["text"] for item in callouts["annotations"]] == ["0.75 | A | B | C"]
+    assert dropped == 1
+    assert _is_sheet_metadata_line("Лист 1")
+    assert not _is_sheet_metadata_line("4X M8x1.25")
+
+
+def test_geometry_free_valid_spec_is_explicitly_observation_only():
+    spec = {"main_view": {}, "dimensions": [{"value": "Ø25"}]}
+    assert _mark_observation_only_if_no_geometry(spec)["observation_only"] is True
+
+
+def test_structured_pmi_preserves_characteristic_value_and_datum_order():
+    annotations, unresolved = _structured_pmi_annotations({
+        "frames": [
+            {
+                "characteristic": "profile_surface",
+                "tolerance_text": "0.75 A B C",
+                "datum_refs": ["A", "B", "C"],
+            },
+            {
+                "characteristic": "perpendicularity",
+                "tolerance_text": "Ø0.02Ⓜ | A",
+                "datum_refs": ["A"],
+            },
+            {"characteristic": "unknown", "tolerance_text": "0.5", "datum_refs": []},
+        ]
+    })
+    assert annotations == [
+        {
+            "kind": "tolerance",
+            "text": "⌓ | 0.75 | A | B | C",
+            "value": "0.75",
+            "symbol": "profile_surface",
+            "datum_refs": ["A", "B", "C"],
+        },
+        {
+            "kind": "tolerance",
+            "text": "⏊ | Ø0.02Ⓜ | A",
+            "value": "Ø0.02Ⓜ",
+            "symbol": "perpendicularity",
+            "datum_refs": ["A"],
+        },
+    ]
+    assert unresolved == 1
 
 
 def test_invalid_geometry_preserves_pmi_as_unresolved_observations():

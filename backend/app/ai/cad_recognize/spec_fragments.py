@@ -304,7 +304,12 @@ _CALLOUT_PROMPT = (
     '"annotations":[{"kind":"roughness|hardness|tolerance|datum|thread|weld|material|other",'
     '"text":"Ra 1,6","value":null,"symbol":null,"datum_refs":[]}]}\n'
     "value — ровно как написано на чертеже, вместе с допуском и посадкой. "
-    "Ничего не добавляй от себя. Кириллицу не экранируй. Только JSON."
+    "Для рамки геометрического допуска text должен содержать видимый знак, "
+    "значение и базы в исходном порядке; datum_refs повторяет только базы. "
+    "Не возвращай annotation с пустым text и не угадывай нечитаемый знак. "
+    "Не включай в dimensions название листа, номер модели, ревизию, год, "
+    "формат или масштаб. Ничего не добавляй от себя. Кириллицу не экранируй. "
+    "Только JSON."
 )
 
 
@@ -435,6 +440,98 @@ _CALLOUT_SCHEMA = {
         }, "required": ["text"]}},
     },
 }
+
+_PMI_CHARACTERISTICS = (
+    "profile_surface", "profile_line", "flatness", "straightness",
+    "perpendicularity", "angularity", "position", "circularity",
+    "cylindricity", "concentricity", "symmetry", "circular_runout",
+    "total_runout", "parallelism", "unknown",
+)
+_PMI_SYMBOLS = {
+    "profile_surface": "⌓",
+    "profile_line": "⌒",
+    "flatness": "▱",
+    "straightness": "−",
+    "perpendicularity": "⏊",
+    "angularity": "∠",
+    "position": "⌖",
+    "circularity": "○",
+    "cylindricity": "⌭",
+    "concentricity": "◎",
+    "symmetry": "⌯",
+    "circular_runout": "↗",
+    "total_runout": "⌰",
+    "parallelism": "⫽",
+}
+_PMI_PROMPT = (
+    "Найди только рамки геометрических допусков на техническом чертеже. "
+    "Для каждой рамки определи знак по форме, перепиши tolerance_text ровно "
+    "как в ячейке допуска (включая Ø и модификаторы) и базы слева направо. "
+    "Не включай обычные размеры, обозначения видов и штамп. Если знак не "
+    "различим, characteristic=unknown; ничего не угадывай. Только JSON."
+)
+_PMI_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "frames": {
+            "type": "array",
+            "maxItems": 40,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "characteristic": {"type": "string", "enum": list(_PMI_CHARACTERISTICS)},
+                    "tolerance_text": {"type": "string"},
+                    "datum_refs": {
+                        "type": "array", "maxItems": 8, "items": {"type": "string"}
+                    },
+                },
+                "required": ["characteristic", "tolerance_text", "datum_refs"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["frames"],
+    "additionalProperties": False,
+}
+
+
+def _structured_pmi_annotations(answer: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
+    annotations = []
+    unresolved = 0
+    for frame in answer.get("frames") or []:
+        if not isinstance(frame, dict):
+            continue
+        characteristic = str(frame.get("characteristic") or "unknown")
+        tolerance = str(frame.get("tolerance_text") or "").strip()
+        datum_refs = [
+            str(value).strip()
+            for value in frame.get("datum_refs") or []
+            if str(value).strip()
+        ]
+        # Models often copy datum cells into tolerance_text and also return the
+        # same cells in datum_refs. Strip only an exact trailing datum sequence;
+        # the source order remains represented once, not duplicated in output.
+        if datum_refs:
+            suffix = re.compile(
+                r"(?:\s*\|?\s*" + r"\s*\|?\s*".join(
+                    re.escape(value) for value in datum_refs
+                ) + r")\s*$",
+                re.IGNORECASE,
+            )
+            tolerance = suffix.sub("", tolerance).strip(" |")
+        symbol = _PMI_SYMBOLS.get(characteristic)
+        if not symbol or not tolerance:
+            unresolved += 1
+            continue
+        text = " | ".join([symbol, tolerance, *datum_refs])
+        annotations.append({
+            "kind": "tolerance",
+            "text": text,
+            "value": tolerance,
+            "symbol": characteristic,
+            "datum_refs": datum_refs,
+        })
+    return annotations, unresolved
 
 
 def _dominant_view_crop(image):
@@ -584,7 +681,8 @@ async def _ask(
     if audit is not None:
         audit.append({
             "question": question,
-            "model": seeing_model,
+            "model": response.model or seeing_model,
+            "routing_preferred_model": seeing_model,
             "raw_response": response.text or "",
         })
     parsed = _parse_spec_json(response.text or "")
@@ -622,6 +720,43 @@ _OCR_MODEL = "glm-ocr:latest"  # fallback only; the assignment decides
 # It repeats its answer when given room, so the budget is small and repeated
 # blocks are collapsed.
 _OCR_NUM_PREDICT = 700
+
+
+_SHEET_METADATA_LINE = re.compile(
+    r"(?:\bNIST\b|\bPMI\s+(?:test|complex|fully[- ]toleranced)\b|"
+    r"\btest\s+(?:model|case)\b|\b(?:sheet|page|revision|rev)\b|"
+    r"\b(?:лист|страница|ревизия|формат|масштаб|дата)\b)",
+    re.IGNORECASE,
+)
+
+
+def _is_sheet_metadata_line(text: str) -> bool:
+    """Administrative sheet labels are evidence context, not dimensions."""
+    return bool(_SHEET_METADATA_LINE.search(str(text or "")))
+
+
+def _clean_callout_observations(callouts: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Drop invalid containers without letting them erase valid PMI/geometry."""
+    dimensions = []
+    for item in callouts.get("dimensions") or []:
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("value") or "").strip()
+        if not value or _is_sheet_metadata_line(value):
+            continue
+        dimensions.append({**item, "value": value})
+
+    annotations = []
+    dropped_annotations = 0
+    for item in callouts.get("annotations") or []:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or item.get("value") or item.get("symbol") or "").strip()
+        if not text:
+            dropped_annotations += 1
+            continue
+        annotations.append({**item, "text": text})
+    return {**callouts, "dimensions": dimensions, "annotations": annotations}, dropped_annotations
 
 
 def _ocr_model_and_url() -> tuple[str, str]:
@@ -719,6 +854,8 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
     dimensions: list[dict] = []
     annotations: list[dict] = []
     for line in lines:
+        if _is_sheet_metadata_line(line):
+            continue
         matched = None
         for kind, pattern in kinds:
             if pattern.search(line):
@@ -3135,6 +3272,18 @@ async def read_spec_by_fragments(
     # second time, which is what let a flange come back as a "rectangle" whose
     # diameter was actually its bore.
     callouts = await _ask(_CALLOUT_PROMPT, overview, num_predict=3000, schema=_CALLOUT_SCHEMA, **ask)
+    pmi_view = _overview(_main_view_crop(image), side=2200)
+    pmi_answer = await _ask(
+        _PMI_PROMPT, pmi_view, num_predict=1600, schema=_PMI_SCHEMA, **ask
+    )
+    structured_pmi, unresolved_pmi_count = _structured_pmi_annotations(pmi_answer)
+    if structured_pmi:
+        # The bounded symbol question supersedes generic tolerance strings from
+        # the broad callout pass. Keep other annotation classes unchanged.
+        callouts["annotations"] = [
+            item for item in (callouts.get("annotations") or [])
+            if not isinstance(item, dict) or item.get("kind") != "tolerance"
+        ] + structured_pmi
     # The document model reads the sheet's text better than the general reader;
     # its lines are ADDED to what the general reader found rather than replacing
     # it, since the two miss different things.
@@ -3152,6 +3301,8 @@ async def read_spec_by_fragments(
             a for a in ocr.get("annotations") or []
             if str(a.get("text") or "").strip().lower() not in known_notes
         )
+
+    callouts, unreadable_annotation_count = _clean_callout_observations(callouts)
 
     # Some VLM passes serialize hardness as a generic dimension even though
     # the text itself is unambiguous. Preserve the raw text but move it to its
@@ -3185,6 +3336,14 @@ async def read_spec_by_fragments(
 
     body: dict[str, Any] = {"type": _type_label(kind)}
     unresolved: list[str] = []
+    if unreadable_annotation_count:
+        unresolved.append(
+            f"PMI: {unreadable_annotation_count} обозначений без читаемого текста"
+        )
+    if unresolved_pmi_count:
+        unresolved.append(
+            f"PMI: {unresolved_pmi_count} рамок с неразличимым знаком или значением"
+        )
     if kind == "rotation":
         # Chain first: the sheet states positions, not lengths.
         profile_evidence: dict[str, Any] = {}
@@ -3334,6 +3493,7 @@ async def read_spec_by_fragments(
             "kind": bool(kind_answer), "stamp": bool(stamp),
             "geometry": bool(body.get("outer") or body.get("profile")),
             "callouts": bool(callouts),
+            "structured_pmi": bool(structured_pmi),
         },
         "fragment_answers": fragment_answers,
     }
@@ -3454,6 +3614,12 @@ def _type_label(kind: str) -> str:
 def _has_geometry(spec: dict) -> bool:
     body = spec.get("main_view") or {}
     return bool(body.get("outer") or (body.get("profile") or {}).get("shape"))
+
+
+def _mark_observation_only_if_no_geometry(spec: dict[str, Any]) -> dict[str, Any]:
+    if spec and not _has_geometry(spec):
+        spec["observation_only"] = True
+    return spec
 
 
 def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
@@ -3706,13 +3872,17 @@ async def read_spec_best_effort(
         },
     )
     if fragment_ready:
-        return _enrich_post_consensus_source_geometry(fragments, image_bytes)
+        return _mark_observation_only_if_no_geometry(
+            _enrich_post_consensus_source_geometry(fragments, image_bytes)
+        )
 
     whole = await read_drawing_spec_consensus(
         image_bytes, passes=passes, router=router, confidential=confidential
     )
     if not whole:
-        return _enrich_post_consensus_source_geometry(fragments, image_bytes)
+        return _mark_observation_only_if_no_geometry(
+            _enrich_post_consensus_source_geometry(fragments, image_bytes)
+        )
     if fragments:
         whole = _merge_fragment_truth(whole, fragments)
         if not (whole.get("title_block") or {}):
@@ -3733,4 +3903,6 @@ async def read_spec_best_effort(
                 "unresolved": whole.get("unresolved") or [],
             },
         )
-    return _enrich_post_consensus_source_geometry(whole, image_bytes)
+    return _mark_observation_only_if_no_geometry(
+        _enrich_post_consensus_source_geometry(whole, image_bytes)
+    )

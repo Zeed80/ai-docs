@@ -8,10 +8,15 @@
     "passes": 1,
     "tuning": "none"
   },
-  "production_route": {
+  "observed_production_assignment": {
     "task": "cad_spec_read",
-    "primary": "qwen3_vl_30b_a3b_ollama",
-    "fallback": "gemma4_e4b_ollama",
+    "primary": "qwen3_6_27b_qwopus_ollama",
+    "fallbacks": [
+      "qwen3_vl_30b_a3b_ollama",
+      "gemma4_e4b_ollama"
+    ],
+    "actual_reader_model": "qwen3_6_27b_qwopus_ollama",
+    "thinking": false,
     "local_only": true
   },
   "before_observation_preservation": {
@@ -34,11 +39,54 @@
     "invented_pmi_rate": 0.9444444444444444,
     "false_exact_rate": 0.0
   },
+  "after_structured_pmi_single_page_smoke": {
+    "source_page": "nist_ctc_01_asme1_rd_p01.png",
+    "reference_records": 10,
+    "candidate_records": 16,
+    "correct_semantic_records": 2,
+    "semantic_precision": 0.125,
+    "semantic_recall": 0.2,
+    "semantic_f1": 0.15384615384615385,
+    "missing_pmi_rate": 0.8,
+    "invented_pmi_rate": 0.875,
+    "reader_errors": 0,
+    "observation_only": true,
+    "geometry_blocker": "geometry_input_incomplete:main_view.profile:shape requires its measured build dimensions"
+  },
+  "after_structured_pmi_full_truth_linked_run": {
+    "source_pages_available": 30,
+    "truth_linked_pages": 27,
+    "reference_records": 98,
+    "passes": 1,
+    "reader_errors": 0,
+    "candidate_records": 440,
+    "correct_semantic_records": 7,
+    "semantic_precision": 0.015909090909090907,
+    "semantic_recall": 0.07142857142857142,
+    "semantic_f1": 0.02602230483271375,
+    "missing_pmi_rate": 0.9285714285714286,
+    "invented_pmi_rate": 0.9840909090909091,
+    "false_exact_rate": 0.0,
+    "candidate_source_diagnostic": {
+      "dimensions": {
+        "candidate_records": 228,
+        "correct_semantic_records": 0,
+        "semantic_f1": 0.0
+      },
+      "annotations": {
+        "candidate_records": 212,
+        "correct_semantic_records": 7,
+        "semantic_f1": 0.04516129032258065
+      }
+    }
+  },
   "promotion_eligible": false,
   "next_error_classes": [
     "PMI symbols are lost from feature-control-frame text",
     "title and sheet labels are misclassified as dimensions",
     "reader observations have no exact drawing evidence boxes",
-    "official geometry-only STEP cannot supply PMI topology associations"
+    "official geometry-only STEP cannot supply PMI topology associations",
+    "ordinary dimension observations add 228 false PMI candidates in the strict full run",
+    "structured PMI annotations still miss 91/98 official records and invent 205/212 candidates"
   ]
 }

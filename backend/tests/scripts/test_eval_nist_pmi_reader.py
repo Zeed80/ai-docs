@@ -5,7 +5,12 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 
-from eval_nist_pmi_reader import candidates_from_spec, page_truth_index, select_pages
+from eval_nist_pmi_reader import (
+    candidates_from_spec,
+    page_truth_index,
+    restore_candidate_sources,
+    select_pages,
+)
 
 
 def _truth():
@@ -38,11 +43,30 @@ def test_candidate_adapter_keeps_observation_unverified():
         "annotations": [{"kind": "datum", "text": "A-B", "evidence": []}],
     }
     candidates = candidates_from_spec(spec, "ftc", "06")
+    assert candidates[0]["reader_source"] == "dimension"
     assert candidates[0]["category"] == "Directly Toleranced Dimensions & Dimension Symbols"
     assert candidates[0]["assurance"] == {
         "semantic_status": "observed",
         "geometry_linked": False,
         "drawing_located": True,
     }
+    assert candidates[1]["reader_source"] == "annotation"
+    assert candidates[1]["reader_annotation_kind"] == "datum"
     assert candidates[1]["category"] == "Datum Features, Datum Targets, Datum Reference Frames"
     assert candidates[1]["assurance"]["drawing_located"] is False
+
+
+def test_old_checkpoint_candidate_sources_are_restored_without_model_call():
+    result = {
+        "spec": {
+            "dimensions": [{"value": "10"}],
+            "annotations": [{"kind": "tolerance", "text": "▱ | .01"}],
+        },
+        "candidate_records": [{"specification": "10"}, {"specification": "▱ | .01"}],
+    }
+
+    restore_candidate_sources(result)
+
+    assert result["candidate_records"][0]["reader_source"] == "dimension"
+    assert result["candidate_records"][1]["reader_source"] == "annotation"
+    assert result["candidate_records"][1]["reader_annotation_kind"] == "tolerance"

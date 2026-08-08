@@ -1220,6 +1220,22 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
                 cleaned.append({"image_index": 0, "raw_text": item.strip()[:200]})
         return cleaned
 
+    def positive_number(value: Any) -> bool:
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value > 0
+        )
+
+    def record_incomplete_geometry(path: str, reason: str) -> None:
+        unresolved = spec.setdefault("unresolved", [])
+        if not isinstance(unresolved, list):
+            unresolved = [str(unresolved)]
+            spec["unresolved"] = unresolved
+        issue = f"geometry_input_incomplete:{path}:{reason}"
+        if issue not in unresolved:
+            unresolved.append(issue)
+
     if not isinstance(spec, dict):
         return spec
     for field in _LIST_FIELDS_TOP:
@@ -1238,8 +1254,11 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
                 for item in items
                 if item is not None
             ]
-    bodies = [spec.get("main_view"), *(spec.get("parts") or [])]
-    for body in bodies:
+    bodies = [("main_view", spec.get("main_view"))] + [
+        (f"parts.{index}", body)
+        for index, body in enumerate(spec.get("parts") or [])
+    ]
+    for body_path, body in bodies:
         if not isinstance(body, dict):
             continue
         for field in _LIST_FIELDS_BODY:
@@ -1255,20 +1274,65 @@ def _coerce_spec_containers(spec: dict) -> dict:  # noqa: C901
             # scored 0/2 diameters, 0/1 fits and 0/3 roughness purely because
             # one pattern came back with a null hole_diameter_mm. Drop the
             # unusable entry, keep the sheet.
-            for field, size_key in (
-                ("holes", "diameter_mm"),
-                ("hole_patterns", "hole_diameter_mm"),
-                ("slots", "width_mm"),
-            ):
-                items = profile.get(field)
-                if isinstance(items, list):
-                    profile[field] = [
-                        item for item in items
-                        if isinstance(item, dict)
-                        and isinstance(item.get(size_key), (int, float))
-                        and not isinstance(item.get(size_key), bool)
-                        and item[size_key] > 0
-                    ]
+            holes = profile.get("holes")
+            if isinstance(holes, list):
+                profile["holes"] = [
+                    item for item in holes
+                    if isinstance(item, dict)
+                    and positive_number(item.get("diameter_mm"))
+                    and isinstance(item.get("center_x_mm"), (int, float))
+                    and not isinstance(item.get("center_x_mm"), bool)
+                    and isinstance(item.get("center_y_mm"), (int, float))
+                    and not isinstance(item.get("center_y_mm"), bool)
+                ]
+            patterns = profile.get("hole_patterns")
+            if isinstance(patterns, list):
+                valid_patterns = []
+                for index, item in enumerate(patterns):
+                    valid = (
+                        isinstance(item, dict)
+                        and isinstance(item.get("count"), int)
+                        and not isinstance(item.get("count"), bool)
+                        and 2 <= item["count"] <= 128
+                        and positive_number(item.get("hole_diameter_mm"))
+                        and positive_number(item.get("bolt_circle_diameter_mm"))
+                        and item.get("kind", "bolt_circle") == "bolt_circle"
+                    )
+                    if valid:
+                        valid_patterns.append(item)
+                    else:
+                        record_incomplete_geometry(
+                            f"{body_path}.profile.hole_patterns.{index}",
+                            "required pattern parameters are missing or invalid",
+                        )
+                profile["hole_patterns"] = valid_patterns
+            slots = profile.get("slots")
+            if isinstance(slots, list):
+                profile["slots"] = [
+                    item for item in slots
+                    if isinstance(item, dict)
+                    and positive_number(item.get("width_mm"))
+                    and positive_number(item.get("length_mm"))
+                    and item["length_mm"] >= item["width_mm"]
+                    and isinstance(item.get("center_x_mm"), (int, float))
+                    and not isinstance(item.get("center_x_mm"), bool)
+                    and isinstance(item.get("center_y_mm"), (int, float))
+                    and not isinstance(item.get("center_y_mm"), bool)
+                ]
+            shape = profile.get("shape")
+            profile_complete = (
+                shape == "rectangle"
+                and positive_number(profile.get("width_mm"))
+                and positive_number(profile.get("height_mm"))
+            ) or (
+                shape == "circle" and positive_number(profile.get("diameter_mm"))
+            )
+            if not profile_complete:
+                body["profile"] = None
+                record_incomplete_geometry(
+                    f"{body_path}.profile",
+                    "shape requires its measured build dimensions",
+                )
         for field in _LIST_FIELDS_BODY:
             for item in body.get(field) or []:
                 if not isinstance(item, dict):

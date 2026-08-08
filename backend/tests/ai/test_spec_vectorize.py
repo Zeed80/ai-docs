@@ -1165,3 +1165,61 @@ def test_refusal_sheet_carries_the_reading_and_no_part_geometry():
     # Sheet furniture is straight lines only — the frame and the stamp grid.
     # A curve or an arc could only have come from the part.
     assert not [e for e in ir.entities if e.type in ("circle", "arc", "polyline", "hatch")]
+
+
+def test_coerce_marks_incomplete_profile_and_pattern_unresolved():
+    from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
+
+    raw = {
+        "main_view": {
+            "type": "prismatic",
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": None,
+                "height_mm": 80,
+                "hole_patterns": [{
+                    "kind": "bolt_circle",
+                    "count": 6,
+                    "bolt_circle_diameter_mm": 0,
+                    "hole_diameter_mm": 8,
+                }],
+            },
+        },
+        "unresolved": [],
+    }
+
+    repaired = _coerce_spec_containers(raw)
+
+    assert repaired["main_view"]["profile"] is None
+    assert any(
+        item.startswith("geometry_input_incomplete:main_view.profile.hole_patterns.0")
+        for item in repaired["unresolved"]
+    )
+    assert any(
+        item.startswith("geometry_input_incomplete:main_view.profile:")
+        for item in repaired["unresolved"]
+    )
+
+
+def test_coerce_keeps_complete_profile_and_pattern():
+    from app.ai.cad_recognize.spec_vectorize import _coerce_spec_containers
+
+    raw = {
+        "main_view": {
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 100,
+                "hole_patterns": [{
+                    "kind": "bolt_circle",
+                    "count": 6,
+                    "bolt_circle_diameter_mm": 70,
+                    "hole_diameter_mm": 8,
+                }],
+            },
+        },
+    }
+
+    repaired = _coerce_spec_containers(raw)
+
+    assert repaired["main_view"]["profile"]["diameter_mm"] == 100
+    assert len(repaired["main_view"]["profile"]["hole_patterns"]) == 1

@@ -74,6 +74,7 @@ def candidates_from_spec(spec: dict[str, Any], suite: str, case_id: str) -> list
                     "primary_case_id": str(int(case_id)),
                     "category": "Directly Toleranced Dimensions & Dimension Symbols",
                     "specification": value,
+                    "reader_source": "dimension",
                     "assurance": {
                         "semantic_status": "observed",
                         "geometry_linked": False,
@@ -91,6 +92,8 @@ def candidates_from_spec(spec: dict[str, Any], suite: str, case_id: str) -> list
                     "primary_case_id": str(int(case_id)),
                     "category": _category_for_annotation(str(annotation.get("kind") or "")),
                     "specification": value,
+                    "reader_source": "annotation",
+                    "reader_annotation_kind": str(annotation.get("kind") or "other"),
                     "assurance": {
                         "semantic_status": "observed",
                         "geometry_linked": False,
@@ -102,21 +105,57 @@ def candidates_from_spec(spec: dict[str, Any], suite: str, case_id: str) -> list
     return candidates
 
 
-async def read_page(image: pathlib.Path, passes: int) -> dict[str, Any]:
+def restore_candidate_sources(page_result: dict[str, Any]) -> None:
+    """Upgrade checkpoints written before reader_source was recorded.
+
+    candidates_from_spec always appends dimensions first and annotations
+    second.  The parsed spec stored beside them makes that boundary explicit,
+    so resuming an older checkpoint does not require another model call.
+    """
+
+    candidates = page_result.get("candidate_records") or []
+    dimensions = (page_result.get("spec") or {}).get("dimensions") or []
+    dimension_count = len(dimensions)
+    annotations = (page_result.get("spec") or {}).get("annotations") or []
+    for index, record in enumerate(candidates):
+        if not isinstance(record, dict) or record.get("reader_source"):
+            continue
+        if index < dimension_count:
+            record["reader_source"] = "dimension"
+            continue
+        record["reader_source"] = "annotation"
+        annotation_index = index - dimension_count
+        if annotation_index < len(annotations) and isinstance(
+            annotations[annotation_index], dict
+        ):
+            record["reader_annotation_kind"] = str(
+                annotations[annotation_index].get("kind") or "other"
+            )
+
+
+async def read_page(
+    image: pathlib.Path, passes: int, model_key: str | None = None
+) -> dict[str, Any]:
     from app.ai.cad_recognize.spec_fragments import read_spec_best_effort
     from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
     from app.ai.router import ai_router
 
     started = time.monotonic()
     try:
+        router = ai_router
+        if model_key:
+            from eval_cad_readers import _PreferredCadReaderRouter
+
+            router = _PreferredCadReaderRouter(ai_router, model_key)
         raw = await read_spec_best_effort(
-            image.read_bytes(), passes=passes, router=ai_router, confidential=True
+            image.read_bytes(), passes=passes, router=router, confidential=True
         )
         if not raw:
             return {"error": "empty_staged_spec", "seconds": time.monotonic() - started}
         spec = EngineeringDrawingSpec.model_validate(raw).model_dump(mode="json")
         return {
             "seconds": time.monotonic() - started,
+            "requested_model": model_key,
             "spec": spec,
             "reader_attempts": raw.get("reader_attempts") or [],
             "fragment_reader_attempts": raw.get("fragment_reader_attempts") or [],
@@ -125,6 +164,7 @@ async def read_page(image: pathlib.Path, passes: int) -> dict[str, Any]:
         return {
             "error": f"{error.__class__.__name__}: {error}"[:500],
             "seconds": time.monotonic() - started,
+            "requested_model": model_key,
         }
 
 
@@ -134,41 +174,69 @@ async def run(args: argparse.Namespace) -> int:
     if not pages:
         raise ValueError("no NIST PMI pages with semantic truth were found")
 
-    reference_by_id = {}
-    candidate_records = []
+    truth_by_id = {record["semantic_id"]: record for record in all_truth}
     page_results = []
+    if args.resume and args.output.exists():
+        previous = json.loads(args.output.read_text(encoding="utf-8"))
+        page_results = list(previous.get("page_results") or [])
+    completed_images = {result.get("image") for result in page_results}
+
+    def write_checkpoint() -> dict[str, Any]:
+        reference_by_id = {}
+        candidate_records = []
+        for result in page_results:
+            restore_candidate_sources(result)
+            for semantic_id in result.get("reference_semantic_ids") or []:
+                if semantic_id in truth_by_id:
+                    reference_by_id[semantic_id] = truth_by_id[semantic_id]
+            candidate_records.extend(result.get("candidate_records") or [])
+        metrics = evaluate(list(reference_by_id.values()), candidate_records)
+        metrics_by_source = {
+            source: evaluate(
+                list(reference_by_id.values()),
+                [
+                    record for record in candidate_records
+                    if record.get("reader_source") == source
+                ],
+            )
+            for source in ("dimension", "annotation")
+        }
+        report = {
+            "contract": "nist-pmi-production-reader-baseline-v1",
+            "passes": args.passes,
+            "requested_model": args.model_key,
+            "requested_pages": len(pages),
+            "pages": len(page_results),
+            "reader_errors": sum("error" in result for result in page_results),
+            "metrics": metrics,
+            "metrics_by_source": metrics_by_source,
+            "page_results": page_results,
+        }
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return report
+
     for image, page_truth in pages:
+        if image.name in completed_images:
+            continue
         match = PAGE_NAME.fullmatch(image.name)
         if not match:
             raise ValueError(f"unsupported NIST page name: {image.name}")
         suite, case_id, _ = match.groups()
         print(f"→ {image.name} ({len(page_truth)} PMI records)", flush=True)
-        result = await read_page(image, args.passes)
-        for record in page_truth:
-            reference_by_id[record["semantic_id"]] = record
+        result = await read_page(image, args.passes, args.model_key)
         if "spec" in result:
             candidates = candidates_from_spec(result["spec"], suite, case_id)
-            candidate_records.extend(candidates)
             result["candidate_records"] = candidates
         result["image"] = image.name
         result["reference_semantic_ids"] = [record["semantic_id"] for record in page_truth]
         page_results.append(result)
+        write_checkpoint()
 
-    reference = list(reference_by_id.values())
-    metrics = evaluate(reference, candidate_records)
-    report = {
-        "contract": "nist-pmi-production-reader-baseline-v1",
-        "passes": args.passes,
-        "pages": len(pages),
-        "reader_errors": sum("error" in result for result in page_results),
-        "metrics": metrics,
-        "page_results": page_results,
-    }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    report = write_checkpoint()
     print(json.dumps({key: report[key] for key in ("pages", "reader_errors", "metrics")}, ensure_ascii=False, indent=2))
     return 0
 
@@ -180,6 +248,8 @@ def main() -> int:
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--passes", type=int, default=3, choices=(1, 2, 3))
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--model-key", help="pin only CAD vision-reader calls to this catalog key")
+    parser.add_argument("--resume", action="store_true", help="continue from output checkpoints")
     args = parser.parse_args()
     return asyncio.run(run(args))
 
