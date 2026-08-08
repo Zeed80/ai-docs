@@ -8,6 +8,7 @@ import pytest
 
 from app.ai.cad_recognize.spec_fragments import (
     _clean_callout_observations,
+    _detect_pmi_frame_regions,
     _observation_only_spec,
     _has_geometry,
     _is_sheet_metadata_line,
@@ -181,6 +182,24 @@ def test_pmi_contact_sheet_rejects_degenerate_locator_boxes():
 
     assert sheet is None
     assert evidence == {}
+
+
+def test_deterministic_pmi_locator_groups_adjacent_rotated_cells_only():
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    canvas = np.full((500, 1000), 255, dtype=np.uint8)
+    for center in ((300, 220), (352, 190)):
+        points = cv2.boxPoints((center, (62, 28), -30)).astype(np.int32)
+        cv2.polylines(canvas, [points], True, 0, 2)
+    isolated = cv2.boxPoints(((700, 300), (62, 28), -30)).astype(np.int32)
+    cv2.polylines(canvas, [isolated], True, 0, 2)
+
+    result = _detect_pmi_frame_regions(Image.fromarray(canvas).convert("RGB"))
+
+    assert len(result["frames"]) == 1
+    assert result["frames"][0]["source"] == "deterministic_cv"
 
 
 def test_invalid_geometry_preserves_pmi_as_unresolved_observations():

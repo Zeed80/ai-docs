@@ -61,6 +61,22 @@
       "reason": "partial localization may not be presented as complete drawing evidence"
     }
   },
+  "after_deterministic_frame_locator_single_page_smoke": {
+    "source_page": "nist_ctc_01_asme1_rd_p01.png",
+    "reference_records": 10,
+    "deterministic_regions": 6,
+    "candidate_records": 15,
+    "correct_semantic_records": 2,
+    "correct_records_with_drawing_bbox": 2,
+    "semantic_precision": 0.13333333333333333,
+    "semantic_recall": 0.2,
+    "semantic_f1": 0.16,
+    "missing_pmi_rate": 0.8,
+    "invented_pmi_rate": 0.8666666666666667,
+    "reader_errors": 0,
+    "crosscheck": "bbox is attached only when crop and whole-view semantics match exactly",
+    "promotion_eligible": false
+  },
   "after_structured_pmi_full_truth_linked_run": {
     "source_pages_available": 30,
     "truth_linked_pages": 27,

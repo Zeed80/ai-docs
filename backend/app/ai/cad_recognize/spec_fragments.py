@@ -660,7 +660,9 @@ def _pmi_contact_sheet(
             {
                 "image_index": 0,
                 "bbox": [round(value, 1) for value in original_bbox],
-                "raw_text": f"localized feature-control frame {frame_id}",
+                "raw_text": (
+                    f"{item.get('source', 'localized')} feature-control frame {frame_id}"
+                ),
             },
         ))
     if not regions:
@@ -680,6 +682,103 @@ def _pmi_contact_sheet(
         sheet.paste(crop, (cell_x + 8, cell_y + 28))
         evidence_by_frame[frame_id] = evidence
     return sheet, evidence_by_frame
+
+
+def _detect_pmi_frame_regions(image) -> dict[str, Any]:
+    """Find chains of adjacent frame cells from vector-like raster geometry.
+
+    Feature-control frames on axonometric drawings are often parallelograms,
+    not axis-aligned rectangles.  Each cell still produces a long, thin closed
+    contour.  Adjacent contours share their long-axis direction and sit on the
+    same line; grouping those pairs is substantially more stable than asking a
+    VLM to estimate coordinates on the full sheet.
+    """
+
+    import math
+
+    import cv2
+    import numpy as np
+
+    grayscale = np.asarray(image.convert("L"))
+    binary = cv2.threshold(grayscale, 210, 255, cv2.THRESH_BINARY_INV)[1]
+    contours, _hierarchy = cv2.findContours(
+        binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
+    )
+    cells = []
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        rect = cv2.minAreaRect(contour)
+        (center_x, center_y), (width, height), angle = rect
+        short_side, long_side = sorted((width, height))
+        rect_area = width * height
+        fill = area / rect_area if rect_area else 0.0
+        if not (
+            20 <= short_side <= 45
+            and 42 <= long_side <= 95
+            and long_side / short_side >= 1.55
+            and area >= 550
+            and fill >= 0.55
+        ):
+            continue
+        long_angle = angle if width >= height else angle + 90
+        radians = math.radians(long_angle)
+        cells.append({
+            "center": np.asarray((center_x, center_y), dtype=float),
+            "axis": np.asarray((math.cos(radians), math.sin(radians)), dtype=float),
+            "short": short_side,
+            "long": long_side,
+            "points": cv2.boxPoints(rect),
+        })
+
+    adjacency = [set() for _ in cells]
+    for left in range(len(cells)):
+        for right in range(left + 1, len(cells)):
+            first, second = cells[left], cells[right]
+            if abs(float(first["axis"] @ second["axis"])) < math.cos(math.radians(10)):
+                continue
+            delta = second["center"] - first["center"]
+            axis = first["axis"]
+            along = abs(float(delta @ axis))
+            perpendicular = abs(float(delta @ np.asarray((-axis[1], axis[0]))))
+            if (
+                8 < along <= (first["long"] + second["long"]) * 0.72
+                and perpendicular <= max(first["short"], second["short"]) * 0.65
+            ):
+                adjacency[left].add(right)
+                adjacency[right].add(left)
+
+    seen = set()
+    boxes = []
+    image_width, image_height = image.size
+    for start in range(len(cells)):
+        if start in seen:
+            continue
+        stack = [start]
+        seen.add(start)
+        group = []
+        while stack:
+            current = stack.pop()
+            group.append(current)
+            for neighbor in adjacency[current]:
+                if neighbor not in seen:
+                    seen.add(neighbor)
+                    stack.append(neighbor)
+        if len(group) < 2:
+            continue
+        points = np.concatenate([cells[index]["points"] for index in group])
+        x0, y0 = points.min(axis=0)
+        x1, y1 = points.max(axis=0)
+        boxes.append({
+            "bbox": [
+                float(x0 / image_width * 1000),
+                float(y0 / image_height * 1000),
+                float(x1 / image_width * 1000),
+                float(y1 / image_height * 1000),
+            ],
+            "source": "deterministic_cv",
+        })
+    boxes.sort(key=lambda item: (item["bbox"][1], item["bbox"][0]))
+    return {"frames": boxes[:24]}
 
 
 def _dominant_view_crop(image):
@@ -3423,13 +3522,7 @@ async def read_spec_by_fragments(
     callouts = await _ask(_CALLOUT_PROMPT, overview, num_predict=3000, schema=_CALLOUT_SCHEMA, **ask)
     pmi_source_box = _main_view_crop_box(image)
     pmi_view = _overview(image.crop(pmi_source_box), side=2200)
-    pmi_locator = await _ask(
-        _PMI_LOCATOR_PROMPT,
-        pmi_view,
-        num_predict=1000,
-        schema=_PMI_LOCATOR_SCHEMA,
-        **ask,
-    )
+    pmi_locator = _detect_pmi_frame_regions(pmi_view)
     pmi_sheet, pmi_evidence = _pmi_contact_sheet(
         pmi_view, pmi_locator, pmi_source_box
     )
@@ -3442,32 +3535,28 @@ async def read_spec_by_fragments(
             schema=_PMI_SCHEMA,
             **ask,
         )
-    structured_pmi, unresolved_pmi_count = _structured_pmi_annotations(
+    localized_pmi, unresolved_pmi_count = _structured_pmi_annotations(
         pmi_answer, pmi_evidence
     )
-    generic_tolerance_count = sum(
-        isinstance(item, dict) and item.get("kind") == "tolerance"
-        for item in (callouts.get("annotations") or [])
+    direct_answer = await _ask(
+        _PMI_DIRECT_PROMPT,
+        pmi_view,
+        num_predict=1600,
+        schema=_PMI_DIRECT_SCHEMA,
+        **ask,
     )
-    # A locator miss must not erase a better whole-view read.  The direct pass
-    # remains observation-only (no bbox); localized matches take precedence
-    # and supply evidence.  This fallback is triggered only when the number of
-    # accepted regions is implausibly below the broad callout observation.
-    if len(structured_pmi) < max(3, generic_tolerance_count):
-        direct_answer = await _ask(
-            _PMI_DIRECT_PROMPT,
-            pmi_view,
-            num_predict=1600,
-            schema=_PMI_DIRECT_SCHEMA,
-            **ask,
-        )
-        direct_pmi, direct_unresolved = _structured_pmi_annotations(direct_answer)
-        unresolved_pmi_count += direct_unresolved
-        # The fallback condition itself says localization coverage is
-        # insufficient.  Do not mix its untrusted partial crops into the
-        # direct observation set: the first live version did so and added one
-        # false candidate while recovering the same two correct records.
-        structured_pmi = direct_pmi
+    direct_pmi, direct_unresolved = _structured_pmi_annotations(direct_answer)
+    unresolved_pmi_count += direct_unresolved
+    localized_by_text = {item["text"]: item for item in localized_pmi}
+    structured_pmi = []
+    seen_pmi = set()
+    for item in direct_pmi:
+        if item["text"] in seen_pmi:
+            continue
+        seen_pmi.add(item["text"])
+        # Semantics come from the whole-view read; a bbox is attached only
+        # when the independent crop read produced the exact same construct.
+        structured_pmi.append(localized_by_text.get(item["text"], item))
     if structured_pmi:
         # The bounded symbol question supersedes generic tolerance strings from
         # the broad callout pass. Keep other annotation classes unchanged.
