@@ -62,3 +62,15 @@ def test_description_input_is_part_of_reproducible_manifest_hash():
     )
     assert description["input_kind"] == "description"
     assert description["config_sha256"] != image["config_sha256"]
+
+
+def test_digitization_type_is_part_of_reproducible_manifest_hash():
+    automatic = build_cad_pipeline_manifest(profile="auto", method="spec")
+    rotation = build_cad_pipeline_manifest(
+        profile="mechanical",
+        method="spec",
+        digitization_type="rotation_body",
+    )
+
+    assert rotation["digitization_type"] == "rotation_body"
+    assert rotation["config_sha256"] != automatic["config_sha256"]

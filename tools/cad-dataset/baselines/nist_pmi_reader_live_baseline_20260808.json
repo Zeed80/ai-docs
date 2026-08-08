@@ -104,13 +104,58 @@
       }
     }
   },
+  "after_semantic_candidate_adapter_full_truth_linked_run": {
+    "candidate_adapter": "nist-pmi-semantic-adapter-v2",
+    "source": "same saved 27-page production specs; no repeat model calls",
+    "reference_records": 98,
+    "reader_errors": 0,
+    "candidate_records": 312,
+    "correct_semantic_records": 8,
+    "semantic_precision": 0.02564102564102564,
+    "semantic_recall": 0.08163265306122448,
+    "semantic_f1": 0.03902439024390243,
+    "missing_pmi_rate": 0.9183673469387755,
+    "invented_pmi_rate": 0.9743589743589743,
+    "false_exact_rate": 0.0,
+    "candidate_source_diagnostic": {
+      "dimensions": {
+        "candidate_records": 123,
+        "correct_semantic_records": 1,
+        "semantic_f1": 0.00904977375565611
+      },
+      "annotations": {
+        "candidate_records": 189,
+        "correct_semantic_records": 7,
+        "semantic_f1": 0.04878048780487805
+      }
+    },
+    "policy": "ordinary dimensions and unclassified notes are not PMI candidates",
+    "promotion_eligible": false
+  },
+  "deterministic_frame_locator_full_truth_linked_diagnostic": {
+    "contract": "nist-pmi-frame-locator-diagnostic-v1",
+    "truth_linked_pages": 27,
+    "reference_page_memberships": 105,
+    "geometric_tolerance_reference_records": 37,
+    "detected_regions": 147,
+    "pages_with_zero_regions": 2,
+    "regions_per_page": {
+      "minimum": 0,
+      "median": 5,
+      "maximum": 14
+    },
+    "bbox_truth_available": false,
+    "promotion_eligible": false,
+    "reason": "official truth has no exact frame bbox or region-to-record links"
+  },
   "promotion_eligible": false,
   "next_error_classes": [
     "PMI symbols are lost from feature-control-frame text",
     "title and sheet labels are misclassified as dimensions",
     "reader observations have no exact drawing evidence boxes",
     "official geometry-only STEP cannot supply PMI topology associations",
-    "ordinary dimension observations add 228 false PMI candidates in the strict full run",
-    "structured PMI annotations still miss 91/98 official records and invent 205/212 candidates"
+    "123 explicit dimension-like observations still contain only 1 exact semantic record",
+    "structured PMI annotations still miss 91/98 official records and invent 182/189 candidates",
+    "exact frame bbox and region-to-semantic truth are unavailable for locator promotion"
   ]
 }

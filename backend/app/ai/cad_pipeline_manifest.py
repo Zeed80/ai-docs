@@ -63,7 +63,11 @@ def build_cad_pipeline_manifest(
     method: str,
     source_sha256: str | None = None,
     input_kind: str = "source_image",
+    digitization_type: str = "auto",
 ) -> dict[str, Any]:
+    from app.ai.cad_digitization_type import resolve_digitization_type
+
+    type_decision = resolve_digitization_type(digitization_type)
     normalized_profile = "mechanical" if profile == "mechanical_eskd" else profile
     normalized_profile = (
         normalized_profile if normalized_profile in PROFILE_GATES else "auto"
@@ -149,6 +153,7 @@ def build_cad_pipeline_manifest(
         "manifest_version": MANIFEST_VERSION,
         "pipeline_revision": PIPELINE_REVISION,
         "profile": normalized_profile,
+        "digitization_type": type_decision.normalized,
         "method": method,
         "input_kind": input_kind,
         "components": components,

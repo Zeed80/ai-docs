@@ -17,16 +17,13 @@ import {
   uploadSource,
   VectorizerDevelopmentStatus,
 } from "@/lib/studio-api";
+import {
+  DIGITIZATION_TYPE_OPTIONS,
+  DigitizationType,
+  profileForDigitizationType,
+} from "@/lib/cad-digitization";
 
 type SheetFormat = "A4" | "A3" | "A2" | "A1";
-type DigitizationProfile =
-  | "auto"
-  | "mechanical_eskd"
-  | "construction"
-  | "electrical"
-  | "hydraulic"
-  | "pid";
-
 function docTitle(g: Generation): string {
   const params = (g.params ?? {}) as Record<string, unknown>;
   return (
@@ -58,8 +55,8 @@ export default function CadListPage() {
   const [landscape, setLandscape] = useState(false);
   const [withFrame, setWithFrame] = useState(true);
   const [sheetTitle, setSheetTitle] = useState("");
-  const [digitizationProfile, setDigitizationProfile] =
-    useState<DigitizationProfile>("auto");
+  const [digitizationType, setDigitizationType] =
+    useState<DigitizationType>("auto");
   const [digitizeSheetFormat, setDigitizeSheetFormat] = useState<
     "" | SheetFormat
   >("");
@@ -163,7 +160,8 @@ export default function CadListPage() {
           source_image_paths: [path],
           params: {
             quality_mode: "exact_or_refuse",
-            digitization_profile: digitizationProfile,
+            digitization_type: digitizationType,
+            digitization_profile: profileForDigitizationType(digitizationType),
             vectorize_method: vectorizeMethod,
             source_filename: file.name,
             pdf_page: pdfPage,
@@ -181,7 +179,7 @@ export default function CadListPage() {
       }
     },
     [
-      digitizationProfile,
+      digitizationType,
       digitizeSheetFormat,
       vectorizeMethod,
       readPasses,
@@ -245,19 +243,18 @@ export default function CadListPage() {
             </select>
           )}
           <select
-            value={digitizationProfile}
+            value={digitizationType}
             onChange={(e) =>
-              setDigitizationProfile(e.target.value as DigitizationProfile)
+              setDigitizationType(e.target.value as DigitizationType)
             }
             className="rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
-            title={t("digitization_profile")}
+            title={t("digitization_type")}
           >
-            <option value="auto">{t("profile_auto")}</option>
-            <option value="mechanical_eskd">{t("profile_mechanical")}</option>
-            <option value="construction">{t("profile_construction")}</option>
-            <option value="electrical">{t("profile_electrical")}</option>
-            <option value="hydraulic">{t("profile_hydraulic")}</option>
-            <option value="pid">{t("profile_pid")}</option>
+            {DIGITIZATION_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {t(option.labelKey)}
+              </option>
+            ))}
           </select>
           <select
             value={digitizeSheetFormat}

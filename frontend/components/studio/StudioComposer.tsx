@@ -5,6 +5,11 @@ import { useEffect, useRef, useState } from "react";
 
 import { isNative, pickImage } from "@/lib/native-bridge";
 import {
+  DIGITIZATION_TYPE_OPTIONS,
+  DigitizationType,
+  profileForDigitizationType,
+} from "@/lib/cad-digitization";
+import {
   GenerateInput,
   Generation,
   Operation,
@@ -54,6 +59,7 @@ type StudioComposerPrefs = {
   vectorSheetFormat?: "" | "A4" | "A3" | "A2" | "A1" | "A0";
   vectorMethod?: "trace" | "spec";
   readPasses?: number;
+  digitizationType?: DigitizationType;
   vectorDescription?: string;
   vectorLandscape?: boolean;
   blankFormat?: "A4" | "A3" | "A2" | "A1";
@@ -168,6 +174,13 @@ export default function StudioComposer({
   const [readPasses, setReadPasses] = useState<number>(
     typeof prefs.readPasses === "number" ? prefs.readPasses : 3,
   );
+  const [digitizationType, setDigitizationType] = useState<DigitizationType>(
+    DIGITIZATION_TYPE_OPTIONS.some(
+      (option) => option.value === prefs.digitizationType,
+    )
+      ? (prefs.digitizationType as DigitizationType)
+      : "auto",
+  );
   const [vectorDescription, setVectorDescription] = useState(
     prefs.vectorDescription ?? "",
   );
@@ -277,6 +290,7 @@ export default function StudioComposer({
           vectorSheetFormat,
           vectorMethod,
           readPasses,
+          digitizationType,
           vectorDescription,
           vectorLandscape,
           blankFormat,
@@ -313,6 +327,7 @@ export default function StudioComposer({
     vectorSheetFormat,
     vectorMethod,
     readPasses,
+    digitizationType,
     vectorDescription,
     vectorLandscape,
     blankFormat,
@@ -626,6 +641,10 @@ export default function StudioComposer({
         ...link,
       };
       (input.params as Record<string, unknown>).vectorize_method = method;
+      (input.params as Record<string, unknown>).digitization_type =
+        digitizationType;
+      (input.params as Record<string, unknown>).digitization_profile =
+        profileForDigitizationType(digitizationType);
       const s = Number(vectorScale.replace(",", "."));
       // The "spec" method auto-picks a ГОСТ 2.302 scale from the sheet +
       // orientation, so a manual scale is ignored there (but the sheet is used).
@@ -1321,23 +1340,46 @@ export default function StudioComposer({
               several times and intersecting turns disagreement into a review
               item instead of a silently wrong number. */}
           {(sourceFile || sourceGenerationId) && vectorMethod === "spec" && (
-            <label className="block">
-              <span className="text-xs text-zinc-500">
-                {t("read_passes_label")}
-              </span>
-              <select
-                value={readPasses}
-                onChange={(e) => setReadPasses(Number(e.target.value))}
-                className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
-              >
-                <option value={1}>{t("read_passes_one")}</option>
-                <option value={2}>{t("read_passes_two")}</option>
-                <option value={3}>{t("read_passes_three")}</option>
-              </select>
-              <p className="mt-1 text-[11px] text-zinc-600">
-                {t("read_passes_hint")}
-              </p>
-            </label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block">
+                <span className="text-xs text-zinc-500">
+                  {t("digitization_type")}
+                </span>
+                <select
+                  value={digitizationType}
+                  onChange={(e) =>
+                    setDigitizationType(e.target.value as DigitizationType)
+                  }
+                  className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                >
+                  {DIGITIZATION_TYPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {t(option.labelKey)}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-zinc-600">
+                  {t("digitization_type_hint")}
+                </p>
+              </label>
+              <label className="block">
+                <span className="text-xs text-zinc-500">
+                  {t("read_passes_label")}
+                </span>
+                <select
+                  value={readPasses}
+                  onChange={(e) => setReadPasses(Number(e.target.value))}
+                  className="mt-1 w-full rounded bg-zinc-900 border border-white/10 p-2 text-sm text-zinc-200"
+                >
+                  <option value={1}>{t("read_passes_one")}</option>
+                  <option value={2}>{t("read_passes_two")}</option>
+                  <option value={3}>{t("read_passes_three")}</option>
+                </select>
+                <p className="mt-1 text-[11px] text-zinc-600">
+                  {t("read_passes_hint")}
+                </p>
+              </label>
+            </div>
           )}
 
           <div className="grid gap-2 sm:grid-cols-2">

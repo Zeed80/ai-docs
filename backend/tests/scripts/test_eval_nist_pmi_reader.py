@@ -39,8 +39,15 @@ def test_select_pages_never_substitutes_missing_images(tmp_path):
 
 def test_candidate_adapter_keeps_observation_unverified():
     spec = {
-        "dimensions": [{"value": "2X S⌀ 1.250 ± .008", "evidence": [{"bbox": [1, 2, 3, 4]}]}],
-        "annotations": [{"kind": "datum", "text": "A-B", "evidence": []}],
+        "dimensions": [
+            {"value": "100", "evidence": []},
+            {"value": "2X S⌀ 1.250 ± .008", "evidence": [{"bbox": [1, 2, 3, 4]}]},
+            {"value": "(25 REF)", "evidence": []},
+        ],
+        "annotations": [
+            {"kind": "other", "text": "UNITS: INCHES", "evidence": []},
+            {"kind": "datum", "text": "A-B", "evidence": []},
+        ],
     }
     candidates = candidates_from_spec(spec, "ftc", "06")
     assert candidates[0]["reader_source"] == "dimension"
@@ -50,10 +57,14 @@ def test_candidate_adapter_keeps_observation_unverified():
         "geometry_linked": False,
         "drawing_located": True,
     }
-    assert candidates[1]["reader_source"] == "annotation"
-    assert candidates[1]["reader_annotation_kind"] == "datum"
-    assert candidates[1]["category"] == "Datum Features, Datum Targets, Datum Reference Frames"
-    assert candidates[1]["assurance"]["drawing_located"] is False
+    assert candidates[1]["reader_source"] == "dimension"
+    assert candidates[1]["category"] == "Basic and Reference Dimensions:"
+    assert candidates[2]["reader_source"] == "annotation"
+    assert candidates[2]["reader_annotation_kind"] == "datum"
+    assert candidates[2]["category"] == "Datum Features, Datum Targets, Datum Reference Frames"
+    assert candidates[2]["assurance"]["drawing_located"] is False
+    assert all(item["specification"] != "100" for item in candidates)
+    assert all(item["specification"] != "UNITS: INCHES" for item in candidates)
 
 
 def test_old_checkpoint_candidate_sources_are_restored_without_model_call():

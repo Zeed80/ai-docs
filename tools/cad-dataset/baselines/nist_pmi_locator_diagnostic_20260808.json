@@ -1,0 +1,1829 @@
+{
+  "bbox_truth_available": false,
+  "blockers": [
+    "missing_exact_frame_bbox_truth",
+    "missing_region_to_semantic_record_truth"
+  ],
+  "contract": "nist-pmi-frame-locator-diagnostic-v1",
+  "detected_regions": 147,
+  "geometric_tolerance_reference_records": 37,
+  "interpretation": "Region counts are operational diagnostics only. The official truth does not provide exact frame bounding boxes, so recall, precision, false-region rate, and semantic attachment cannot be calculated.",
+  "page_results": [
+    {
+      "detected_region_count": 6,
+      "detected_regions": [
+        {
+          "bbox": [
+            158.01486206054688,
+            191.17030334472656,
+            208.67257690429688,
+            237.96873474121094
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            521.1253662109375,
+            250.71969604492188,
+            573.3441162109375,
+            298.57379150390625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            692.3810424804688,
+            375.1112365722656,
+            742.7227783203125,
+            421.7293395996094
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            900.0545043945312,
+            587.4498901367188,
+            949.7625122070312,
+            633.545654296875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            411.5846252441406,
+            732.1376953125,
+            466.6024169921875,
+            782.1771850585938
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            744.1441650390625,
+            742.3085327148438,
+            796.3369140625,
+            790.2728881835938
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 3,
+      "image": "nist_ctc_01_asme1_rd_p01.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 10,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2144,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 1,
+      "detected_regions": [
+        {
+          "bbox": [
+            772.1078491210938,
+            760.0767822265625,
+            836.7609252929688,
+            818.75537109375
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 2,
+      "image": "nist_ctc_02_asme1_rc_p01.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 5,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2144,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 1,
+      "detected_regions": [
+        {
+          "bbox": [
+            767.680419921875,
+            590.4368286132812,
+            832.3880615234375,
+            649.15869140625
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 2,
+      "image": "nist_ctc_02_asme1_rc_p02.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 3,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 8,
+      "detected_regions": [
+        {
+          "bbox": [
+            406.3847351074219,
+            82.25230407714844,
+            531.37353515625,
+            185.20095825195312
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            789.7559204101562,
+            93.07474517822266,
+            889.896484375,
+            177.77679443359375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            633.2297973632812,
+            127.26103973388672,
+            691.7374877929688,
+            181.37152099609375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            807.01123046875,
+            158.28810119628906,
+            865.5256958007812,
+            212.46072387695312
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            829.1206665039062,
+            314.3787536621094,
+            886.1575317382812,
+            367.46002197265625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            627.14208984375,
+            342.623046875,
+            728.0995483398438,
+            427.7125244140625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            792.8352661132812,
+            539.07470703125,
+            858.4248046875,
+            598.4279174804688
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            648.156982421875,
+            648.6322021484375,
+            664.4327392578125,
+            720.36474609375
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 2,
+      "image": "nist_ctc_02_asme1_rc_p03.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 2,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2144,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 9,
+      "detected_regions": [
+        {
+          "bbox": [
+            262.7684326171875,
+            127.9168701171875,
+            321.3348693847656,
+            180.6759490966797
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            482.103515625,
+            252.98062133789062,
+            537.1160278320312,
+            303.0924377441406
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            208.544921875,
+            382.6109619140625,
+            259.150390625,
+            429.5274353027344
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            819.3865966796875,
+            391.7320861816406,
+            868.6858520507812,
+            437.63067626953125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            802.783447265625,
+            518.7264404296875,
+            857.7869262695312,
+            568.8834838867188
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            799.7910766601562,
+            710.4794311523438,
+            856.8623046875,
+            762.1116943359375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            639.2216186523438,
+            809.576416015625,
+            694.5791625976562,
+            859.9995727539062
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            592.5694580078125,
+            827.0769653320312,
+            639.9722900390625,
+            871.6218872070312
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            351.91259765625,
+            833.849609375,
+            392.38134765625,
+            903.2807006835938
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 5,
+      "image": "nist_ctc_03_asme1_rc_p01.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 10,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2144,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 5,
+      "detected_regions": [
+        {
+          "bbox": [
+            263.28387451171875,
+            159.87841796875,
+            289.133544921875,
+            213.9817657470703
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            635.143798828125,
+            252.4947509765625,
+            673.8815307617188,
+            289.7732238769531
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            622.5894775390625,
+            261.2809143066406,
+            661.7372436523438,
+            299.331298828125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            79.28907012939453,
+            553.2984008789062,
+            142.77642822265625,
+            610.1137084960938
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            183.8905029296875,
+            654.1689453125,
+            237.17791748046875,
+            703.4784545898438
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 4,
+      "image": "nist_ctc_04_asme1_rd_p01.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 10,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2144,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 8,
+      "detected_regions": [
+        {
+          "bbox": [
+            439.0867919921875,
+            113.27926635742188,
+            508.1766357421875,
+            173.18670654296875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            692.9821166992188,
+            279.7107849121094,
+            749.6342163085938,
+            330.4305419921875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            310.9195556640625,
+            349.95562744140625,
+            362.91461181640625,
+            397.1932373046875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            326.5988464355469,
+            515.0310668945312,
+            378.4090881347656,
+            562.1417236328125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            483.53961181640625,
+            741.3865966796875,
+            552.847900390625,
+            801.470703125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            779.0267333984375,
+            746.32177734375,
+            848.3134155273438,
+            806.3817138671875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            382.1600341796875,
+            747.8099365234375,
+            431.1785888671875,
+            792.9839477539062
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            750.5158081054688,
+            774.402587890625,
+            802.5219116210938,
+            821.6322021484375
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 4,
+      "image": "nist_ctc_05_asme1_rd_p01.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 8,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 2,
+      "detected_regions": [
+        {
+          "bbox": [
+            248.9130096435547,
+            397.657958984375,
+            304.6324768066406,
+            447.68560791015625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            280.0611572265625,
+            527.7730712890625,
+            335.773681640625,
+            577.8583374023438
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 1,
+      "image": "nist_ctc_05_asme1_rd_p02.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 3,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 4,
+      "detected_regions": [
+        {
+          "bbox": [
+            763.4036254882812,
+            317.63043212890625,
+            822.6295776367188,
+            372.5513000488281
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            763.3239135742188,
+            341.29461669921875,
+            821.6229858398438,
+            395.47613525390625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            368.597412109375,
+            437.6899719238281,
+            456.1991271972656,
+            452.8875427246094
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            377.8357238769531,
+            772.877685546875,
+            435.8415222167969,
+            826.9546508789062
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 1,
+      "image": "nist_ftc_06_asme1_rd_p01.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 6,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2144,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 9,
+      "detected_regions": [
+        {
+          "bbox": [
+            593.1423950195312,
+            104.91242218017578,
+            652.4105224609375,
+            159.7852783203125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            593.22607421875,
+            127.8321762084961,
+            651.5562744140625,
+            182.04965209960938
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            295.3262023925781,
+            187.3715057373047,
+            354.6217346191406,
+            242.31988525390625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            625.9578247070312,
+            219.452880859375,
+            641.2835083007812,
+            274.77203369140625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            440.13409423828125,
+            329.4832763671875,
+            504.789306640625,
+            348.9361572265625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            470.7854309082031,
+            404.2400817871094,
+            541.2421875,
+            431.6109313964844
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            799.61474609375,
+            426.3012390136719,
+            865.245361328125,
+            485.9308776855469
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            150.38314819335938,
+            466.2613830566406,
+            165.7088165283203,
+            522.1884155273438
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            642.03515625,
+            654.06298828125,
+            707.4630126953125,
+            713.4158935546875
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_06_asme1_rd_p02.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 2,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 4,
+      "detected_regions": [
+        {
+          "bbox": [
+            243.77395629882812,
+            208.5106201171875,
+            309.86590576171875,
+            227.96351623535156
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            665.2297973632812,
+            208.5106201171875,
+            731.3218383789062,
+            227.96351623535156
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            315.13409423828125,
+            368.3890686035156,
+            366.37933349609375,
+            384.80242919921875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            666.6666870117188,
+            368.3890686035156,
+            717.9119262695312,
+            384.80242919921875
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_06_asme1_rd_p03.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 2,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 4,
+      "detected_regions": [
+        {
+          "bbox": [
+            581.514404296875,
+            98.38402557373047,
+            636.298828125,
+            152.10023498535156
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            691.97509765625,
+            158.025390625,
+            765.7557983398438,
+            225.8114776611328
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            422.9776611328125,
+            252.4905242919922,
+            496.52996826171875,
+            320.1067810058594
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            714.3065185546875,
+            267.7413330078125,
+            788.6456298828125,
+            335.9367370605469
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_07_asme1_rd_p01.png",
+      "locator_image_size": [
+        2089,
+        1629
+      ],
+      "reference_record_count": 2,
+      "source_crop_box_pixels": [
+        37,
+        53,
+        2126,
+        1682
+      ]
+    },
+    {
+      "detected_region_count": 8,
+      "detected_regions": [
+        {
+          "bbox": [
+            606.9889526367188,
+            107.59878540039062,
+            627.572998046875,
+            179.939208984375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            551.1453247070312,
+            121.38150787353516,
+            617.996337890625,
+            199.23068237304688
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            315.4619445800781,
+            174.46807861328125,
+            330.7802734375,
+            236.4741668701172
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            330.7802734375,
+            186.01824951171875,
+            346.0986022949219,
+            248.02430725097656
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            346.57733154296875,
+            197.56838989257812,
+            362.8530578613281,
+            260.182373046875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            698.8989868164062,
+            234.6504669189453,
+            719.0043334960938,
+            302.7355651855469
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            638.6017456054688,
+            248.3805694580078,
+            708.8931884765625,
+            314.4496765136719
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            639.6322021484375,
+            278.23797607421875,
+            706.90771484375,
+            340.55694580078125
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 4,
+      "image": "nist_ftc_07_asme1_rd_p02.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 5,
+      "source_crop_box_pixels": [
+        57,
+        23,
+        2146,
+        1668
+      ]
+    },
+    {
+      "detected_region_count": 2,
+      "detected_regions": [
+        {
+          "bbox": [
+            717.5682373046875,
+            159.87841796875,
+            736.2374267578125,
+            230.3951416015625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            844.90185546875,
+            254.71124267578125,
+            863.5711059570312,
+            325.22796630859375
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 2,
+      "image": "nist_ftc_07_asme1_rd_p03.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 2,
+      "source_crop_box_pixels": [
+        57,
+        23,
+        2146,
+        1668
+      ]
+    },
+    {
+      "detected_region_count": 6,
+      "detected_regions": [
+        {
+          "bbox": [
+            705.2102661132812,
+            138.48077392578125,
+            770.1505126953125,
+            197.73233032226562
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            733.5870971679688,
+            274.9703674316406,
+            800.1671142578125,
+            335.39971923828125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            891.8142700195312,
+            334.34649658203125,
+            910.962158203125,
+            386.62615966796875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            843.2257080078125,
+            344.44671630859375,
+            898.8666381835938,
+            396.8237609863281
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            843.2508544921875,
+            364.4899597167969,
+            903.1669921875,
+            419.97943115234375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            311.8161315917969,
+            568.809326171875,
+            360.57110595703125,
+            616.190185546875
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 1,
+      "image": "nist_ftc_08_asme1_rc_p01.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 2,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2144,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 13,
+      "detected_regions": [
+        {
+          "bbox": [
+            496.64752197265625,
+            101.5197525024414,
+            524.42529296875,
+            161.09422302246094
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            558.5093994140625,
+            127.37281799316406,
+            655.9144287109375,
+            210.25270080566406
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            438.4660339355469,
+            139.337890625,
+            503.4800720214844,
+            198.42796325683594
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            802.77880859375,
+            247.8007354736328,
+            847.3314819335938,
+            291.36328125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            789.0810546875,
+            258.8909912109375,
+            832.9723510742188,
+            301.11761474609375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            774.6968383789062,
+            268.62890625,
+            819.243408203125,
+            311.81317138671875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            864.9425659179688,
+            327.6595764160156,
+            884.099609375,
+            379.939208984375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            817.3692016601562,
+            338.3676452636719,
+            872.3576049804688,
+            390.0576477050781
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            124.52107238769531,
+            352.5835876464844,
+            146.07278442382812,
+            432.2188415527344
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            61.17509078979492,
+            356.94952392578125,
+            120.44195556640625,
+            411.8193359375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            817.2975463867188,
+            358.1775817871094,
+            876.5576782226562,
+            413.0527648925781
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            61.467620849609375,
+            604.00048828125,
+            120.9599380493164,
+            659.1255493164062
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            210.5685272216797,
+            662.257080078125,
+            276.5563049316406,
+            722.0776977539062
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 1,
+      "image": "nist_ftc_08_asme1_rc_p02.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 3,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 5,
+      "detected_regions": [
+        {
+          "bbox": [
+            865.7530517578125,
+            275.885009765625,
+            910.7648315429688,
+            319.4669189453125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            852.1663208007812,
+            287.1171569824219,
+            896.1612548828125,
+            329.2121276855469
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            837.8385009765625,
+            296.7574157714844,
+            882.41357421875,
+            339.8125915527344
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            200.37542724609375,
+            643.9673461914062,
+            308.1335754394531,
+            734.4915771484375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            370.402587890625,
+            810.9485473632812,
+            435.4554748535156,
+            870.1429443359375
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_08_asme1_rc_p03.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 1,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 14,
+      "detected_regions": [
+        {
+          "bbox": [
+            228.21249389648438,
+            178.44281005859375,
+            288.64105224609375,
+            234.13632202148438
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            172.08961486816406,
+            305.1110534667969,
+            216.68142700195312,
+            348.1225280761719
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            186.09640502929688,
+            315.71337890625,
+            230.2348175048828,
+            358.1295166015625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            200.0147247314453,
+            325.2720947265625,
+            244.95761108398438,
+            369.03436279296875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            113.60154724121094,
+            536.0977783203125,
+            157.7928466796875,
+            578.9946899414062
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            127.6082992553711,
+            546.8499755859375,
+            171.3597412109375,
+            589.0016479492188
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            141.1632537841797,
+            556.4365844726562,
+            186.10794067382812,
+            600.2017822265625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            798.515625,
+            596.3113403320312,
+            924.496826171875,
+            700.1406860351562
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            750.8302001953125,
+            729.2965698242188,
+            795.194091796875,
+            772.2935180664062
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            765.2164306640625,
+            739.741943359375,
+            809.1049194335938,
+            782.00634765625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            778.5293579101562,
+            749.6376342773438,
+            823.5117797851562,
+            793.2850341796875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            425.05157470703125,
+            773.961181640625,
+            469.63287353515625,
+            817.011962890625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            439.41943359375,
+            784.4622192382812,
+            483.341796875,
+            826.7570190429688
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            453.1612854003906,
+            794.1984252929688,
+            497.9442138671875,
+            837.8767700195312
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_08_asme1_rc_p04.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 3,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 4,
+      "detected_regions": [
+        {
+          "bbox": [
+            547.4241943359375,
+            262.7074890136719,
+            592.3007202148438,
+            306.29522705078125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            353.9226379394531,
+            585.25146484375,
+            412.4399719238281,
+            639.648681640625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            476.6064147949219,
+            699.2471923828125,
+            521.0838012695312,
+            742.5484619140625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            828.4906616210938,
+            746.0422973632812,
+            888.0882568359375,
+            801.17529296875
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 1,
+      "image": "nist_ftc_09_asme1_rd_p01.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 2,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2144,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 1,
+      "detected_regions": [
+        {
+          "bbox": [
+            236.32688903808594,
+            608.3416748046875,
+            336.5019836425781,
+            693.2958374023438
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_09_asme1_rd_p02.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 3,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 6,
+      "detected_regions": [
+        {
+          "bbox": [
+            352.8258056640625,
+            192.43460083007812,
+            417.7760009765625,
+            253.80104064941406
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            477.860107421875,
+            230.63330078125,
+            542.9992065429688,
+            292.14898681640625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            521.7674560546875,
+            277.5517883300781,
+            588.7544555664062,
+            340.43292236328125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            586.9176025390625,
+            354.94708251953125,
+            652.060302734375,
+            416.4734191894531
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            180.6218719482422,
+            366.2785949707031,
+            232.39398193359375,
+            411.95233154296875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            760.7858276367188,
+            410.3054504394531,
+            880.9002075195312,
+            521.6814575195312
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_09_asme1_rd_p03.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 1,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 5,
+      "detected_regions": [
+        {
+          "bbox": [
+            268.1117858886719,
+            328.69268798828125,
+            313.0521240234375,
+            372.91802978515625
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            167.02598571777344,
+            610.9476318359375,
+            235.7916259765625,
+            672.855224609375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            640.9594116210938,
+            704.4097290039062,
+            702.3258056640625,
+            760.8709716796875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            352.2991027832031,
+            746.720458984375,
+            420.6814270019531,
+            808.3123168945312
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            462.8594970703125,
+            749.3099365234375,
+            524.5528564453125,
+            805.9859619140625
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_09_asme1_rd_p04.png",
+      "locator_image_size": [
+        2088,
+        1645
+      ],
+      "reference_record_count": 3,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2143,
+        1679
+      ]
+    },
+    {
+      "detected_region_count": 10,
+      "detected_regions": [
+        {
+          "bbox": [
+            568.0630493164062,
+            205.77467346191406,
+            633.0377807617188,
+            264.8471984863281
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            735.280029296875,
+            232.21884155273438,
+            750.598388671875,
+            286.9300842285156
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            86.97160339355469,
+            374.05853271484375,
+            151.38015747070312,
+            432.716064453125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            740.8330688476562,
+            396.6561584472656,
+            801.547607421875,
+            452.6015319824219
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            86.89986419677734,
+            428.3197937011719,
+            151.52073669433594,
+            487.142578125
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            271.6164245605469,
+            477.7144470214844,
+            337.3489685058594,
+            537.3596801757812
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            215.70945739746094,
+            524.8884887695312,
+            274.9146728515625,
+            579.739990234375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            386.4850769042969,
+            633.3231811523438,
+            442.3726501464844,
+            685.7615966796875
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            514.3250122070312,
+            791.986083984375,
+            572.594482421875,
+            846.1250610351562
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            565.3422241210938,
+            802.4315795898438,
+            580.181884765625,
+            856.5349731445312
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 2,
+      "image": "nist_ftc_10_asme1_rb_p02.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 7,
+      "source_crop_box_pixels": [
+        57,
+        25,
+        2146,
+        1670
+      ]
+    },
+    {
+      "detected_region_count": 11,
+      "detected_regions": [
+        {
+          "bbox": [
+            199.7461395263672,
+            276.6664123535156,
+            257.8454284667969,
+            330.724365234375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            125.24706268310547,
+            450.0813293457031,
+            190.22637939453125,
+            509.1539611816406
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            742.189453125,
+            458.6622314453125,
+            806.8131713867188,
+            517.4716186523438
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            742.2453002929688,
+            508.0251770019531,
+            806.868896484375,
+            566.8345336914062
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            635.525146484375,
+            561.437255859375,
+            700.1005859375,
+            620.2066040039062
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            287.2187805175781,
+            606.6869506835938,
+            303.97320556640625,
+            658.966552734375
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            679.5982055664062,
+            609.1657104492188,
+            727.8440551757812,
+            648.7709350585938
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            529.3222045898438,
+            639.1022338867188,
+            593.9280395507812,
+            697.7905883789062
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            573.7293701171875,
+            686.8553466796875,
+            621.9760131835938,
+            726.3908081054688
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            410.81903076171875,
+            726.0227661132812,
+            475.2508850097656,
+            784.6155395507812
+          ],
+          "source": "deterministic_cv"
+        },
+        {
+          "bbox": [
+            455.0355529785156,
+            773.8021850585938,
+            503.2868347167969,
+            813.364501953125
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 1,
+      "image": "nist_ftc_10_asme1_rb_p03.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 5,
+      "source_crop_box_pixels": [
+        57,
+        25,
+        2146,
+        1670
+      ]
+    },
+    {
+      "detected_region_count": 0,
+      "detected_regions": [],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_10_asme1_rb_p04.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 1,
+      "source_crop_box_pixels": [
+        57,
+        25,
+        2146,
+        1670
+      ]
+    },
+    {
+      "detected_region_count": 0,
+      "detected_regions": [],
+      "geometric_tolerance_reference_record_count": 1,
+      "image": "nist_ftc_10_asme1_rb_p05.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 2,
+      "source_crop_box_pixels": [
+        57,
+        25,
+        2146,
+        1670
+      ]
+    },
+    {
+      "detected_region_count": 1,
+      "detected_regions": [
+        {
+          "bbox": [
+            250.20608520507812,
+            671.0363159179688,
+            297.6838684082031,
+            717.4093627929688
+          ],
+          "source": "deterministic_cv"
+        }
+      ],
+      "geometric_tolerance_reference_record_count": 0,
+      "image": "nist_ftc_11_asme1_rb_p01.png",
+      "locator_image_size": [
+        2089,
+        1645
+      ],
+      "reference_record_count": 2,
+      "source_crop_box_pixels": [
+        55,
+        34,
+        2144,
+        1679
+      ]
+    }
+  ],
+  "pages": 27,
+  "pages_with_zero_regions": 2,
+  "promotion_eligible": false,
+  "reference_records": 105,
+  "regions_per_page": {
+    "maximum": 14,
+    "median": 5,
+    "minimum": 0
+  }
+}

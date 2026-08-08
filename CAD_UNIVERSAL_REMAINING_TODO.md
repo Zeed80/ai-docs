@@ -53,8 +53,8 @@
 - [x] Добавить возобновляемый live evaluator с checkpoint после каждого листа и возможностью закрепить reader model.
 - [x] Разделить в evaluator кандидаты `dimension`/`annotation`, сохранив основной строгий all-candidate score неизменным.
 - [x] Нормализовать неполные profile/hole-pattern inputs в точные `geometry_input_incomplete:*` причины до общей schema validation. Production smoke больше не дал общего schema reject: observations сохранены, `profile=null`, `observation_only=true`, точный blocker доступен пользователю; single-page strict F1 вырос с `0,071429` до `0,153846` за счёт structured PMI.
-- [-] Сегментировать/локализовать реальные feature-control frames до VLM и требовать evidence bbox: VLM locator (`2/6` регионов) заменён детерминированной группировкой соседних наклонных ячеек. На первом live-листе CV нашёл `6/6` рамок; crop ↔ whole-view crosscheck дал bbox обоим точным semantic records, не присвоил bbox ошибочным guesses и удалил дубликат. Strict F1 вырос `0,153846 → 0,16`, invented снизился `87,5% → 86,67%`. Остаётся измерить CV coverage/false regions на всех `27` truth-linked листах и расширить размеры контуров для мелких/крупных форматов.
-- [ ] Добавить отдельные semantic adapters для basic/reference dimensions, datum features/targets, dimension symbols и notes вместо приравнивания любого обычного размера к PMI.
+- [-] Сегментировать/локализовать реальные feature-control frames до VLM и требовать evidence bbox: VLM locator (`2/6` регионов) заменён детерминированной группировкой соседних наклонных ячеек. На первом live-листе CV нашёл `6/6` рамок; crop ↔ whole-view crosscheck дал bbox обоим точным semantic records, не присвоил bbox ошибочным guesses и удалил дубликат. Полный диагностический прогон обработал `27/27` truth-linked листов: `147` регионов, `2` листа без регионов, медиана `5`, диапазон `0–14`. Это не coverage/recall: официальная истина не содержит точных bbox и связей region → semantic record, поэтому promotion остаётся запрещён до ручной/независимой bbox-разметки.
+- [x] Добавить отдельные semantic adapters для basic/reference dimensions, datum features/targets, dimension symbols и notes вместо приравнивания любого обычного размера к PMI. Адаптер v2 на сохранённых результатах тех же `27` production-чтений исключил обычные размеры и неклассифицированные notes: кандидаты `440 → 312`, точные записи `7 → 8`, precision `0,015909 → 0,025641`, recall `0,071429 → 0,081633`, F1 `0,026022 → 0,039024`; promotion по-прежнему запрещён.
 
 **Готово, когда:** любой PMI score прослеживается до официальной строки NIST и evidence; неподтверждённая привязка не становится verified.
 
@@ -126,7 +126,7 @@
 
 ## 5. Runtime: чтение и строгие графовые контракты
 
-- [ ] Добавить domain router с confidence, evidence и исходами `mechanical/construction/mixed/unknown`.
+- [-] Добавить domain router с confidence, evidence и исходами `mechanical/construction/mixed/unknown`: пользователь теперь явно выбирает `auto`, тело вращения, произвольную механическую деталь, сборку, строительную конструкцию, архитектурный чертёж, ОВ/ВК, электрику, гидравлику или P&ID; выбор нормализуется backend-контрактом, сохраняется в manifest/audit и задаёт доменный профиль. Автоматический evidence/confidence router для `auto/mixed/unknown` ещё нужен.
 - [ ] Для mixed/unknown запрещать запуск неподходящего генератора без review.
 - [ ] Принимать mechanical input только как полный валидный `EngineeringDrawingGraph`.
 - [ ] Принимать construction input только как полный валидный BIM/drawing graph.
@@ -135,6 +135,7 @@
 - [-] Документировать каждый этап: production reader уже сохраняет per-question audit, фактическую модель, thinking flag, raw/parsed validation failures и checkpoint; остаются стабильные prompt/config hashes и единый generator-payload trace.
 - [ ] Вернуть для назначений модели явный `thinking=false` и проверить, что провайдер действительно его получает.
 - [ ] Не запускать 3D/BIM при missing critical parameters; вернуть точный список вопросов/блокеров.
+- [x] Не запускать механический spec-генератор для явно выбранных сборок, строительных, архитектурных, MEP и схемных типов; для типа «тело вращения» требовать осевой профиль `main_view.outer` и возвращать точный blocker при несовместимом чтении.
 
 ## 6. Генерация 3D/BIM и обязательного 2D
 

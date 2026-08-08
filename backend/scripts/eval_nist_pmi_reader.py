@@ -24,6 +24,15 @@ from eval_pmi_manifest import evaluate
 
 
 PAGE_NAME = re.compile(r"nist_(ctc|ftc)_(\d{2})_asme1_[a-z]+_p(\d{2})\.png$")
+SEMANTIC_ADAPTER = "nist-pmi-semantic-adapter-v2"
+
+_REFERENCE_DIMENSION = re.compile(r"^(?:REF\b|\([^()]+\))", re.IGNORECASE)
+_BASIC_DIMENSION = re.compile(r"^(?:BASIC\b|\[[^\]]+\]|\u25a1\s*\d)", re.IGNORECASE)
+_PLUS_MINUS_TOLERANCE = re.compile(r"\d[^\n]{0,80}(?:\u00b1|\+/-)\s*\.?\d")
+_LIMIT_DIMENSION = re.compile(r"\d(?:[.,]\d+)?\s*[-\u2013]\s*\d(?:[.,]\d+)?")
+_UNILATERAL_TOLERANCE = re.compile(r"\d(?:[.,]\d+)?[^\n]{0,30}[+-]\s*\.?\d")
+_FIT_CLASS = re.compile(r"(?:\d|\u2300)\s*(?:JS|js|[A-HJ-NP-Za-hj-np-z])\d{1,2}\b")
+_THREAD_TOLERANCE = re.compile(r"\bM\s*\d[^\n]{0,50}\b\d+[A-Za-z]\b")
 
 
 def load_jsonl(path: pathlib.Path) -> list[dict[str, Any]]:
@@ -54,27 +63,51 @@ def select_pages(
     return selected
 
 
-def _category_for_annotation(kind: str) -> str:
+def _category_for_annotation(kind: str) -> str | None:
     return {
         "tolerance": "Geometric Tolerances",
         "datum": "Datum Features, Datum Targets, Datum Reference Frames",
         "roughness": "Dimensioning and Tolerancing Constructs",
         "thread": "Directly Toleranced Dimensions & Dimension Symbols",
-    }.get(kind, "Dimensioning and Tolerancing Constructs")
+    }.get(kind)
+
+
+def _category_for_dimension(value: str) -> str | None:
+    """Return a PMI class only for an explicit semantic construct.
+
+    Ordinary drawing dimensions are geometry inputs, not NIST PMI candidate
+    records.  Treating every number as PMI inflated the old baseline with 228
+    dimension candidates and made the score describe OCR volume rather than
+    semantic recognition quality.
+    """
+
+    if _REFERENCE_DIMENSION.search(value) or _BASIC_DIMENSION.search(value):
+        return "Basic and Reference Dimensions:"
+    if any(pattern.search(value) for pattern in (
+        _PLUS_MINUS_TOLERANCE,
+        _LIMIT_DIMENSION,
+        _UNILATERAL_TOLERANCE,
+        _FIT_CLASS,
+        _THREAD_TOLERANCE,
+    )):
+        return "Directly Toleranced Dimensions & Dimension Symbols"
+    return None
 
 
 def candidates_from_spec(spec: dict[str, Any], suite: str, case_id: str) -> list[dict[str, Any]]:
     candidates = []
     for dimension in spec.get("dimensions") or []:
         value = str(dimension.get("value") or "").strip()
-        if value:
+        category = _category_for_dimension(value)
+        if value and category:
             candidates.append(
                 {
                     "suite": suite,
                     "primary_case_id": str(int(case_id)),
-                    "category": "Directly Toleranced Dimensions & Dimension Symbols",
+                    "category": category,
                     "specification": value,
                     "reader_source": "dimension",
+                    "reader_adapter": SEMANTIC_ADAPTER,
                     "assurance": {
                         "semantic_status": "observed",
                         "geometry_linked": False,
@@ -85,15 +118,18 @@ def candidates_from_spec(spec: dict[str, Any], suite: str, case_id: str) -> list
             )
     for annotation in spec.get("annotations") or []:
         value = str(annotation.get("text") or annotation.get("value") or "").strip()
-        if value:
+        kind = str(annotation.get("kind") or "")
+        category = _category_for_annotation(kind)
+        if value and category:
             candidates.append(
                 {
                     "suite": suite,
                     "primary_case_id": str(int(case_id)),
-                    "category": _category_for_annotation(str(annotation.get("kind") or "")),
+                    "category": category,
                     "specification": value,
                     "reader_source": "annotation",
-                    "reader_annotation_kind": str(annotation.get("kind") or "other"),
+                    "reader_annotation_kind": kind,
+                    "reader_adapter": SEMANTIC_ADAPTER,
                     "assurance": {
                         "semantic_status": "observed",
                         "geometry_linked": False,
@@ -185,6 +221,13 @@ async def run(args: argparse.Namespace) -> int:
         reference_by_id = {}
         candidate_records = []
         for result in page_results:
+            if result.get("spec"):
+                match = PAGE_NAME.fullmatch(str(result.get("image") or ""))
+                if match:
+                    suite, case_id, _ = match.groups()
+                    result["candidate_records"] = candidates_from_spec(
+                        result["spec"], suite, case_id
+                    )
             restore_candidate_sources(result)
             for semantic_id in result.get("reference_semantic_ids") or []:
                 if semantic_id in truth_by_id:
@@ -203,6 +246,7 @@ async def run(args: argparse.Namespace) -> int:
         }
         report = {
             "contract": "nist-pmi-production-reader-baseline-v1",
+            "candidate_adapter": SEMANTIC_ADAPTER,
             "passes": args.passes,
             "requested_model": args.model_key,
             "requested_pages": len(pages),

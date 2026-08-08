@@ -1600,7 +1600,17 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
     try:
         import hashlib
 
+        from app.ai.cad_digitization_type import resolve_digitization_type
+
         vectorize_method = str(params.get("vectorize_method") or "trace")
+        digitization_type = resolve_digitization_type(
+            str(params.get("digitization_type") or "auto")
+        )
+        requested_profile = (
+            digitization_type.profile
+            if digitization_type.explicit
+            else str(params.get("digitization_profile") or "auto")
+        )
         await _record(
             "pipeline",
             "started",
@@ -1608,6 +1618,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             {
                 "task_id": task_id,
                 "method": vectorize_method,
+                "digitization_type": digitization_type.normalized,
+                "domain_profile": requested_profile,
                 "read_passes": int(params.get("read_passes") or 3),
             },
         )
@@ -1652,10 +1664,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         from app.ai.cad_pipeline_manifest import build_cad_pipeline_manifest
 
         pipeline_manifest = build_cad_pipeline_manifest(
-            profile=str(params.get("digitization_profile") or "auto"),
+            profile=requested_profile,
             method=str(params.get("vectorize_method") or "trace"),
             source_sha256=source_sha256,
             input_kind="description" if description_mode else "source_image",
+            digitization_type=digitization_type.normalized,
         )
         # Persist the exact component/model snapshot before inference starts so
         # failed and interrupted attempts remain reproducible in the UI too.
@@ -1699,6 +1712,13 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # spec drafter cannot express yet and as a verification surface, not as
         # the way to reach an exact ЕСКД redraw.
         if vectorize_method in ("spec", "graph", "text_spec"):
+            if vectorize_method == "spec" and not digitization_type.spec_redraw_supported:
+                return await _fail(
+                    "Выбранный тип оцифровки пока не имеет валидного "
+                    "параметрического 3D/BIM-генератора. Используйте "
+                    "вспомогательную трассировку либо выберите механическую "
+                    "деталь; запуск неподходящего генератора запрещён."
+                )
             if vectorize_method == "graph":
                 from app.ai.cad_drawing_graph import (
                     DrawingGraphDraftError,
@@ -1902,6 +1922,28 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "валидный спек. Проверьте назначение CAD reader (Настройки → "
                         "Модели → Оцифровка) и исходный лист."
                     )
+                from app.ai.cad_digitization_type import (
+                    validate_spec_for_digitization_type,
+                )
+
+                type_blockers = validate_spec_for_digitization_type(
+                    spec, digitization_type.normalized
+                )
+                await _record(
+                    "reader.type_gate",
+                    "failed" if type_blockers else "completed",
+                    (
+                        "Прочитанная геометрия не соответствует выбранному типу"
+                        if type_blockers
+                        else "Тип прочитанной геометрии подтверждён"
+                    ),
+                    {
+                        "requested_type": digitization_type.normalized,
+                        "blockers": type_blockers,
+                    },
+                )
+                if type_blockers:
+                    return await _fail("; ".join(type_blockers))
                 # A value the whole-sheet read missed is not the end of the
                 # sheet: asking for that ONE dimension, with its neighbours
                 # named, is a far easier question than the one that failed. An
@@ -2317,7 +2359,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         from app.ai.cad_profile import choose_profile
 
         profile_decision = choose_profile(
-            str(params.get("digitization_profile") or params.get("profile") or "auto"),
+            requested_profile,
             [entity.text for entity in text_entities],
             str(params.get("source_filename") or ""),
         )
@@ -2577,12 +2619,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 **(gen.params or {}),
                 "normalized_source_path": normalized_path,
                 "digitization_profile": profile_decision.profile,
+                "digitization_type": digitization_type.normalized,
                 "digitization_profile_confidence": profile_decision.confidence,
                 "digitization_profile_evidence": list(profile_decision.evidence),
                 "cad_pipeline_manifest": build_cad_pipeline_manifest(
                     profile=profile_decision.profile,
                     method="trace",
                     source_sha256=source_sha256,
+                    digitization_type=digitization_type.normalized,
                 ),
             }
             await cad_ir_store.save_revision(
