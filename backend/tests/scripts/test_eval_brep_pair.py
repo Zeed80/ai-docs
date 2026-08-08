@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 
-from eval_brep_pair import _count_score, _promotion_decision, _relative_error
+from eval_brep_pair import _combine_shapes, _count_score, _promotion_decision, _relative_error
 
 
 def _passing_metrics():
@@ -47,3 +47,15 @@ def test_good_envelope_cannot_hide_wrong_topology():
     eligible, failures = _promotion_decision(metrics)
     assert eligible is False
     assert failures == ["topology_mismatch"]
+
+
+def test_single_shape_is_not_wrapped_in_crashing_compound_helper():
+    shape = object()
+
+    class FakePart:
+        @staticmethod
+        def Compound(shapes):
+            return ("compound", shapes)
+
+    assert _combine_shapes(FakePart, [shape]) is shape
+    assert _combine_shapes(FakePart, [shape, shape]) == ("compound", [shape, shape])

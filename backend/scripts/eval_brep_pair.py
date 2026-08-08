@@ -26,6 +26,12 @@ def _count_score(actual: int, expected: int) -> float:
     return max(0.0, 1.0 - _relative_error(float(actual), float(expected)))
 
 
+def _combine_shapes(part_module: Any, shapes: list[Any]) -> Any:
+    if not shapes:
+        raise ValueError("STEP contains no shapes")
+    return shapes[0] if len(shapes) == 1 else part_module.Compound(shapes)
+
+
 def _promotion_decision(metrics: dict[str, Any]) -> tuple[bool, list[str]]:
     checks = {
         "reference_brep_invalid": metrics["reference_valid"],
@@ -55,9 +61,10 @@ def _load_shape(path: pathlib.Path):
             for obj in document.Objects
             if hasattr(obj, "Shape") and obj.Shape and not obj.Shape.isNull()
         ]
-        if not shapes:
-            raise ValueError("STEP contains no shapes")
-        return Part.makeCompound(shapes)
+        # FreeCAD 1.1's Python ``Part.makeCompound`` helper segfaults for a
+        # valid imported STEP in the production CAD image.  Avoid wrapping a
+        # single shape and use the native constructor for real assemblies.
+        return _combine_shapes(Part, shapes)
     finally:
         FreeCAD.closeDocument(document.Name)
 
