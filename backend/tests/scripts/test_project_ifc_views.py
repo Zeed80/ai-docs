@@ -7,6 +7,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 
 from project_ifc_views import (
+    _depth_visible,
     _drawing_edges,
     _edge_indices,
     _section_segments,
@@ -64,16 +65,29 @@ def test_section_segments_cut_vertical_faces_without_coplanar_diagonals():
 
 
 def test_visible_edge_parts_keep_visibility_per_span():
-    class AlternatingTree:
-        calls = 0
-
-        def select_ray(self, origin, direction, length):
-            self.calls += 1
-            distance = 10.0 if self.calls == 2 else 20.0
-            return [SimpleNamespace(position=(origin[0], origin[1], origin[2] - distance))]
-
     parts = _visible_edge_parts(
-        AlternatingTree(), (0, 0, 0), (3, 0, 0), (0, 0, 1), 20, 1e-6
+        (0, 0, 0),
+        (3, 0, 0),
+        lambda point, start, end: not 1.0 < point[0] < 2.0,
     )
     assert [part[2] for part in parts] == ["visible", "hidden", "visible"]
     assert parts[0][:2] == ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+
+
+def test_depth_visibility_rejects_edge_behind_both_probe_sides():
+    import numpy as np
+
+    depth = np.full((16, 16), -np.inf, dtype=np.float32)
+    depth[6:11, 6:11] = 2.0
+    buffer = {
+        "depth": depth,
+        "axes": (0, 1),
+        "direction": (0, 0, 1),
+        "u_min": 0.0,
+        "v_min": 0.0,
+        "u_scale": 1.0,
+        "v_scale": 1.0,
+        "resolution": 16,
+    }
+    assert not _depth_visible(buffer, (7, 7, 1), (5, 7, 1), (9, 7, 1), 1e-6)
+    assert _depth_visible(buffer, (7, 7, 3), (5, 7, 3), (9, 7, 3), 1e-6)

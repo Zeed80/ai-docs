@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-08-08",
+  "corpus": {
+    "ifc_source_assets": 23,
+    "logical_source_groups": 14,
+    "canonical_ifc_assets": 14,
+    "projected_elements": 717,
+    "geometry_failures": 0,
+    "visible_edges": 74802,
+    "hidden_edges": 79741,
+    "section_segments": 188,
+    "section_source_files": 8,
+    "sheets": 169,
+    "represented_products": 335,
+    "entities": 23516,
+    "rejected_views": 3,
+    "train_sheets": 147,
+    "validation_sheets": 12,
+    "holdout_sheets": 10
+  },
+  "recognizer": "cv",
+  "truth_kind": [
+    "ifc_semantic_hidden_line_projection",
+    "ifc_semantic_storey_section"
+  ],
+  "holdout": {
+    "files": 10,
+    "entity_precision": 0.41958,
+    "entity_recall": 0.058309,
+    "entity_f1": 0.102389,
+    "exact_sheet_rate": 0.3,
+    "false_exact_rate": 0.7,
+    "by_class": {
+      "architectural_bim": {"files": 3, "entity_f1": 0.378378},
+      "building_services": {"files": 7, "entity_f1": 0.093392}
+    }
+  },
+  "promotion_eligible": false,
+  "notes": [
+    "Depth-buffer HLR replaced a rejected boundary ray-cast implementation that classified every edge as visible.",
+    "Top projection is excluded when a truthful storey cut-plane view exists.",
+    "Hidden edges remain in semantic projections but are excluded from default construction drawing sheets.",
+    "Higher precision does not compensate for 5.8 percent entity recall or 70 percent false exact rate."
+  ]
+}

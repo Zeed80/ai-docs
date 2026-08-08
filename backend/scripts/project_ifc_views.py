@@ -204,36 +204,10 @@ def _section_segments(
     return segments
 
 
-def _ray_visible(
-    tree: Any,
-    point: tuple[float, float, float],
-    direction: tuple[float, float, float],
-    ray_offset: float,
-    tolerance: float,
-) -> bool:
-    """Return whether ``point`` is the first surface seen by an orthographic ray."""
-
-    origin = tuple(point[index] + direction[index] * ray_offset for index in range(3))
-    ray_direction = tuple(-value for value in direction)
-    hits = tree.select_ray(origin, ray_direction, ray_offset * 2)
-    if not hits:
-        # Exact boundary rays may miss both adjacent faces. Keeping the source
-        # edge is safer than inventing an occluder in that numerical case.
-        return True
-    nearest = min(
-        math.sqrt(sum((float(hit.position[index]) - origin[index]) ** 2 for index in range(3)))
-        for hit in hits
-    )
-    return nearest >= ray_offset - tolerance
-
-
 def _visible_edge_parts(
-    tree: Any,
     start: tuple[float, float, float],
     end: tuple[float, float, float],
-    direction: tuple[float, float, float],
-    ray_offset: float,
-    tolerance: float,
+    visible_at: Any,
     *,
     samples: int = 3,
 ) -> list[tuple[tuple[float, float, float], tuple[float, float, float], str]]:
@@ -244,9 +218,7 @@ def _visible_edge_parts(
         left_fraction = index / samples
         right_fraction = (index + 1) / samples
         midpoint = _lerp3(start, end, (left_fraction + right_fraction) / 2)
-        visibility = "visible" if _ray_visible(
-            tree, midpoint, direction, ray_offset, tolerance
-        ) else "hidden"
+        visibility = "visible" if visible_at(midpoint, start, end) else "hidden"
         parts.append((
             _lerp3(start, end, left_fraction),
             _lerp3(start, end, right_fraction),
@@ -259,6 +231,116 @@ def _visible_edge_parts(
         else:
             merged.append((start_part, end_part, visibility))
     return merged
+
+
+def _build_depth_buffer(
+    meshes: list[tuple],
+    axes: tuple[int, int],
+    direction: tuple[float, float, float],
+    bounds: list[tuple[float, float]],
+    *,
+    resolution: int = 1024,
+) -> dict[str, Any]:
+    """Rasterize scene triangles into an orthographic maximum-depth buffer."""
+
+    import numpy as np
+
+    u_min, u_max = bounds[axes[0]]
+    v_min, v_max = bounds[axes[1]]
+    u_scale = (resolution - 3) / max(u_max - u_min, 1e-12)
+    v_scale = (resolution - 3) / max(v_max - v_min, 1e-12)
+    depth = np.full((resolution, resolution), -np.inf, dtype=np.float32)
+    for _, vertices, faces, _, _, _ in meshes:
+        for index in range(0, len(faces) - 2, 3):
+            triangle = [_vertex(vertices, int(value)) for value in faces[index:index + 3]]
+            pixel = [
+                (
+                    1 + (point[axes[0]] - u_min) * u_scale,
+                    1 + (point[axes[1]] - v_min) * v_scale,
+                )
+                for point in triangle
+            ]
+            x0 = max(0, int(math.floor(min(point[0] for point in pixel))))
+            x1 = min(resolution - 1, int(math.ceil(max(point[0] for point in pixel))))
+            y0 = max(0, int(math.floor(min(point[1] for point in pixel))))
+            y1 = min(resolution - 1, int(math.ceil(max(point[1] for point in pixel))))
+            if x1 < x0 or y1 < y0:
+                continue
+            px0, px1, px2 = pixel
+            denominator = (
+                (px1[1] - px2[1]) * (px0[0] - px2[0])
+                + (px2[0] - px1[0]) * (px0[1] - px2[1])
+            )
+            if abs(denominator) <= 1e-9:
+                continue
+            grid_y, grid_x = np.mgrid[y0:y1 + 1, x0:x1 + 1]
+            weight0 = (
+                (px1[1] - px2[1]) * (grid_x - px2[0])
+                + (px2[0] - px1[0]) * (grid_y - px2[1])
+            ) / denominator
+            weight1 = (
+                (px2[1] - px0[1]) * (grid_x - px2[0])
+                + (px0[0] - px2[0]) * (grid_y - px2[1])
+            ) / denominator
+            weight2 = 1.0 - weight0 - weight1
+            inside = (weight0 >= -1e-5) & (weight1 >= -1e-5) & (weight2 >= -1e-5)
+            if not inside.any():
+                continue
+            triangle_depth = [
+                sum(point[axis] * direction[axis] for axis in range(3))
+                for point in triangle
+            ]
+            values = (
+                weight0 * triangle_depth[0]
+                + weight1 * triangle_depth[1]
+                + weight2 * triangle_depth[2]
+            )
+            target = depth[y0:y1 + 1, x0:x1 + 1]
+            target[inside] = np.maximum(target[inside], values[inside])
+    return {
+        "depth": depth,
+        "axes": axes,
+        "direction": direction,
+        "u_min": u_min,
+        "v_min": v_min,
+        "u_scale": u_scale,
+        "v_scale": v_scale,
+        "resolution": resolution,
+    }
+
+
+def _depth_visible(
+    buffer: dict[str, Any],
+    point: tuple[float, float, float],
+    edge_start: tuple[float, float, float],
+    edge_end: tuple[float, float, float],
+    tolerance: float,
+) -> bool:
+    """Test both raster sides of an edge against the scene depth buffer."""
+
+    import numpy as np
+
+    axes = buffer["axes"]
+    x = 1 + (point[axes[0]] - buffer["u_min"]) * buffer["u_scale"]
+    y = 1 + (point[axes[1]] - buffer["v_min"]) * buffer["v_scale"]
+    edge_x = (edge_end[axes[0]] - edge_start[axes[0]]) * buffer["u_scale"]
+    edge_y = (edge_end[axes[1]] - edge_start[axes[1]]) * buffer["v_scale"]
+    length = math.hypot(edge_x, edge_y)
+    if length <= 1e-9:
+        return False
+    perpendicular = (-edge_y / length * 2.0, edge_x / length * 2.0)
+    point_depth = sum(
+        point[axis] * buffer["direction"][axis] for axis in range(3)
+    )
+    for sign in (-1, 1):
+        px = int(round(x + sign * perpendicular[0]))
+        py = int(round(y + sign * perpendicular[1]))
+        if not (0 <= px < buffer["resolution"] and 0 <= py < buffer["resolution"]):
+            return True
+        observed = buffer["depth"][py, px]
+        if not np.isfinite(observed) or float(observed) <= point_depth + tolerance:
+            return True
+    return False
 
 
 def project_ifc(path: pathlib.Path) -> dict[str, Any]:
@@ -279,7 +361,6 @@ def project_ifc(path: pathlib.Path) -> dict[str, Any]:
     elements = []
     failures = []
     meshes = []
-    tree = ifcopenshell.geom.tree()
     for product in model.by_type("IfcProduct"):
         if not getattr(product, "Representation", None):
             continue
@@ -312,7 +393,6 @@ def project_ifc(path: pathlib.Path) -> dict[str, Any]:
             "storey_elevation_m": storey_elevation_m,
             "triangle_count": len(faces) // 3,
         })
-        tree.add_element(shape)
         meshes.append((product, vertices, faces, container, storey, storey_elevation_m))
 
     all_vertices = [
@@ -328,8 +408,13 @@ def project_ifc(path: pathlib.Path) -> dict[str, Any]:
         diagonal = math.sqrt(sum((maximum - minimum) ** 2 for minimum, maximum in bounds))
     else:
         diagonal = 1.0
-    ray_offset = max(1.0, diagonal * 2)
     visibility_tolerance = max(1e-5, diagonal * 1e-6)
+    depth_buffers = {
+        view_name: _build_depth_buffer(
+            meshes, view["axes"], view["direction"], bounds
+        )
+        for view_name, view in VIEWS.items()
+    }
     for product, vertices, faces, container, storey, storey_elevation in meshes:
         guid = str(getattr(product, "GlobalId", ""))
         for view_name, view in VIEWS.items():
@@ -338,8 +423,17 @@ def project_ifc(path: pathlib.Path) -> dict[str, Any]:
             seen: set[tuple[float, ...]] = set()
             for (left, right), edge_kind in edges.items():
                 start, end = _vertex(vertices, left), _vertex(vertices, right)
+                visibility_test = lambda point, edge_start, edge_end: _depth_visible(
+                    depth_buffers[view_name],
+                    point,
+                    edge_start,
+                    edge_end,
+                    visibility_tolerance,
+                )
                 for visible_start, visible_end, visibility in _visible_edge_parts(
-                    tree, start, end, view["direction"], ray_offset, visibility_tolerance
+                    start,
+                    end,
+                    visibility_test,
                 ):
                     p1 = [round(visible_start[axis], 6) for axis in axes]
                     p2 = [round(visible_end[axis], 6) for axis in axes]
@@ -382,8 +476,9 @@ def project_ifc(path: pathlib.Path) -> dict[str, Any]:
         "class_counts": dict(sorted(Counter(item["ifc_class"] for item in elements).items())),
         "views": views,
         "projection": {
-            "hidden_line_method": "ifcopenshell_geometry_tree_ray_cast",
+            "hidden_line_method": "triangle_depth_buffer",
             "visibility_samples_per_edge": 3,
+            "depth_buffer_resolution": 1024,
             "section_height_m": SECTION_HEIGHT_M,
             "project_unit_scale_to_m": unit_scale,
         },
