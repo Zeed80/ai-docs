@@ -58,6 +58,25 @@ export interface Generation {
   case_id: string | null;
 }
 
+export interface CadModelOutput {
+  id: string;
+  sequence: number;
+  at: string;
+  stage: string;
+  kind?: string;
+  model?: string;
+  prompt?: string;
+  answer?: string;
+  thinking?: string;
+  parsed?: boolean;
+}
+
+export interface CadModelOutputsResponse {
+  generation_id: string;
+  count: number;
+  outputs: CadModelOutput[];
+}
+
 export interface VectorizerDevelopmentStatus {
   pipeline_revision: string;
   evaluated_at: string;
@@ -513,6 +532,13 @@ export async function getVectorizerDevelopmentStatus(): Promise<VectorizerDevelo
 export async function getGeneration(id: string): Promise<Generation> {
   const res = await apiFetch(`${BASE}/${id}`);
   return jsonOrThrow<Generation>(res);
+}
+
+export async function getCadModelOutputs(
+  id: string,
+): Promise<CadModelOutputsResponse> {
+  const res = await apiFetch(`${BASE}/${id}/cad-model-outputs`);
+  return jsonOrThrow<CadModelOutputsResponse>(res);
 }
 
 export async function acceptGeneration(id: string): Promise<Generation> {

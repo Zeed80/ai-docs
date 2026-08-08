@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
 import {
+  CadModelOutput,
   Generation,
   GenerateInput,
   Workflow,
@@ -12,6 +13,7 @@ import {
   artifactUrl,
   deleteGeneration,
   duplicateWorkflow,
+  getCadModelOutputs,
   iterateGeneration,
   listWorkflows,
   patchWorkflow,
@@ -40,6 +42,9 @@ interface CadProcess {
   current_stage?: string;
   current_status?: string;
   updated_at?: string;
+  started_at?: string;
+  progress_pct?: number;
+  current_message?: string;
   events?: CadProcessEvent[];
 }
 
@@ -54,6 +59,7 @@ function CadProcessTimeline({
   currentLabel: string;
   detailsLabel: string;
 }) {
+  const t = useTranslations("studio");
   const events = process?.events ?? [];
   if (!events.length) return null;
   const tone: Record<string, string> = {
@@ -74,6 +80,25 @@ function CadProcessTimeline({
           ? ` · ${currentLabel}: ${process.current_stage}`
           : ""}
       </summary>
+      <div className="mt-2">
+        <div className="mb-1 flex items-center justify-between gap-3 text-[10px] text-zinc-400">
+          <span>{process?.current_message ?? currentLabel}</span>
+          <span>{Math.max(0, Math.min(100, process?.progress_pct ?? 0))}%</span>
+        </div>
+        <div className="h-2 overflow-hidden rounded bg-black/40">
+          <div
+            className="h-full rounded bg-sky-500 transition-[width] duration-500"
+            style={{
+              width: `${Math.max(0, Math.min(100, process?.progress_pct ?? 0))}%`,
+            }}
+          />
+        </div>
+        {process?.started_at && (
+          <div className="mt-1 text-[10px] text-zinc-500">
+            {t("detail.cad_process_started")}: {new Date(process.started_at).toLocaleString()}
+          </div>
+        )}
+      </div>
       <ol className="mt-2 max-h-96 space-y-1.5 overflow-y-auto pr-1">
         {events.map((event) => {
           const hasDetails = Boolean(
@@ -111,6 +136,94 @@ function CadProcessTimeline({
           );
         })}
       </ol>
+    </details>
+  );
+}
+
+export function CadModelOutputsPanel({ generationId }: { generationId: string }) {
+  const t = useTranslations("studio");
+  const [outputs, setOutputs] = useState<CadModelOutput[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  async function loadOutputs() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const result = await getCadModelOutputs(generationId);
+      setOutputs(result.outputs);
+    } catch (error) {
+      setLoadError(String((error as Error).message || error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <details className="rounded border border-white/10 bg-white/[0.03] p-2 text-xs">
+      <summary className="cursor-pointer font-medium text-zinc-200">
+        {t("detail.cad_model_outputs_title")}
+      </summary>
+      {outputs === null ? (
+        <button
+          type="button"
+          disabled={loading}
+          onClick={loadOutputs}
+          className="mt-2 rounded bg-sky-600 px-3 py-1.5 text-white hover:bg-sky-500 disabled:opacity-50"
+        >
+          {loading
+            ? t("detail.cad_model_outputs_loading")
+            : t("detail.cad_model_outputs_load")}
+        </button>
+      ) : outputs.length === 0 ? (
+        <p className="mt-2 text-zinc-500">
+          {t("detail.cad_model_outputs_empty")}
+        </p>
+      ) : (
+        <div className="mt-2 max-h-[36rem] space-y-2 overflow-y-auto pr-1">
+          {outputs.map((output) => (
+            <details
+              key={output.id}
+              className="rounded border border-white/10 bg-black/20 p-2"
+            >
+              <summary className="cursor-pointer text-zinc-300">
+                #{output.sequence} · {output.kind ?? output.stage} ·{" "}
+                {output.model ?? "—"}
+                {output.parsed === false ? " · JSON ERROR" : ""}
+              </summary>
+              <div className="mt-2 space-y-2">
+                <div>
+                  <div className="mb-1 text-[10px] uppercase text-zinc-500">
+                    {t("detail.cad_model_prompt")}
+                  </div>
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-2 text-[10px] text-zinc-300">
+                    {output.prompt || "—"}
+                  </pre>
+                </div>
+                <div>
+                  <div className="mb-1 text-[10px] uppercase text-zinc-500">
+                    {t("detail.cad_model_answer")}
+                  </div>
+                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-2 text-[10px] text-zinc-200">
+                    {output.answer || "—"}
+                  </pre>
+                </div>
+                {output.thinking && (
+                  <div>
+                    <div className="mb-1 text-[10px] uppercase text-zinc-500">
+                      {t("detail.cad_model_thinking")}
+                    </div>
+                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/40 p-2 text-[10px] text-zinc-300">
+                      {output.thinking}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
+      {loadError && <p className="mt-2 text-red-300">{loadError}</p>}
     </details>
   );
 }
@@ -513,6 +626,7 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
           currentLabel={t("detail.cad_process_current")}
           detailsLabel={t("detail.cad_process_details")}
         />
+        <CadModelOutputsPanel generationId={gen.id} />
         <Link
           href={`/cad/${gen.id}`}
           className="rounded bg-sky-600 px-3 py-2 text-center text-sm text-white hover:bg-sky-500"
@@ -554,12 +668,15 @@ export default function GenerationDetail({ gen, onChanged, onClose }: Props) {
       </div>
 
       {gen.operation === "vectorize" && (
-        <CadProcessTimeline
-          process={cadProcess}
-          title={t("detail.cad_process_title")}
-          currentLabel={t("detail.cad_process_current")}
-          detailsLabel={t("detail.cad_process_details")}
-        />
+        <>
+          <CadProcessTimeline
+            process={cadProcess}
+            title={t("detail.cad_process_title")}
+            currentLabel={t("detail.cad_process_current")}
+            detailsLabel={t("detail.cad_process_details")}
+          />
+          <CadModelOutputsPanel generationId={gen.id} />
+        </>
       )}
 
       {/* Primary actions up top so they're reachable without scrolling past the

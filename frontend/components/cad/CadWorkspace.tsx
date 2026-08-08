@@ -49,6 +49,7 @@ import AnnotationsPanel from "@/components/cad/AnnotationsPanel";
 import TitleBlockPanel from "@/components/cad/TitleBlockPanel";
 import ValidationPanel from "@/components/cad/ValidationPanel";
 import CadModelViewer from "@/components/studio/CadModelViewer";
+import { CadModelOutputsPanel } from "@/components/studio/GenerationDetail";
 import {
   DIM_TOOL_KIND,
   Tool,
@@ -1228,6 +1229,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     | {
         status?: string;
         current_stage?: string;
+        current_message?: string;
+        progress_pct?: number;
         events?: Array<{
           sequence?: number;
           at?: string;
@@ -1369,6 +1372,20 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
             {t("detail.cad_process_title")} · {cadProcess.events.length} ·{" "}
             {t("detail.cad_process_current")}: {cadProcess.current_stage ?? "—"}
           </summary>
+          <div className="mt-2">
+            <div className="mb-1 flex items-center justify-between gap-3 text-[10px]">
+              <span>{cadProcess.current_message ?? cadProcess.current_stage ?? "—"}</span>
+              <span>{Math.max(0, Math.min(100, cadProcess.progress_pct ?? 0))}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded bg-black/40">
+              <div
+                className="h-full rounded bg-sky-500"
+                style={{
+                  width: `${Math.max(0, Math.min(100, cadProcess.progress_pct ?? 0))}%`,
+                }}
+              />
+            </div>
+          </div>
           <ol className="mt-2 max-h-96 space-y-1.5 overflow-y-auto">
             {cadProcess.events.map((event, index) => (
               <li
@@ -1409,6 +1426,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           </ol>
         </details>
       ) : null}
+
+      <CadModelOutputsPanel generationId={gen.id} />
 
       {pipelineManifest && (
         <details className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-400">

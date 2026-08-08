@@ -576,7 +576,15 @@
       "graph_reader_model": "Модель reader-а",
       "cad_process_title": "Журнал чтения и построения CAD",
       "cad_process_current": "текущий этап",
-      "cad_process_details": "Технические данные этапа"
+      "cad_process_details": "Технические данные этапа",
+      "cad_process_started": "Запущено",
+      "cad_model_outputs_title": "Полный вывод модели",
+      "cad_model_outputs_load": "Загрузить полные ответы",
+      "cad_model_outputs_loading": "Загрузка…",
+      "cad_model_outputs_empty": "Сохранённых ответов модели нет",
+      "cad_model_prompt": "Запрос модели",
+      "cad_model_answer": "Полный ответ модели",
+      "cad_model_thinking": "Рассуждение модели"
     },
     "vector": {
       "title": "Оцифрованный чертёж",

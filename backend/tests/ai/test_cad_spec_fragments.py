@@ -267,12 +267,11 @@ async def test_fragments_win_when_they_produced_geometry(monkeypatch):
     result = await read_spec_best_effort(b"x", passes=3)
     assert result["main_view"]["profile"]["diameter_mm"] == 560
     assert result["title_block"]["material"] == "Чугун СЧ20"
-    # The expensive whole-sheet read must not run when it is not needed — but
-    # the fragment read itself now runs once per pass, because a single read is
-    # a single bet and this pipeline claims agreement, not luck.
-    assert called == ["fragments"] * 3
-    assert result["consensus"]["usable"] == 3
-    # Three identical reads are not a disagreement about anything.
+    # Two independent matching reads are enough. A third full pass would only
+    # consume the global budget and used to erase both valid reads on timeout.
+    assert called == ["fragments"] * 2
+    assert result["consensus"]["usable"] == 2
+    # Two identical reads are not a disagreement about anything.
     assert result["unresolved"] == []
 
 

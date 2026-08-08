@@ -268,6 +268,22 @@ def _gen_out(gen: ImageGeneration) -> dict:
             progress = read_progress(str(gen.id))
         except Exception:  # noqa: BLE001
             progress = None
+        if progress is None and gen.operation == "vectorize":
+            process = (gen.params or {}).get("cad_process") or {}
+            pct = int(process.get("progress_pct") or 0)
+            progress = {
+                "value": pct,
+                "max": 100,
+                "pct": pct,
+                "node": process.get("current_message") or process.get("current_stage"),
+                "ts": int(datetime.now(timezone.utc).timestamp()),
+            }
+    public_params = dict(gen.params or {})
+    # Full model transcripts and per-pass recovery specs are fetched on demand.
+    # Returning them in the 2.5-second Studio list poll turns observability into
+    # multi-megabyte traffic and can itself make the progress UI appear stuck.
+    public_params.pop("cad_model_outputs", None)
+    public_params.pop("cad_partial_spec", None)
     return {
         "id": str(gen.id),
         "operation": gen.operation,
@@ -275,7 +291,7 @@ def _gen_out(gen: ImageGeneration) -> dict:
         "progress": progress,
         "prompt": gen.prompt,
         "negative_prompt": gen.negative_prompt,
-        "params": gen.params or {},
+        "params": public_params,
         "source_image_paths": gen.source_image_paths or [],
         "mask_path": gen.mask_path,
         "has_result": bool(gen.result_path),
@@ -545,6 +561,25 @@ async def get_cad_process(
     if not process:
         raise HTTPException(404, "Журнал этапов ещё не создан")
     return process
+
+
+@router.get("/{generation_id}/cad-model-outputs")
+async def get_cad_model_outputs(
+    generation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Full CAD-reader prompts, answers and thinking, loaded only on demand."""
+
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    outputs = list((gen.params or {}).get("cad_model_outputs") or [])
+    return {
+        "generation_id": str(generation_id),
+        "count": len(outputs),
+        "outputs": outputs,
+    }
 
 
 @router.get("/{generation_id}/cad-reading")

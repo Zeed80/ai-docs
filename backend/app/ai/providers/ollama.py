@@ -23,6 +23,11 @@ def _inference_options(request: AIRequest, default_temperature: float = 0.2) -> 
         opts["top_k"] = params["top_k"]
     if "repeat_penalty" in params:
         opts["repeat_penalty"] = params["repeat_penalty"]
+    if "num_ctx" in params:
+        # Per-task context prevents a short CAD JSON question from allocating
+        # the service-wide 32K KV cache. Keep a safe lower bound for images and
+        # an upper bound matching the production service configuration.
+        opts["num_ctx"] = max(4096, min(int(params["num_ctx"]), 32768))
     return opts
 
 

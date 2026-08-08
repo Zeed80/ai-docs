@@ -40,6 +40,50 @@ logger = structlog.get_logger()
 
 _CAD_PROCESS_LOG_VERSION = 1
 _CAD_PROCESS_LOG_MAX_EVENTS = 500
+_CAD_MODEL_OUTPUT_MAX_ITEMS = 160
+
+
+def _progress_for_event(
+    stage: str,
+    status: str,
+    details: dict[str, Any],
+    current: int,
+) -> int:
+    """Monotonic user-facing progress derived from durable stage events."""
+
+    explicit = details.pop("_progress_pct", None)
+    if explicit is not None:
+        try:
+            return max(current, min(100, int(explicit)))
+        except (TypeError, ValueError):
+            pass
+    if stage == "pipeline" and status == "started":
+        return max(current, 1)
+    if stage.startswith("source."):
+        return max(current, 3)
+    if stage == "pipeline.manifest":
+        return max(current, 5)
+    if stage == "reader" and status == "started":
+        return max(current, 7)
+    if stage == "reader" and status == "completed":
+        return max(current, 62)
+    if stage == "reader.type_gate":
+        return max(current, 65)
+    if stage == "reader.followup":
+        return max(current, 70 if status == "completed" else 66)
+    if stage == "normalize.verify":
+        return max(current, 76)
+    if stage.startswith("solid."):
+        return max(current, 82)
+    if stage == "kernel.compile":
+        return max(current, 90 if status == "completed" else 84)
+    if stage == "kernel.verify":
+        return max(current, 93)
+    if stage.startswith("sheet."):
+        return max(current, 96)
+    if stage == "pipeline" and status == "completed":
+        return 100
+    return current
 
 
 async def _append_cad_process_event(
@@ -70,15 +114,39 @@ async def _append_cad_process_event(
             events = list(process.get("events") or [])
             now = datetime.now(UTC).isoformat()
             sequence = int(events[-1].get("sequence") or 0) + 1 if events else 1
+            event_details = dict(details or {})
+            model_output = event_details.pop("_model_output", None)
+            partial_spec = event_details.pop("_partial_spec", None)
+            if isinstance(model_output, dict):
+                output_id = f"model-output-{sequence}"
+                outputs = list(params.get("cad_model_outputs") or [])
+                outputs.append({
+                    "id": output_id,
+                    "sequence": sequence,
+                    "at": now,
+                    "stage": stage,
+                    **model_output,
+                })
+                params["cad_model_outputs"] = outputs[-_CAD_MODEL_OUTPUT_MAX_ITEMS:]
+                event_details["model_output_id"] = output_id
+            if isinstance(partial_spec, dict) and partial_spec:
+                params["cad_partial_spec"] = partial_spec
+                params["cad_partial_spec_sequence"] = sequence
             event = {
                 "sequence": sequence,
                 "at": now,
                 "stage": stage,
                 "status": status,
                 "message": message,
-                "details": details or {},
+                "details": event_details,
             }
             events.append(event)
+            progress_pct = _progress_for_event(
+                stage,
+                status,
+                event_details,
+                int(process.get("progress_pct") or 0),
+            )
             process.update({
                 "version": _CAD_PROCESS_LOG_VERSION,
                 "status": (
@@ -89,6 +157,8 @@ async def _append_cad_process_event(
                 "current_stage": stage,
                 "current_status": status,
                 "updated_at": now,
+                "progress_pct": progress_pct,
+                "current_message": message,
                 "events": events[-_CAD_PROCESS_LOG_MAX_EVENTS:],
             })
             process.setdefault("started_at", now)
@@ -102,6 +172,19 @@ async def _append_cad_process_event(
             stage=stage,
             error=str(exc)[:200],
         )
+
+
+async def _load_cad_partial_spec(gen_uuid: uuid.UUID) -> dict[str, Any]:
+    """Load the last committed consensus after an outer reader timeout."""
+
+    from app.db.models import ImageGeneration
+    from app.db.session import _get_session_factory
+
+    factory = _get_session_factory()
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        value = (gen.params or {}).get("cad_partial_spec") if gen else None
+        return dict(value) if isinstance(value, dict) else {}
 
 
 async def _finalize_cad_task_failure(generation_id: str, message: str) -> None:
@@ -1886,7 +1969,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         {"passes": passes, "timeout_seconds": 480},
                     )
                     async with asyncio.timeout(480):
-                        spec = await read_spec_best_effort(content, passes=passes)
+                        spec = await read_spec_best_effort(
+                            content,
+                            passes=passes,
+                            budget_seconds=450,
+                        )
                     await _record(
                         "reader",
                         "completed" if spec else "failed",
@@ -1904,9 +1991,28 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         },
                     )
                 except TimeoutError:
-                    return await _fail(
-                        "Метод «по описанию»: чтение остановлено через 480 с. "
-                        "Последний незавершённый запрос виден в журнале этапов."
+                    spec = await _load_cad_partial_spec(gen_uuid)
+                    if not spec:
+                        return await _fail(
+                            "Метод «по описанию»: чтение остановлено через 480 с.; "
+                            "ни один проход не успел сформировать валидную геометрию."
+                        )
+                    spec.setdefault("optional_unresolved", []).append(
+                        "чтение достигло лимита 480 с.; использован последний "
+                        "сохранённый consensus"
+                    )
+                    await _record(
+                        "reader.timeout_recovery",
+                        "warning",
+                        "Лимит чтения достигнут; работа продолжена с последнего "
+                        "сохранённого consensus",
+                        {
+                            "timeout_seconds": 480,
+                            "has_geometry": bool((spec.get("main_view") or {}).get("outer")),
+                            "partial_spec_sequence": "latest",
+                            "_partial_spec": spec,
+                            "_progress_pct": 60,
+                        },
                     )
                 except (
                     SpecReaderNotVisionError,
@@ -2051,8 +2157,16 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     reason = (solid_result or {}).get("error") or (
                         "по прочитанному не удалось собрать деталь"
                     )
+                    blockers = [
+                        str(item) for item in (solid_result or {}).get("blockers") or []
+                        if str(item)
+                    ]
+                    if blockers:
+                        reason += ": " + "; ".join(blockers[:3])
+                        if len(blockers) > 3:
+                            reason += f"; и ещё {len(blockers) - 3} — см. журнал"
                     return await _fail(
-                        "Оцифровка: деталь не построена — " + str(reason)[:400]
+                        "Оцифровка: деталь не построена — " + str(reason)[:700]
                         + ". Прочитанное сохранено: откройте спецификацию, уточните "
                         "недостающие размеры и пересоберите."
                     )

@@ -974,6 +974,7 @@ async def read_drawing_spec(
     Robust to real scans (understanding, not pixel localisation). Returns {} on
     failure so the caller can fall back to the tracing method.
     """
+    import asyncio
     import base64
     import hashlib
     import io
@@ -1030,19 +1031,20 @@ async def read_drawing_spec(
             f"({get_routing_for(read_task).primary}). Назначьте vision-модель "
             "в Настройки → Модели → Оцифровка."
         )
+    full_prompt = (
+        _SPEC_PROMPT
+        + "\nДЛЯ ЭТОГО ПОЛНОГО ПРОХОДА верни только геометрию: "
+        "main_view, parts, views, unresolved и optional_unresolved. "
+        "Не повторяй dimensions, annotations, title_block и evidence — "
+        "они читаются отдельными специализированными проходами."
+        + "\nКАРТА ИЗОБРАЖЕНИЙ:\n"
+        + "\n".join(tile_descriptions)
+    )
     request = AIRequest(
         task=read_task,
         messages=[ChatMessage(
             role="user",
-            content=(
-                _SPEC_PROMPT
-                + "\nДЛЯ ЭТОГО ПОЛНОГО ПРОХОДА верни только геометрию: "
-                "main_view, parts, views, unresolved и optional_unresolved. "
-                "Не повторяй dimensions, annotations, title_block и evidence — "
-                "они читаются отдельными специализированными проходами."
-                + "\nКАРТА ИЗОБРАЖЕНИЙ:\n"
-                + "\n".join(tile_descriptions)
-            ),
+            content=full_prompt,
         )],
         images=[base64.b64encode(value).decode() for value in images],
         confidential=confidential,
@@ -1054,6 +1056,7 @@ async def read_drawing_spec(
         metadata={
             "num_predict": 6000,
             "json_schema": _whole_sheet_reader_schema(),
+            "inference_params": {"temperature": 0, "num_ctx": 16384},
         },
     )
     started = time.monotonic()
@@ -1070,7 +1073,8 @@ async def read_drawing_spec(
         },
     )
     try:
-        response = await router.run(request)
+        async with asyncio.timeout(120):
+            response = await router.run(request)
     except Exception as exc:  # noqa: BLE001 — never sink the pipeline on a VLM error
         await record_cad_process_event(
             "reader.whole_sheet.request",
@@ -1080,6 +1084,7 @@ async def read_drawing_spec(
                 "model": seeing_model,
                 "duration_ms": round((time.monotonic() - started) * 1000),
                 "error": f"{type(exc).__name__}: {exc}"[:400],
+                "timeout_seconds": 120,
             },
         )
         return {}
@@ -1096,6 +1101,14 @@ async def read_drawing_spec(
         "answer_tail": answer[-2000:],
         "thinking_chars": len(str((response.raw or {}).get("thinking") or "")),
         "done_reason": (response.raw or {}).get("done_reason"),
+        "_model_output": {
+            "kind": "whole_sheet",
+            "model": response.model or seeing_model,
+            "prompt": full_prompt,
+            "answer": answer,
+            "thinking": str((response.raw or {}).get("thinking") or ""),
+            "parsed": False,
+        },
     }
     try:
         parsed = _coerce_spec_containers(_parse_spec_json(answer, strict=True))
@@ -1154,6 +1167,10 @@ async def read_drawing_spec(
         "Ответ полного чтения принят в EngineeringDrawingSpec",
         {
             **response_details,
+            "_model_output": {
+                **response_details["_model_output"],
+                "parsed": True,
+            },
         },
     )
     return validated
@@ -3119,26 +3136,83 @@ async def _draft_generative(
     Handles multiple bodies. When ``sheet_format`` is set, the generated geometry
     is laid out on that ГОСТ sheet at an auto-chosen standard scale.
     """
+    import asyncio
+    import hashlib
     import json
+    import time
 
     from app.ai.schemas import AIRequest, AITask, ChatMessage
+    from app.ai.cad_process_log import record_cad_process_event
 
     if router is None:
         from app.ai.router import ai_router
 
         router = ai_router
+    full_prompt = _DRAFT_PROMPT + json.dumps(spec, ensure_ascii=False)
     request = AIRequest(
         task=AITask.CAD_SPEC_DRAFT,
         messages=[ChatMessage(
             role="user",
-            content=_DRAFT_PROMPT + json.dumps(spec, ensure_ascii=False),
+            content=full_prompt,
         )],
         preferred_model=draft_model,
         confidential=True,
         allow_cloud=False,
+        metadata={
+            "num_predict": 6000,
+            "inference_params": {"temperature": 0, "num_ctx": 16384},
+        },
     )
-    response = await router.run(request)
-    dsl = _parse_spec_json(response.text or "")
+    started = time.monotonic()
+    await record_cad_process_event(
+        "drafter.model.request",
+        "started",
+        "Генеративному чертёжнику передана полная спецификация",
+        {
+            "model": draft_model,
+            "prompt_chars": len(full_prompt),
+            "prompt_sha256": hashlib.sha256(full_prompt.encode()).hexdigest(),
+        },
+    )
+    try:
+        async with asyncio.timeout(120):
+            response = await router.run(request)
+    except Exception as exc:  # noqa: BLE001
+        await record_cad_process_event(
+            "drafter.model.request",
+            "failed",
+            "Генеративный чертёжник завершился ошибкой",
+            {
+                "model": draft_model,
+                "duration_ms": round((time.monotonic() - started) * 1000),
+                "error": f"{type(exc).__name__}: {exc}"[:400],
+                "timeout_seconds": 120,
+            },
+        )
+        return None
+    answer = response.text or ""
+    dsl = _parse_spec_json(answer)
+    await record_cad_process_event(
+        "drafter.model.request",
+        "completed" if dsl else "failed",
+        "Ответ генеративного чертёжника получен"
+        if dsl else "Ответ генеративного чертёжника не является корректным JSON",
+        {
+            "model": response.model or draft_model,
+            "duration_ms": response.usage.latency_ms,
+            "answer_chars": len(answer),
+            "answer_sha256": hashlib.sha256(answer.encode()).hexdigest(),
+            "parsed": bool(dsl),
+            "_model_output": {
+                "kind": "generative_drafter",
+                "model": response.model or draft_model,
+                "prompt": full_prompt,
+                "answer": answer,
+                "thinking": str((response.raw or {}).get("thinking") or ""),
+                "parsed": bool(dsl),
+            },
+        },
+    )
     if not dsl:
         return None
     ir = _dsl_to_ir(dsl)

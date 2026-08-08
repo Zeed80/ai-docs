@@ -869,6 +869,7 @@ async def _ask(
     schema: dict | None = None, audit: list[dict[str, Any]] | None = None,
 ) -> dict:
     """One bounded question. A failure returns {} and never raises."""
+    import asyncio
     import time
     import hashlib
 
@@ -894,7 +895,11 @@ async def _ask(
         confidential=confidential,
         allow_cloud=False,
         preferred_model=seeing_model,
-        metadata={"num_predict": num_predict, "json_schema": schema},
+        metadata={
+            "num_predict": num_predict,
+            "json_schema": schema,
+            "inference_params": {"temperature": 0, "num_ctx": 8192},
+        },
     )
     question = prompt.splitlines()[0][:200]
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -912,7 +917,8 @@ async def _ask(
         },
     )
     try:
-        response = await router.run(request)
+        async with asyncio.timeout(75):
+            response = await router.run(request)
     except Exception as exc:  # noqa: BLE001 — one lost fragment, not the sheet
         logger.warning("cad_fragment_failed", error=str(exc)[:200])
         await record_cad_process_event(
@@ -923,6 +929,7 @@ async def _ask(
                 "model": seeing_model,
                 "duration_ms": round((time.monotonic() - started) * 1000),
                 "error": f"{type(exc).__name__}: {exc}"[:400],
+                "timeout_seconds": 75,
             },
         )
         return {}
@@ -937,6 +944,7 @@ async def _ask(
     result = _coerce_spec_containers(parsed) if parsed else {}
     raw = response.raw or {}
     answer = response.text or ""
+    thinking = str(raw.get("thinking") or "")
     await record_cad_process_event(
         "reader.fragment.question",
         "completed" if result else "failed",
@@ -950,8 +958,16 @@ async def _ask(
             "answer_chars": len(answer),
             "answer_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
             "answer_preview": answer[:2000],
-            "thinking_chars": len(str(raw.get("thinking") or "")),
+            "thinking_chars": len(thinking),
             "parsed": bool(result),
+            "_model_output": {
+                "kind": "fragment_question",
+                "model": response.model or seeing_model,
+                "prompt": prompt,
+                "answer": answer,
+                "thinking": thinking,
+                "parsed": bool(result),
+            },
         },
     )
     return result
@@ -1057,7 +1073,11 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
         "stream": False,
         "think": False,
         "chat_template_kwargs": {"enable_thinking": False},
-        "options": {"num_predict": _OCR_NUM_PREDICT, "temperature": 0},
+        "options": {
+            "num_predict": _OCR_NUM_PREDICT,
+            "temperature": 0,
+            "num_ctx": 8192,
+        },
     }
     started = time.monotonic()
     await record_cad_process_event(
@@ -1128,6 +1148,14 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
             "output_tokens": raw_body.get("eval_count"),
             "dimensions": len(dimensions),
             "annotations": len(annotations),
+            "_model_output": {
+                "kind": "text_ocr",
+                "model": model,
+                "prompt": payload["prompt"],
+                "answer": text,
+                "thinking": str(raw_body.get("thinking") or ""),
+                "parsed": bool(text.strip()),
+            },
         },
     )
     return {"dimensions": dimensions, "annotations": annotations}
@@ -3456,7 +3484,8 @@ async def _profile_by_assignment(
 
 
 async def read_spec_by_fragments(
-    image_bytes: bytes, *, router: Any | None = None, confidential: bool = True
+    image_bytes: bytes, *, router: Any | None = None, confidential: bool = True,
+    shared_layers: dict[str, Any] | None = None,
 ) -> dict:
     """Assemble a spec from several narrow reads of the same sheet."""
     from PIL import Image
@@ -3538,25 +3567,27 @@ async def read_spec_by_fragments(
     localized_pmi, unresolved_pmi_count = _structured_pmi_annotations(
         pmi_answer, pmi_evidence
     )
-    direct_answer = await _ask(
-        _PMI_DIRECT_PROMPT,
-        pmi_view,
-        num_predict=1600,
-        schema=_PMI_DIRECT_SCHEMA,
-        **ask,
-    )
-    direct_pmi, direct_unresolved = _structured_pmi_annotations(direct_answer)
-    unresolved_pmi_count += direct_unresolved
-    localized_by_text = {item["text"]: item for item in localized_pmi}
-    structured_pmi = []
-    seen_pmi = set()
-    for item in direct_pmi:
-        if item["text"] in seen_pmi:
-            continue
-        seen_pmi.add(item["text"])
-        # Semantics come from the whole-view read; a bbox is attached only
-        # when the independent crop read produced the exact same construct.
-        structured_pmi.append(localized_by_text.get(item["text"], item))
+    structured_pmi = list(localized_pmi)
+    if localized_pmi:
+        from app.ai.cad_process_log import record_cad_process_event
+
+        await record_cad_process_event(
+            "reader.pmi.direct",
+            "skipped",
+            "Whole-view PMI-запрос пропущен: детерминированные рамки уже локализованы",
+            {"localized_frames": len(localized_pmi), "reason": "localized_pmi_available"},
+        )
+    else:
+        direct_answer = await _ask(
+            _PMI_DIRECT_PROMPT,
+            pmi_view,
+            num_predict=1600,
+            schema=_PMI_DIRECT_SCHEMA,
+            **ask,
+        )
+        direct_pmi, direct_unresolved = _structured_pmi_annotations(direct_answer)
+        unresolved_pmi_count += direct_unresolved
+        structured_pmi = direct_pmi
     if structured_pmi:
         # The bounded symbol question supersedes generic tolerance strings from
         # the broad callout pass. Keep other annotation classes unchanged.
@@ -3567,7 +3598,12 @@ async def read_spec_by_fragments(
     # The document model reads the sheet's text better than the general reader;
     # its lines are ADDED to what the general reader found rather than replacing
     # it, since the two miss different things.
-    ocr = await read_callouts_with_ocr(overview, router=router)
+    if shared_layers is not None and "ocr" in shared_layers:
+        ocr = shared_layers["ocr"]
+    else:
+        ocr = await read_callouts_with_ocr(overview, router=router)
+        if shared_layers is not None:
+            shared_layers["ocr"] = ocr
     if ocr:
         known = {str((d or {}).get("value") or "").strip().lower()
                  for d in (callouts.get("dimensions") or [])}
@@ -4044,6 +4080,7 @@ def _enrich_post_consensus_source_geometry(
 async def read_fragments_consensus(
     image_bytes: bytes, *, passes: int, router: Any | None = None,
     confidential: bool = True,
+    deadline_monotonic: float | None = None,
 ) -> dict:
     """Read the sheet in fragments several times and keep what agrees.
 
@@ -4060,19 +4097,58 @@ async def read_fragments_consensus(
     """
     from app.ai.cad_recognize.spec_consensus import consensus_spec
 
+    import time
+
+    shared_layers: dict[str, Any] = {}
     reads: list[dict] = []
+    pass_durations: list[float] = []
     from app.ai.cad_process_log import record_cad_process_event
 
     for _attempt in range(max(1, passes)):
+        remaining = (
+            deadline_monotonic - time.monotonic()
+            if deadline_monotonic is not None else None
+        )
+        predicted = (
+            max(90.0, sum(pass_durations) / len(pass_durations) * 1.15)
+            if pass_durations else 90.0
+        )
+        if _attempt > 0 and remaining is not None and remaining < predicted:
+            await record_cad_process_event(
+                "reader.fragments.pass",
+                "skipped",
+                f"Проход {_attempt + 1}/{max(1, passes)} не запущен: "
+                "оставшегося бюджета недостаточно",
+                {
+                    "pass": _attempt + 1,
+                    "passes": max(1, passes),
+                    "remaining_seconds": round(max(0.0, remaining), 1),
+                    "predicted_seconds": round(predicted, 1),
+                    "reason": "insufficient_reader_budget",
+                },
+            )
+            break
+        pass_started = time.monotonic()
         await record_cad_process_event(
             "reader.fragments.pass",
             "started",
             f"Фрагментное чтение: проход {_attempt + 1}/{max(1, passes)}",
-            {"pass": _attempt + 1, "passes": max(1, passes)},
+            {
+                "pass": _attempt + 1,
+                "passes": max(1, passes),
+                "_progress_pct": 7 + round(_attempt / max(1, passes) * 50),
+            },
         )
         spec = await read_spec_by_fragments(
-            image_bytes, router=router, confidential=confidential
+            image_bytes,
+            router=router,
+            confidential=confidential,
+            shared_layers=shared_layers,
         )
+        pass_durations.append(time.monotonic() - pass_started)
+        if spec:
+            reads.append(spec)
+        partial = consensus_spec(reads) if reads else {}
         await record_cad_process_event(
             "reader.fragments.pass",
             "completed" if spec else "failed",
@@ -4082,10 +4158,31 @@ async def read_fragments_consensus(
                 "valid_spec": bool(spec),
                 "has_geometry": _has_geometry(spec) if spec else False,
                 "questions": len(spec.get("fragment_answers") or []) if spec else 0,
+                "duration_seconds": round(pass_durations[-1], 1),
+                "usable_passes": len(reads),
+                "_progress_pct": 7 + round((_attempt + 1) / max(1, passes) * 50),
+                "_partial_spec": partial,
             },
         )
-        if spec:
-            reads.append(spec)
+        disagreements = (partial.get("consensus") or {}).get("disagreements") or []
+        if (
+            len(reads) >= 2
+            and _has_geometry(partial)
+            and not disagreements
+            and _attempt + 1 < max(1, passes)
+        ):
+            await record_cad_process_event(
+                "reader.fragments.consensus",
+                "completed",
+                "Два прохода полностью сошлись; лишние полные проходы пропущены",
+                {
+                    "usable_passes": len(reads),
+                    "skipped_passes": max(1, passes) - _attempt - 1,
+                    "reason": "stable_consensus",
+                    "_partial_spec": partial,
+                },
+            )
+            break
     if not reads:
         return {}
     merged = consensus_spec(reads)
@@ -4107,6 +4204,7 @@ async def read_fragments_consensus(
 async def read_spec_best_effort(
     image_bytes: bytes, *, passes: int = 3, router: Any | None = None,
     confidential: bool = True,
+    budget_seconds: float = 450.0,
 ) -> dict:
     """Fragments first, whole-sheet consensus as the fallback for geometry.
 
@@ -4125,17 +4223,28 @@ async def read_spec_best_effort(
     fallback: on the flange it read all four fields correctly where whole-sheet
     reading returned an empty title block.
     """
+    import time
+
     from app.ai.cad_recognize.spec_vectorize import read_drawing_spec_consensus
     from app.ai.cad_process_log import record_cad_process_event
 
+    deadline = time.monotonic() + max(60.0, budget_seconds)
     fragments = await read_fragments_consensus(
-        image_bytes, passes=passes, router=router, confidential=confidential
+        image_bytes,
+        passes=passes,
+        router=router,
+        confidential=confidential,
+        deadline_monotonic=deadline,
     )
     fragment_unresolved = [
         str(item) for item in (fragments.get("unresolved") or []) if str(item)
     ] if fragments else []
+    remaining_seconds = deadline - time.monotonic()
     fragment_ready = bool(
         fragments and _has_geometry(fragments) and not fragment_unresolved
+    )
+    budget_requires_partial = bool(
+        fragments and _has_geometry(fragments) and remaining_seconds < 150
     )
     await record_cad_process_event(
         "reader.strategy",
@@ -4143,16 +4252,25 @@ async def read_spec_best_effort(
         (
             "Фрагментный consensus достаточен; полное чтение не требуется"
             if fragment_ready
+            else "Фрагментная геометрия сохранена; полного бюджета на fallback нет"
+            if budget_requires_partial
             else "Фрагментный consensus неполон; запускается полное чтение листа"
         ),
         {
             "has_fragment_spec": bool(fragments),
             "has_geometry": _has_geometry(fragments) if fragments else False,
             "unresolved": fragment_unresolved,
-            "whole_sheet_fallback": not fragment_ready,
+            "whole_sheet_fallback": not fragment_ready and not budget_requires_partial,
+            "remaining_seconds": round(max(0.0, remaining_seconds), 1),
+            "partial_due_to_budget": budget_requires_partial,
+            "_partial_spec": fragments if fragments else None,
         },
     )
-    if fragment_ready:
+    if fragment_ready or budget_requires_partial:
+        if budget_requires_partial:
+            fragments.setdefault("optional_unresolved", []).append(
+                "полное чтение не запускалось: сохранён лучший consensus в пределах времени"
+            )
         return _mark_observation_only_if_no_geometry(
             _enrich_post_consensus_source_geometry(fragments, image_bytes)
         )

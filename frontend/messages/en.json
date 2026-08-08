@@ -576,7 +576,15 @@
       "graph_reader_model": "Reader model",
       "cad_process_title": "CAD reading and build log",
       "cad_process_current": "current stage",
-      "cad_process_details": "Stage technical data"
+      "cad_process_details": "Stage technical data",
+      "cad_process_started": "Started",
+      "cad_model_outputs_title": "Full model output",
+      "cad_model_outputs_load": "Load full responses",
+      "cad_model_outputs_loading": "Loading…",
+      "cad_model_outputs_empty": "No saved model responses",
+      "cad_model_prompt": "Model prompt",
+      "cad_model_answer": "Full model response",
+      "cad_model_thinking": "Model thinking"
     },
     "vector": {
       "title": "Digitized drawing",

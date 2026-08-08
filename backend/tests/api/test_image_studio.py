@@ -169,6 +169,45 @@ async def test_generate_creates_queued_record(client):
 
 
 @pytest.mark.asyncio
+async def test_cad_model_outputs_are_loaded_on_demand_not_in_generation_poll(
+    client, db_session
+):
+    from app.db.models import ImageGeneration, ImageGenStatus
+
+    gen = ImageGeneration(
+        owner_sub="dev-user",
+        operation="vectorize",
+        status=ImageGenStatus.failed,
+        params={
+            "cad_process": {"events": [{"sequence": 1}]},
+            "cad_partial_spec": {"main_view": {"outer": []}},
+            "cad_model_outputs": [{
+                "id": "model-output-1",
+                "sequence": 1,
+                "at": "2026-08-08T00:00:00Z",
+                "stage": "reader.fragment.question",
+                "answer": '{"outer":[]}',
+            }],
+        },
+        source_image_paths=[],
+    )
+    db_session.add(gen)
+    await db_session.commit()
+    await db_session.refresh(gen)
+
+    polled = await client.get(f"/api/image-gen/{gen.id}")
+    assert polled.status_code == 200
+    assert "cad_model_outputs" not in polled.json()["params"]
+    assert "cad_partial_spec" not in polled.json()["params"]
+    assert polled.json()["params"]["cad_process"]["events"]
+
+    audit = await client.get(f"/api/image-gen/{gen.id}/cad-model-outputs")
+    assert audit.status_code == 200
+    assert audit.json()["count"] == 1
+    assert audit.json()["outputs"][0]["answer"] == '{"outer":[]}'
+
+
+@pytest.mark.asyncio
 async def test_iterate_edit_does_not_inherit_cleanup_workflow(client, db_session, monkeypatch):
     from app.db.models import ComfyWorkflow, ImageGeneration, ImageGenStatus
 

@@ -64,7 +64,21 @@ async def test_persisted_process_log_tracks_sequence_and_only_terminal_failure(
     gen_id = uuid.uuid4()
 
     await _append_cad_process_event(
-        gen_id, "reader.fragment.question", "failed", "one prompt failed"
+        gen_id,
+        "reader.fragment.question",
+        "completed",
+        "one prompt completed",
+        {
+            "_progress_pct": 25,
+            "_partial_spec": {"main_view": {"outer": [{"diameter_mm": 10}]}},
+            "_model_output": {
+                "model": "test-model",
+                "prompt": "read",
+                "answer": '{"ok":true}',
+                "thinking": "",
+                "parsed": True,
+            },
+        },
     )
     await _append_cad_process_event(
         gen_id, "pipeline", "failed", "terminal", {"terminal": True}
@@ -72,6 +86,11 @@ async def test_persisted_process_log_tracks_sequence_and_only_terminal_failure(
 
     process = gen.params["cad_process"]
     assert [event["sequence"] for event in process["events"]] == [1, 2]
-    assert process["events"][0]["status"] == "failed"
+    assert process["events"][0]["status"] == "completed"
+    assert process["events"][0]["details"]["model_output_id"] == "model-output-1"
+    assert "_model_output" not in process["events"][0]["details"]
+    assert process["progress_pct"] == 25
+    assert gen.params["cad_partial_spec"]["main_view"]["outer"][0]["diameter_mm"] == 10
+    assert gen.params["cad_model_outputs"][0]["answer"] == '{"ok":true}'
     assert process["status"] == "failed"
     assert process["current_stage"] == "pipeline"
