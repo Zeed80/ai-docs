@@ -495,6 +495,11 @@ class EngineeringDrawingSpec(BaseModel):
     title_block: dict[str, Any] = Field(default_factory=dict)
     unresolved: list[str] = Field(default_factory=list)
     optional_unresolved: list[str] = Field(default_factory=list)
+    # A reader may recover useful dimensions/PMI while geometry is incomplete
+    # or schema-invalid.  Keep those observations visible, but make it
+    # impossible to mistake this envelope for buildable geometry.
+    observation_only: bool = False
+    geometry_validation_errors: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _record_incomplete_rotation_sections(self) -> "EngineeringDrawingSpec":

@@ -1,0 +1,44 @@
+{
+  "contract": "nist-pmi-production-reader-baseline-v1",
+  "date": "2026-08-08",
+  "scope": {
+    "pages": 1,
+    "source_page": "nist_ctc_01_asme1_rd_p01.png",
+    "reference_records": 10,
+    "passes": 1,
+    "tuning": "none"
+  },
+  "production_route": {
+    "task": "cad_spec_read",
+    "primary": "qwen3_vl_30b_a3b_ollama",
+    "fallback": "gemma4_e4b_ollama",
+    "local_only": true
+  },
+  "before_observation_preservation": {
+    "seconds": 106.4,
+    "reader_errors": 1,
+    "candidate_records": 0,
+    "semantic_f1": 0.0,
+    "missing_pmi_rate": 1.0,
+    "failure": "geometry schema rejection erased all callout observations"
+  },
+  "after_observation_preservation": {
+    "seconds": 56.7,
+    "reader_errors": 0,
+    "candidate_records": 18,
+    "correct_semantic_records": 1,
+    "semantic_precision": 0.05555555555555555,
+    "semantic_recall": 0.1,
+    "semantic_f1": 0.07142857142857142,
+    "missing_pmi_rate": 0.9,
+    "invented_pmi_rate": 0.9444444444444444,
+    "false_exact_rate": 0.0
+  },
+  "promotion_eligible": false,
+  "next_error_classes": [
+    "PMI symbols are lost from feature-control-frame text",
+    "title and sheet labels are misclassified as dimensions",
+    "reader observations have no exact drawing evidence boxes",
+    "official geometry-only STEP cannot supply PMI topology associations"
+  ]
+}

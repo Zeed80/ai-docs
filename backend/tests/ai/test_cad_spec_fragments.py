@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.ai.cad_recognize.spec_fragments import (
+    _observation_only_spec,
     _has_geometry,
     _enrich_post_consensus_source_geometry,
     _stamp_crop,
@@ -62,6 +63,45 @@ def test_geometry_presence_covers_both_supported_classes():
     assert _has_geometry({"main_view": {"profile": {"shape": "circle"}}})
     assert not _has_geometry({"main_view": {"profile": {}}})
     assert not _has_geometry({"main_view": {}})
+
+
+def test_invalid_geometry_preserves_pmi_as_unresolved_observations():
+    assembled = {
+        "part": "test part",
+        "main_view": {"type": "prismatic", "profile": {"shape": "rectangle"}},
+        "dimensions": [
+            {"value": "⌀25 ±0.15", "applies_to": None, "evidence": [{"image_index": 1, "bbox": [1, 2, 3, 4]}]},
+            {"value": ""},
+        ],
+        "annotations": [
+            {"kind": "datum", "text": "A", "evidence": []},
+            {"kind": "tolerance", "text": "", "value": "⌓ | 0.5 | A"},
+            {"kind": "other", "text": ""},
+        ],
+        "title_block": {"name": "test part"},
+        "unresolved": [],
+    }
+
+    result = _observation_only_spec(
+        assembled,
+        fragments={"callouts": True},
+        fragment_answers=[{"task": "callouts"}],
+        invalid_fields=["main_view.profile"],
+    )
+
+    assert result["observation_only"] is True
+    assert result["main_view"]["type"] == "unknown"
+    assert result["main_view"]["profile"] is None
+    assert [item["value"] for item in result["dimensions"]] == ["⌀25 ±0.15"]
+    assert [item["text"] for item in result["annotations"]] == ["A", "⌓ | 0.5 | A"]
+    assert result["geometry_validation_errors"] == ["main_view.profile"]
+    assert "geometry_schema_invalid:main_view.profile" in result["unresolved"]
+
+    from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
+
+    round_trip = EngineeringDrawingSpec.model_validate(result).model_dump(mode="json")
+    assert round_trip["observation_only"] is True
+    assert round_trip["geometry_validation_errors"] == ["main_view.profile"]
 
 
 @pytest.mark.asyncio

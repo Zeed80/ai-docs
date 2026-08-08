@@ -47,7 +47,7 @@
 - [x] Считать `invented_pmi_rate`, `missing_pmi_rate`, attachment metrics и `false_exact_rate`.
 - [x] Запрещать promotion при пустой истине, дубликатах, неизвестной связи или ложном `verified`.
 - [x] Добавить unit/CLI tests, self-pair semantic pass и deliberate-corruption rejection; `18` смежных тестов проходят.
-- [ ] Зафиксировать честный PMI baseline текущего reader.
+- [-] Зафиксировать честный PMI baseline текущего reader: первый live CTC-лист без подстройки дал до исправления `0/10` и потерю всех observations из-за geometry schema reject; после разделения observation/build gate сохранено `18` кандидатов, semantic F1 `0,071429`, missing `90%`, invented `94,44%`. Полный набор ещё не прогнан.
 
 **Готово, когда:** любой PMI score прослеживается до официальной строки NIST и evidence; неподтверждённая привязка не становится verified.
 

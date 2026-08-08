@@ -3355,11 +3355,92 @@ async def read_spec_by_fragments(
         validated["fragment_answers"] = fragment_answers
         return validated
     except ValidationError as exc:
+        fields = [".".join(str(p) for p in e["loc"]) for e in exc.errors()[:6]]
         logger.warning(
             "cad_fragment_spec_invalid",
-            fields=[".".join(str(p) for p in e["loc"]) for e in exc.errors()[:6]],
+            fields=fields,
         )
-        return {}
+        # Geometry validity gates 3D generation, but it must not erase text and
+        # PMI observations already read from the source.  Return a deliberately
+        # geometry-free, unresolved spec: downstream build gates still fail
+        # closed, while the audit/editor/evaluator can show what the model saw.
+        return _observation_only_spec(
+            assembled,
+            fragments=fragments,
+            fragment_answers=fragment_answers,
+            invalid_fields=fields,
+        )
+
+
+def _observation_only_spec(
+    assembled: dict[str, Any], *, fragments: dict[str, Any],
+    fragment_answers: list[dict[str, Any]], invalid_fields: list[str],
+) -> dict[str, Any]:
+    """Preserve evidenced callouts when geometry cannot satisfy the schema."""
+    from app.ai.cad_recognize.spec_vectorize import (
+        EngineeringDrawingSpec,
+        SpecEvidence,
+        _ANNOTATION_KINDS,
+    )
+
+    def valid_evidence(value: Any) -> list[dict[str, Any]]:
+        result = []
+        for evidence in value if isinstance(value, list) else []:
+            try:
+                result.append(SpecEvidence.model_validate(evidence).model_dump(mode="json"))
+            except Exception:  # noqa: BLE001 - invalid evidence cannot be promoted
+                continue
+        return result
+
+    dimensions = []
+    for item in assembled.get("dimensions") or []:
+        if not isinstance(item, dict) or not str(item.get("value") or "").strip():
+            continue
+        dimensions.append({
+            "value": str(item["value"]).strip(),
+            "applies_to": str(item.get("applies_to") or ""),
+            "evidence": valid_evidence(item.get("evidence")),
+        })
+
+    annotations = []
+    for item in assembled.get("annotations") or []:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or item.get("value") or item.get("symbol") or "").strip()
+        if not text:
+            continue
+        kind = str(item.get("kind") or "other")
+        if kind not in _ANNOTATION_KINDS:
+            kind = "other"
+        annotations.append({
+            "kind": kind,
+            "text": text,
+            "value": item.get("value"),
+            "symbol": item.get("symbol"),
+            "datum_refs": item.get("datum_refs") if isinstance(item.get("datum_refs"), list) else [],
+            "evidence": valid_evidence(item.get("evidence")),
+        })
+
+    unresolved = [str(item) for item in assembled.get("unresolved") or [] if str(item)]
+    unresolved.extend(f"geometry_schema_invalid:{field}" for field in invalid_fields)
+    fallback = {
+        "schema_version": 1,
+        "part": str(assembled.get("part") or ""),
+        "main_view": {"type": "unknown"},
+        "parts": [],
+        "views": [],
+        "dimensions": dimensions,
+        "annotations": annotations,
+        "title_block": assembled.get("title_block") if isinstance(assembled.get("title_block"), dict) else {},
+        "unresolved": sorted(set(unresolved)),
+        "optional_unresolved": assembled.get("optional_unresolved") or [],
+        "observation_only": True,
+        "geometry_validation_errors": invalid_fields,
+    }
+    validated = EngineeringDrawingSpec.model_validate(fallback).model_dump(mode="json")
+    validated["fragments"] = fragments
+    validated["fragment_answers"] = fragment_answers
+    return validated
 
 
 def _type_label(kind: str) -> str:
