@@ -287,6 +287,115 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
 
 
 @pytest.mark.asyncio
+async def test_construction_graph_builds_reopened_ifc_and_replays_idempotently(
+    client: AsyncClient,
+    monkeypatch,
+):
+    graph_objects: dict[str, bytes] = {}
+    for target in (
+        "app.services.engineering_model_graph.upload_file",
+        "app.storage.upload_file",
+    ):
+        monkeypatch.setattr(
+            target,
+            lambda content, path, _content_type: graph_objects.setdefault(path, content),
+        )
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.download_file",
+        lambda path: graph_objects[path],
+    )
+    for target in (
+        "app.services.engineering_model_graph.delete_file",
+        "app.storage.delete_file",
+    ):
+        monkeypatch.setattr(target, lambda path: graph_objects.pop(path, None))
+
+    project = (await client.post(
+        "/api/engineering/projects", json={"name": "IFC building"}
+    )).json()
+    payload = {
+        "construction_model": {
+            "site_name": "Site",
+            "building_name": "Building",
+            "storeys": [{"id": "l1", "name": "Level 1", "elevation_mm": 0}],
+            "elements": [{
+                "id": "w1",
+                "kind": "wall",
+                "name": "Wall",
+                "storey_id": "l1",
+                "material": "Concrete",
+                "box": {
+                    "x_mm": 0,
+                    "y_mm": 0,
+                    "z_mm": 0,
+                    "width_mm": 5000,
+                    "depth_mm": 200,
+                    "height_mm": 3000,
+                },
+            }],
+        },
+    }
+    revision = (await client.post(
+        f"/api/engineering/projects/{project['id']}/revisions",
+        json={"base_revision": None, "payload": payload},
+    )).json()
+    initial = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/construction-model-graph"
+    )
+    assert initial.status_code == 200
+    assert initial.json()["profile"] == "construction"
+    assert initial.json()["revision"] == 0
+    assert initial.json()["release_status"] == "blocked"
+
+    approved = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/approve",
+        json={"approved_by": "chief-engineer"},
+    )
+    assert approved.status_code == 200
+
+    ifc_bytes = b"ISO-10303-21; IFC4 test; END-ISO-10303-21;"
+    ifc_sha = hashlib.sha256(ifc_bytes).hexdigest()
+    report = {
+        "valid": True,
+        "ifc_sha256": ifc_sha,
+        "product_class_counts": {"IfcWall": 1},
+        "products": [{
+            "source_id": "w1",
+            "ifc_class": "IfcWall",
+            "global_id": "0testGlobalId0000000000",
+            "name": "Wall",
+        }],
+    }
+    monkeypatch.setattr(
+        "app.ai.construction_emg.compile_construction_ifc",
+        lambda _model: (ifc_bytes, report),
+    )
+
+    synced = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/construction-model-graph"
+    )
+    assert synced.status_code == 200
+    assert synced.json()["profile"] == "construction"
+    assert synced.json()["revision"] == 1
+
+    built = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/construction-model-graph/build"
+    )
+    assert built.status_code == 200
+    assert built.json()["revision"] == 2
+    assert built.json()["ifc_reopen_valid"] is True
+    assert built.json()["production_export_allowed"] is True
+    assert built.json()["provisional"] is False
+
+    replay = await client.post(
+        f"/api/engineering/revisions/{revision['id']}/construction-model-graph/build"
+    )
+    assert replay.status_code == 200
+    assert replay.json()["revision"] == 2
+    assert replay.json()["idempotent_replay"] is True
+
+
+@pytest.mark.asyncio
 async def test_release_validation_promotes_clean_revision(client: AsyncClient):
     project = (await client.post("/api/engineering/projects", json={"name": "Втулка"})).json()
     revision = (await client.post(f"/api/engineering/projects/{project['id']}/revisions", json={"base_revision": None})).json()

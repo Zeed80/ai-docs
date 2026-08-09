@@ -873,8 +873,8 @@ DOMAIN_ADAPTERS: dict[str, DomainAdapter] = {
     ),
     "construction": DomainAdapter(
         profile="construction",
-        supported_node_types=["DocumentSet", "Document", "Sheet", "View", "Product", "Component", "Feature", "Geometry", "Material", "System", "Port", "Artifact", "TopologyElement"],
-        supported_edge_types=["contains", "part_of", "located_in", "connects_to", "opens_in", "maps_to_topology"],
+        supported_node_types=["DocumentSet", "Document", "Sheet", "View", "Product", "Component", "Feature", "Geometry", "Material", "System", "Port", "BuildOperation", "Artifact", "TopologyElement"],
+        supported_edge_types=["contains", "part_of", "located_in", "connects_to", "opens_in", "depends_on", "generated_by", "maps_to_topology"],
         critical_impacts=["base_topology", "envelope", "connection_opening", "load_path", "structural_capacity", "regulatory_check", "operational_safety", "material_quantity"],
         hybrid_trace_cases=["finish_boundary", "non_structural_symbolic_outline"],
         mandatory_assertions=["spatial.level", "element.material"],

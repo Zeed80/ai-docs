@@ -701,6 +701,340 @@ async def build_assembly_model_graph(
     }
 
 
+@router.post("/revisions/{revision_id}/construction-model-graph")
+async def sync_construction_model_graph(
+    revision_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Project an immutable construction_model payload into canonical EMG."""
+    import hashlib
+
+    require_permission(user, "engineering.revision_create")
+    from app.ai.construction_emg import ConstructionModel, construction_as_graph
+    from app.domain.engineering_model_graph import Evidence, GraphPatch
+    from app.services.engineering_model_graph import (
+        create_initial_graph,
+        latest_graph_revision,
+        load_graph,
+        merge_and_persist_patch,
+    )
+
+    revision = await db.get(EngineeringRevision, revision_id)
+    if revision is None:
+        raise HTTPException(404, "Инженерная ревизия не найдена")
+    try:
+        model = ConstructionModel.model_validate(
+            revision.payload.get("construction_model")
+        )
+    except Exception as exc:
+        raise HTTPException(422, f"construction_model невалиден: {exc}") from exc
+    graph_id = f"construction:{revision_id}"
+    latest = await latest_graph_revision(db, graph_id, lock=True)
+    if latest is None:
+        graph = construction_as_graph(
+            graph_id=graph_id,
+            model=model,
+            source_revision_id=str(revision_id),
+            source_approved=revision.status == "approved",
+        )
+        latest = await create_initial_graph(
+            db,
+            graph,
+            engineering_project_id=revision.engineering_project_id,
+            engineering_revision_id=revision.id,
+        )
+        await db.commit()
+    else:
+        graph = load_graph(latest)
+        approvable = [
+            item for item in graph.assertions
+            if item.state == "active"
+            and item.origin == "human"
+            and item.assurance == "observed"
+            and item.value.kind != "unknown"
+        ]
+        if revision.status == "approved" and approvable:
+            approval_seed = f"{revision_id}:{revision.approved_by or 'approved'}"
+            approval_digest = hashlib.sha256(approval_seed.encode()).hexdigest()
+            evidence_id = f"evidence:construction-approval:{approval_digest[:20]}"
+            replacements = [
+                item.model_copy(update={
+                    "id": f"assertion:construction-approved:{hashlib.sha256(item.id.encode()).hexdigest()[:20]}",
+                    "assurance": "human_approved",
+                    "evidence_ids": [evidence_id],
+                    "supersedes_assertion_id": item.id,
+                })
+                for item in approvable
+            ]
+            patch = GraphPatch(
+                patch_id=f"construction-approval:{approval_digest}",
+                base_revision=graph.revision,
+                base_sha256=graph.canonical_sha256,
+                producer="human",
+                pass_id=f"construction-approval:r{graph.revision + 1}",
+                idempotency_key=f"construction-approval:{graph.canonical_sha256}:{approval_digest}",
+                add_assertions=replacements,
+                add_evidence=[Evidence(
+                    id=evidence_id,
+                    kind="human_decision",
+                    payload={
+                        "engineering_revision_id": str(revision_id),
+                        "approved_by": revision.approved_by,
+                        "approved_at": (
+                            revision.approved_at.isoformat()
+                            if revision.approved_at else None
+                        ),
+                    },
+                    sha256=approval_digest,
+                )],
+                supersede_assertion_ids=[item.id for item in approvable],
+            )
+            row, errors = await merge_and_persist_patch(
+                db,
+                patch,
+                expected_graph_id=graph_id,
+            )
+            if row is None:
+                await db.rollback()
+                raise HTTPException(409, "Approval GraphPatch отклонён: " + ", ".join(errors))
+            await db.commit()
+            latest = row
+            graph = load_graph(row)
+    return {
+        "id": str(latest.id),
+        "engineering_project_id": str(latest.engineering_project_id),
+        "engineering_revision_id": str(latest.engineering_revision_id),
+        "graph_id": latest.graph_id,
+        "revision": latest.revision,
+        "canonical_sha256": latest.canonical_sha256,
+        "profile": latest.profile,
+        "comprehension_status": latest.comprehension_status,
+        "build_status": latest.build_status,
+        "release_status": latest.release_status,
+        "graph": graph.model_dump(mode="json"),
+    }
+
+
+@router.post("/revisions/{revision_id}/construction-model-graph/build")
+async def build_construction_model_graph(
+    revision_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Build, reopen and attach a provisional or production IFC4 artifact."""
+    import hashlib
+    import json
+
+    from anyio import to_thread
+
+    from app.ai.construction_emg import ConstructionModel, compile_construction_ifc
+    from app.domain.engineering_model_graph import (
+        Assertion,
+        Evidence,
+        ExactValue,
+        GraphEdge,
+        GraphNode,
+        GraphPatch,
+        compile_build_plan,
+    )
+    from app.services.engineering_model_graph import (
+        latest_graph_revision,
+        load_graph,
+        merge_and_persist_patch,
+    )
+    from app.storage import delete_file, upload_file
+
+    await sync_construction_model_graph(revision_id, db, user)
+    revision = await db.get(EngineeringRevision, revision_id)
+    if revision is None:
+        raise HTTPException(404, "Инженерная ревизия не найдена")
+    model = ConstructionModel.model_validate(revision.payload["construction_model"])
+    graph_id = f"construction:{revision_id}"
+    latest = await latest_graph_revision(db, graph_id, lock=True)
+    if latest is None:
+        raise HTTPException(409, "Construction EngineeringModelGraph не создан")
+    graph = load_graph(latest)
+    reopen_assertion = next(
+        (
+            item for item in graph.assertions
+            if item.state == "active"
+            and item.predicate == "construction.ifc_reopen_valid"
+        ),
+        None,
+    )
+    if reopen_assertion is None:
+        raise HTTPException(409, "В construction graph отсутствует IFC reopen gate")
+    if (
+        reopen_assertion.value.kind == "exact"
+        and reopen_assertion.value.value is True
+        and reopen_assertion.evidence_ids
+    ):
+        evidence_by_id = {item.id: item for item in graph.evidence}
+        evidence = evidence_by_id.get(reopen_assertion.evidence_ids[0])
+        if evidence and evidence.payload.get("artifact_path"):
+            plan = compile_build_plan(graph, "production")
+            return {
+                "graph_id": graph_id,
+                "revision": latest.revision,
+                "canonical_sha256": latest.canonical_sha256,
+                "artifact_path": evidence.payload["artifact_path"],
+                "artifact_sha256": evidence.payload["report"]["ifc_sha256"],
+                "report_path": evidence.payload["report_path"],
+                "ifc_reopen_valid": True,
+                "production_export_allowed": plan.production_export_allowed,
+                "provisional": not plan.production_export_allowed,
+                "critical_assumption_ids": plan.critical_assumption_ids,
+                "idempotent_replay": True,
+            }
+
+    try:
+        ifc_bytes, report = await to_thread.run_sync(
+            compile_construction_ifc,
+            model,
+        )
+    except Exception as exc:
+        raise HTTPException(422, f"IfcOpenShell отклонил construction model: {exc}") from exc
+    if not report.get("valid"):
+        raise HTTPException(422, "IFC reopen verification failed: " + json.dumps(report)[:500])
+    ifc_sha = hashlib.sha256(ifc_bytes).hexdigest()
+    if report.get("ifc_sha256") != ifc_sha:
+        raise HTTPException(502, "IFC SHA не совпал с reopen report")
+    artifact_path = f"engineering/construction/{revision_id}/r{graph.revision}-{ifc_sha}.ifc"
+    report_path = artifact_path.removesuffix(".ifc") + ".json"
+    artifact_id = f"artifact:construction-ifc:{ifc_sha[:20]}"
+    operation_id = f"operation:construction-ifc:{ifc_sha[:20]}"
+    nodes = [
+        GraphNode(id=operation_id, type="BuildOperation", name="Compile construction IFC4"),
+        GraphNode(id=artifact_id, type="Artifact", name="Construction IFC4"),
+    ]
+    edges = [
+        GraphEdge(
+            id=f"depends:{operation_id}",
+            type="depends_on",
+            source_id=operation_id,
+            target_id="product:building",
+        ),
+        GraphEdge(
+            id=f"generated:{artifact_id}",
+            type="generated_by",
+            source_id=artifact_id,
+            target_id=operation_id,
+        ),
+    ]
+    graph_node_ids = {item.id for item in graph.nodes}
+    for product in report.get("products", []):
+        source_id = str(product.get("source_id") or "")
+        subject_id = f"feature:construction:{hashlib.sha256(source_id.encode()).hexdigest()[:16]}"
+        if subject_id not in graph_node_ids:
+            raise HTTPException(502, f"IFC report содержит неизвестный source element {source_id}")
+        topology_id = f"topology:ifc:{product['global_id']}"
+        nodes.append(GraphNode(
+            id=topology_id,
+            type="TopologyElement",
+            name=f"{product['ifc_class']} {product.get('name') or source_id}",
+        ))
+        edges.append(GraphEdge(
+            id=f"maps:{subject_id}:{topology_id}",
+            type="maps_to_topology",
+            source_id=subject_id,
+            target_id=topology_id,
+        ))
+    report_bytes = json.dumps(
+        report,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    evidence_id = f"evidence:construction-ifc:{ifc_sha[:20]}"
+    patch = GraphPatch(
+        patch_id=f"construction-build:{ifc_sha}",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id=f"construction-build:r{graph.revision + 1}",
+        idempotency_key=f"construction-build:{graph.canonical_sha256}:{ifc_sha}",
+        add_nodes=nodes,
+        add_edges=edges,
+        add_assertions=[
+            Assertion(
+                id=f"assertion:construction-ifc-reopen:{ifc_sha[:20]}",
+                subject_id="product:building",
+                predicate="construction.ifc_reopen_valid",
+                value=ExactValue(kind="exact", value=True),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+                impacts=["base_topology", "regulatory_check"],
+                supersedes_assertion_id=reopen_assertion.id,
+            ),
+            Assertion(
+                id=f"assertion:construction-ifc-sha:{ifc_sha[:20]}",
+                subject_id=artifact_id,
+                predicate="artifact.sha256",
+                value=ExactValue(kind="exact", value=ifc_sha),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+                impacts=["base_topology"],
+            ),
+        ],
+        add_evidence=[Evidence(
+            id=evidence_id,
+            kind="kernel_topology",
+            payload={
+                "artifact_path": artifact_path,
+                "report_path": report_path,
+                "report": report,
+            },
+            sha256=hashlib.sha256(report_bytes).hexdigest(),
+        )],
+        supersede_assertion_ids=[reopen_assertion.id],
+    )
+    uploaded: list[str] = []
+    try:
+        await to_thread.run_sync(upload_file, ifc_bytes, artifact_path, "application/x-step")
+        uploaded.append(artifact_path)
+        await to_thread.run_sync(upload_file, report_bytes, report_path, "application/json")
+        uploaded.append(report_path)
+        row, errors = await merge_and_persist_patch(
+            db,
+            patch,
+            expected_graph_id=graph_id,
+        )
+        if row is None:
+            raise ValueError("Artifact GraphPatch отклонён: " + ", ".join(errors))
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        for path in reversed(uploaded):
+            try:
+                await to_thread.run_sync(delete_file, path)
+            except Exception:  # noqa: BLE001 - preserve primary build error
+                pass
+        if isinstance(exc, ValueError):
+            raise HTTPException(409, str(exc)) from exc
+        raise
+    built_graph = load_graph(row)
+    plan = compile_build_plan(built_graph, "production")
+    return {
+        "graph_id": graph_id,
+        "revision": row.revision,
+        "canonical_sha256": row.canonical_sha256,
+        "artifact_path": artifact_path,
+        "artifact_sha256": ifc_sha,
+        "report_path": report_path,
+        "ifc_reopen_valid": True,
+        "product_class_counts": report["product_class_counts"],
+        "production_export_allowed": plan.production_export_allowed,
+        "provisional": not plan.production_export_allowed,
+        "critical_assumption_ids": plan.critical_assumption_ids,
+        "idempotent_replay": False,
+    }
+
+
 @router.get("/revisions/{revision_id}/validation-runs", response_model=list[EngineeringValidationRunOut])
 async def list_validation_runs(revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[EngineeringValidationRun]:
     return list((await db.execute(
