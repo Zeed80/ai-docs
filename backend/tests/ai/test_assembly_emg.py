@@ -1,4 +1,9 @@
-from app.ai.assembly_emg import assembly_as_graph, assembly_revision_patch
+from app.ai.assembly_emg import (
+    assembly_as_graph,
+    assembly_drawing_patch,
+    assembly_revision_patch,
+    build_assembly_drawing_svg,
+)
 from app.domain.assembly import analyze_assembly_dof
 from app.domain.engineering_model_graph import (
     Assertion,
@@ -8,6 +13,7 @@ from app.domain.engineering_model_graph import (
     apply_graph_patch,
     compile_build_plan,
 )
+from app.services.engineering_model_graph import verify_graph
 
 
 def _assembly_graph(*, shaft_quantity: int = 1):
@@ -145,6 +151,66 @@ def test_assembly_graph_projects_instances_bom_mates_and_release_gate():
     assert "assertion:assembly:required-2d" in production.critical_assumption_ids
 
 
+def test_deterministic_assembly_drawing_covers_instances_mates_and_views():
+    components = [
+        {
+            "key": "housing",
+            "shape": {"kind": "box", "width_mm": 100, "height_mm": 80, "depth_mm": 40},
+            "transform": {},
+        },
+        {
+            "key": "shaft",
+            "shape": {"kind": "cylinder", "diameter_mm": 30, "height_mm": 120},
+            "transform": {"translate": [120, 25, 0]},
+        },
+    ]
+    mates = [{
+        "id": "mate-1",
+        "first_instance_key": "housing",
+        "second_instance_key": "shaft",
+    }]
+    first_svg, first_report = build_assembly_drawing_svg(
+        components=components, mates=mates, name="Test assembly"
+    )
+    second_svg, second_report = build_assembly_drawing_svg(
+        components=components, mates=mates, name="Test assembly"
+    )
+
+    assert first_svg == second_svg
+    assert first_report == second_report
+    assert first_report["valid"] is True
+    assert first_report["views"] == ["assembled", "exploded"]
+    assert first_report["instance_occurrences"] == 4
+    assert first_report["mate_occurrences"] == 2
+
+    graph = _assembly_graph()
+    patched = apply_graph_patch(
+        graph,
+        assembly_drawing_patch(graph, svg=first_svg, report=first_report),
+    )
+    state, issues = verify_graph(patched)
+    assert "required_2d_artifacts_missing" not in state.issue_codes
+    assert not [item for item in issues if item["severity"] == "error"]
+    assert "assertion:assembly:required-2d" not in compile_build_plan(
+        patched, "production"
+    ).critical_assumption_ids
+
+
+def test_tampered_assembly_drawing_cannot_be_admitted():
+    svg, report = build_assembly_drawing_svg(
+        components=[{
+            "key": "base",
+            "shape": {"kind": "box", "width_mm": 100, "height_mm": 80, "depth_mm": 20},
+            "transform": {},
+        }],
+        mates=[],
+        name="Base",
+    )
+
+    with pytest.raises(ValueError, match="does not validate"):
+        assembly_drawing_patch(_assembly_graph(), svg=svg + b" ", report=report)
+
+
 def test_assembly_revision_patch_is_deterministic_and_supersedes_bom_value():
     current = _assembly_graph()
     desired = _assembly_graph(shaft_quantity=4)
@@ -254,3 +320,4 @@ def test_assembly_sync_preserves_reopen_only_for_unchanged_snapshot():
         and assertion.predicate == "assembly.artifact_reopen_valid"
     )
     assert active_reopen.value.kind == "unknown"
+import pytest

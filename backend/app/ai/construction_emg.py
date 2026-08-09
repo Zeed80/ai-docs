@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import uuid
 from collections import Counter
 from typing import Annotated, Literal
+from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,6 +20,7 @@ from app.domain.engineering_model_graph import (
     ExactValue,
     GraphEdge,
     GraphNode,
+    GraphPatch,
     Requirement,
     UnknownValue,
 )
@@ -318,6 +321,190 @@ def construction_as_graph(
             ),
         ],
     ).sealed()
+
+
+def build_construction_sheets_svg(model: ConstructionModel) -> tuple[bytes, dict]:
+    """Render one plan per storey plus a section and reopen the semantic SVG."""
+    panel_width = 420
+    panel_height = 340
+    panel_count = len(model.storeys) + 1
+    width = panel_width * panel_count
+    height = panel_height
+    max_xy = max(
+        max(
+            item.box.x_mm + item.box.width_mm,
+            item.box.y_mm + item.box.depth_mm,
+        )
+        for item in model.elements
+    )
+    max_z = max(
+        next(storey.elevation_mm for storey in model.storeys if storey.id == item.storey_id)
+        + item.box.z_mm
+        + item.box.height_mm
+        for item in model.elements
+    )
+    plan_scale = min(1.0, 300.0 / max(max_xy, 1.0))
+    section_scale = min(1.0, 260.0 / max(max(max_xy, max_z), 1.0))
+    views = []
+    for index, storey in enumerate(model.storeys):
+        origin_x = index * panel_width + 50.0
+        view_id = f"plan:{storey.id}"
+        elements = []
+        for item in model.elements:
+            if item.storey_id != storey.id:
+                continue
+            box = item.box
+            elements.append(
+                f'<rect data-view="{html.escape(view_id)}" '
+                f'data-element-id="{html.escape(item.id)}" data-element-kind="{item.kind}" '
+                f'x="{origin_x + box.x_mm * plan_scale:.2f}" '
+                f'y="{70 + box.y_mm * plan_scale:.2f}" '
+                f'width="{max(2.0, box.width_mm * plan_scale):.2f}" '
+                f'height="{max(2.0, box.depth_mm * plan_scale):.2f}" />'
+            )
+        views.append(
+            f'<g data-view-panel="{html.escape(view_id)}">'
+            f'<text x="{origin_x:.2f}" y="35">Plan — {html.escape(storey.name)}</text>'
+            f'{"".join(elements)}</g>'
+        )
+    section_origin = len(model.storeys) * panel_width + 50.0
+    section_elements = []
+    elevations = {item.id: item.elevation_mm for item in model.storeys}
+    for item in model.elements:
+        box = item.box
+        z = elevations[item.storey_id] + box.z_mm
+        section_elements.append(
+            f'<rect data-view="section" data-element-id="{html.escape(item.id)}" '
+            f'data-element-kind="{item.kind}" '
+            f'x="{section_origin + box.x_mm * section_scale:.2f}" '
+            f'y="{310 - (z + box.height_mm) * section_scale:.2f}" '
+            f'width="{max(2.0, box.width_mm * section_scale):.2f}" '
+            f'height="{max(2.0, box.height_mm * section_scale):.2f}" />'
+        )
+    views.append(
+        f'<g data-view-panel="section"><text x="{section_origin:.2f}" y="35">Section</text>'
+        f'{"".join(section_elements)}</g>'
+    )
+    svg = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}">'
+        '<style>rect{fill:#dbeafe;stroke:#111;stroke-width:1.5}'
+        'rect[data-element-kind="opening"]{fill:#fff;stroke:#dc2626;stroke-dasharray:5 3}'
+        'rect[data-element-kind="space"]{fill:#dcfce7;fill-opacity:.5}'
+        'text{font:14px sans-serif;fill:#111}</style>'
+        f'<text x="12" y="330">{html.escape(model.building_name)}</text>'
+        f'{"".join(views)}</svg>'
+    ).encode()
+    root = ElementTree.fromstring(svg)
+    namespace = {"svg": "http://www.w3.org/2000/svg"}
+    rendered_views = {
+        item.attrib["data-view-panel"]
+        for item in root.findall(".//svg:g[@data-view-panel]", namespace)
+    }
+    occurrences = {
+        (item.attrib["data-view"], item.attrib["data-element-id"])
+        for item in root.findall(".//svg:rect[@data-element-id]", namespace)
+    }
+    expected_views = {"section", *(f"plan:{item.id}" for item in model.storeys)}
+    expected_occurrences = {
+        (f"plan:{item.storey_id}", item.id) for item in model.elements
+    } | {("section", item.id) for item in model.elements}
+    report = {
+        "media_type": "image/svg+xml",
+        "views": sorted(rendered_views),
+        "element_ids": sorted(item.id for item in model.elements),
+        "element_occurrences": len(occurrences),
+        "storey_count": len(model.storeys),
+        "required_views_complete": rendered_views == expected_views,
+    }
+    report["valid"] = bool(
+        rendered_views == expected_views and occurrences == expected_occurrences
+    )
+    report["artifact_sha256"] = hashlib.sha256(svg).hexdigest()
+    report["canonical_report_sha256"] = hashlib.sha256(
+        json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return svg, report
+
+
+def construction_sheets_patch(
+    graph: EngineeringModelGraph, *, svg: bytes, report: dict
+) -> GraphPatch:
+    artifact_sha = hashlib.sha256(svg).hexdigest()
+    if (
+        not report.get("valid")
+        or report.get("media_type") != "image/svg+xml"
+        or report.get("artifact_sha256") != artifact_sha
+        or "section" not in report.get("views", [])
+    ):
+        raise ValueError("construction sheet report does not validate the supplied SVG")
+    required = next(
+        item for item in graph.assertions
+        if item.state == "active"
+        and item.predicate == "construction.required_sheets_complete"
+    )
+    suffix = artifact_sha[:16]
+    artifact_id = f"artifact:construction-sheets:{suffix}"
+    operation_id = f"operation:construction-sheets:{suffix}"
+    evidence_id = f"evidence:construction-sheets:{suffix}"
+    return GraphPatch(
+        patch_id=f"construction-sheets:{suffix}",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id=f"construction-sheets:r{graph.revision + 1}",
+        idempotency_key=f"construction-sheets:{artifact_sha}",
+        add_nodes=[
+            GraphNode(id=operation_id, type="BuildOperation", name="Build construction sheets"),
+            GraphNode(id=artifact_id, type="Artifact", name="Construction plans and section SVG"),
+        ],
+        add_edges=[
+            GraphEdge(
+                id=f"depends:construction-sheets:{suffix}",
+                type="depends_on",
+                source_id=operation_id,
+                target_id="product:building",
+            ),
+            GraphEdge(
+                id=f"generated:construction-sheets:{suffix}",
+                type="generated_by",
+                source_id=artifact_id,
+                target_id=operation_id,
+            ),
+        ],
+        add_evidence=[Evidence(
+            id=evidence_id,
+            kind="projection_comparison",
+            payload=report,
+            sha256=report["canonical_report_sha256"],
+        )],
+        add_assertions=[
+            Assertion(
+                id=f"assertion:construction-sheets-media:{suffix}",
+                subject_id=artifact_id,
+                predicate="artifact.media_type",
+                value=ExactValue(kind="exact", value="image/svg+xml"),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+            ),
+            Assertion(
+                id=f"assertion:construction-sheets-complete:{suffix}",
+                subject_id="product:building",
+                predicate="construction.required_sheets_complete",
+                value=ExactValue(kind="exact", value=True),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+                impacts=["required_view", "required_section"],
+                supersedes_assertion_id=required.id,
+            ),
+        ],
+        supersede_assertion_ids=[required.id],
+    )
 
 
 def _ifc_guid(ifcopenshell_module: object, seed: str) -> str:

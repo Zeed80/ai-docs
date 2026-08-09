@@ -1,7 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from app.ai.construction_emg import ConstructionModel, construction_as_graph
+from app.ai.construction_emg import (
+    ConstructionModel,
+    build_construction_sheets_svg,
+    construction_as_graph,
+    construction_sheets_patch,
+)
 from app.domain.engineering_model_graph import (
     Assertion,
     ExactValue,
@@ -116,6 +121,48 @@ def test_construction_graph_projects_spatial_hierarchy_and_opening_host():
     built_plan = compile_build_plan(built, "production")
     assert built_plan.production_export_allowed is False
     assert "assertion:construction:required-sheets" in built_plan.critical_assumption_ids
+
+
+def test_deterministic_construction_sheets_cover_plan_section_and_elements():
+    model = _model()
+    first_svg, first_report = build_construction_sheets_svg(model)
+    second_svg, second_report = build_construction_sheets_svg(model)
+
+    assert first_svg == second_svg
+    assert first_report == second_report
+    assert first_report["valid"] is True
+    assert first_report["views"] == ["plan:level-1", "section"]
+    assert first_report["element_occurrences"] == 6
+
+    graph = construction_as_graph(
+        graph_id="construction:test",
+        model=model,
+        source_revision_id="revision-1",
+        source_approved=True,
+    )
+    patched = apply_graph_patch(
+        graph,
+        construction_sheets_patch(graph, svg=first_svg, report=first_report),
+    )
+    state, issues = verify_graph(patched)
+    assert "required_2d_artifacts_missing" not in state.issue_codes
+    assert not [item for item in issues if item["severity"] == "error"]
+    assert "assertion:construction:required-sheets" not in compile_build_plan(
+        patched, "production"
+    ).critical_assumption_ids
+
+
+def test_tampered_construction_sheets_cannot_be_admitted():
+    svg, report = build_construction_sheets_svg(_model())
+    graph = construction_as_graph(
+        graph_id="construction:test",
+        model=_model(),
+        source_revision_id="revision-1",
+        source_approved=True,
+    )
+
+    with pytest.raises(ValueError, match="does not validate"):
+        construction_sheets_patch(graph, svg=svg + b" ", report=report)
 
 
 def test_construction_release_keeps_unapproved_source_values_critical():

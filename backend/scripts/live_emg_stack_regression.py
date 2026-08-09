@@ -27,13 +27,25 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.ai.construction_emg import ConstructionModel, compile_construction_ifc
+from app.ai.assembly_emg import (
+    assembly_as_graph,
+    assembly_drawing_patch,
+    build_assembly_drawing_svg,
+)
+from app.ai.construction_emg import (
+    ConstructionModel,
+    build_construction_sheets_svg,
+    compile_construction_ifc,
+    construction_as_graph,
+    construction_sheets_patch,
+)
 from app.ai.system_emg import (
     EngineeringSystemModel,
     build_system_diagram_svg,
     system_as_graph,
     system_diagram_patch,
 )
+from app.domain.assembly import analyze_assembly_dof
 from app.domain.engineering_model_graph import apply_graph_patch, compile_build_plan
 from app.services.engineering_model_graph import verify_graph
 
@@ -218,6 +230,10 @@ def _assembly_cases() -> list[tuple[str, dict[str, Any]]]:
                     {"key": "left-support", "shape": {"kind": "box", "width_mm": 20, "height_mm": 100, "depth_mm": 80}, "transform": {"translate": [0, 0, 20]}},
                     {"key": "right-support", "shape": {"kind": "box", "width_mm": 20, "height_mm": 100, "depth_mm": 80}, "transform": {"translate": [160, 0, 20]}},
                 ],
+                "drawing_mates": [
+                    {"id": "base-left", "mate_type": "fixed", "first_instance_key": "base", "second_instance_key": "left-support", "parameters": {}},
+                    {"id": "base-right", "mate_type": "fixed", "first_instance_key": "base", "second_instance_key": "right-support", "parameters": {}},
+                ],
                 "metadata": {"live_case": "assembly-bearing-block"},
             },
         ),
@@ -230,6 +246,10 @@ def _assembly_cases() -> list[tuple[str, dict[str, Any]]]:
                     {"key": "motor", "shape": {"kind": "cylinder", "diameter_mm": 120, "height_mm": 220}, "transform": {"translate": [90, 110, 20], "rotate_z_deg": 0}},
                     {"key": "pump", "shape": {"kind": "cylinder", "diameter_mm": 90, "height_mm": 150}, "transform": {"translate": [270, 110, 20], "rotate_z_deg": 0}},
                 ],
+                "drawing_mates": [
+                    {"id": "skid-motor", "mate_type": "fixed", "first_instance_key": "skid", "second_instance_key": "motor", "parameters": {}},
+                    {"id": "skid-pump", "mate_type": "fixed", "first_instance_key": "skid", "second_instance_key": "pump", "parameters": {}},
+                ],
                 "metadata": {"live_case": "assembly-pump-skid"},
             },
         ),
@@ -237,13 +257,48 @@ def _assembly_cases() -> list[tuple[str, dict[str, Any]]]:
 
 
 def _run_assembly(case_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    status, body, _ = _post("/assembly/compile", payload)
+    kernel_payload = {key: value for key, value in payload.items() if key != "drawing_mates"}
+    status, body, _ = _post("/assembly/compile", kernel_payload)
     if status != 200:
         raise RuntimeError(f"/assembly/compile HTTP {status}: {body[:400].decode(errors='replace')}")
     members = _zip_members(body)
     report = json.loads(members["assembly-report.json"])
     reopen = report.get("reopen", {})
     step = members["assembly.step"]
+    mates = payload.get("drawing_mates", [])
+    svg, drawing_report = build_assembly_drawing_svg(
+        components=payload["components"], mates=mates, name=payload["name"]
+    )
+    repeated_svg, repeated_drawing_report = build_assembly_drawing_svg(
+        components=payload["components"], mates=mates, name=payload["name"]
+    )
+    graph_components = [
+        {
+            "instance_key": item["key"],
+            "designation": item["key"],
+            "quantity": 1,
+            "metadata_": {"grounded": index == 0, "shape": item["shape"]},
+            "transform": item.get("transform", {}),
+        }
+        for index, item in enumerate(payload["components"])
+    ]
+    dof = analyze_assembly_dof(graph_components, mates)
+    graph = assembly_as_graph(
+        graph_id=f"live-regression:{case_id}",
+        name=payload["name"],
+        designation=case_id,
+        components=graph_components,
+        mates=mates,
+        dof=dof,
+        collisions=[],
+        exact_checked=[item["key"] for item in payload["components"]],
+        interference_degraded=None,
+    )
+    drawing_graph = apply_graph_patch(
+        graph,
+        assembly_drawing_patch(graph, svg=svg, report=drawing_report),
+    )
+    drawing_plan = compile_build_plan(drawing_graph, "production")
     checks = {
         "assembly_brep_valid": bool(report.get("assembly", {}).get("brep_valid")),
         "component_count": len(report.get("components", [])) == len(payload["components"]),
@@ -251,6 +306,14 @@ def _run_assembly(case_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         "reopened_solid_count": reopen.get("solid_count") == len(payload["components"]),
         "reopen_sha_matches": reopen.get("step_sha256") == hashlib.sha256(step).hexdigest(),
         "step_signature": step[:16].startswith(b"ISO-10303-21"),
+        "drawing_svg_reopened": bool(drawing_report.get("valid")),
+        "drawing_deterministic": (
+            svg == repeated_svg and drawing_report == repeated_drawing_report
+        ),
+        "drawing_has_both_views": drawing_report.get("views") == ["assembled", "exploded"],
+        "drawing_covers_instances": drawing_report.get("instance_occurrences") == 2 * len(payload["components"]),
+        "drawing_covers_mates": drawing_report.get("mate_occurrences") == 2 * len(mates),
+        "drawing_release_gate_admitted": "assertion:assembly:required-2d" not in drawing_plan.critical_assumption_ids,
     }
     return {
         "runtime": "cad-kernel FreeCAD/OpenCascade isolated STEP reopen",
@@ -258,6 +321,7 @@ def _run_assembly(case_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         "passed": all(checks.values()),
         "checks": checks,
         "artifact_sha256": hashlib.sha256(step).hexdigest(),
+        "drawing_artifact_sha256": hashlib.sha256(svg).hexdigest(),
         "component_count": len(payload["components"]),
         "reopen": reopen,
     }
@@ -301,6 +365,21 @@ def _construction_cases() -> list[tuple[str, ConstructionModel]]:
 def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
     artifact, report = compile_construction_ifc(model)
     repeated_artifact, repeated_report = compile_construction_ifc(model)
+    sheets_svg, sheets_report = build_construction_sheets_svg(model)
+    repeated_sheets_svg, repeated_sheets_report = build_construction_sheets_svg(model)
+    graph = construction_as_graph(
+        graph_id=f"live-regression:{case_id}",
+        model=model,
+        source_revision_id=f"live:{case_id}:r1",
+        source_approved=True,
+    )
+    sheets_graph = apply_graph_patch(
+        graph,
+        construction_sheets_patch(
+            graph, svg=sheets_svg, report=sheets_report
+        ),
+    )
+    sheets_plan = compile_build_plan(sheets_graph, "production")
     checks = {
         "ifc_signature": artifact.startswith(b"ISO-10303-21"),
         "reopen_valid": bool(report.get("valid")),
@@ -312,6 +391,22 @@ def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
             artifact == repeated_artifact
             and report.get("ifc_sha256") == repeated_report.get("ifc_sha256")
         ),
+        "sheets_svg_reopened": bool(sheets_report.get("valid")),
+        "sheets_deterministic": (
+            sheets_svg == repeated_sheets_svg
+            and sheets_report == repeated_sheets_report
+        ),
+        "all_storey_plans_and_section_present": (
+            len(sheets_report.get("views", [])) == len(model.storeys) + 1
+            and "section" in sheets_report.get("views", [])
+        ),
+        "sheets_cover_all_elements": (
+            sheets_report.get("element_occurrences") == 2 * len(model.elements)
+        ),
+        "sheets_release_gate_admitted": (
+            "assertion:construction:required-sheets"
+            not in sheets_plan.critical_assumption_ids
+        ),
     }
     return {
         "runtime": "production backend IfcOpenShell geometry runtime",
@@ -319,6 +414,7 @@ def _run_construction(case_id: str, model: ConstructionModel) -> dict[str, Any]:
         "passed": all(checks.values()),
         "checks": checks,
         "artifact_sha256": hashlib.sha256(artifact).hexdigest(),
+        "sheets_artifact_sha256": hashlib.sha256(sheets_svg).hexdigest(),
         "storey_count": len(model.storeys),
         "element_count": len(model.elements),
         "product_class_counts": report.get("product_class_counts"),

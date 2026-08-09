@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 from typing import Any
+from xml.etree import ElementTree
 
 from app.domain.assembly import AssemblyDofReport
 from app.domain.engineering_model_graph import (
@@ -351,6 +353,228 @@ def assembly_as_graph(
             ),
         ],
     ).sealed()
+
+
+def _assembly_drawing_component(item: Any) -> dict[str, Any]:
+    key = str(_value(item, "instance_key", _value(item, "key", "")))
+    metadata = _value(item, "metadata_", {}) or {}
+    shape = _value(item, "shape", None) or metadata.get("shape")
+    transform = _value(item, "transform", {}) or {}
+    if not key or not isinstance(shape, dict) or shape.get("kind") not in {"box", "cylinder"}:
+        raise ValueError("assembly drawing requires keyed box or cylinder shapes")
+    if shape["kind"] == "box":
+        width = float(shape.get("width_mm", 0))
+        height = float(shape.get("height_mm", 0))
+    else:
+        width = float(shape.get("diameter_mm", 0))
+        height = width
+    if width <= 0 or height <= 0:
+        raise ValueError(f"assembly component {key!r} has invalid drawing extents")
+    translate = transform.get("translate")
+    if not isinstance(translate, list) or len(translate) != 3:
+        translate = [transform.get(axis, 0) for axis in ("x", "y", "z")]
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in translate):
+        raise ValueError(f"assembly component {key!r} has invalid transform")
+    return {
+        "key": key,
+        "kind": shape["kind"],
+        "width": width,
+        "height": height,
+        "x": float(translate[0]),
+        "y": float(translate[1]),
+    }
+
+
+def build_assembly_drawing_svg(
+    *, components: list[Any], mates: list[Any], name: str
+) -> tuple[bytes, dict[str, Any]]:
+    """Render assembled and exploded views and reopen their semantic SVG."""
+    normalized = [_assembly_drawing_component(item) for item in components]
+    if len({item["key"] for item in normalized}) != len(normalized):
+        raise ValueError("assembly drawing component keys must be unique")
+    instance_keys = {item["key"] for item in normalized}
+    normalized_mates = []
+    for index, mate in enumerate(mates):
+        first = str(_value(mate, "first_instance_key", ""))
+        second = str(_value(mate, "second_instance_key", ""))
+        mate_id = str(_value(mate, "id", f"mate:{index}"))
+        if first not in instance_keys or second not in instance_keys or first == second:
+            raise ValueError(f"assembly drawing mate {mate_id!r} has invalid instances")
+        normalized_mates.append((mate_id, first, second))
+    max_extent = max(
+        max(item["width"], item["height"], abs(item["x"]), abs(item["y"]))
+        for item in normalized
+    )
+    scale = min(1.0, 160.0 / max_extent) if max_extent else 1.0
+    panel_width = max(360, 180 + len(normalized) * 150)
+    height = 430
+
+    def render_view(view: str, origin_x: float, origin_y: float, exploded: bool) -> str:
+        centres: dict[str, tuple[float, float]] = {}
+        shapes = []
+        for index, item in enumerate(normalized):
+            offset_x = index * 120.0 if exploded else item["x"] * scale
+            x = origin_x + 40.0 + offset_x
+            y = origin_y + 70.0 + item["y"] * scale
+            width = max(16.0, item["width"] * scale)
+            height_px = max(16.0, item["height"] * scale)
+            centres[item["key"]] = (x + width / 2, y + height_px / 2)
+            if item["kind"] == "cylinder":
+                shape = (
+                    f'<ellipse cx="{x + width / 2:.2f}" cy="{y + height_px / 2:.2f}" '
+                    f'rx="{width / 2:.2f}" ry="{height_px / 2:.2f}" />'
+                )
+            else:
+                shape = (
+                    f'<rect x="{x:.2f}" y="{y:.2f}" width="{width:.2f}" '
+                    f'height="{height_px:.2f}" />'
+                )
+            shapes.append(
+                f'<g data-view="{view}" data-instance-key="{html.escape(item["key"])}">'
+                f'{shape}<text x="{x + width / 2:.2f}" y="{y + height_px + 18:.2f}" '
+                f'text-anchor="middle">{html.escape(item["key"])}</text></g>'
+            )
+        mate_lines = []
+        for mate_id, first, second in normalized_mates:
+            start, end = centres[first], centres[second]
+            mate_lines.append(
+                f'<line data-view="{view}" data-mate-id="{html.escape(mate_id)}" '
+                f'x1="{start[0]:.2f}" y1="{start[1]:.2f}" '
+                f'x2="{end[0]:.2f}" y2="{end[1]:.2f}" />'
+            )
+        return (
+            f'<g data-view-panel="{view}"><text x="{origin_x + 20:.2f}" '
+            f'y="{origin_y + 28:.2f}">{view}</text>'
+            f'<g class="mates">{"".join(mate_lines)}</g>'
+            f'<g class="instances">{"".join(shapes)}</g></g>'
+        )
+
+    svg = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{panel_width * 2}" '
+        f'height="{height}" viewBox="0 0 {panel_width * 2} {height}">'
+        '<style>rect,ellipse{fill:#fff;stroke:#111;stroke-width:2}'
+        'line{stroke:#b45309;stroke-width:2;stroke-dasharray:6 4}'
+        'text{font:14px sans-serif;fill:#111}</style>'
+        f'<text x="20" y="28">{html.escape(name)}</text>'
+        f'{render_view("assembled", 0, 36, False)}'
+        f'{render_view("exploded", panel_width, 36, True)}'
+        '</svg>'
+    ).encode()
+    root = ElementTree.fromstring(svg)
+    namespace = {"svg": "http://www.w3.org/2000/svg"}
+    views = {
+        item.attrib["data-view-panel"]
+        for item in root.findall(".//svg:g[@data-view-panel]", namespace)
+    }
+    rendered_instances = {
+        (item.attrib["data-view"], item.attrib["data-instance-key"])
+        for item in root.findall(".//svg:g[@data-instance-key]", namespace)
+    }
+    rendered_mates = {
+        (item.attrib["data-view"], item.attrib["data-mate-id"])
+        for item in root.findall(".//svg:line[@data-mate-id]", namespace)
+    }
+    expected_instances = {(view, key) for view in views for key in instance_keys}
+    mate_ids = {item[0] for item in normalized_mates}
+    expected_mates = {(view, mate_id) for view in views for mate_id in mate_ids}
+    report: dict[str, Any] = {
+        "media_type": "image/svg+xml",
+        "views": sorted(views),
+        "instance_keys": sorted(instance_keys),
+        "mate_ids": sorted(mate_ids),
+        "instance_occurrences": len(rendered_instances),
+        "mate_occurrences": len(rendered_mates),
+        "required_views_complete": views == {"assembled", "exploded"},
+    }
+    report["valid"] = bool(
+        rendered_instances == expected_instances
+        and rendered_mates == expected_mates
+        and report["required_views_complete"]
+    )
+    report["artifact_sha256"] = hashlib.sha256(svg).hexdigest()
+    report["canonical_report_sha256"] = hashlib.sha256(
+        json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return svg, report
+
+
+def assembly_drawing_patch(
+    graph: EngineeringModelGraph, *, svg: bytes, report: dict[str, Any]
+) -> GraphPatch:
+    artifact_sha = hashlib.sha256(svg).hexdigest()
+    if (
+        not report.get("valid")
+        or report.get("media_type") != "image/svg+xml"
+        or report.get("artifact_sha256") != artifact_sha
+        or report.get("views") != ["assembled", "exploded"]
+    ):
+        raise ValueError("assembly drawing report does not validate the supplied SVG")
+    required = next(
+        item for item in graph.assertions
+        if item.state == "active" and item.predicate == "assembly.required_2d_complete"
+    )
+    suffix = artifact_sha[:16]
+    artifact_id = f"artifact:assembly-drawing:{suffix}"
+    operation_id = f"operation:assembly-drawing:{suffix}"
+    evidence_id = f"evidence:assembly-drawing:{suffix}"
+    return GraphPatch(
+        patch_id=f"assembly-drawing:{suffix}",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id=f"assembly-drawing:r{graph.revision + 1}",
+        idempotency_key=f"assembly-drawing:{artifact_sha}",
+        add_nodes=[
+            GraphNode(id=operation_id, type="BuildOperation", name="Build assembly drawing"),
+            GraphNode(id=artifact_id, type="Artifact", name="Assembly drawing SVG"),
+        ],
+        add_edges=[
+            GraphEdge(
+                id=f"depends:assembly-drawing:{suffix}",
+                type="depends_on",
+                source_id=operation_id,
+                target_id="product:assembly",
+            ),
+            GraphEdge(
+                id=f"generated:assembly-drawing:{suffix}",
+                type="generated_by",
+                source_id=artifact_id,
+                target_id=operation_id,
+            ),
+        ],
+        add_evidence=[Evidence(
+            id=evidence_id,
+            kind="projection_comparison",
+            payload=report,
+            sha256=report["canonical_report_sha256"],
+        )],
+        add_assertions=[
+            Assertion(
+                id=f"assertion:assembly-drawing-media:{suffix}",
+                subject_id=artifact_id,
+                predicate="artifact.media_type",
+                value=ExactValue(kind="exact", value="image/svg+xml"),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+            ),
+            Assertion(
+                id=f"assertion:assembly-drawing-complete:{suffix}",
+                subject_id="product:assembly",
+                predicate="assembly.required_2d_complete",
+                value=ExactValue(kind="exact", value=True),
+                origin="derived",
+                assurance="constraint_validated",
+                evidence_ids=[evidence_id],
+                confidence=1.0,
+                impacts=["required_view"],
+                supersedes_assertion_id=required.id,
+            ),
+        ],
+        supersede_assertion_ids=[required.id],
+    )
 
 
 def assembly_revision_patch(
