@@ -343,6 +343,8 @@ async def _rebuild_from_spec(
                         else f"spec-rebuild:{generation_id}"
                     ),
                     idempotency_key=patch_key,
+                    source_sha256=params.get("normalized_source_sha256"),
+                    source_uri=params.get("normalized_source_path"),
                 )
                 engineering_graph = load_graph(engineering_graph_row)
                 engineering_graph_ref = {
@@ -360,6 +362,8 @@ async def _rebuild_from_spec(
         # human correction is the explicit review action that may replace
         # missing model evidence for the corrected candidate.
         require_source_evidence=not bool(params.get("spec_corrected")),
+        source_sha256=params.get("normalized_source_sha256"),
+        source_uri=params.get("normalized_source_path"),
         engineering_graph_override=engineering_graph,
     )
     if not solid_result or not solid_result.get("built"):
@@ -940,6 +944,7 @@ async def _build_spec_solid(
     landscape: bool = True,
     require_source_evidence: bool = False,
     source_sha256: str | None = None,
+    source_uri: str | None = None,
     engineering_graph_override: Any | None = None,
 ) -> dict | None:
     """Compile the read spec into a solid, and draw the sheet from that solid.
@@ -997,6 +1002,7 @@ async def _build_spec_solid(
                 spec,
                 graph_id=graph_id,
                 source_sha256=source_sha256,
+                source_uri=source_uri,
             )
         else:
             engineering_graph = spec_feature_tree_as_graph(
@@ -1004,6 +1010,7 @@ async def _build_spec_solid(
                 candidate,
                 graph_id=graph_id,
                 source_sha256=source_sha256,
+                source_uri=source_uri,
             )
             # Under the canary flag the kernel boundary consumes only a
             # deterministic projection of the sealed graph revision.
@@ -1936,6 +1943,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 "Нормализация и dewarp исходника завершены",
                 {"bytes": len(content)},
             )
+        normalized_source_path = None
+        normalized_source_sha256 = source_sha256
+        if content:
+            normalized_source_path = (
+                f"image-gen/{owner_sub or 'shared'}/{generation_id}_normalized.png"
+            )
+            normalized_source_sha256 = hashlib.sha256(content).hexdigest()
+            upload_file(content, normalized_source_path, "image/png")
         from app.ai.cad_pipeline_manifest import build_cad_pipeline_manifest
 
         pipeline_manifest = build_cad_pipeline_manifest(
@@ -1953,6 +1968,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 manifest_gen.params = {
                     **(manifest_gen.params or {}),
                     "cad_pipeline_manifest": pipeline_manifest,
+                    **(
+                        {
+                            "normalized_source_path": normalized_source_path,
+                            "normalized_source_sha256": normalized_source_sha256,
+                        }
+                        if normalized_source_path
+                        else {}
+                    ),
                 }
                 await db.commit()
         await _record(
@@ -2370,7 +2393,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 solid_result = await _build_spec_solid(
                     spec, generation_id, owner_sub, sheet_format=spec_sheet,
                     landscape=spec_landscape, require_source_evidence=True,
-                    source_sha256=source_sha256,
+                    source_sha256=normalized_source_sha256,
+                    source_uri=normalized_source_path,
                 )
                 if not solid_result or not solid_result.get("built"):
                     # The part could not be built, but the READING is not lost:

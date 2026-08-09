@@ -170,6 +170,15 @@ class EngineeringAssemblyValidation(BaseModel):
     exact_collisions: list[dict] = Field(default_factory=list)
     exact_checked: list[str] = Field(default_factory=list)
     degraded: str | None = None
+    active_instances: list[str] = Field(default_factory=list)
+    grounded_instances: list[str] = Field(default_factory=list)
+    floating_instances: list[str] = Field(default_factory=list)
+    grouped_quantity_instances: list[str] = Field(default_factory=list)
+    unsupported_mates: list[str] = Field(default_factory=list)
+    constraint_rank_estimate: int = 0
+    degrees_of_freedom: int = 0
+    overconstrained: bool = False
+    fully_constrained: bool = False
 
 
 class EngineeringValidationRunOut(BaseModel):

@@ -4,7 +4,14 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
-from app.db.models import CadIrRevision, Drawing, DrawingStatus, ImageGeneration
+
+from app.db.models import (
+    CadIrRevision,
+    Drawing,
+    DrawingStatus,
+    EngineeringAssemblyComponent,
+    ImageGeneration,
+)
 
 
 @pytest.mark.asyncio
@@ -108,6 +115,94 @@ async def test_assembly_reports_aabb_collision(client: AsyncClient):
     report = await client.post(f"/api/engineering/assemblies/{assembly['id']}/validate")
     assert report.status_code == 200
     assert report.json()["collisions"] == [["housing", "shaft"]]
+
+
+@pytest.mark.asyncio
+async def test_assembly_model_graph_is_revisioned_through_graph_patch(
+    client: AsyncClient,
+    db_session,
+    monkeypatch,
+):
+    graph_objects: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.upload_file",
+        lambda content, path, _content_type: graph_objects.setdefault(path, content),
+    )
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.download_file",
+        lambda path: graph_objects[path],
+    )
+    monkeypatch.setattr(
+        "app.services.engineering_model_graph.delete_file",
+        lambda path: graph_objects.pop(path, None),
+    )
+    project = (await client.post(
+        "/api/engineering/projects", json={"name": "EMG сборка"}
+    )).json()
+    revision = (await client.post(
+        f"/api/engineering/projects/{project['id']}/revisions",
+        json={"base_revision": None},
+    )).json()
+    assembly = (await client.post(
+        f"/api/engineering/revisions/{revision['id']}/assemblies",
+        json={"name": "Вал в корпусе", "designation": "ASM-EMG"},
+    )).json()
+    component_responses = []
+    for key, designation, metadata in (
+        ("housing", "Housing", {"grounded": True}),
+        ("shaft", "Shaft", {}),
+    ):
+        component_responses.append(await client.post(
+            f"/api/engineering/assemblies/{assembly['id']}/components",
+            json={
+                "instance_key": key,
+                "designation": designation,
+                "metadata": metadata,
+            },
+        ))
+    assert all(response.status_code == 201 for response in component_responses)
+    mate = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/mates",
+        json={
+            "mate_type": "fixed",
+            "first_instance_key": "housing",
+            "second_instance_key": "shaft",
+        },
+    )
+    assert mate.status_code == 201
+
+    first = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/model-graph"
+    )
+    assert first.status_code == 200
+    assert first.json()["revision"] == 0
+    assert first.json()["profile"] == "assembly"
+    assert first.json()["release_status"] == "blocked"
+
+    shaft_id = component_responses[1].json()["id"]
+    shaft = await db_session.get(EngineeringAssemblyComponent, uuid.UUID(shaft_id))
+    assert shaft is not None
+    shaft.quantity = 4
+    await db_session.commit()
+
+    second = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/model-graph"
+    )
+    assert second.status_code == 200
+    assert second.json()["revision"] == 1
+    active_quantities = [
+        assertion["value"]["value"]
+        for assertion in second.json()["graph"]["assertions"]
+        if assertion["state"] == "active"
+        and assertion["predicate"] == "component.quantity"
+    ]
+    assert sorted(active_quantities) == [1, 4]
+
+    replay = await client.post(
+        f"/api/engineering/assemblies/{assembly['id']}/model-graph"
+    )
+    assert replay.status_code == 200
+    assert replay.json()["revision"] == 1
 
 
 @pytest.mark.asyncio

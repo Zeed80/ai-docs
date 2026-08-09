@@ -119,6 +119,36 @@ async def get_latest_graph(graph_id: str, db: AsyncSession = Depends(get_db)) ->
     return _revision_response(row, graph=load_graph(row))
 
 
+@router.post("/graphs/{graph_id}/reader-runs", status_code=status.HTTP_202_ACCEPTED)
+async def start_reader_run(
+    graph_id: str,
+    target_id: str = Query(default="preview"),
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Queue the adaptive local reader against the latest immutable revision."""
+    require_permission(user, "engineering.revision_create")
+    row = await latest_graph_revision(db, graph_id)
+    if row is None:
+        raise HTTPException(404, "EngineeringModelGraph не найден")
+    graph = load_graph(row)
+    if not any(item.id == target_id for item in graph.build_targets):
+        raise HTTPException(404, "Build target не найден")
+    from app.tasks.engineering_model_reader import run_engineering_model_reader
+
+    task = run_engineering_model_reader.apply_async(
+        args=[graph_id, target_id],
+        queue="gpu",
+    )
+    return {
+        "task_id": task.id,
+        "graph_id": graph_id,
+        "base_revision": row.revision,
+        "base_sha256": row.canonical_sha256,
+        "target_id": target_id,
+    }
+
+
 @router.get("/revisions/{revision_id}")
 async def get_graph_revision(
     revision_id: uuid.UUID, db: AsyncSession = Depends(get_db)

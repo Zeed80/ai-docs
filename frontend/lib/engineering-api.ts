@@ -87,6 +87,12 @@ export type EngineeringModelGraphRevision = {
     evidence: Array<{ id: string; kind: string; source_region_id?: string | null; payload: Record<string, unknown> }>;
     hypothesis_sets: Array<{ id: string; option_ids: string[]; selected_option_id?: string | null }>;
     verification: { critical_unresolved_assertion_ids: string[]; issue_codes: string[] };
+    reader_manifest: {
+      max_wall_seconds: number; max_model_calls: number; call_timeout_seconds: number;
+      no_progress_pass_limit: number; calls_used: number; elapsed_seconds: number;
+      no_progress_passes: number; ordinary_attempts: Record<string, number>;
+      stop_reason?: string | null;
+    };
   };
 };
 
@@ -211,5 +217,14 @@ export const engineeringApi = {
     request<{ state: Record<string, unknown>; issues: Array<Record<string, unknown>> }>(
       `/api/engineering-model-graphs/revisions/${revisionId}/verify`,
       { method: "POST" },
+    ),
+  startModelReader: (graphId: string, targetId = "preview") =>
+    request<{ task_id: string; graph_id: string; base_revision: number; target_id: string }>(
+      `/api/engineering-model-graphs/graphs/${encodeURIComponent(graphId)}/reader-runs?target_id=${encodeURIComponent(targetId)}`,
+      { method: "POST" },
+    ),
+  getTaskStatus: (taskId: string) =>
+    request<{ task_id: string; status: string; result?: Record<string, unknown> | null }>(
+      `/api/tasks/${taskId}`,
     ),
 };

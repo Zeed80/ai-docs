@@ -31,6 +31,8 @@ export default function EngineeringModelGraphPanel({
   const [traces, setTraces] = useState<EngineeringTraceProposal[]>([]);
   const [selectedAssertionId, setSelectedAssertionId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [readerTaskId, setReaderTaskId] = useState<string | null>(null);
+  const [readerStatus, setReaderStatus] = useState<string | null>(null);
 
   const selected = graphs.find((item) => item.id === selectedId) ?? graphs[0] ?? null;
   const selectedGraphId = selected?.graph_id ?? null;
@@ -46,6 +48,27 @@ export default function EngineeringModelGraphPanel({
   }, [onError, projectId]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!readerTaskId) return;
+    const timer = window.setInterval(() => {
+      engineeringApi.getTaskStatus(readerTaskId).then(async (task) => {
+        setReaderStatus(task.status);
+        if (["SUCCESS", "FAILURE", "REVOKED"].includes(task.status)) {
+          window.clearInterval(timer);
+          setReaderTaskId(null);
+          setBusy(false);
+          if (task.status === "SUCCESS") await load();
+          else onError(`Reader завершился со статусом ${task.status}`);
+        }
+      }).catch((error) => {
+        window.clearInterval(timer);
+        setReaderTaskId(null);
+        setBusy(false);
+        onError(String(error));
+      });
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [load, onError, readerTaskId]);
   useEffect(() => {
     if (!selectedGraphId || !selectedRevisionId) {
       setPatches([]);
@@ -85,6 +108,19 @@ export default function EngineeringModelGraphPanel({
     }
   }
 
+  async function runReader() {
+    if (!selectedGraphId) return;
+    setBusy(true);
+    setReaderStatus("QUEUED");
+    try {
+      const task = await engineeringApi.startModelReader(selectedGraphId);
+      setReaderTaskId(task.task_id);
+    } catch (error) {
+      setBusy(false);
+      onError(String(error));
+    }
+  }
+
   return (
     <section className="border border-white/10">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
@@ -97,6 +133,9 @@ export default function EngineeringModelGraphPanel({
             <span className="text-zinc-400">r{selected.revision} · {selected.canonical_sha256.slice(0, 12)}</span>
             <button disabled={busy} onClick={() => void verify()} className="text-sky-300 disabled:text-zinc-600">
               Проверить 12 уровней
+            </button>
+            <button disabled={busy} onClick={() => void runReader()} className="text-violet-300 disabled:text-zinc-600">
+              Адаптивно дочитать
             </button>
           </div>
         )}
@@ -114,6 +153,11 @@ export default function EngineeringModelGraphPanel({
             <Status label="Выпуск" value={selected.release_status} danger={selected.release_status === "blocked"} />
             <span className="rounded bg-white/5 px-2 py-1 text-zinc-400">
               {selected.graph.nodes.length} узлов · {selected.graph.edges.length} связей
+            </span>
+            <span className="rounded bg-white/5 px-2 py-1 text-zinc-400">
+              Reader: {selected.graph.reader_manifest.calls_used}/{selected.graph.reader_manifest.max_model_calls}
+              {selected.graph.reader_manifest.stop_reason ? ` · ${selected.graph.reader_manifest.stop_reason}` : ""}
+              {readerStatus ? ` · ${readerStatus}` : ""}
             </span>
           </div>
 

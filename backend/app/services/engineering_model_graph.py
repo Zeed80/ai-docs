@@ -182,6 +182,7 @@ async def persist_feature_tree_revision(
     pass_id: str,
     idempotency_key: str,
     source_sha256: str | None = None,
+    source_uri: str | None = None,
 ) -> EngineeringGraphRevision:
     """Persist an editor/retry feature tree strictly through ``GraphPatch``.
 
@@ -201,6 +202,7 @@ async def persist_feature_tree_revision(
             candidate,
             graph_id=graph_id,
             source_sha256=source_sha256,
+            source_uri=source_uri,
         )
         latest = await persist_graph_revision(
             db,

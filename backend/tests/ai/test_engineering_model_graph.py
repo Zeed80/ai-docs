@@ -273,6 +273,23 @@ def test_legacy_spec_is_only_low_assurance_compatibility_view():
     assert all(item.origin == "derived" for item in graph.assertions)
 
 
+def test_legacy_spec_links_unknowns_to_normalized_source_without_trace_permission():
+    graph = legacy_spec_as_low_assurance(
+        {"kind": "shaft", "diameter_mm": None},
+        graph_id="legacy:source",
+        source_sha256="a" * 64,
+        source_uri="image-gen/test/normalized.png",
+    )
+
+    assert graph.sources[0].uri == "image-gen/test/normalized.png"
+    assert graph.sources[0].media_type == "image/png"
+    evidence = graph.evidence[0]
+    assert evidence.payload["fallback"] is True
+    unknown = next(item for item in graph.assertions if item.value.kind == "unknown")
+    assert unknown.evidence_ids == [evidence.id]
+    assert unknown.impacts == ["base_topology"]
+
+
 def test_spec_candidate_round_trips_through_sealed_graph_before_kernel():
     candidate = FeatureTreeCandidate(
         features=[Feature3D(

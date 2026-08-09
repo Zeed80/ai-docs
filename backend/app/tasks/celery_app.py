@@ -47,6 +47,7 @@ celery_app.conf.update(
         "app.tasks.embedding.embed_document": {"queue": "gpu"},
         # name= on @celery_app.task in drawing_analysis.py — VLM, GPU-bound
         "drawing_analysis.*": {"queue": "gpu"},
+        "engineering_model_reader.*": {"queue": "gpu"},
         # ComfyUI studio jobs are GPU/VRAM-bound too. They get their own logical
         # queue for product-level queueing, but the single GPU worker consumes it
         # alongside gpu/gpu_priority so heavy image work never lands on the
@@ -191,3 +192,4 @@ from app.tasks import graph_analytics as _graph_analytics  # noqa: F401
 from app.tasks import image_generation as _image_generation  # noqa: F401
 from app.tasks import lora_training as _lora_training  # noqa: F401
 from app.tasks import cad_trace as _cad_trace  # noqa: F401
+from app.tasks import engineering_model_reader as _engineering_model_reader  # noqa: F401

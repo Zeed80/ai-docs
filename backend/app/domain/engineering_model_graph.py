@@ -211,6 +211,7 @@ class ReaderManifest(StrictModel):
     calls_used: int = Field(default=0, ge=0)
     elapsed_seconds: float = Field(default=0.0, ge=0.0)
     no_progress_passes: int = Field(default=0, ge=0)
+    ordinary_attempts: dict[str, int] = Field(default_factory=dict)
     stop_reason: str | None = None
 
 
@@ -327,6 +328,10 @@ class GraphPatch(StrictModel):
     retract_assertion_ids: list[str] = Field(default_factory=list)
     resolved_question_ids: list[str] = Field(default_factory=list)
     remaining_contradictions: list[str] = Field(default_factory=list)
+    reader_call_count: int = Field(default=0, ge=0, le=4)
+    reader_call_elapsed_seconds: float = Field(default=0.0, ge=0.0)
+    reader_attempt_assertion_ids: list[str] = Field(default_factory=list)
+    reader_stop_reason: str | None = None
 
 
 class PatchMergeError(ValueError):
@@ -355,7 +360,18 @@ def apply_graph_patch(
         item.assurance in _FORBIDDEN_MODEL_ASSURANCE for item in patch.add_assertions
     ):
         errors.append("producer_cannot_validate_or_approve")
+    if patch.reader_stop_reason and patch.producer != "system":
+        errors.append("only_system_can_stop_reader")
+    if patch.reader_call_count and patch.producer not in {*_MODEL_PRODUCERS, "system"}:
+        errors.append("reader_runtime_metadata_requires_reader_or_system")
+    if not patch.reader_call_count and (
+        patch.reader_call_elapsed_seconds or patch.reader_attempt_assertion_ids
+    ):
+        errors.append("reader_runtime_metadata_requires_call")
     current = {item.id: item for item in graph.assertions}
+    unknown_attempts = sorted(set(patch.reader_attempt_assertion_ids) - current.keys())
+    if unknown_attempts:
+        errors.append("unknown_reader_attempts:" + ",".join(unknown_attempts))
     touched = set(patch.supersede_assertion_ids) | set(patch.retract_assertion_ids)
     missing = sorted(touched - current.keys())
     if missing:
@@ -383,6 +399,48 @@ def apply_graph_patch(
             state = "retracted"
         assertions.append(item.model_copy(update={"state": state}))
     assertions.extend(patch.add_assertions)
+    reader_manifest = graph.reader_manifest
+    if patch.reader_call_count:
+        supported_evidence_ids = {
+            evidence_id
+            for assertion in patch.add_assertions
+            for evidence_id in assertion.evidence_ids
+        }
+        contradicted = {
+            item.id for item in graph.assertions if item.assurance == "contradicted"
+        }
+        progress = ReaderProgress(
+            # Keep every raw response in the journal, but do not call a repeated
+            # unreadable answer progress unless a new assertion actually uses it.
+            new_evidence=sum(
+                item.id in supported_evidence_ids for item in patch.add_evidence
+            ),
+            contradictions_closed=len(
+                contradicted
+                & (
+                    set(patch.supersede_assertion_ids)
+                    | set(patch.retract_assertion_ids)
+                )
+            ),
+            validated_assertions_added=sum(
+                item.assurance in _FORBIDDEN_MODEL_ASSURANCE
+                for item in patch.add_assertions
+            ),
+        )
+        attempts = dict(reader_manifest.ordinary_attempts)
+        for assertion_id in patch.reader_attempt_assertion_ids:
+            attempts[assertion_id] = attempts.get(assertion_id, 0) + 1
+        reader_manifest = next_reader_manifest(
+            reader_manifest,
+            progress,
+            call_elapsed_seconds=patch.reader_call_elapsed_seconds,
+            call_count=patch.reader_call_count,
+        ).model_copy(update={"ordinary_attempts": attempts})
+    if patch.reader_stop_reason:
+        reader_manifest = reader_manifest.model_copy(
+            update={"stop_reason": patch.reader_stop_reason}
+        )
+
     try:
         merged = graph.model_copy(update={
             "revision": graph.revision + 1,
@@ -394,6 +452,7 @@ def apply_graph_patch(
             "evidence": [*graph.evidence, *patch.add_evidence],
             "hypothesis_options": [*graph.hypothesis_options, *patch.add_hypothesis_options],
             "hypothesis_sets": [*graph.hypothesis_sets, *patch.add_hypothesis_sets],
+            "reader_manifest": reader_manifest,
         })
         merged = EngineeringModelGraph.model_validate(merged.model_dump(mode="json"))
     except ValueError as exc:
@@ -483,6 +542,8 @@ class DeterministicTraceChecks(StrictModel):
             self.connected, self.closed, self.no_self_intersections,
             self.no_dangling_ends, self.anchors_satisfied,
             self.dimensions_satisfied, self.forbidden_geometry_clear,
+            self.pixel_precision >= 0.75,
+            self.pixel_recall >= 0.70,
             not self.critical_impact_detected,
         ))
 
@@ -642,6 +703,7 @@ def next_reader_manifest(
     progress: ReaderProgress,
     *,
     call_elapsed_seconds: float,
+    call_count: int = 1,
 ) -> ReaderManifest:
     useful = bool(
         progress.new_evidence
@@ -649,7 +711,7 @@ def next_reader_manifest(
         or progress.validated_assertions_added
     )
     updated = manifest.model_copy(update={
-        "calls_used": manifest.calls_used + 1,
+        "calls_used": manifest.calls_used + call_count,
         "elapsed_seconds": manifest.elapsed_seconds + call_elapsed_seconds,
         "no_progress_passes": 0 if useful else manifest.no_progress_passes + 1,
     })
@@ -680,7 +742,11 @@ def plan_next_reader_pass(
     """Recalculate the unresolved frontier and schedule one narrow pass."""
     if graph.reader_manifest.stop_reason:
         return ReaderPassPlan(kind="stop", reason=graph.reader_manifest.stop_reason)
-    attempts = ordinary_attempts or {}
+    attempts = (
+        ordinary_attempts
+        if ordinary_attempts is not None
+        else graph.reader_manifest.ordinary_attempts
+    )
     critical = critical_assertion_ids(graph, target_id)
     unresolved = [
         item for item in graph.assertions
@@ -703,8 +769,11 @@ def plan_next_reader_pass(
             reason="unresolved_observation_frontier",
         )
     traceable = sorted(
-        item.id for item in unresolved
-        if item.id not in critical and attempts.get(item.id, 0) > 0
+        item.id
+        for item in unresolved
+        if item.id not in critical
+        and attempts.get(item.id, 0) > 0
+        and is_hybrid_trace_candidate(graph, item)
     )
     if traceable:
         region_ids = sorted({
@@ -717,7 +786,34 @@ def plan_next_reader_pass(
             kind="hybrid_trace", assertion_ids=traceable[:1], source_region_ids=region_ids[:1],
             reason="non_critical_reading_exhausted",
         )
+    if unresolved:
+        return ReaderPassPlan(kind="stop", reason="unresolved_non_traceable")
     return ReaderPassPlan(kind="stop", reason="frontier_resolved")
+
+
+def is_hybrid_trace_candidate(
+    graph: EngineeringModelGraph,
+    assertion: Assertion,
+) -> bool:
+    """Allow tracing only for localized visual shape assertions declared by the adapter."""
+    adapter = DOMAIN_ADAPTERS.get(graph.profile)
+    if adapter is None or not adapter.hybrid_trace_cases:
+        return False
+    predicate = assertion.predicate.lower()
+    shape_tokens = ("contour", "profile", "shape", "outline", "fillet", "decor")
+    if not any(token in predicate for token in shape_tokens):
+        return False
+    evidence = {item.id: item for item in graph.evidence}
+    regions = [
+        evidence[evidence_id]
+        for evidence_id in assertion.evidence_ids
+        if evidence_id in evidence
+        and evidence[evidence_id].kind == "raster_region"
+        and evidence[evidence_id].source_region_id
+    ]
+    return bool(regions) and all(
+        not bool(item.payload.get("fallback")) for item in regions
+    )
 
 
 def rank_trace_proposals(

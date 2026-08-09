@@ -354,6 +354,9 @@ async def validate_assembly(assembly_id: uuid.UUID, db: AsyncSession = Depends(g
     keys = {component.instance_key for component in components}
     mates = list((await db.execute(select(EngineeringAssemblyMate).where(EngineeringAssemblyMate.engineering_assembly_id == assembly_id))).scalars())
     invalid = [str(mate.id) for mate in mates if mate.first_instance_key not in keys or mate.second_instance_key not in keys or mate.first_instance_key == mate.second_instance_key]
+    from app.domain.assembly import analyze_assembly_dof
+
+    dof = analyze_assembly_dof(components, mates)
     return EngineeringAssemblyValidation(
         assembly_id=assembly_id,
         collisions=collisions,
@@ -361,7 +364,95 @@ async def validate_assembly(assembly_id: uuid.UUID, db: AsyncSession = Depends(g
         exact_collisions=exact_collisions,
         exact_checked=sorted(exact_key_set),
         degraded=degraded,
+        **dof.model_dump(exclude={"invalid_mates"}),
     )
+
+
+@router.post("/assemblies/{assembly_id}/model-graph")
+async def sync_assembly_model_graph(
+    assembly_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """Project an editable assembly into one immutable EMG revision chain."""
+    require_permission(user, "engineering.revision_create")
+    assembly = await db.get(EngineeringAssembly, assembly_id)
+    if not assembly:
+        raise HTTPException(404, "Сборка не найдена")
+    revision = await db.get(EngineeringRevision, assembly.engineering_revision_id)
+    if revision is None:
+        raise HTTPException(409, "Инженерная ревизия сборки не найдена")
+    components = list((await db.execute(
+        select(EngineeringAssemblyComponent).where(
+            EngineeringAssemblyComponent.engineering_assembly_id == assembly_id
+        )
+    )).scalars())
+    mates = list((await db.execute(
+        select(EngineeringAssemblyMate).where(
+            EngineeringAssemblyMate.engineering_assembly_id == assembly_id
+        )
+    )).scalars())
+    validation = await validate_assembly(assembly_id, db)
+
+    from app.ai.assembly_emg import assembly_as_graph, assembly_revision_patch
+    from app.services.engineering_model_graph import (
+        create_initial_graph,
+        latest_graph_revision,
+        load_graph,
+        merge_and_persist_patch,
+    )
+
+    graph_id = f"assembly:{assembly_id}"
+    desired = assembly_as_graph(
+        graph_id=graph_id,
+        name=assembly.name,
+        designation=assembly.designation,
+        components=components,
+        mates=mates,
+        dof=validation,
+        collisions=validation.collisions,
+        exact_checked=validation.exact_checked,
+        interference_degraded=validation.degraded,
+    )
+    latest = await latest_graph_revision(db, graph_id, lock=True)
+    if latest is None:
+        row = await create_initial_graph(
+            db,
+            desired,
+            engineering_project_id=revision.engineering_project_id,
+            engineering_revision_id=revision.id,
+        )
+        graph = desired
+    else:
+        current = load_graph(latest)
+        patch = assembly_revision_patch(current, desired)
+        if patch is None:
+            row, graph = latest, current
+        else:
+            row, errors = await merge_and_persist_patch(
+                db,
+                patch,
+                expected_graph_id=graph_id,
+            )
+            if row is None:
+                await db.rollback()
+                raise HTTPException(409, "GraphPatch отклонён: " + ", ".join(errors))
+            graph = load_graph(row)
+    await db.commit()
+    return {
+        "id": str(row.id),
+        "engineering_project_id": str(row.engineering_project_id),
+        "engineering_revision_id": str(row.engineering_revision_id),
+        "graph_id": row.graph_id,
+        "revision": row.revision,
+        "parent_revision": row.parent_revision,
+        "canonical_sha256": row.canonical_sha256,
+        "profile": row.profile,
+        "comprehension_status": row.comprehension_status,
+        "build_status": row.build_status,
+        "release_status": row.release_status,
+        "graph": graph.model_dump(mode="json"),
+    }
 
 
 @router.get("/revisions/{revision_id}/validation-runs", response_model=list[EngineeringValidationRunOut])

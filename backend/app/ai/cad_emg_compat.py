@@ -135,12 +135,14 @@ def legacy_spec_as_low_assurance(
     *,
     graph_id: str,
     source_sha256: str | None = None,
+    source_uri: str | None = None,
 ) -> EngineeringModelGraph:
     payload = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else dict(spec)
     digest = source_sha256 or hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode()
     ).hexdigest()
     assertions: list[Assertion] = []
+    whole_sheet_evidence_id = "evidence:whole-sheet" if source_uri else None
 
     def collect(value: Any, path: str) -> None:
         if isinstance(value, dict):
@@ -167,22 +169,64 @@ def legacy_spec_as_low_assurance(
                 value=UnknownValue(kind="unknown", reason="missing in legacy spec"),
                 origin="derived",
                 assurance="proposed",
+                evidence_ids=(
+                    [whole_sheet_evidence_id] if whole_sheet_evidence_id else []
+                ),
+                impacts=["base_topology"],
             ))
 
     collect(payload, "")
+    nodes = [
+        GraphNode(id="document-set:root", type="DocumentSet"),
+        GraphNode(
+            id="product:legacy-spec",
+            type="Product",
+            name="Legacy EngineeringDrawingSpec",
+        ),
+    ]
+    edges = [GraphEdge(
+        id="contains:legacy-product",
+        type="contains",
+        source_id="document-set:root",
+        target_id="product:legacy-spec",
+    )]
+    evidence: list[Evidence] = []
+    if source_uri:
+        nodes.append(GraphNode(
+            id="region:whole-sheet",
+            type="SourceRegion",
+            name="Normalized whole sheet fallback",
+        ))
+        edges.append(GraphEdge(
+            id="located:whole-sheet",
+            type="located_in",
+            source_id="region:whole-sheet",
+            target_id="document-set:root",
+        ))
+        evidence.append(Evidence(
+            id="evidence:whole-sheet",
+            kind="raster_region",
+            source_id="source:legacy-spec",
+            source_region_id="region:whole-sheet",
+            payload={
+                "bbox_normalized": [0.0, 0.0, 1.0, 1.0],
+                "fallback": True,
+            },
+            sha256=digest,
+        ))
     return EngineeringModelGraph(
         graph_id=graph_id,
         profile="mechanical",
-        sources=[GraphSource(id="source:legacy-spec", sha256=digest, media_type="application/json")],
-        nodes=[
-            GraphNode(id="document-set:root", type="DocumentSet"),
-            GraphNode(id="product:legacy-spec", type="Product", name="Legacy EngineeringDrawingSpec"),
-        ],
-        edges=[GraphEdge(
-            id="contains:legacy-product", type="contains",
-            source_id="document-set:root", target_id="product:legacy-spec",
+        sources=[GraphSource(
+            id="source:legacy-spec",
+            uri=source_uri,
+            sha256=digest,
+            media_type="image/png" if source_uri else "application/json",
         )],
+        nodes=nodes,
+        edges=edges,
         assertions=assertions,
+        evidence=evidence,
         build_targets=[BuildTarget(id="preview", kind="preview_brep", root_node_ids=["product:legacy-spec"])],
     ).sealed()
 
@@ -249,6 +293,7 @@ def spec_feature_tree_as_graph(
     *,
     graph_id: str,
     source_sha256: str | None = None,
+    source_uri: str | None = None,
 ) -> EngineeringModelGraph:
     """Create the initial EMG revision for the legacy mechanical reader.
 
@@ -257,7 +302,10 @@ def spec_feature_tree_as_graph(
     :func:`feature_tree_from_graph`.
     """
     graph = legacy_spec_as_low_assurance(
-        spec, graph_id=graph_id, source_sha256=source_sha256
+        spec,
+        graph_id=graph_id,
+        source_sha256=source_sha256,
+        source_uri=source_uri,
     )
     nodes = list(graph.nodes)
     edges = list(graph.edges)
@@ -339,6 +387,7 @@ def spec_feature_tree_as_graph(
             value=UnknownValue(kind="unknown", reason=str(item)),
             origin="derived",
             assurance="proposed",
+            evidence_ids=["evidence:whole-sheet"] if source_uri else [],
             impacts=["base_topology"],
             hypothesis_id="hypothesis:legacy-reader",
         ))
