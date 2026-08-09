@@ -519,6 +519,111 @@ def critical_assertion_ids(graph: EngineeringModelGraph, target_id: str) -> set[
     return result
 
 
+class AssertionImpactReport(StrictModel):
+    """Target-specific rebuild impact for one immutable assertion."""
+
+    assertion_id: str
+    target_id: str
+    subject_node_id: str
+    critical_for_target: bool
+    classification: Literal["critical_for_target", "non_critical_for_target"]
+    declared_impacts: list[Impact]
+    direct_dependency_node_ids: list[str]
+    affected_node_ids: list[str]
+    affected_build_operation_ids: list[str]
+    affected_artifact_ids: list[str]
+    affected_topology_element_ids: list[str]
+    evidence_ids: list[str]
+    superseded_by_assertion_ids: list[str]
+    dependency_paths: dict[str, list[str]]
+
+
+def assertion_impact_report(
+    graph: EngineeringModelGraph,
+    assertion_id: str,
+    target_id: str,
+) -> AssertionImpactReport:
+    """Trace deterministic downstream rebuild impact without mutating the graph.
+
+    Edge directions describe graph facts, not always influence. For example,
+    ``operation depends_on feature`` means a feature edit affects the operation,
+    while ``artifact generated_by operation`` means an operation edit affects
+    the artifact. Symmetric engineering relations are traversed both ways.
+    """
+    assertion = next((item for item in graph.assertions if item.id == assertion_id), None)
+    if assertion is None:
+        raise KeyError(assertion_id)
+    critical = critical_assertion_ids(graph, target_id)
+    node_by_id = {item.id: item for item in graph.nodes}
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    symmetric = {"same_object_across_views", "mates_with", "connects_to"}
+    forward = {
+        "contains", "represented_by", "defines", "constrains", "applies_to",
+        "opens_in", "maps_to_topology",
+    }
+    reverse = {
+        "part_of", "instance_of", "located_in", "depends_on", "generated_by",
+    }
+    for edge in graph.edges:
+        if edge.type in symmetric:
+            adjacency[edge.source_id].add(edge.target_id)
+            adjacency[edge.target_id].add(edge.source_id)
+        elif edge.type in forward:
+            adjacency[edge.source_id].add(edge.target_id)
+        elif edge.type in reverse:
+            adjacency[edge.target_id].add(edge.source_id)
+
+    subject_id = assertion.subject_id
+    parents: dict[str, str | None] = {subject_id: None}
+    queue = deque([subject_id])
+    while queue:
+        current = queue.popleft()
+        for next_id in sorted(adjacency[current]):
+            if next_id in parents:
+                continue
+            parents[next_id] = current
+            queue.append(next_id)
+
+    affected_ids = sorted(parents)
+    paths: dict[str, list[str]] = {}
+    for node_id in affected_ids:
+        path: list[str] = []
+        current: str | None = node_id
+        while current is not None:
+            path.append(current)
+            current = parents[current]
+        paths[node_id] = list(reversed(path))
+
+    def affected_of_type(node_type: NodeType) -> list[str]:
+        return sorted(
+            node_id for node_id in affected_ids
+            if node_by_id[node_id].type == node_type
+        )
+
+    is_critical = assertion_id in critical
+    return AssertionImpactReport(
+        assertion_id=assertion_id,
+        target_id=target_id,
+        subject_node_id=subject_id,
+        critical_for_target=is_critical,
+        classification=(
+            "critical_for_target" if is_critical else "non_critical_for_target"
+        ),
+        declared_impacts=assertion.impacts,
+        direct_dependency_node_ids=sorted(adjacency[subject_id]),
+        affected_node_ids=affected_ids,
+        affected_build_operation_ids=affected_of_type("BuildOperation"),
+        affected_artifact_ids=affected_of_type("Artifact"),
+        affected_topology_element_ids=affected_of_type("TopologyElement"),
+        evidence_ids=assertion.evidence_ids,
+        superseded_by_assertion_ids=sorted(
+            item.id for item in graph.assertions
+            if item.supersedes_assertion_id == assertion_id
+        ),
+        dependency_paths=paths,
+    )
+
+
 class TracePrimitive(StrictModel):
     kind: Literal["segment", "arc", "circle", "polyline", "spline"]
     parameters: dict[str, float | int | list[float]]

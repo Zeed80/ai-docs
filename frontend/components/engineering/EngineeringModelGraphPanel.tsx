@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   engineeringApi,
+  EngineeringAssertionImpact,
   EngineeringGraphPatch,
   EngineeringModelGraphRevision,
   EngineeringTraceProposal,
@@ -18,6 +19,15 @@ const ORIGIN: Record<string, string> = {
   human: "Инженер",
 };
 
+const ASSURANCE: Record<string, string> = {
+  proposed: "Предложено",
+  observed: "Наблюдалось",
+  corroborated: "Подтверждено",
+  constraint_validated: "Проверено ограничениями",
+  human_approved: "Принято инженером",
+  contradicted: "Противоречит данным",
+};
+
 export default function EngineeringModelGraphPanel({
   projectId,
   onError,
@@ -30,6 +40,10 @@ export default function EngineeringModelGraphPanel({
   const [patches, setPatches] = useState<EngineeringGraphPatch[]>([]);
   const [traces, setTraces] = useState<EngineeringTraceProposal[]>([]);
   const [selectedAssertionId, setSelectedAssertionId] = useState<string | null>(null);
+  const [targetId, setTargetId] = useState<string>("");
+  const [impact, setImpact] = useState<EngineeringAssertionImpact | null>(null);
+  const [impactLoading, setImpactLoading] = useState(false);
+  const [impactError, setImpactError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [readerTaskId, setReaderTaskId] = useState<string | null>(null);
   const [readerStatus, setReaderStatus] = useState<string | null>(null);
@@ -37,6 +51,7 @@ export default function EngineeringModelGraphPanel({
   const selected = graphs.find((item) => item.id === selectedId) ?? graphs[0] ?? null;
   const selectedGraphId = selected?.graph_id ?? null;
   const selectedRevisionId = selected?.id ?? null;
+  const targets = useMemo(() => selected?.graph.build_targets ?? [], [selected]);
   const load = useCallback(async () => {
     try {
       const rows = await engineeringApi.listModelGraphs(projectId);
@@ -84,16 +99,43 @@ export default function EngineeringModelGraphPanel({
     }).catch((error) => onError(String(error)));
   }, [onError, selectedGraphId, selectedRevisionId]);
 
+  useEffect(() => {
+    const preferred = targets.find((item) => item.id === "production") ?? targets[0];
+    setTargetId((current) => targets.some((item) => item.id === current) ? current : preferred?.id ?? "");
+    setSelectedAssertionId((current) => (
+      selected?.graph.assertions.some((item) => item.id === current)
+        ? current
+        : selected?.graph.assertions.find((item) => item.state === "active")?.id ?? null
+    ));
+  }, [selected, targets]);
+
   const assertion = selected?.graph.assertions.find((item) => item.id === selectedAssertionId) ?? null;
   const selectedEvidence = selected?.graph.evidence.filter(
     (item) => assertion?.evidence_ids.includes(item.id),
   ) ?? [];
-  const dependentNodes = useMemo(() => {
-    if (!selected || !assertion) return [];
-    return selected.graph.edges
-      .filter((edge) => edge.source_id === assertion.subject_id || edge.target_id === assertion.subject_id)
-      .map((edge) => edge.source_id === assertion.subject_id ? edge.target_id : edge.source_id);
-  }, [assertion, selected]);
+  const nodeById = useMemo(() => new Map(
+    selected?.graph.nodes.map((item) => [item.id, item]) ?? [],
+  ), [selected]);
+
+  useEffect(() => {
+    if (!selectedRevisionId || !selectedAssertionId || !targetId) {
+      setImpact(null);
+      return;
+    }
+    let active = true;
+    setImpactLoading(true);
+    setImpactError(null);
+    engineeringApi.getAssertionImpact(selectedRevisionId, selectedAssertionId, targetId)
+      .then((result) => { if (active) setImpact(result); })
+      .catch((error) => {
+        if (active) {
+          setImpact(null);
+          setImpactError(String(error));
+        }
+      })
+      .finally(() => { if (active) setImpactLoading(false); });
+    return () => { active = false; };
+  }, [selectedAssertionId, selectedRevisionId, targetId]);
 
   async function verify() {
     if (!selected) return;
@@ -148,6 +190,14 @@ export default function EngineeringModelGraphPanel({
             <select value={selected.id} onChange={(event) => setSelectedId(event.target.value)} className="rounded border border-white/10 bg-zinc-900 px-2 py-1 text-zinc-200">
               {graphs.map((item) => <option key={item.id} value={item.id}>{item.graph_id} · r{item.revision}</option>)}
             </select>
+            {!!targets.length && (
+              <label className="flex items-center gap-2 rounded border border-white/10 bg-zinc-900 px-2 py-1 text-zinc-400">
+                Target
+                <select value={targetId} onChange={(event) => setTargetId(event.target.value)} className="bg-transparent text-zinc-200 outline-none">
+                  {targets.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.kind}</option>)}
+                </select>
+              </label>
+            )}
             <Status label="Понимание" value={selected.comprehension_status} />
             <Status label="Построение" value={selected.build_status} />
             <Status label="Выпуск" value={selected.release_status} danger={selected.release_status === "blocked"} />
@@ -169,8 +219,8 @@ export default function EngineeringModelGraphPanel({
               {selected.graph.assertions.map((item) => (
                 <button key={item.id} onClick={() => setSelectedAssertionId(item.id)} className={`grid w-full grid-cols-[minmax(120px,1fr)_120px_120px] gap-2 border-b border-white/5 px-3 py-2 text-left text-xs hover:bg-white/5 ${item.id === selectedAssertionId ? "bg-sky-500/10" : ""}`}>
                   <span className="truncate text-zinc-200">{item.predicate}</span>
-                  <span className={item.origin === "assumed" ? "text-amber-300" : item.origin === "traced" ? "text-violet-300" : "text-zinc-400"}>{ORIGIN[item.origin] || item.origin}</span>
-                  <span className="truncate text-zinc-400">{item.assurance}</span>
+                  <OriginBadge value={item.origin} />
+                  <AssuranceBadge value={item.assurance} />
                 </button>
               ))}
             </div>
@@ -178,10 +228,30 @@ export default function EngineeringModelGraphPanel({
               {assertion ? (
                 <div className="space-y-2">
                   <p className="font-mono text-zinc-200">{assertion.id}</p>
-                  <p>Объект: {assertion.subject_id}</p>
+                  <p>Объект: {nodeLabel(assertion.subject_id, nodeById)}</p>
+                  <div className="flex flex-wrap gap-2"><OriginBadge value={assertion.origin} /><AssuranceBadge value={assertion.assurance} /><span>confidence {Math.round(assertion.confidence * 100)}%</span></div>
                   <pre className="max-h-24 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-[11px]">{JSON.stringify(assertion.value, null, 2)}</pre>
                   <p>Влияние: {assertion.impacts.join(", ") || "не заявлено"}</p>
-                  <p>Будут пересобраны: {dependentNodes.join(", ") || "нет прямых зависимостей"}</p>
+                  {impactLoading && <p className="text-sky-300">Рассчитываю dependency impact…</p>}
+                  {impactError && <p className="text-red-300">Impact report недоступен: {impactError}</p>}
+                  {impact && (
+                    <div className="space-y-2 border-l-2 border-white/10 pl-3">
+                      <p className={impact.critical_for_target ? "text-red-300" : "text-emerald-300"}>
+                        {impact.critical_for_target ? "Критично" : "Некритично"} для target {impact.target_id}
+                      </p>
+                      <ImpactLine label="Операции" ids={impact.affected_build_operation_ids} nodes={nodeById} />
+                      <ImpactLine label="Артефакты" ids={impact.affected_artifact_ids} nodes={nodeById} />
+                      <ImpactLine label="Топология" ids={impact.affected_topology_element_ids} nodes={nodeById} />
+                      <details>
+                        <summary className="cursor-pointer text-zinc-300">Цепочки пересборки ({Object.keys(impact.dependency_paths).length})</summary>
+                        <div className="mt-2 max-h-32 space-y-1 overflow-auto font-mono text-[10px] text-zinc-500">
+                          {Object.entries(impact.dependency_paths).map(([id, path]) => (
+                            <p key={id}>{path.join(" → ")}</p>
+                          ))}
+                        </div>
+                      </details>
+                    </div>
+                  )}
                   <p>Evidence: {assertion.evidence_ids.join(", ") || "нет"}</p>
                   {selectedEvidence.map((item) => (
                     <pre key={item.id} className="max-h-32 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-[11px]">
@@ -208,6 +278,7 @@ export default function EngineeringModelGraphPanel({
                 <details key={item.id} className="border-b border-white/5 px-3 py-2 text-xs">
                   <summary className="text-violet-300">#{item.rank} {item.source_region_id} · {item.status} · {item.score ?? "—"}</summary>
                   <p className="mt-2 text-zinc-400">Visual verifier: {item.visual_verifications.length} запуск(ов)</p>
+                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-500">{JSON.stringify(item.payload, null, 2)}</pre>
                   <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-500">{JSON.stringify(item.visual_verifications, null, 2)}</pre>
                 </details>
               ))}
@@ -221,6 +292,35 @@ export default function EngineeringModelGraphPanel({
 
 function Status({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
   return <span className={`rounded px-2 py-1 ${danger ? "bg-red-500/10 text-red-300" : "bg-white/5 text-zinc-300"}`}>{label}: {value}</span>;
+}
+
+function OriginBadge({ value }: { value: string }) {
+  const style = value === "assumed"
+    ? "bg-amber-500/10 text-amber-300"
+    : value === "traced"
+      ? "bg-violet-500/10 text-violet-300"
+      : value === "observed" || value === "human"
+        ? "bg-emerald-500/10 text-emerald-300"
+        : "bg-white/5 text-zinc-400";
+  return <span className={`w-fit rounded px-1.5 py-0.5 ${style}`}>{ORIGIN[value] || value}</span>;
+}
+
+function AssuranceBadge({ value }: { value: string }) {
+  const style = value === "human_approved" || value === "constraint_validated"
+    ? "text-emerald-300"
+    : value === "contradicted"
+      ? "text-red-300"
+      : "text-zinc-400";
+  return <span className={`truncate ${style}`}>{ASSURANCE[value] || value}</span>;
+}
+
+function nodeLabel(id: string, nodes: Map<string, { id: string; type: string; name?: string | null }>) {
+  const node = nodes.get(id);
+  return node ? `${node.name || node.id} [${node.type}]` : id;
+}
+
+function ImpactLine({ label, ids, nodes }: { label: string; ids: string[]; nodes: Map<string, { id: string; type: string; name?: string | null }> }) {
+  return <p>{label}: {ids.map((id) => nodeLabel(id, nodes)).join(", ") || "не затронуты"}</p>;
 }
 
 function Log({ title, empty, children }: { title: string; empty: string; children: React.ReactNode }) {

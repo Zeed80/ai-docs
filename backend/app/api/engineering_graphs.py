@@ -24,6 +24,7 @@ from app.domain.engineering_model_graph import (
     TraceAdmission,
     TraceProposal,
     VisualVerification,
+    assertion_impact_report,
     compile_build_plan,
     critical_assertion_ids,
     evaluate_trace_admission,
@@ -331,6 +332,29 @@ async def get_build_plan(
         return compile_build_plan(load_graph(row), target_id).model_dump(mode="json")
     except KeyError as exc:
         raise HTTPException(404, "Build target не найден") from exc
+
+
+@router.get("/revisions/{revision_id}/assertions/{assertion_id}/impact")
+async def get_assertion_impact(
+    revision_id: uuid.UUID,
+    assertion_id: str,
+    target_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    row = await db.get(EngineeringGraphRevision, revision_id)
+    if not row:
+        raise HTTPException(404, "Ревизия EngineeringModelGraph не найдена")
+    try:
+        return assertion_impact_report(
+            load_graph(row), assertion_id, target_id
+        ).model_dump(mode="json")
+    except KeyError as exc:
+        missing = exc.args[0] if exc.args else None
+        detail = (
+            "Build target не найден" if missing == target_id
+            else "Assertion не найден"
+        )
+        raise HTTPException(404, detail) from exc
 
 
 @router.post("/trace/evaluate", response_model=TraceAdmission)

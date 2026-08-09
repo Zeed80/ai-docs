@@ -86,6 +86,10 @@ export type EngineeringModelGraphRevision = {
     }>;
     evidence: Array<{ id: string; kind: string; source_region_id?: string | null; payload: Record<string, unknown> }>;
     hypothesis_sets: Array<{ id: string; option_ids: string[]; selected_option_id?: string | null }>;
+    build_targets: Array<{
+      id: string; kind: string; root_node_ids: string[]; requirement_ids: string[];
+      critical_impacts: string[]; mass_tolerance_percent: number;
+    }>;
     verification: { critical_unresolved_assertion_ids: string[]; issue_codes: string[] };
     reader_manifest: {
       max_wall_seconds: number; max_model_calls: number; call_timeout_seconds: number;
@@ -94,6 +98,23 @@ export type EngineeringModelGraphRevision = {
       stop_reason?: string | null;
     };
   };
+};
+
+export type EngineeringAssertionImpact = {
+  assertion_id: string;
+  target_id: string;
+  subject_node_id: string;
+  critical_for_target: boolean;
+  classification: "critical_for_target" | "non_critical_for_target";
+  declared_impacts: string[];
+  direct_dependency_node_ids: string[];
+  affected_node_ids: string[];
+  affected_build_operation_ids: string[];
+  affected_artifact_ids: string[];
+  affected_topology_element_ids: string[];
+  evidence_ids: string[];
+  superseded_by_assertion_ids: string[];
+  dependency_paths: Record<string, string[]>;
 };
 
 export type EngineeringGraphPatch = {
@@ -212,6 +233,10 @@ export const engineeringApi = {
   listTraceProposals: (revisionId: string) =>
     request<EngineeringTraceProposal[]>(
       `/api/engineering-model-graphs/revisions/${revisionId}/trace-proposals`,
+    ),
+  getAssertionImpact: (revisionId: string, assertionId: string, targetId: string) =>
+    request<EngineeringAssertionImpact>(
+      `/api/engineering-model-graphs/revisions/${revisionId}/assertions/${encodeURIComponent(assertionId)}/impact?target_id=${encodeURIComponent(targetId)}`,
     ),
   verifyModelGraph: (revisionId: string) =>
     request<{ state: Record<string, unknown>; issues: Array<Record<string, unknown>> }>(

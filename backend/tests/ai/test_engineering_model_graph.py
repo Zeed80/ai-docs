@@ -26,6 +26,7 @@ from app.domain.engineering_model_graph import (
     TraceProposal,
     VisualVerification,
     apply_graph_patch,
+    assertion_impact_report,
     compile_build_plan,
     critical_assertion_ids,
     evaluate_trace_admission,
@@ -158,6 +159,41 @@ def test_criticality_is_target_dependency_based_and_release_stays_blocked():
     approved_plan = compile_build_plan(approved, "production")
     assert approved_plan.provisional is False
     assert approved_plan.production_export_allowed is True
+
+
+def test_assertion_impact_reports_target_criticality_and_downstream_rebuilds():
+    graph = _graph()
+    payload = graph.model_dump(mode="json")
+    payload["nodes"].extend([
+        {"id": "artifact", "type": "Artifact"},
+        {"id": "face", "type": "TopologyElement"},
+    ])
+    payload["edges"].extend([
+        {
+            "id": "e-artifact", "type": "generated_by",
+            "source_id": "artifact", "target_id": "op",
+        },
+        {
+            "id": "e-topology", "type": "maps_to_topology",
+            "source_id": "artifact", "target_id": "face",
+        },
+    ])
+    graph = EngineeringModelGraph.model_validate(payload).sealed()
+
+    report = assertion_impact_report(graph, "a-envelope", "production")
+
+    assert report.critical_for_target is True
+    assert report.classification == "critical_for_target"
+    assert report.affected_build_operation_ids == ["op"]
+    assert report.affected_artifact_ids == ["artifact"]
+    assert report.affected_topology_element_ids == ["face"]
+    assert report.dependency_paths["face"] == [
+        "product", "op", "artifact", "face",
+    ]
+
+    decorative = assertion_impact_report(graph, "a-decor", "production")
+    assert decorative.classification == "non_critical_for_target"
+    assert decorative.affected_build_operation_ids == []
 
 
 def test_hypothesis_selection_uses_fixed_scoring_and_stable_tie_break():
