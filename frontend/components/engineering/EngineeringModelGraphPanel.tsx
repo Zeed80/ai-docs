@@ -47,6 +47,7 @@ export default function EngineeringModelGraphPanel({
   const [busy, setBusy] = useState(false);
   const [readerTaskId, setReaderTaskId] = useState<string | null>(null);
   const [readerStatus, setReaderStatus] = useState<string | null>(null);
+  const [artifactMessage, setArtifactMessage] = useState<string | null>(null);
 
   const selected = graphs.find((item) => item.id === selectedId) ?? graphs[0] ?? null;
   const selectedGraphId = selected?.graph_id ?? null;
@@ -116,6 +117,48 @@ export default function EngineeringModelGraphPanel({
   const nodeById = useMemo(() => new Map(
     selected?.graph.nodes.map((item) => [item.id, item]) ?? [],
   ), [selected]);
+  const artifacts = useMemo(() => {
+    if (!selected) return [];
+    const evidenceById = new Map(selected.graph.evidence.map((item) => [item.id, item]));
+    return selected.graph.nodes
+      .filter((node) => node.type === "Artifact")
+      .flatMap((node) => {
+        const assertions = selected.graph.assertions.filter(
+          (item) => item.state === "active" && item.subject_id === node.id,
+        );
+        const evidence = assertions
+          .flatMap((item) => item.evidence_ids)
+          .map((id) => evidenceById.get(id))
+          .find((item) => item?.payload.artifact_path && item.payload.report_path);
+        if (!evidence) return [];
+        return [{ node, assertions, evidence }];
+      });
+  }, [selected]);
+  const artifactBuild = useMemo(() => {
+    if (!selected) return null;
+    if (selected.profile === "assembly") {
+      const assemblyId = selected.graph_id.startsWith("assembly:")
+        ? selected.graph_id.slice("assembly:".length)
+        : "";
+      return assemblyId
+        ? { label: "Построить сборочный чертёж", run: () => engineeringApi.buildAssemblyDrawing(assemblyId) }
+        : null;
+    }
+    if (!selected.engineering_revision_id) return null;
+    if (selected.profile === "construction") {
+      return {
+        label: "Построить планы и разрез",
+        run: () => engineeringApi.buildConstructionSheets(selected.engineering_revision_id!),
+      };
+    }
+    if (["mep", "electrical", "hydraulic", "pid"].includes(selected.profile)) {
+      return {
+        label: "Построить схему системы",
+        run: () => engineeringApi.buildSystemDiagram(selected.engineering_revision_id!),
+      };
+    }
+    return null;
+  }, [selected]);
 
   useEffect(() => {
     if (!selectedRevisionId || !selectedAssertionId || !targetId) {
@@ -163,6 +206,23 @@ export default function EngineeringModelGraphPanel({
     }
   }
 
+  async function buildDomainArtifact() {
+    if (!artifactBuild) return;
+    setBusy(true);
+    setArtifactMessage(null);
+    try {
+      const result = await artifactBuild.run();
+      setArtifactMessage(
+        `${result.idempotent_replay ? "Уже существовал" : "Построен"}: ${result.artifact_sha256.slice(0, 12)} · ${result.production_export_allowed ? "production разрешён" : "provisional"}`,
+      );
+      await load();
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="border border-white/10">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
@@ -179,6 +239,11 @@ export default function EngineeringModelGraphPanel({
             <button disabled={busy} onClick={() => void runReader()} className="text-violet-300 disabled:text-zinc-600">
               Адаптивно дочитать
             </button>
+            {artifactBuild && (
+              <button disabled={busy} onClick={() => void buildDomainArtifact()} className="text-emerald-300 disabled:text-zinc-600">
+                {artifactBuild.label}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -210,6 +275,9 @@ export default function EngineeringModelGraphPanel({
               {readerStatus ? ` · ${readerStatus}` : ""}
             </span>
           </div>
+          {artifactMessage && <p className="text-xs text-emerald-300">{artifactMessage}</p>}
+
+          <DomainArtifacts revisionId={selected.id} artifacts={artifacts} />
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.7fr)]">
             <div className="max-h-80 overflow-auto border border-white/10">
@@ -286,6 +354,71 @@ export default function EngineeringModelGraphPanel({
           </div>
         </div>
       )}
+    </section>
+  );
+}
+
+function DomainArtifacts({
+  revisionId,
+  artifacts,
+}: {
+  revisionId: string;
+  artifacts: Array<{
+    node: { id: string; type: string; name?: string | null };
+    assertions: EngineeringModelGraphRevision["graph"]["assertions"];
+    evidence: EngineeringModelGraphRevision["graph"]["evidence"][number];
+  }>;
+}) {
+  if (!artifacts.length) {
+    return (
+      <div className="border border-dashed border-white/10 px-3 py-4 text-xs text-zinc-500">
+        Проверенных доменных артефактов в этой ревизии пока нет.
+      </div>
+    );
+  }
+  return (
+    <section className="border border-white/10">
+      <h3 className="border-b border-white/10 px-3 py-2 text-xs font-medium text-zinc-300">
+        Доменные артефакты ({artifacts.length})
+      </h3>
+      <div className="grid gap-3 p-3 md:grid-cols-2">
+        {artifacts.map(({ node, assertions, evidence }) => {
+          const payload = evidence.payload;
+          const mediaType = String(payload.media_type || "application/octet-stream");
+          const artifactUrl = engineeringApi.graphArtifactUrl(revisionId, node.id);
+          const reportUrl = engineeringApi.graphArtifactUrl(revisionId, node.id, "report");
+          const views = Array.isArray(payload.views) ? payload.views.map(String) : [];
+          const assurance = assertions.map((item) => item.assurance).join(", ");
+          return (
+            <article key={node.id} className="space-y-2 rounded border border-white/10 bg-black/10 p-3 text-xs text-zinc-400">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-zinc-200">{node.name || node.id}</p>
+                  <p className="mt-1 font-mono text-[10px] text-zinc-600">{node.id}</p>
+                </div>
+                <span className="rounded bg-emerald-500/10 px-2 py-1 text-emerald-300">SHA verified</span>
+              </div>
+              {mediaType === "image/svg+xml" && (
+                <a href={artifactUrl} target="_blank" rel="noreferrer" className="block overflow-hidden rounded bg-white p-2">
+                  {/* SVG stays in an isolated image document; it is never injected into the DOM. */}
+                  <img src={artifactUrl} alt={node.name || "Engineering artifact"} className="h-40 w-full object-contain" />
+                </a>
+              )}
+              <p>Evidence: {evidence.kind} · {assurance || "—"}</p>
+              <p className="break-all font-mono text-[10px]">SHA-256: {String(payload.artifact_sha256 || "—")}</p>
+              <p>Виды: {views.join(", ") || "метаданные вида не заданы"}</p>
+              <p>
+                Покрытие: {payload.required_views_complete === true ? "полное" : "не заявлено"}
+                {payload.valid === true ? " · reopen valid" : ""}
+              </p>
+              <div className="flex gap-3">
+                <a href={artifactUrl} target="_blank" rel="noreferrer" className="text-sky-300 hover:text-sky-100">Открыть artifact</a>
+                <a href={reportUrl} className="text-violet-300 hover:text-violet-100">Скачать report</a>
+              </div>
+            </article>
+          );
+        })}
+      </div>
     </section>
   );
 }

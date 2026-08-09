@@ -1,8 +1,13 @@
 """EngineeringModelGraph v1 revision, patch and verification API."""
 
+import hashlib
+import json
 import uuid
+from pathlib import PurePosixPath
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,6 +163,99 @@ async def get_graph_revision(
     if not row:
         raise HTTPException(404, "Ревизия EngineeringModelGraph не найдена")
     return _revision_response(row, graph=load_graph(row))
+
+
+@router.get("/revisions/{revision_id}/artifacts/{artifact_id}")
+async def download_graph_artifact(
+    revision_id: uuid.UUID,
+    artifact_id: str,
+    kind: Literal["artifact", "report"] = Query(default="artifact"),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Serve a graph-bound artifact after verifying its content address."""
+    from anyio import to_thread
+
+    from app.storage import download_file
+
+    row = await db.get(EngineeringGraphRevision, revision_id)
+    if row is None:
+        raise HTTPException(404, "Ревизия EngineeringModelGraph не найдена")
+    graph = load_graph(row)
+    node = next(
+        (item for item in graph.nodes if item.id == artifact_id and item.type == "Artifact"),
+        None,
+    )
+    if node is None:
+        raise HTTPException(404, "Artifact не найден в выбранной ревизии графа")
+    evidence_ids = {
+        evidence_id
+        for assertion in graph.assertions
+        if assertion.state == "active" and assertion.subject_id == artifact_id
+        for evidence_id in assertion.evidence_ids
+    }
+    evidence = next(
+        (
+            item for item in reversed(graph.evidence)
+            if item.id in evidence_ids
+            and item.payload.get("artifact_path")
+            and item.payload.get("report_path")
+            and item.payload.get("artifact_sha256")
+        ),
+        None,
+    )
+    if evidence is None:
+        raise HTTPException(409, "Artifact не связан с проверенным evidence")
+    path_key = "artifact_path" if kind == "artifact" else "report_path"
+    storage_path = evidence.payload[path_key]
+    if (
+        not isinstance(storage_path, str)
+        or not storage_path.startswith("engineering/")
+        or ".." in PurePosixPath(storage_path).parts
+    ):
+        raise HTTPException(409, "Evidence содержит недопустимый storage path")
+    try:
+        content = await to_thread.run_sync(download_file, storage_path)
+    except Exception as exc:
+        raise HTTPException(404, "Файл artifact отсутствует в объектном хранилище") from exc
+    suffix = PurePosixPath(storage_path).suffix.lower()
+    if kind == "artifact":
+        expected_sha = evidence.payload["artifact_sha256"]
+        actual_sha = hashlib.sha256(content).hexdigest()
+        media_type = {
+            ".svg": "image/svg+xml",
+            ".step": "model/step",
+            ".stp": "model/step",
+            ".ifc": "application/x-step",
+            ".stl": "model/stl",
+            ".dxf": "application/dxf",
+            ".pdf": "application/pdf",
+        }.get(suffix, "application/octet-stream")
+    else:
+        try:
+            report = json.loads(content)
+            expected_sha = report.pop("canonical_report_sha256")
+            actual_sha = hashlib.sha256(
+                json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(409, "Verification report невалиден") from exc
+        media_type = "application/json"
+    if not isinstance(expected_sha, str) or actual_sha != expected_sha:
+        raise HTTPException(409, "Content-addressed artifact не прошёл SHA-256 проверку")
+    safe_name = "".join(
+        char if char.isalnum() or char in "-_." else "-" for char in artifact_id
+    )[:160] or "engineering-artifact"
+    disposition = "inline" if media_type == "image/svg+xml" else "attachment"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{safe_name}{suffix}"',
+            "X-Engineering-Artifact-SHA256": actual_sha,
+            "X-Engineering-Graph-Revision": str(row.revision),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/graphs/{graph_id}/patches")

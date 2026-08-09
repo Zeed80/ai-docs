@@ -244,6 +244,10 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
         "app.storage.delete_file",
         lambda path: graph_objects.pop(path, None),
     )
+    monkeypatch.setattr(
+        "app.storage.download_file",
+        lambda path: graph_objects[path],
+    )
     built = await client.post(
         f"/api/engineering/assemblies/{assembly['id']}/model-graph/build"
     )
@@ -266,6 +270,40 @@ async def test_assembly_model_graph_is_revisioned_through_graph_patch(
     assert drawing_replay.status_code == 200
     assert drawing_replay.json()["revision"] == 2
     assert drawing_replay.json()["idempotent_replay"] is True
+
+    graph_rows = (
+        await client.get(
+            f"/api/engineering-model-graphs/projects/{project['id']}/graphs"
+        )
+    ).json()
+    assembly_graph = next(
+        item for item in graph_rows if item["graph_id"].startswith("assembly:")
+    )
+    drawing_artifact = next(
+        item for item in assembly_graph["graph"]["nodes"]
+        if item["id"].startswith("artifact:assembly-drawing:")
+    )
+    artifact_url = (
+        f"/api/engineering-model-graphs/revisions/{assembly_graph['id']}"
+        f"/artifacts/{drawing_artifact['id']}"
+    )
+    downloaded = await client.get(artifact_url)
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"].startswith("image/svg+xml")
+    assert (
+        downloaded.headers["x-engineering-artifact-sha256"]
+        == drawing.json()["artifact_sha256"]
+    )
+    report_download = await client.get(artifact_url, params={"kind": "report"})
+    assert report_download.status_code == 200
+    assert report_download.json()["views"] == ["assembled", "exploded"]
+
+    artifact_path = drawing.json()["artifact_path"]
+    original_svg = graph_objects[artifact_path]
+    graph_objects[artifact_path] = original_svg + b"<!-- tampered -->"
+    tampered = await client.get(artifact_url)
+    assert tampered.status_code == 409
+    graph_objects[artifact_path] = original_svg
 
     unchanged = await client.post(
         f"/api/engineering/assemblies/{assembly['id']}/model-graph"

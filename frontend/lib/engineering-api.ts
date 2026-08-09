@@ -68,6 +68,7 @@ export type EngineeringProjection = {
 export type EngineeringModelGraphRevision = {
   id: string;
   engineering_project_id?: string | null;
+  engineering_revision_id?: string | null;
   graph_id: string;
   revision: number;
   parent_revision: number | null;
@@ -153,6 +154,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok)
     throw new Error(`${response.status} ${await response.text()}`);
   return response.json() as Promise<T>;
+}
+
+export type EngineeringDomainArtifactBuild = {
+  graph_id: string;
+  revision: number;
+  canonical_sha256: string;
+  artifact_path: string;
+  artifact_sha256: string;
+  report_path: string;
+  views?: string[];
+  production_export_allowed: boolean;
+  critical_assumption_ids: string[];
+  idempotent_replay: boolean;
+};
+
+function apiUrl(path: string): string {
+  return `${getApiBaseUrl()}${path}`;
 }
 
 export const engineeringApi = {
@@ -251,5 +269,24 @@ export const engineeringApi = {
   getTaskStatus: (taskId: string) =>
     request<{ task_id: string; status: string; result?: Record<string, unknown> | null }>(
       `/api/tasks/${taskId}`,
+    ),
+  buildAssemblyDrawing: (assemblyId: string) =>
+    request<EngineeringDomainArtifactBuild>(
+      `/api/engineering/assemblies/${assemblyId}/model-graph/drawing`,
+      { method: "POST" },
+    ),
+  buildConstructionSheets: (revisionId: string) =>
+    request<EngineeringDomainArtifactBuild>(
+      `/api/engineering/revisions/${revisionId}/construction-model-graph/sheets`,
+      { method: "POST" },
+    ),
+  buildSystemDiagram: (revisionId: string) =>
+    request<EngineeringDomainArtifactBuild>(
+      `/api/engineering/revisions/${revisionId}/system-model-graph/diagram`,
+      { method: "POST" },
+    ),
+  graphArtifactUrl: (revisionId: string, artifactId: string, kind: "artifact" | "report" = "artifact") =>
+    apiUrl(
+      `/api/engineering-model-graphs/revisions/${revisionId}/artifacts/${encodeURIComponent(artifactId)}?kind=${kind}`,
     ),
 };
