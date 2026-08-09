@@ -1,0 +1,119 @@
+{
+  "schema_version": "emg-regression/1.0",
+  "cases": [
+    {
+      "id": "mechanical-detal-126-v2",
+      "kind": "mechanical_spec",
+      "input": {"fixture": "detal_126_reference_spec_v2.json"},
+      "expected": {
+        "profile": "mechanical",
+        "canonical_sha256": "dc4deb1d9014cef06ac2c0ca12bfe2613427ffaa36353253d522561587ba3ce5",
+        "production_artifact_hash": "11b7c12974423ceb5e6d0fc45bc928c0e141ec12e6e40d5cd793c6635f985be9",
+        "assertion_count": 245,
+        "nodes_by_type": {"BuildOperation": 9, "DocumentSet": 1, "Product": 1},
+        "edges_by_type": {"contains": 1, "depends_on": 9},
+        "feature_kinds": ["revolve", "thread", "keyway", "keyway", "hole", "hole", "hole", "chamfer", "chamfer"],
+        "preview_export_allowed": true,
+        "production_export_allowed": false,
+        "checked_levels": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "error_codes": []
+      }
+    },
+    {
+      "id": "assembly-fixed-shaft",
+      "kind": "assembly",
+      "input": {
+        "name": "Golden spindle assembly",
+        "designation": "ASM-GOLD-001",
+        "components": [
+          {"instance_key": "housing", "designation": "Housing", "quantity": 1, "metadata_": {"grounded": true}, "transform": {}},
+          {"instance_key": "shaft", "designation": "Shaft", "quantity": 1, "metadata_": {}, "transform": {"x": 12.0}}
+        ],
+        "mates": [
+          {"id": "mate-fixed", "mate_type": "fixed", "first_instance_key": "housing", "second_instance_key": "shaft", "parameters": {}}
+        ],
+        "collisions": [],
+        "exact_checked": ["housing", "shaft"]
+      },
+      "expected": {
+        "profile": "assembly",
+        "canonical_sha256": "c6fe3e65201594b3fe03da4f5cd3a1cf62670fa58f21ce77a486e5f014f1a3e8",
+        "production_artifact_hash": "434eaf5216cbdb5bfcfea751efac6b476665e05789c65d994efdaea4c2230c93",
+        "assertion_count": 25,
+        "nodes_by_type": {"BuildOperation": 2, "Component": 4, "Constraint": 1, "DocumentSet": 1, "Product": 1},
+        "edges_by_type": {"applies_to": 2, "contains": 3, "depends_on": 2, "instance_of": 2, "mates_with": 1},
+        "critical_assumption_ids": ["assertion:assembly:artifact-reopen"],
+        "preview_export_allowed": true,
+        "production_export_allowed": false,
+        "checked_levels": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "error_codes": []
+      }
+    },
+    {
+      "id": "construction-wall-opening",
+      "kind": "construction",
+      "input": {
+        "source_revision_id": "golden-construction-r1",
+        "source_approved": true,
+        "model": {
+          "site_name": "Golden site",
+          "building_name": "Golden building",
+          "storeys": [{"id": "level-1", "name": "Level 1", "elevation_mm": 0}],
+          "elements": [
+            {"id": "wall-1", "kind": "wall", "name": "Wall", "storey_id": "level-1", "material": "Concrete C30/37", "load_bearing": true, "box": {"x_mm": 0, "y_mm": 0, "z_mm": 0, "width_mm": 5000, "depth_mm": 200, "height_mm": 3000}},
+            {"id": "opening-1", "kind": "opening", "name": "Door", "storey_id": "level-1", "host_id": "wall-1", "box": {"x_mm": 1000, "y_mm": 0, "z_mm": 0, "width_mm": 900, "depth_mm": 200, "height_mm": 2100}},
+            {"id": "space-1", "kind": "space", "name": "Room 101", "storey_id": "level-1", "box": {"x_mm": 200, "y_mm": 200, "z_mm": 0, "width_mm": 4600, "depth_mm": 4000, "height_mm": 3000}}
+          ]
+        }
+      },
+      "expected": {
+        "profile": "construction",
+        "canonical_sha256": "d9d0c70b2ea018e67b45e1937dff40eab33f36a1db3d16a39e7cb8768a9a0e47",
+        "production_artifact_hash": "bd37d352183896c827e17bafb8b9391c6e75481821c76b05a276a5eb42dc6493",
+        "assertion_count": 10,
+        "nodes_by_type": {"BuildOperation": 3, "Component": 2, "Feature": 3, "Product": 1},
+        "edges_by_type": {"contains": 2, "depends_on": 3, "located_in": 3, "opens_in": 1},
+        "critical_assumption_ids": ["assertion:construction:ifc-reopen"],
+        "preview_export_allowed": true,
+        "production_export_allowed": false,
+        "checked_levels": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "error_codes": []
+      }
+    },
+    {
+      "id": "hydraulic-closed-loop",
+      "kind": "system",
+      "input": {
+        "source_revision_id": "golden-system-r1",
+        "source_approved": true,
+        "model": {
+          "profile": "hydraulic",
+          "name": "Golden hydraulic unit",
+          "system_kind": "hydraulic_power",
+          "equipment": [
+            {"id": "pump", "name": "Pump", "equipment_type": "pump"},
+            {"id": "tank", "name": "Tank", "equipment_type": "reservoir"}
+          ],
+          "ports": [
+            {"id": "pump-out", "equipment_id": "pump", "kind": "pressure", "direction": "out", "medium": "hydraulic_oil", "nominal_size_mm": 20},
+            {"id": "tank-in", "equipment_id": "tank", "kind": "return", "direction": "in", "medium": "hydraulic_oil", "nominal_size_mm": 20}
+          ],
+          "connections": [{"id": "line-1", "first_port_id": "pump-out", "second_port_id": "tank-in"}]
+        }
+      },
+      "expected": {
+        "profile": "hydraulic",
+        "canonical_sha256": "06f16cded295b82a737134dddfac171f4255280521ddc918018e8ffde8eb5550",
+        "production_artifact_hash": "77aea247b172d5f946d6c0f2aa7fe78c9ebde6890eed1706c0710c2e1a8bfaea",
+        "assertion_count": 12,
+        "nodes_by_type": {"Component": 2, "Port": 2, "System": 1},
+        "edges_by_type": {"connects_to": 1, "contains": 2, "part_of": 2},
+        "critical_assumption_ids": [],
+        "preview_export_allowed": true,
+        "production_export_allowed": true,
+        "checked_levels": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "error_codes": []
+      }
+    }
+  ]
+}

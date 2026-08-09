@@ -4,7 +4,7 @@
         clean rebuild nuke \
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
-        test test-cov e2e regression agent-regression agent-test agent-ws-smoke \
+        test test-cov e2e regression emg-regression agent-regression agent-test agent-ws-smoke \
         studio-queue-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
         turboquant-benchmark turboquant-quality \
@@ -64,6 +64,7 @@ help:
 	@echo "    make test-cov         — backend tests with HTML coverage report"
 	@echo "    make e2e              — Playwright E2E tests"
 	@echo "    make regression       — manifest regression checks"
+	@echo "    make emg-regression   — four-domain EngineeringModelGraph golden gate"
 	@echo "    make cad-regression   — scan-to-DXF golden regression"
 	@echo "    make cad-candidate-gate — fail-closed entity-level model promotion gate"
 	@echo "    make cad-drawing-graph-eval — exact EngineeringDrawingGraph → DXF contract benchmark"
@@ -210,6 +211,11 @@ e2e:
 regression:
 	python3 scripts/regression_manifest_check.py example-invoices/manifest.json docs/drawing-samples-manifest.json docs/technology-regression-manifest.json
 	python3 scripts/agent_role_regression_check.py
+
+emg-regression:
+	cd backend && PYTHONPATH=. python3 scripts/eval_emg_domains.py \
+		--manifest tests/fixtures/emg_domain_golden.json \
+		--out ../test-results/emg_domain_regression.json
 
 agent-regression:
 	python3 scripts/agent_role_regression_check.py
