@@ -87,6 +87,7 @@ export type EngineeringModelGraphRevision = {
       id: string; subject_id: string; predicate: string; value: Record<string, unknown>;
       origin: string; assurance: string; confidence: number; impacts: string[];
       evidence_ids: string[]; state: string; hypothesis_id?: string | null;
+      supersedes_assertion_id?: string | null;
     }>;
     evidence: Array<{ id: string; kind: string; source_region_id?: string | null; payload: Record<string, unknown> }>;
     hypothesis_sets: Array<{ id: string; option_ids: string[]; selected_option_id?: string | null }>;
@@ -266,6 +267,35 @@ export const engineeringApi = {
   ) =>
     request<EngineeringAssertionImpact>(
       `/api/image-gen/${generationId}/model-graph/assertions/${encodeURIComponent(assertionId)}/impact?target_id=${encodeURIComponent(targetId)}`,
+    ),
+  generationAssertionOverlayUrl: (
+    generationId: string,
+    assertionId: string,
+    mode: "source" | "candidate" | "overlay" | "difference" = "source",
+    proposalId?: string,
+  ) => {
+    const query = new URLSearchParams({ mode });
+    if (proposalId) query.set("proposal_id", proposalId);
+    return `${getApiBaseUrl()}/api/image-gen/${generationId}/model-graph/assertions/${encodeURIComponent(assertionId)}/source-overlay?${query}`;
+  },
+  correctGenerationAssertion: (
+    generationId: string,
+    assertionId: string,
+    body: {
+      value: Record<string, unknown>;
+      unit?: string | null;
+      note: string;
+      idempotency_key: string;
+      source_bbox_normalized?: [number, number, number, number] | null;
+      rebuild?: boolean;
+    },
+  ) =>
+    request<EngineeringModelGraphRevision & {
+      compatibility_spec_updated: boolean;
+      rebuild_task_id?: string | null;
+    }>(
+      `/api/image-gen/${generationId}/model-graph/assertions/${encodeURIComponent(assertionId)}/corrections`,
+      { method: "POST", body: JSON.stringify(body) },
     ),
   verifyGenerationModelGraph: (generationId: string) =>
     request<{ state: Record<string, unknown>; issues: Array<Record<string, unknown>> }>(

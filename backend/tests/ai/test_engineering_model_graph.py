@@ -99,6 +99,47 @@ def test_canonical_hash_is_stable_and_broken_refs_fail_closed():
         EngineeringModelGraph.model_validate(payload)
 
 
+def test_legacy_consensus_provenance_becomes_assertion_level_source_region():
+    graph = legacy_spec_as_low_assurance(
+        {
+            "main_view": {"outer": [{"diameter_mm": 30}]},
+            "value_provenance": {
+                "main_view/outer/0/diameter_mm": {
+                    "evidence": [{
+                        "source_bbox": [10, 20, 110, 70],
+                        "raw_text": "Ø30",
+                        "image_index": 1,
+                        "pass": 2,
+                    }],
+                },
+            },
+        },
+        graph_id="image-generation:test",
+        source_sha256="a" * 64,
+        source_uri="image-gen/test/normalized.png",
+    )
+
+    assertion = next(
+        item for item in graph.assertions
+        if item.predicate == "main_view.outer[0].diameter_mm"
+    )
+    assert assertion.origin == "derived"
+    assert assertion.assurance == "proposed"
+    assert len(assertion.evidence_ids) == 1
+    evidence = next(item for item in graph.evidence if item.id in assertion.evidence_ids)
+    assert evidence.source_region_id is not None
+    assert evidence.payload["bbox"] == {"x0": 10.0, "y0": 20.0, "x1": 110.0, "y1": 70.0}
+    assert evidence.payload["fallback"] is False
+    assert evidence.payload["raw_text"] == "Ø30"
+    assert any(
+        item.id == evidence.source_region_id and item.type == "SourceRegion"
+        for item in graph.nodes
+    )
+    assert not any(
+        item.predicate.startswith("value_provenance") for item in graph.assertions
+    )
+
+
 def test_graph_patch_is_atomic_revision_safe_and_model_cannot_approve():
     graph = _graph()
     patch = GraphPatch(

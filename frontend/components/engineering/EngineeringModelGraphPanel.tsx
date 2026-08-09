@@ -50,6 +50,11 @@ export default function EngineeringModelGraphPanel({
   const [readerTaskId, setReaderTaskId] = useState<string | null>(null);
   const [readerStatus, setReaderStatus] = useState<string | null>(null);
   const [artifactMessage, setArtifactMessage] = useState<string | null>(null);
+  const [correctionValue, setCorrectionValue] = useState("");
+  const [correctionNote, setCorrectionNote] = useState("");
+  const [correctionBbox, setCorrectionBbox] = useState("");
+  const [correctionRebuild, setCorrectionRebuild] = useState(false);
+  const [correctionMessage, setCorrectionMessage] = useState<string | null>(null);
 
   const selected = graphs.find((item) => item.id === selectedId) ?? graphs[0] ?? null;
   const selectedGraphId = selected?.graph_id ?? null;
@@ -130,6 +135,8 @@ export default function EngineeringModelGraphPanel({
   const selectedEvidence = selected?.graph.evidence.filter(
     (item) => assertion?.evidence_ids.includes(item.id),
   ) ?? [];
+  const rasterEvidence = selectedEvidence.find((item) => item.kind === "raster_region");
+  const assertionTrace = traces.find((item) => item.assertion_id === assertion?.id);
   const nodeById = useMemo(() => new Map(
     selected?.graph.nodes.map((item) => [item.id, item]) ?? [],
   ), [selected]);
@@ -150,6 +157,18 @@ export default function EngineeringModelGraphPanel({
         return [{ node, assertions, evidence }];
       });
   }, [selected]);
+
+  useEffect(() => {
+    setCorrectionValue(assertion ? JSON.stringify(assertion.value, null, 2) : "");
+    setCorrectionNote("");
+    setCorrectionRebuild(false);
+    const normalized = rasterEvidence?.payload.bbox_normalized;
+    setCorrectionBbox(
+      Array.isArray(normalized) && normalized.length === 4
+        ? normalized.map(String).join(", ")
+        : "",
+    );
+  }, [assertion, rasterEvidence]);
   const artifactBuild = useMemo(() => {
     if (!selected) return null;
     if (selected.profile === "assembly") {
@@ -210,6 +229,52 @@ export default function EngineeringModelGraphPanel({
       if (generationId) await engineeringApi.verifyGenerationModelGraph(generationId);
       else await engineeringApi.verifyModelGraph(selected.id);
       await load();
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitCorrection() {
+    if (!generationId || !assertion) return;
+    setBusy(true);
+    setCorrectionMessage(null);
+    try {
+      const value = JSON.parse(correctionValue) as Record<string, unknown>;
+      const rawBbox = correctionBbox.trim();
+      const bbox = rawBbox
+        ? rawBbox.split(",").map((item) => Number(item.trim()))
+        : null;
+      if (bbox && (bbox.length !== 4 || bbox.some((item) => !Number.isFinite(item)))) {
+        throw new Error("bbox должен содержать четыре числа 0..1");
+      }
+      const revised = await engineeringApi.correctGenerationAssertion(
+        generationId,
+        assertion.id,
+        {
+          value,
+          note: correctionNote.trim(),
+          idempotency_key: `human-ui:${crypto.randomUUID()}`,
+          source_bbox_normalized: bbox as [number, number, number, number] | null,
+          rebuild: correctionRebuild,
+        },
+      );
+      const replacement = revised.graph.assertions.find(
+        (item) => item.supersedes_assertion_id === assertion.id,
+      );
+      setGraphs([revised]);
+      setSelectedId(revised.id);
+      setSelectedAssertionId(replacement?.id ?? null);
+      if (revised.rebuild_task_id) {
+        setReaderStatus("BUILD_QUEUED");
+        setReaderTaskId(revised.rebuild_task_id);
+      }
+      setCorrectionMessage(
+        `GraphPatch принят: revision ${revised.revision}`
+        + (revised.compatibility_spec_updated ? " · compatibility-view обновлён" : "")
+        + (revised.rebuild_task_id ? " · пересборка поставлена в очередь" : ""),
+      );
     } catch (error) {
       onError(String(error));
     } finally {
@@ -361,6 +426,96 @@ export default function EngineeringModelGraphPanel({
                       {JSON.stringify({ id: item.id, kind: item.kind, source_region_id: item.source_region_id, ...item.payload }, null, 2)}
                     </pre>
                   ))}
+                  {generationId && rasterEvidence && (
+                    <section className="space-y-2 border-t border-white/10 pt-3">
+                      <p className="text-zinc-200">
+                        SourceRegion: {rasterEvidence.source_region_id}
+                        {rasterEvidence.payload.fallback === true ? " · whole-sheet fallback" : " · точный ROI"}
+                      </p>
+                      <div className={`grid gap-2 ${assertionTrace ? "sm:grid-cols-2" : ""}`}>
+                        <EvidenceImage
+                          label="Исходный crop"
+                          src={engineeringApi.generationAssertionOverlayUrl(
+                            generationId, assertion.id, "source",
+                          )}
+                        />
+                        {assertionTrace && (
+                          <>
+                            <EvidenceImage
+                              label="Candidate"
+                              src={engineeringApi.generationAssertionOverlayUrl(
+                                generationId, assertion.id, "candidate", assertionTrace.proposal_id,
+                              )}
+                            />
+                            <EvidenceImage
+                              label="Overlay"
+                              src={engineeringApi.generationAssertionOverlayUrl(
+                                generationId, assertion.id, "overlay", assertionTrace.proposal_id,
+                              )}
+                            />
+                            <EvidenceImage
+                              label="Difference mask"
+                              src={engineeringApi.generationAssertionOverlayUrl(
+                                generationId, assertion.id, "difference", assertionTrace.proposal_id,
+                              )}
+                            />
+                          </>
+                        )}
+                      </div>
+                    </section>
+                  )}
+                  {generationId && assertion.state === "active" && (
+                    <section className="space-y-2 border-t border-white/10 pt-3">
+                      <p className="font-medium text-zinc-200">Исправить через human GraphPatch</p>
+                      <label className="block space-y-1">
+                        <span>AssertionValue JSON</span>
+                        <textarea
+                          aria-label="AssertionValue JSON"
+                          value={correctionValue}
+                          onChange={(event) => setCorrectionValue(event.target.value)}
+                          className="h-28 w-full rounded border border-white/10 bg-black/30 p-2 font-mono text-[11px] text-zinc-200"
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span>Source bbox normalized: x0, y0, x1, y1</span>
+                        <input
+                          aria-label="Source bbox normalized"
+                          value={correctionBbox}
+                          onChange={(event) => setCorrectionBbox(event.target.value)}
+                          placeholder="0.10, 0.20, 0.35, 0.42"
+                          className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 font-mono text-[11px] text-zinc-200"
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span>Инженерное обоснование</span>
+                        <textarea
+                          aria-label="Инженерное обоснование"
+                          value={correctionNote}
+                          onChange={(event) => setCorrectionNote(event.target.value)}
+                          className="h-20 w-full rounded border border-white/10 bg-black/30 p-2 text-xs text-zinc-200"
+                        />
+                      </label>
+                      {assertion.subject_id === "product:legacy-spec" && (
+                        <label className="flex items-center gap-2 text-zinc-300">
+                          <input
+                            type="checkbox"
+                            checked={correctionRebuild}
+                            onChange={(event) => setCorrectionRebuild(event.target.checked)}
+                          />
+                          После GraphPatch пересобрать provisional DXF без повторного VLM-чтения
+                        </label>
+                      )}
+                      <button
+                        type="button"
+                        disabled={busy || !correctionNote.trim()}
+                        onClick={() => void submitCorrection()}
+                        className="rounded bg-emerald-500/20 px-3 py-1.5 text-emerald-200 disabled:opacity-40"
+                      >
+                        Создать human GraphPatch
+                      </button>
+                      {correctionMessage && <p className="text-emerald-300">{correctionMessage}</p>}
+                    </section>
+                  )}
                 </div>
               ) : <p>Выберите assertion, чтобы увидеть значение, bbox/evidence и зависимые узлы.</p>}
             </div>
@@ -489,6 +644,17 @@ function nodeLabel(id: string, nodes: Map<string, { id: string; type: string; na
 
 function ImpactLine({ label, ids, nodes }: { label: string; ids: string[]; nodes: Map<string, { id: string; type: string; name?: string | null }> }) {
   return <p>{label}: {ids.map((id) => nodeLabel(id, nodes)).join(", ") || "не затронуты"}</p>;
+}
+
+function EvidenceImage({ label, src }: { label: string; src: string }) {
+  return (
+    <figure className="overflow-hidden rounded border border-white/10 bg-white p-1">
+      {/* Raster evidence must stay pixel-exact and authenticated through the API. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={label} className="h-36 w-full object-contain" />
+      <figcaption className="bg-zinc-950 px-2 py-1 text-[10px] text-zinc-400">{label}</figcaption>
+    </figure>
+  );
 }
 
 function Log({ title, empty, children }: { title: string; empty: string; children: React.ReactNode }) {

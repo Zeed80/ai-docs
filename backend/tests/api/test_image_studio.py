@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
+from types import SimpleNamespace
+
 import pytest
 
 # NOTE: the "agent-service" ownership-bypass tests below exercise pure helper
@@ -32,13 +36,26 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
 ):
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.domain.engineering_model_graph import (
+        Assertion,
         BuildTarget,
+        DeterministicTraceChecks,
         EngineeringModelGraph,
+        Evidence,
+        GraphSource,
         GraphNode,
+        TracePrimitive,
+        TraceProposal,
+        UnknownValue,
     )
+    from app.db.models import TraceProposalRecord
     from app.services.engineering_model_graph import persist_pipeline_graph
+    from PIL import Image
 
     objects: dict[str, bytes] = {}
+    source_buffer = io.BytesIO()
+    Image.new("RGB", (100, 80), "white").save(source_buffer, format="PNG")
+    source_bytes = source_buffer.getvalue()
+    source_path = f"image-gen/dev-user/{id(source_bytes)}.png"
     monkeypatch.setattr(
         "app.services.engineering_model_graph.upload_file",
         lambda content, path, _content_type: objects.setdefault(path, content),
@@ -47,11 +64,29 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
         "app.services.engineering_model_graph.download_file",
         lambda path: objects[path],
     )
+    monkeypatch.setattr(
+        "app.api.image_generation.download_file",
+        lambda path: source_bytes if path == source_path else objects[path],
+    )
+    rebuild_calls: list[tuple[list[str], str]] = []
+    monkeypatch.setattr(
+        "app.tasks.cad_trace.rebuild_from_spec.apply_async",
+        lambda args, queue: (
+            rebuild_calls.append((args, queue))
+            or SimpleNamespace(id="rebuild-task")
+        ),
+    )
     generation = ImageGeneration(
         owner_sub="dev-user",
         operation="vectorize",
         status=ImageGenStatus.failed,
-        params={"spec": {"part": "Blocked shaft"}},
+        params={
+            "spec": {
+                "part": "Blocked shaft",
+                "hole": {"diameter_mm": None},
+            },
+        },
+        source_image_paths=[source_path],
         error="critical dimensions unresolved",
     )
     db_session.add(generation)
@@ -59,12 +94,74 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     graph = EngineeringModelGraph(
         graph_id=f"image-generation:{generation.id}",
         profile="mechanical",
-        nodes=[GraphNode(id="product:part", type="Product", name="Blocked shaft")],
+        sources=[GraphSource(
+            id="source:sheet",
+            uri=source_path,
+            sha256=hashlib.sha256(source_bytes).hexdigest(),
+            media_type="image/png",
+        )],
+        nodes=[
+            GraphNode(id="docs", type="DocumentSet"),
+            GraphNode(id="product:legacy-spec", type="Product", name="Blocked shaft"),
+            GraphNode(id="region:whole", type="SourceRegion"),
+        ],
+        assertions=[Assertion(
+            id="assertion:hole-diameter",
+            subject_id="product:legacy-spec",
+            predicate="hole.diameter_mm",
+            value=UnknownValue(kind="unknown", reason="unreadable"),
+            unit="mm",
+            origin="observed",
+            assurance="proposed",
+            evidence_ids=["evidence:whole"],
+            confidence=0.2,
+            impacts=["connection_opening"],
+        )],
+        evidence=[Evidence(
+            id="evidence:whole",
+            kind="raster_region",
+            source_id="source:sheet",
+            source_region_id="region:whole",
+            payload={"bbox_normalized": [0, 0, 1, 1], "fallback": True},
+        )],
         build_targets=[BuildTarget(
-            id="preview", kind="preview_brep", root_node_ids=["product:part"]
+            id="preview", kind="preview_brep", root_node_ids=["product:legacy-spec"]
         )],
     ).sealed()
     row = await persist_pipeline_graph(db_session, graph)
+    proposal = TraceProposal(
+        id="trace-test",
+        source_region_id="region:whole",
+        hypothesis_id="hypothesis:trace-test",
+        primitives=[TracePrimitive(
+            kind="polyline",
+            parameters={"points": [10, 10, 40, 10, 40, 30, 10, 30]},
+        )],
+        trace_parameters={"scale_mm_per_px": 1.0},
+        source_bbox=(0, 0, 100, 80),
+        uncertainty=0.1,
+        checks=DeterministicTraceChecks(
+            connected=True,
+            closed=True,
+            no_self_intersections=True,
+            no_dangling_ends=True,
+            anchors_satisfied=True,
+            dimensions_satisfied=True,
+            forbidden_geometry_clear=True,
+            pixel_precision=0.9,
+            pixel_recall=0.9,
+        ),
+    )
+    db_session.add(TraceProposalRecord(
+        graph_revision_id=row.id,
+        proposal_id=proposal.id,
+        source_region_id=proposal.source_region_id,
+        assertion_id="assertion:hole-diameter",
+        rank=1,
+        status="accepted",
+        score=0.9,
+        payload=proposal.model_dump(mode="json"),
+    ))
     generation.params = {
         **generation.params,
         "engineering_model_graph": {"revision_id": str(row.id)},
@@ -77,13 +174,86 @@ async def test_failed_digitization_exposes_owned_model_graph_as_review_required(
     assert body["id"] == str(row.id)
     assert body["source_generation_status"] == "failed"
     assert body["workflow_status"] == "review_required"
-    assert body["graph"]["nodes"][0]["name"] == "Blocked shaft"
+    assert any(item.get("name") == "Blocked shaft" for item in body["graph"]["nodes"])
+
+    trace_overlay = await client.get(
+        f"/api/image-gen/{generation.id}/model-graph/assertions/"
+        "assertion:hole-diameter/source-overlay?mode=overlay&proposal_id=trace-test"
+    )
+    assert trace_overlay.status_code == 200, trace_overlay.text
+    assert trace_overlay.headers["x-trace-proposal-id"] == "trace-test"
+    with Image.open(io.BytesIO(trace_overlay.content)) as overlay_image:
+        assert overlay_image.size == (100, 80)
 
     verification = await client.post(
         f"/api/image-gen/{generation.id}/model-graph/verify"
     )
     assert verification.status_code == 200
     assert verification.json()["workflow_status"] == "review_required"
+
+    correction_body = {
+        "value": {"kind": "exact", "value": 15.7},
+        "note": "Размер подтверждён по выноске Ø15.7",
+        "idempotency_key": "human-test-hole-15-7",
+        "source_bbox_normalized": [0.1, 0.25, 0.4, 0.5],
+        "rebuild": True,
+    }
+    correction = await client.post(
+        f"/api/image-gen/{generation.id}/model-graph/assertions/"
+        "assertion:hole-diameter/corrections",
+        json=correction_body,
+    )
+    assert correction.status_code == 200, correction.text
+    revised = correction.json()
+    assert revised["revision"] == 1
+    assert revised["compatibility_spec_updated"] is True
+    assert revised["rebuild_task_id"] == "rebuild-task"
+    assert len(rebuild_calls) == 1
+    assert rebuild_calls[0][0][0] == str(generation.id)
+    assert rebuild_calls[0][0][1].startswith("human-graph:")
+    assert rebuild_calls[0][1] == "celery"
+    await db_session.refresh(generation)
+    assert generation.params["spec_corrected"]["hole"]["diameter_mm"] == 15.7
+    old = next(
+        item for item in revised["graph"]["assertions"]
+        if item["id"] == "assertion:hole-diameter"
+    )
+    replacement = next(
+        item for item in revised["graph"]["assertions"]
+        if item.get("supersedes_assertion_id") == "assertion:hole-diameter"
+    )
+    assert old["state"] == "superseded"
+    assert replacement["origin"] == "human"
+    assert replacement["assurance"] == "human_approved"
+    assert replacement["value"] == {"kind": "exact", "value": 15.7}
+    raster = next(
+        item for item in revised["graph"]["evidence"]
+        if item["id"] in replacement["evidence_ids"]
+        and item["kind"] == "raster_region"
+    )
+    assert raster["payload"]["bbox_normalized"] == [0.1, 0.25, 0.4, 0.5]
+    assert raster["payload"]["fallback"] is False
+
+    overlay = await client.get(
+        f"/api/image-gen/{generation.id}/model-graph/assertions/"
+        f"{replacement['id']}/source-overlay?mode=source"
+    )
+    assert overlay.status_code == 200
+    assert overlay.headers["content-type"] == "image/png"
+    with Image.open(io.BytesIO(overlay.content)) as crop:
+        assert crop.size == (30, 20)
+
+    patches = await client.get(f"/api/image-gen/{generation.id}/model-graph/patches")
+    assert patches.status_code == 200
+    assert patches.json()[0]["producer"] == "human"
+    assert patches.json()[0]["accepted"] is True
+
+    duplicate = await client.post(
+        f"/api/image-gen/{generation.id}/model-graph/assertions/"
+        f"{replacement['id']}/corrections",
+        json=correction_body,
+    )
+    assert duplicate.status_code == 409
 
     other = ImageGeneration(
         owner_sub="another-user",

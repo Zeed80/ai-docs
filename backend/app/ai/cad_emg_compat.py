@@ -143,10 +143,83 @@ def legacy_spec_as_low_assurance(
     ).hexdigest()
     assertions: list[Assertion] = []
     whole_sheet_evidence_id = "evidence:whole-sheet" if source_uri else None
+    provenance = payload.get("value_provenance") or {}
+    nodes = [
+        GraphNode(id="document-set:root", type="DocumentSet"),
+        GraphNode(
+            id="product:legacy-spec",
+            type="Product",
+            name="Legacy EngineeringDrawingSpec",
+        ),
+    ]
+    edges = [GraphEdge(
+        id="contains:legacy-product",
+        type="contains",
+        source_id="document-set:root",
+        target_id="product:legacy-spec",
+    )]
+    evidence: list[Evidence] = []
+
+    def provenance_key(path: str) -> str:
+        return path.replace(".", "/").replace("[", "/").replace("]", "")
+
+    def localized_evidence(path: str) -> list[str]:
+        if not source_uri:
+            return []
+        item = provenance.get(provenance_key(path))
+        if not isinstance(item, dict):
+            return []
+        candidates = [
+            value for value in item.get("evidence") or []
+            if isinstance(value, dict)
+            and isinstance(value.get("source_bbox"), (list, tuple))
+            and len(value["source_bbox"]) == 4
+        ]
+        if not candidates:
+            return []
+        raw = candidates[0]
+        try:
+            x0, y0, x1, y1 = (float(value) for value in raw["source_bbox"])
+        except (TypeError, ValueError):
+            return []
+        if x0 < 0 or y0 < 0 or x1 <= x0 or y1 <= y0:
+            return []
+        suffix = f"{len(evidence):04d}"
+        region_id = f"region:legacy-spec:{suffix}"
+        evidence_id = f"evidence:legacy-spec:{suffix}"
+        nodes.append(GraphNode(
+            id=region_id,
+            type="SourceRegion",
+            name=f"Observed region for {path}",
+        ))
+        edges.append(GraphEdge(
+            id=f"located:{region_id}",
+            type="located_in",
+            source_id=region_id,
+            target_id="document-set:root",
+        ))
+        evidence.append(Evidence(
+            id=evidence_id,
+            kind="raster_region",
+            source_id="source:legacy-spec",
+            source_region_id=region_id,
+            payload={
+                "bbox": {"x0": x0, "y0": y0, "x1": x1, "y1": y1},
+                "fallback": False,
+                "raw_text": raw.get("raw_text"),
+                "image_index": raw.get("image_index"),
+                "reader_pass": raw.get("pass"),
+                "provenance_path": provenance_key(path),
+            },
+            sha256=digest,
+        ))
+        return [evidence_id]
 
     def collect(value: Any, path: str) -> None:
         if isinstance(value, dict):
             for key in sorted(value):
+                if not path and key == "value_provenance":
+                    continue
                 collect(value[key], f"{path}.{key}" if path else key)
         elif isinstance(value, list):
             for index, item in enumerate(value):
@@ -159,6 +232,7 @@ def legacy_spec_as_low_assurance(
                 value=ExactValue(kind="exact", value=value),
                 origin="derived",
                 assurance="proposed",
+                evidence_ids=localized_evidence(path),
                 confidence=0.25,
             ))
         elif value is None:
@@ -176,21 +250,6 @@ def legacy_spec_as_low_assurance(
             ))
 
     collect(payload, "")
-    nodes = [
-        GraphNode(id="document-set:root", type="DocumentSet"),
-        GraphNode(
-            id="product:legacy-spec",
-            type="Product",
-            name="Legacy EngineeringDrawingSpec",
-        ),
-    ]
-    edges = [GraphEdge(
-        id="contains:legacy-product",
-        type="contains",
-        source_id="document-set:root",
-        target_id="product:legacy-spec",
-    )]
-    evidence: list[Evidence] = []
     if source_uri:
         nodes.append(GraphNode(
             id="region:whole-sheet",
